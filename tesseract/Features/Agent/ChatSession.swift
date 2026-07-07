@@ -64,6 +64,15 @@ final class ChatSession {
     /// The one observable box for the currently-streaming part, if any.
     private(set) var livePart: LivePart?
 
+    /// The **Pending Row**: the just-sent user message, rendered from send
+    /// until the event spine commits the same message — so the transcript
+    /// shows it instantly even while the run sits queued behind the lease
+    /// (cold-start model load). Ephemeral derived view-state like the Live
+    /// Part, never agent state. If the run settles before the commit (cancel
+    /// while queued, load failure), it vanishes and its content is restored
+    /// to the composer via `restoreComposerDraft`.
+    private(set) var pendingUserMessage: UserMessage?
+
     /// The run phase, folded from lifecycle + tool events.
     private(set) var runPhase: ChatRunPhase = .idle
 
@@ -75,6 +84,21 @@ final class ChatSession {
     /// "A foreground run is queued or active" — includes lease-queue time the
     /// event fold can't see. The composer's send/cancel switch keys off this.
     var isGenerating: Bool { agentRun.isGenerating }
+
+    /// Whether the **Waiting Row** shows: the run is waiting on the model with
+    /// nothing streaming — queued behind the lease (cold start) or in a turn
+    /// prefill (first turn and after every tool batch). Deliberately *not*
+    /// shown between parts mid-stream (the live message already has content —
+    /// a row there would flicker) or during tool execution (tool rows own
+    /// their spinners). The view layer adds the `promptStartsThinking` gate.
+    var showsWaitingRow: Bool {
+        guard isGenerating, livePart == nil else { return false }
+        guard liveMessage?.content.isEmpty ?? true else { return false }
+        switch runPhase {
+        case .idle, .streaming: return true
+        case .writingTool, .executingTool, .transformingContext: return false
+        }
+    }
 
     // MARK: - Non-observable fold state
 
@@ -131,6 +155,11 @@ final class ChatSession {
     private let recordSkillInvocation: @MainActor (_ skillName: String) -> Void
     /// `/clear` discards the view-owned composer draft through this hook.
     private let clearComposerDraft: @MainActor () -> Void
+    /// A run that settles before its user message committed (cancel while
+    /// queued, load failure) hands the Pending Row's content back to the
+    /// view-owned composer through this hook — the message was never sent,
+    /// so silently discarding it is not an option.
+    private let restoreComposerDraft: @MainActor (String, [ImageAttachment]) -> Void
     /// Fired on every conversation boundary (new / load / delete-current) so
     /// the view-owned leaves can react: System Prompt Inspector re-probe,
     /// Skill Pill ranking recompute, ephemeral composer state reset. The
@@ -159,6 +188,8 @@ final class ChatSession {
         },
         recordSkillInvocation: @MainActor @escaping (String) -> Void = { _ in },
         clearComposerDraft: @MainActor @escaping () -> Void = {},
+        restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in
+        },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
@@ -173,6 +204,7 @@ final class ChatSession {
         self.assembleSkillArguments = assembleSkillArguments
         self.recordSkillInvocation = recordSkillInvocation
         self.clearComposerDraft = clearComposerDraft
+        self.restoreComposerDraft = restoreComposerDraft
         self.onConversationSwitch = onConversationSwitch
         self.liveThrottle = liveMarkdownThrottle
         self.agentRun = AgentRunController(
@@ -180,6 +212,9 @@ final class ChatSession {
         )
 
         agentRun.setReportError { [weak self] message in self?.error = message }
+        // A settle with the Pending Row still up means the user message never
+        // entered the agent context — hand it back to the composer.
+        agentRun.setOnRunSettled { [weak self] in self?.settlePendingUserMessage() }
 
         unsubscribe = agent.subscribe { [weak self] event in
             Task { @MainActor in
@@ -416,6 +451,9 @@ final class ChatSession {
 
     private func commit(_ message: any AgentMessageProtocol) {
         if let user = message.asUser {
+            // The agent accepted a message — the Pending Row's job is done.
+            // Only one send is in flight at a time, so no id check is needed.
+            pendingUserMessage = nil
             items.append(.user(user))
             return
         }
@@ -476,6 +514,9 @@ final class ChatSession {
 
     /// Rebuild the committed items from an authoritative message log.
     private func resync(from messages: [any AgentMessageProtocol]) {
+        // An authoritative snapshot supersedes the Pending Row: either the
+        // message is in it (committed) or it doesn't belong here (switch).
+        pendingUserMessage = nil
         var rebuilt: [ChatItem] = []
         var results: [String: ToolResultMessage] = [:]
         for message in messages {
@@ -525,16 +566,45 @@ final class ChatSession {
             debugLogger.logSystemPrompt(agent.state.systemPrompt, tools: agent.state.tools)
         }
 
-        let userMessage = CoreMessage.user(UserMessage(content: trimmed, images: images))
-        agentRun.send(userMessage)
+        let user = UserMessage(content: trimmed, images: images)
+        // Raise the Pending Row before the send: the run may sit queued behind
+        // the lease (cold-start model load) for seconds, and the transcript
+        // must show the message immediately. The event-spine commit of the
+        // same message lowers it.
+        pendingUserMessage = user
+        agentRun.send(CoreMessage.user(user))
     }
 
     func cancelGeneration() {
         agentRun.cancel()
+        // Settle synchronously: a cancel while the run is still queued (the
+        // Pending Row is up) must hand the message back to the composer *now*,
+        // not when the cancelled task's catch runs — the callers that switch
+        // conversations right after would otherwise resync the row away and
+        // lose the content. The async `onRunSettled` backstop then finds the
+        // row already down and does nothing.
+        settlePendingUserMessage()
     }
 
     func cancelGenerationAndWait() async {
+        settlePendingUserMessage()
         await agentRun.cancelAndWait()
+    }
+
+    /// The run settled (completed, cancelled, or failed) — if the Pending Row
+    /// is still up, its message never entered the agent context: lower it and
+    /// restore the content to the composer.
+    ///
+    /// Known, accepted race: events reach the fold one main-actor hop after
+    /// emission, so a cancel landing in the instant between the loop
+    /// committing the user message and the fold processing it restores a copy
+    /// to the composer *and* keeps the committed item. Worst case is a
+    /// spurious composer copy — never a lost message, never a transcript that
+    /// disagrees with the agent context.
+    private func settlePendingUserMessage() {
+        guard let pending = pendingUserMessage else { return }
+        pendingUserMessage = nil
+        restoreComposerDraft(pending.content, pending.images)
     }
 
     // MARK: - Slash commands
@@ -687,6 +757,10 @@ final class ChatSession {
         let wasCurrent = conversationStore.currentConversation?.id == id
         conversationStore.delete(id: id)
         if wasCurrent {
+            // Same contract as the other switch paths: stop the run and
+            // settle a still-queued Pending Row (restore, never silently
+            // drop) before the resync below would clear it.
+            cancelGeneration()
             if let current = conversationStore.currentConversation {
                 agent.loadMessages(current.messages)
                 resync(from: current.messages)

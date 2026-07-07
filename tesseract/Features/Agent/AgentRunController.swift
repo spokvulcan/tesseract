@@ -43,6 +43,10 @@ final class AgentRunController {
     /// coordinator can wire it once `self` is fully initialized.
     @ObservationIgnored private var reportError: @MainActor (String) -> Void
 
+    /// Fired once per run task after `isGenerating` clears, on every exit path.
+    /// See `setOnRunSettled`.
+    @ObservationIgnored private var onRunSettled: @MainActor () -> Void = {}
+
     /// The task that holds the arbiter lease for the current run. Cancelled by
     /// `cancel()` to abort both queued waits and active runs.
     @ObservationIgnored private var sendTask: Task<Void, Never>?
@@ -67,6 +71,15 @@ final class AgentRunController {
     /// shared `error` banner once `self` is available).
     func setReportError(_ handler: @escaping @MainActor (String) -> Void) {
         reportError = handler
+    }
+
+    /// Wire the run-settled sink: called exactly once per `runUnderLease` task,
+    /// after `isGenerating` clears, on every exit — completion, cancellation
+    /// (including a cancel while still *queued* behind the lease, which emits
+    /// no agent events at all), and error. The Chat Session uses it to settle
+    /// a Pending Row whose message never reached the agent.
+    func setOnRunSettled(_ handler: @escaping @MainActor () -> Void) {
+        onRunSettled = handler
     }
 
     // MARK: - Command Side
@@ -118,6 +131,9 @@ final class AgentRunController {
                 self.reportError(error.localizedDescription)
                 self.isGenerating = false
             }
+            // After the flag clears, synchronously in the same job — a poll
+            // that observes `isGenerating == false` also observes the settle.
+            self.onRunSettled()
             self.sendTask = nil
         }
     }

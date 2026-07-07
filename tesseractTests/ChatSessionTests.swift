@@ -25,14 +25,30 @@ struct ChatSessionTests {
 
     private func makeSession(
         agent: Agent? = nil,
-        store: InMemoryAgentConversationStore = InMemoryAgentConversationStore()
+        store: InMemoryAgentConversationStore = InMemoryAgentConversationStore(),
+        arbiter: InMemoryInferenceArbiter = InMemoryInferenceArbiter(),
+        restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in }
     ) -> ChatSession {
         ChatSession(
             agent: agent ?? makeNoOpAgent(modelID: "test-model"),
             conversationStore: store,
-            arbiter: InMemoryInferenceArbiter(),
+            arbiter: arbiter,
+            restoreComposerDraft: restoreComposerDraft,
             liveMarkdownThrottle: .zero
         )
+    }
+
+    private func waitUntilIdle(
+        _ session: ChatSession, timeout: Duration = .seconds(3)
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while session.isGenerating {
+            try await Task.sleep(for: .milliseconds(20))
+            if ContinuousClock.now >= deadline {
+                Issue.record("ChatSession did not become idle within timeout")
+                return
+            }
+        }
     }
 
     /// Feed one raw generation event through a builder and hand every produced
@@ -478,6 +494,176 @@ struct ChatSessionTests {
         #expect(draft?.text == "second question")
         #expect(session.items.count == 2)
         #expect(agent.context.messages.count == 2)
+    }
+
+    // MARK: - Pending Row
+
+    /// `sendMessage` raises the Pending Row synchronously — the transcript
+    /// shows the user message while the run is still queued behind the lease —
+    /// and the event-spine commit of the same message lowers it.
+    @Test func sendMessageRaisesPendingRowUntilTheUserCommit() async throws {
+        var restored: [(String, Int)] = []
+        let session = makeSession(restoreComposerDraft: { text, images in
+            restored.append((text, images.count))
+        })
+
+        session.sendMessage("hello cold start")
+        #expect(session.pendingUserMessage?.content == "hello cold start")
+
+        try await waitUntilIdle(session)
+        // The commit (or the turn-end resync) replaced the Pending Row with
+        // the committed item; nothing was restored to the composer.
+        #expect(session.pendingUserMessage == nil)
+        #expect(restored.isEmpty)
+        #expect(
+            session.items.contains { item in
+                if case .user(let msg) = item { return msg.content == "hello cold start" }
+                return false
+            })
+    }
+
+    /// A run that dies before the user message ever enters the agent context
+    /// (cancel while queued, load failure) lowers the Pending Row and restores
+    /// its content to the composer — the transcript never shows a message the
+    /// agent doesn't have.
+    @Test func pendingRowRestoresComposerDraftWhenRunDiesBeforeCommit() async throws {
+        let arbiter = InMemoryInferenceArbiter()
+        arbiter.ensureLoadedError = AgentEngineError.modelNotDownloaded(
+            modelID: "chat-session-nonexistent-model")
+        var restored: [(String, Int)] = []
+        let session = makeSession(
+            arbiter: arbiter,
+            restoreComposerDraft: { text, images in restored.append((text, images.count)) })
+
+        session.sendMessage("doomed message")
+        #expect(session.pendingUserMessage != nil)
+
+        try await waitUntilIdle(session)
+        #expect(session.pendingUserMessage == nil)
+        #expect(restored.count == 1)
+        #expect(restored.first?.0 == "doomed message")
+        #expect(session.items.isEmpty)
+    }
+
+    /// Cancel while the run sits queued behind the lease — the queued-wait
+    /// analogue of the load-failure path: same restore (text *and* images),
+    /// no ghost message.
+    @Test func pendingRowRestoresComposerDraftOnCancelWhileQueued() async throws {
+        let arbiter = InMemoryInferenceArbiter()
+        arbiter.leaseDelay = .seconds(10)
+        var restored: [(String, [ImageAttachment])] = []
+        let session = makeSession(
+            arbiter: arbiter,
+            restoreComposerDraft: { text, images in restored.append((text, images)) })
+
+        let image = ImageAttachment(data: ImageTestFixtures.tinyPNGData, mimeType: "image/png")
+        session.sendMessage("cancelled while queued", images: [image])
+        #expect(session.pendingUserMessage != nil)
+        session.cancelGeneration()
+
+        try await waitUntilIdle(session)
+        #expect(session.pendingUserMessage == nil)
+        #expect(restored.count == 1)
+        #expect(restored.first?.0 == "cancelled while queued")
+        #expect(restored.first?.1 == [image])
+        #expect(session.items.isEmpty)
+    }
+
+    /// The user commit lowers the Pending Row through the event fold, so a
+    /// later settle has nothing to restore.
+    @Test func userCommitLowersPendingRowThroughTheFold() {
+        let arbiter = InMemoryInferenceArbiter()
+        arbiter.leaseDelay = .seconds(10)
+        let session = makeSession(arbiter: arbiter)
+
+        session.sendMessage("hello")
+        #expect(session.pendingUserMessage != nil)
+
+        session.handle(.messageEnd(message: CoreMessage.user(UserMessage(content: "hello"))))
+        #expect(session.pendingUserMessage == nil)
+        session.cancelGeneration()
+    }
+
+    /// Slash commands never raise a Pending Row — an unknown command (name +
+    /// arguments, so the parser can't read it as partial typing) is an error,
+    /// not a message.
+    @Test func slashCommandDoesNotRaisePendingRow() {
+        let session = makeSession()
+        session.sendMessage("/definitely-not-a-command with args")
+        #expect(session.pendingUserMessage == nil)
+        #expect(session.error != nil)
+    }
+
+    // MARK: - Waiting Row
+
+    /// The Waiting Row shows from send (queued, cold start) through turn
+    /// prefill, and hides the moment the first delta opens a Live Part.
+    @Test func waitingRowSpansQueueAndPrefillUntilFirstDelta() {
+        let session = makeSession()
+        var builder = AssistantPartsBuilder()
+
+        #expect(session.showsWaitingRow == false)
+
+        // Queued behind the lease (cold start): isGenerating is up eagerly,
+        // no agent events yet.
+        session.agentRun.markStarted()
+        #expect(session.showsWaitingRow == true)
+
+        session.handle(.agentStart)
+        #expect(session.showsWaitingRow == true)
+
+        // Message opened, still no content — prefill continues.
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+        #expect(session.showsWaitingRow == true)
+
+        // First delta: the Live Part takes over.
+        drive(session, &builder, .thinkStart)
+        drive(session, &builder, .thinking("pondering"))
+        #expect(session.showsWaitingRow == false)
+    }
+
+    /// Between parts and during tool execution the Waiting Row stays hidden
+    /// (the live message has content; tool rows own their spinners) — it
+    /// returns only for the next turn's prefill, after the tool batch ends.
+    @Test func waitingRowHiddenBetweenPartsAndDuringToolsShownForNextTurnPrefill() {
+        let session = makeSession()
+        var builder = AssistantPartsBuilder()
+
+        session.agentRun.markStarted()
+        session.handle(.agentStart)
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+
+        // Thinking part streams and commits — the between-parts gap.
+        drive(session, &builder, .thinkStart)
+        drive(session, &builder, .thinking("pondering"))
+        drive(session, &builder, .thinkEnd)
+        #expect(session.livePart == nil)
+        #expect(session.showsWaitingRow == false)
+
+        // Turn ends in a tool call; execution runs under the tool row's spinner.
+        let call = ToolCallInfo(id: "call-1", name: "read_file", argumentsJSON: "{}")
+        let assistant = AssistantMessage(
+            content: "", toolCalls: [call], stopReason: .toolUse)
+        session.handle(.messageEnd(message: assistant))
+        session.handle(
+            .toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}"))
+        #expect(session.showsWaitingRow == false)
+
+        // Tool batch done → the next turn's prefill: the Waiting Row returns.
+        session.handle(
+            .toolExecutionEnd(
+                toolCallId: "call-1", toolName: "read_file",
+                result: .text("ok"), isError: false))
+        #expect(session.showsWaitingRow == true)
+
+        // Run over → hidden.
+        session.agentRun.finish()
+        session.handle(.agentEnd(messages: []))
+        #expect(session.showsWaitingRow == false)
     }
 
     // MARK: - Live Part throttle

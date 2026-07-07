@@ -804,6 +804,27 @@ The one sanctioned exception to the otherwise monochrome chat content layer.
 _Avoid_: coloring body prose or user messages; per-view ad-hoc colors outside
 the named roles.
 
+**Pending Row**:
+The user message rendered from send until the event spine commits the same
+message — ephemeral derived view-state like the **Live Part**, never agent
+state, so the transcript shows the message instantly while the run is still
+queued behind the GPU lease or a model load. If the run dies before the commit
+(cancel while queued, load failure) it vanishes and its content is restored to
+the composer.
+_Avoid_: optimistic update / eager append (the rejected agent-state mutation);
+local echo; queued message (the lease-queue concept, not the row).
+
+**Waiting Row**:
+The placeholder row shown while a turn is waiting on the model — no live
+message yet, no pending tools — with a spinner in the marker slot and a
+stage label: "Loading model…" while the model is not yet loaded, "Reading
+context…" during turn prefill. Hands off to the live thinking row at the first
+delta with no geometry change; shown only for models whose template starts
+generation inside a think block, so the handoff is always seamless. Never
+appears between parts mid-stream or during tool execution.
+_Avoid_: prefill spinner (the removed floating `ProgressView`); thinking
+placeholder (it never says "Thinking"); progress row.
+
 ### Agent run lifecycle
 
 **Agent Run**:

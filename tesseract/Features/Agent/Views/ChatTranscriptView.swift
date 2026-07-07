@@ -51,6 +51,17 @@ struct ChatTranscriptView: View {
                     )
                 }
 
+                // The Pending Row: the just-sent user message, rendered through
+                // the same row view as its committed form — the event-spine
+                // commit swaps it into `items` with no visual change.
+                if let pending = session.pendingUserMessage {
+                    ChatItemRow(
+                        item: .user(pending),
+                        speakingMessageID: $speakingMessageID,
+                        isSpeechActive: isSpeechActive
+                    )
+                }
+
                 LiveMessageSection()
             }
             .padding(.horizontal, 24)
@@ -92,6 +103,14 @@ struct ChatTranscriptView: View {
         // even if the user had scrolled up into history.
         .onChange(of: session.items.count) { _, _ in
             if case .user = session.items.last {
+                autoFollow = true
+                scrollPosition.scrollTo(edge: .bottom)
+            }
+        }
+        // The Pending Row is the send signal now — it rises before any item
+        // commits (the run may sit queued behind a cold-start model load).
+        .onChange(of: session.pendingUserMessage?.id) { _, id in
+            if id != nil {
                 autoFollow = true
                 scrollPosition.scrollTo(edge: .bottom)
             }
@@ -187,6 +206,7 @@ private struct ChatItemRow: View {
 /// `liveMessage`/`livePart`.
 private struct LiveMessageSection: View {
     @Environment(ChatSession.self) private var session
+    @Environment(AgentEngine.self) private var agentEngine
 
     var body: some View {
         if let message = session.liveMessage {
@@ -202,11 +222,42 @@ private struct LiveMessageSection: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if session.runPhase == .streaming, session.livePart == nil, session.isGenerating {
-            // Waiting on the model (prefill, or between parts) — a quiet pulse.
+        // The Waiting Row: queued behind the lease (cold start) or in a turn
+        // prefill. Gated on `promptStartsThinking` — the turn's first tokens
+        // are then guaranteed to be thinking, so the live "Thinking…" row
+        // takes over with no geometry change. While the model is still
+        // loading, the gate can't be read for the incoming model, so the row
+        // shows for all models ("Loading model…" is true regardless); a
+        // non-thinking model drops the row once loaded. How a prefill wait
+        // should present for non-thinking models is deferred — every model
+        // the app currently ships starts its turns thinking.
+        if session.showsWaitingRow,
+            !agentEngine.isModelLoaded || agentEngine.promptStartsThinking
+        {
+            WaitingRow(isModelLoaded: agentEngine.isModelLoaded)
+        }
+    }
+}
+
+/// The Waiting Row: the placeholder for a turn that is waiting on the model —
+/// a spinner in the marker slot (the running-tool-row convention) and a stage
+/// label, "Loading model…" until the load completes, "Reading context…"
+/// through prefill. Same geometry as the live thinking row it hands off to,
+/// so the transition never shifts layout; only the text swaps.
+private struct WaitingRow: View {
+    let isModelLoaded: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             ProgressView()
-                .controlSize(.small)
-                .padding(.vertical, 2)
+                .controlSize(.mini)
+                .frame(width: ChatLayout.markerWidth)
+            Text(isModelLoaded ? "Reading context…" : "Loading model…")
+                .font(.system(size: chatBodyFontSize, weight: .medium))
+                .foregroundStyle(.secondary)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: isModelLoaded)
+            Spacer(minLength: 0)
         }
     }
 }

@@ -223,6 +223,9 @@ final class DependencyContainer: ObservableObject {
                 skillPills.recordUserInvocation(skillName: name)
             },
             clearComposerDraft: { [composerDraft] in composerDraft.clearDraft() },
+            restoreComposerDraft: { [composerDraft] text, images in
+                composerDraft.restore(text: text, images: images)
+            },
             onConversationSwitch: { [composerDraft, agentSystemPromptInspector, skillPills] in
                 composerDraft.resetEphemeral()
                 agentSystemPromptInspector.reset()

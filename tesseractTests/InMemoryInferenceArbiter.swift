@@ -36,6 +36,12 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
     /// of `ensureLoaded` failing (e.g. `modelNotDownloaded`).
     var ensureLoadedError: (any Error)?
 
+    /// When set, the lease suspends this long before running the body — the
+    /// in-memory analogue of a run sitting *queued* behind the lease (e.g. a
+    /// cold-start model load). A cancellation during the wait surfaces as
+    /// `CancellationError`, exactly like a real queued lease.
+    var leaseDelay: Duration?
+
     func withExclusiveGPU<T: Sendable>(
         _ slot: ModelSlot,
         llmModelIDOverride: String?,
@@ -49,6 +55,7 @@ final class InMemoryInferenceArbiter: InferenceArbitrating {
                 llmVision: llmVision
             ))
         if let ensureLoadedError { throw ensureLoadedError }
+        if let leaseDelay { try await Task.sleep(for: leaseDelay) }
         return try await body()
     }
 }
