@@ -71,7 +71,7 @@ nonisolated struct AssistantPartsBuilder: Sendable {
             return .events(appendText(chunk))
 
         case .thinkStart:
-            discardOpenToolCall()
+            retractOpenToolCall()
             var events = closeOpenPart()
             parts.append(.thinking(ThinkingPart(thinking: "")))
             openIndex = parts.count - 1
@@ -147,7 +147,7 @@ nonisolated struct AssistantPartsBuilder: Sendable {
         case .malformedToolCall(let raw):
             // The block closed unparseable — the Open Tool Call vanishes
             // without trace (the malformed-buffer surfacing owns recovery).
-            discardOpenToolCall()
+            retractOpenToolCall()
             return .malformed(raw: raw)
 
         case .info(let info):
@@ -168,16 +168,18 @@ nonisolated struct AssistantPartsBuilder: Sendable {
     /// An Open Tool Call that never parsed is retracted, not closed — the
     /// terminal message must not carry an unexecutable call.
     mutating func closeForTerminal() -> [AssistantMessageEvent] {
-        discardOpenToolCall()
+        retractOpenToolCall()
         return closeOpenPart()
     }
 
-    /// Drop an unfinished Open Tool Call before a terminal snapshot. The
-    /// abort/error paths call this so a half-written call is never persisted
-    /// (the same vanish-without-trace rule as the malformed and raw-text
-    /// fallbacks).
+    /// The vanish-without-trace rule: drop the in-flight tool-call state,
+    /// emitting nothing — the next event's partial (or the terminal message)
+    /// simply no longer contains the part, and consumers resync from the
+    /// snapshot they carry. The driver's abort/error paths call this directly
+    /// so a half-written call is never persisted or executed.
     mutating func retractOpenToolCall() {
-        discardOpenToolCall()
+        openToolCall = nil
+        preNameBuffer = ""
     }
 
     /// The pi-ai stop reason for a successful end of turn.
@@ -233,12 +235,12 @@ nonisolated struct AssistantPartsBuilder: Sendable {
 
     // MARK: - Private
 
-    /// Fold one raw tool-call fragment. Before name-lock the fragments pool in
-    /// `preNameBuffer` silently; the moment the name is known (from the parser,
-    /// or extracted from the accumulated buffer on the vendor-library path,
-    /// whose deltas never carry a name) the Open Tool Call is born and
-    /// `toolcallStart` fires with a real id and name. Afterward every fragment
-    /// grows the buffer and emits `toolcallDelta`.
+    /// Fold one raw tool-call fragment. Name-lock belongs to the producers
+    /// (`ToolCallParser` and `GenerationStreamLoop`'s vendor path, both via
+    /// `ToolCallNameLock`): before it fires, nameless fragments pool in
+    /// `preNameBuffer` silently; the first named fragment births the Open
+    /// Tool Call and `toolcallStart` fires with a real id and name. Afterward
+    /// every fragment grows the buffer and emits `toolcallDelta`.
     private mutating func appendToolCallDelta(
         name: String?, delta: String
     ) -> [AssistantMessageEvent] {
@@ -247,50 +249,16 @@ nonisolated struct AssistantPartsBuilder: Sendable {
             return [.toolcallDelta(contentIndex: parts.count, delta: delta, partial: snapshot())]
         }
         preNameBuffer += delta
-        guard let locked = name ?? Self.extractToolName(from: preNameBuffer) else {
-            return []
-        }
+        guard let name else { return [] }
         var events = closeOpenPart()
-        openToolCall = OpenToolCall(id: UUID().uuidString, name: locked, buffer: preNameBuffer)
+        openToolCall = OpenToolCall(id: UUID().uuidString, name: name, buffer: preNameBuffer)
         preNameBuffer = ""
         events.append(.toolcallStart(contentIndex: parts.count, partial: snapshot()))
         return events
     }
 
-    /// Drop the in-flight tool-call state without emitting anything: the next
-    /// event's partial (or the terminal message) simply no longer contains the
-    /// part, and consumers resync from the snapshot they carry.
-    private mutating func discardOpenToolCall() {
-        openToolCall = nil
-        preNameBuffer = ""
-    }
-
-    /// `"name": "X"` (JSON dialect) or `<function=X>` (XML dialect) in a raw
-    /// tool-call body. Nil until the literal is complete, so the name never
-    /// flickers through partial states — the same rule as `ToolCallParser`.
-    private static func extractToolName(from body: String) -> String? {
-        let ns = body as NSString
-        let range = NSRange(location: 0, length: ns.length)
-        for regex in [jsonNameRegex, xmlFunctionNameRegex] {
-            if let match = regex.firstMatch(in: body, range: range), match.numberOfRanges >= 2 {
-                return ns.substring(with: match.range(at: 1))
-            }
-        }
-        return nil
-    }
-
-    private static let jsonNameRegex: NSRegularExpression = {
-        // swiftlint:disable:next force_try
-        try! NSRegularExpression(pattern: #""name"\s*:\s*"([^"]+)""#)
-    }()
-
-    private static let xmlFunctionNameRegex: NSRegularExpression = {
-        // swiftlint:disable:next force_try
-        try! NSRegularExpression(pattern: #"<function=([^>\s]+)>"#)
-    }()
-
     private mutating func appendText(_ chunk: String) -> [AssistantMessageEvent] {
-        discardOpenToolCall()
+        retractOpenToolCall()
         if let index = openIndex, case .text(var t) = parts[index] {
             t.text += chunk
             parts[index] = .text(t)
@@ -309,7 +277,7 @@ nonisolated struct AssistantPartsBuilder: Sendable {
     }
 
     private mutating func appendThinking(_ chunk: String) -> [AssistantMessageEvent] {
-        discardOpenToolCall()
+        retractOpenToolCall()
         if let index = openIndex, case .thinking(var t) = parts[index] {
             t.thinking += chunk
             parts[index] = .thinking(t)

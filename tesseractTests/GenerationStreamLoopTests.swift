@@ -204,6 +204,32 @@ nonisolated struct GenerationStreamLoopTests {
     }
 
     @Test
+    func vendorBufferDeltasLockTheToolNameAtTheProducer() async throws {
+        let recorder = SinkRecorder()
+        let loop = GenerationStreamLoop(
+            initial: cannedHandle([
+                // Name literal split across deltas: nil until it closes.
+                .toolCallBufferDelta(#"{"name": "rea"#),
+                .toolCallBufferDelta(#"d", "arguments": {}}"#),
+                // Parsed call consumes the buffer — the lock resets.
+                toolCallGen(name: "read"),
+                .toolCallBufferDelta(#"{"name": "wri"#),
+                info(),
+            ]),
+            startsInsideThinkBlock: false,
+            safeguard: .init(enabled: false)
+        )
+
+        _ = try await loop.run(continuation: nil, sink: recorder.sink)
+
+        var deltaNames: [String?] = []
+        for event in recorder.events {
+            if case .toolCallDelta(let name, _) = event { deltaNames.append(name) }
+        }
+        #expect(deltaNames == [nil, "read", nil])
+    }
+
+    @Test
     func bufferedToolCallWithNoCloseAtEOSSurfacesOneWrappedMalformedToolCall() async throws {
         let recorder = SinkRecorder()
         let loop = GenerationStreamLoop(

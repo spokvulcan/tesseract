@@ -177,4 +177,17 @@ struct ToolCallParserDeltaTests {
         #expect(texts.contains("pre-text "))
         #expect(texts.contains(" post"))
     }
+
+    // MARK: - ToolCallNameLock (the shared name-lock definition)
+
+    @Test func nameLockFiresOnlyOnACompleteJSONNameLiteral() {
+        #expect(ToolCallNameLock.extract(from: #"{"name": "rea"#) == nil)
+        #expect(ToolCallNameLock.extract(from: #"{"name": "read", "arguments": {"#) == "read")
+        #expect(ToolCallNameLock.extract(from: #"{"name" : "read"}"#) == "read")
+    }
+
+    @Test func nameLockFiresOnACompleteXMLFunctionTag() {
+        #expect(ToolCallNameLock.extract(from: "<function=rea") == nil)
+        #expect(ToolCallNameLock.extract(from: "<function=read><parameter=path>") == "read")
+    }
 }

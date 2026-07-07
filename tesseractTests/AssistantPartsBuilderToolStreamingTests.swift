@@ -66,43 +66,28 @@ struct AssistantPartsBuilderToolStreamingTests {
         #expect(part?.argumentsJSON == #"{"name": "read", "arguments": {"#)
     }
 
-    @Test func nameLocksFromAccumulatedBufferWhenParserNeverNamesIt() {
-        // The vendor-library path forwards deltas with `name: nil` always —
-        // the builder extracts the name from its own accumulated buffer.
+    @Test func namelessDeltasPoolSilentlyUntilTheProducerLocksAName() {
+        // Name-lock belongs to the producers (`ToolCallNameLock` in
+        // ToolCallParser and GenerationStreamLoop's vendor path) — the
+        // builder reacts only to the delta's `name` field, but the part born
+        // at name-lock still carries every pooled nameless fragment.
         var builder = AssistantPartsBuilder()
 
         _ = builder.ingest(.toolCallDelta(name: nil, argumentsDelta: #"{"name": "wri"#))
+        _ = builder.ingest(.toolCallDelta(name: nil, argumentsDelta: #"te", "#))
         #expect(!hasToolCallPart(builder.snapshot()))
 
         guard
             case .events(let events) = builder.ingest(
-                .toolCallDelta(name: nil, argumentsDelta: #"te", "arguments": {"#))
+                .toolCallDelta(name: "write", argumentsDelta: #""arguments": {"#)),
+            case .toolcallStart(_, let partial) = events.last
         else {
-            Issue.record("expected toolcallStart once the name literal closes")
+            Issue.record("expected toolcallStart on the first named delta")
             return
         }
-        guard case .toolcallStart(_, let partial) = events.last else {
-            Issue.record("expected toolcallStart")
-            return
-        }
-        #expect(toolCallPart(at: 0, in: partial)?.name == "write")
-    }
-
-    @Test func nameLocksFromXMLFunctionBuffer() {
-        var builder = AssistantPartsBuilder()
-
-        guard
-            case .events(let events) = builder.ingest(
-                .toolCallDelta(name: nil, argumentsDelta: "<function=read><parameter=path>"))
-        else {
-            Issue.record("expected toolcallStart from XML function buffer")
-            return
-        }
-        guard case .toolcallStart(_, let partial) = events.last else {
-            Issue.record("expected toolcallStart")
-            return
-        }
-        #expect(toolCallPart(at: 0, in: partial)?.name == "read")
+        let part = toolCallPart(at: 0, in: partial)
+        #expect(part?.name == "write")
+        #expect(part?.argumentsJSON == #"{"name": "write", "arguments": {"#)
     }
 
     @Test func nameLockClosesTheOpenTextPartFirst() {

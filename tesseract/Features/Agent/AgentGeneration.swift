@@ -167,8 +167,9 @@ nonisolated enum AgentGeneration: Sendable {
     /// tool call. The authoritative `.toolCall` / `.malformedToolCall`
     /// event still fires once on close with the parsed payload and should
     /// replace the building span with the finalized one.
-    /// - Parameter name: non-nil once the parser has scanned past the
-    ///   first `"name":"X"` literal. `nil` before that point.
+    /// - Parameter name: non-nil once the producer's name-lock fires
+    ///   (`ToolCallNameLock`: the first complete name literal, JSON or XML
+    ///   dialect). `nil` before that point.
     /// - Parameter argumentsDelta: append-only raw text added to the parser
     ///   buffer on this chunk. Not parsed JSON.
     case toolCallDelta(name: String?, argumentsDelta: String)

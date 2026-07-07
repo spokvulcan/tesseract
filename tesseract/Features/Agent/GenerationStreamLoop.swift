@@ -137,6 +137,10 @@ nonisolated struct GenerationStreamLoop {
         // content as `.malformedToolCall`; a successful `.toolCall` consumed
         // the buffer and resets it.
         var libraryToolCallBufferAccum = ""
+        /// Name-lock for the vendor's in-flight buffer, mirroring
+        /// `ToolCallParser.toolCallCurrentName`: locked once from the
+        /// accumulated body, reset when a parsed `.toolCall` consumes it.
+        var libraryToolCallName: String?
         var libraryToolCallEventCount = 0
         var completionInfo: AgentGeneration.Info?
         var cancelled = false
@@ -250,12 +254,19 @@ nonisolated struct GenerationStreamLoop {
                         // building toward — reset so a later interrupted call's
                         // malformed surface doesn't include this parsed block.
                         libraryToolCallBufferAccum = ""
+                        libraryToolCallName = nil
                         sink(.toolCall(call))
 
                     case .toolCallBufferDelta(let delta):
                         libraryParsedToolCalls = true
                         libraryToolCallBufferAccum += delta
-                        sink(.toolCallDelta(name: nil, argumentsDelta: delta))
+                        if libraryToolCallName == nil {
+                            libraryToolCallName = ToolCallNameLock.extract(
+                                from: libraryToolCallBufferAccum)
+                        }
+                        sink(
+                            .toolCallDelta(
+                                name: libraryToolCallName, argumentsDelta: delta))
 
                     case .info(let vinfo):
                         // Captured into the Outcome, never pushed to the sink.

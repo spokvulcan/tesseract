@@ -313,13 +313,21 @@ final class ChatSession {
     // MARK: - The assistant stream fold
 
     private func fold(_ event: AssistantMessageEvent) {
+        // Only the Open Tool Call's own start/deltas sustain the writing
+        // phase; any other event means the call committed (`toolcallEnd`) or
+        // was retracted without an event of its own (text/thinking opening
+        // after an unclosed block, terminal done/error).
+        switch event {
+        case .toolcallStart, .toolcallDelta: break
+        default: endWritingToolPhaseIfNeeded()
+        }
+
         switch event {
         case .start(let partial):
             liveMessage = partial
 
         case .textStart(let index, let partial):
             liveMessage = partial
-            endWritingToolPhaseIfNeeded()
             livePart = LivePart(
                 messageID: partial.id, partIndex: index, kind: .text,
                 initial: textOfPart(at: index, in: partial), throttle: liveThrottle
@@ -327,7 +335,6 @@ final class ChatSession {
 
         case .thinkingStart(let index, let partial):
             liveMessage = partial
-            endWritingToolPhaseIfNeeded()
             thinkingStartInstants[
                 ThinkingPartKey(messageID: partial.id, partIndex: index)] = .now
             livePart = LivePart(
@@ -377,17 +384,14 @@ final class ChatSession {
 
         case .toolcallEnd(_, _, let partial):
             liveMessage = partial
-            endWritingToolPhaseIfNeeded()
 
         case .done(_, let message):
             liveMessage = message
-            endWritingToolPhaseIfNeeded()
 
         case .error(_, let message):
             // The partial is preserved; `messageEnd` commits it. The banner is
             // fed by the distinct `generationError` agent event.
             liveMessage = message
-            endWritingToolPhaseIfNeeded()
         }
     }
 
@@ -401,10 +405,9 @@ final class ChatSession {
         }
     }
 
-    /// Leave `.writingTool` for `.streaming`. Fired at `toolcallEnd`, and on
-    /// every event that means the Open Tool Call is gone without one — a
-    /// text/thinking part opening after a retraction, a malformed close, or
-    /// the terminal done/error (a call unclosed at end of stream).
+    /// Leave `.writingTool` for `.streaming`. The fold fires this for every
+    /// stream event that isn't the Open Tool Call's own start/delta; the
+    /// malformed close (which emits no stream event) fires it from `handle`.
     private func endWritingToolPhaseIfNeeded() {
         if case .writingTool = runPhase {
             runPhase = .streaming

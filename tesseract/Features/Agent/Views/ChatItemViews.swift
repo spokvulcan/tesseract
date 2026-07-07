@@ -257,10 +257,7 @@ struct ToolCallRowView: View {
                         if let duration = session.toolDuration(for: part.id),
                             duration >= ChatLayout.minBadgeDuration
                         {
-                            Text(duration.chatBadge)
-                                .font(.system(size: chatBodyFontSize))
-                                .foregroundStyle(.tertiary)
-                                .monospacedDigit()
+                            Text(duration.chatBadge).toolDurationBadge()
                         } else if isRunning, let start = session.toolStartInstant(for: part.id) {
                             LiveToolClockBadge(start: start)
                         }
@@ -362,12 +359,20 @@ private struct LiveToolClockBadge: View {
         TimelineView(.periodic(from: .now, by: 1)) { _ in
             let elapsed = ContinuousClock.now - start
             if elapsed >= .seconds(1) {
-                Text(elapsed.liveChatBadge)
-                    .font(.system(size: chatBodyFontSize))
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
+                Text(elapsed.liveChatBadge).toolDurationBadge()
             }
         }
+    }
+}
+
+extension Text {
+    /// The one styling of the trailing duration slot — the live and frozen
+    /// badges share it so the tick-to-frozen transition changes nothing but
+    /// the number.
+    fileprivate func toolDurationBadge() -> some View {
+        font(.system(size: chatBodyFontSize))
+            .foregroundStyle(.tertiary)
+            .monospacedDigit()
     }
 }
 

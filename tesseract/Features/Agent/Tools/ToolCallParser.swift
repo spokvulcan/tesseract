@@ -41,8 +41,9 @@ nonisolated final class ToolCallParser {
         /// arguments (e.g. the in-app Requests log) can update a "building"
         /// span on each delta. The authoritative `.toolCall` / `.malformedToolCall`
         /// event still fires once on `</tool_call>` close with the parsed payload.
-        /// - Parameter name: non-nil once the parser has scanned past the
-        ///   first `"name":"X"` literal. `nil` before that point.
+        /// - Parameter name: non-nil once the name-lock fires
+        ///   (`ToolCallNameLock` — the first complete name literal, JSON or
+        ///   XML dialect). `nil` before that point.
         /// - Parameter argumentsDelta: append-only raw text that was added to the
         ///   internal tool-call buffer on this chunk. Not parsed JSON.
         case toolCallDelta(name: String?, argumentsDelta: String)
@@ -68,15 +69,9 @@ nonisolated final class ToolCallParser {
     /// Reset on every `</tool_call>` close so the next in-flight tool
     /// call starts from zero.
     private var toolCallDeltaForwarded = 0
-    /// First non-nil once the parser has scanned past the first
-    /// `"name":"X"` literal inside the current `<tool_call>` block.
-    /// Reset on every `</tool_call>` close.
+    /// First non-nil once `ToolCallNameLock` fires on the current
+    /// `<tool_call>` block's body. Reset on every `</tool_call>` close.
     private var toolCallCurrentName: String?
-
-    private static let nameFieldRegex: NSRegularExpression = {
-        // swiftlint:disable:next force_try
-        try! NSRegularExpression(pattern: #""name"\s*:\s*"([^"]+)""#)
-    }()
 
     /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
     ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
@@ -300,7 +295,7 @@ nonisolated final class ToolCallParser {
                     // avoids rerunning the regex on every single delta
                     // after the name is already known.
                     if toolCallCurrentName == nil {
-                        toolCallCurrentName = Self.extractName(from: bodySoFar)
+                        toolCallCurrentName = ToolCallNameLock.extract(from: bodySoFar)
                     }
 
                     events.append(
@@ -325,7 +320,7 @@ nonisolated final class ToolCallParser {
             if bodyBeforeClose.count > toolCallDeltaForwarded {
                 let newChars = bodyBeforeClose.dropFirst(toolCallDeltaForwarded)
                 if toolCallCurrentName == nil {
-                    toolCallCurrentName = Self.extractName(from: bodyBeforeClose)
+                    toolCallCurrentName = ToolCallNameLock.extract(from: bodyBeforeClose)
                 }
                 events.append(
                     .toolCallDelta(
@@ -356,20 +351,6 @@ nonisolated final class ToolCallParser {
         }
 
         return events
-    }
-
-    /// Extract the function name from a partial or complete JSON body between
-    /// `<tool_call>` and `</tool_call>`. Returns `nil` until the closing quote
-    /// of the `"name":"X"` value has been observed so consumers don't flicker
-    /// between partial names like "re" → "read".
-    private static func extractName(from body: String) -> String? {
-        let ns = body as NSString
-        let match = nameFieldRegex.firstMatch(
-            in: body,
-            range: NSRange(location: 0, length: ns.length)
-        )
-        guard let match, match.numberOfRanges >= 2 else { return nil }
-        return ns.substring(with: match.range(at: 1))
     }
 
     /// Returns the earliest index where a partial prefix of any relevant tag
@@ -434,4 +415,35 @@ nonisolated final class ToolCallParser {
         }
         return nil
     }
+}
+
+// MARK: - Tool-call name lock
+
+/// The one definition of name-lock: the first *complete* tool-name literal in
+/// a raw in-flight tool-call body — JSON (`"name": "X"`) or XML
+/// (`<function=X>`). Nil until the literal closes, so a consumer never sees a
+/// partial name flicker ("re" → "read"). Shared by every `.toolCallDelta`
+/// producer: this parser and `GenerationStreamLoop`'s vendor-library path.
+nonisolated enum ToolCallNameLock {
+
+    static func extract(from body: String) -> String? {
+        let ns = body as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        for regex in [jsonNameRegex, xmlFunctionNameRegex] {
+            if let match = regex.firstMatch(in: body, range: range), match.numberOfRanges >= 2 {
+                return ns.substring(with: match.range(at: 1))
+            }
+        }
+        return nil
+    }
+
+    private static let jsonNameRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #""name"\s*:\s*"([^"]+)""#)
+    }()
+
+    private static let xmlFunctionNameRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #"<function=([^>]+)>"#)
+    }()
 }
