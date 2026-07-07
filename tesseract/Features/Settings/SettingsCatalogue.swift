@@ -33,7 +33,9 @@ enum SettingsCatalogue {
     // MARK: - Audio
 
     static let selectedMicrophoneUID = Setting.string("selectedMicrophoneUID", default: "")
-    static let voiceProcessingEnabled = Setting.bool("voiceProcessingEnabled", default: false)
+    // Voice Processing (PRD #175) graduated from a toggle to the standard
+    // capture mode (PRD #188) — the `voiceProcessingEnabled` key is abandoned,
+    // not migrated: reading simply stopped.
     static let captureDumpEnabled = Setting.bool("captureDumpEnabled", default: true)
 
     // MARK: - Language

@@ -881,12 +881,21 @@ _Avoid_: coordinator (it is composed by the coordinators, not one), capture engi
 **Voice Processing**:
 Apple's capture-time processing bundle — echo cancellation, automatic gain control,
 noise suppression — applied by the OS before the app ever sees samples; in Tesseract
-one user toggle covering all microphone capture (dictation, **Voice Input**, and the
-settings level meter alike). Capture-time: it changes what gets recorded, so its
-effect can never be replayed offline against the same utterance — unlike post-capture
-DSP.
+the standard mode for all microphone capture (dictation, **Voice Input**, and the
+settings level meter alike), with raw capture only as the fallback when the platform
+refuses it. Capture-time: it changes what gets recorded, so its effect can never be
+replayed offline against the same utterance — unlike post-capture DSP.
 _Avoid_: Voice Isolation (the user-only Control Center mic mode — not programmatically
 settable), noise cancellation, VPIO / `setVoiceProcessingEnabled` (the implementation).
+
+**System Audio Duck**:
+What happens to all *other* system audio while **Voice Processing** is armed. Two
+treatments: *idle* — full volume, by ear indistinguishable from the app not running —
+and *recording* — the standard dip exactly while a dictation capture runs. Armed
+otherwise means audibly ducked; the idle treatment is what makes staying armed free
+(ADR-0025).
+_Avoid_: ducking level (one lever inside a treatment), mute/suppression (it attenuates,
+never silences).
 
 **Capture Dump**:
 The on-disk ring buffer of recent dictation capture audio — what the microphone tap

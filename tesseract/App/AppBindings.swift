@@ -159,6 +159,18 @@ final class AppBindings {
 
         installSubscriptions()
 
+        // Build the capture engine (and arm Voice Processing) once at launch —
+        // the arm is the expensive step (PRD #188) and paying it here keeps
+        // every press at engine-start cost. As a task rather than inline: the
+        // arm takes hundreds of ms and must not block the launch turn. Launch
+        // is also when no other in-process audio can be running yet, which is
+        // exactly when arming is safe (arming starves concurrent in-process
+        // capture — measured, ADR-0025). No-ops without microphone permission;
+        // the first press arms instead in that case.
+        Task { [weak self] in
+            self?.effects.prewarmAudioCapture()
+        }
+
         // Load an already-downloaded Whisper model as an owned child task,
         // *after* every subscription is installed — the HTTP server (and every
         // other rule) must never wait on a speech-model load.
@@ -332,8 +344,6 @@ final class AppBindings {
                 }
             })
 
-        installCapturePrewarmSubscription()
-
         // Re-bind the dictation hotkey on change. The initial emission matches
         // the combo the wiring already bound, so the unchanged-combo guard makes
         // launch a no-op instead of a redundant re-bind.
@@ -395,18 +405,4 @@ final class AppBindings {
             })
     }
 
-    /// Builds the capture engine ahead of the first press. The initial
-    /// emission prewarms at launch; later ones (the Voice Processing toggle)
-    /// are effectively no-ops — VP is armed per capture, not baked into the
-    /// prewarmed engine, because an armed VPIO ducks system audio even while
-    /// idle. (The effect also no-ops mid-capture and without mic permission.)
-    private func installCapturePrewarmSubscription() {
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await _ in Observations({ self.settings.voiceProcessingEnabled }) {
-                    self.effects.prewarmAudioCapture()
-                }
-            })
-    }
 }

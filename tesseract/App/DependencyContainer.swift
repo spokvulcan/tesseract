@@ -17,9 +17,7 @@ final class DependencyContainer: ObservableObject {
     lazy var audioDeviceManager = AudioDeviceManager()
 
     // Audio
-    lazy var audioCaptureEngine = AudioCaptureEngine(
-        isVoiceProcessingEnabled: { [settingsManager] in settingsManager.voiceProcessingEnabled }
-    )
+    lazy var audioCaptureEngine = AudioCaptureEngine()
 
     /// The **Capture Dump** (PRD #175) — one shared ring buffer for every
     /// capture surface, so bounds are enforced across the whole app.

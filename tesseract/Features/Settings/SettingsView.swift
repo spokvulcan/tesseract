@@ -226,9 +226,8 @@ struct RecordingSettingsSection: View {
                 AudioLevelMeter(audioCapture: container.audioCaptureEngine)
                     .frame(height: 20)
 
-                Toggle("Voice Processing", isOn: $settings.voiceProcessingEnabled)
                 Text(
-                    "Applies Apple's echo cancellation, noise suppression, and automatic gain to all voice capture. Other audio may briefly duck while recording."
+                    "Capture uses Apple's echo cancellation, noise suppression, and automatic gain. Other audio dips briefly while recording."
                 )
                 .font(.footnote)
                 .foregroundStyle(.secondary)

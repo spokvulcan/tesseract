@@ -58,20 +58,11 @@ struct SettingsCatalogueTests {
     }
 
     @Test
-    func voiceProcessingDefaultsOff() {
-        // PRD #175: Voice Processing is an experiment the owner opts into —
-        // the baseline capture behavior must be unchanged on a fresh install.
-        let store = InMemorySettingsStore()
-        #expect(SettingsCatalogue.voiceProcessingEnabled.default == false)
-        #expect(SettingsCatalogue.voiceProcessingEnabled.load(from: store) == false)
-    }
-
-    @Test
     func captureSettingsRoundTripThroughTheStore() {
+        // Voice Processing has no setting anymore — it is the standard capture
+        // mode (PRD #188); the Capture Dump toggle is what remains.
         let store = InMemorySettingsStore()
-        SettingsCatalogue.voiceProcessingEnabled.write(true, to: store)
         SettingsCatalogue.captureDumpEnabled.write(false, to: store)
-        #expect(SettingsCatalogue.voiceProcessingEnabled.load(from: store) == true)
         #expect(SettingsCatalogue.captureDumpEnabled.load(from: store) == false)
     }
 
