@@ -122,7 +122,8 @@ struct ChatSessionTests {
         #expect(session.livePart?.partIndex == 1)
 
         drive(session, &builder, .toolCall(GenerationFixtures.toolCall(name: "read_file")))
-        // Text part closed by the tool call; tool calls never stream.
+        // Text part closed by the tool call; no Live Part exists for tool
+        // calls (this parse had no preceding deltas — the atomic pair).
         #expect(session.livePart == nil)
         #expect(session.liveMessage?.content.count == 3)
 
@@ -174,6 +175,153 @@ struct ChatSessionTests {
                 toolCallId: "call-1", toolName: "read_file",
                 result: .text("file body"), isError: false))
         #expect(session.runPhase == .streaming)
+    }
+
+    // MARK: - Streaming tool calls (Open Tool Call + Tool Clock)
+
+    @Test func writingToolPhaseAndToolClockSpanWritingToExecution() {
+        let session = makeSession()
+        var builder = AssistantPartsBuilder()
+
+        session.handle(.agentStart)
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+
+        // Pre-name fragment: still plain streaming, no row, no clock.
+        drive(session, &builder, .toolCallDelta(name: nil, argumentsDelta: #"{"na"#))
+        #expect(session.runPhase == .streaming)
+        #expect(session.liveMessage?.content.isEmpty != false)
+
+        // Name-lock: the Open Tool Call is born — row in the live message,
+        // writing phase entered, Tool Clock anchored.
+        drive(
+            session, &builder,
+            .toolCallDelta(name: "read_file", argumentsDelta: #"me": "read_file", "arg"#))
+        #expect(session.runPhase == .writingTool("read_file"))
+        guard case .toolCall(let open) = session.liveMessage?.content.first else {
+            Issue.record("expected the Open Tool Call in the live message")
+            return
+        }
+        #expect(open.name == "read_file")
+        let anchor = session.toolStartInstant(for: open.id)
+        #expect(anchor != nil)
+        // No Live Part for tool calls; deltas are a rendering no-op.
+        #expect(session.livePart == nil)
+
+        drive(
+            session, &builder,
+            .toolCallDelta(name: "read_file", argumentsDelta: #"uments": {}}"#))
+        #expect(session.runPhase == .writingTool("read_file"))
+
+        // Parse commits in place: same id, back to streaming.
+        drive(session, &builder, .toolCall(GenerationFixtures.toolCall(name: "read_file")))
+        #expect(session.runPhase == .streaming)
+        guard case .toolCall(let committed) = session.liveMessage?.content.first else {
+            Issue.record("expected the committed tool-call part")
+            return
+        }
+        #expect(committed.id == open.id)
+
+        // Execution start must not reset the clock; execution end freezes it.
+        session.handle(
+            .toolExecutionStart(toolCallId: committed.id, toolName: "read_file", argsJSON: "{}"))
+        #expect(session.runPhase == .executingTool("read_file"))
+        #expect(session.toolStartInstant(for: committed.id) == anchor)
+
+        session.handle(
+            .toolExecutionEnd(
+                toolCallId: committed.id, toolName: "read_file",
+                result: .text("ok"), isError: false))
+        #expect(session.toolDuration(for: committed.id) != nil)
+        #expect(session.toolStartInstant(for: committed.id) == nil)
+    }
+
+    @Test func abandonedToolCallVanishesAndPhaseRecovers() {
+        let session = makeSession()
+        var builder = AssistantPartsBuilder()
+
+        session.handle(.agentStart)
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+
+        drive(
+            session, &builder,
+            .toolCallDelta(name: "read_file", argumentsDelta: #"{"name": "read_file""#))
+        #expect(session.runPhase == .writingTool("read_file"))
+
+        // Parser finalize reclassified the unclosed block as raw text: the
+        // retraction rides the next part's snapshot — row gone, phase back.
+        drive(session, &builder, .text(#"<tool_call>{"name": "read_file""#))
+        #expect(session.runPhase == .streaming)
+        let hasToolCall = session.liveMessage?.content.contains {
+            if case .toolCall = $0 { return true } else { return false }
+        }
+        #expect(hasToolCall == false)
+    }
+
+    @Test func malformedCloseLeavesTheWritingPhasePromptly() {
+        let session = makeSession()
+        var builder = AssistantPartsBuilder()
+
+        session.handle(.agentStart)
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+
+        drive(
+            session, &builder,
+            .toolCallDelta(name: "read_file", argumentsDelta: #"{"name": "read_file", bad"#))
+        #expect(session.runPhase == .writingTool("read_file"))
+
+        // The block closed unparseable: the builder retracts with no stream
+        // event of its own; the loop's distinct malformed event resets the
+        // phase immediately, not at the next part boundary.
+        guard
+            case .malformed(let raw) = builder.ingest(
+                .malformedToolCall(#"{"name": "read_file", bad"#))
+        else {
+            Issue.record("expected malformed step")
+            return
+        }
+        session.handle(.malformedToolCall(raw: raw))
+        #expect(session.runPhase == .streaming)
+    }
+
+    @Test func unclosedToolCallAtTerminalLeavesNoTraceInTheCommit() {
+        let session = makeSession()
+        var builder = AssistantPartsBuilder()
+
+        session.handle(.agentStart)
+        let start = builder.snapshot()
+        session.handle(.messageStart(message: start))
+        session.handle(.messageUpdate(message: start, event: .start(partial: start)))
+
+        drive(session, &builder, .text("Checking."))
+        drive(
+            session, &builder,
+            .toolCallDelta(name: "read_file", argumentsDelta: #"{"name": "read_file""#))
+        #expect(session.runPhase == .writingTool("read_file"))
+
+        // Stream ends with the call unclosed (e.g. token limit): terminal
+        // close retracts it; done resets the phase; the commit carries text only.
+        for event in builder.closeForTerminal() {
+            session.handle(.messageUpdate(message: event.partial, event: event))
+        }
+        let final = builder.finalize(stopReason: builder.terminalStopReason)
+        session.handle(.messageUpdate(message: final, event: .done(reason: .stop, message: final)))
+        session.handle(.messageEnd(message: final))
+        session.handle(.agentEnd(messages: []))
+
+        #expect(session.runPhase == .idle)
+        guard case .assistant(let committed) = session.items.first else {
+            Issue.record("expected committed assistant item")
+            return
+        }
+        #expect(committed.text == "Checking.")
+        #expect(committed.toolCalls.isEmpty)
+        #expect(committed.stopReason == .stop)
     }
 
     // MARK: - Cancellation and errors

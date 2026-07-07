@@ -303,6 +303,9 @@ private func streamAssistantResponse(
     emit(.messageUpdate(message: placeholderMessage, event: .start(partial: placeholderMessage)))
 
     func emitAborted() -> AssistantMessage {
+        // A half-written tool call vanishes without trace — it must never be
+        // persisted or reach tool extraction.
+        builder.retractOpenToolCall()
         let msg = builder.snapshot(stopReason: .aborted)
         emit(.messageUpdate(message: msg, event: .error(reason: .aborted, error: msg)))
         emit(.messageEnd(message: msg))
@@ -334,6 +337,8 @@ private func streamAssistantResponse(
             return .success(emitAborted(), .cancelled)
         }
         // Preserve the partial message — runLoop will append it to context.
+        // (Minus any half-written tool call, which vanishes without trace.)
+        builder.retractOpenToolCall()
         let msg = builder.snapshot(stopReason: .error, errorMessage: error.localizedDescription)
         emit(.messageUpdate(message: msg, event: .error(reason: .error, error: msg)))
         emit(.messageEnd(message: msg))

@@ -261,6 +261,8 @@ struct ToolCallRowView: View {
                                 .font(.system(size: chatBodyFontSize))
                                 .foregroundStyle(.tertiary)
                                 .monospacedDigit()
+                        } else if isRunning, let start = session.toolStartInstant(for: part.id) {
+                            LiveToolClockBadge(start: start)
                         }
                         Spacer(minLength: 0)
                     }
@@ -345,6 +347,27 @@ struct ToolCallRowView: View {
             fileURL = PathSandbox.defaultRoot.appendingPathComponent(path).standardizedFileURL
         }
         NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+    }
+}
+
+/// The ticking Tool Clock readout, in the same trailing slot the frozen
+/// duration badge takes over on completion. Whole seconds at 1 Hz — the tick
+/// is scoped to this view, so nothing else invalidates — and it appears only
+/// once elapsed reaches 1s (the live analog of `minBadgeDuration`): a call
+/// that finishes fast never flashes "0s".
+private struct LiveToolClockBadge: View {
+    let start: ContinuousClock.Instant
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let elapsed = ContinuousClock.now - start
+            if elapsed >= .seconds(1) {
+                Text(elapsed.liveChatBadge)
+                    .font(.system(size: chatBodyFontSize))
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
+        }
     }
 }
 

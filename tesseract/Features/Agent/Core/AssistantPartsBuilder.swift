@@ -13,8 +13,13 @@ import MLXLMCommon
 ///
 /// Part-boundary rule: a part stays open while events of its kind arrive;
 /// an event of a different kind closes it (emitting `*_end`) and opens the
-/// next (emitting `*_start`). Tool calls arrive fully parsed, so each one is
-/// an immediate start + end pair.
+/// next (emitting `*_start`). Tool calls stream through the **Open Tool
+/// Call**: the part is born at name-lock (`toolcallStart` with a real id and
+/// name), grows raw fragments via `toolcallDelta`, and commits in place on
+/// the parsed `.toolCall` (`toolcallEnd`, same id). An Open Tool Call lives
+/// outside `parts` — snapshots append it — so every path that ends the turn
+/// without a parse (raw-text fallback, malformed close, terminal close,
+/// abort) retracts it without trace.
 nonisolated struct AssistantPartsBuilder: Sendable {
 
     /// Stable identity for the turn's assistant message.
@@ -25,6 +30,20 @@ nonisolated struct AssistantPartsBuilder: Sendable {
 
     private(set) var parts: [ContentPart] = []
     private var usage = Usage()
+
+    /// The in-flight tool call, born at name-lock. `buffer` accumulates the
+    /// raw body fragments (pre-name characters included) — the committed
+    /// part's normalized-JSON guarantee does not apply while open.
+    private struct OpenToolCall {
+        let id: String
+        let name: String
+        var buffer: String
+    }
+
+    private var openToolCall: OpenToolCall?
+
+    /// Raw body accumulated before the name locks — no part exists yet.
+    private var preNameBuffer = ""
 
     /// Whether generation stopped at the token limit (from the terminal
     /// `.info` metrics) — maps to pi-ai's `length` stop reason.
@@ -52,6 +71,7 @@ nonisolated struct AssistantPartsBuilder: Sendable {
             return .events(appendText(chunk))
 
         case .thinkStart:
+            discardOpenToolCall()
             var events = closeOpenPart()
             parts.append(.thinking(ThinkingPart(thinking: "")))
             openIndex = parts.count - 1
@@ -94,11 +114,28 @@ nonisolated struct AssistantPartsBuilder: Sendable {
             ])
 
         case .toolCall(let call):
+            let normalized = ToolArgumentNormalizer.encode(call.function.arguments)
+            if let open = openToolCall {
+                // Commit the Open Tool Call in place: same id (row identity
+                // and the Tool Clock key survive), authoritative name, and
+                // the raw buffer replaced by the normalized arguments.
+                openToolCall = nil
+                let part = ToolCallPart(
+                    id: open.id, name: call.function.name, argumentsJSON: normalized)
+                parts.append(.toolCall(part))
+                let index = parts.count - 1
+                return .events([
+                    .toolcallEnd(contentIndex: index, toolCall: part, partial: snapshot())
+                ])
+            }
+            // No deltas preceded the parse (or the name never locked) — the
+            // original atomic start + end pair.
+            preNameBuffer = ""
             var events = closeOpenPart()
             let part = ToolCallPart(
                 id: UUID().uuidString,
                 name: call.function.name,
-                argumentsJSON: ToolArgumentNormalizer.encode(call.function.arguments)
+                argumentsJSON: normalized
             )
             parts.append(.toolCall(part))
             let index = parts.count - 1
@@ -108,6 +145,9 @@ nonisolated struct AssistantPartsBuilder: Sendable {
             return .events(events)
 
         case .malformedToolCall(let raw):
+            // The block closed unparseable — the Open Tool Call vanishes
+            // without trace (the malformed-buffer surfacing owns recovery).
+            discardOpenToolCall()
             return .malformed(raw: raw)
 
         case .info(let info):
@@ -117,17 +157,27 @@ nonisolated struct AssistantPartsBuilder: Sendable {
             if case .length = info.stopReason { hitLengthLimit = true }
             return .silent
 
-        case .toolCallDelta:
-            // Live tool-call argument deltas are a Requests-log concern; the
-            // chat surfaces the call when it parses.
-            return .silent
+        case .toolCallDelta(let name, let argumentsDelta):
+            let events = appendToolCallDelta(name: name, delta: argumentsDelta)
+            return events.isEmpty ? .silent : .events(events)
         }
     }
 
     /// Close any still-open part at end of stream, returning its `*_end`
     /// event. Call before `finalize` so the event protocol terminates cleanly.
+    /// An Open Tool Call that never parsed is retracted, not closed — the
+    /// terminal message must not carry an unexecutable call.
     mutating func closeForTerminal() -> [AssistantMessageEvent] {
-        closeOpenPart()
+        discardOpenToolCall()
+        return closeOpenPart()
+    }
+
+    /// Drop an unfinished Open Tool Call before a terminal snapshot. The
+    /// abort/error paths call this so a half-written call is never persisted
+    /// (the same vanish-without-trace rule as the malformed and raw-text
+    /// fallbacks).
+    mutating func retractOpenToolCall() {
+        discardOpenToolCall()
     }
 
     /// The pi-ai stop reason for a successful end of turn.
@@ -142,10 +192,17 @@ nonisolated struct AssistantPartsBuilder: Sendable {
 
     /// The turn so far. Used for every per-event partial and for the
     /// cancel/error paths, which must preserve the partial message exactly.
+    /// An Open Tool Call appears as the trailing part, its `argumentsJSON`
+    /// holding the raw accumulated buffer (terminal paths retract it first).
     func snapshot(stopReason: StopReason = .stop, errorMessage: String? = nil) -> AssistantMessage {
-        AssistantMessage(
+        var content = parts
+        if let open = openToolCall {
+            content.append(
+                .toolCall(ToolCallPart(id: open.id, name: open.name, argumentsJSON: open.buffer)))
+        }
+        return AssistantMessage(
             id: messageID,
-            content: parts,
+            content: content,
             model: model,
             usage: usage,
             stopReason: stopReason,
@@ -176,7 +233,64 @@ nonisolated struct AssistantPartsBuilder: Sendable {
 
     // MARK: - Private
 
+    /// Fold one raw tool-call fragment. Before name-lock the fragments pool in
+    /// `preNameBuffer` silently; the moment the name is known (from the parser,
+    /// or extracted from the accumulated buffer on the vendor-library path,
+    /// whose deltas never carry a name) the Open Tool Call is born and
+    /// `toolcallStart` fires with a real id and name. Afterward every fragment
+    /// grows the buffer and emits `toolcallDelta`.
+    private mutating func appendToolCallDelta(
+        name: String?, delta: String
+    ) -> [AssistantMessageEvent] {
+        if openToolCall != nil {
+            openToolCall?.buffer += delta
+            return [.toolcallDelta(contentIndex: parts.count, delta: delta, partial: snapshot())]
+        }
+        preNameBuffer += delta
+        guard let locked = name ?? Self.extractToolName(from: preNameBuffer) else {
+            return []
+        }
+        var events = closeOpenPart()
+        openToolCall = OpenToolCall(id: UUID().uuidString, name: locked, buffer: preNameBuffer)
+        preNameBuffer = ""
+        events.append(.toolcallStart(contentIndex: parts.count, partial: snapshot()))
+        return events
+    }
+
+    /// Drop the in-flight tool-call state without emitting anything: the next
+    /// event's partial (or the terminal message) simply no longer contains the
+    /// part, and consumers resync from the snapshot they carry.
+    private mutating func discardOpenToolCall() {
+        openToolCall = nil
+        preNameBuffer = ""
+    }
+
+    /// `"name": "X"` (JSON dialect) or `<function=X>` (XML dialect) in a raw
+    /// tool-call body. Nil until the literal is complete, so the name never
+    /// flickers through partial states — the same rule as `ToolCallParser`.
+    private static func extractToolName(from body: String) -> String? {
+        let ns = body as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        for regex in [jsonNameRegex, xmlFunctionNameRegex] {
+            if let match = regex.firstMatch(in: body, range: range), match.numberOfRanges >= 2 {
+                return ns.substring(with: match.range(at: 1))
+            }
+        }
+        return nil
+    }
+
+    private static let jsonNameRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #""name"\s*:\s*"([^"]+)""#)
+    }()
+
+    private static let xmlFunctionNameRegex: NSRegularExpression = {
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: #"<function=([^>\s]+)>"#)
+    }()
+
     private mutating func appendText(_ chunk: String) -> [AssistantMessageEvent] {
+        discardOpenToolCall()
         if let index = openIndex, case .text(var t) = parts[index] {
             t.text += chunk
             parts[index] = .text(t)
@@ -195,6 +309,7 @@ nonisolated struct AssistantPartsBuilder: Sendable {
     }
 
     private mutating func appendThinking(_ chunk: String) -> [AssistantMessageEvent] {
+        discardOpenToolCall()
         if let index = openIndex, case .thinking(var t) = parts[index] {
             t.thinking += chunk
             parts[index] = .thinking(t)
@@ -211,8 +326,9 @@ nonisolated struct AssistantPartsBuilder: Sendable {
         return events
     }
 
-    /// Close the open part, emitting its `*_end` event. Tool-call parts are
-    /// never open (they start and end atomically).
+    /// Close the open part, emitting its `*_end` event. `openIndex` never
+    /// points at a tool-call part — the in-flight call is the separately
+    /// tracked Open Tool Call.
     private mutating func closeOpenPart() -> [AssistantMessageEvent] {
         guard let index = openIndex else { return [] }
         openIndex = nil

@@ -86,6 +86,15 @@ struct AsyncImageAttachmentView: View {
 // MARK: - Duration formatting
 
 extension Duration {
+    /// Whole-second readout for the ticking Tool Clock: "4s", "1m 05s".
+    /// Tenths would flicker at tick rate and read as anxiety, not
+    /// information; the frozen badge (`chatBadge`) keeps them.
+    var liveChatBadge: String {
+        let totalSeconds = Int(components.seconds)
+        if totalSeconds < 60 { return "\(totalSeconds)s" }
+        return String(format: "%dm %02ds", totalSeconds / 60, totalSeconds % 60)
+    }
+
     /// Compact human duration for tool rows: "0.4s", "12s", "2m 05s".
     var chatBadge: String {
         let totalSeconds =

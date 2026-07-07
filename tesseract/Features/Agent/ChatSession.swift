@@ -8,6 +8,10 @@ import Observation
 enum ChatRunPhase: Equatable, Sendable {
     case idle
     case streaming
+    /// The model is writing a tool call (the Open Tool Call is live) — the
+    /// tool row owns the live indicator, so the transcript's quiet spinner
+    /// stays hidden. Associated value: the tool name.
+    case writingTool(String)
     case executingTool(String)
     case transformingContext(ContextTransformReason)
 }
@@ -81,8 +85,11 @@ final class ChatSession {
     /// Tool calls currently executing (run-phase bookkeeping).
     @ObservationIgnored private var pendingToolCalls: Set<String> = []
 
-    /// Wall-clock execution time per finished tool call — the tool row's
-    /// duration badge. Start instants are recorded on `toolExecutionStart`.
+    /// The Tool Clock: one wall clock per tool call, from `toolcallStart`
+    /// (name-lock, when the row first appears) through writing, waiting, and
+    /// execution to `toolExecutionEnd` — the frozen badge reads "time from
+    /// first visible to result". `toolStartInstants` is the ticking clock's
+    /// anchor; `toolExecutionStart` never resets an existing instant.
     private var toolDurations: [String: Duration] = [:]
     @ObservationIgnored private var toolStartInstants: [String: ContinuousClock.Instant] = [:]
 
@@ -209,6 +216,7 @@ final class ChatSession {
             clearLiveState()
             runPhase = .idle
             pendingToolCalls.removeAll()
+            toolStartInstants.removeAll()
             thinkingStartInstants.removeAll()
             autoSpeakIfEnabled()
 
@@ -252,11 +260,14 @@ final class ChatSession {
             commit(message)
 
         case .malformedToolCall:
-            break
+            // The Open Tool Call was retracted with no stream event of its
+            // own — leave the writing phase now rather than waiting for the
+            // next part boundary.
+            endWritingToolPhaseIfNeeded()
 
         case .toolExecutionStart(let id, let name, _):
             pendingToolCalls.insert(id)
-            toolStartInstants[id] = .now
+            anchorToolClock(id)
             runPhase = .executingTool(name)
 
         case .toolExecutionUpdate:
@@ -278,9 +289,19 @@ final class ChatSession {
         toolResultsByCallID[toolCallID]
     }
 
-    /// Execution duration for a finished tool call, if measured this session.
+    /// The Tool Clock's frozen reading for a finished tool call, if measured
+    /// this session: name-lock through execution end.
     func toolDuration(for toolCallID: String) -> Duration? {
         toolDurations[toolCallID]
+    }
+
+    /// The Tool Clock's anchor for a still-active tool call — the live badge
+    /// derives its ticking elapsed time from this. Nil once the call finishes
+    /// (the frozen `toolDuration` takes over) or for calls not started this
+    /// session. Not observable; the badge's `TimelineView` drives its own
+    /// updates.
+    func toolStartInstant(for toolCallID: String) -> ContinuousClock.Instant? {
+        toolStartInstants[toolCallID]
     }
 
     /// Streaming duration for a committed thinking part, if measured this
@@ -298,6 +319,7 @@ final class ChatSession {
 
         case .textStart(let index, let partial):
             liveMessage = partial
+            endWritingToolPhaseIfNeeded()
             livePart = LivePart(
                 messageID: partial.id, partIndex: index, kind: .text,
                 initial: textOfPart(at: index, in: partial), throttle: liveThrottle
@@ -305,6 +327,7 @@ final class ChatSession {
 
         case .thinkingStart(let index, let partial):
             liveMessage = partial
+            endWritingToolPhaseIfNeeded()
             thinkingStartInstants[
                 ThinkingPartKey(messageID: partial.id, partIndex: index)] = .now
             livePart = LivePart(
@@ -334,21 +357,57 @@ final class ChatSession {
                 thinkingDurations[key] = .now - start
             }
 
-        case .toolcallStart(_, let partial),
-            .toolcallEnd(_, _, let partial):
-            // Tool calls commit atomically; no Live Part exists for them.
+        case .toolcallStart(let index, let partial):
+            // The Open Tool Call is born (name-lock): the row appears, the
+            // Tool Clock starts, and the writing phase hides the transcript's
+            // quiet spinner. No Live Part — argument deltas are not rendered.
             liveMessage = partial
+            if partial.content.indices.contains(index),
+                case .toolCall(let part) = partial.content[index]
+            {
+                anchorToolClock(part.id)
+                runPhase = .writingTool(part.name)
+            }
 
         case .toolcallDelta:
+            // Deliberately a rendering no-op: the row shows status only
+            // (title, spinner, ticking badge); `liveMessage` republishes at
+            // part boundaries. The Tool Clock ticks via its own TimelineView.
             break
+
+        case .toolcallEnd(_, _, let partial):
+            liveMessage = partial
+            endWritingToolPhaseIfNeeded()
 
         case .done(_, let message):
             liveMessage = message
+            endWritingToolPhaseIfNeeded()
 
         case .error(_, let message):
             // The partial is preserved; `messageEnd` commits it. The banner is
             // fed by the distinct `generationError` agent event.
             liveMessage = message
+            endWritingToolPhaseIfNeeded()
+        }
+    }
+
+    /// Anchor the Tool Clock for a call id, never resetting an existing
+    /// instant: the clock runs continuously from `toolcallStart` (name-lock)
+    /// across the execution boundary. `toolExecutionStart` anchors only when
+    /// the writing phase was never observed (e.g. resync mid-turn).
+    private func anchorToolClock(_ toolCallID: String) {
+        if toolStartInstants[toolCallID] == nil {
+            toolStartInstants[toolCallID] = .now
+        }
+    }
+
+    /// Leave `.writingTool` for `.streaming`. Fired at `toolcallEnd`, and on
+    /// every event that means the Open Tool Call is gone without one — a
+    /// text/thinking part opening after a retraction, a malformed close, or
+    /// the terminal done/error (a call unclosed at end of stream).
+    private func endWritingToolPhaseIfNeeded() {
+        if case .writingTool = runPhase {
+            runPhase = .streaming
         }
     }
 
@@ -643,6 +702,7 @@ final class ChatSession {
         clearLiveState()
         runPhase = .idle
         pendingToolCalls.removeAll()
+        toolStartInstants.removeAll()
         if resyncItems {
             resync(from: agent.state.messages)
         }

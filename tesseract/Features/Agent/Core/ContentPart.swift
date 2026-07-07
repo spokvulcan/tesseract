@@ -60,7 +60,11 @@ nonisolated struct ThinkingPart: Sendable, Codable, Equatable {
     var thinking: String
 }
 
-/// A parsed tool call with stable identity.
+/// A tool call with stable identity. In a *committed* message
+/// `argumentsJSON` is the normalized JSON string; while the call is still
+/// streaming (the Open Tool Call in a partial message) it holds the raw
+/// accumulated body fragments, replaced wholesale at `toolcallEnd`. The id
+/// is minted at name-lock and survives the partial → committed transition.
 nonisolated struct ToolCallPart: Sendable, Codable, Equatable, Identifiable {
     let id: String
     let name: String

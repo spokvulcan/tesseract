@@ -698,6 +698,26 @@ unknown tools fall back to the raw tool name.
 _Avoid_: progressive verbs ("Reading…" — implies still running, which the
 spinner owns); bare tool names for known tools; filename-only targets.
 
+**Open Tool Call**:
+The chat-side partial tool-call **Content Part** — born with a stable id and
+real name the moment the streaming parser locks the tool name, its arguments
+accumulating raw fragments until the call parses (the normalized-JSON guarantee
+applies only to committed parts). Lives only in the live message; if the turn
+ends without a parsed call (malformed, truncated, aborted) it vanishes without
+trace.
+_Avoid_: fragment (the server wire term); pending tool call (the
+executing-phase set); partial part (ambiguous with the whole-message "partial"
+snapshot).
+
+**Tool Clock**:
+The single per-call wall clock: starts when the **Open Tool Call** is born,
+ticks live in whole seconds (appearing once elapsed reaches 1s), runs
+continuously through writing, waiting, and execution, and freezes into the
+row's duration badge at execution end. The badge therefore reads "time from
+first visible to result."
+_Avoid_: execution duration (the pre-2026-07 badge semantics — execution-only);
+generation time / write time (phases of the one clock, never shown separately).
+
 **Row Rhythm**:
 The single vertical spacing between every pair of transcript rows — between
 messages and within them alike, one shared constant, deliberately without

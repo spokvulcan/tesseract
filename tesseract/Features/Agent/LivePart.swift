@@ -8,8 +8,11 @@ import Observation
 /// fast tokens arrive. On part end the Chat Session commits the part into the
 /// value rows and drops this box.
 ///
-/// Tool calls never stream through a Live Part — they arrive fully parsed and
-/// commit atomically — so the kind is text or thinking only.
+/// Tool calls don't stream through a Live Part — the Open Tool Call lives in
+/// the live message directly (status-only row: title, spinner, ticking Tool
+/// Clock; argument deltas are a rendering no-op) — so the kind is text or
+/// thinking only. Rendering arguments live later means adding a `.toolCall`
+/// kind here and routing `toolcallDelta` into it.
 @Observable @MainActor
 final class LivePart: Identifiable {
 
