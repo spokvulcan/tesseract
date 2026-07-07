@@ -533,9 +533,31 @@ dump, DOM tree.
 
 **Browser MCP Server**:
 The MCP endpoint the running app serves so external agents can drive the
-**Agent Browser**; Tesseract's own agent consumes it through its MCP client
-exactly like an external client.
+**Agent Browser**; Tesseract's own agent consumes it through its **MCP Client**,
+speaking the same protocol over an in-process transport (not the loopback
+socket, so browser-use in chat never depends on the inference server running).
 _Avoid_: standalone server, stdio server, plugin API.
+
+**MCP Client**:
+The in-app agent's client for Model Context Protocol servers (#190): it connects
+to configured HTTP servers — and to the app's own **Browser MCP Server**
+in-process — so their tools materialize in the agent's registry alongside
+built-ins, namespaced by server. Dogfooding the browser server through it
+(ADR-0027) keeps one honest tool surface.
+_Avoid_: plugin loader, tool proxy, RPC bridge.
+
+**Connected Server**:
+One configured MCP server the **MCP Client** talks to — URL, display name,
+enabled flag, optional headers. The **Browser MCP Server** is the pre-registered
+first entry (enabled by the one Browser Access switch); user servers are added
+deliberately and persist through the **Settings Catalogue**.
+_Avoid_: integration, plugin, AgentExtension (that is the in-app tool-source type).
+
+**Tool Consent**:
+The explicit user approval a user-added **Connected Server** requires before its
+tools reach the agent — no third-party tool surfaces silently. Adding a server
+is the consent gate; disabling one instantly withdraws its tools.
+_Avoid_: allowlist, sandbox policy, capability grant.
 
 ### Settings persistence
 

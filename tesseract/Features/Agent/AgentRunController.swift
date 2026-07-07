@@ -164,7 +164,16 @@ final class AgentRunController {
         if settings?.webAccessEnabled == true {
             agent.updateTools(allTools)
         } else {
-            agent.updateTools(allTools.filter { $0.name != "web_search" && $0.name != "web_fetch" })
+            agent.updateTools(allTools.filter { !Self.webGatedToolNames.contains($0.name) })
         }
     }
+
+    /// Tool names the web-access switch governs: the anonymous web tools *and*
+    /// the built-in Browser server's MCP tools (PRD #190, US #16), so one switch
+    /// keeps meaning what it says now that browser-use arrives via MCP. The
+    /// browser names come from ``MCPServerConfig/browserToolNames`` — the same
+    /// namespace the live tools are built with — so the gated set and the
+    /// materialized tools can't drift (a test pins the equality).
+    private static let webGatedToolNames: Set<String> =
+        MCPServerConfig.browserToolNames.union(["web_search", "web_fetch"])
 }

@@ -120,3 +120,31 @@ extension Setting where Value == Int? {
             write: { value, store in store.setOptional(value, for: key) })
     }
 }
+
+extension Setting where Value: Codable & Sendable {
+    /// A setting whose value is any `Codable` collection/struct, persisted as a
+    /// JSON string under one key. An empty or corrupt payload reads back as
+    /// `default`, so a malformed store never crashes load. The codec stays here
+    /// (above the store, which only moves primitive bytes) so the store never
+    /// learns what the JSON means — ADR-0002's meaning/bytes split.
+    static func json(_ key: String, default def: Value) -> Setting<Value> {
+        Setting(
+            key: key, default: def,
+            load: { store in
+                let raw = store.string(for: key, default: "")
+                guard !raw.isEmpty, let data = raw.data(using: .utf8),
+                    let decoded = try? JSONDecoder().decode(Value.self, from: data)
+                else { return def }
+                return decoded
+            },
+            write: { value, store in
+                if let data = try? JSONEncoder().encode(value),
+                    let raw = String(data: data, encoding: .utf8)
+                {
+                    store.set(raw, for: key)
+                } else {
+                    store.set("", for: key)
+                }
+            })
+    }
+}

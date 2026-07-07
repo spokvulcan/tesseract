@@ -1,6 +1,6 @@
 # Browser MCP server lives in-app; Tesseract's agent dogfoods it via a full MCP client
 
-Status: proposed
+Status: accepted
 
 The browser capability (ADR-0026) must serve two consumers: external coding
 agents (Claude Code et al., including offline ones using the local browser as
@@ -41,3 +41,27 @@ Consequences:
   agents can use the browser server before the internal client lands.
 - The loopback HTTP endpoint must reject non-local origins (DNS-rebinding
   guard) per MCP transport security guidance.
+
+**Realization (#190):** the full MCP client shipped as an ``MCPClient`` over a
+transport abstraction: ``HTTPMCPTransport`` (URLSession, for arbitrary
+user-configured servers) and ``InProcessMCPTransport`` for the built-in Browser
+server. The in-process transport dispatches real MCP JSON-RPC straight to
+``MCPBrowserServer.handle(request:)`` — same protocol, same request handler, no
+socket. This refines "the agent connects to `127.0.0.1:<port>/mcp`": consuming
+the browser server *is* dogfooding at the protocol layer, but going in-process
+(rather than over the loopback listener) decouples browser-use in chat from the
+inference HTTP server, which only starts with `isServerEnabled`. The built-in
+Browser server's enablement is the one "Browser Access" switch
+(`browserMCPServerEnabled`); the web-access switch continues to gate its tools
+(US #16), pinned to the canonical `browser` namespace so the gated set cannot
+drift from the tools the server materializes. No stdio in v1 (App Sandbox), as
+above.
+
+**v1 scope (#190).** Tools-only, Streamable HTTP only. Consent is add-time: a
+second gate on first tool-list materialization (US #3 as literally worded) would
+contradict the zero-config pre-registered Browser server and is redundant for a
+user server that was approved seconds earlier, so it was not built. Deferred with
+tracking issues: a standing server→client SSE channel for idle
+`tools/list_changed` (#193, US #13 while no call is in flight), the SSE-legacy
+fallback transport for older servers (#194), and Keychain-backed header secrets
+(#195, US #14 — v1 persists them in the sandboxed settings store).

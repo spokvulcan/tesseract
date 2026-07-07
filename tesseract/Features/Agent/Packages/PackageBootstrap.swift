@@ -17,7 +17,8 @@ enum PackageBootstrap {
         packageRegistry: PackageRegistry,
         extensionHost: ExtensionHost,
         agentRoot: URL,
-        settingsManager: SettingsManager
+        settingsManager: SettingsManager,
+        mcpToolsExtension: MCPToolsExtension? = nil
     ) {
         // 1. Discover and load packages from bundled and user directories.
         let bundledDir = Bundle.main.url(forResource: "AgentPackages", withExtension: nil)
@@ -60,6 +61,14 @@ enum PackageBootstrap {
         let webExt = WebToolsExtension()
         extensionHost.register(webExt)
         registeredPaths.append(webExt.path)
+
+        // MCP client tools (PRD #190): the tool set is dynamic (servers connect,
+        // disconnect, change their list), so the MCPClientManager owns the
+        // extension and pushes snapshots into it; here we only register it.
+        if let mcpToolsExtension {
+            extensionHost.register(mcpToolsExtension)
+            registeredPaths.append(mcpToolsExtension.path)
+        }
 
         packageManagedExtensionPaths = registeredPaths
     }

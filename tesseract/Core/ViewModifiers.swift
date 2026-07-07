@@ -81,6 +81,7 @@ extension View {
         self
             .environment(container.settingsManager)
             .environment(container.agentBrowser)
+            .environment(container.mcpClientManager)
             .environmentObject(container.permissionsManager)
     }
 
