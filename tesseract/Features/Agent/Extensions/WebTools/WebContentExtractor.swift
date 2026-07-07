@@ -51,6 +51,22 @@ nonisolated enum WebContentExtractor: Sendable {
         return extractBasic(html: html, url: url)
     }
 
+    /// Extract from already-rendered live-DOM HTML (the **Agent Browser** path).
+    /// Skips the SPA-detection re-render of ``extract(html:url:)`` because the
+    /// caller's `WebPage` has already executed the page's JavaScript — the DOM
+    /// handed in *is* the hydrated result. Readability+Demark first, regex
+    /// fallback if that yields nothing.
+    static func extractRendered(html: String, url: URL) async -> ExtractedContent {
+        do {
+            if let result = try await extractWithReadability(html: html, url: url) {
+                return result
+            }
+        } catch {
+            Log.agent.debug("[WebContentExtractor] Rendered readability failed: \(error)")
+        }
+        return extractBasic(html: html, url: url)
+    }
+
     // MARK: - SPA Detection
 
     private static let spaMarkers = [

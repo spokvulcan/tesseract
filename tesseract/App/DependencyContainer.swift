@@ -107,6 +107,18 @@ final class DependencyContainer: ObservableObject {
     // HTTP Server
     lazy var httpServer = HTTPServer(port: HTTPServer.clampedPort(settingsManager.serverPort))
 
+    // Agent Browser + Browser MCP Server (PRD #189). The browser owns the
+    // Agent Profile and hands each MCP client a private Browser Session; the
+    // MCP server rides the one loopback HTTP listener alongside the OpenAI
+    // routes. Production shows real windows (ADR-0026: always-visible browsing).
+    lazy var agentBrowser = AgentBrowser(presenter: AgentBrowserWindowPresenter())
+    lazy var browserToolExecutor = BrowserToolExecutor(browser: agentBrowser)
+    lazy var mcpBrowserServer = MCPBrowserServer(
+        browser: agentBrowser,
+        executor: browserToolExecutor,
+        isEnabled: { [settingsManager] in settingsManager.browserMCPServerEnabled }
+    )
+
     lazy var terminationCoordinator = makeTerminationCoordinator()
 
     // Chat leaves (ADR-0024): standalone controllers for everything not
@@ -259,6 +271,8 @@ final class DependencyContainer: ObservableObject {
 
     func prepareForTermination() async {
         await terminationCoordinator.prepareForTermination()
+        // Close Agent Browser windows/sessions on the way out.
+        mcpBrowserServer.closeAllSessions()
     }
 
     private func makeTerminationCoordinator() -> AppTerminationCoordinator {
@@ -517,5 +531,9 @@ final class DependencyContainer: ObservableObject {
             }
             try await writer.send(response)
         }
+
+        // Browser MCP Server (PRD #189): the `/mcp` endpoint. Registered
+        // unconditionally; the handler refuses (503) when the setting is off.
+        mcpBrowserServer.attach(to: httpServer)
     }
 }

@@ -86,6 +86,30 @@ struct ServerConfigurationView: View {
                 )
             }
 
+            Section {
+                Toggle("Enable Browser Access (MCP)", isOn: $settings.browserMCPServerEnabled)
+
+                if settings.browserMCPServerEnabled {
+                    if settings.isServerEnabled {
+                        LabeledContent("MCP Endpoint") {
+                            Text("http://127.0.0.1:\(settings.serverPort)/mcp")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    } else {
+                        Text("Turn on the HTTP Server above to expose the browser endpoint.")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Browser Access")
+            } footer: {
+                Text(
+                    "Exposes a Model Context Protocol server so agents (Claude Code, etc.) can drive a local browser using your logged-in sessions. Agent browsing always opens visible windows. Add it with: claude mcp add --transport http tesseract-browser http://127.0.0.1:\(settings.serverPort)/mcp"
+                )
+            }
+
             ServerPromptCacheBudgetSection()
 
             ServerPreserveThinkingSection()

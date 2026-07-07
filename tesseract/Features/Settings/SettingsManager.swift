@@ -369,6 +369,15 @@ final class SettingsManager {
         didSet { SettingsCatalogue.serverPort.write(serverPort, to: store) }
     }
 
+    /// Whether the **Browser MCP Server** is exposed on the HTTP server. Also
+    /// requires the local server itself to be running (they share the one
+    /// loopback listener).
+    var browserMCPServerEnabled: Bool {
+        didSet {
+            SettingsCatalogue.browserMCPServerEnabled.write(browserMCPServerEnabled, to: store)
+        }
+    }
+
     // MARK: - SSD Prefix Cache
 
     // Changes to these settings take effect on the next model unload/reload.
@@ -463,6 +472,7 @@ final class SettingsManager {
         self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
+        self.browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
         self.prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.load(
             from: store)
@@ -568,6 +578,7 @@ final class SettingsManager {
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default
+        browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.default
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.default
         prefixCacheSSDBudgetCapBytes = SettingsCatalogue.prefixCacheSSDBudgetCapBytes.default
