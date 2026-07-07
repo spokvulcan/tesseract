@@ -1,37 +1,6 @@
 import Foundation
 import MLXLMCommon
 
-// MARK: - JSONValue client accessors
-
-/// Read-side conveniences the MCP **client** needs to walk decoded JSON-RPC
-/// trees. Complements the `asObject`/`asString` pair the Browser MCP *server*
-/// already defines (`MCPModels.swift`); kept `nonisolated` so the transport can
-/// parse responses off the MainActor.
-extension JSONValue {
-    nonisolated var asArray: [JSONValue]? {
-        if case .array(let value) = self { return value }
-        return nil
-    }
-    nonisolated var asInt: Int? {
-        switch self {
-        case .int(let value): return value
-        case .double(let value): return Int(value)
-        default: return nil
-        }
-    }
-    nonisolated var asBool: Bool? {
-        if case .bool(let value) = self { return value }
-        return nil
-    }
-    nonisolated var asDouble: Double? {
-        switch self {
-        case .double(let value): return value
-        case .int(let value): return Double(value)
-        default: return nil
-        }
-    }
-}
-
 // MARK: - MCPToolDescriptor
 
 /// One tool as a server advertises it in `tools/list`. `inputSchema` is carried

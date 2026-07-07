@@ -22,19 +22,6 @@ nonisolated enum MCPProtocol {
     }
 }
 
-// MARK: - JSONValue conveniences
-
-extension JSONValue {
-    nonisolated var asObject: [String: JSONValue]? {
-        if case .object(let object) = self { return object }
-        return nil
-    }
-    nonisolated var asString: String? {
-        if case .string(let string) = self { return string }
-        return nil
-    }
-}
-
 // MARK: - MCPEncoding
 
 /// Builds JSON-RPC / MCP payloads as `JSONValue` trees (encoded with a plain

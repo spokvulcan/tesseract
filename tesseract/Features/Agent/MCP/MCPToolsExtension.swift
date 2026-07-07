@@ -24,11 +24,8 @@ final class MCPToolsExtension: AgentExtension, @unchecked Sendable {
     /// Replace the exposed tool set. First definition wins on a name collision
     /// (the same policy `ExtensionHost` applies across extensions).
     func update(_ definitions: [AgentToolDefinition]) {
-        var byName: [String: AgentToolDefinition] = [:]
-        for definition in definitions {
-            if byName[definition.name] == nil { byName[definition.name] = definition }
-        }
-        let resolved = byName
+        let resolved = Dictionary(
+            definitions.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         snapshot.withLock { $0 = resolved }
     }
 }

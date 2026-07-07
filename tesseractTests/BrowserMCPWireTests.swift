@@ -61,17 +61,6 @@ private func rpc(
         json: parsed)
 }
 
-@MainActor
-private func waitForPort(_ server: HTTPServer) async -> UInt16 {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(3))
-    while clock.now < deadline {
-        if let port = server.boundPort { return port }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return server.boundPort ?? 0
-}
-
 // MARK: - Fixtures
 
 private enum Fixture {
@@ -124,7 +113,7 @@ struct BrowserMCPWireTests {
         serve("/hello", Fixture.hello)
         serve("/page2", Fixture.page2)
         await fixtures.start()
-        let fixturePort = await waitForPort(fixtures)
+        let fixturePort = await ScriptedMCPServer.waitForPort(fixtures)
 
         // MCP server under test. Ephemeral profile so parallel test processes
         // never contend on the real persistent Agent Profile store.
@@ -137,7 +126,7 @@ struct BrowserMCPWireTests {
         let mcp = HTTPServer(port: 0)
         mcpServer.attach(to: mcp)
         await mcp.start()
-        let mcpPort = await waitForPort(mcp)
+        let mcpPort = await ScriptedMCPServer.waitForPort(mcp)
 
         return Harness(
             mcpPort: mcpPort, fixturePort: fixturePort, mcp: mcp, fixtures: fixtures,

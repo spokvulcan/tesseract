@@ -141,11 +141,9 @@ nonisolated final class HTTPMCPTransport: MCPTransport {
 /// request handler, but browser-use in chat no longer depends on the inference
 /// HTTP listener being enabled (it only starts with `isServerEnabled`).
 nonisolated final class InProcessMCPTransport: MCPTransport {
-    private let path: String
     private let handle: @Sendable (HTTPRequest) async -> HTTPResponse
 
-    init(path: String = "/mcp", handle: @escaping @Sendable (HTTPRequest) async -> HTTPResponse) {
-        self.path = path
+    init(handle: @escaping @Sendable (HTTPRequest) async -> HTTPResponse) {
         self.handle = handle
     }
 
@@ -156,7 +154,7 @@ nonisolated final class InProcessMCPTransport: MCPTransport {
     ) async throws -> MCPTransportResponse {
         var headers: [(name: String, value: String)] = [("Content-Type", "application/json")]
         if let sessionID { headers.append(("Mcp-Session-Id", sessionID)) }
-        let request = HTTPRequest(method: .POST, path: path, headers: headers, body: body)
+        let request = HTTPRequest(method: .POST, path: "/mcp", headers: headers, body: body)
         let response = await handle(request)
         let sessionID = response.headers.first { $0.name.lowercased() == "mcp-session-id" }?.value
 

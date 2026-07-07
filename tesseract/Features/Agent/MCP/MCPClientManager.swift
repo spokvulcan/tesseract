@@ -53,13 +53,6 @@ final class MCPClientManager {
         }
     }
 
-    func stop() {
-        observationTask?.cancel()
-        observationTask = nil
-        connections.removeAll()
-        handleToolsChanged()
-    }
-
     /// Re-read the configured servers and reconcile.
     func resync() {
         sync(configs: configsProvider())
