@@ -535,9 +535,9 @@ struct RecordingSettingsSection: View {
             }
 
             Section("Skills") {
-                Toggle("Show skill pills", isOn: $settings.showSkillPills)
+                Toggle("Show skill button", isOn: $settings.showSkillPills)
                 Text(
-                    "One-tap skills above the chat composer — tap a pill to run it on your text and attachments instantly. Every skill also stays available as a slash command."
+                    "The floating ✦ button above the chat composer — hover to fan out your skills, tap one to run it on your text and attachments instantly. Every skill also stays available as a slash command."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

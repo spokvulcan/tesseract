@@ -108,9 +108,10 @@ enum SettingsCatalogue {
 
     // MARK: - Skill Pills (PRD #174)
 
-    /// The "Show skill pills" opt-out for the pill row above the agent
-    /// composer. Default on; the row also hides itself when no skill declares
-    /// pill membership.
+    /// The "Show skill button" opt-out for the Skill Cluster above the agent
+    /// composer (ADR-0030; same stored key as the retired pill row). Default
+    /// on; the cluster also hides itself when no skill declares pill
+    /// membership.
     static let showSkillPills = Setting.bool("showSkillPills", default: true)
 
     /// The `translate` skill's default target language, stored as an English

@@ -3,10 +3,10 @@
 //  tesseract
 //
 //  The agent chat page: the flat document transcript with the glass composer
-//  floating in the bottom safe-area inset. The chat's two custom glass
-//  surfaces — the composer and the slash-command popup — share the one
-//  GlassEffectContainer here; everything above them is content layer and
-//  stays glass-free (HIG).
+//  floating in the bottom safe-area inset. The chat's three custom glass
+//  surfaces — the composer, the slash-command popup, and the Skill Cluster
+//  (ADR-0030) — share the one GlassEffectContainer here; everything above
+//  them is content layer and stays glass-free (HIG).
 //
 
 import SwiftUI
@@ -16,6 +16,7 @@ struct AgentContentView: View {
     @Environment(ChatSession.self) private var session
     @Environment(ComposerDraftController.self) private var composerDraft
     @Environment(SlashCommandPaletteController.self) private var commandPalette
+    @Environment(SkillPillController.self) private var skillPills
     @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(SettingsManager.self) private var settings
@@ -23,12 +24,24 @@ struct AgentContentView: View {
 
     @State private var showingHistory = false
     @State private var speakingMessageID: UUID?
+    /// The Skill Cluster's interaction state machine (ADR-0030). View-local:
+    /// it has no dependencies and no life outside this page.
+    @State private var skillCluster = SkillClusterController()
     @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
     private var isSpeechActive: Bool {
         if case .idle = speechCoordinator.state { return false }
         if case .error = speechCoordinator.state { return false }
         return true
+    }
+
+    /// The full-inset tap catcher behind a transient surface (the slash popup
+    /// or a pinned Skill Cluster): any click outside the surface dismisses it.
+    private func clickAwayCatcher(_ action: @escaping () -> Void) -> some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     var body: some View {
@@ -49,16 +62,13 @@ struct AgentContentView: View {
 
                 ZStack(alignment: .bottom) {
                     if commandPalette.showCommandPopup {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                commandPalette.dismissCommandPopup()
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        clickAwayCatcher { commandPalette.dismissCommandPopup() }
+                    } else if skillCluster.phase == .pinned {
+                        clickAwayCatcher { skillCluster.clickedAway() }
                     }
 
-                    // The one glass container: the popup and the composer
-                    // morph within a shared sampling context.
+                    // The one glass container: the popup, the composer, and
+                    // the Skill Cluster morph within a shared sampling context.
                     GlassEffectContainer {
                         VStack(spacing: 0) {
                             if commandPalette.showCommandPopup,
@@ -80,9 +90,35 @@ struct AgentContentView: View {
                             AgentComposerView()
                                 .padding(Theme.Spacing.md)
                         }
+                        // The Skill Cluster floats above the composer's
+                        // trailing corner without reserving inset space — the
+                        // fan overlays the transcript, so opening it never
+                        // shifts layout. Faded out while the slash popup owns
+                        // this area (the controller is suppressed then).
+                        .overlay(alignment: .topTrailing) {
+                            if skillPills.isClusterVisible {
+                                SkillClusterView()
+                                    .padding(.trailing, Theme.Spacing.md)
+                                    .alignmentGuide(.top) { dimensions in
+                                        dimensions[VerticalAlignment.bottom] + 8
+                                    }
+                                    .opacity(commandPalette.showCommandPopup ? 0 : 1)
+                                    .allowsHitTesting(!commandPalette.showCommandPopup)
+                            }
+                        }
                     }
                 }
+                // `initial: true` seeds suppression on (re)appear — this view
+                // is recreated by sidebar navigation, and a run can be
+                // generating when the user navigates back.
+                .onChange(
+                    of: session.isGenerating || commandPalette.showCommandPopup, initial: true
+                ) {
+                    _, suppressed in
+                    skillCluster.isSuppressed = suppressed
+                }
                 .animation(.easeOut(duration: 0.15), value: commandPalette.showCommandPopup)
+                .environment(skillCluster)
             }
             .frame(maxWidth: ChatLayout.columnMaxWidth + 2 * Theme.Spacing.md)
             // Min-size shield, load-bearing (macOS 26 framework bug): the
@@ -136,6 +172,8 @@ struct AgentContentView: View {
         .onExitCommand {
             if voiceInput.voiceState == .recording {
                 voiceInput.cancel()
+            } else {
+                skillCluster.escapePressed()
             }
         }
         .toolbar {

@@ -6,8 +6,9 @@
 //  the Agent-coordinator-leaves pattern. It owns the pill list derivation
 //  (membership × **Skill Usage Ranking** × curated default order), usage
 //  recording, and skill-invocation argument assembly (including the translate
-//  pill's default-target wiring). The SwiftUI pill row is a dumb rendering of
-//  this module's state; skill *execution* stays on the coordinator spine.
+//  pill's default-target wiring). The SwiftUI **Skill Cluster** (ADR-0030) is
+//  a dumb rendering of this module's state; skill *execution* stays on the
+//  coordinator spine.
 //
 
 import Foundation
@@ -31,9 +32,10 @@ final class SkillPillController {
 
     // MARK: - Observable State
 
-    /// The current pill row, leftmost first. Recomputed only by
-    /// ``refreshPills()`` — at conversation start — and held stable within a
-    /// conversation, so pills never shift under the cursor mid-session.
+    /// The current pills, most-used first (nearest the cluster's bubble).
+    /// Recomputed only by ``refreshPills()`` — at conversation start — and
+    /// held stable within a conversation, so pills never shift under the
+    /// cursor mid-session.
     private(set) var pills: [SkillPill] = []
 
     // MARK: - Dependencies
@@ -62,17 +64,17 @@ final class SkillPillController {
         refreshPills()
     }
 
-    // MARK: - Row visibility
+    // MARK: - Visibility
 
-    /// Whether the row should render: the "Show skill pills" Setting is on and
-    /// at least one skill declares pill membership.
-    var isRowVisible: Bool {
+    /// Whether the Skill Cluster should render: the "Show skill button"
+    /// Setting is on and at least one skill declares pill membership.
+    var isClusterVisible: Bool {
         (settings?.showSkillPills ?? true) && !pills.isEmpty
     }
 
     // MARK: - Pill list derivation
 
-    /// Recompute the pill row: `composer-pill` skills, ordered by the Skill
+    /// Recompute the pills: `composer-pill` skills, ordered by the Skill
     /// Usage Ranking (usage count descending; ties fall back to the curated
     /// order, then name). Called at conversation start — never mid-conversation.
     func refreshPills() {
