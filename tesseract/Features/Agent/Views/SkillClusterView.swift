@@ -131,9 +131,11 @@ struct SkillClusterView: View {
         // midline — the fan reads as growing out of the bubble, not resting
         // on its baseline.
         GlassEffectContainer(spacing: 16) {
-            HStack(alignment: .center, spacing: 8) {
+            // 10pt gaps — at 8pt the capsules sit inside the container's
+            // blend range and liquid-merge into each other.
+            HStack(alignment: .center, spacing: 10) {
                 if cluster.isOpen {
-                    TrailingWrapLayout(spacing: 8, rowSpacing: 8) {
+                    TrailingWrapLayout(spacing: 10, rowSpacing: 10) {
                         ForEach(skillPills.pills) { pill in
                             pillCapsule(pill)
                         }
