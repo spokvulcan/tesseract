@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.6.0](https://github.com/spokvulcan/tesseract/compare/v1.5.0...v1.6.0) (2026-07-08)
+
+
+### Features
+
+* **agent:** full MCP client with HTTP transports ([#190](https://github.com/spokvulcan/tesseract/issues/190)) ([#196](https://github.com/spokvulcan/tesseract/issues/196)) ([e294b5d](https://github.com/spokvulcan/tesseract/commit/e294b5de4d697fd5aef4fc12160345b158a85fef))
+* **agent:** instant Pending Row on send + Waiting Row for model waits ([28c1ab9](https://github.com/spokvulcan/tesseract/commit/28c1ab9921034f9c9b7ba97a1d340e8bf3f715f8))
+* **agent:** Tool Panels — specialized OpenCode-style tool-call rendering ([#201](https://github.com/spokvulcan/tesseract/issues/201)) ([f079f4c](https://github.com/spokvulcan/tesseract/commit/f079f4c99c4a3d0344e245da11a613fd9cfb6356))
+* **browser:** Agent Browser + Browser MCP Server ([#189](https://github.com/spokvulcan/tesseract/issues/189)) ([#191](https://github.com/spokvulcan/tesseract/issues/191)) ([c92ee60](https://github.com/spokvulcan/tesseract/commit/c92ee607c1aff32287b351ed316bd046270509f0))
+* **browser:** make the Browser MCP the sole web surface; render search in WebKit ([#199](https://github.com/spokvulcan/tesseract/issues/199)) ([7a8d86e](https://github.com/spokvulcan/tesseract/commit/7a8d86e24781ca179f8f14ae2f08ac90adecef2e))
+
+
+### Bug Fixes
+
+* **agent:** stable transcript rhythm — Waiting Row geometry, edge newlines, line spacing ([dc07223](https://github.com/spokvulcan/tesseract/commit/dc0722369ac9362275c2eee98391431fac4053ee))
+* **browser:** enforce navigation timeout and bound every tool call ([#197](https://github.com/spokvulcan/tesseract/issues/197)) ([ca18828](https://github.com/spokvulcan/tesseract/commit/ca188280130c901c616707813612d9296eb97a8c))
+
 ## [1.5.0](https://github.com/spokvulcan/tesseract/compare/v1.4.0...v1.5.0) (2026-07-07)
 
 
