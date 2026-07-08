@@ -36,10 +36,50 @@ final class SkillClusterController {
     /// suppressed collapses it and cancels any pending transition.
     var isSuppressed: Bool = false {
         didSet {
-            guard isSuppressed, !oldValue else { return }
+            guard isSuppressed != oldValue else { return }
+            if isSuppressed {
+                cancelPendingTransition()
+                phase = .collapsed
+            } else {
+                // A draft written mid-suppression still deserves the
+                // suggestion once the run/popup is out of the way.
+                autoOpenIfArmed()
+            }
+        }
+    }
+
+    // MARK: - Draft auto-open
+
+    /// Whether the composer draft currently has content (text or images) —
+    /// mirrored in by the view.
+    @ObservationIgnored private var draftHasContent = false
+
+    /// Armed on the draft's empty→non-empty edge; disarmed by any manual
+    /// close (bubble toggle, Esc, click-away, fire) or by the draft emptying.
+    /// While armed, an auto-open fires as soon as the cluster is collapsed
+    /// and unsuppressed — so a close is always the user's last word.
+    @ObservationIgnored private var autoOpenArmed = false
+
+    /// The composer draft gained or lost content. Gaining content opens the
+    /// cluster pinned — suggesting the skills for what was just typed or
+    /// attached — and losing it (send, fire, clear) retires the cluster.
+    func draftContentChanged(hasContent: Bool) {
+        guard hasContent != draftHasContent else { return }
+        draftHasContent = hasContent
+        if hasContent {
+            autoOpenArmed = true
+            autoOpenIfArmed()
+        } else {
+            autoOpenArmed = false
             cancelPendingTransition()
             phase = .collapsed
         }
+    }
+
+    private func autoOpenIfArmed() {
+        guard autoOpenArmed, !isSuppressed, phase == .collapsed else { return }
+        cancelPendingTransition()
+        phase = .pinned
     }
 
     // MARK: - Timing
@@ -47,9 +87,9 @@ final class SkillClusterController {
     /// Hover-open delay — long enough that a pointer crossing the bubble on
     /// its way elsewhere never flashes the cluster open.
     private let openDelay: Duration
-    /// Exit grace — deliberately long (owner call, 2026-07-08): leaving the
-    /// cluster should give the pointer a real chance to come back, not
-    /// collapse the moment hover is lost.
+    /// Exit grace — long enough that a small pointer slip off the cluster's
+    /// union doesn't collapse it mid-reach. (A 2s grace was tried and
+    /// reverted — it made the cluster feel stuck open.)
     private let exitGrace: Duration
 
     /// The one in-flight delayed transition (pending open or pending
@@ -60,7 +100,7 @@ final class SkillClusterController {
 
     init(
         openDelay: Duration = .milliseconds(150),
-        exitGrace: Duration = .seconds(2)
+        exitGrace: Duration = .milliseconds(250)
     ) {
         self.openDelay = openDelay
         self.exitGrace = exitGrace
@@ -103,12 +143,18 @@ final class SkillClusterController {
     func buttonClicked() {
         guard !isSuppressed else { return }
         cancelPendingTransition()
-        phase = (phase == .pinned) ? .collapsed : .pinned
+        if phase == .pinned {
+            autoOpenArmed = false
+            phase = .collapsed
+        } else {
+            phase = .pinned
+        }
     }
 
     /// A click landed outside the cluster while pinned — collapse.
     func clickedAway() {
         cancelPendingTransition()
+        autoOpenArmed = false
         phase = .collapsed
     }
 
@@ -118,6 +164,7 @@ final class SkillClusterController {
     func escapePressed() -> Bool {
         guard isOpen else { return false }
         cancelPendingTransition()
+        autoOpenArmed = false
         phase = .collapsed
         return true
     }
@@ -125,6 +172,7 @@ final class SkillClusterController {
     /// A pill fired — the invocation is on its way, collapse immediately.
     func pillFired() {
         cancelPendingTransition()
+        autoOpenArmed = false
         phase = .collapsed
     }
 

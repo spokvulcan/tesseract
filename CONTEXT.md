@@ -957,9 +957,11 @@ nothing).
 **Skill Cluster**:
 The floating glass surface for **Skill Pill**s: a collapsed bubble above the
 composer's trailing corner that morphs open into the fanned pills — hover opens,
-click pins, firing or Esc collapses. Dimmed and inert while a run is generating;
-its visibility is the "show skill pills" Setting. The pills fan leftward from the
-bubble, most-used nearest, wrapping upward when out of width.
+click pins, a composer draft gaining content auto-opens it, firing/Esc/the draft
+emptying collapse it, and a manual close is final for the current draft. Dimmed
+and inert while a run is generating; its visibility is the "show skill pills"
+Setting. The pills fan leftward from the bubble, most-used nearest, wrapping
+upward when out of width.
 _Avoid_: FAB / floating action button, quick actions, toolbar, menu (nothing arms
 or navigates), palette (the slash popup concept).
 

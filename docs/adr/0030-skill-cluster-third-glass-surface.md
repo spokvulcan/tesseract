@@ -14,11 +14,18 @@ reaching for a skill.
 
 - **The Skill Pills leave the composer and become the Skill Cluster** — a
   floating glass surface above the composer's trailing corner: a collapsed
-  ~44pt circular bubble (`sparkles` icon, `.regular` glass, `.interactive()`)
-  that morphs open into the fanned pills, centered on the bubble's midline.
-  Hover opens (~150ms delay), click pins until click-away/Esc, firing a pill
-  collapses. The exit grace is a deliberate ~2s (owner call, live-tuned
-  2026-07-08): losing hover must leave time to come back, not snap shut.
+  ~40pt circular bubble (`sparkles` icon, `.regular` glass, `.interactive()`;
+  an `xmark` close toggle while open, per the Landmarks badges) that morphs
+  open into the fanned pills, centered on the bubble's midline. Hover opens
+  (~150ms delay, ~250ms exit grace — a 2s grace was live-tried and reverted),
+  click pins until click-away/Esc, firing a pill collapses.
+- **The draft auto-opens the cluster.** The composer draft gaining content
+  (first keystroke, pasted/appshot image) opens the cluster pinned —
+  suggesting the skills for what was just written — and the draft emptying
+  (send, fire, clear) retires it. Any manual close (bubble ✕, Esc,
+  click-away, fire) is the user's last word: the same draft never re-opens
+  it, only the next empty→non-empty edge does. A draft written while
+  suppressed (mid-generation, popup open) opens once unsuppressed.
 - **It is the third custom glass surface, in its own
   `GlassEffectContainer(spacing: 16)`** in `AgentContentView`'s bottom
   safe-area inset — the collapsed⇄expanded morph uses `glassEffectID` within

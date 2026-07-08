@@ -134,6 +134,62 @@ struct SkillClusterControllerTests {
         #expect(controller.phase == .collapsed)
     }
 
+    // MARK: - Draft auto-open
+
+    @Test func draftGainingContentOpensTheClusterPinned() {
+        let controller = makeController()
+        controller.draftContentChanged(hasContent: true)
+        // Immediate and pinned — an auto-open must survive pointer exits.
+        #expect(controller.phase == .pinned)
+    }
+
+    @Test func clearingTheDraftCollapses() {
+        let controller = makeController()
+        controller.draftContentChanged(hasContent: true)
+        controller.draftContentChanged(hasContent: false)
+        #expect(controller.phase == .collapsed)
+    }
+
+    @Test func pointerExitDoesNotCloseAnAutoOpenedCluster() async {
+        let controller = makeController()
+        controller.draftContentChanged(hasContent: true)
+
+        controller.pointerExited()
+        await controller.settle()
+        #expect(controller.phase == .pinned)
+    }
+
+    @Test func manualCloseWinsOverDraftContent() {
+        let controller = makeController()
+        controller.draftContentChanged(hasContent: true)
+        controller.buttonClicked()
+        #expect(controller.phase == .collapsed)
+
+        // Same-content notifications never re-open a manually closed cluster.
+        controller.draftContentChanged(hasContent: true)
+        #expect(controller.phase == .collapsed)
+    }
+
+    @Test func draftTypedDuringSuppressionOpensOnUnsuppress() {
+        let controller = makeController()
+        controller.isSuppressed = true
+        controller.draftContentChanged(hasContent: true)
+        #expect(controller.phase == .collapsed)
+
+        controller.isSuppressed = false
+        #expect(controller.phase == .pinned)
+    }
+
+    @Test func manualCloseThenUnsuppressDoesNotReopen() {
+        let controller = makeController()
+        controller.draftContentChanged(hasContent: true)
+        controller.escapePressed()
+
+        controller.isSuppressed = true
+        controller.isSuppressed = false
+        #expect(controller.phase == .collapsed)
+    }
+
     // MARK: - Suppression (generating / slash popup open)
 
     @Test func hoverIsInertWhileSuppressed() async {

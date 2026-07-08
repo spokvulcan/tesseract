@@ -122,7 +122,7 @@ struct SkillClusterView: View {
     /// a glassEffectID in it, so open/close morphs instead of fading.
     @Namespace private var glassNamespace
 
-    private static let bubbleSize: CGFloat = 44
+    private static let bubbleSize: CGFloat = 40
 
     var body: some View {
         // The cluster's own sampling context (spacing per the Landmarks
@@ -131,9 +131,9 @@ struct SkillClusterView: View {
         // midline — the fan reads as growing out of the bubble, not resting
         // on its baseline.
         GlassEffectContainer(spacing: 16) {
-            HStack(alignment: .center, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
                 if cluster.isOpen {
-                    TrailingWrapLayout(spacing: 10, rowSpacing: 10) {
+                    TrailingWrapLayout(spacing: 8, rowSpacing: 8) {
                         ForEach(skillPills.pills) { pill in
                             pillCapsule(pill)
                         }
@@ -153,25 +153,26 @@ struct SkillClusterView: View {
         .animation(.smooth(duration: 0.3), value: cluster.isOpen)
     }
 
-    /// The collapsed ✦ bubble. Dimmed and inert while a run is generating
+    /// The ✦ bubble — an ✕ close button while the cluster is open (the
+    /// Landmarks badges toggle). Dimmed and inert while a run is generating
     /// (the controller is suppressed then, so hover/click are already no-ops —
     /// the opacity is the visible half of that state).
     private var bubble: some View {
         Button {
             cluster.buttonClicked()
         } label: {
-            Image(systemName: "sparkles")
-                .font(.system(size: 17, weight: .medium))
+            Image(systemName: cluster.isOpen ? "xmark" : "sparkles")
+                .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: Self.bubbleSize, height: Self.bubbleSize)
                 .contentShape(Circle())
+                .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
         .glassEffectID("bubble", in: glassNamespace)
         .opacity(session.isGenerating ? 0.4 : 1)
-        .pointerStyle(session.isGenerating ? nil : .link)
-        .help("Skills")
+        .help(cluster.isOpen ? "Close skills" : "Skills")
     }
 
     /// One fanned Skill Pill — same firing contract as the retired composer
@@ -183,14 +184,13 @@ struct SkillClusterView: View {
             Text(pill.label)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
         .glassEffectID(pill.name, in: glassNamespace)
-        .pointerStyle(.link)
         .help(pill.description)
     }
 

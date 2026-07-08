@@ -106,7 +106,7 @@ struct AgentContentView: View {
                     .overlay(alignment: .topTrailing) {
                         if skillPills.isClusterVisible {
                             SkillClusterView()
-                                .padding(.bottom, Theme.Spacing.sm)
+                                .padding(.bottom, Theme.Spacing.xs)
                                 .frame(height: 0, alignment: .bottom)
                                 .padding(.trailing, Theme.Spacing.md)
                                 .opacity(commandPalette.showCommandPopup ? 0 : 1)
@@ -122,6 +122,17 @@ struct AgentContentView: View {
                 ) {
                     _, suppressed in
                     skillCluster.isSuppressed = suppressed
+                }
+                // Draft auto-open: text or an image landing in the composer
+                // opens the cluster (pinned) to suggest the skills for it;
+                // clearing the draft retires it. Order matters — suppression
+                // must be seeded before the draft edge so a mid-generation
+                // draft arms instead of opening.
+                .onChange(
+                    of: !composerDraft.text.isEmpty || !composerDraft.pendingImages.isEmpty,
+                    initial: true
+                ) { _, hasContent in
+                    skillCluster.draftContentChanged(hasContent: hasContent)
                 }
                 .animation(.easeOut(duration: 0.15), value: commandPalette.showCommandPopup)
                 .environment(skillCluster)
