@@ -800,9 +800,39 @@ _Avoid_: separate item-spacing / part-spacing knobs; section gap.
 The named color roles applied to assistant markdown syntax — heading, strong,
 emphasis, inline code, link, list marker — so document structure reads at a
 glance; adapted from OpenCode's default theme, with dark and light variants.
-The one sanctioned exception to the otherwise monochrome chat content layer.
+With the **Code Accent Palette**, one of the two sanctioned exceptions to the
+otherwise monochrome chat content layer.
 _Avoid_: coloring body prose or user messages; per-view ad-hoc colors outside
 the named roles.
+
+**Code Accent Palette**:
+The named color roles for code and diffs in the transcript — syntax-highlight
+token roles (mapped from syntect scopes in Tool Panels, from the markdown
+renderer's tokenizer in assistant-prose code blocks) plus the semantic diff
+tints (added-green, removed-red) — with dark and light variants derived from
+system semantic colors. The second sanctioned color exception to the
+monochrome chat content layer; diff tints are semantic like error red, never
+decoration.
+_Avoid_: stock .tmTheme colors; using diff green/red outside added/removed
+semantics.
+
+**Tool Panel**:
+The specialized expanded body of a tool-call row: a per-tool derived rendering
+(diff, file slice with real line offsets, listing, search-result list, rendered
+page markdown, image thumbnails) that replaces raw arguments/result JSON in the
+UI. Unknown (external MCP) tools fall back to the generic panel — pretty-printed
+arguments plus result text. The exact wire payloads stay persisted in the
+transcript model; the panel is only a projection of them.
+_Avoid_: expanded view / detail section (the pre-2026-07 raw-JSON body);
+raw-mode toggle per panel (rendered/raw switches exist only where a rendered
+mode does, e.g. fetched markdown).
+
+**Panel Cap**:
+The length policy of a **Tool Panel**: the first ~40 lines, then a quiet
+"Show N more lines" row that expands the rest fully inline. Panels never scroll
+internally — the transcript remains the only scroller.
+_Avoid_: nested scroll views; fixed panel heights; truncation without a path to
+the full content.
 
 **Pending Row**:
 The user message rendered from send until the event spine commits the same

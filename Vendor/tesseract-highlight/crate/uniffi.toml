@@ -1,0 +1,3 @@
+[bindings.swift]
+ffi_module_name = "TesseractHighlightFFI"
+module_name = "TesseractHighlight"

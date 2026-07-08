@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 // MARK: - ReadToolDetails
 
-nonisolated struct ReadToolDetails: Sendable, Hashable {
+nonisolated struct ReadToolDetails: Sendable, Hashable, Codable {
     let path: String
     let lineCount: Int
     let wasTruncated: Bool
@@ -71,10 +71,11 @@ nonisolated func createReadTool(sandbox: PathSandbox, readTracker: FileReadTrack
                         .text("Read image file [\(mimeType)]"),
                         .image(data: data, mimeType: mimeType),
                     ],
-                    details: ReadToolDetails(
-                        path: displayName, lineCount: 0,
-                        wasTruncated: false, totalLines: 0
-                    )
+                    details: .read(
+                        ReadToolDetails(
+                            path: displayName, lineCount: 0,
+                            wasTruncated: false, totalLines: 0
+                        ))
                 )
             }
 
@@ -158,10 +159,11 @@ private nonisolated enum ReadToolHelper: Sendable {
 
             return AgentToolResult(
                 content: [.text("(empty file)")],
-                details: ReadToolDetails(
-                    path: displayName, lineCount: 0,
-                    wasTruncated: false, totalLines: 0
-                )
+                details: .read(
+                    ReadToolDetails(
+                        path: displayName, lineCount: 0,
+                        wasTruncated: false, totalLines: 0
+                    ))
             )
         }
 
@@ -271,12 +273,13 @@ private nonisolated enum ReadToolHelper: Sendable {
 
         return AgentToolResult(
             content: [.text(result)],
-            details: ReadToolDetails(
-                path: displayName,
-                lineCount: linesProcessed,
-                wasTruncated: hitToolTruncation,
-                totalLines: totalLines
-            )
+            details: .read(
+                ReadToolDetails(
+                    path: displayName,
+                    lineCount: linesProcessed,
+                    wasTruncated: hitToolTruncation,
+                    totalLines: totalLines
+                ))
         )
     }
 }

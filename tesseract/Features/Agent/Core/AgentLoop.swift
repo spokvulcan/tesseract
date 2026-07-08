@@ -445,6 +445,11 @@ private func executeToolCalls(
                 argsJSON: call.argumentsJSON
             ))
 
+        // The transparency backstop (PRD #200): the Tool Panels replace raw
+        // JSON in the UI, so the exact wire arguments are logged at execution
+        // time — before the call, so a hung tool still leaves its trace.
+        Log.agent.debug("Tool call \(call.name) [\(call.id)] args: \(call.argumentsJSON)")
+
         // Create onUpdate callback
         let toolCallId = call.id
         let toolName = call.name
@@ -472,6 +477,16 @@ private func executeToolCalls(
                 toolCallId: call.id, toolName: call.name,
                 result: toolResult, isError: isError
             ))
+
+        let resultText = toolResult.content.textContent
+        let imageCount = toolResult.content.count(where: {
+            if case .image = $0 { return true } else { return false }
+        })
+        Log.agent.debug(
+            "Tool result \(call.name) [\(call.id)] \(isError ? "error" : "ok") "
+                + "(\(resultText.count) chars\(imageCount > 0 ? ", \(imageCount) image(s)" : "")): "
+                + String(resultText.prefix(2_000))
+        )
 
         // Create result message
         let resultMessage = ToolResultMessage.create(

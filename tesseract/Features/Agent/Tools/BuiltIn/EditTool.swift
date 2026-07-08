@@ -3,10 +3,15 @@ import MLXLMCommon
 
 // MARK: - EditToolDetails
 
-nonisolated struct EditToolDetails: Sendable, Hashable {
+nonisolated struct EditToolDetails: Sendable, Hashable, Codable {
     let path: String
     let diff: String
     let firstChangedLine: Int
+    /// The exact replaced/replacement text (LF-normalized), so the diff panel
+    /// can recompute a word-level inline diff at render time instead of
+    /// re-parsing the unified `diff` string (PRD #200).
+    let oldText: String
+    let newText: String
 }
 
 nonisolated struct EditToolError: LocalizedError {
@@ -135,11 +140,14 @@ nonisolated func createEditTool(sandbox: PathSandbox, readTracker: FileReadTrack
 
             return AgentToolResult(
                 content: [.text("Successfully replaced text in \(path).")],
-                details: EditToolDetails(
-                    path: displayName,
-                    diff: diff,
-                    firstChangedLine: firstChangedLine
-                )
+                details: .edit(
+                    EditToolDetails(
+                        path: displayName,
+                        diff: diff,
+                        firstChangedLine: firstChangedLine,
+                        oldText: matchedText,
+                        newText: normalizedNew
+                    ))
             )
         }
     )

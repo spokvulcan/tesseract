@@ -1,0 +1,38 @@
+[package]
+name = "tesseract-highlight"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Syntax highlighting (syntect) and diff computation (similar) behind a narrow UniFFI interface for the Tesseract transcript (ADR-0029)."
+
+[lib]
+name = "tesseract_highlight"
+# staticlib is what ships in the XCFramework; cdylib exists only so
+# library-mode uniffi-bindgen can read the metadata; lib for cargo test.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+[dependencies]
+uniffi = "0.32"
+# fancy = pure-Rust fancy-regex engine — no oniguruma C dependency, keeps the
+# XCFramework build toolchain-only. two-face supplies bat's extended grammar
+# set (Swift, Rust, TypeScript, …) — syntect's default set lacks Swift.
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-default-fancy"] }
+similar = { version = "3.1", features = ["unicode", "inline"] }
+
+[build-dependencies]
+uniffi = { version = "0.32", features = ["build"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+required-features = ["uniffi/cli"]
+
+[features]
+default = []
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"

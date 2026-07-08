@@ -13,10 +13,11 @@
 //  transcript text — hierarchy comes from color and weight, never from size.
 //  Monochrome content layer — system primary/secondary/tertiary styles and
 //  system materials only. No glass here, ever (HIG: glass belongs to the
-//  navigation/control layer). Red appears exclusively as the semantic error
-//  tint. Row actions (copy, speak, edit & resend, Show in Finder) live in
-//  right-click context menus — no visible button chrome, and nothing
-//  hover-revealed (unreachable the moment the row loses hover).
+//  navigation/control layer). Color appears only semantically: the error
+//  tint, the Prose Accent Palette, and the Code Accent Palette (syntax roles
+//  + diff tints — PRD #200). Row actions (copy, speak, edit & resend, Show
+//  in Finder) live in right-click context menus — no visible button chrome,
+//  and nothing hover-revealed (unreachable the moment the row loses hover).
 //
 
 import SwiftUI
@@ -129,6 +130,7 @@ struct AssistantProseView: View {
             StructuredText(markdown: text)
                 .textual.structuredTextStyle(ChatMarkdownStyle())
                 .textual.codeBlockStyle(CopyableCodeBlockStyle())
+                .textual.highlighterTheme(.codeAccents)
                 .textual.textSelection(.enabled)
                 .font(.system(size: chatBodyFontSize))
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -281,13 +283,16 @@ struct ToolCallRowView: View {
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 10) {
-                    detailSection("Arguments", text: props.argsFormatted, isError: false)
-
                     if let result {
-                        let text = result.content.textContent
-                        if !text.isEmpty {
-                            detailSection("Result", text: text, isError: result.isError)
-                        }
+                        // Committed: the specialized Tool Panel (PRD #200).
+                        ToolPanelView(
+                            panel: ToolPanelBuilder.panel(
+                                for: ToolCallInfo(
+                                    id: part.id, name: part.name,
+                                    argumentsJSON: part.argumentsJSON),
+                                result: result),
+                            argsFormatted: props.argsFormatted
+                        )
                         let images = result.content.imageAttachments(namespace: result.id)
                         if !images.isEmpty {
                             ScrollView(.horizontal, showsIndicators: false) {
@@ -298,6 +303,10 @@ struct ToolCallRowView: View {
                                 }
                             }
                         }
+                    } else {
+                        // Still running: arguments-so-far in the generic form
+                        // until the result commits.
+                        argumentsSoFarSection(props.argsFormatted)
                     }
                 }
                 .padding(.leading, ChatLayout.markerWidth + 8)
@@ -316,9 +325,11 @@ struct ToolCallRowView: View {
         }
     }
 
-    private func detailSection(_ label: String, text: String, isError: Bool) -> some View {
+    /// The running row's arguments-so-far box — the generic form a live call
+    /// shows until its result commits and the Tool Panel takes over.
+    private func argumentsSoFarSection(_ text: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label)
+            Text("Arguments")
                 .font(.system(size: chatBodyFontSize, weight: .medium))
                 .foregroundStyle(.tertiary)
 
@@ -327,11 +338,7 @@ struct ToolCallRowView: View {
             // indentation in monospaced output — keep those.
             Text(text.trimmingCharacters(in: .newlines))
                 .font(.system(size: chatBodyFontSize, design: .monospaced))
-                .foregroundStyle(
-                    isError
-                        ? AnyShapeStyle(DynamicColor.chatError)
-                        : AnyShapeStyle(.secondary)
-                )
+                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(8)
