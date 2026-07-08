@@ -3,10 +3,10 @@
 //  tesseract
 //
 //  The composer: one of the chat's three custom glass surfaces (with the
-//  slash-command popup and the Skill Cluster, ADR-0030; all three live in the
-//  content view's shared GlassEffectContainer). Hosts the text field, the
-//  pending-image strip, the model button, and the single in-composer notice
-//  slot every hint/error feeds — there is no separate status strip or
+//  slash-command popup, which shares its GlassEffectContainer, and the Skill
+//  Cluster, ADR-0030, which floats above in its own). Hosts the text field,
+//  the pending-image strip, the model button, and the single in-composer
+//  notice slot every hint/error feeds — there is no separate status strip or
 //  floating error banner.
 //
 

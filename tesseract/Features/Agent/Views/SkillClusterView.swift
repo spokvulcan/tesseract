@@ -6,9 +6,9 @@
 //  floating ✦ bubble above the composer's trailing corner that morphs open
 //  into the fanned **Skill Pill**s. A dumb rendering of the
 //  `SkillClusterController` phase; pill firing reuses the Chat Session's
-//  draft ride-along contract. Lives inside the content view's one
-//  GlassEffectContainer so the bubble, pills, and composer sample the same
-//  glass and the collapsed ⇄ expanded morph can use glassEffectID.
+//  draft ride-along contract. Hosts its *own* GlassEffectContainer (the
+//  Landmarks badges pattern) so the bubble and pills morph together via
+//  glassEffectID without liquid-fusing into the composer's glass edge.
 //
 
 import SwiftUI
@@ -125,16 +125,21 @@ struct SkillClusterView: View {
     private static let bubbleSize: CGFloat = 38
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if cluster.isOpen {
-                TrailingWrapLayout(spacing: 6, rowSpacing: 6) {
-                    ForEach(skillPills.pills) { pill in
-                        pillCapsule(pill)
+        // The cluster's own sampling context (spacing per the Landmarks
+        // badges): bubble and pills blend with each other during the morph,
+        // never with the composer's glass below.
+        GlassEffectContainer(spacing: 16) {
+            HStack(alignment: .bottom, spacing: 8) {
+                if cluster.isOpen {
+                    TrailingWrapLayout(spacing: 6, rowSpacing: 6) {
+                        ForEach(skillPills.pills) { pill in
+                            pillCapsule(pill)
+                        }
                     }
                 }
-            }
 
-            bubble
+                bubble
+            }
         }
         .onHover { hovering in
             if hovering {
@@ -163,6 +168,7 @@ struct SkillClusterView: View {
         .glassEffect(.regular.interactive(), in: Circle())
         .glassEffectID("bubble", in: glassNamespace)
         .opacity(session.isGenerating ? 0.4 : 1)
+        .pointerStyle(session.isGenerating ? nil : .link)
         .help("Skills")
     }
 
@@ -182,6 +188,7 @@ struct SkillClusterView: View {
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
         .glassEffectID(pill.name, in: glassNamespace)
+        .pointerStyle(.link)
         .help(pill.description)
     }
 

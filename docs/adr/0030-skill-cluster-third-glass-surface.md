@@ -17,14 +17,19 @@ reaching for a skill.
   ~38pt circular bubble (`sparkles` icon, `.regular` glass, `.interactive()`)
   that morphs open into the fanned pills. Hover opens (~150ms delay, ~250ms
   exit grace), click pins until click-away/Esc, firing a pill collapses.
-- **It is the third custom glass surface, inside the one existing
-  `GlassEffectContainer`** in `AgentContentView`'s bottom safe-area inset — so
-  the cluster and composer sample each other's glass, and the collapsed⇄expanded
-  morph uses `glassEffectID` (all verified available on macOS 26:
-  `GlassEffectContainer`, `glassEffectID`, `glassEffectUnion`,
-  `GlassEffectTransition` in the macOS 26.5 SDK swiftinterface). The transcript
-  content itself still never gets glass; the cluster floats in the inset layer,
-  not the content layer.
+- **It is the third custom glass surface, in its own
+  `GlassEffectContainer(spacing: 16)`** in `AgentContentView`'s bottom
+  safe-area inset — the collapsed⇄expanded morph uses `glassEffectID` within
+  that container (all verified available on macOS 26: `GlassEffectContainer`,
+  `glassEffectID`, `glassEffectUnion`, `GlassEffectTransition` in the macOS
+  26.5 SDK swiftinterface). *Amended 2026-07-08 after live testing:* the first
+  build shared the composer's container so the two could sample each other's
+  glass, and at close range the pills liquid-fused into the composer's top
+  edge. Apple's Landmarks Liquid Glass sample (`BadgesView`) gives its
+  morphing badge cluster its own container for exactly this reason; the
+  one-container rule (ADR-0024) scopes to elements that *should* blend. The
+  transcript content itself still never gets glass; the cluster floats in the
+  inset layer, not the content layer.
 - **Geometry:** pills fan leftward from the bubble at its height, most-used
   nearest (the **Skill Usage Ranking**'s new spatial mapping), wrapping upward
   right-aligned when out of width. No scrolling, no overflow menu.

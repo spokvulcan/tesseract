@@ -4,9 +4,11 @@
 //
 //  The agent chat page: the flat document transcript with the glass composer
 //  floating in the bottom safe-area inset. The chat's three custom glass
-//  surfaces — the composer, the slash-command popup, and the Skill Cluster
-//  (ADR-0030) — share the one GlassEffectContainer here; everything above
-//  them is content layer and stays glass-free (HIG).
+//  surfaces live here: the composer and the slash-command popup share one
+//  GlassEffectContainer; the Skill Cluster (ADR-0030) floats above the
+//  composer's trailing corner in its own container so it never fuses with
+//  the composer's glass. Everything above them is content layer and stays
+//  glass-free (HIG).
 //
 
 import SwiftUI
@@ -67,8 +69,9 @@ struct AgentContentView: View {
                         clickAwayCatcher { skillCluster.clickedAway() }
                     }
 
-                    // The one glass container: the popup, the composer, and
-                    // the Skill Cluster morph within a shared sampling context.
+                    // The composer's glass container: the popup and the
+                    // composer morph within a shared sampling context. (The
+                    // Skill Cluster brings its own container — ADR-0030.)
                     GlassEffectContainer {
                         VStack(spacing: 0) {
                             if commandPalette.showCommandPopup,
@@ -90,21 +93,24 @@ struct AgentContentView: View {
                             AgentComposerView()
                                 .padding(Theme.Spacing.md)
                         }
-                        // The Skill Cluster floats above the composer's
-                        // trailing corner without reserving inset space — the
-                        // fan overlays the transcript, so opening it never
-                        // shifts layout. Faded out while the slash popup owns
-                        // this area (the controller is suppressed then).
-                        .overlay(alignment: .topTrailing) {
-                            if skillPills.isClusterVisible {
-                                SkillClusterView()
-                                    .padding(.trailing, Theme.Spacing.md)
-                                    .alignmentGuide(.top) { dimensions in
-                                        dimensions[VerticalAlignment.bottom] + 8
-                                    }
-                                    .opacity(commandPalette.showCommandPopup ? 0 : 1)
-                                    .allowsHitTesting(!commandPalette.showCommandPopup)
-                            }
+                    }
+                    // The Skill Cluster floats above the composer's trailing
+                    // corner without reserving inset space — the fan overlays
+                    // the transcript, so opening it never shifts layout. The
+                    // zero-height frame pins an anchor line at the container's
+                    // top edge and the cluster hangs entirely above it (an
+                    // alignmentGuide override here silently failed through the
+                    // conditional wrapper — don't reintroduce one). Faded out
+                    // while the slash popup owns this area (the controller is
+                    // suppressed then).
+                    .overlay(alignment: .topTrailing) {
+                        if skillPills.isClusterVisible {
+                            SkillClusterView()
+                                .padding(.bottom, Theme.Spacing.sm)
+                                .frame(height: 0, alignment: .bottom)
+                                .padding(.trailing, Theme.Spacing.md)
+                                .opacity(commandPalette.showCommandPopup ? 0 : 1)
+                                .allowsHitTesting(!commandPalette.showCommandPopup)
                         }
                     }
                 }
