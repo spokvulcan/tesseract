@@ -122,16 +122,18 @@ struct SkillClusterView: View {
     /// a glassEffectID in it, so open/close morphs instead of fading.
     @Namespace private var glassNamespace
 
-    private static let bubbleSize: CGFloat = 38
+    private static let bubbleSize: CGFloat = 44
 
     var body: some View {
         // The cluster's own sampling context (spacing per the Landmarks
         // badges): bubble and pills blend with each other during the morph,
-        // never with the composer's glass below.
+        // never with the composer's glass below. Pills center on the bubble's
+        // midline — the fan reads as growing out of the bubble, not resting
+        // on its baseline.
         GlassEffectContainer(spacing: 16) {
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
                 if cluster.isOpen {
-                    TrailingWrapLayout(spacing: 6, rowSpacing: 6) {
+                    TrailingWrapLayout(spacing: 10, rowSpacing: 10) {
                         ForEach(skillPills.pills) { pill in
                             pillCapsule(pill)
                         }
@@ -159,7 +161,7 @@ struct SkillClusterView: View {
             cluster.buttonClicked()
         } label: {
             Image(systemName: "sparkles")
-                .font(.system(size: 15, weight: .medium))
+                .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: Self.bubbleSize, height: Self.bubbleSize)
                 .contentShape(Circle())
@@ -179,10 +181,10 @@ struct SkillClusterView: View {
             fire(pill)
         } label: {
             Text(pill.label)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)

@@ -47,8 +47,9 @@ final class SkillClusterController {
     /// Hover-open delay — long enough that a pointer crossing the bubble on
     /// its way elsewhere never flashes the cluster open.
     private let openDelay: Duration
-    /// Exit grace — long enough that a small pointer slip off the cluster's
-    /// union doesn't collapse it mid-reach.
+    /// Exit grace — deliberately long (owner call, 2026-07-08): leaving the
+    /// cluster should give the pointer a real chance to come back, not
+    /// collapse the moment hover is lost.
     private let exitGrace: Duration
 
     /// The one in-flight delayed transition (pending open or pending
@@ -59,7 +60,7 @@ final class SkillClusterController {
 
     init(
         openDelay: Duration = .milliseconds(150),
-        exitGrace: Duration = .milliseconds(250)
+        exitGrace: Duration = .seconds(2)
     ) {
         self.openDelay = openDelay
         self.exitGrace = exitGrace

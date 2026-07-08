@@ -14,9 +14,11 @@ reaching for a skill.
 
 - **The Skill Pills leave the composer and become the Skill Cluster** — a
   floating glass surface above the composer's trailing corner: a collapsed
-  ~38pt circular bubble (`sparkles` icon, `.regular` glass, `.interactive()`)
-  that morphs open into the fanned pills. Hover opens (~150ms delay, ~250ms
-  exit grace), click pins until click-away/Esc, firing a pill collapses.
+  ~44pt circular bubble (`sparkles` icon, `.regular` glass, `.interactive()`)
+  that morphs open into the fanned pills, centered on the bubble's midline.
+  Hover opens (~150ms delay), click pins until click-away/Esc, firing a pill
+  collapses. The exit grace is a deliberate ~2s (owner call, live-tuned
+  2026-07-08): losing hover must leave time to come back, not snap shut.
 - **It is the third custom glass surface, in its own
   `GlassEffectContainer(spacing: 16)`** in `AgentContentView`'s bottom
   safe-area inset — the collapsed⇄expanded morph uses `glassEffectID` within

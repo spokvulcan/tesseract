@@ -238,7 +238,11 @@ struct AgentComposerView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
         }
-        .glassEffect(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // `.interactive()` matches the Skill Cluster's material — the two
+        // surfaces sit 20pt apart and must not read as different colors.
+        .glassEffect(
+            .regular.interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.quaternary, lineWidth: 0.5)
