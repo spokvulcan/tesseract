@@ -39,6 +39,10 @@ extension Color {
     /// Stronger tint on the word-level changed range inside a modified line.
     static let diffAddedEmphasis = Color(nsColor: .systemGreen).opacity(0.32)
     static let diffRemovedEmphasis = Color(nsColor: .systemRed).opacity(0.30)
+    /// Gutter numbers on ± rows, tinted like the row so old/new membership
+    /// reads at a glance (delta-style).
+    static let diffAddedGutter = Color(nsColor: .systemGreen).opacity(0.75)
+    static let diffRemovedGutter = Color(nsColor: .systemRed).opacity(0.75)
 }
 
 // MARK: - ToolPanelView
@@ -57,6 +61,8 @@ struct ToolPanelView: View {
             CodeRowsPanel(rows: rows, showsDiffGutter: false, footnote: footnote)
         case .text(let text):
             MonospacedTextPanel(text: text, isError: false)
+        case .evaluate(let scriptRows, let result):
+            EvaluatePanel(scriptRows: scriptRows, result: result)
         case .search(let results, let fallbackText):
             SearchResultsPanel(results: results, fallbackText: fallbackText)
         case .page(let title, let url, let body, let raw):
@@ -74,15 +80,18 @@ struct ToolPanelView: View {
 // MARK: - Panel chrome
 
 /// The one panel surface: full-width muted box, matching the transcript's
-/// existing quinary boxes.
+/// existing quinary boxes. `flush` drops the inner inset so row tints (diff
+/// ± backgrounds) run edge to edge; rows then carry their own text padding.
 private struct PanelBox<Content: View>: View {
+    var flush = false
     @ViewBuilder var content: Content
 
     var body: some View {
         content
-            .padding(8)
+            .padding(flush ? 0 : 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quinary, in: RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -108,7 +117,8 @@ private struct ShowMoreRow: View {
 // MARK: - Code / diff rows
 
 /// Line-numbered highlighted rows — the shared body of the diff panel
-/// (± tints, dual gutter) and the read/write panels (single gutter).
+/// (± tints, tinted gutter number + sign column) and the read/write
+/// panels (plain single gutter).
 private struct CodeRowsPanel: View {
     let rows: [PanelCodeRow]
     let showsDiffGutter: Bool
@@ -121,7 +131,7 @@ private struct CodeRowsPanel: View {
         let gutterWidth = gutterWidth
 
         VStack(alignment: .leading, spacing: 2) {
-            PanelBox {
+            PanelBox(flush: true) {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(visible) { row in
                         CodeRowView(
@@ -131,7 +141,9 @@ private struct CodeRowsPanel: View {
                         ShowMoreRow(hidden: hidden) {
                             withAnimation(.easeOut(duration: 0.15)) { capExpanded = true }
                         }
+                        .padding(.horizontal, 6)
                         .padding(.top, 4)
+                        .padding(.bottom, 6)
                     }
                 }
                 .textSelection(.enabled)
@@ -161,8 +173,10 @@ private struct CodeRowView: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 0) {
             if showsDiffGutter {
-                gutterText(row.oldLine)
-                gutterText(row.newLine)
+                // Single gutter: the line's number in its own file (old for
+                // removed, new otherwise), then a tinted ± sign column.
+                gutterText(row.kind == .removed ? row.oldLine : row.newLine)
+                signText
                     .padding(.trailing, 8)
             } else {
                 gutterText(row.newLine)
@@ -171,16 +185,37 @@ private struct CodeRowView: View {
             spansText
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // Text inset lives on the row, inside the tint, so ± backgrounds run
+        // the panel's full width and height.
+        .padding(.leading, 6)
+        .padding(.trailing, 8)
         .padding(.vertical, 1)
         .background(rowBackground)
     }
 
+    /// Gutter numbers on ± rows tint like the row so old/new membership
+    /// reads at a glance.
     private func gutterText(_ number: Int?) -> some View {
         Text(number.map(String.init) ?? "")
             .font(.system(size: chatBodyFontSize, design: .monospaced))
             .monospacedDigit()
-            .foregroundStyle(.tertiary)
+            .foregroundStyle(gutterStyle)
             .frame(width: gutterWidth, alignment: .trailing)
+    }
+
+    private var signText: some View {
+        Text(row.kind == .added ? "+" : row.kind == .removed ? "−" : "")
+            .font(.system(size: chatBodyFontSize, design: .monospaced))
+            .foregroundStyle(gutterStyle)
+            .frame(width: chatBodyFontSize * 0.62 + 8, alignment: .center)
+    }
+
+    private var gutterStyle: AnyShapeStyle {
+        switch row.kind {
+        case .added: AnyShapeStyle(Color.diffAddedGutter)
+        case .removed: AnyShapeStyle(Color.diffRemovedGutter)
+        case .context: AnyShapeStyle(.tertiary)
+        }
     }
 
     /// The row's spans as one attributed line, so selection reads as a single
@@ -395,6 +430,28 @@ private struct StatusPanel: View {
     }
 }
 
+// MARK: - Evaluate panel
+
+/// browser.evaluate: the exact JavaScript the agent ran, highlighted like any
+/// code panel, then the value the page returned.
+private struct EvaluatePanel: View {
+    let scriptRows: [PanelCodeRow]
+    let result: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LabeledPanelSection(label: "Script") {
+                CodeRowsPanel(rows: scriptRows, showsDiffGutter: false, footnote: nil)
+            }
+            if !result.isEmpty {
+                LabeledPanelSection(label: "Result") {
+                    MonospacedTextPanel(text: result, isError: false)
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Generic panel
 
 /// Unknown/external tools and detail-less legacy messages: the full
@@ -405,25 +462,30 @@ private struct GenericPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            labeledSection("Arguments") {
+            LabeledPanelSection(label: "Arguments") {
                 MonospacedTextPanel(text: argsFormatted, isError: false)
             }
             if let resultText, !resultText.isEmpty {
-                labeledSection("Result") {
+                LabeledPanelSection(label: "Result") {
                     MonospacedTextPanel(text: resultText, isError: false)
                 }
             }
         }
     }
+}
 
-    private func labeledSection(_ label: String, @ViewBuilder content: () -> some View)
-        -> some View
-    {
+/// A quiet tertiary label over a panel body — shared by the multi-part
+/// panels (evaluate, generic).
+private struct LabeledPanelSection<Content: View>: View {
+    let label: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.system(size: chatBodyFontSize, weight: .medium))
                 .foregroundStyle(.tertiary)
-            content()
+            content
         }
     }
 }

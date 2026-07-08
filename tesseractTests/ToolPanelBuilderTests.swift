@@ -144,11 +144,36 @@ struct ToolPanelBuilderTests {
     // MARK: - Listing tools stay monospaced text
 
     @Test func lsAndSkillAndPageMapAreTextPanels() {
-        for tool in ["ls", "use_skill", "browser.page_map", "browser.find", "browser.evaluate"] {
+        for tool in ["ls", "use_skill", "browser.page_map", "browser.find"] {
             let panel = ToolPanelBuilder.panel(
                 for: call(tool), result: result(tool, text: "line one\nline two"))
             #expect(panel == .text("line one\nline two"), "tool: \(tool)")
         }
+    }
+
+    // MARK: - Evaluate → highlighted script + result
+
+    @Test func evaluateProjectsItsScriptHighlightedAsJavaScript() throws {
+        let script = "const rows = document.querySelectorAll('tr');\nreturn rows.length;"
+        let panel = ToolPanelBuilder.panel(
+            for: call("browser.evaluate", args: ["script": script]),
+            result: result("browser.evaluate", text: "42")
+        )
+        guard case .evaluate(let rows, let value) = panel else {
+            Issue.record("Expected evaluate panel, got \(panel)")
+            return
+        }
+        #expect(value == "42")
+        #expect(rows.map(\.newLine) == [1, 2])
+        #expect(
+            rows[0].spans.map(\.text).joined() == "const rows = document.querySelectorAll('tr');")
+        #expect(rows[0].spans.contains { $0.role == .keyword })  // const
+    }
+
+    @Test func evaluateWithoutAScriptArgumentStaysTextual() {
+        let panel = ToolPanelBuilder.panel(
+            for: call("browser.evaluate"), result: result("browser.evaluate", text: "undefined"))
+        #expect(panel == .text("undefined"))
     }
 
     // MARK: - Search → structured hits

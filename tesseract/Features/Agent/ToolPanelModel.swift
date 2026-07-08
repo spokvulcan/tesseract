@@ -54,8 +54,11 @@ nonisolated enum ToolPanel: Sendable, Hashable {
     case diff(path: String, rows: [PanelCodeRow])
     /// A line-numbered, highlighted file slice (read / write).
     case code(path: String?, rows: [PanelCodeRow], footnote: String?)
-    /// Monospaced text as returned (ls, page_map, find, evaluate, use_skill…).
+    /// Monospaced text as returned (ls, page_map, find, use_skill…).
     case text(String)
+    /// browser.evaluate: the JavaScript the agent ran, highlighted, plus the
+    /// value the page returned.
+    case evaluate(scriptRows: [PanelCodeRow], result: String)
     /// Structured web-search results; `fallbackText` when the engine returned
     /// prose instead of result rows.
     case search(results: [PanelSearchHit], fallbackText: String?)
@@ -155,8 +158,10 @@ nonisolated enum ToolPanelBuilder {
             return readPanel(args: args, resultText: text)
         case "write":
             return writePanel(args: args)
-        case "ls", "use_skill", "browser.page_map", "browser.find", "browser.evaluate":
+        case "ls", "use_skill", "browser.page_map", "browser.find":
             return .text(text)
+        case "browser.evaluate":
+            return evaluatePanel(args: args, resultText: text)
         case "browser.search":
             return searchPanel(resultText: text)
         case "browser.fetch", "browser.read_page":
@@ -249,6 +254,19 @@ nonisolated enum ToolPanelBuilder {
         let rows = highlightRows(
             code: content, languageHint: path ?? "", numbers: Array(1...lineCount))
         return .code(path: path, rows: rows, footnote: nil)
+    }
+
+    // MARK: Evaluate → highlighted script + result
+
+    /// The script the agent ran (from the exact call arguments), highlighted
+    /// as JavaScript, alongside the returned value.
+    private static func evaluatePanel(args: [String: JSONValue]?, resultText: String) -> ToolPanel {
+        guard let script = args?.string(for: "script"), !script.isEmpty else {
+            return .text(resultText)
+        }
+        let lineCount = script.split(separator: "\n", omittingEmptySubsequences: false).count
+        let rows = highlightRows(code: script, languageHint: "js", numbers: Array(1...lineCount))
+        return .evaluate(scriptRows: rows, result: resultText)
     }
 
     // MARK: Search → structured hits
