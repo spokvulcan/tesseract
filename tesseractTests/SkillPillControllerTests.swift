@@ -136,21 +136,21 @@ struct SkillPillControllerTests {
         #expect(second.pills.first?.name == "translate")
     }
 
-    // MARK: - Row visibility
+    // MARK: - Cluster visibility
 
-    @Test func rowHiddenWhenSettingOff() {
+    @Test func clusterHiddenWhenSettingOff() {
         let settings = makeSettings()
         let controller = makeController(skills: essentials, settings: settings)
-        #expect(controller.isRowVisible == true)
+        #expect(controller.isClusterVisible == true)
 
         settings.showSkillPills = false
-        #expect(controller.isRowVisible == false)
+        #expect(controller.isClusterVisible == false)
     }
 
-    @Test func rowHiddenWhenNoPillSkillsExist() {
+    @Test func clusterHiddenWhenNoPillSkillsExist() {
         let controller = makeController(
             skills: [skill("memory", pill: false)], settings: makeSettings())
-        #expect(controller.isRowVisible == false)
+        #expect(controller.isClusterVisible == false)
     }
 
     // MARK: - Invocation argument assembly

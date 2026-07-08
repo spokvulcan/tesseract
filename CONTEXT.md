@@ -947,12 +947,23 @@ _Avoid_: command (the palette concept), prompt template, tool (a callable
 capability, not an instruction), persona/mode.
 
 **Skill Pill**:
-The tappable pill inline in the agent chat composer's action row that runs one **Skill** instantly
+The tappable capsule inside the **Skill Cluster** that runs one **Skill** instantly
 on tap — the composer's current text and pending images ride along as the skill's
 arguments and attachments, and a bare tap with an empty composer still fires.
 Presentation only: a surface over skills, never a second invocation mechanism.
 _Avoid_: quick action, suggestion chip, shortcut button, mode/toggle (a pill arms
 nothing).
+
+**Skill Cluster**:
+The floating glass surface for **Skill Pill**s: a collapsed bubble above the
+composer's trailing corner that morphs open into the fanned pills — hover opens,
+click pins, a composer draft gaining content auto-opens it, firing/Esc/the draft
+emptying collapse it, and a manual close is final for the current draft. Dimmed
+and inert while a run is generating; its visibility is the "show skill pills"
+Setting. The pills fan leftward from the bubble, most-used nearest, wrapping
+upward when out of width.
+_Avoid_: FAB / floating action button, quick actions, toolbar, menu (nothing arms
+or navigates), palette (the slash popup concept).
 
 **Skill Invocation Row**:
 The chat's compact rendering of a fired **Skill** — the skill name
@@ -962,12 +973,13 @@ _Avoid_: raw `<skill>` text as the user bubble, skill message (it is a rendering
 not a message kind).
 
 **Skill Usage Ranking**:
-The left-to-right order of **Skill Pill**s: user-initiated invocations (pill tap
-or slash command — never model-initiated) accumulate a per-skill count; zero-count
-skills follow the curated default order. Recomputed at conversation start and held
-stable within a conversation.
+The order of **Skill Pill**s — most-used nearest the **Skill Cluster**'s collapsed
+bubble: user-initiated invocations (pill tap or slash command — never
+model-initiated) accumulate a per-skill count; zero-count skills follow the curated
+default order. Recomputed at conversation start and held stable within a
+conversation.
 _Avoid_: frecency (not the V1 mechanism), MRU/recently-used (counts, not recency),
-live re-sort (explicitly rejected — the row never shifts mid-conversation).
+live re-sort (explicitly rejected — the order never shifts mid-conversation).
 
 ### Operation staleness
 

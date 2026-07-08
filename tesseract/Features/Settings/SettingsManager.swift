@@ -330,7 +330,7 @@ final class SettingsManager {
 
     // MARK: - Skill Pills (PRD #174)
 
-    /// "Show skill pills" — the pill row's single opt-out.
+    /// "Show skill button" — the Skill Cluster's single opt-out.
     var showSkillPills: Bool {
         didSet { SettingsCatalogue.showSkillPills.write(showSkillPills, to: store) }
     }

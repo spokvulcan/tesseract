@@ -2,11 +2,12 @@
 //  AgentComposerView.swift
 //  tesseract
 //
-//  The composer: one of exactly two custom glass surfaces in the chat (the
-//  other is the slash-command popup; both live in the content view's shared
-//  GlassEffectContainer). Hosts the text field, the pending-image strip, the
-//  model button, and the single in-composer notice slot every hint/error feeds —
-//  there is no separate status strip or floating error banner.
+//  The composer: one of the chat's three custom glass surfaces (with the
+//  slash-command popup, which shares its GlassEffectContainer, and the Skill
+//  Cluster, ADR-0030, which floats above in its own). Hosts the text field,
+//  the pending-image strip, the model button, and the single in-composer
+//  notice slot every hint/error feeds — there is no separate status strip or
+//  floating error banner.
 //
 
 import SwiftUI
@@ -25,7 +26,7 @@ struct AgentComposerView: View {
     @Environment(ChatSession.self) private var session
     @Environment(ComposerDraftController.self) private var composerDraft
     @Environment(SlashCommandPaletteController.self) private var commandPalette
-    @Environment(SkillPillController.self) private var skillPills
+    @Environment(SkillClusterController.self) private var skillCluster
     @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(AppshotController.self) private var appshot
     @Environment(AgentEngine.self) private var agentEngine
@@ -104,7 +105,10 @@ struct AgentComposerView: View {
                         return true
                     },
                     onEscape: {
-                        guard commandPalette.showCommandPopup else { return false }
+                        guard commandPalette.showCommandPopup else {
+                            // No popup — Esc closes an open Skill Cluster.
+                            return skillCluster.escapePressed()
+                        }
                         commandPalette.dismissCommandPopup()
                         composerDraft.text = ""
                         return true
@@ -198,14 +202,7 @@ struct AgentComposerView: View {
                 .buttonStyle(.plain)
                 .help("Commands")
 
-                // The Skill Pills, inline in the action row (PRD #183 US 18:
-                // invoked skills visible where you type). The strip flexes to
-                // fill the row, so it doubles as the spacer while visible.
-                if skillPills.isRowVisible {
-                    SkillPillRowView()
-                } else {
-                    Spacer()
-                }
+                Spacer()
 
                 ModelButtonView()
 
@@ -241,7 +238,11 @@ struct AgentComposerView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
         }
-        .glassEffect(in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        // `.interactive()` matches the Skill Cluster's material — the two
+        // surfaces sit 20pt apart and must not read as different colors.
+        .glassEffect(
+            .regular.interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.quaternary, lineWidth: 0.5)
