@@ -72,7 +72,8 @@ extension ToolResultMessage {
             toolCallId: toolCallId,
             toolName: toolName,
             content: result.content,
-            isError: isError
+            isError: isError,
+            details: result.details
         )
     }
 

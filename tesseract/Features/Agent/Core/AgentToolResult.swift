@@ -99,9 +99,11 @@ extension [ContentBlock] {
 /// Structured result returned by a tool execution.
 nonisolated struct AgentToolResult: Sendable {
     let content: [ContentBlock]
-    let details: (any Sendable & Hashable)?
+    /// Typed facts about the execution (PRD #200) — threaded onto the
+    /// persisted `ToolResultMessage` by the agent loop's commit step.
+    let details: ToolResultDetails?
 
-    init(content: [ContentBlock], details: (any Sendable & Hashable)? = nil) {
+    init(content: [ContentBlock], details: ToolResultDetails? = nil) {
         self.content = content
         self.details = details
     }

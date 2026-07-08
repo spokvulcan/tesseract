@@ -289,7 +289,7 @@ struct ReadToolTests {
         #expect(lines[2].hasSuffix("\tLine 3"))
         #expect(!output.contains("Use offset="))
 
-        guard let details = result.details as? ReadToolDetails else {
+        guard let details = result.details?.readDetails else {
             Issue.record("Expected ReadToolDetails")
             return
         }
@@ -392,7 +392,7 @@ struct ReadToolTests {
         #expect(!output.contains("\tLine 2001"))
         #expect(output.contains("[Showing lines 1-2000 of 2500. Use offset=2001 to continue.]"))
 
-        guard let details = result.details as? ReadToolDetails else {
+        guard let details = result.details?.readDetails else {
             Issue.record("Expected ReadToolDetails")
             return
         }
@@ -419,7 +419,7 @@ struct ReadToolTests {
         #expect(output.contains("\tLine 1:"))
         #expect(output.contains("(50.0KB limit). Use offset="))
 
-        guard let details = result.details as? ReadToolDetails else {
+        guard let details = result.details?.readDetails else {
             Issue.record("Expected ReadToolDetails")
             return
         }
@@ -444,7 +444,7 @@ struct ReadToolTests {
         #expect(output.contains("truncated to 50.0KB. Content may be incomplete.]"))
         #expect(!output.contains("Use offset="))
 
-        guard let details = result.details as? ReadToolDetails else {
+        guard let details = result.details?.readDetails else {
             Issue.record("Expected ReadToolDetails")
             return
         }
@@ -584,7 +584,7 @@ struct LsToolTests {
                 == "a.txt\nb.txt\n\n[2 entries limit reached. Use limit=4 for more]"
         )
 
-        guard let details = result.details as? LsToolDetails else {
+        guard let details = result.details?.lsDetails else {
             Issue.record("Expected LsToolDetails")
             return
         }
@@ -609,7 +609,7 @@ struct LsToolTests {
 
         #expect(result.content.textContent.contains("[50.0KB limit reached]"))
 
-        guard let details = result.details as? LsToolDetails else {
+        guard let details = result.details?.lsDetails else {
             Issue.record("Expected LsToolDetails")
             return
         }
@@ -768,7 +768,7 @@ struct EditToolTests {
         #expect(result.content.textContent.contains("Successfully replaced text in edit-test.txt."))
         #expect(try readUTF8PreservingBytes(from: fileURL) == "Hello, testing!")
 
-        guard let details = result.details as? EditToolDetails else {
+        guard let details = result.details?.editDetails else {
             Issue.record("Expected EditToolDetails")
             return
         }

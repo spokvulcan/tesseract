@@ -226,6 +226,10 @@ nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, 
     let toolName: String
     let content: [ContentBlock]
     let isError: Bool
+    /// Typed execution details (PRD #200) — the Tool Panels' data source.
+    /// `nil` for legacy conversations, detail-less tools, and any persisted
+    /// shape this build can't decode.
+    let details: ToolResultDetails?
     let timestamp: Date
 
     init(
@@ -234,6 +238,7 @@ nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, 
         toolName: String,
         content: [ContentBlock],
         isError: Bool = false,
+        details: ToolResultDetails? = nil,
         timestamp: Date = Date()
     ) {
         self.id = id
@@ -241,7 +246,25 @@ nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, 
         self.toolName = toolName
         self.content = content
         self.isError = isError
+        self.details = details
         self.timestamp = timestamp
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        toolCallId = try container.decode(String.self, forKey: .toolCallId)
+        toolName = try container.decode(String.self, forKey: .toolName)
+        content = try container.decode([ContentBlock].self, forKey: .content)
+        isError = try container.decode(Bool.self, forKey: .isError)
+        // Lenient on purpose: an unknown details shape (from a newer build)
+        // costs only the details, never the message.
+        details = try? container.decodeIfPresent(ToolResultDetails.self, forKey: .details)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, toolCallId, toolName, content, isError, details, timestamp
     }
 
     func toLLMMessage() -> LLMMessage? {

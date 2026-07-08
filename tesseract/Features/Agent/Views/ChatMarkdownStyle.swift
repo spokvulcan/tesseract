@@ -86,6 +86,66 @@ struct AccentOrderedListMarker: StructuredText.OrderedListMarker {
     }
 }
 
+// MARK: - Code Accent Palette (prose code blocks)
+
+extension StructuredText.HighlighterTheme {
+    /// Prose code blocks in the Code Accent Palette (PRD #200): the same
+    /// system-semantic colors the Tool Panels use, so code looks identical
+    /// everywhere in the transcript. Textual tokenizes with its bundled
+    /// Prism.js — its token names map onto the palette's roles here; the
+    /// panels' Rust engine (`tesseract-highlight`) cannot be injected into
+    /// Textual's renderer without forking it, so the *palette* is the shared
+    /// contract while the tokenizers differ.
+    static let codeAccents: Self = {
+        // Prism token name(s) → palette role. Built imperatively — a single
+        // dictionary literal of this size stalls the type checker.
+        let roles: [(tokens: [TokenType], role: CodeTokenRole)] = [
+            ([.keyword, .literal], .keyword),
+            ([.boolean, .constant], .constant),
+            ([.string, .char, .regex], .string),
+            ([.number], .number),
+            ([.className, .builtin], .type),
+            ([.function, .functionName], .function),
+            ([.attribute, .attributeName, .directive, .preprocessor], .attribute),
+            ([.comment, .blockComment, .docComment], .comment),
+        ]
+        var properties: [TokenType: AnyTextProperty] = [:]
+        for (tokens, role) in roles {
+            let property = AnyTextProperty(.foregroundColor(DynamicColor.codeAccent(role)))
+            for token in tokens {
+                properties[token] = property
+            }
+        }
+        return Self(
+            foregroundColor: .codePanelPlain,
+            backgroundColor: .codePanelBackground,
+            tokenProperties: properties
+        )
+    }()
+}
+
+extension DynamicColor {
+    /// Base text of prose code blocks — near-label, both appearances.
+    fileprivate static let codePanelPlain = DynamicColor(
+        light: Color(red: 0, green: 0, blue: 0, opacity: 0.85),
+        dark: Color(red: 1, green: 1, blue: 1, opacity: 0.85)
+    )
+    /// Block background, matching Textual's GitHub block surface.
+    fileprivate static let codePanelBackground = DynamicColor(
+        light: Color(red: 0.960784, green: 0.960784, blue: 0.968627),
+        dark: Color(red: 0.120543, green: 0.122844, blue: 0.141312)
+    )
+}
+
+extension DynamicColor {
+    /// A Code Accent Palette role as a `DynamicColor` — the system semantic
+    /// colors already adapt to light/dark, so both variants are the same.
+    fileprivate static func codeAccent(_ role: CodeTokenRole) -> DynamicColor {
+        let color = Color.codeAccent(role)
+        return DynamicColor(light: color, dark: color)
+    }
+}
+
 /// The chat's markdown style bundle: GitHub block layout with the Prose
 /// Accent Palette applied to headings, inline spans, and list markers. The
 /// code block style here is nominal — `AssistantProseView` overrides it with

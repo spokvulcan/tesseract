@@ -3,7 +3,7 @@ import MLXLMCommon
 
 // MARK: - LsToolDetails
 
-nonisolated struct LsToolTruncationDetails: Sendable, Hashable {
+nonisolated struct LsToolTruncationDetails: Sendable, Hashable, Codable {
     let truncated: Bool
     let truncatedBy: String?
     let totalLines: Int
@@ -16,7 +16,7 @@ nonisolated struct LsToolTruncationDetails: Sendable, Hashable {
     let maxBytes: Int
 }
 
-nonisolated struct LsToolDetails: Sendable, Hashable {
+nonisolated struct LsToolDetails: Sendable, Hashable, Codable {
     let truncation: LsToolTruncationDetails?
     let entryLimitReached: Int?
 }
@@ -176,7 +176,7 @@ private nonisolated enum LsToolHelper: Sendable {
                 nil
             }
 
-        return AgentToolResult(content: [.text(output)], details: details)
+        return AgentToolResult(content: [.text(output)], details: details.map { .ls($0) })
     }
 
     static func caseInsensitiveAscending(_ lhs: String, _ rhs: String) -> Bool {

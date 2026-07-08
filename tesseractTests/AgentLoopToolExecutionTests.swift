@@ -425,6 +425,34 @@ struct AgentLoopToolExecutionTests {
             ))
     }
 
+    // MARK: - Details threading (PRD #200)
+
+    /// Typed details returned by a tool must survive the loop's commit step
+    /// onto the persisted `ToolResultMessage` — the transcript's Tool Panels
+    /// project from them.
+    @Test func toolDetailsThreadOntoTheCommittedResultMessage() async throws {
+        let details = ToolResultDetails.edit(
+            EditToolDetails(
+                path: "a.swift", diff: "-x\n+y", firstChangedLine: 3,
+                oldText: "x", newText: "y"
+            ))
+        let editor = makeTool(name: "edit") { _, _, _, _ in
+            AgentToolResult(content: [.text("edited")], details: details)
+        }
+
+        let (events, context, _) = await run(
+            turns: [
+                [toolCall("edit")],
+                [.text("done")],
+            ],
+            tools: [editor]
+        )
+
+        let result = try #require(committed(events, as: ToolResultMessage.self).first)
+        #expect(result.details == details)
+        #expect((context.messages[2] as? ToolResultMessage)?.details == details)
+    }
+
     // MARK: - Steering skip
 
     @Test func steeringSkipsRemainingToolCallsAndEntersSteeringTurn() async throws {
