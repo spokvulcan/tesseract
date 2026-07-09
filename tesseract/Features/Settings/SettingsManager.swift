@@ -290,6 +290,15 @@ final class SettingsManager {
         didSet { SettingsCatalogue.webAccessEnabled.write(webAccessEnabled, to: store) }
     }
 
+    // MARK: - Agent Markdown Render
+
+    /// Render assistant prose as Markdown (default on). Toggled only from the
+    /// agent toolbar — an in-context mode switch, never mirrored in the
+    /// Settings window (#213).
+    var agentUseMarkdown: Bool {
+        didSet { SettingsCatalogue.agentUseMarkdown.write(agentUseMarkdown, to: store) }
+    }
+
     // MARK: - Agent Vision Mode
 
     /// Global opt-out "Use vision models when available" (default on, ADR-0013).
@@ -483,6 +492,7 @@ final class SettingsManager {
         self.maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.load(from: store)
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
+        self.agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.load(from: store)
         self.useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.load(from: store)
         self.showSkillPills = SettingsCatalogue.showSkillPills.load(from: store)
         self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
@@ -591,6 +601,7 @@ final class SettingsManager {
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
+        agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.default
         useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default

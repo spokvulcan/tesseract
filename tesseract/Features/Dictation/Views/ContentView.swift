@@ -53,17 +53,11 @@ struct ContentView: View {
                 .environment(container.speechCoordinator)
                 .environment(container.transcriptionEngine)
                 .environmentObject(container.modelDownloadManager)
-        case .general:
-            GeneralSettingsSection()
         case .serverDashboard:
             ServerDashboardView()
                 .injectCoreDependencies(from: container)
                 .injectServerDependencies(from: container)
                 .environment(container.inferenceArbiter)
-        case .serverConfiguration:
-            ServerConfigurationView()
-                .injectCoreDependencies(from: container)
-                .injectModelDependencies(from: container)
         case .serverPromptCache:
             ServerPromptCacheView()
                 .injectCoreDependencies(from: container)
@@ -73,9 +67,6 @@ struct ContentView: View {
             ModelsPageView()
                 .environmentObject(container)
                 .environmentObject(container.modelDownloadManager)
-        case .recording:
-            RecordingSettingsSection()
-                .environmentObject(container)
         }
     }
 }

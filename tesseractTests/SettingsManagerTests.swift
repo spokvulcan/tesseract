@@ -50,6 +50,24 @@ struct SettingsManagerTests {
         #expect(second.useVisionWhenAvailable == false)
     }
 
+    /// The Markdown render toggle graduated from a loose `@AppStorage` into the
+    /// catalogue (map #211 cutover): default on, persists across a relaunch,
+    /// and a pre-existing store value (what `@AppStorage` wrote under the same
+    /// key) hydrates instead of the default — the migration is read-compatible.
+    @Test
+    func agentUseMarkdownDefaultsOnPersistsAndReadsLegacyKey() {
+        let store = InMemorySettingsStore()
+        let first = SettingsManager(store: store)
+        #expect(first.agentUseMarkdown == true)
+
+        first.agentUseMarkdown = false
+        let second = SettingsManager(store: store)
+        #expect(second.agentUseMarkdown == false)
+
+        second.resetToDefaults()
+        #expect(second.agentUseMarkdown == true)
+    }
+
     // MARK: - Persistence across a simulated relaunch
 
     @Test

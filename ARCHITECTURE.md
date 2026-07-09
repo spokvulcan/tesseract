@@ -148,7 +148,8 @@ tesseract/
 │   │   ├── SettingsManager.swift      # @Observable Settings Facade
 │   │   ├── SettingsStore.swift        # Persistence seam + Setting declarations
 │   │   ├── SettingsCatalogue.swift    # Single home for every default
-│   │   └── SettingsView.swift         # Settings UI sections
+│   │   ├── SettingsWindowView.swift   # Native Settings scene: TabView of panes
+│   │   └── Panes/                     # One file per Settings pane
 │   └── Models/                        # Model download management
 │
 └── Models/                      # Shared data types

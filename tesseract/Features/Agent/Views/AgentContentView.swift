@@ -29,7 +29,6 @@ struct AgentContentView: View {
     /// The Skill Cluster's interaction state machine (ADR-0030). View-local:
     /// it has no dependencies and no life outside this page.
     @State private var skillCluster = SkillClusterController()
-    @AppStorage("agentUseMarkdown") private var useMarkdown = true
 
     private var isSpeechActive: Bool {
         if case .idle = speechCoordinator.state { return false }
@@ -225,11 +224,14 @@ struct AgentContentView: View {
                         ? "Auto-speak responses (on)" : "Auto-speak responses (off)")
 
                 Button {
-                    useMarkdown.toggle()
+                    settings.agentUseMarkdown.toggle()
                 } label: {
-                    Image(systemName: useMarkdown ? "text.alignleft" : "doc.plaintext")
+                    Image(
+                        systemName: settings.agentUseMarkdown ? "text.alignleft" : "doc.plaintext")
                 }
-                .help(useMarkdown ? "Disable Markdown formatting" : "Enable Markdown formatting")
+                .help(
+                    settings.agentUseMarkdown
+                        ? "Disable Markdown formatting" : "Enable Markdown formatting")
             }
         }
     }

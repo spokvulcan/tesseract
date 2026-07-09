@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var trackedMainWindow: NSWindow?
     private var navigationSelection: Binding<NavigationItem?>?
     var onOpenWindow: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
     private var hasSetupWithContainer = false
     private var isRunningUnderTests: Bool {
         ProcessEnvironment.isRunningTests
@@ -98,7 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showMainWindow()
         }
         menuBarManager?.onShowSettings = { [weak self] in
-            self?.navigateToSettings()
+            self?.openSettingsWindow()
         }
         menuBarManager?.onTalkToAgent = { [weak self] in
             self?.navigateToAgent()
@@ -182,8 +183,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onOpenWindow?()
     }
 
-    func navigateToSettings() {
-        navigationSelection?.wrappedValue = .general
+    /// Open the native Settings window — the same scene ⌘, reaches — via the
+    /// bridged SwiftUI `openSettings` action.
+    func openSettingsWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        onOpenSettings?()
+    }
+
+    /// Summon the main window onto the Models page — the "Manage Models…"
+    /// target from the Settings panes and the composer's download affordances.
+    func navigateToModels() {
+        navigationSelection?.wrappedValue = .model
         showMainWindow()
     }
 

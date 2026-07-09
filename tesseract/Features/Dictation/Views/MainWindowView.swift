@@ -3,7 +3,6 @@
 //  tesseract
 //
 
-import AppKit
 import SwiftUI
 
 struct MainWindowView: View {
@@ -53,15 +52,5 @@ struct MainWindowView: View {
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .frame(minWidth: 400, minHeight: 500)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    (NSApp.delegate as? AppDelegate)?.navigateToSettings()
-                } label: {
-                    Image(systemName: "gear")
-                }
-                .help("Open settings")
-            }
-        }
     }
 }

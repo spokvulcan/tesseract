@@ -381,8 +381,8 @@ struct AgentComposerView: View {
             composerBanner(
                 icon: "arrow.down.circle",
                 message: "No agent model on this Mac yet. Download one to start chatting.",
-                actionTitle: "Open Settings",
-                action: { (NSApp.delegate as? AppDelegate)?.navigateToSettings() },
+                actionTitle: "Open Models",
+                action: { (NSApp.delegate as? AppDelegate)?.navigateToModels() },
                 onDismiss: nil
             )
         }
@@ -659,7 +659,7 @@ private struct ModelButtonView: View {
             }
             if models.isEmpty {
                 Button("Download Models…") {
-                    (NSApp.delegate as? AppDelegate)?.navigateToSettings()
+                    (NSApp.delegate as? AppDelegate)?.navigateToModels()
                 }
             }
         } label: {
