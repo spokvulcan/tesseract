@@ -10,6 +10,7 @@ struct RecordingButtonView: View {
     let onToggle: () -> Void
 
     @State private var isPulsing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // Compact button: 64px with pulse ring up to 72 × 1.2 = 86px
     private let buttonSize: CGFloat = 64
@@ -18,15 +19,18 @@ struct RecordingButtonView: View {
     var body: some View {
         Button(action: onToggle) {
             ZStack {
-                // Pulse ring - only rendered when recording to avoid idle CPU usage
+                // Pulse ring - only rendered when recording to avoid idle CPU
+                // usage; a static ring under Reduce Motion
                 if state == .recording {
                     Circle()
                         .stroke(Color.red.opacity(0.5), lineWidth: 3)
                         .frame(width: 72, height: 72)
-                        .scaleEffect(isPulsing ? 1.2 : 1.0)
-                        .opacity(isPulsing ? 0 : 1)
+                        .scaleEffect(isPulsing && !reduceMotion ? 1.2 : 1.0)
+                        .opacity(isPulsing && !reduceMotion ? 0 : 1)
                         .animation(
-                            .easeInOut(duration: 1.0).repeatForever(autoreverses: false),
+                            reduceMotion
+                                ? nil
+                                : .easeInOut(duration: 1.0).repeatForever(autoreverses: false),
                             value: isPulsing
                         )
                 }
@@ -35,13 +39,12 @@ struct RecordingButtonView: View {
                     .fill(buttonBackgroundColor.opacity(0.85))
                     .frame(width: buttonSize, height: buttonSize)
                     .glassEffect(.regular.tint(buttonBackgroundColor))
-                    .shadow(color: Color.black.opacity(0.15), radius: 8, y: 3)
                     .animation(.easeInOut(duration: 0.2), value: state)
 
                 Image(systemName: buttonIcon)
                     .font(.system(size: 26))
                     .foregroundStyle(.white)
-                    .symbolEffect(.pulse, isActive: state == .processing)
+                    .symbolEffect(.pulse, isActive: state == .processing && !reduceMotion)
             }
             .frame(width: containerSize, height: containerSize)
         }

@@ -6,70 +6,68 @@
 import SwiftUI
 
 struct StatusIndicator: View {
-    let state: DictationState
-
-    // Fixed height: status line (18) + spacing (2) + detail line (16) = 36
-    private let totalHeight: CGFloat = 36
-
-    var body: some View {
-        VStack(spacing: 2) {
-            // Status line - centered with dot
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 8, height: 8)
-                    .accessibilityHidden(true)
-
-                Text(statusTitle)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-            }
-            .frame(height: 18)
-            .animation(.easeInOut(duration: 0.2), value: state)
-
-            // Error detail - always reserves space
-            Text(statusDetail ?? " ")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .frame(height: 16)
-                .opacity(statusDetail != nil ? 1 : 0)
-        }
-        .frame(height: totalHeight)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Status: \(statusTitle)")
-        .accessibilityHint(statusDetail ?? "")
+    enum Badge {
+        case dot(Color)
+        case spinner
     }
 
-    private var statusTitle: String {
-        switch state {
-        case .error:
-            return "Error"
-        default:
-            return state.statusText
-        }
+    let badge: Badge
+    let title: String
+    let detail: String?
+
+    init(badge: Badge, title: String, detail: String?) {
+        self.badge = badge
+        self.title = title
+        self.detail = detail
     }
 
-    private var statusDetail: String? {
+    init(state: DictationState) {
         switch state {
         case .error(let message):
-            return message
-        default:
-            return nil
+            self.init(badge: .dot(.red), title: "Error", detail: message)
+        case .idle:
+            self.init(badge: .dot(.green), title: state.statusText, detail: nil)
+        case .listening:
+            self.init(badge: .dot(.yellow), title: state.statusText, detail: nil)
+        case .recording:
+            self.init(badge: .dot(.red), title: state.statusText, detail: nil)
+        case .processing:
+            self.init(badge: .dot(.orange), title: state.statusText, detail: nil)
         }
     }
 
-    private var statusColor: Color {
-        switch state {
-        case .idle:
-            return .green
-        case .listening:
-            return .yellow
-        case .recording:
-            return .red
-        case .processing:
-            return .orange
-        case .error:
-            return .red
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 6) {
+                switch badge {
+                case .dot(let color):
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
+                case .spinner:
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityHidden(true)
+                }
+
+                Text(title)
+                    .font(.system(size: DictationPageStyle.bodySize, weight: .medium))
+            }
+            .frame(height: 20)
+
+            // Detail line always reserves space so the button doesn't jump.
+            Text(detail ?? " ")
+                .font(.system(size: DictationPageStyle.bodySize))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(height: 20)
+                .opacity(detail != nil ? 1 : 0)
+                .help(detail ?? "")
         }
+        .frame(height: 44)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Status: \(title)")
+        .accessibilityHint(detail ?? "")
     }
 }
