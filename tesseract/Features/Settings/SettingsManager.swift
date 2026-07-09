@@ -593,9 +593,9 @@ final class SettingsManager {
         prefixCacheSSDBudgetCapBytes = SettingsCatalogue.prefixCacheSSDBudgetCapBytes.default
         prefixCacheSSDDirectoryOverride = SettingsCatalogue.prefixCacheSSDDirectoryOverride.default
         // Dynamic per-model keys are minted on demand and aren't in the static
-        // enumeration above; sweep their prefix so a reset truly clears them. A
-        // stale `preserveThinkingRender.<modelID> = true` would otherwise keep
-        // that model in a non-canonical cache partition after a "clean" reset.
+        // enumeration above; sweep their prefix so a reset truly clears any
+        // explicit per-model override and restores the catalogue default
+        // (preserve-on where the template declares it, #237).
         store.removeAll(withPrefix: SettingsCatalogue.preserveThinkingRenderKeyPrefix)
         preserveThinkingRenderRevision += 1
         // Per-skill usage counters are minted on demand too — sweep them so a

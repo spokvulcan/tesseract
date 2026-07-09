@@ -71,6 +71,32 @@ struct PreserveThinkingRenderTests {
         #expect(requestOn.preservesThinking)
     }
 
+    @Test func preserveThinkingDefaultsOnAndGatesOnDeclaration() {
+        // #237: the per-model setting now defaults on. The blanket `true`
+        // must be safe — it renders preserve only where the template declares
+        // the flag, and canonical everywhere else.
+        #expect(SettingsCatalogue.preserveThinkingRender(modelID: "anything").default)
+
+        let appEnabled: Set<TemplateRenderFlag> =
+            SettingsCatalogue.preserveThinkingRender(modelID: "m").default ? [preserveFlag] : []
+
+        // Declaring model under the default → preserve.
+        #expect(
+            TemplateRenderContext.resolve(
+                requestKwargs: nil,
+                appEnabledFlags: appEnabled,
+                declaredFlags: [preserveFlag]
+            ).preservesThinking)
+
+        // Non-declaring model under the same default → still canonical.
+        #expect(
+            TemplateRenderContext.resolve(
+                requestKwargs: nil,
+                appEnabledFlags: appEnabled,
+                declaredFlags: []
+            ) == .canonical)
+    }
+
     @Test func undeclaredFlagsAreIgnoredWithoutFragmentingThePartition() {
         // Qwen3.5-PARO receiving preserve_thinking, plus an arbitrary kwarg:
         // neither may change the render nor the digest.

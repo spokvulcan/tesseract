@@ -93,7 +93,7 @@ enum SettingsCatalogue {
     /// HTTP server ignores this (ADR-0008).
     static let useVisionWhenAvailable = Setting.bool("useVisionWhenAvailable", default: true)
 
-    /// Per-model opt-in for the **Preserve-Thinking Render** (issue #98).
+    /// Per-model setting for the **Preserve-Thinking Render** (issue #98).
     /// Keyed by model ID because the capability is per chat template; the UI
     /// surfaces the toggle only for models whose template declares the flag
     /// (`ModelIdentity.declaredTemplateFlags`). The one dynamic-key setting in
@@ -102,8 +102,17 @@ enum SettingsCatalogue {
     /// can sweep them without re-deriving the literal.
     static let preserveThinkingRenderKeyPrefix = "preserveThinkingRender."
 
+    /// Default **on** (#237): a declaring model — Qwen3.6-35B-A3B MoE and its
+    /// siblings — is only worth running with preserved thinking, because the
+    /// append-stable render lets the coding-agent loop reuse the growing prefix
+    /// across turns and auto-disables the expensive per-turn speculative
+    /// double-prefill (`speculativeSeedPlan` returns nil under preserve). The
+    /// blanket `true` is safe for non-declaring models: `TemplateRenderContext
+    /// .resolve` only enables flags the template declares, and the UI toggle is
+    /// shown only for declaring models — so a dense model reads `true` here but
+    /// renders canonically. The per-model toggle still turns it OFF explicitly.
     static func preserveThinkingRender(modelID: String) -> Setting<Bool> {
-        Setting.bool(preserveThinkingRenderKeyPrefix + modelID, default: false)
+        Setting.bool(preserveThinkingRenderKeyPrefix + modelID, default: true)
     }
 
     // MARK: - Skill Pills (PRD #174)
