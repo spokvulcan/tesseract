@@ -131,6 +131,17 @@ struct BrowserMCPTelemetryTests {
         #expect(image?.mimeType == "image/png")
         // Total payload = image bytes + text bytes.
         #expect(call?.resultBytes == png.count + "Screenshot of https://example.com".utf8.count)
+
+        // The exact pixels the model received are saved as a sidecar
+        // artifact at the recorded relative path.
+        guard let path = image?.path else {
+            Issue.record("expected an artifact path")
+            return
+        }
+        #expect(path.hasPrefix("artifacts/"))
+        #expect(path.hasSuffix(".png"))
+        let saved = try? Data(contentsOf: directory.appendingPathComponent(path))
+        #expect(saved == png)
     }
 
     @Test

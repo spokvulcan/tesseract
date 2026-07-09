@@ -39,6 +39,7 @@ final class BrowserMCPTelemetryRecorder {
     }
 
     private let log: BrowserMCPTelemetryLog
+    private let screenshots: BrowserMCPScreenshotStore
     private let isEnabled: @MainActor @Sendable () -> Bool
     private var sessions: [String: SessionInfo] = [:]
 
@@ -47,6 +48,8 @@ final class BrowserMCPTelemetryRecorder {
         isEnabled: @escaping @MainActor @Sendable () -> Bool = { true }
     ) {
         self.log = log
+        self.screenshots = BrowserMCPScreenshotStore(
+            root: log.directory.appendingPathComponent("artifacts", isDirectory: true))
         self.isEnabled = isEnabled
     }
 
@@ -154,7 +157,8 @@ final class BrowserMCPTelemetryRecorder {
 
         let originalBytes = encodedSize(.object(arguments))
         let (capped, truncated) = Self.capped(.object(arguments))
-        let shape = Self.measure(result)
+        let shape = measure(
+            result, artifactBaseName: "\(short(sessionID))-\(seq ?? 0)", timestamp: Date())
         let durationMS = Self.milliseconds(duration)
 
         append(
@@ -212,9 +216,11 @@ final class BrowserMCPTelemetryRecorder {
                 + "origin=\(origin.rawValue): \(message)")
     }
 
-    /// Test barrier: returns after every recorded event is on disk.
+    /// Test barrier: returns after every recorded event and artifact is
+    /// on disk.
     func flushForTesting() {
         log.flushForTesting()
+        screenshots.flushForTesting()
     }
 
     // MARK: - Result measurement
@@ -228,7 +234,12 @@ final class BrowserMCPTelemetryRecorder {
         var errorMessage: String?
     }
 
-    private static func measure(_ result: BrowserToolResult) -> ResultShape {
+    /// Measure a result's shape, saving each image block as a sidecar
+    /// artifact (`artifacts/<day>/<base>-<index>.<ext>`) so the exact
+    /// pixels the model received can be opened later.
+    private func measure(
+        _ result: BrowserToolResult, artifactBaseName: String, timestamp: Date
+    ) -> ResultShape {
         var shape = ResultShape()
         for block in result.content {
             switch block {
@@ -238,22 +249,26 @@ final class BrowserMCPTelemetryRecorder {
                 if !shape.preview.isEmpty { shape.preview += "\n" }
                 shape.preview += text
             case .image(let data, let mimeType):
-                let dimensions = imageDimensions(data)
+                let dimensions = Self.imageDimensions(data)
+                let path = screenshots.save(
+                    data, mimeType: mimeType, timestamp: timestamp,
+                    name: "\(artifactBaseName)-\(shape.images.count)")
                 shape.images.append(
                     BrowserMCPTelemetryEvent.ImageInfo(
                         width: dimensions?.width,
                         height: dimensions?.height,
                         bytes: data.count,
-                        mimeType: mimeType
+                        mimeType: mimeType,
+                        path: path
                     ))
                 shape.totalBytes += data.count
             }
         }
         if result.isError {
-            shape.errorMessage = String(shape.preview.prefix(maxErrorChars))
+            shape.errorMessage = String(shape.preview.prefix(Self.maxErrorChars))
         }
-        if shape.preview.count > maxPreviewChars {
-            shape.preview = String(shape.preview.prefix(maxPreviewChars))
+        if shape.preview.count > Self.maxPreviewChars {
+            shape.preview = String(shape.preview.prefix(Self.maxPreviewChars))
             shape.previewTruncated = true
         }
         return shape
