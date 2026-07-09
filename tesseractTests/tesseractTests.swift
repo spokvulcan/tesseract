@@ -56,6 +56,47 @@ struct ModelDefinitionCatalogTests {
         #expect(isParoModel)
     }
 
+    @Test func recognizesMoEParoCheckpoints() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let config = """
+            {
+              "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+              "quantization_config": {
+                "quant_method": "paroquant"
+              }
+            }
+            """
+        try config.write(
+            to: root.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+
+        let isParoModel = Tesseract_Agent.isParoQuantModel(directory: root)
+        #expect(isParoModel)
+    }
+
+    @Test func includesQwen36_35BParoInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-paro" })
+        else {
+            Issue.record("Missing qwen3.6-35b-a3b-paro model definition")
+            return
+        }
+
+        #expect(model.displayName == "Qwen3.6-35B-A3B PARO")
+        #expect(model.category == .agent)
+        #expect(model.repoID == "z-lab/Qwen3.6-35B-A3B-PARO")
+        #expect(model.cacheSubdirectory == "z-lab_Qwen3.6-35B-A3B-PARO")
+        #expect(model.requiredExtension == "safetensors")
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
     @Test func includesQwen36MoeInAgentCatalog() async throws {
         guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-ud" }) else {
             Issue.record("Missing qwen3.6-35b-a3b-ud model definition")

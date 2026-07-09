@@ -24,7 +24,8 @@ nonisolated func isParoQuantModel(directory: URL) -> Bool {
     return isSupportedParoQuantModel(directory: directory, configData: configData)
 }
 
-/// The custom loader is meant for z-lab Qwen3.5/3.6 PARO models (4B, 9B, and 27B) with VLM wrappers.
+/// The custom loader is meant for z-lab Qwen3.5/3.6 PARO models — dense (4B,
+/// 9B, and 27B) and MoE (35B-A3B) — with VLM wrappers.
 nonisolated private func isSupportedParoQuantModel(directory: URL, configData: Data) -> Bool {
     guard let json = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
         let qc = json["quantization_config"] as? [String: Any],
@@ -39,13 +40,19 @@ nonisolated private func isSupportedParoQuantModel(directory: URL, configData: D
         "Qwen3.5-9B-PARO",
         "z-lab_Qwen3.6-27B-PARO",
         "Qwen3.6-27B-PARO",
+        "z-lab_Qwen3.6-35B-A3B-PARO",
+        "Qwen3.6-35B-A3B-PARO",
     ]
     if supportedDirectoryNames.contains(directory.lastPathComponent) {
         return true
     }
 
+    let supportedArchitectures: Set<String> = [
+        "Qwen3_5ForConditionalGeneration",
+        "Qwen3_5MoeForConditionalGeneration",
+    ]
     let architectures = json["architectures"] as? [String] ?? []
-    return architectures.contains("Qwen3_5ForConditionalGeneration")
+    return architectures.contains(where: supportedArchitectures.contains)
 }
 
 // MARK: - UserInputProcessor
@@ -111,9 +118,9 @@ nonisolated private func installTextOnlyProcessor(on container: ModelContainer) 
 ///
 /// `loadParoQuantModel` is generic over a concrete `LanguageModel` type, so the
 /// shared factory registries (`ModelTypeRegistry<LanguageModel>`, existential
-/// element) don't satisfy it. ParoQuant supports exactly one architecture
-/// (Qwen3.5), so a single-creator registry mirroring the factory entry is
-/// passed instead.
+/// element) don't satisfy it. ParoQuant supports one model family (Qwen3.5,
+/// dense + MoE — `Qwen35MoEModel` subclasses `Qwen35Model`), so a small
+/// registry mirroring the factory entries is passed instead.
 nonisolated func loadParoQuantLLMContainer(
     from directory: URL, toolCallFormat: ToolCallFormat?
 ) async throws -> ModelContainer {
@@ -121,7 +128,11 @@ nonisolated func loadParoQuantLLMContainer(
         "qwen3_5": { data in
             MLXLLM.Qwen35Model(
                 try JSONDecoder.json5().decode(MLXLLM.Qwen35Configuration.self, from: data))
-        }
+        },
+        "qwen3_5_moe": { data in
+            MLXLLM.Qwen35MoEModel(
+                try JSONDecoder.json5().decode(MLXLLM.Qwen35Configuration.self, from: data))
+        },
     ])
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
@@ -148,7 +159,11 @@ nonisolated func loadParoQuantVLMContainer(
         "qwen3_5": { data in
             MLXVLM.Qwen35(
                 try JSONDecoder.json5().decode(MLXVLM.Qwen35Configuration.self, from: data))
-        }
+        },
+        "qwen3_5_moe": { data in
+            MLXVLM.Qwen35MoE(
+                try JSONDecoder.json5().decode(MLXVLM.Qwen35Configuration.self, from: data))
+        },
     ])
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
