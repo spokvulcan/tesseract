@@ -161,13 +161,11 @@ extension ModelDefinition {
             sizeDescription: "~19 GB",
             dependencies: []
         ),
-        // Download-only until MoE PARO loader support lands (issues #208/#210):
-        // selecting it as the agent model fails at load today.
         ModelDefinition(
             id: "qwen3.6-35b-a3b-paro",
             displayName: "Qwen3.6-35B-A3B PARO",
             description:
-                "Large sparse-MoE PARO agent (3B active / 35B total), built on Qwen3.6. Requires a high-memory Mac (48 GB+ recommended)",
+                "Large sparse-MoE PARO agent (3B active / 35B total), built on Qwen3.6. Requires a high-memory Mac (48 GB+ recommended).",
             category: .agent,
             source: .huggingFace(
                 repo: "z-lab/Qwen3.6-35B-A3B-PARO",
