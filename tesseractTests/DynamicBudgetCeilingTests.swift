@@ -60,6 +60,59 @@ struct DynamicCeilingPolicyTests {
     }
 }
 
+// MARK: - Headroom sample (pure)
+
+struct MemoryHeadroomSampleTests {
+
+    @Test func headroomSumsFreePurgeableAndReclaimable() {
+        let sample = MemoryHeadroomSample(
+            freeBytes: 2 * gib, purgeableBytes: 1 * gib, reclaimableBytes: 5 * gib
+        )
+        #expect(sample.headroomBytes == 8 * gib)
+    }
+
+    @Test func reclaimableDefaultsToZeroForFreeOnlySamples() {
+        let sample = MemoryHeadroomSample(freeBytes: 3 * gib, purgeableBytes: 0)
+        #expect(sample.reclaimableBytes == 0)
+        #expect(sample.headroomBytes == 3 * gib)
+    }
+
+    /// Issue #236 regression: on a large-model machine the kernel parks
+    /// most of RAM as inactive, so a free+purgeable-only sample reads
+    /// below the Active-Inference Reserve and zeros the ceiling — the RAM
+    /// cache turns off. Counting the reclaimable buckets keeps the
+    /// ceiling truthful and positive.
+    @Test func reclaimableMemoryKeepsCeilingPositiveUnderLargeModelPressure() {
+        // Live-measured 35B-A3B shape: ~4.6 GiB free+purgeable, 4 GiB
+        // bootstrap reserve → 0.8·4.6 − 4 < 0 → ceiling 0.
+        let freeOnly = MemoryHeadroomSample(
+            freeBytes: 4 * gib + 640 * 1024 * 1024, purgeableBytes: 0
+        )
+        let freeOnlyCeiling = DynamicCeilingPolicy.ceilingBytes(
+            residentBytes: 0,
+            measuredHeadroomBytes: freeOnly.headroomBytes,
+            reserveBytes: ActiveInferenceReserve.bootstrapPerLaneBytes,
+            capBytes: nil
+        )
+        #expect(freeOnlyCeiling == 0)
+
+        // Same machine, ~11 GiB genuinely reclaimable (inactive +
+        // speculative) folded in → the ceiling recovers to a usable size.
+        let withReclaimable = MemoryHeadroomSample(
+            freeBytes: 4 * gib + 640 * 1024 * 1024,
+            purgeableBytes: 0,
+            reclaimableBytes: 11 * gib
+        )
+        let recoveredCeiling = DynamicCeilingPolicy.ceilingBytes(
+            residentBytes: 0,
+            measuredHeadroomBytes: withReclaimable.headroomBytes,
+            reserveBytes: ActiveInferenceReserve.bootstrapPerLaneBytes,
+            capBytes: nil
+        )
+        #expect(recoveredCeiling > 8 * gib)
+    }
+}
+
 // MARK: - Active-Inference Reserve (pure)
 
 struct ActiveInferenceReserveTests {

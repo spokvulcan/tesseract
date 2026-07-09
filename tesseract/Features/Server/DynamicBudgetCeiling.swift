@@ -4,7 +4,8 @@
 //
 //  **Dynamic Budget Ceilings** (ADR-0018, PRD #149): the RAM-tier
 //  ceiling comes from *measurement*, not load-time constants. A
-//  periodic headroom sample (free + purgeable memory) feeds the
+//  periodic headroom sample (free + purgeable + reclaimable memory —
+//  see `MemoryHeadroomSample`, widened for issue #236) feeds the
 //  pressure band's ceiling; the old `(physRAM − weights − 20 GiB)/2`
 //  formula survives only as the bootstrap value before the first
 //  measurement. The `/2` divisor's job — protecting the in-flight
@@ -21,15 +22,35 @@ import Foundation
 // MARK: - Headroom sample
 
 /// One measurement of machine memory headroom: bytes the OS could hand
-/// this process without swapping. Free pages plus purgeable pages
-/// (ADR-0018's "free + purgeable"); deliberately conservative — file-backed
-/// reclaimable pages are not counted, and the fast pressure retreat
-/// (ADR-0011) remains the guardrail for anything the sample got wrong.
+/// this process without swapping. Free + purgeable + reclaimable pages,
+/// where *reclaimable* is the inactive + speculative buckets the OS
+/// evicts under pressure without paging out anonymous memory.
+///
+/// The original "free + purgeable only" sample (ADR-0018) proved *too*
+/// conservative: on macOS the kernel parks most of RAM as inactive
+/// rather than free, so a large model (e.g. Qwen3.6-35B-A3B, ~18.6 GB
+/// weights) reads a ~4.6 GB sample on a 48 GB machine even with ~30 GB
+/// genuinely reclaimable — under the count-aware Active-Inference
+/// Reserve, that collapses the ceiling to 0 and disables the RAM cache
+/// entirely (issue #236). Inactive + speculative pages *are* bytes the
+/// OS hands back on demand, so counting them restores a truthful
+/// ceiling. The fast pressure retreat (ADR-0011) remains the guardrail
+/// for anything this over-claims.
 nonisolated struct MemoryHeadroomSample: Sendable, Equatable {
     let freeBytes: Int
     let purgeableBytes: Int
+    /// Inactive + speculative pages: reclaimed under memory pressure
+    /// ahead of any anonymous swap. Defaults to 0 so scripted test
+    /// samples keep the free-only shape.
+    let reclaimableBytes: Int
 
-    var headroomBytes: Int { freeBytes + purgeableBytes }
+    init(freeBytes: Int, purgeableBytes: Int, reclaimableBytes: Int = 0) {
+        self.freeBytes = freeBytes
+        self.purgeableBytes = purgeableBytes
+        self.reclaimableBytes = reclaimableBytes
+    }
+
+    var headroomBytes: Int { freeBytes + purgeableBytes + reclaimableBytes }
 }
 
 // MARK: - Port
@@ -73,9 +94,18 @@ final class MachMemoryHeadroomSource: MemoryHeadroomSource {
             return nil
         }
         let pageSize = Int(getpagesize())
+        // Inactive + speculative are the kernel's reclaim-first buckets:
+        // evicted under pressure before any anonymous page swaps out, so
+        // they are genuinely available headroom (issue #236). The
+        // compressor's own pages are excluded — they hold live compressed
+        // data, not free space.
+        let reclaimablePages =
+            Int(clamping: stats.inactive_count)
+            + Int(clamping: stats.speculative_count)
         return MemoryHeadroomSample(
             freeBytes: Int(clamping: stats.free_count) * pageSize,
-            purgeableBytes: Int(clamping: stats.purgeable_count) * pageSize
+            purgeableBytes: Int(clamping: stats.purgeable_count) * pageSize,
+            reclaimableBytes: reclaimablePages * pageSize
         )
     }
 }
