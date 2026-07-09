@@ -5,55 +5,17 @@
 
 import SwiftUI
 
-// MARK: - History View (with ScrollView)
+// MARK: - Timeline layout
 
-struct TranscriptionHistoryView: View {
-    var history: TranscriptionHistory
-    @Environment(SettingsManager.self) private var settings
+private enum TimelineLayout {
+    static let timeColumnWidth: CGFloat = 84
+    static let timeToConnectorSpacing: CGFloat = 12
+    static let connectorWidth: CGFloat = 8
+    static let connectorToContentSpacing: CGFloat = 12
 
-    // Layout constants for header alignment
-    private let timeColumnWidth: CGFloat = 70
-    private let timeToConnectorSpacing: CGFloat = 12
-    private let connectorWidth: CGFloat = 8
-    private let connectorToContentSpacing: CGFloat = 12
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if history.flattenedItems.isEmpty {
-                HistoryEmptyStateView(hotkey: settings.hotkey.displayString)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                    .padding(.vertical, 16)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(history.flattenedItems) { item in
-                            switch item {
-                            case .header(let label, _):
-                                HistorySectionHeader(
-                                    label: label,
-                                    leadingPadding: timeColumnWidth + timeToConnectorSpacing
-                                        + connectorWidth + connectorToContentSpacing
-                                )
-                            case .entry(let entry, let isFirst, let isLast):
-                                TimelineEntryRow(
-                                    entry: entry,
-                                    isFirst: isFirst,
-                                    isLast: isLast,
-                                    onDelete: { history.delete(entry) }
-                                )
-                                .equatable()
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 4)
-                }
-                .scrollContentBackground(.hidden)
-                .frame(maxHeight: .infinity)
-                .accessibilityLabel("Transcription history, \(history.entries.count) items")
-            }
-        }
-        .frame(maxHeight: .infinity)
-        .frame(maxWidth: .infinity, alignment: .leading)
+    /// Left edge of the content column, where section headers align.
+    static var contentLeadingPadding: CGFloat {
+        timeColumnWidth + timeToConnectorSpacing + connectorWidth + connectorToContentSpacing
     }
 }
 
@@ -63,26 +25,21 @@ struct TranscriptionHistoryInlineView: View {
     var history: TranscriptionHistory
     @Environment(SettingsManager.self) private var settings
 
-    private let timeColumnWidth: CGFloat = 70
-    private let timeToConnectorSpacing: CGFloat = 12
-    private let connectorWidth: CGFloat = 8
-    private let connectorToContentSpacing: CGFloat = 12
-
     var body: some View {
         if history.flattenedItems.isEmpty {
-            HistoryEmptyStateView(hotkey: settings.hotkey.displayString)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 16)
+            ContentUnavailableView(
+                "No transcriptions yet",
+                systemImage: "waveform",
+                description: Text(
+                    "Press \(settings.hotkey.displayString) to start dictating in any app.")
+            )
+            .padding(.vertical, DictationPageStyle.rhythm)
         } else {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(history.flattenedItems) { item in
                     switch item {
                     case .header(let label, _):
-                        HistorySectionHeader(
-                            label: label,
-                            leadingPadding: timeColumnWidth + timeToConnectorSpacing
-                                + connectorWidth + connectorToContentSpacing
-                        )
+                        HistorySectionHeader(label: label)
                     case .entry(let entry, let isFirst, let isLast):
                         TimelineEntryRow(
                             entry: entry,
@@ -100,57 +57,21 @@ struct TranscriptionHistoryInlineView: View {
     }
 }
 
-// MARK: - History Empty State
-
-private struct HistoryEmptyStateView: View {
-    let hotkey: String
-
-    var body: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(Color.secondary.opacity(0.12))
-                    .frame(width: 44, height: 44)
-
-                Image(systemName: "waveform")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text("No transcriptions yet")
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
-
-            Text("Press \(hotkey) to start dictating.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .frame(maxWidth: 300)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("No transcriptions yet. Press \(hotkey) to start dictating.")
-    }
-}
-
 // MARK: - History Section Header
 
 struct HistorySectionHeader: View, Equatable {
     let label: String
-    let leadingPadding: CGFloat
 
     var body: some View {
         Text(label)
-            .font(.caption)
-            .fontWeight(.medium)
+            .font(.system(size: DictationPageStyle.bodySize, weight: .medium))
             .foregroundStyle(.tertiary)
-            .padding(.top, 16)
-            .padding(.bottom, 8)
-            .padding(.leading, leadingPadding)
+            .padding(.top, DictationPageStyle.rhythm)
+            .padding(.leading, TimelineLayout.contentLeadingPadding)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.label == rhs.label && lhs.leadingPadding == rhs.leadingPadding
+        lhs.label == rhs.label
     }
 }
 
@@ -170,59 +91,39 @@ struct TimelineEntryRow: View, Equatable {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: TimelineLayout.timeToConnectorSpacing) {
             // Time column
             Text(timeString)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: DictationPageStyle.bodySize, weight: .medium))
                 .foregroundStyle(.tertiary)
                 .monospacedDigit()
-                .frame(width: 70, alignment: .trailing)
+                .frame(width: TimelineLayout.timeColumnWidth, alignment: .trailing)
                 .padding(.top, 2)
 
             // Timeline connector
             TimelineConnector(isFirst: isFirst, isLast: isLast)
 
             // Content
-            HStack(alignment: .top, spacing: 8) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(entry.text)
-                        .font(.system(size: 15))
-                        .foregroundStyle(.primary)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(entry.text)
+                    .font(.system(size: DictationPageStyle.bodySize))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
 
-                    Text(String(format: "%.1fs", entry.duration))
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 8)
+                Text(String(format: "%.1fs", entry.duration))
+                    .font(.system(size: DictationPageStyle.bodySize))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
-            .padding(.trailing, 28)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10)
                     .fill(isHovered ? Color.primary.opacity(0.04) : Color.clear)
             )
             .contentShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(alignment: .topTrailing) {
-                if isHovered {
-                    Menu {
-                        actionMenuItems
-                    } label: {
-                        Label("More actions", systemImage: "ellipsis")
-                            .labelStyle(.iconOnly)
-                    }
-                    .menuIndicator(.hidden)
-                    .controlSize(.small)
-                    .help("More actions")
-                    .accessibilityLabel("More actions")
-                    .padding(.top, 6)
-                    .padding(.trailing, 8)
-                }
-            }
         }
         .contentShape(RoundedRectangle(cornerRadius: 10))
         .onHover { isHovered = $0 }  // No animation - instant state change
@@ -233,7 +134,7 @@ struct TimelineEntryRow: View, Equatable {
         .accessibilityLabel(
             "\(entry.text), recorded at \(timeString), duration \(String(format: "%.1f", entry.duration)) seconds"
         )
-        .accessibilityHint("Actions menu appears on hover")
+        .accessibilityHint("Use the context menu to copy or delete")
     }
 
     @ViewBuilder
@@ -287,5 +188,6 @@ private struct TimelineConnector: View {
                 .frame(width: 1.5)
                 .frame(maxHeight: .infinity)
         }
+        .frame(width: TimelineLayout.connectorWidth)
     }
 }
