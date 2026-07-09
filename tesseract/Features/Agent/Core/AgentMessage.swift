@@ -45,7 +45,18 @@ nonisolated enum LLMMessage: Sendable, Equatable {
     case system(content: String)
     case user(content: String, images: [ImageAttachment] = [])
     case assistant(content: String, reasoning: String? = nil, toolCalls: [ToolCallInfo]?)
-    case toolResult(toolCallId: String, content: String)
+    /// `images` carries tool-returned images (browser screenshots) into the
+    /// context window — see `toLLMCommonMessages` for how they reach the
+    /// model or degrade to a text note when the session is text-only.
+    case toolResult(toolCallId: String, content: String, images: [ImageAttachment])
+}
+
+extension LLMMessage {
+    /// Text-only tool result — the overwhelmingly common shape; keeps the
+    /// many image-less construction sites at two arguments.
+    nonisolated static func toolResult(toolCallId: String, content: String) -> LLMMessage {
+        .toolResult(toolCallId: toolCallId, content: content, images: [])
+    }
 }
 
 // MARK: - AgentMessageProtocol
@@ -272,7 +283,12 @@ nonisolated struct ToolResultMessage: AgentMessageProtocol, Codable, Equatable, 
             if case .text(let text) = block { return text }
             return nil
         }.joined(separator: "\n")
-        return .toolResult(toolCallId: toolCallId, content: textContent)
+        // Image blocks (browser screenshots) ride along — dropping them here
+        // fed the model only "Screenshot of <url>" and invited it to
+        // hallucinate the pixels (the 2026-07-09 HN incident).
+        return .toolResult(
+            toolCallId: toolCallId, content: textContent,
+            images: content.imageAttachments(namespace: id))
     }
 }
 
