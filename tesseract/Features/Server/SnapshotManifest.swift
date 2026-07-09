@@ -69,7 +69,13 @@ nonisolated enum SnapshotManifestSchema {
     ///   from superseded ancestor leaves), and per-layer container headers
     ///   gain `suffix_base_offset`. v7 manifests are wiped on first boot
     ///   under v8.
-    static let currentVersion: Int = 8
+    /// - v9: vision preprocessing gained the missing sRGB tone-curve step
+    ///   (vendored `Qwen3VL.preprocess`), changing every image's pixel
+    ///   values while its digest — the cache key — stays byte-identical.
+    ///   v8 snapshots of image-bearing prefixes would replay KV computed
+    ///   from the old linear-space pixels, so v8 is wiped on first boot
+    ///   under v9.
+    static let currentVersion: Int = 9
 }
 
 // MARK: - Segment chain (Codable, manifest.json + safetensors header)

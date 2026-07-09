@@ -67,14 +67,16 @@ struct SnapshotManifestTests {
     // MARK: - Schema version
 
     @Test
-    func schemaVersionIsEight() {
+    func schemaVersionIsNine() {
         // Bumping invalidates every existing manifest. Pinned so an
-        // accidental bump trips this test. v8 adds **Segment Chain**
-        // support for **Leaf Extension Admission** (docs/adr/0010):
-        // descriptors carry `segmentBaseOffset` + `inheritedSegments`,
-        // per-layer container headers carry `suffix_base_offset`.
-        // It is the on-disk schema all current-build writes produce.
-        #expect(SnapshotManifestSchema.currentVersion == 8)
+        // accidental bump trips this test. v9 carries no wire-format
+        // change: it invalidates v8 snapshots because vision
+        // preprocessing gained the missing sRGB tone-curve step, so
+        // image-bearing prefixes captured under v8 hold KV computed
+        // from linear-space pixels while keying on the same image
+        // digest. It is the on-disk schema all current-build writes
+        // produce.
+        #expect(SnapshotManifestSchema.currentVersion == 9)
     }
 
     @Test
