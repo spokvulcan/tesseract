@@ -378,6 +378,15 @@ final class SettingsManager {
         }
     }
 
+    /// Local-only Browser MCP tool telemetry (ADR-0031). Applies to both entry
+    /// paths — the in-app agent and external HTTP clients.
+    var browserMCPTelemetryEnabled: Bool {
+        didSet {
+            SettingsCatalogue.browserMCPTelemetryEnabled.write(
+                browserMCPTelemetryEnabled, to: store)
+        }
+    }
+
     /// User-configured MCP servers the agent connects to as a client (#190). The
     /// built-in Browser server is synthesized from `browserMCPServerEnabled`, so
     /// it never appears in this list.
@@ -480,6 +489,8 @@ final class SettingsManager {
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
         self.browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.load(from: store)
+        self.browserMCPTelemetryEnabled = SettingsCatalogue.browserMCPTelemetryEnabled.load(
+            from: store)
         self.mcpServers = SettingsCatalogue.mcpServers.load(from: store)
         self.prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.load(from: store)
         self.prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.load(
@@ -587,6 +598,7 @@ final class SettingsManager {
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default
         browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.default
+        browserMCPTelemetryEnabled = SettingsCatalogue.browserMCPTelemetryEnabled.default
         mcpServers = SettingsCatalogue.mcpServers.default
         prefixCacheSSDEnabled = SettingsCatalogue.prefixCacheSSDEnabled.default
         prefixCacheRAMBudgetCapBytes = SettingsCatalogue.prefixCacheRAMBudgetCapBytes.default

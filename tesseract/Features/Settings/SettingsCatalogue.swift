@@ -153,6 +153,14 @@ enum SettingsCatalogue {
     /// guard fails closed on non-loopback requests.
     static let browserMCPServerEnabled = Setting.bool("browserMCPServerEnabled", default: true)
 
+    /// Local-only usage telemetry for the Browser MCP tools (ADR-0031): one
+    /// JSONL event per tool call (arguments, latency, outcome, result shape,
+    /// screenshot dimensions) under Application Support, for offline analysis
+    /// that improves the tools. Nothing ever leaves the Mac; on by default,
+    /// bounded by rotation + 30-day retention.
+    static let browserMCPTelemetryEnabled = Setting.bool(
+        "browserMCPTelemetryEnabled", default: true)
+
     /// User-configured MCP servers the in-app agent connects to as an MCP client
     /// (#190). The built-in Browser server is synthesized separately (always
     /// connected in-process) and never stored here. Persisted as JSON;

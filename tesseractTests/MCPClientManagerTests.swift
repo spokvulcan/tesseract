@@ -196,7 +196,9 @@ struct MCPClientManagerTests {
         let manager = MCPClientManager(
             configsProvider: { [MCPServerConfig.builtInBrowser(enabled: true)] },
             makeTransport: { _ in
-                InProcessMCPTransport(handle: { request in await server.handle(request: request) })
+                InProcessMCPTransport(handle: { request in
+                    await server.handle(request: request, origin: .inProcess)
+                })
             })
         manager.sync(configs: [MCPServerConfig.builtInBrowser(enabled: true)])
 
