@@ -19,15 +19,18 @@ final class MCPBrowserServer {
     private let browser: AgentBrowser
     private let executor: BrowserToolExecutor
     private let isEnabled: @MainActor @Sendable () -> Bool
+    private let telemetry: BrowserMCPTelemetryRecorder
 
     init(
         browser: AgentBrowser,
         executor: BrowserToolExecutor,
-        isEnabled: @escaping @MainActor @Sendable () -> Bool
+        isEnabled: @escaping @MainActor @Sendable () -> Bool,
+        telemetry: BrowserMCPTelemetryRecorder = BrowserMCPTelemetryRecorder()
     ) {
         self.browser = browser
         self.executor = executor
         self.isEnabled = isEnabled
+        self.telemetry = telemetry
     }
 
     /// Register the `/mcp` routes on the shared HTTP server. Requests go through
@@ -59,11 +62,12 @@ final class MCPBrowserServer {
         if let rejection = originRejection(request) {
             return rejection
         }
-        return await handle(request: request)
+        return await handle(request: request, origin: .http)
     }
 
     /// Close every client session (server stop / app termination).
     func closeAllSessions() {
+        telemetry.recordServerShutdown()
         browser.closeAll()
     }
 
@@ -72,25 +76,31 @@ final class MCPBrowserServer {
     /// Handle one MCP request. Pure protocol dispatch — the HTTP-exposure gate and
     /// the origin guard are applied by ``attach(to:path:)`` on the loopback
     /// listener, *not* here, so the in-process transport (the in-app agent) reaches
-    /// this directly (ADR-0027/0028).
-    func handle(request: HTTPRequest) async -> HTTPResponse {
+    /// this directly (ADR-0027/0028). `origin` names the entry path for telemetry:
+    /// `.http` from the loopback listener, `.inProcess` from the in-app transport.
+    func handle(request: HTTPRequest, origin: MCPClientOrigin) async -> HTTPResponse {
         switch request.method {
         case .DELETE:
             if let sessionID = request.header("Mcp-Session-Id") {
+                telemetry.recordSessionEnd(sessionID: sessionID, origin: origin)
                 browser.closeSession(id: sessionID)
             }
             return empty(200)
         case .POST:
-            return await handlePost(request: request)
+            return await handlePost(request: request, origin: origin)
         default:
             return plain(405, "Method not allowed")
         }
     }
 
-    private func handlePost(request: HTTPRequest) async -> HTTPResponse {
+    private func handlePost(request: HTTPRequest, origin: MCPClientOrigin) async -> HTTPResponse {
         guard let body = request.body, !body.isEmpty,
             let message = try? JSONDecoder().decode(JSONValue.self, from: body)
         else {
+            telemetry.recordProtocolError(
+                method: nil, code: MCPProtocol.ErrorCode.parseError,
+                message: "Invalid or empty JSON body",
+                sessionID: request.header("Mcp-Session-Id"), origin: origin)
             return json(
                 MCPEncoding.error(
                     id: .null, code: MCPProtocol.ErrorCode.parseError,
@@ -102,7 +112,7 @@ final class MCPBrowserServer {
         if case .array(let items) = message {
             var responses: [JSONValue] = []
             for item in items {
-                if let response = await dispatch(item, request: request) {
+                if let response = await dispatch(item, request: request, origin: origin) {
                     responses.append(response)
                 }
             }
@@ -111,23 +121,27 @@ final class MCPBrowserServer {
 
         // `initialize` is special: it mints the session id returned in the header.
         if let object = message.asObject, object["method"]?.asString == "initialize" {
-            return initialize(object)
+            return initialize(object, origin: origin)
         }
 
-        if let response = await dispatch(message, request: request) {
+        if let response = await dispatch(message, request: request, origin: origin) {
             return json(response)
         }
         // Notification (no id) — acknowledge with 202 and no body.
         return empty(202)
     }
 
-    private func initialize(_ object: [String: JSONValue]) -> HTTPResponse {
+    private func initialize(_ object: [String: JSONValue], origin: MCPClientOrigin)
+        -> HTTPResponse
+    {
         let id = object["id"] ?? .null
         let requested = object["params"]?.asObject?["protocolVersion"]?.asString
         let version = requested.flatMap { $0.isEmpty ? nil : $0 } ?? MCPProtocol.version
 
         let sessionID = UUID().uuidString
         _ = browser.session(id: sessionID)  // create the Browser Session now
+        telemetry.recordSessionStart(
+            sessionID: sessionID, origin: origin, params: object["params"]?.asObject)
 
         let result = MCPEncoding.result(
             id: id, MCPEncoding.initializeResult(protocolVersion: version))
@@ -136,8 +150,14 @@ final class MCPBrowserServer {
 
     /// Handle one JSON-RPC message. Returns the response value, or nil for
     /// notifications (which get a bodyless 202 at the transport layer).
-    private func dispatch(_ message: JSONValue, request: HTTPRequest) async -> JSONValue? {
+    private func dispatch(
+        _ message: JSONValue, request: HTTPRequest, origin: MCPClientOrigin
+    ) async -> JSONValue? {
         guard let object = message.asObject, let method = object["method"]?.asString else {
+            telemetry.recordProtocolError(
+                method: nil, code: MCPProtocol.ErrorCode.invalidRequest,
+                message: "Not a JSON-RPC request",
+                sessionID: request.header("Mcp-Session-Id"), origin: origin)
             return MCPEncoding.error(
                 id: message.asObject?["id"] ?? .null,
                 code: MCPProtocol.ErrorCode.invalidRequest,
@@ -151,10 +171,16 @@ final class MCPBrowserServer {
         case "ping":
             return MCPEncoding.result(id: id, .object([:]))
         case "tools/list":
+            telemetry.recordToolsList(
+                sessionID: request.header("Mcp-Session-Id"), origin: origin)
             return MCPEncoding.result(id: id, MCPEncoding.toolsListResult(BrowserToolCatalog.all))
         case "tools/call":
-            return await handleToolCall(id: id, object: object, request: request)
+            return await handleToolCall(id: id, object: object, request: request, origin: origin)
         default:
+            telemetry.recordProtocolError(
+                method: method, code: MCPProtocol.ErrorCode.methodNotFound,
+                message: "Unknown method: \(method)",
+                sessionID: request.header("Mcp-Session-Id"), origin: origin)
             return MCPEncoding.error(
                 id: id, code: MCPProtocol.ErrorCode.methodNotFound,
                 message: "Unknown method: \(method)")
@@ -162,23 +188,36 @@ final class MCPBrowserServer {
     }
 
     private func handleToolCall(
-        id: JSONValue, object: [String: JSONValue], request: HTTPRequest
+        id: JSONValue, object: [String: JSONValue], request: HTTPRequest,
+        origin: MCPClientOrigin
     ) async -> JSONValue {
         guard let sessionID = request.header("Mcp-Session-Id"),
             let session = browser.existingSession(id: sessionID)
         else {
+            telemetry.recordProtocolError(
+                method: "tools/call", code: MCPProtocol.ErrorCode.noSession,
+                message: "No active session",
+                sessionID: request.header("Mcp-Session-Id"), origin: origin)
             return MCPEncoding.error(
                 id: id, code: MCPProtocol.ErrorCode.noSession,
                 message: "No active session — call initialize first (Mcp-Session-Id required).")
         }
         guard let params = object["params"]?.asObject, let name = params["name"]?.asString else {
+            telemetry.recordProtocolError(
+                method: "tools/call", code: MCPProtocol.ErrorCode.invalidParams,
+                message: "tools/call requires params.name",
+                sessionID: sessionID, origin: origin)
             return MCPEncoding.error(
                 id: id, code: MCPProtocol.ErrorCode.invalidParams,
                 message: "tools/call requires params.name")
         }
         let arguments = params["arguments"]?.asObject ?? [:]
         let normalized = ToolArgumentNormalizer.normalize(arguments)
+        let start = ContinuousClock.now
         let result = await executor.call(name, session: session, arguments: normalized)
+        telemetry.recordToolCall(
+            sessionID: sessionID, origin: origin, tool: name, arguments: normalized,
+            result: result, duration: ContinuousClock.now - start)
         return MCPEncoding.result(id: id, MCPEncoding.toolCallResult(result))
     }
 

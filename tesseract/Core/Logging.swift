@@ -72,6 +72,7 @@ nonisolated enum Log: Sendable {
     static let image = PublicLogger(subsystem: "app.tesseract.agent", category: "image")
     static let agent = PublicLogger(subsystem: "app.tesseract.agent", category: "agent")
     static let server = PublicLogger(subsystem: "app.tesseract.agent", category: "server")
+    static let browser = PublicLogger(subsystem: "app.tesseract.agent", category: "browser")
 }
 
 /// Chat view performance profiling — signposts visible in Instruments, logs to console.

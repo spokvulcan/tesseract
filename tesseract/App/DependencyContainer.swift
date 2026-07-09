@@ -114,10 +114,17 @@ final class DependencyContainer: ObservableObject {
     // routes. Production shows real windows (ADR-0026: always-visible browsing).
     lazy var agentBrowser = AgentBrowser(presenter: AgentBrowserWindowPresenter())
     lazy var browserToolExecutor = BrowserToolExecutor(browser: agentBrowser)
+    // Local-only tool-usage telemetry (ADR-0031): durable JSONL under
+    // Application Support, covering both the in-app agent and external
+    // HTTP clients through the one server choke point.
+    lazy var browserMCPTelemetry = BrowserMCPTelemetryRecorder(
+        isEnabled: { [settingsManager] in settingsManager.browserMCPTelemetryEnabled }
+    )
     lazy var mcpBrowserServer = MCPBrowserServer(
         browser: agentBrowser,
         executor: browserToolExecutor,
-        isEnabled: { [settingsManager] in settingsManager.browserMCPServerEnabled }
+        isEnabled: { [settingsManager] in settingsManager.browserMCPServerEnabled },
+        telemetry: browserMCPTelemetry
     )
 
     // MCP client (PRD #190): the in-app agent connects to configured HTTP MCP
@@ -139,7 +146,7 @@ final class DependencyContainer: ObservableObject {
             switch config.transport {
             case .inProcessBrowser:
                 return InProcessMCPTransport(handle: { request in
-                    await mcpBrowserServer.handle(request: request)
+                    await mcpBrowserServer.handle(request: request, origin: .inProcess)
                 })
             case .http:
                 // An unparseable persisted URL yields a nil endpoint; the
