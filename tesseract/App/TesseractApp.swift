@@ -128,15 +128,25 @@ struct TesseractApp: App {
         // at the Handoff (or via the menu bar). Every later launch is normal.
         .defaultLaunchBehavior(isFirstLaunch ? .suppressed : .automatic)
         .commands {
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings...") {
-                    selectedNavigation = .general
-                    appDelegate.showMainWindow()
-                }
-                .keyboardShortcut(",", modifiers: .command)
-            }
+            // PROTOTYPE (#215): the ⌘, rewire to the sidebar Settings pages is
+            // bypassed so the system Settings command opens the prototype
+            // Settings scene below. Restore this CommandGroup to revert.
+            // CommandGroup(replacing: .appSettings) {
+            //     Button("Settings...") {
+            //         selectedNavigation = .general
+            //         appDelegate.showMainWindow()
+            //     }
+            //     .keyboardShortcut(",", modifiers: .command)
+            // }
 
             DictationCommands()
+        }
+
+        // PROTOTYPE (#215): native Settings scene — rough take for owner
+        // reaction; the accepted shape is the spec for the cutover (#216).
+        Settings {
+            SettingsWindowPrototypeView()
+                .injectDependencies(from: container)
         }
 
         Window("Welcome to Tesseract", id: WindowID.onboarding) {
