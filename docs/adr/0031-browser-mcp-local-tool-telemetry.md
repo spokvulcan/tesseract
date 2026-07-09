@@ -60,8 +60,12 @@ paths are covered by one recorder:
   `RotatingJSONLWriter` (32 MB/day size cap, 30-day retention, crash-safe
   `O_APPEND` lines) and `TelemetryEnvironment` (test runs divert to a
   per-process temp dir, issue #159). Screenshots are recorded as
-  **dimensions + byte counts**, not pixel artifacts — that answers the
-  resolution question without a second retention regime for image files.
+  dimensions + byte counts in the event **and** saved as sidecar pixel
+  artifacts under `artifacts/<yyyy-MM-dd>/` (the Playwright-trace
+  model), referenced by relative path from the event, so the owner can
+  open exactly what the model was shown. Artifacts share the 30-day
+  retention (day-directory pruning) plus a 256 MB/day byte budget —
+  past it, saving stops (path is nil) but dimensions keep recording.
 - **Live visibility**: each event also emits one `Log.browser` line
   (subsystem `app.tesseract.agent`, category `browser`), so
   `log stream --predicate 'category == "browser"'` shows tool traffic

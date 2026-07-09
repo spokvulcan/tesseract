@@ -85,6 +85,19 @@ nonisolated struct BrowserMCPTelemetryEvent: Codable, Sendable, Equatable {
         /// Encoded (pre-base64) byte count.
         let bytes: Int
         let mimeType: String
+        /// Path of the saved artifact, relative to the telemetry
+        /// directory (`artifacts/<day>/<file>`), so the exact image the
+        /// model was shown can be opened; nil when the artifact day
+        /// budget was exhausted.
+        let path: String?
+
+        init(width: Int?, height: Int?, bytes: Int, mimeType: String, path: String? = nil) {
+            self.width = width
+            self.height = height
+            self.bytes = bytes
+            self.mimeType = mimeType
+            self.path = path
+        }
     }
 
     let kind: Kind
