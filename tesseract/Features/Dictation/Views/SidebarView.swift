@@ -18,14 +18,6 @@ struct SidebarView: View {
                 }
             }
 
-            Section("Settings") {
-                ForEach(NavigationItem.settingsPages) { page in
-                    NavigationLink(value: page) {
-                        Label(page.name, systemImage: page.symbolName)
-                    }
-                }
-            }
-
             Section("Server") {
                 ForEach(NavigationItem.serverPages) { page in
                     NavigationLink(value: page) {

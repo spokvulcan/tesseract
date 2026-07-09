@@ -5,23 +5,23 @@
 
 import SwiftUI
 
+/// The main-window sidebar's content-only pages (map #211): settings live in
+/// the native Settings window, not here. Models files under Server — the
+/// download manager is server-side infrastructure (#213) — but stays a
+/// main-window task surface (live progress, storage, verify).
 enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
     case agent
-    case general
     case serverDashboard
-    case serverConfiguration
     case serverPromptCache
     case model
-    case recording
 
     var id: String { rawValue }
 
     static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
-    static let settingsPages: [NavigationItem] = [.general, .recording, .model]
     static let serverPages: [NavigationItem] = [
-        .serverDashboard, .serverPromptCache, .serverConfiguration,
+        .serverDashboard, .serverPromptCache, .model,
     ]
 
     var name: LocalizedStringResource {
@@ -29,12 +29,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .agent: "Agent"
-        case .general: "General"
         case .serverDashboard: "Dashboard"
-        case .serverConfiguration: "Configuration"
         case .serverPromptCache: "Prompt Cache"
         case .model: "Models"
-        case .recording: "Preferences"
         }
     }
 
@@ -43,36 +40,9 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
         case .agent: "brain.head.profile"
-        case .general: "gear"
         case .serverDashboard: "gauge"
-        case .serverConfiguration: "server.rack"
         case .serverPromptCache: "tray.2.fill"
         case .model: "brain"
-        case .recording: "slider.horizontal.3"
-        }
-    }
-
-    @MainActor @ViewBuilder
-    var destinationView: some View {
-        switch self {
-        case .dictation:
-            DictationContentView()
-        case .speech:
-            SpeechContentView()
-        case .agent:
-            AgentContentView()
-        case .general:
-            GeneralSettingsSection()
-        case .serverDashboard:
-            ServerDashboardView()
-        case .serverConfiguration:
-            ServerConfigurationView()
-        case .serverPromptCache:
-            ServerPromptCacheView()
-        case .model:
-            ModelsPageView()
-        case .recording:
-            RecordingSettingsSection()
         }
     }
 }

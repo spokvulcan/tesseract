@@ -15,6 +15,14 @@ import Foundation
 /// `ttsParameters`, `selectedLanguage`, the enum-over-raw pairs) stay computed
 /// over these primitives in the `SettingsManager` facade, so the catalogue only
 /// declares the primitives that actually own a key.
+///
+/// Deliberately *not* catalogued — the blessed UI-local `@AppStorage` keys
+/// (Settings IA, issue #213): pure view state (panel visibility, disclosure)
+/// that belongs to its surface, is never shown in the Settings window, and is
+/// never swept by Reset to Defaults: `ttsParametersPanelVisible`,
+/// `toolPanelPageShowsRaw`, `server.console.open`,
+/// `server.promptCache.events.open`, and
+/// `server.promptCache.writePressure.open`/`.daily`.
 enum SettingsCatalogue {
 
     // MARK: - General
@@ -92,6 +100,12 @@ enum SettingsCatalogue {
     /// `.fromSettings`, which gates vision on this opt-out (→ text-only). The
     /// HTTP server ignores this (ADR-0008).
     static let useVisionWhenAvailable = Setting.bool("useVisionWhenAvailable", default: true)
+
+    /// Render assistant prose as Markdown. Surfaced only by the agent
+    /// toolbar's in-context toggle — a mid-conversation mode switch, never
+    /// mirrored in the Settings window (#213). Same key the former loose
+    /// `@AppStorage` wrote, so existing choices carry over.
+    static let agentUseMarkdown = Setting.bool("agentUseMarkdown", default: true)
 
     /// Per-model setting for the **Preserve-Thinking Render** (issue #98).
     /// Keyed by model ID because the capability is per chat template; the UI

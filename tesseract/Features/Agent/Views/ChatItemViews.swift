@@ -120,13 +120,13 @@ struct AssistantPartView: View {
 /// toggle falls back to plain text.
 struct AssistantProseView: View {
     let text: String
-    @AppStorage("agentUseMarkdown") private var useMarkdown = true
+    @Environment(SettingsManager.self) private var settings
 
     var body: some View {
         #if DEBUG
         let _ = ChatViewPerf.signposter.emitEvent("AssistantProseView.body")
         #endif
-        if useMarkdown {
+        if settings.agentUseMarkdown {
             StructuredText(markdown: text)
                 .textual.structuredTextStyle(ChatMarkdownStyle())
                 .textual.codeBlockStyle(CopyableCodeBlockStyle())

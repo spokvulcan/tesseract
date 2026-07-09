@@ -14,10 +14,13 @@ enum WindowID {
     static let onboarding = "onboarding"
 }
 
-/// Bridges the SwiftUI `openWindow` environment action to the AppDelegate.
-/// Needed because `@Environment(\.openWindow)` is only available inside a SwiftUI view hierarchy.
+/// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
+/// AppDelegate. Needed because the actions are only available inside a SwiftUI
+/// view hierarchy; the captured actions keep working after the hosting window
+/// closes (the existing `showMainWindow` fallback relies on this).
 private struct WindowOpenerView: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     let appDelegate: AppDelegate
 
     var body: some View {
@@ -26,6 +29,9 @@ private struct WindowOpenerView: View {
             .onAppear {
                 appDelegate.onOpenWindow = { [openWindow] in
                     openWindow(id: WindowID.main)
+                }
+                appDelegate.onOpenSettings = { [openSettings] in
+                    openSettings()
                 }
             }
     }
@@ -128,24 +134,14 @@ struct TesseractApp: App {
         // at the Handoff (or via the menu bar). Every later launch is normal.
         .defaultLaunchBehavior(isFirstLaunch ? .suppressed : .automatic)
         .commands {
-            // PROTOTYPE (#215): the ⌘, rewire to the sidebar Settings pages is
-            // bypassed so the system Settings command opens the prototype
-            // Settings scene below. Restore this CommandGroup to revert.
-            // CommandGroup(replacing: .appSettings) {
-            //     Button("Settings...") {
-            //         selectedNavigation = .general
-            //         appDelegate.showMainWindow()
-            //     }
-            //     .keyboardShortcut(",", modifiers: .command)
-            // }
-
             DictationCommands()
         }
 
-        // PROTOTYPE (#215): native Settings scene — rough take for owner
-        // reaction; the accepted shape is the spec for the cutover (#216).
+        // The native Settings window (map #211): ⌘, and the App menu reach it
+        // through the standard system command; the status-bar "Settings…"
+        // arrives via the AppDelegate's bridged `openSettings`.
         Settings {
-            SettingsWindowPrototypeView()
+            SettingsWindowView()
                 .injectDependencies(from: container)
         }
 
