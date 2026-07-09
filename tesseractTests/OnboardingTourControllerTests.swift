@@ -61,7 +61,7 @@ struct OnboardingTourControllerTests {
         #expect(small.chosenAgentModelID == "qwen3.5-4b-paro")
 
         let big = world.makeController(physicalMemoryGiB: 64)
-        #expect(big.chosenAgentModelID == "qwen3.6-27b-paro")
+        #expect(big.chosenAgentModelID == "qwen3.6-35b-a3b-paro")
     }
 
     @Test func downloadedSelectedAgentModelOutranksTheRAMPick() throws {
@@ -103,7 +103,7 @@ struct OnboardingTourControllerTests {
         let controller = world.makeController(physicalMemoryGiB: 64)
 
         controller.beginSetupIfNeeded()
-        #expect(world.settings.selectedAgentModelID == "qwen3.6-27b-paro")
+        #expect(world.settings.selectedAgentModelID == "qwen3.6-35b-a3b-paro")
         try await world.waitUntil { controller.isSetupComplete }
     }
 
@@ -259,7 +259,7 @@ private final class TourWorld {
         fixture("tts-fixture", repo: "fixture/voice", category: .textToSpeech),
         fixture("qwen3.5-4b-paro", repo: "fixture/agent-4b", category: .agent),
         fixture("qwen3.5-9b-paro", repo: "fixture/agent-9b", category: .agent),
-        fixture("qwen3.6-27b-paro", repo: "fixture/agent-27b", category: .agent),
+        fixture("qwen3.6-35b-a3b-paro", repo: "fixture/agent-35b", category: .agent),
     ]
 
     init() throws {
@@ -274,7 +274,7 @@ private final class TourWorld {
                 "fixture/voice": [.init(path: "model.safetensors", size: 8)],
                 "fixture/agent-4b": [.init(path: "model.safetensors", size: 8)],
                 "fixture/agent-9b": [.init(path: "model.safetensors", size: 8)],
-                "fixture/agent-27b": [.init(path: "model.safetensors", size: 8)],
+                "fixture/agent-35b": [.init(path: "model.safetensors", size: 8)],
             ]
         )
         manager = ModelDownloadManager(

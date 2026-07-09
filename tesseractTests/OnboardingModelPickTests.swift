@@ -5,8 +5,8 @@
 //  The hardware-aware zero-UI model pick of the Onboarding Tour (PRD #171,
 //  ADR-0021): physical RAM in, recommended agent-tier model id out. Pure, in
 //  the ModelCatalog style — prior art: `ModelCatalogTests`. Expected tiers come
-//  from the catalogue's own stated requirements: the 27B tier is documented
-//  "48 GB+ recommended", the 9B tier "~10 GB with voice", the 4B tier is the
+//  from the catalogue's own stated requirements: the 48 GB+ tier is the
+//  35B-A3B MoE PARO (#228), the 9B tier "~10 GB with voice", the 4B tier is the
 //  floor default.
 //
 
@@ -37,11 +37,11 @@ struct OnboardingModelPickTests {
     }
 
     @Test(arguments: [48, 64, 128, 512] as [UInt64])
-    func bigMachinesGetTheTwentySevenBTier(gigabytes: UInt64) {
+    func bigMachinesGetTheMoETier(gigabytes: UInt64) {
         #expect(
             OnboardingModelPick.recommendedAgentModelID(
                 physicalMemoryBytes: gigabytes * Self.gib)
-                == "qwen3.6-27b-paro")
+                == "qwen3.6-35b-a3b-paro")
     }
 
     @Test func boundariesBelongToTheHigherTier() {
