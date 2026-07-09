@@ -52,7 +52,13 @@ nonisolated enum AgentConversationBuilder {
                         }
                     ))
 
-            case .toolResult(_, let content):
+            case .toolResult(_, let content, let images):
+                // The prefix-cache shape carries images on user messages only;
+                // an image-bearing tool result (browser screenshot) makes the
+                // request ineligible — it rides the standard route, uncached
+                // but with the pixels intact — exactly as the HTTP edge bails
+                // via `.nonTextToolMessage`.
+                guard images.isEmpty else { return nil }
                 // The chat template matches tool results to calls positionally;
                 // the agent loop already appends them in call order, so the id
                 // is dropped here exactly as the HTTP edge drops it.

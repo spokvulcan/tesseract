@@ -46,6 +46,11 @@ final class AgentEngine {
     private(set) var loadingStatus: String = ""
     private(set) var isGenerating = false
 
+    /// Whether the loaded container is the vision (VLM) variant — decides
+    /// whether tool-result images (browser screenshots) are attached to the
+    /// prompt or degraded to a text note (`toLLMCommonMessages`).
+    private(set) var loadedVisionMode = false
+
     private(set) var agentTokenizer: AgentTokenizer?
 
     /// Whether the loaded model's template starts generation inside a `<think>` block.
@@ -165,6 +170,7 @@ final class AgentEngine {
             promptStartsThinking = startsThinking
             declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
             toolCallFormat = await llmActor.loadedToolCallFormat()
+            loadedVisionMode = visionMode
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -249,10 +255,11 @@ final class AgentEngine {
         systemPrompt: String,
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
-        renderContext: TemplateRenderContext = .canonical
+        renderContext: TemplateRenderContext = .canonical,
+        visionActive: Bool = false
     ) -> UserInput {
         var chatMessages = [Chat.Message.system(systemPrompt)]
-        chatMessages.append(contentsOf: toLLMCommonMessages(messages))
+        chatMessages.append(contentsOf: toLLMCommonMessages(messages, visionActive: visionActive))
         return UserInput(
             chat: chatMessages,
             tools: toolSpecs,
@@ -327,6 +334,7 @@ final class AgentEngine {
         promptStartsThinking = false
         declaredTemplateFlags = []
         toolCallFormat = nil
+        loadedVisionMode = false
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in
@@ -547,7 +555,8 @@ extension AgentEngine: ManagedInferenceStarting {
             systemPrompt: systemPrompt,
             messages: messages,
             toolSpecs: toolSpecs,
-            renderContext: renderContext
+            renderContext: renderContext,
+            visionActive: loadedVisionMode
         )
         return try startManagedGeneration(
             input: input,

@@ -16,7 +16,14 @@ func defaultConvertToLlm(_ messages: [any AgentMessageProtocol]) -> [LLMMessage]
 /// Since Tesseract uses local models with XML-based `<tool_call>` tags, assistant
 /// messages reconstruct historical tool calls inline in the content string using
 /// the model's expected wire format.
-func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
+///
+/// `visionActive` says whether the loaded container can ingest images (the VLM
+/// variant). Tool-result images (browser screenshots) attach to their tool
+/// message when it can — the Qwen3.5 template renders image pads for tool-role
+/// content, and `UserInput(chat:)` collects images from every role — and
+/// degrade to an explicit text note when it can't, so a text-only model is
+/// told the pixels are absent instead of being invited to hallucinate them.
+func toLLMCommonMessages(_ messages: [LLMMessage], visionActive: Bool = false) -> [Chat.Message] {
     messages.map { message in
         switch message {
         case .system(let content):
@@ -37,8 +44,24 @@ func toLLMCommonMessages(_ messages: [LLMMessage]) -> [Chat.Message] {
                         HTTPPrefixCacheToolCall(name: $0.name, argumentsJSON: $0.argumentsJSON)
                     } ?? []
                 ))
-        case .toolResult(_, let content):
-            .tool(content)
+        case .toolResult(_, let content, let images):
+            if images.isEmpty {
+                .tool(content)
+            } else if visionActive {
+                Chat.Message(
+                    role: .tool,
+                    content: content,
+                    images: images.compactMap { attachment in
+                        attachment.ciImage.map { .ciImage($0) }
+                    }
+                )
+            } else {
+                .tool(
+                    content
+                        + "\n[This tool call also returned \(images.count) image(s), "
+                        + "but the current model session is text-only and cannot see them.]"
+                )
+            }
         }
     }
 }

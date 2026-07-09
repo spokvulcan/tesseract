@@ -247,7 +247,7 @@ enum MessageConverter {
             // Build a lookup from tool_call_id → tool result message
             var resultsByID: [String: LLMMessage] = [:]
             for msg in toolResultSlice {
-                if case .toolResult(let id, _) = msg, !id.isEmpty {
+                if case .toolResult(let id, _, _) = msg, !id.isEmpty {
                     resultsByID[id] = msg
                 }
             }
@@ -261,7 +261,7 @@ enum MessageConverter {
             }
             // Append any results with unknown/missing IDs in their original order
             for msg in toolResultSlice {
-                if case .toolResult(let id, _) = msg {
+                if case .toolResult(let id, _, _) = msg {
                     if resultsByID.removeValue(forKey: id) != nil || id.isEmpty {
                         reordered.append(msg)
                     }

@@ -123,7 +123,7 @@ struct MessageConverterTests {
         }
 
         // Tool result
-        if case .toolResult(let toolCallId, let content) = converted[2] {
+        if case .toolResult(let toolCallId, let content, _) = converted[2] {
             #expect(toolCallId == "call_abc123")
             #expect(content == "file contents here")
         } else {
@@ -194,7 +194,7 @@ struct MessageConverterTests {
             #expect(reasoning == nil)
             #expect(toolCalls == nil)
         }
-        if case .toolResult(_, let content) = converted[2] {
+        if case .toolResult(_, let content, _) = converted[2] {
             #expect(content.isEmpty)
         }
     }
@@ -694,14 +694,14 @@ struct MessageConverterTests {
         let (_, converted) = MessageConverter.convertMessages(messages)
 
         // Tool results should be reordered to match tool_calls: A first, then B
-        if case .toolResult(let id1, let content1) = converted[2] {
+        if case .toolResult(let id1, let content1, _) = converted[2] {
             #expect(id1 == "call_A")
             #expect(content1 == "contents of a")
         } else {
             Issue.record("Expected .toolResult at index 2")
         }
 
-        if case .toolResult(let id2, let content2) = converted[3] {
+        if case .toolResult(let id2, let content2, _) = converted[3] {
             #expect(id2 == "call_B")
             #expect(content2 == "contents of b")
         } else {
@@ -730,13 +730,13 @@ struct MessageConverterTests {
 
         let (_, converted) = MessageConverter.convertMessages(messages)
 
-        if case .toolResult(let id, _) = converted[2] {
+        if case .toolResult(let id, _, _) = converted[2] {
             #expect(id == "call_1")
         } else {
             Issue.record("Expected .toolResult at index 2")
         }
 
-        if case .toolResult(let id, _) = converted[3] {
+        if case .toolResult(let id, _, _) = converted[3] {
             #expect(id == "call_2")
         } else {
             Issue.record("Expected .toolResult at index 3")
