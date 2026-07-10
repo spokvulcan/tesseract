@@ -166,7 +166,7 @@ private struct ToolCallBox: View {
     let argumentsJSON: String
     let malformed: Bool
 
-    private var tint: Color { malformed ? .red : .orange }
+    private var tint: Color { malformed ? .red : .accentColor }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

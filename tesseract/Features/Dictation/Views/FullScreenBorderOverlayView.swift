@@ -13,6 +13,8 @@ struct GlowEffect: View {
     let audioLevel: CGFloat
     let theme: GlowTheme
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         // 30 fps is visually indistinguishable here: the gradient oscillates
         // with a ~42 s period and the audio level arrives at 20 Hz — at 120 fps
@@ -21,7 +23,10 @@ struct GlowEffect: View {
         // renders on the GPU, and flattening a full-screen overlay re-uploads
         // a screen-sized texture every frame.
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
+            // Under Reduce Motion the hue oscillation freezes; the border
+            // still breathes with the audio level (informative, not
+            // decorative), so the timeline keeps ticking.
+            let time = reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate
 
             Canvas { context, size in
                 drawGlowBorder(context: context, size: size, time: time)

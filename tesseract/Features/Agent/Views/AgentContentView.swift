@@ -22,6 +22,7 @@ struct AgentContentView: View {
     @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var conversationStore: AgentConversationStore
 
     @State private var showingHistory = false
@@ -133,7 +134,10 @@ struct AgentContentView: View {
                 ) { _, hasContent in
                     skillCluster.draftContentChanged(hasContent: hasContent)
                 }
-                .animation(.easeOut(duration: 0.15), value: commandPalette.showCommandPopup)
+                .animation(
+                    reduceMotion ? nil : .easeOut(duration: 0.15),
+                    value: commandPalette.showCommandPopup
+                )
                 .environment(skillCluster)
             }
             .frame(maxWidth: ChatLayout.columnMaxWidth + 2 * Theme.Spacing.md)
@@ -300,11 +304,14 @@ struct AgentContentView: View {
 struct AgentSpeechIndicatorBar: View {
     let onStop: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "speaker.wave.2.fill")
                 .foregroundStyle(.tint)
-                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .symbolEffect(
+                    .variableColor.iterative, options: .repeating, isActive: !reduceMotion)
             Text("Speaking\u{2026}")
                 .font(.caption)
                 .foregroundStyle(.secondary)
