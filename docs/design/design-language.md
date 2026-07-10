@@ -52,6 +52,7 @@ same PR:
 - Speech transport bar (`SpeechTransportBar`)
 - Global overlay HUD (`GlobalOverlayHUD`)
 - Dictation recording button (`RecordingButtonView`)
+- Models action bar (`ModelsActionBar`)
 
 ## 2. Reference aesthetic — what generalizes from the agent chat
 
