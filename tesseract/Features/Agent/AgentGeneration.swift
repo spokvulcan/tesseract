@@ -35,7 +35,33 @@ struct AgentGenerateParameters: Sendable, Codable {
     var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
 
     /// Number of bits for KV cache quantization (4 or 8). nil disables quantization.
-    var kvBits: Int? = 8
+    ///
+    /// **Default is `nil` (unquantized).** `kvBits = 8` was the default until #252
+    /// measured what it actually buys, out to the owner's real 200K regime:
+    ///
+    /// - **It saves zero *peak* memory, at every context.** Run peaks are identical
+    ///   to the byte — 21.58 / 26.76 / 30.57 GB at 32K / 128K / 200K — because the
+    ///   high-water mark is set during *prefill*, where the cache is still fp16.
+    ///   `maybeQuantizeKVCache` (`KVCache.swift:1859`) converts only *after* the
+    ///   step-0 forward, so quantization arrives after the peak has happened.
+    /// - **It costs decode, and the cost grows with context**: −11.6% at 32K,
+    ///   −40.1% at 128K, −38.2% at 200K.
+    /// - **It is the numerically fragile option** (#233): 4× the chunk-shape noise
+    ///   floor at 32K, and the only config where a benign prefill-chunk-size change
+    ///   flips a greedy prediction.
+    ///
+    /// It does halve the cache *itself*, which peak memory hides. Only 10 of the 40
+    /// layers carry a KV cache (the other 30 are GatedDeltaNet, with a fixed-size
+    /// recurrent state), so fp16 KV costs 20 KiB/token: 0.67 / 2.68 / 4.10 GB at
+    /// 32K / 128K / 200K, against 0.36 / 1.43 / 2.18 GB at 8 bits. Within a request
+    /// that is never binding — 4.10 GB of KV sits far under the 30.57 GB prefill
+    /// peak. **Across** requests it may be: `HybridCacheSnapshot` stores whatever
+    /// cache type is live, so dense snapshots are ~1.9× larger and a fixed budget
+    /// retains ~half as many prefixes. Snapshots partition on `kvBits`
+    /// (`SnapshotManifest.partitionDigest`), so flipping this is always safe — it
+    /// just strands the previous partition's snapshots. Decoupling the live dtype
+    /// from the stored dtype is #259.
+    var kvBits: Int?
     /// Group size for KV cache quantization.
     var kvGroupSize: Int = 64
     /// Token chunk size for prompt prefill. Larger values improve throughput at
