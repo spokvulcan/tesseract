@@ -3,9 +3,9 @@
 //  tesseract
 //
 //  Chapter 1 — the brand moment. Privacy is the identity, not a later slide;
-//  the live tesseract is the hero (it will shrink into the corner and become
-//  the ambient download indicator); the hardware-aware model pick is disclosed
-//  transparently and setup begins here.
+//  the app icon is the hero (it shrinks into the corner once the tour moves
+//  on); the hardware-aware model pick is disclosed transparently and setup
+//  begins here.
 //
 
 import SwiftUI
@@ -21,8 +21,10 @@ struct WelcomeChapter: View {
         VStack(spacing: 0) {
             Spacer(minLength: 4)
 
-            TesseractMarkView(progress: controller.setupProgress)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
                 .frame(width: 168, height: 168)
+                .accessibilityHidden(true)
                 .matchedGeometryEffect(
                     id: OnboardingMarkID.shared, in: markNamespace,
                     isSource: controller.chapter == .welcome)
@@ -138,8 +140,8 @@ struct ModelPickCard: View {
     }
 }
 
-/// The shared-element id the welcome hero and the ambient corner mark morph
-/// between.
+/// The shared-element id the welcome hero icon and the ambient corner icon
+/// morph between.
 enum OnboardingMarkID {
     static let shared = "onboarding-tesseract-mark"
 }

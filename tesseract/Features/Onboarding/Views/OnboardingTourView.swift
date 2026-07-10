@@ -2,8 +2,8 @@
 //  OnboardingTourView.swift
 //  tesseract
 //
-//  The Welcome Window's content: ambient mark, the six Chapters with
-//  directional transitions, and the navigation chrome. Owns the Handoff
+//  The Welcome Window's content: the ambient corner icon, the seven Chapters
+//  with directional transitions, and the navigation chrome. Owns the Handoff
 //  (main window first, then this window dissolves — never zero windows) and
 //  the close-=-skip semantics (`CONTEXT.md` → Onboarding tour, ADR-0021).
 //
@@ -64,8 +64,10 @@ struct OnboardingTourView: View {
                         .foregroundStyle(.tertiary)
                         .contentTransition(.numericText())
                 }
-                TesseractMarkView(progress: controller.setupProgress)
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
                     .frame(width: 30, height: 30)
+                    .accessibilityHidden(true)
                     .matchedGeometryEffect(
                         id: OnboardingMarkID.shared, in: markNamespace,
                         isSource: controller.chapter != .welcome)
@@ -94,6 +96,8 @@ struct OnboardingTourView: View {
             WelcomeChapter(controller: controller, markNamespace: markNamespace)
         case .agent:
             AgentChapter()
+        case .appshot:
+            AppshotChapter()
         case .dictation:
             DictationChapter(controller: controller)
         case .voice:

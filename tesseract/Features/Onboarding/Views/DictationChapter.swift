@@ -2,7 +2,7 @@
 //  DictationChapter.swift
 //  tesseract
 //
-//  Chapter 3 — push-to-talk dictation, and the chapter that carries both
+//  Chapter 4 — push-to-talk dictation, and the chapter that carries both
 //  permissions (asked in context, user-initiated, never gating Continue). Its
 //  Try-it is the tour's signature satisfaction beat: hold the button and
 //  dictate a real sentence into the tour itself.
@@ -18,7 +18,7 @@ struct DictationChapter: View {
 
     var body: some View {
         ChapterScaffold(
-            kicker: "Chapter 3 · Dictation",
+            kicker: "Chapter 4 · Dictation",
             title: "Hold a key. Speak. It types.",
             subtitle: "Push-to-talk dictation into any app on your Mac — "
                 + "transcribed on device, in your language."

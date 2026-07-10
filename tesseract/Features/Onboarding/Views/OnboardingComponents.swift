@@ -298,7 +298,7 @@ struct TryItLockedSlot: View {
 // MARK: - Stage panel
 
 /// The material panel every chapter stages its demo in — one consistent
-/// surface so the six stages read as one system.
+/// surface so the stages read as one system.
 struct StagePanel<Content: View>: View {
     var maxWidth: CGFloat = 560
     @ViewBuilder var content: Content

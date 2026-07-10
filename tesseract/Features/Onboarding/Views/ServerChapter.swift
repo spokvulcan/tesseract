@@ -2,10 +2,10 @@
 //  ServerChapter.swift
 //  tesseract
 //
-//  Chapter 5 — the reveal: under everything sits an OpenAI-compatible local
+//  Chapter 6 — the reveal: under everything sits an OpenAI-compatible local
 //  server whose tiered RAM + SSD radix prefix cache is the hero. Full
-//  production value, aimed at the power user (ADR-0021 kept it at position
-//  five deliberately — the foundation lands harder after the experience).
+//  production value, aimed at the power user (ADR-0021 deliberately kept it
+//  late — the foundation lands harder after the experience).
 //
 
 import SwiftUI
@@ -20,7 +20,7 @@ struct ServerChapter: View {
 
     var body: some View {
         ChapterScaffold(
-            kicker: "Chapter 5 · The Server",
+            kicker: "Chapter 6 · The Server",
             title: "Everything you just saw is a server",
             subtitle: "An OpenAI-compatible endpoint lives inside Tesseract — point any "
                 + "client at it and it answers from this Mac, never the cloud."

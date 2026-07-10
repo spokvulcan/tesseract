@@ -22,10 +22,11 @@ import Observation
 @Observable @MainActor
 final class OnboardingTourController {
 
-    /// The six Chapters, in narrative order. `ready` is the honest finish.
+    /// The seven Chapters, in narrative order. `ready` is the honest finish.
     enum Chapter: Int, CaseIterable, Identifiable {
         case welcome
         case agent
+        case appshot
         case dictation
         case voice
         case server

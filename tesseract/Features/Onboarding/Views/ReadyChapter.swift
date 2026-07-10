@@ -2,7 +2,7 @@
 //  ReadyChapter.swift
 //  tesseract
 //
-//  Chapter 6 — the honest finish. All-green earns the tour's single
+//  Chapter 7 — the honest finish. All-green earns the tour's single
 //  celebratory beat; anything still in flight is shown as live progress, never
 //  a fake success. The hotkey reminder lives here.
 //
@@ -17,7 +17,7 @@ struct ReadyChapter: View {
 
     var body: some View {
         ChapterScaffold(
-            kicker: "Chapter 6 · Ready",
+            kicker: "Chapter 7 · Ready",
             title: controller.isSetupComplete
                 ? "Your intelligence is home"
                 : "Almost there",
