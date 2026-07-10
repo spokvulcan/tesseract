@@ -35,7 +35,7 @@ struct SpeechComposerView: View {
         VStack(spacing: 0) {
             voiceRow
                 .padding(.horizontal, Theme.Spacing.lg)
-                .padding(.vertical, Theme.Spacing.md)
+                .padding(.vertical, SpeechPageStyle.rhythm)
 
             Divider()
 
@@ -50,6 +50,7 @@ struct SpeechComposerView: View {
     private var voiceRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
             Text("Voice")
+                .font(.system(size: SpeechPageStyle.bodySize))
                 .foregroundStyle(.secondary)
 
             TextField(
@@ -57,6 +58,7 @@ struct SpeechComposerView: View {
                 text: $voiceDescription,
                 axis: .vertical
             )
+            .font(.system(size: SpeechPageStyle.bodySize))
             .textFieldStyle(.plain)
             .lineLimit(1...3)
             .help(
@@ -87,26 +89,32 @@ struct SpeechComposerView: View {
 
     // MARK: - Text body
 
+    /// `TextEditor`'s text container draws ~5 pt of intrinsic inset; subtract
+    /// it so the body text left-aligns with the voice row above the divider.
+    private static let editorIntrinsicInset: CGFloat = 5
+
     private var editor: some View {
         TextEditor(text: $text)
-            .font(.body)
+            .font(.system(size: SpeechPageStyle.bodySize))
             .lineSpacing(3)
             .scrollContentBackground(.hidden)
-            .padding(Theme.Spacing.sm)
+            .padding(.vertical, Theme.Spacing.sm)
+            .padding(.horizontal, Theme.Spacing.lg - Self.editorIntrinsicInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text("Type or paste text to speak…")
+                        .font(.system(size: SpeechPageStyle.bodySize))
                         .foregroundStyle(.tertiary)
                         .padding(.top, Theme.Spacing.sm)
-                        .padding(.leading, Theme.Spacing.sm + 5)
+                        .padding(.leading, Theme.Spacing.lg)
                         .allowsHitTesting(false)
                 }
             }
             .overlay(alignment: .bottomTrailing) {
                 if !text.isEmpty {
                     Text("\(wordCount) words")
-                        .font(.caption2)
+                        .font(.system(size: SpeechPageStyle.bodySize))
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()
                         .padding(Theme.Spacing.sm)

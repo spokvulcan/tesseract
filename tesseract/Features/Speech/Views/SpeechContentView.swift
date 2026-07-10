@@ -5,6 +5,13 @@
 
 import SwiftUI
 
+/// Speech page surface constants (design language §2: one type size and
+/// one spacing rhythm per surface; hierarchy comes from weight and color).
+enum SpeechPageStyle {
+    static let bodySize: CGFloat = 15
+    static let rhythm: CGFloat = 12
+}
+
 struct SpeechContentView: View {
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(SpeechEngine.self) private var speechEngine
@@ -21,7 +28,7 @@ struct SpeechContentView: View {
             language: $settings.ttsLanguage
         )
         .padding(.horizontal, Theme.Spacing.xxl)
-        .padding(.top, Theme.Spacing.lg)
+        .padding(.top, SpeechPageStyle.rhythm)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .bottom) {
             SpeechTransportBar(
@@ -36,7 +43,7 @@ struct SpeechContentView: View {
                 onResume: { speechCoordinator.resume() }
             )
             .padding(.horizontal, Theme.Spacing.xxl)
-            .padding(.vertical, Theme.Spacing.md)
+            .padding(.vertical, SpeechPageStyle.rhythm)
         }
         .inspector(isPresented: $isParametersPanelVisible) {
             TTSParametersInspector()
@@ -48,7 +55,7 @@ struct SpeechContentView: View {
                 } label: {
                     Label("Parameters", systemImage: "slider.horizontal.3")
                 }
-                .help("Toggle parameters")
+                .help("Show or hide the generation parameters")
             }
         }
         .navigationTitle("Speech")
