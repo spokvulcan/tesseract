@@ -65,6 +65,31 @@ struct AppBindingsTests {
     }
 
     @Test
+    func speechStateEmissionReachesTheMenuBar() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "pushSpeechState") == [
+                    "pushSpeechStateToMenuBar(idle)"
+                ]
+            })
+
+        h.driver.speechState = .playing
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "pushSpeechState") == [
+                    "pushSpeechStateToMenuBar(idle)",
+                    "pushSpeechStateToMenuBar(playing)",
+                ]
+            })
+    }
+
+    @Test
     func audioLevelFansOutToBothOverlays() async {
         let h = makeHarness()
         defer { h.bindings.stop() }
@@ -490,6 +515,7 @@ private final class EffectRecorder {
 @Observable @MainActor
 private final class InputDriver {
     var dictationState: DictationState = .idle
+    var speechState: SpeechState = .idle
     var audioLevel: Float = 0
     var currentDictationHotkey: KeyCombo = .optionSpace
     var isLLMSlotLoaded = false
@@ -538,6 +564,7 @@ private func makeHarness(
         settings: settings,
         inputs: .init(
             dictationState: { driver.dictationState },
+            speechState: { driver.speechState },
             audioLevel: { driver.audioLevel },
             currentDictationHotkey: { driver.currentDictationHotkey },
             isLLMSlotLoaded: { driver.isLLMSlotLoaded },
@@ -553,6 +580,7 @@ private func makeHarness(
             pushDictationStateToPill: { recorder("pushDictationStateToPill(\($0))") },
             pushDictationStateToBorder: { recorder("pushDictationStateToBorder(\($0))") },
             pushDictationStateToMenuBar: { recorder("pushDictationStateToMenuBar(\($0))") },
+            pushSpeechStateToMenuBar: { recorder("pushSpeechStateToMenuBar(\($0))") },
             pushAudioLevelToPill: { recorder("pushAudioLevelToPill(\($0))") },
             pushAudioLevelToBorder: { recorder("pushAudioLevelToBorder(\($0))") },
             updateDictationHotkey: { recorder("updateDictationHotkey(\($0.displayString))") },

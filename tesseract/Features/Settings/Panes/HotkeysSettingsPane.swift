@@ -17,7 +17,7 @@ struct HotkeysSettingsPane: View {
             Section("Global Hotkeys") {
                 HotkeyRecorderRow(label: "Dictation Push-to-Talk", combo: $settings.hotkey)
                 HotkeyRecorderRow(label: "Speak Selected Text", combo: $settings.ttsHotkey)
-                HotkeyRecorderRow(label: "Talk to Tesse", combo: $settings.agentHotkey)
+                HotkeyRecorderRow(label: "Talk to Tesseract", combo: $settings.agentHotkey)
             }
 
             Section {

@@ -112,6 +112,29 @@ final class SettingsManager {
         SupportedLanguage.language(forCode: language) ?? .auto
     }
 
+    /// Recently picked dictation languages, newest first (comma-joined
+    /// codes; see the catalogue entry). Maintained by
+    /// `recordRecentDictationLanguage`.
+    var recentDictationLanguages: String {
+        didSet {
+            SettingsCatalogue.recentDictationLanguages.write(
+                recentDictationLanguages, to: store)
+        }
+    }
+
+    /// Remember `code` as the most recent dictation-language pick.
+    /// `"auto"` is never recorded — it has a permanent pinned slot.
+    func recordRecentDictationLanguage(_ code: String) {
+        guard code != SupportedLanguage.auto.code else { return }
+        var codes =
+            recentDictationLanguages
+            .split(separator: ",")
+            .map(String.init)
+        codes.removeAll { $0 == code }
+        codes.insert(code, at: 0)
+        recentDictationLanguages = codes.prefix(5).joined(separator: ",")
+    }
+
     // MARK: - Hotkey Settings
 
     var hotkeyKeyCode: Int {
@@ -469,6 +492,8 @@ final class SettingsManager {
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
         self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
         self.language = SettingsCatalogue.language.load(from: store)
+        self.recentDictationLanguages =
+            SettingsCatalogue.recentDictationLanguages.load(from: store)
         self.hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.load(from: store)
         self.hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.load(from: store)
         self.ttsHotkeyKeyCode = SettingsCatalogue.ttsHotkeyKeyCode.load(from: store)
@@ -542,6 +567,14 @@ final class SettingsManager {
         return parameters
     }
 
+    /// The SSD prefix-cache root directory — the size/wipe target for the
+    /// status-bar menu's "Clear Disk Cache". Valid even while the SSD tier
+    /// is disabled or no model is loaded: the artifacts on disk outlive
+    /// both.
+    var ssdPrefixCacheRootURL: URL {
+        resolvedSSDPrefixCacheRootURL()
+    }
+
     private func resolvedSSDPrefixCacheRootURL() -> URL {
         if let override = prefixCacheSSDDirectoryOverride, !override.isEmpty {
             // Accept either a file URL string or a plain path.
@@ -579,6 +612,7 @@ final class SettingsManager {
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
         captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default
+        recentDictationLanguages = SettingsCatalogue.recentDictationLanguages.default
         hotkeyKeyCode = SettingsCatalogue.hotkeyKeyCode.default
         hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.default
         maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.default

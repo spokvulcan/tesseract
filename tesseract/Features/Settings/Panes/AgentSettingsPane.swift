@@ -18,18 +18,11 @@ struct AgentSettingsPane: View {
         container.modelDownloadManager.status(for: settings.selectedAgentModelID)
     }
 
-    /// Language options for the Translate skill's target picker: the canonical
-    /// ``SupportedLanguage`` catalogue (minus the dictation-only "Auto-detect"
-    /// pseudo-entry), with the current selection always present so the Picker
-    /// never shows an unselectable value.
+    /// Language options for the Translate skill's target picker — the one
+    /// canonical list, shared with the status-bar menu's Translate To
+    /// submenu.
     private var translateLanguageOptions: [String] {
-        var languages = SupportedLanguage.all
-            .filter { $0.code != SupportedLanguage.auto.code }
-            .map(\.name)
-        if !languages.contains(settings.translateTargetLanguage) {
-            languages.append(settings.translateTargetLanguage)
-        }
-        return languages.sorted()
+        SupportedLanguage.translateTargetOptions(current: settings.translateTargetLanguage)
     }
 
     var body: some View {

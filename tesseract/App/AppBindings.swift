@@ -20,6 +20,9 @@ final class AppBindings {
         /// Tracked read of the dictation coordinator's state. Read inside an
         /// `Observations` closure, so the rule re-fires on every state change.
         let dictationState: @MainActor () -> DictationState
+        /// Tracked read of the speech coordinator's state — feeds the menu
+        /// bar's status glyph (the speaking animation).
+        let speechState: @MainActor () -> SpeechState
         /// Tracked read of the audio capture engine's level, observed the same way.
         let audioLevel: @MainActor () -> Float
         /// Gate read of the hotkey manager's currently bound dictation combo —
@@ -41,6 +44,7 @@ final class AppBindings {
 
         init(
             dictationState: @escaping @MainActor () -> DictationState,
+            speechState: @escaping @MainActor () -> SpeechState,
             audioLevel: @escaping @MainActor () -> Float,
             currentDictationHotkey: @escaping @MainActor () -> KeyCombo,
             isLLMSlotLoaded: @escaping @MainActor () -> Bool,
@@ -49,6 +53,7 @@ final class AppBindings {
             modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
         ) {
             self.dictationState = dictationState
+            self.speechState = speechState
             self.audioLevel = audioLevel
             self.currentDictationHotkey = currentDictationHotkey
             self.isLLMSlotLoaded = isLLMSlotLoaded
@@ -69,6 +74,7 @@ final class AppBindings {
         let pushDictationStateToPill: @MainActor (DictationState) -> Void
         let pushDictationStateToBorder: @MainActor (DictationState) -> Void
         let pushDictationStateToMenuBar: @MainActor (DictationState) -> Void
+        let pushSpeechStateToMenuBar: @MainActor (SpeechState) -> Void
         let pushAudioLevelToPill: @MainActor (Float) -> Void
         let pushAudioLevelToBorder: @MainActor (Float) -> Void
         /// Builds the capture engine (incl. its Voice Processing configuration)
@@ -95,6 +101,7 @@ final class AppBindings {
             pushDictationStateToPill: @escaping @MainActor (DictationState) -> Void,
             pushDictationStateToBorder: @escaping @MainActor (DictationState) -> Void,
             pushDictationStateToMenuBar: @escaping @MainActor (DictationState) -> Void,
+            pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
             pushAudioLevelToPill: @escaping @MainActor (Float) -> Void,
             pushAudioLevelToBorder: @escaping @MainActor (Float) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
@@ -115,6 +122,7 @@ final class AppBindings {
             self.pushDictationStateToPill = pushDictationStateToPill
             self.pushDictationStateToBorder = pushDictationStateToBorder
             self.pushDictationStateToMenuBar = pushDictationStateToMenuBar
+            self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
             self.pushAudioLevelToPill = pushAudioLevelToPill
             self.pushAudioLevelToBorder = pushAudioLevelToBorder
             self.prewarmAudioCapture = prewarmAudioCapture
@@ -319,6 +327,16 @@ final class AppBindings {
                     self.effects.pushDictationStateToPill(state)
                     self.effects.pushDictationStateToBorder(state)
                     self.effects.pushDictationStateToMenuBar(state)
+                }
+            })
+
+        // Speech state feeds the menu bar's glyph the same way — one
+        // subscription, one surface.
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await state in Observations({ self.inputs.speechState() }) {
+                    self.effects.pushSpeechStateToMenuBar(state)
                 }
             })
 

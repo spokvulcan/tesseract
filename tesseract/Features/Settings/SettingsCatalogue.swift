@@ -49,6 +49,12 @@ enum SettingsCatalogue {
     // MARK: - Language
 
     static let language = Setting.string("language", default: "en")
+    /// Recently picked dictation languages, newest first, as a
+    /// comma-joined code list (e.g. `"uk,de"`). Feeds the status-bar
+    /// menu's pinned Language entries so switching back is one click;
+    /// `"auto"` and the current selection are pinned separately.
+    static let recentDictationLanguages = Setting.string(
+        "recentDictationLanguages", default: "")
 
     // MARK: - Hotkeys
 
