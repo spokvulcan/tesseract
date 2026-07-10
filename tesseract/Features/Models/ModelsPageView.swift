@@ -5,17 +5,11 @@
 
 import SwiftUI
 
-/// Models page surface constants (design language §2: one type size and
-/// one spacing rhythm per surface; hierarchy comes from weight and color).
-enum ModelsPageStyle {
-    static let bodySize: CGFloat = 15
-    static let rhythm: CGFloat = 12
-}
-
-/// The model library: every known model grouped by category, presence on
-/// disk encoded in ink (solid = downloaded, faded = not), with a floating
-/// glass action bar reflecting the selected model. Two layers: the list is
-/// content, the toolbar and action bar are the functional layer.
+/// The model library: every known model grouped by category in a native
+/// grouped form (design language §4 — settings surfaces lean native, with
+/// stock macOS metrics), presence on disk encoded in ink (solid =
+/// downloaded, faded = not). Two layers: the form is content; the toolbar
+/// and the floating glass action bar are the functional layer.
 struct ModelsPageView: View {
     @EnvironmentObject private var container: DependencyContainer
     @EnvironmentObject private var downloadManager: ModelDownloadManager
@@ -25,27 +19,30 @@ struct ModelsPageView: View {
     @State private var modelPendingDelete: ModelDefinition?
 
     var body: some View {
-        List(selection: $selectedModelID) {
+        Form {
             ForEach(ModelDefinition.byCategory(), id: \.0) { category, models in
-                Section {
+                Section(category.rawValue) {
                     ForEach(models) { model in
                         ModelRowView(
                             model: model,
                             status: downloadManager.status(for: model.id),
                             isMemoryLoaded: isModelLoadedInMemory(model)
                         )
-                        .tag(model.id)
+                        .contentShape(Rectangle())
+                        .onTapGesture { selectedModelID = model.id }
+                        .listRowBackground(
+                            selectedModelID == model.id
+                                ? Color.accentColor.opacity(0.12) : nil
+                        )
                         .contextMenu { contextMenuItems(for: model) }
                     }
-                } header: {
-                    Text(category.rawValue)
-                        .font(.system(size: ModelsPageStyle.bodySize, weight: .medium))
-                        .foregroundStyle(.tertiary)
                 }
             }
         }
-        .listStyle(.inset)
-        // The action bar floats over the scrolling list; the soft bottom
+        .formStyle(.grouped)
+        .frame(maxWidth: Theme.Layout.contentMaxWidth)
+        .frame(maxWidth: .infinity)
+        // The action bar floats over the scrolling form; the soft bottom
         // edge keeps row text legible as it passes under the glass.
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .safeAreaInset(edge: .bottom) {
@@ -60,7 +57,7 @@ struct ModelsPageView: View {
                     onDelete: { modelPendingDelete = model }
                 )
                 .padding(.horizontal, Theme.Spacing.xxl)
-                .padding(.vertical, ModelsPageStyle.rhythm)
+                .padding(.vertical, Theme.Spacing.md)
             }
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: selectedModelID)
@@ -200,10 +197,10 @@ struct ModelsPageView: View {
 
 // MARK: - Model row
 
-/// Icon-light row: presence on disk is encoded in ink, not badges — a
-/// downloaded model reads solid, an absent one faded. At most one status
-/// glyph on the trailing edge; actions live in the context menu and the
-/// action bar (design language §2).
+/// Icon-light native form row: presence on disk is encoded in ink, not
+/// badges — a downloaded model reads solid, an absent one faded. At most
+/// one status glyph on the trailing edge; actions live in the context
+/// menu and the action bar (design language §2).
 private struct ModelRowView: View {
     let model: ModelDefinition
     let status: ModelStatus
@@ -215,24 +212,24 @@ private struct ModelRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: ModelsPageStyle.rhythm) {
+        HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.displayName)
                     .fontWeight(.semibold)
                     .foregroundStyle(isOnDisk ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
                 Text(model.description)
+                    .font(.callout)
                     .foregroundStyle(
                         isOnDisk ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tertiary)
                     )
                     .lineLimit(2)
             }
 
-            Spacer(minLength: ModelsPageStyle.rhythm)
+            Spacer(minLength: Theme.Spacing.md)
 
             trailingStatus
         }
-        .font(.system(size: ModelsPageStyle.bodySize))
-        .padding(.vertical, 6)
+        .padding(.vertical, 2)
     }
 
     @ViewBuilder
