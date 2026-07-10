@@ -32,6 +32,7 @@ struct AgentComposerView: View {
     @Environment(AgentEngine.self) private var agentEngine
     @Environment(TranscriptionEngine.self) private var transcriptionEngine
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var permissions: PermissionsManager
     @EnvironmentObject private var downloadManager: ModelDownloadManager
 
@@ -462,11 +463,12 @@ struct AgentComposerView: View {
         case .recording:
             Image(systemName: "stop.fill")
                 .foregroundStyle(.red)
-                .symbolEffect(.pulse, options: .repeating)
+                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
         case .transcribing:
             Image(systemName: "waveform")
                 .foregroundStyle(.tint)
-                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .symbolEffect(
+                    .variableColor.iterative, options: .repeating, isActive: !reduceMotion)
         case .error:
             Image(systemName: "mic.slash.fill")
                 .foregroundStyle(.red)

@@ -117,6 +117,7 @@ struct SkillClusterView: View {
     @Environment(SkillPillController.self) private var skillPills
     @Environment(ComposerDraftController.self) private var composerDraft
     @Environment(SkillClusterController.self) private var cluster
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// One namespace for the whole cluster — the bubble and every pill carry
     /// a glassEffectID in it, so open/close morphs instead of fading.
@@ -152,7 +153,7 @@ struct SkillClusterView: View {
                 cluster.pointerExited()
             }
         }
-        .animation(.smooth(duration: 0.3), value: cluster.isOpen)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.3), value: cluster.isOpen)
     }
 
     /// The ✦ bubble — an ✕ close button while the cluster is open (the
@@ -168,13 +169,14 @@ struct SkillClusterView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: Self.bubbleSize, height: Self.bubbleSize)
                 .contentShape(Circle())
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Circle())
         .glassEffectID("bubble", in: glassNamespace)
         .opacity(session.isGenerating ? 0.4 : 1)
         .help(cluster.isOpen ? "Close skills" : "Skills")
+        .accessibilityLabel(cluster.isOpen ? "Close skills" : "Skills")
     }
 
     /// One fanned Skill Pill — same firing contract as the retired composer

@@ -23,9 +23,9 @@ struct ProcessingDotsView: View {
     // Container size to accommodate max scaled dot
     private var containerSize: CGFloat { dotSize * maxScale }
 
-    // Follows the effective appearance: the pill's hosting view is forced
-    // light so its clear glass renders bright — fixed white dots would vanish
-    // on it.
+    // Follows the effective appearance: the pill tracks the system appearance
+    // (DependencyContainer wires no `contentAppearance` override), so a fixed
+    // white would vanish on the light-mode glass.
     private let dotColor = Color.primary
 
     var body: some View {

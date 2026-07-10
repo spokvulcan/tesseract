@@ -147,7 +147,7 @@ struct PromptCacheEventsDrawer: View {
         .monospacedDigit()
         .foregroundStyle(.secondary)
         .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 5)
+        .padding(.vertical, 6)
     }
 
     private var savedSummary: String? {

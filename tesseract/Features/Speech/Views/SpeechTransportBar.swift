@@ -19,6 +19,7 @@ struct SpeechTransportBar: View {
     let onResume: () -> Void
 
     @Namespace private var glassNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Tall enough for the large glass buttons and the status capsule alike,
     /// so the bar (and the composer above it) never resizes as elements
@@ -45,8 +46,8 @@ struct SpeechTransportBar: View {
                 }
                 .frame(height: controlRowHeight)
             }
-            .animation(.smooth(duration: 0.25), value: state)
-            .animation(.smooth(duration: 0.25), value: isModelLoading)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: state)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: isModelLoading)
 
             Text("\(hotkeyHint) speaks the selected text in any app")
                 .font(.caption2)
@@ -78,7 +79,7 @@ struct SpeechTransportBar: View {
             .frame(minWidth: 90)
         }
         .buttonStyle(.glassProminent)
-        .tint(isActive ? .red : .accentColor)
+        .tint(isActive ? Color.red : nil)
         .controlSize(.large)
         .disabled(!isActive && !hasText)
         .keyboardShortcut(
@@ -161,7 +162,7 @@ struct SpeechTransportBar: View {
             }
             if status.isPlaying {
                 Image(systemName: "speaker.wave.3.fill")
-                    .symbolEffect(.variableColor.iterative, isActive: true)
+                    .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
                     .foregroundStyle(.secondary)
             }
             if status.isError {

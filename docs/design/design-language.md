@@ -54,6 +54,12 @@ same PR:
 - Dictation recording button (`RecordingButtonView`)
 - Models action bar (`ModelsActionBar`)
 
+The inventory governs custom `.glassEffect` surfaces. The system glass
+button styles (`.glass` / `.glassProminent`) are standard components — they
+don't need an entry, including when a `GlassEffectContainer` merely gives a
+group of such buttons a shared sampling context (onboarding footer nav,
+Prompt Cache canvas zoom controls).
+
 ## 2. Reference aesthetic — what generalizes from the agent chat
 
 The chat is the reference surface. Its *principles* graduate app-wide; its
