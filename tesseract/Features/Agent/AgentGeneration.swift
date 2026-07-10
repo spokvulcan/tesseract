@@ -35,14 +35,59 @@ struct AgentGenerateParameters: Sendable, Codable {
     var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
 
     /// Number of bits for KV cache quantization (4 or 8). nil disables quantization.
-    var kvBits: Int? = 8
+    ///
+    /// **Default is `nil` (unquantized).** `kvBits = 8` was the default until #252
+    /// measured what it actually buys, out to the owner's real 200K regime:
+    ///
+    /// - **It saves zero *peak* memory, at every context.** Run peaks are identical
+    ///   to the byte — 21.58 / 26.76 / 30.57 GB at 32K / 128K / 200K — because the
+    ///   high-water mark is set during *prefill*, where the cache is still fp16.
+    ///   `maybeQuantizeKVCache` (`KVCache.swift:1859`) converts only *after* the
+    ///   step-0 forward, so quantization arrives after the peak has happened.
+    /// - **It costs decode, and the cost grows with context**: −11.6% at 32K,
+    ///   −40.1% at 128K, −38.2% at 200K.
+    /// - **It is the numerically fragile option** (#233): 4× the chunk-shape noise
+    ///   floor at 32K, and the only config where a benign prefill-chunk-size change
+    ///   flips a greedy prediction.
+    ///
+    /// It does halve the cache *itself*, which peak memory hides. Only 10 of the 40
+    /// layers carry a KV cache (the other 30 are GatedDeltaNet, with a fixed-size
+    /// recurrent state), so fp16 KV costs 20 KiB/token: 0.67 / 2.68 / 4.10 GB at
+    /// 32K / 128K / 200K, against 0.36 / 1.43 / 2.18 GB at 8 bits. Within a request
+    /// that is never binding — 4.10 GB of KV sits far under the 30.57 GB prefill
+    /// peak. **Across** requests it may be: `HybridCacheSnapshot` stores whatever
+    /// cache type is live, so dense snapshots are ~1.9× larger and a fixed budget
+    /// retains ~half as many prefixes. Snapshots partition on `kvBits`
+    /// (`SnapshotManifest.partitionDigest`), so flipping this is always safe — it
+    /// just strands the previous partition's snapshots. Decoupling the live dtype
+    /// from the stored dtype is #259.
+    var kvBits: Int?
     /// Group size for KV cache quantization.
     var kvGroupSize: Int = 64
-    /// Token chunk size for prompt prefill. Larger values improve throughput at
-    /// the cost of higher per-step peak memory. Our Phase 3.2 benchmark on the
-    /// production prefix-cache path found 1024 to be the fastest cold-prefill
-    /// default that still keeps peak memory well below the larger 2048/4096
-    /// settings, so that is the production default.
+    /// Token chunk size for prompt prefill.
+    ///
+    /// **1024, re-confirmed by measurement in #253** (the earlier "Phase 3.2"
+    /// rationale predates the fixed harness). On PARO 35B at 32K, full prefill:
+    /// **1006 tok/s at 1024**, 864 at 2048, 857 at 4096 — and peak memory rises
+    /// 21.58 → 23.24 → 26.08 GB, because the unfused attention path materializes
+    /// a `[1, 16, Lq, Lk]` score matrix.
+    ///
+    /// Counter-intuitively the *chunk loop itself* prefers larger chunks (#254:
+    /// each MoE expert's `gather_qmm` gets `Lq × topK / numExperts` rows — only
+    /// **32 rows at 1024**, running at 43% of peak GEMM). What kills the raise is
+    /// `LLMModel.prepare`'s **tail**: it loops `while size > prefillStepSize`, so
+    /// the `TokenIterator` swallows `promptTokens mod prefillStepSize` tokens in
+    /// one un-pipelined forward — 141 tokens at 1024, but 3,213 at 4096. The tail
+    /// grows with the step and erases the loop's gain. See #258.
+    ///
+    /// And at long context a raise is not a knob with a memory price — it is a
+    /// cliff. At 128K, `prefillStepSize = 2048` measured **155.53 tok/s against
+    /// 1024's 431.27** (2.8× slower) with peak 31.60 GB, because a single chunk's
+    /// score matrix is 8.36 GB and the machine starts swapping. At 200K, 4096
+    /// projects to ~59 GB on a 48 GB machine.
+    ///
+    /// Do not raise this before #258 lands, and never without re-measuring peak
+    /// memory at 128K–200K.
     var prefillStepSize: Int = 1024
 
     static let `default` = AgentGenerateParameters()
