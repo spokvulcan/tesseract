@@ -11,41 +11,46 @@ import SwiftUI
 
 // MARK: - Card surface
 
-/// The one material card surface all tour cards share.
+/// The one material card surface all tour cards share — standard material and
+/// a hairline, nothing else (design language §1: adopt by subtraction).
 struct OnboardingCardModifier: ViewModifier {
-    var cornerRadius: CGFloat = 12
-    var shadowed = false
-
     func body(content: Content) -> some View {
         content.background(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(.regularMaterial)
                 .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(.quaternary, lineWidth: 0.5)
                 }
-                .shadow(
-                    color: shadowed ? .black.opacity(0.18) : .clear,
-                    radius: shadowed ? 18 : 0,
-                    y: shadowed ? 8 : 0)
         )
     }
 }
 
 extension View {
-    func onboardingCard(cornerRadius: CGFloat = 12, shadowed: Bool = false) -> some View {
-        modifier(
-            OnboardingCardModifier(cornerRadius: cornerRadius, shadowed: shadowed))
+    func onboardingCard() -> some View {
+        modifier(OnboardingCardModifier())
     }
 }
 
 // MARK: - Typography
 
+/// Tour surface constants (design language §2: one type size and one spacing
+/// rhythm per surface; hierarchy comes from weight and color). The kicker and
+/// title are the tour's display roles and keep their own scale — everything
+/// else sets `body`.
 enum OnboardingType {
+    static let bodySize: CGFloat = 13
+    static let rhythm: CGFloat = 12
+
+    static let body: Font = .system(size: bodySize)
+
+    static let titleFont: Font = .system(size: 30, weight: .semibold)
+    static let titleTracking: CGFloat = -0.4
+
     static func title(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 30, weight: .semibold))
-            .tracking(-0.4)
+            .font(titleFont)
+            .tracking(titleTracking)
             .foregroundStyle(.primary)
             .multilineTextAlignment(.center)
     }
@@ -60,8 +65,8 @@ enum OnboardingType {
 
     static func subtitle(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 13))
-            .lineSpacing(3.5)
+            .font(body)
+            .lineSpacing(3)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
     }
@@ -77,7 +82,7 @@ struct ChapterScaffold<Stage: View>: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 10) {
+            VStack(spacing: OnboardingType.rhythm) {
                 OnboardingType.kicker(kicker)
                 OnboardingType.title(title)
                 OnboardingType.subtitle(subtitle)
@@ -168,21 +173,22 @@ struct PermissionCard: View {
     let recoverAction: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: OnboardingType.rhythm) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.system(size: 15, weight: .medium))
                     .foregroundStyle(.tint)
                     .frame(width: 22)
                 Text(title)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(OnboardingType.body)
+                    .fontWeight(.semibold)
                 Spacer(minLength: 0)
                 statusChip
             }
 
             Text(benefit)
-                .font(.system(size: 11.5))
-                .lineSpacing(2.5)
+                .font(OnboardingType.body)
+                .lineSpacing(3)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -199,7 +205,8 @@ struct PermissionCard: View {
         switch state {
         case .granted:
             Label("Granted", systemImage: "checkmark.circle.fill")
-                .font(.system(size: 11, weight: .medium))
+                .font(OnboardingType.body)
+                .fontWeight(.medium)
                 .foregroundStyle(.green)
                 .labelStyle(.titleAndIcon)
                 .transition(.scale.combined(with: .opacity))
@@ -207,12 +214,13 @@ struct PermissionCard: View {
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini)
                 Text("Waiting\u{2026}")
-                    .font(.system(size: 11))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.secondary)
             }
         case .denied, .restricted:
             Label("Not granted", systemImage: "xmark.circle")
-                .font(.system(size: 11, weight: .medium))
+                .font(OnboardingType.body)
+                .fontWeight(.medium)
                 .foregroundStyle(.orange)
         case .unknown:
             EmptyView()
@@ -230,7 +238,7 @@ struct PermissionCard: View {
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                 Text("You can continue — this just stays off until you grant it.")
-                    .font(.system(size: 10.5))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.tertiary)
             }
         case .unknown, .requesting:
@@ -264,10 +272,11 @@ struct TryItLockedSlot: View {
                 .foregroundStyle(.tertiary)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Try it right here")
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(OnboardingType.body)
+                    .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                 Text(reason)
-                    .font(.system(size: 11))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
@@ -298,6 +307,6 @@ struct StagePanel<Content: View>: View {
         content
             .padding(18)
             .frame(maxWidth: maxWidth)
-            .onboardingCard(cornerRadius: 14, shadowed: true)
+            .onboardingCard()
     }
 }

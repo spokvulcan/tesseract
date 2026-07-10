@@ -29,11 +29,11 @@ struct AgentChapter: View {
                 + "and because it runs here, trusting it costs nothing."
         ) {
             StagePanel {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: OnboardingType.rhythm) {
                     HStack {
                         Spacer(minLength: 60)
                         Text(Self.userLine)
-                            .font(.system(size: 12.5))
+                            .font(OnboardingType.body)
                             .foregroundStyle(.primary)
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
@@ -48,7 +48,7 @@ struct AgentChapter: View {
                             Image(systemName: "wrench.and.screwdriver.fill")
                                 .font(.system(size: 9))
                             Text(Self.toolLine)
-                                .font(.system(size: 10.5, design: .monospaced))
+                                .font(OnboardingType.body.monospaced())
                         }
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 9)
@@ -62,7 +62,7 @@ struct AgentChapter: View {
                     if revealedCharacters > 0 {
                         HStack {
                             Text(String(Self.assistantLine.prefix(revealedCharacters)))
-                                .font(.system(size: 12.5))
+                                .font(OnboardingType.body)
                                 .lineSpacing(3)
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 12)

@@ -25,9 +25,9 @@ struct ReadyChapter: View {
                 ? "Everything is on this Mac and ready. It stays yours."
                 : "You can start now — the rest keeps arriving in the background."
         ) {
-            VStack(spacing: 14) {
+            VStack(spacing: OnboardingType.rhythm) {
                 StagePanel(maxWidth: 480) {
-                    VStack(spacing: 10) {
+                    VStack(spacing: OnboardingType.rhythm) {
                         modelRow(
                             label: "Speech to text",
                             id: controller.speechToTextModelID)
@@ -52,12 +52,12 @@ struct ReadyChapter: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
                     Text("Hold ")
-                        .font(.system(size: 12))
+                        .font(OnboardingType.body)
                         .foregroundStyle(.secondary)
                         + Text(settings.hotkey.displayString)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(OnboardingType.body.weight(.semibold))
                         + Text(" in any app to dictate.")
-                        .font(.system(size: 12))
+                        .font(OnboardingType.body)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -73,11 +73,11 @@ struct ReadyChapter: View {
     private func modelRow(label: String, id: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 12))
+                .font(OnboardingType.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 110, alignment: .leading)
             Text(ModelDefinition.withID(id)?.displayName ?? id)
-                .font(.system(size: 12, weight: .medium))
+                .font(OnboardingType.body.weight(.medium))
             Spacer(minLength: 0)
             modelStatusChip(for: id)
         }
@@ -96,23 +96,23 @@ struct ReadyChapter: View {
                     .controlSize(.small)
                     .frame(width: 56)
                 Text(progress.formatted(.wholePercent))
-                    .font(.system(size: 10.5).monospacedDigit())
+                    .font(OnboardingType.body.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
         case .verifying:
             HStack(spacing: 5) {
                 ProgressView().controlSize(.mini)
                 Text("Verifying")
-                    .font(.system(size: 10.5))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.secondary)
             }
         case .notDownloaded:
             Text("Queued")
-                .font(.system(size: 10.5))
+                .font(OnboardingType.body)
                 .foregroundStyle(.tertiary)
         case .error:
             Label("Retry from Models", systemImage: "exclamationmark.circle")
-                .font(.system(size: 10.5))
+                .font(OnboardingType.body)
                 .foregroundStyle(.orange)
         }
     }
@@ -120,7 +120,7 @@ struct ReadyChapter: View {
     private func permissionRow(label: String, state: PermissionState) -> some View {
         HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 12))
+                .font(OnboardingType.body)
                 .foregroundStyle(.secondary)
                 .frame(width: 110, alignment: .leading)
             Spacer(minLength: 0)
@@ -130,7 +130,7 @@ struct ReadyChapter: View {
                     .foregroundStyle(.green)
             } else {
                 Text("Optional — grant any time in Settings")
-                    .font(.system(size: 10.5))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.tertiary)
             }
         }

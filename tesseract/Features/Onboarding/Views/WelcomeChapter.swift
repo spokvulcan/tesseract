@@ -30,14 +30,12 @@ struct WelcomeChapter: View {
             Spacer(minLength: 18)
 
             Text("Welcome to Tesseract")
-                .font(.system(size: 34, weight: .semibold))
-                .tracking(-0.6)
+                .font(OnboardingType.titleFont)
+                .tracking(OnboardingType.titleTracking)
                 .textRenderer(GlyphReveal(progress: headlineProgress))
 
-            Text("Everything runs on this Mac. Nothing ever leaves it.")
-                .font(.system(size: 13.5))
-                .foregroundStyle(.secondary)
-                .padding(.top, 10)
+            OnboardingType.subtitle("Everything runs on this Mac. Nothing ever leaves it.")
+                .padding(.top, OnboardingType.rhythm)
 
             Spacer(minLength: 22)
 
@@ -82,15 +80,16 @@ struct ModelPickCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(chosen?.displayName ?? controller.chosenAgentModelID)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(OnboardingType.body)
+                        .fontWeight(.semibold)
                     if let size = chosen?.sizeDescription {
                         Text(size)
-                            .font(.system(size: 11))
+                            .font(OnboardingType.body)
                             .foregroundStyle(.tertiary)
                     }
                 }
                 Text(pickStatusLine)
-                    .font(.system(size: 11))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.secondary)
             }
 
@@ -113,7 +112,7 @@ struct ModelPickCard: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .font(.system(size: 11.5))
+            .font(OnboardingType.body)
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)

@@ -34,7 +34,7 @@ struct VoiceChapter: View {
                 + "read a page, a draft, or an answer aloud."
         ) {
             StagePanel(maxWidth: 520) {
-                VStack(spacing: 16) {
+                VStack(spacing: OnboardingType.rhythm) {
                     WaveformView(isActive: isSpeaking && !reduceMotion)
                         .frame(height: 56)
 
@@ -57,7 +57,7 @@ struct VoiceChapter: View {
                             .controlSize(.regular)
 
                             Text(speakStatusLine)
-                                .font(.system(size: 11))
+                                .font(OnboardingType.body)
                                 .foregroundStyle(.secondary)
                         }
                     } else {
