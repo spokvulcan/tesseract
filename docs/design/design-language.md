@@ -110,6 +110,49 @@ native macOS metrics untouched.
   exists.
 - **Never duplicate system settings** (appearance, accessibility, scrolling).
 
+## 5. Charts
+
+Ratified with the Cache cutover (map #269, ticket #277). Charts are Swift
+Charts; the shared pieces live in `ChartSupport.swift`. The reference
+surfaces are the Cache Overview's three charts and the Activity rail.
+
+- **The categorical palette is `ChartPalette` — four fixed slots, assigned
+  in fixed order, never cycled.** Light `#2A78D6 · #1BAF7A · #D68C27 ·
+  #4A3AA7` on `#fcfcfb`; dark `#3987E5 · #199E70 · #C67F16 · #9085E9` on
+  `#1a1a19`. Validated (CVD separation, lightness band, chroma floor)
+  2026-07-10 — re-run the dataviz palette validator before changing any
+  step. Slot 3 is the brand warm orange with its dark step lowered into the
+  dark lightness band; **prefill wears slot 3 on every chart, app-wide** —
+  color follows the entity, never its rank. A fifth series is never a new
+  hue: fold into "Other," split the chart, or encode differently.
+- **One axis per chart.** Never a dual-axis chart. Two measures of
+  different scale get two charts or an indexed base.
+- **A legend whenever a chart draws ≥ 2 series;** a single series is named
+  by its title. Identity never rides on color alone — legends, axis labels,
+  and tooltips carry it in text.
+- **Text wears text tokens, never the series color.** Values, labels, and
+  legends stay in primary/secondary/muted ink; a small color dot beside the
+  text carries identity (`ChartTooltipRow`).
+- **Hover is standard equipment**: a full-plot `ChartHoverOverlay`, a 1 px
+  quaternary `RuleMark` cursor snapped to the nearest point, the hovered
+  point emphasized, and a `ChartTooltipChrome` annotation — a thin-material
+  chip with a hairline quaternary ring (content layer: standard materials,
+  no glass), fitted inside the chart bounds.
+- **Heavy-tailed measures cap the y-domain near p95** (when
+  `max > p95 × 1.6`); off-scale marks clip at the top edge and the footnote
+  counts them ("N slow requests run off-scale, hover for exact"). Truthful
+  and readable beats fitted and unreadable.
+- **Footnotes state the window and the identity** ("last 80 of 3 781
+  requests in 30 d, oldest → newest") in caption-weight secondary text —
+  no silent truncation of what a chart covers.
+- **Swift Charts gotcha (learned the hard way):** `BarMark`
+  `width: .ratio` is only defined for binned/categorical axes — on a
+  continuous (Int) x-axis it renders zero-width, invisible bars while the
+  legend and tooltips keep working. Use a `.fixed` width computed from the
+  measured chart width ÷ point count (clamped), via `onGeometryChange`.
+  Automatic width doesn't shrink with density (bars merge at ~400 pt), and
+  `xStart:/xEnd:` ranges break y-stacking — both probed and rejected.
+
 ## Revision expectations
 
 One revision loop is budgeted after the first surface (the native Settings

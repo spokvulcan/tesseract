@@ -58,8 +58,14 @@ struct ContentView: View {
                 .injectCoreDependencies(from: container)
                 .injectServerDependencies(from: container)
                 .environment(container.inferenceArbiter)
-        case .serverPromptCache:
-            ServerPromptCacheView()
+        // PROTOTYPE (wayfinder #273) — THROWAWAY: Activity re-cut, until the
+        // cutover (#276) replaces the Dashboard.
+        case .serverActivityPrototype:
+            ServerActivityPrototypeView()
+                .injectCoreDependencies(from: container)
+                .injectServerDependencies(from: container)
+        case .serverCache:
+            ServerCacheView()
                 .injectCoreDependencies(from: container)
                 .injectAgentDependencies(from: container)
                 .injectServerDependencies(from: container)

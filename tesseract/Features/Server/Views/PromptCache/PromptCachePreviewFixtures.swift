@@ -104,34 +104,6 @@ enum PromptCachePreviewFixtures {
             ]),
     ]
 
-    static var samples: [PromptCacheMetricSample] {
-        var result: [PromptCacheMetricSample] = []
-        for index in 0..<18 {
-            let date = Date(timeIntervalSinceNow: Double(index - 18) * 10)
-            let hitRate = Swift.min(0.35 + Double(index) * 0.028, 0.92)
-            let tokenReuseRate = Swift.min(0.28 + Double(index) * 0.031, 0.88)
-            let ramBytes = (42 + index * 7) * 1024 * 1024
-            let ssdBytes = (180 + index * 24) * 1024 * 1024
-            result.append(
-                PromptCacheMetricSample(
-                    date: date,
-                    hitRate: hitRate,
-                    tokenReuseRate: tokenReuseRate,
-                    ramBytes: ramBytes,
-                    ramBudgetBytes: 256 * 1024 * 1024,
-                    ssdBytes: ssdBytes,
-                    ssdBudgetBytes: 1024 * 1024 * 1024,
-                    evictionCount: index / 4,
-                    admissionCount: index / 2,
-                    averageLookupMs: 4 + Double(index % 5),
-                    averageRestoreMs: 1.5 + Double(index % 4),
-                    averagePrefillMs: 42 + Double(index * 2)
-                )
-            )
-        }
-        return result
-    }
-
     private static func makeSnapshot(
         name: String,
         ramBytes: Int,
@@ -331,7 +303,6 @@ enum PromptCachePreviewFixtures {
 
 private struct PromptCacheAdaptivePreview: View {
     enum Surface {
-        case overview
         case tree
         case events
         case inspector
@@ -351,15 +322,6 @@ private struct PromptCacheAdaptivePreview: View {
     var body: some View {
         Group {
             switch surface {
-            case .overview:
-                PromptCacheHeroBand(
-                    snapshot: snapshot,
-                    aggregate: PromptCacheTelemetryAggregate.from(
-                        events: PromptCachePreviewFixtures.events),
-                    samples: PromptCachePreviewFixtures.samples,
-                    isLive: true
-                )
-
             case .tree:
                 PromptCacheTreeCanvasView(
                     tree: tree,
@@ -390,15 +352,7 @@ private struct PromptCacheAdaptivePreview: View {
     }
 }
 
-#Preview("Prompt Cache 520x380 Overview") {
-    PromptCacheAdaptivePreview(
-        snapshot: PromptCachePreviewFixtures.evictionHeavy,
-        surface: .overview
-    )
-    .frame(width: 520, height: 380)
-}
-
-#Preview("Prompt Cache 520x380 Tree") {
+#Preview("Cache 520x380 Tree") {
     PromptCacheAdaptivePreview(
         snapshot: PromptCachePreviewFixtures.largeBranchy,
         surface: .tree
@@ -406,7 +360,7 @@ private struct PromptCacheAdaptivePreview: View {
     .frame(width: 520, height: 380)
 }
 
-#Preview("Prompt Cache 640x480 Events") {
+#Preview("Cache 640x480 Events") {
     PromptCacheAdaptivePreview(
         snapshot: PromptCachePreviewFixtures.ramOnly,
         surface: .events
@@ -414,7 +368,7 @@ private struct PromptCacheAdaptivePreview: View {
     .frame(width: 640, height: 480)
 }
 
-#Preview("Prompt Cache 900x620 Inspector Popover") {
+#Preview("Cache 900x620 Inspector Popover") {
     PromptCacheAdaptivePreview(
         snapshot: PromptCachePreviewFixtures.ssdWarmStart,
         surface: .inspector
@@ -422,7 +376,7 @@ private struct PromptCacheAdaptivePreview: View {
     .frame(width: 900, height: 620)
 }
 
-#Preview("Prompt Cache Wide Tree") {
+#Preview("Cache Wide Tree") {
     PromptCacheAdaptivePreview(
         snapshot: PromptCachePreviewFixtures.largeBranchy,
         surface: .tree
@@ -430,35 +384,14 @@ private struct PromptCacheAdaptivePreview: View {
     .frame(width: 1200, height: 760)
 }
 
-#Preview("Prompt Cache Empty") {
-    PromptCacheAdaptivePreview(
-        snapshot: PromptCachePreviewFixtures.empty,
-        surface: .overview
-    )
-}
-
-#Preview("Prompt Cache RAM") {
-    PromptCacheAdaptivePreview(
-        snapshot: PromptCachePreviewFixtures.ramOnly,
-        surface: .overview
-    )
-}
-
-#Preview("Prompt Cache SSD Warm Start") {
+#Preview("Cache SSD Warm Start") {
     PromptCacheAdaptivePreview(
         snapshot: PromptCachePreviewFixtures.ssdWarmStart,
         surface: .inspector
     )
 }
 
-#Preview("Prompt Cache Eviction Heavy") {
-    PromptCacheAdaptivePreview(
-        snapshot: PromptCachePreviewFixtures.evictionHeavy,
-        surface: .overview
-    )
-}
-
-#Preview("Prompt Cache Large Branchy") {
+#Preview("Cache Large Branchy") {
     PromptCacheAdaptivePreview(
         snapshot: PromptCachePreviewFixtures.largeBranchy,
         surface: .tree
