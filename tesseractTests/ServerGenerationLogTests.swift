@@ -342,8 +342,9 @@ struct ServerGenerationLogTests {
             completionID: "id", model: "m", stream: true, sessionAffinity: nil
         )
 
-        // 100 KB of ASCII — well over the head+tail budget.
-        let payload = String(repeating: "x", count: 100_000)
+        // 400 KB of ASCII lines — well over the 64+192 KiB head+tail budget.
+        let payload = String(
+            repeating: String(repeating: "x", count: 99) + "\n", count: 4_000)
         log.ingest(handle: handle, event: .text(payload))
         log.flushPending(handle: handle)
 
@@ -353,11 +354,17 @@ struct ServerGenerationLogTests {
         }
 
         let budget = ServerGenerationLog.textHeadBytes + ServerGenerationLog.textTailBytes
-        #expect(content.utf8.count < 100_000)
+        #expect(content.utf8.count < payload.utf8.count)
         #expect(content.utf8.count < budget + 200)
         #expect(content.contains("--- elided "))
         #expect(content.hasPrefix(String(repeating: "x", count: 32)))
-        #expect(content.hasSuffix(String(repeating: "x", count: 32)))
+        #expect(content.hasSuffix(String(repeating: "x", count: 32) + "\n"))
+    }
+
+    @Test func capBudgetIsBigEnoughForRealResponses() {
+        // The #274 contract: 64 KiB head + 192 KiB tail.
+        #expect(ServerGenerationLog.textHeadBytes == 64 * 1024)
+        #expect(ServerGenerationLog.textTailBytes == 192 * 1024)
     }
 
     @Test func shortTextIsNotElided() {

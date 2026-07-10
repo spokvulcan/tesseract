@@ -196,7 +196,8 @@ struct CompletionHandler: Sendable {
             completionID: completionID,
             model: requestedModelName,
             stream: completionRequest.stream == true,
-            sessionAffinity: sessionAffinity
+            sessionAffinity: sessionAffinity,
+            inbound: RequestTrace.captureInbound(completionRequest.messages)
         )
 
         do {
