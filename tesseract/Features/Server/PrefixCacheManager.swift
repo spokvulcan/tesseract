@@ -2242,6 +2242,49 @@ final class PrefixCacheManager {
         return events
     }
 
+    /// User-initiated RAM-tier wipe (the status-bar menu's "Clear Memory
+    /// Cache"): drops every resident snapshot body through the `dropBody`
+    /// chokepoint. Only the in-flight restore pins survive — a running
+    /// request's restore path is a correctness floor (ADR-0019). Unlike a
+    /// budget drain this deliberately drops the freshest-leaf floor member
+    /// (the user asked for the memory back, not a TTFT guarantee) and never
+    /// touches the budget band — `setMemoryBudget` would suspend dynamic
+    /// measurement for the rest of the load (ADR-0018). No demotion either:
+    /// SSD-backed bodies settle recoverable on their existing refs, unbacked
+    /// bodies drop terminally — persisting more to disk on a "free memory"
+    /// action would invert its intent, and the disk tier has its own clear.
+    /// Returns the freed bytes.
+    @discardableResult
+    func clearRAMTier() -> Int {
+        var pinned: Set<ObjectIdentifier> = []
+        for entry in restorePins {
+            for pin in entry.pins {
+                guard let node = pin.node else { continue }
+                pinned.insert(ObjectIdentifier(node))
+            }
+        }
+        var freed = 0
+        for (_, tree) in store.orderedPartitions() {
+            // `allSnapshotNodes()` materializes the walk before any drop;
+            // `selfHeal` only detaches emptied nodes, so every remaining
+            // body-bearing entry stays a valid `dropBody` target.
+            for node in tree.allSnapshotNodes() {
+                guard node.state.body != nil,
+                    !pinned.contains(ObjectIdentifier(node))
+                else { continue }
+                freed += tree.dropBody(node: node).droppedBodyBytes
+            }
+        }
+        if freed > 0 {
+            Log.agent.info(
+                "PrefixCacheManager.clearRAMTier: freed \(freed) bytes "
+                    + "(\(pinned.count) in-flight pins kept, "
+                    + "resident now \(self.totalSnapshotBytes) bytes)"
+            )
+        }
+        return freed
+    }
+
     // MARK: - Stats
 
     var stats: CacheStats {

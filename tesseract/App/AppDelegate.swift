@@ -110,7 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarManager?.setupMenuBar()
 
         // The Appshot flow summons the main window onto the Agent view — the
-        // same activation path as the menu bar's "Talk to Tesse".
+        // same activation path as the menu bar's "Talk to Tesseract".
         container.appshotController.onSummon = { [weak self] in
             self?.navigateToAgent()
         }

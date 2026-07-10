@@ -1811,6 +1811,75 @@ extension SSDSnapshotStore {
     nonisolated func transferringBaseIDsForTesting() -> Set<String> {
         ledger.transferringBaseIDsForTesting()
     }
+
+    // MARK: - On-disk artifact utilities (no live store required)
+
+    /// The store's on-disk artifacts under `root`: the manifest and the
+    /// partition tree — the complete persisted footprint (layout authority:
+    /// `PersistedSnapshotDescriptor.relativeFilePath` and the Snapshot
+    /// Ledger's `manifestURL`). Deliberately enumerated rather than "the
+    /// whole directory": the root may be a user-chosen folder
+    /// (`prefixCacheSSDDirectoryOverride`), so a wipe must never touch
+    /// anything the store didn't write.
+    nonisolated static func artifactURLs(at root: URL) -> [URL] {
+        [
+            root.appendingPathComponent("manifest.json"),
+            root.appendingPathComponent("partitions", isDirectory: true),
+        ]
+    }
+
+    /// Total persisted bytes at `root` — sizes the status-bar menu's
+    /// "Clear Disk Cache" item honestly. `0` when nothing is persisted.
+    nonisolated static func artifactBytes(at root: URL) -> Int {
+        let fm = FileManager.default
+        var total = 0
+        for url in artifactURLs(at: root) {
+            var isDirectory: ObjCBool = false
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            if isDirectory.boolValue {
+                let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .isRegularFileKey]
+                guard
+                    let enumerator = fm.enumerator(
+                        at: url, includingPropertiesForKeys: keys)
+                else { continue }
+                for case let file as URL in enumerator {
+                    guard let values = try? file.resourceValues(forKeys: Set(keys)),
+                        values.isRegularFile == true
+                    else { continue }
+                    total += values.totalFileAllocatedSize ?? 0
+                }
+            } else {
+                let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey])
+                total += values?.totalFileAllocatedSize ?? 0
+            }
+        }
+        return total
+    }
+
+    /// Delete the store's on-disk artifacts at `root` — the user-initiated
+    /// "Clear Disk Cache". Callers must ensure no live store points at
+    /// `root` first (offload the model): a live ledger's manifest persist
+    /// would resurrect state, and its residents would hit backing loss.
+    /// Returns the freed bytes.
+    @discardableResult
+    nonisolated static func wipeArtifacts(at root: URL) -> Int {
+        let freed = artifactBytes(at: root)
+        let fm = FileManager.default
+        for url in artifactURLs(at: root) {
+            guard fm.fileExists(atPath: url.path) else { continue }
+            do {
+                try fm.removeItem(at: url)
+            } catch {
+                Log.agent.error(
+                    "SSDSnapshotStore.wipeArtifacts: failed to delete "
+                        + "\(url.path): \(error.localizedDescription)"
+                )
+            }
+        }
+        Log.agent.info(
+            "SSDSnapshotStore.wipeArtifacts: cleared \(freed) bytes at \(root.path)")
+        return freed
+    }
 }
 
 // MARK: - Placeholder on-disk format

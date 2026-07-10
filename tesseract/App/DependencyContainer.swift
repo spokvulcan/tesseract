@@ -291,6 +291,43 @@ final class DependencyContainer: ObservableObject {
         manager.coordinator = dictationCoordinator
         manager.history = transcriptionHistory
         manager.speechCoordinator = speechCoordinator
+        manager.onTakeAppshot = { [appshotController] in
+            Task { await appshotController.takeAppshot() }
+        }
+        // `AgentEngine.unloadModel` flushes pending SSD writes before the
+        // teardown, so a plain offload never costs the disk tier its fresh
+        // snapshots.
+        manager.onOffloadModel = { [inferenceArbiter] in
+            Task { await inferenceArbiter.offloadAllModels() }
+        }
+        manager.onClearMemoryCache = { [agentEngine] in
+            agentEngine.llmActor.prefixCacheAdmin.clearRAMTier()
+        }
+        // Disk clear must not race the detached unload: a live ledger's
+        // manifest persist after the wipe would resurrect the store.
+        manager.onClearDiskCache = { [inferenceArbiter, agentEngine, settingsManager] in
+            let root = settingsManager.ssdPrefixCacheRootURL
+            Task {
+                await inferenceArbiter.offloadAllModels()
+                await agentEngine.awaitPendingUnload()
+                SSDSnapshotStore.wipeArtifacts(at: root)
+            }
+        }
+        manager.serverStatus = { [httpServer, settingsManager] in
+            (
+                isRunning: httpServer.isRunning,
+                port: Int(HTTPServer.clampedPort(settingsManager.serverPort))
+            )
+        }
+        manager.isModelLoaded = { [inferenceArbiter] in
+            !inferenceArbiter.loadedSlots.isEmpty
+        }
+        manager.residentCacheBytes = { [agentEngine] in
+            agentEngine.llmActor.prefixCacheAdmin.residentRAMBytes
+        }
+        manager.diskCacheBytes = { [settingsManager] in
+            SSDSnapshotStore.artifactBytes(at: settingsManager.ssdPrefixCacheRootURL)
+        }
         return manager
     }()
 
@@ -423,6 +460,9 @@ final class DependencyContainer: ObservableObject {
                 dictationState: { [dictationCoordinator] in
                     dictationCoordinator.state
                 },
+                speechState: { [speechCoordinator] in
+                    speechCoordinator.state
+                },
                 audioLevel: { [audioCaptureEngine] in
                     audioCaptureEngine.audioLevel
                 },
@@ -462,6 +502,9 @@ final class DependencyContainer: ObservableObject {
                 },
                 pushDictationStateToMenuBar: { [menuBarManager] in
                     menuBarManager.updateState(from: $0)
+                },
+                pushSpeechStateToMenuBar: { [menuBarManager] in
+                    menuBarManager.updateState(fromSpeech: $0)
                 },
                 pushAudioLevelToPill: { [pillOverlay] in
                     pillOverlay.handleAudioLevelChange($0)

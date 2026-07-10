@@ -231,6 +231,29 @@ final class InferenceArbiter: InferenceArbitrating {
         }
     }
 
+    /// User-initiated offload (the status-bar menu's "Offload Model"):
+    /// waits its FIFO turn on the GPU lease — so a running generation
+    /// finishes first and nothing can interleave — then unloads every
+    /// loaded slot. The next consumer lazy-reloads as usual. STT is
+    /// deliberately untouched: always-armed dictation is a product
+    /// promise (ADR-0025), and WhisperKit lives in a separate memory
+    /// pool anyway.
+    func offloadAllModels() async {
+        do {
+            try await lease.withExclusive {
+                let slots = loadedSlots
+                guard !slots.isEmpty else { return }
+                for slot in slots {
+                    unload(slot)
+                }
+            }
+        } catch {
+            Log.general.error(
+                "InferenceArbiter.offloadAllModels: lease acquisition failed: "
+                    + "\(error.localizedDescription)")
+        }
+    }
+
     private func unload(_ slot: ModelSlot) {
         switch slot {
         case .llm:

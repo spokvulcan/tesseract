@@ -30,6 +30,21 @@ nonisolated struct SupportedLanguage: Identifiable, Hashable {
         nativeName: nil
     )
 
+    /// Target options for the Translate skill (the Agent settings pane and
+    /// the status-bar menu share this one list): the catalogue minus the
+    /// dictation-only Auto-detect pseudo-entry, with the current selection
+    /// always present so a picker never shows an unselectable value.
+    static func translateTargetOptions(current: String) -> [String] {
+        var languages =
+            all
+            .filter { $0.code != auto.code }
+            .map(\.name)
+        if !languages.contains(current) {
+            languages.append(current)
+        }
+        return languages.sorted()
+    }
+
     // MARK: - All Supported Languages (99 languages from Whisper Large V3 Turbo)
 
     static let all: [SupportedLanguage] = [

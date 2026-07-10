@@ -54,6 +54,20 @@ final class PrefixCacheAdmin {
         current?.makeTelemetrySnapshot()
     }
 
+    /// RAM-tier bytes currently resident, or `nil` when no cache is live.
+    /// The status-bar menu reads this at open time to size its
+    /// "Clear Memory Cache" item honestly.
+    var residentRAMBytes: Int? {
+        current?.totalSnapshotBytes
+    }
+
+    /// User-initiated RAM-tier wipe (the status-bar menu's "Clear Memory
+    /// Cache"). Returns the freed bytes, or `nil` when no cache is live.
+    @discardableResult
+    func clearRAMTier() -> Int? {
+        current?.clearRAMTier()
+    }
+
     /// Override the RAM-tier budget through the manager's band-consistent
     /// mutation. Used by the loaded-model E2E runner to deliberately
     /// trigger eviction pressure.
