@@ -64,11 +64,30 @@ struct AgentGenerateParameters: Sendable, Codable {
     var kvBits: Int?
     /// Group size for KV cache quantization.
     var kvGroupSize: Int = 64
-    /// Token chunk size for prompt prefill. Larger values improve throughput at
-    /// the cost of higher per-step peak memory. Our Phase 3.2 benchmark on the
-    /// production prefix-cache path found 1024 to be the fastest cold-prefill
-    /// default that still keeps peak memory well below the larger 2048/4096
-    /// settings, so that is the production default.
+    /// Token chunk size for prompt prefill.
+    ///
+    /// **1024, re-confirmed by measurement in #253** (the earlier "Phase 3.2"
+    /// rationale predates the fixed harness). On PARO 35B at 32K, full prefill:
+    /// **1006 tok/s at 1024**, 864 at 2048, 857 at 4096 — and peak memory rises
+    /// 21.58 → 23.24 → 26.08 GB, because the unfused attention path materializes
+    /// a `[1, 16, Lq, Lk]` score matrix.
+    ///
+    /// Counter-intuitively the *chunk loop itself* prefers larger chunks (#254:
+    /// each MoE expert's `gather_qmm` gets `Lq × topK / numExperts` rows — only
+    /// **32 rows at 1024**, running at 43% of peak GEMM). What kills the raise is
+    /// `LLMModel.prepare`'s **tail**: it loops `while size > prefillStepSize`, so
+    /// the `TokenIterator` swallows `promptTokens mod prefillStepSize` tokens in
+    /// one un-pipelined forward — 141 tokens at 1024, but 3,213 at 4096. The tail
+    /// grows with the step and erases the loop's gain. See #258.
+    ///
+    /// And at long context a raise is not a knob with a memory price — it is a
+    /// cliff. At 128K, `prefillStepSize = 2048` measured **155.53 tok/s against
+    /// 1024's 431.27** (2.8× slower) with peak 31.60 GB, because a single chunk's
+    /// score matrix is 8.36 GB and the machine starts swapping. At 200K, 4096
+    /// projects to ~59 GB on a 48 GB machine.
+    ///
+    /// Do not raise this before #258 lands, and never without re-measuring peak
+    /// memory at 128K–200K.
     var prefillStepSize: Int = 1024
 
     static let `default` = AgentGenerateParameters()
