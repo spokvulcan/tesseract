@@ -2,7 +2,7 @@
 //  VoiceChapter.swift
 //  tesseract
 //
-//  Chapter 4 — text-to-speech. Its Try-it speaks the chapter's own headline
+//  Chapter 5 — text-to-speech. Its Try-it speaks the chapter's own headline
 //  out loud through the real speech coordinator once the voice model is on
 //  disk; until then, an honest locked state under the scripted waveform.
 //
@@ -28,13 +28,13 @@ struct VoiceChapter: View {
 
     var body: some View {
         ChapterScaffold(
-            kicker: "Chapter 4 · Voice",
+            kicker: "Chapter 5 · Voice",
             title: "It speaks for itself",
             subtitle: "Natural long-form speech, synthesized on device — "
                 + "read a page, a draft, or an answer aloud."
         ) {
             StagePanel(maxWidth: 520) {
-                VStack(spacing: 16) {
+                VStack(spacing: OnboardingType.rhythm) {
                     WaveformView(isActive: isSpeaking && !reduceMotion)
                         .frame(height: 56)
 
@@ -57,7 +57,7 @@ struct VoiceChapter: View {
                             .controlSize(.regular)
 
                             Text(speakStatusLine)
-                                .font(.system(size: 11))
+                                .font(OnboardingType.body)
                                 .foregroundStyle(.secondary)
                         }
                     } else {

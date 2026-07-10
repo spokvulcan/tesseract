@@ -49,3 +49,20 @@ do anything; a pure setup wizard was rejected because it wastes the one moment
 the user is guaranteed to be watching; a model-picker step was rejected as a
 settings screen in a tuxedo; generated raster imagery was rejected as
 fixed-resolution, theme-blind, and cheaper-looking than native drawing.
+
+## Amendment — 2026-07-10
+
+Two owner decisions during the face-lift (map #211, ticket #247's PR):
+
+- **Seven chapters.** An Appshot chapter (PRD #170 — the double-Command
+  frontmost-window capture staged into the agent composer) joins the tour
+  after The Agent: Welcome → Agent → Appshot → Dictation → Voice → Server →
+  Ready. It is scripted like the Agent chapter — a real capture needs Screen
+  Recording (asked lazily on first use) and would summon the main window over
+  the tour — with the demo strings built by the real `AppshotController`
+  label builders.
+- **The app icon replaces the live tesseract projection.** The code-drawn 4D
+  wireframe read as cheap; the welcome hero and the ambient corner indicator
+  are now the app icon (one deliberate exception to "no raster imagery" — it
+  is the app's own identity asset). The corner percent text alone carries the
+  ambient download progress.

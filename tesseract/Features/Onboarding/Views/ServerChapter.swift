@@ -2,10 +2,10 @@
 //  ServerChapter.swift
 //  tesseract
 //
-//  Chapter 5 — the reveal: under everything sits an OpenAI-compatible local
+//  Chapter 6 — the reveal: under everything sits an OpenAI-compatible local
 //  server whose tiered RAM + SSD radix prefix cache is the hero. Full
-//  production value, aimed at the power user (ADR-0021 kept it at position
-//  five deliberately — the foundation lands harder after the experience).
+//  production value, aimed at the power user (ADR-0021 deliberately kept it
+//  late — the foundation lands harder after the experience).
 //
 
 import SwiftUI
@@ -20,14 +20,14 @@ struct ServerChapter: View {
 
     var body: some View {
         ChapterScaffold(
-            kicker: "Chapter 5 · The Server",
+            kicker: "Chapter 6 · The Server",
             title: "Everything you just saw is a server",
             subtitle: "An OpenAI-compatible endpoint lives inside Tesseract — point any "
                 + "client at it and it answers from this Mac, never the cloud."
         ) {
-            VStack(spacing: 12) {
+            VStack(spacing: OnboardingType.rhythm) {
                 StagePanel(maxWidth: 560) {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: OnboardingType.rhythm) {
                         endpointRow
 
                         RadixTreeDiagram()
@@ -35,7 +35,7 @@ struct ServerChapter: View {
 
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text("one shared prefix · RAM + SSD")
-                                .font(.system(size: 9.5, design: .monospaced))
+                                .font(OnboardingType.body.monospaced())
                                 .foregroundStyle(.tint)
                             Spacer(minLength: 0)
                         }
@@ -46,15 +46,15 @@ struct ServerChapter: View {
                                 + "restores them on demand — every follow-up starts from "
                                 + "where you left off."
                         )
-                        .font(.system(size: 11))
-                        .lineSpacing(2.5)
+                        .font(OnboardingType.body)
+                        .lineSpacing(3)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
                 Text("Works with OpenCode and any OpenAI-compatible client.")
-                    .font(.system(size: 11))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.tertiary)
             }
         }
@@ -67,7 +67,7 @@ struct ServerChapter: View {
                 .fill(settings.isServerEnabled ? .green : .secondary)
                 .frame(width: 7, height: 7)
             Text(endpoint)
-                .font(.system(size: 13, design: .monospaced))
+                .font(OnboardingType.body.monospaced())
                 .textSelection(.enabled)
             Button {
                 NSPasteboard.general.clearContents()
@@ -93,7 +93,7 @@ struct ServerChapter: View {
                 settings.isServerEnabled
                     ? "Serving" : "Enable in Settings → Server"
             )
-            .font(.system(size: 10.5))
+            .font(OnboardingType.body)
             .foregroundStyle(.secondary)
         }
     }

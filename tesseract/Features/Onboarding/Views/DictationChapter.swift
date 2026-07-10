@@ -2,7 +2,7 @@
 //  DictationChapter.swift
 //  tesseract
 //
-//  Chapter 3 — push-to-talk dictation, and the chapter that carries both
+//  Chapter 4 — push-to-talk dictation, and the chapter that carries both
 //  permissions (asked in context, user-initiated, never gating Continue). Its
 //  Try-it is the tour's signature satisfaction beat: hold the button and
 //  dictate a real sentence into the tour itself.
@@ -18,13 +18,13 @@ struct DictationChapter: View {
 
     var body: some View {
         ChapterScaffold(
-            kicker: "Chapter 3 · Dictation",
+            kicker: "Chapter 4 · Dictation",
             title: "Hold a key. Speak. It types.",
             subtitle: "Push-to-talk dictation into any app on your Mac — "
                 + "transcribed on device, in your language."
         ) {
-            VStack(spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: OnboardingType.rhythm) {
+                HStack(alignment: .top, spacing: OnboardingType.rhythm) {
                     PermissionCard(
                         icon: "mic.fill",
                         title: "Microphone",
@@ -73,7 +73,7 @@ struct DictationChapter: View {
                 .font(.system(size: 10))
                 .foregroundStyle(.tertiary)
             Text("Listening in \(settings.selectedLanguage.displayName)")
-                .font(.system(size: 11))
+                .font(OnboardingType.body)
                 .foregroundStyle(.secondary)
             LanguageChangePopover(selectedLanguage: $settings.language)
         }
@@ -89,7 +89,7 @@ private struct LanguageChangePopover: View {
             isPresented = true
         }
         .buttonStyle(.plain)
-        .font(.system(size: 11, weight: .medium))
+        .font(OnboardingType.body.weight(.medium))
         .foregroundStyle(.tint)
         .popover(isPresented: $isPresented, arrowEdge: .bottom) {
             CompactLanguagePickerView(selectedLanguage: $selectedLanguage)
@@ -142,17 +142,17 @@ private struct DictationTryItStrip: View {
             VStack(alignment: .leading, spacing: 3) {
                 if transcribed.isEmpty {
                     Text(statusLine)
-                        .font(.system(size: 12))
+                        .font(OnboardingType.body)
                         .foregroundStyle(.secondary)
                 } else {
                     Text(transcribed)
-                        .font(.system(size: 12.5, weight: .medium))
+                        .font(OnboardingType.body.weight(.medium))
                         .lineLimit(2)
                         .transition(.blurReplace)
                 }
                 if case .error(let message) = voice?.voiceState {
                     Text(message)
-                        .font(.system(size: 10.5))
+                        .font(OnboardingType.body)
                         .foregroundStyle(.orange)
                 }
             }

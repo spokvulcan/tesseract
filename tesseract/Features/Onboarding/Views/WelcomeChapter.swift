@@ -3,9 +3,9 @@
 //  tesseract
 //
 //  Chapter 1 — the brand moment. Privacy is the identity, not a later slide;
-//  the live tesseract is the hero (it will shrink into the corner and become
-//  the ambient download indicator); the hardware-aware model pick is disclosed
-//  transparently and setup begins here.
+//  the app icon is the hero (it shrinks into the corner once the tour moves
+//  on); the hardware-aware model pick is disclosed transparently and setup
+//  begins here.
 //
 
 import SwiftUI
@@ -21,8 +21,10 @@ struct WelcomeChapter: View {
         VStack(spacing: 0) {
             Spacer(minLength: 4)
 
-            TesseractMarkView(progress: controller.setupProgress)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
                 .frame(width: 168, height: 168)
+                .accessibilityHidden(true)
                 .matchedGeometryEffect(
                     id: OnboardingMarkID.shared, in: markNamespace,
                     isSource: controller.chapter == .welcome)
@@ -30,14 +32,12 @@ struct WelcomeChapter: View {
             Spacer(minLength: 18)
 
             Text("Welcome to Tesseract")
-                .font(.system(size: 34, weight: .semibold))
-                .tracking(-0.6)
+                .font(OnboardingType.titleFont)
+                .tracking(OnboardingType.titleTracking)
                 .textRenderer(GlyphReveal(progress: headlineProgress))
 
-            Text("Everything runs on this Mac. Nothing ever leaves it.")
-                .font(.system(size: 13.5))
-                .foregroundStyle(.secondary)
-                .padding(.top, 10)
+            OnboardingType.subtitle("Everything runs on this Mac. Nothing ever leaves it.")
+                .padding(.top, OnboardingType.rhythm)
 
             Spacer(minLength: 22)
 
@@ -82,15 +82,16 @@ struct ModelPickCard: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(chosen?.displayName ?? controller.chosenAgentModelID)
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(OnboardingType.body)
+                        .fontWeight(.semibold)
                     if let size = chosen?.sizeDescription {
                         Text(size)
-                            .font(.system(size: 11))
+                            .font(OnboardingType.body)
                             .foregroundStyle(.tertiary)
                     }
                 }
                 Text(pickStatusLine)
-                    .font(.system(size: 11))
+                    .font(OnboardingType.body)
                     .foregroundStyle(.secondary)
             }
 
@@ -113,7 +114,7 @@ struct ModelPickCard: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .font(.system(size: 11.5))
+            .font(OnboardingType.body)
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
@@ -139,8 +140,8 @@ struct ModelPickCard: View {
     }
 }
 
-/// The shared-element id the welcome hero and the ambient corner mark morph
-/// between.
+/// The shared-element id the welcome hero icon and the ambient corner icon
+/// morph between.
 enum OnboardingMarkID {
     static let shared = "onboarding-tesseract-mark"
 }

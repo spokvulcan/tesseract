@@ -2,7 +2,7 @@
 //  OnboardingTourView.swift
 //  tesseract
 //
-//  The Welcome Window's content: backdrop, ambient mark, the six Chapters
+//  The Welcome Window's content: the ambient corner icon, the seven Chapters
 //  with directional transitions, and the navigation chrome. Owns the Handoff
 //  (main window first, then this window dissolves — never zero windows) and
 //  the close-=-skip semantics (`CONTEXT.md` → Onboarding tour, ADR-0021).
@@ -17,6 +17,7 @@ struct OnboardingTourView: View {
     @State private var direction: CGFloat = 1
     @State private var isDissolving = false
     @Namespace private var markNamespace
+    @Namespace private var glassNamespace
 
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
@@ -25,7 +26,11 @@ struct OnboardingTourView: View {
     var body: some View {
         ZStack {
             if let controller {
-                OnboardingBackdrop()
+                // The window's own background is the backdrop (design
+                // language §1: adopt by subtraction — no custom washes);
+                // this layer only keeps the empty areas draggable.
+                Color.clear
+                    .contentShape(Rectangle())
                     .gesture(WindowDragGesture())
 
                 VStack(spacing: 0) {
@@ -55,12 +60,14 @@ struct OnboardingTourView: View {
             if controller.chapter != .welcome {
                 if !controller.isSetupComplete {
                     Text(controller.setupProgress.formatted(.wholePercent))
-                        .font(.system(size: 10.5).monospacedDigit())
+                        .font(OnboardingType.body.monospacedDigit())
                         .foregroundStyle(.tertiary)
                         .contentTransition(.numericText())
                 }
-                TesseractMarkView(progress: controller.setupProgress)
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
                     .frame(width: 30, height: 30)
+                    .accessibilityHidden(true)
                     .matchedGeometryEffect(
                         id: OnboardingMarkID.shared, in: markNamespace,
                         isSource: controller.chapter != .welcome)
@@ -89,6 +96,8 @@ struct OnboardingTourView: View {
             WelcomeChapter(controller: controller, markNamespace: markNamespace)
         case .agent:
             AgentChapter()
+        case .appshot:
+            AppshotChapter()
         case .dictation:
             DictationChapter(controller: controller)
         case .voice:
@@ -107,11 +116,11 @@ struct OnboardingTourView: View {
                 move(controller, to: target)
             }
 
-            HStack(spacing: 12) {
+            HStack(spacing: OnboardingType.rhythm) {
                 if !controller.isLastChapter {
                     Button("Skip Tour") { finish(controller) }
                         .buttonStyle(.plain)
-                        .font(.system(size: 11))
+                        .font(OnboardingType.body)
                         .foregroundStyle(.tertiary)
                         .keyboardShortcut(.cancelAction)
                 } else {
@@ -126,32 +135,41 @@ struct OnboardingTourView: View {
 
                 Spacer()
 
-                if controller.canGoBack {
-                    Button {
-                        goBack(controller)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .frame(minWidth: 20)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-                    .accessibilityLabel("Back")
-                }
+                // The navigation cluster is the tour's functional layer, so
+                // it wears the system glass button styles (design language
+                // §1) — one container, so the pair shares refraction.
+                GlassEffectContainer(spacing: OnboardingType.rhythm) {
+                    HStack(spacing: OnboardingType.rhythm) {
+                        if controller.canGoBack {
+                            Button {
+                                goBack(controller)
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .frame(minWidth: 20)
+                            }
+                            .buttonStyle(.glass)
+                            .controlSize(.large)
+                            .keyboardShortcut(.leftArrow, modifiers: [])
+                            .accessibilityLabel("Back")
+                            .glassEffectID("back", in: glassNamespace)
+                        }
 
-                Button {
-                    if controller.isLastChapter {
-                        finish(controller)
-                    } else {
-                        advance(controller)
+                        Button {
+                            if controller.isLastChapter {
+                                finish(controller)
+                            } else {
+                                advance(controller)
+                            }
+                        } label: {
+                            Text(controller.isLastChapter ? "Start Using Tesseract" : "Continue")
+                                .frame(minWidth: controller.isLastChapter ? 150 : 90)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
+                        .keyboardShortcut(.defaultAction)
+                        .glassEffectID("continue", in: glassNamespace)
                     }
-                } label: {
-                    Text(controller.isLastChapter ? "Start Using Tesseract" : "Continue")
-                        .frame(minWidth: controller.isLastChapter ? 150 : 90)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
             }
 
             // Right-arrow advance, window-wide, without a second visible control.

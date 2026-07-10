@@ -35,7 +35,7 @@ struct OnboardingTourControllerTests {
             controller.advance()
             visited.append(controller.chapter)
         }
-        #expect(visited == [.welcome, .agent, .dictation, .voice, .server, .ready])
+        #expect(visited == [.welcome, .agent, .appshot, .dictation, .voice, .server, .ready])
 
         controller.advance()
         #expect(controller.chapter == .ready, "advance clamps at the last chapter")
