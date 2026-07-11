@@ -666,6 +666,107 @@ struct ChatSessionTests {
         #expect(session.showsWaitingRow == false)
     }
 
+    // MARK: - Conversation switch
+
+    @Test func loadConversationAdoptsTheStoredTranscript() {
+        let user = UserMessage(content: "stored question")
+        let answer = AssistantMessage(content: "stored answer")
+        let conversation = AgentConversation(messages: [CoreMessage.user(user), answer])
+        let store = InMemoryAgentConversationStore(seed: [conversation])
+        let agent = makeNoOpAgent(modelID: "test-model")
+        let session = makeSession(agent: agent, store: store)
+
+        session.loadConversation(conversation.id)
+
+        #expect(session.items.count == 2)
+        #expect(agent.context.messages.count == 2)
+        #expect(store.currentConversation?.id == conversation.id)
+    }
+
+    @Test func newConversationPersistsTheOutgoingTranscript() throws {
+        let store = InMemoryAgentConversationStore()
+        let agent = makeNoOpAgent(modelID: "test-model")
+        let session = makeSession(agent: agent, store: store)
+        store.createNew()
+        let outgoingID = try #require(store.currentConversation).id
+        agent.loadMessages([CoreMessage.user(UserMessage(content: "keep me"))])
+
+        session.newConversation()
+
+        #expect(store.currentConversation?.id != outgoingID)
+        #expect(session.items.isEmpty)
+        #expect(agent.context.messages.isEmpty)
+
+        // The outgoing transcript survived the switch: it loads back whole.
+        session.loadConversation(outgoingID)
+        #expect(session.items.count == 1)
+    }
+
+    /// Deleting the *current* conversation is a switch like any other: the
+    /// session lands on the store's fresh conversation with the outgoing
+    /// one's error banner down (it belonged to the deleted transcript).
+    @Test func deleteCurrentConversationSwitchesCleanAndDropsTheBanner() throws {
+        let store = InMemoryAgentConversationStore()
+        let agent = makeNoOpAgent(modelID: "test-model")
+        let session = makeSession(agent: agent, store: store)
+        store.createNew()
+        let id = try #require(store.currentConversation).id
+        let user = UserMessage(content: "doomed")
+        agent.loadMessages([CoreMessage.user(user)])
+        session.handle(.agentStart)
+        session.handle(
+            .turnEnd(
+                message: AssistantMessage(content: "reply"), toolResults: [],
+                contextMessages: [CoreMessage.user(user)]))
+        session.handle(.agentEnd(messages: []))
+        session.error = "stale banner"
+
+        session.deleteConversation(id)
+
+        #expect(session.error == nil)
+        #expect(session.items.isEmpty)
+        #expect(agent.context.messages.isEmpty)
+        #expect(store.currentConversation?.id != id)
+    }
+
+    /// Deleting a conversation that is not current is not a switch — the
+    /// live transcript, banner, and agent context stay untouched.
+    @Test func deleteOtherConversationLeavesTheSessionUntouched() {
+        let other = AgentConversation(
+            messages: [CoreMessage.user(UserMessage(content: "other"))])
+        let store = InMemoryAgentConversationStore(seed: [other])
+        let agent = makeNoOpAgent(modelID: "test-model")
+        let session = makeSession(agent: agent, store: store)
+        store.createNew()
+        agent.loadMessages([CoreMessage.user(UserMessage(content: "mine"))])
+        session.error = "still mine"
+
+        session.deleteConversation(other.id)
+
+        #expect(session.error == "still mine")
+        #expect(agent.context.messages.count == 1)
+        #expect(store.currentConversation != nil)
+    }
+
+    /// A switch while the run sits queued behind the lease settles the
+    /// Pending Row to the composer — restore, never silently drop.
+    @Test func conversationSwitchRestoresAQueuedPendingRowToTheComposer() {
+        let arbiter = InMemoryInferenceArbiter()
+        arbiter.leaseDelay = .seconds(10)
+        var restored: [String] = []
+        let session = makeSession(
+            arbiter: arbiter,
+            restoreComposerDraft: { text, _ in restored.append(text) })
+        session.sendMessage("queued behind the lease")
+        #expect(session.pendingUserMessage != nil)
+
+        session.newConversation()
+
+        #expect(session.pendingUserMessage == nil)
+        #expect(restored == ["queued behind the lease"])
+        #expect(session.items.isEmpty)
+    }
+
     // MARK: - Live Part throttle
 
     @Test func livePartThrottleBoundsRepublishes() async throws {

@@ -724,65 +724,61 @@ final class ChatSession {
     // MARK: - Conversation lifecycle
 
     func newConversation() {
-        cancelGeneration()
-        persistCurrentConversation()
-        conversationStore.createNew()
-        agent.resetMessages([])
-        resetForConversationSwitch()
-        error = nil
-        debugLogger.reset()
-        onConversationSwitch()
+        switchConversation { conversationStore.createNew() }
         Log.agent.info("New conversation created")
     }
 
     func loadConversation(_ id: UUID) {
-        cancelGeneration()
-        persistCurrentConversation()
-        conversationStore.load(id: id)
-        if let current = conversationStore.currentConversation {
-            agent.loadMessages(current.messages)
-            resync(from: current.messages)
-        } else {
-            agent.resetMessages([])
-            resync(from: [])
-        }
-        resetForConversationSwitch(resyncItems: false)
-        error = nil
-        debugLogger.reset()
-        onConversationSwitch()
+        switchConversation { conversationStore.load(id: id) }
         Log.agent.info("Loaded conversation \(id) with \(self.items.count) items")
     }
 
     func deleteConversation(_ id: UUID) {
-        let wasCurrent = conversationStore.currentConversation?.id == id
-        conversationStore.delete(id: id)
-        if wasCurrent {
-            // Same contract as the other switch paths: stop the run and
-            // settle a still-queued Pending Row (restore, never silently
-            // drop) before the resync below would clear it.
-            cancelGeneration()
-            if let current = conversationStore.currentConversation {
-                agent.loadMessages(current.messages)
-                resync(from: current.messages)
-            } else {
-                agent.resetMessages([])
-                resync(from: [])
-            }
-            resetForConversationSwitch(resyncItems: false)
-            debugLogger.reset()
-            onConversationSwitch()
+        guard conversationStore.currentConversation?.id == id else {
+            conversationStore.delete(id: id)
+            return
+        }
+        // Deleting the current conversation is a switch to whatever the
+        // store installs next; the outgoing conversation is the one being
+        // deleted, so it is not persisted first.
+        switchConversation(persistingOutgoing: false) {
+            conversationStore.delete(id: id)
         }
     }
 
-    private func resetForConversationSwitch(resyncItems: Bool = true) {
+    /// The one conversation-switch sequence. Every path that changes which
+    /// conversation is current — new, load, delete-current — settles the
+    /// outgoing conversation, runs its store mutation, then adopts whatever
+    /// the store reports as current: the destination is data, not a code
+    /// path. Divergence between the switch paths was exactly the bug class
+    /// this prevents (delete-current used to leave the outgoing
+    /// conversation's error banner up).
+    private func switchConversation(
+        persistingOutgoing: Bool = true, mutateStore: () -> Void
+    ) {
+        // Stop the run and settle a still-queued Pending Row (restore to
+        // the composer, never silently drop) before the resync below would
+        // clear it.
+        cancelGeneration()
+        if persistingOutgoing {
+            persistCurrentConversation()
+        }
+        mutateStore()
+        let destination = conversationStore.currentConversation?.messages ?? []
+        if destination.isEmpty {
+            agent.resetMessages([])
+        } else {
+            agent.loadMessages(destination)
+        }
+        resync(from: destination)
         agentRun.finish()  // clear isGenerating synchronously
         clearLiveState()
         runPhase = .idle
         pendingToolCalls.removeAll()
         toolStartInstants.removeAll()
-        if resyncItems {
-            resync(from: agent.state.messages)
-        }
+        error = nil
+        debugLogger.reset()
+        onConversationSwitch()
     }
 
     private func persistCurrentConversation() {
