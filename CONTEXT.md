@@ -923,6 +923,18 @@ per-conversation draft (one shared draft, not one per thread); **Image Input
 Availability** (the broader affordance/capability verdict); image cache (the
 server-side **Image Digest** path).
 
+**Vision Availability**:
+The leaf that owns the lifecycle around the pure **Image Input Availability**
+verdict: the cached is-the-selected-model-vision-capable probe (refreshed on
+selection/status/setting changes, never per keystroke), the effects of an
+availability flip on the **Composer Draft** (mirror the verdict, lower a moot
+switch hint, clear pending images the text-only container would silently drop),
+and the switch-hint *remedy* ladder — turn the setting on, switch to a downloaded
+vision model, or nothing to offer. Catalog reads arrive as injected closures; it
+touches no `Agent`.
+_Avoid_: **Image Input Availability** (the pure verdict this leaf wraps), vision
+switch (say "remedy"), capability prober.
+
 **Image Gesture**:
 An inbound paste or drop into the agent chat whose payload carries image content —
 one concept regardless of delivery (⌘V, drag onto the composer, drag onto the

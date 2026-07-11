@@ -178,6 +178,14 @@ final class DependencyContainer: ObservableObject {
             return []
         }
     })
+    lazy var visionAvailability = VisionAvailabilityController(
+        settings: settingsManager,
+        draft: composerDraft,
+        isVisionCapable: { [modelDownloadManager] in modelDownloadManager.isVisionCapable($0) },
+        downloadedAgentModels: { [modelDownloadManager] in
+            modelDownloadManager.downloadedModels(in: .agent)
+        }
+    )
     lazy var agentSystemPromptInspector: AgentSystemPromptInspector = {
         AgentSystemPromptInspector(
             promptSource: { [agent] in (agent.state.systemPrompt, agent.state.tools) },

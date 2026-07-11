@@ -109,6 +109,7 @@ extension View {
         self
             .environment(container.chatSession)
             .environment(container.composerDraft)
+            .environment(container.visionAvailability)
             .environment(container.commandPalette)
             .environment(container.skillPills)
             .environment(container.agentVoiceInput)

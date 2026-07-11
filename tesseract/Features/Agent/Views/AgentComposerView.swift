@@ -28,6 +28,7 @@ struct AgentComposerView: View {
     @Environment(SlashCommandPaletteController.self) private var commandPalette
     @Environment(SkillClusterController.self) private var skillCluster
     @Environment(AgentVoiceInputController.self) private var voiceInput
+    @Environment(VisionAvailabilityController.self) private var visionAvailability
     @Environment(AppshotController.self) private var appshot
     @Environment(AgentEngine.self) private var agentEngine
     @Environment(TranscriptionEngine.self) private var transcriptionEngine
@@ -38,19 +39,6 @@ struct AgentComposerView: View {
 
     @State private var isHoldingMic = false
     @State private var textHeight: CGFloat = 20
-    /// Whether the *selected* agent model can serve images. Probed off the view
-    /// body (disk read via `ModelIdentity`) and cached here, refreshed only when
-    /// the selection or its download status changes — never per keystroke.
-    @State private var selectedModelIsVisionCapable = false
-
-    /// The image-input-availability projection (ADR-0013): show image affordances
-    /// only when the model is vision-capable *and* the global vision opt-out is on.
-    private var imageInputAvailable: Bool {
-        ImageInputAvailability.showImageAffordance(
-            isVisionCapable: selectedModelIsVisionCapable,
-            useVisionWhenAvailable: settings.useVisionWhenAvailable
-        )
-    }
 
     /// Whether controls that depend on a loaded model should be disabled —
     /// during both generation and model (re)loading.
@@ -149,7 +137,7 @@ struct AgentComposerView: View {
             }
 
             HStack(spacing: actionIconSpacing) {
-                if imageInputAvailable {
+                if visionAvailability.imageInputAvailable {
                     Button {
                         openImagePicker()
                     } label: {
@@ -251,30 +239,19 @@ struct AgentComposerView: View {
         .onChange(of: draft.text) { _, newValue in
             commandPalette.updateCommandPopup(for: newValue)
         }
-        .onChange(of: imageInputAvailable) { _, available in
-            // Mirror availability to the draft controller so the full-window
-            // drop (hosted above the composer) can decide attach-vs-hint (#117).
-            composerDraft.imageInputAvailable = available
-            if available {
-                // Vision input just became available (model switched / opt-in) —
-                // the hint is moot.
-                composerDraft.showImageSwitchHint = false
-            } else {
-                // Clear any queued images when image input becomes unavailable
-                // (model switched to text-only, or vision opted out) — the LLM
-                // container would silently drop them.
-                composerDraft.pendingImages = []
-            }
-        }
+        // The Vision Availability leaf owns the verdict and its effects on the
+        // draft; the view keeps only the refresh triggers for its inputs.
         .onChange(of: settings.selectedAgentModelID) { _, _ in
-            refreshVisionCapability()
+            visionAvailability.refresh()
         }
         .onChange(of: downloadManager.status(for: settings.selectedAgentModelID)) { _, _ in
-            refreshVisionCapability()
+            visionAvailability.refresh()
+        }
+        .onChange(of: settings.useVisionWhenAvailable) { _, _ in
+            visionAvailability.refresh()
         }
         .onAppear {
-            refreshVisionCapability()
-            composerDraft.imageInputAvailable = imageInputAvailable
+            visionAvailability.refresh()
             voiceInput.onVoiceTranscription = { [weak composerDraft] text in
                 guard let composerDraft else { return }
                 if composerDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -337,8 +314,9 @@ struct AgentComposerView: View {
 
         case .imageHint:
             composerBanner(
-                icon: "eye.slash", message: visionSwitch.message,
-                actionTitle: visionSwitch.actionTitle, action: applyVisionSwitch
+                icon: "eye.slash", message: visionAvailability.remedy.message,
+                actionTitle: visionAvailability.remedy.actionTitle,
+                action: { visionAvailability.applyRemedy() }
             ) {
                 composerDraft.showImageSwitchHint = false
             }
@@ -539,79 +517,6 @@ struct AgentComposerView: View {
         let images = composerDraft.drainImages()
         composerDraft.text = ""
         session.sendMessage(text, images: images)
-    }
-
-    /// Re-probe whether the selected agent model is vision-capable and cache the
-    /// result in `selectedModelIsVisionCapable`. Called on selection/status
-    /// changes and on appear — never from the view body — so the `ModelIdentity`
-    /// disk read stays off the per-keystroke render path.
-    private func refreshVisionCapability() {
-        selectedModelIsVisionCapable =
-            downloadManager.isVisionCapable(settings.selectedAgentModelID)
-    }
-
-    // MARK: - Image Switch Hint (slice #115)
-
-    /// How the user can make image input available from the current state.
-    private enum VisionSwitch: Equatable {
-        /// The selected model is vision-capable but the global opt-out is off.
-        case turnOnSetting
-        /// A different downloaded model can see images — offer to switch to it.
-        case switchModel(id: String, name: String)
-        /// No vision-capable model is downloaded — nothing to switch to.
-        case noVisionModel
-
-        var message: String {
-            switch self {
-            case .turnOnSetting:
-                "Vision is turned off. Turn it on to attach images."
-            case .switchModel(_, let name):
-                "This model can’t see images. Switch to \(name) to attach images."
-            case .noVisionModel:
-                "This model can’t see images. Download a vision model from Settings → Models."
-            }
-        }
-
-        var actionTitle: String? {
-            switch self {
-            case .turnOnSetting: "Turn On"
-            case .switchModel: "Switch"
-            case .noVisionModel: nil
-            }
-        }
-    }
-
-    private var visionSwitch: VisionSwitch {
-        if selectedModelIsVisionCapable && !settings.useVisionWhenAvailable {
-            return .turnOnSetting
-        }
-        if let model = firstDownloadedVisionModel() {
-            return .switchModel(id: model.id, name: model.displayName)
-        }
-        return .noVisionModel
-    }
-
-    /// The first downloaded agent model that can serve images, if any.
-    private func firstDownloadedVisionModel() -> ModelDefinition? {
-        downloadManager.downloadedModels(in: .agent).first {
-            downloadManager.isVisionCapable($0.id)
-        }
-    }
-
-    /// Apply the one-tap switch: turn vision on, or switch to a vision model.
-    private func applyVisionSwitch() {
-        switch visionSwitch {
-        case .turnOnSetting:
-            settings.useVisionWhenAvailable = true
-        case .switchModel(let id, _):
-            settings.selectedAgentModelID = id
-            if !settings.useVisionWhenAvailable {
-                settings.useVisionWhenAvailable = true
-            }
-        case .noVisionModel:
-            break
-        }
-        composerDraft.showImageSwitchHint = false
     }
 
     private func openImagePicker() {
