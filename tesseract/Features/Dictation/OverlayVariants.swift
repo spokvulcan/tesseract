@@ -51,7 +51,7 @@ enum OverlayVariants {
         AnyView(GlobalOverlayHUD(feed: feed, actions: actions))
     }
 
-    static let all: [OverlayVariant] = [classic]
+    static let all: [OverlayVariant] = [classic, ribbon, orb, island, whisper, stageCard]
 
     /// Unknown ids (a removed exploration surviving in defaults) fall back to
     /// the classic pill.
