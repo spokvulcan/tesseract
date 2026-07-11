@@ -30,9 +30,18 @@ final class DependencyContainer: ObservableObject {
             directory:
                 base
                 .appendingPathComponent("Tesseract Agent", isDirectory: true)
-                .appendingPathComponent("CaptureDump", isDirectory: true)
+                .appendingPathComponent("CaptureDump", isDirectory: true),
+            protectedFileNames: { [weak self] in
+                // Gold Correction Pairs keep their audio (ticket #289).
+                self?.correctionPairStore.protectedAudioFileNames ?? []
+            }
         )
     }()
+
+    // The Correction Pair flywheel (ticket #289): every dictation take is
+    // recorded as a training-pair candidate; overlay flags and history edits
+    // turn candidates gold.
+    lazy var correctionPairStore = CorrectionPairStore()
 
     // Transcription
     lazy var transcriptionEngine = TranscriptionEngine()
@@ -379,9 +388,18 @@ final class DependencyContainer: ObservableObject {
             settings: settingsManager,
             feed: dictationFeed,
             proofreadPass: proofreadPass,
-            captureDump: captureDumpStore
+            captureDump: captureDumpStore,
+            pairs: correctionPairStore
         )
     }()
+
+    /// The variant-agnostic overlay action surface (ticket #289): variants
+    /// render the feed and call these — they never see the coordinator.
+    lazy var overlayActions = OverlayActions(
+        flagLastTakeWrong: { [weak self] in self?.dictationCoordinator.flagLastTakeWrong() },
+        editLastTake: { [weak self] in self?.dictationCoordinator.editLastTake() },
+        insertRawAnyway: { [weak self] in self?.dictationCoordinator.insertRawAnyway() }
+    )
 
     private var hasSetup = false
 
@@ -500,6 +518,9 @@ final class DependencyContainer: ObservableObject {
                 dictationState: { [dictationFeed] in
                     dictationFeed.phase
                 },
+                dictationBeat: { [dictationFeed] in
+                    dictationFeed.beat
+                },
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
                 },
@@ -526,13 +547,16 @@ final class DependencyContainer: ObservableObject {
                 setUpOverlayPanel: { [pillOverlay] in
                     pillOverlay.setup()
                 },
-                setOverlayVariant: { [pillOverlay, dictationFeed] variantID in
+                setOverlayVariant: { [pillOverlay, dictationFeed, overlayActions] variantID in
                     let variant = OverlayVariants.variant(for: variantID)
                     pillOverlay.setPlacement(variant.placement)
-                    pillOverlay.setContent(variant.makeView(dictationFeed))
+                    pillOverlay.setContent(variant.makeView(dictationFeed, overlayActions))
                 },
                 reassertOverlayFront: { [pillOverlay] in
                     pillOverlay.reassertFront()
+                },
+                setOverlayInteractive: { [pillOverlay] in
+                    pillOverlay.setInteractive($0)
                 },
                 pushDictationStateToMenuBar: { [menuBarManager] in
                     menuBarManager.updateState(from: $0)

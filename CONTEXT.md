@@ -1098,6 +1098,19 @@ narration, and a rejected take's raw text stays available for "insert raw anyway
 _Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
 autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
 
+**Correction Pair**:
+One dictation take's full text lineage — raw ASR, regex-cleaned, **Proofread
+Pass** output + verdict, committed text, the owner's correction — plus capture
+conditions and a Capture Dump audio reference; the local, bounded, exportable
+training-pair collection the flywheel feeds from day one. Every take is a
+*candidate*; an owner signal (a correction edit in the history, or a one-click
+wrong-flag from the overlay's lingering beat) makes it *gold* — evicted last,
+its audio exempt from the dump's ring eviction. Full editing lives in the
+history window; the overlay stays keyboard-free.
+_Avoid_: training data (unqualified — pairs are candidates until gold),
+feedback log, transcription history (the sibling store it links to by id),
+fine-tune corpus (the export's *consumer*, out of scope — see the map).
+
 ### Hotkey handling
 
 **Hotkey Matcher**:

@@ -105,7 +105,7 @@ final class AgentVoiceInputController {
         switch session.stop() {
         case .noAudio, .tooShort:
             setVoiceError("Recording too short")
-        case .audio(let audioData):
+        case .audio(let audioData, _):
             voiceState = .transcribing
             Log.agent.info(
                 "Voice input stopped, transcribing \(String(format: "%.1f", audioData.duration))s audio"

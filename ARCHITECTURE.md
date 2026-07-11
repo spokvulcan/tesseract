@@ -100,6 +100,7 @@ tesseract/
 │   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, meter
 │   │   ├── OverlayVariants.swift      # Overlay Variant registry (exploration scaffolding)
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
+│   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
 │   │   └── Views/                     # Recording UI components + overlay variants
 │   ├── Speech/
 │   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator

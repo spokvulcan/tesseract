@@ -74,6 +74,15 @@ final class OverlayPanel {
         refreshPanelLayout()
     }
 
+    /// Flips the panel between click-through (the resting state — an
+    /// invisible always-front panel must never swallow clicks) and
+    /// interactive. Driven by one App Bindings rule for the lingering-beat
+    /// affordance window (ticket #289); the panel stays nonactivating, so
+    /// clicks never steal focus from the frontmost app.
+    func setInteractive(_ interactive: Bool) {
+        panel?.ignoresMouseEvents = !interactive
+    }
+
     /// Z-order hygiene on dictation activity: something may have ordered
     /// above the panel since launch, so a press re-asserts front. Pure
     /// command — the caller (one App Bindings rule) decides when.

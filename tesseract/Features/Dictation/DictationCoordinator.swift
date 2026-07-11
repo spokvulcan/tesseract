@@ -43,6 +43,20 @@ final class DictationCoordinator {
     /// narrates the `.proofreading` phase — the session stays feed-blind.
     private let proofreadPass: ProofreadPass?
 
+    /// The **Correction Pair** store (ticket #289); `nil` in tests that don't
+    /// exercise the flywheel. Every take is recorded as a candidate; the
+    /// overlay affordances and the history editor turn candidates gold.
+    private let pairs: CorrectionPairStore?
+
+    /// The pair of the last take that surfaced a beat — what the overlay's
+    /// flag/edit affordances target while the beat lingers.
+    private(set) var lastTakePairID: UUID?
+
+    /// The overlay "edit" affordance's window hook: summon the main window
+    /// onto the dictation page. Set by the app delegate (window management
+    /// is its turf); the coordinator only decides *when*.
+    var onOpenDictationHistory: (@MainActor () -> Void)?
+
     /// The maximum-recording-duration auto-stop. Caller-owned: it finalizes a stuck
     /// recording, which is a dictation-presentation concern, not part of the shared
     /// capture lifecycle.
@@ -63,7 +77,8 @@ final class DictationCoordinator {
         settings: SettingsManager,
         feed: DictationFeed,
         proofreadPass: ProofreadPass? = nil,
-        captureDump: (any CaptureDumpStoring)? = nil
+        captureDump: (any CaptureDumpStoring)? = nil,
+        pairs: CorrectionPairStore? = nil
     ) {
         self.session = VoiceCaptureSession(
             audioCapture: audioCapture,
@@ -76,6 +91,7 @@ final class DictationCoordinator {
         self.settings = settings
         self.feed = feed
         self.proofreadPass = proofreadPass
+        self.pairs = pairs
     }
 
     // MARK: - Public API
@@ -181,12 +197,12 @@ final class DictationCoordinator {
         case .tooShort:
             handleError(.recordingTooShort)
             DictationPerf.markResolved("error(tooShort)")
-        case .audio(let audioData):
-            process(audioData)
+        case .audio(let audioData, let dumpFile):
+            process(audioData, dumpFile: dumpFile)
         }
     }
 
-    private func process(_ audioData: AudioData) {
+    private func process(_ audioData: AudioData, dumpFile: String?) {
         feed.setPhase(.processing)
 
         // Fire-and-forget: the session owns the in-flight task and its cancellation,
@@ -212,8 +228,44 @@ final class DictationCoordinator {
                 }
             }
 
+            // Record the take as a Correction Pair candidate the moment its
+            // lineage is known (before the commit, so the history entry can
+            // link to it). Every take is a candidate — the flywheel collects
+            // from day one; flags and edits turn candidates gold.
+            var recordedPairID: UUID?
+            var onTake: (@MainActor (VoiceCaptureSession.Take) -> Void)?
+            if let pairs {
+                onTake = { [settings] take in
+                    let pair = CorrectionPair(
+                        rawASR: take.rawASR,
+                        cleaned: take.cleaned,
+                        proofread: {
+                            if case .corrected(let text, _) = take.verdict { return text }
+                            return nil
+                        }(),
+                        verdict: Self.pairVerdict(from: take.verdict),
+                        rejectReason: {
+                            if case .rejected(let reason) = take.verdict { return reason }
+                            return nil
+                        }(),
+                        committed: take.committedText,
+                        conditions: CorrectionPair.Conditions(
+                            duration: audioData.duration,
+                            language: settings.language,
+                            asrModel: ModelDefinition.withID(
+                                settings.selectedSpeechToTextModelID)?.displayName
+                                ?? settings.selectedSpeechToTextModelID
+                        ),
+                        audioFileName: dumpFile
+                    )
+                    pairs.record(pair)
+                    recordedPairID = pair.id
+                }
+            }
+
             let outcome = await session.transcribeAndCommit(
-                audioData, language: settings.language, proofread: proofread
+                audioData, language: settings.language, proofread: proofread,
+                onTake: onTake
             ) { [self] text, duration in
                 lastTranscription = text
                 committedDuration = duration
@@ -222,7 +274,8 @@ final class DictationCoordinator {
                     text: text,
                     duration: duration,
                     model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
-                        ?? settings.selectedSpeechToTextModelID
+                        ?? settings.selectedSpeechToTextModelID,
+                    pairID: recordedPairID
                 )
 
                 if settings.autoInsertText {
@@ -241,6 +294,7 @@ final class DictationCoordinator {
                     playSound(.success)
                 }
                 lastRejectedRaw = nil
+                lastTakePairID = recordedPairID
                 feed.setPhase(.idle)
                 feed.emit(
                     .committed(
@@ -252,6 +306,7 @@ final class DictationCoordinator {
                 // phase returns to idle — no error gate. The beat carries the
                 // raw text for "insert raw anyway".
                 lastRejectedRaw = raw
+                lastTakePairID = recordedPairID
                 feed.setPhase(.idle)
                 feed.emit(.rejected(raw: raw, reason: reason))
                 DictationPerf.markResolved("rejected")
@@ -283,21 +338,53 @@ final class DictationCoordinator {
     }
 
     /// Injects the raw text of the last rejected take — the "insert raw
-    /// anyway" affordance's hook (map #283; overlay click wiring is the
-    /// panel-interactivity follow-up).
+    /// anyway" affordance (map #283). Using it *is* "the pass was wrong":
+    /// the take's pair is flagged gold, which also protects its audio.
     func insertRawAnyway() {
         guard let raw = lastRejectedRaw else { return }
         lastRejectedRaw = nil
+        if let lastTakePairID {
+            pairs?.flagWrong(lastTakePairID)
+        }
         history.add(
             text: raw,
             duration: 0,
             model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
-                ?? settings.selectedSpeechToTextModelID
+                ?? settings.selectedSpeechToTextModelID,
+            pairID: lastTakePairID
         )
         guard settings.autoInsertText else { return }
         textInjector.restoreClipboard = settings.restoreClipboard
         Task {
             try? await textInjector.inject(raw + " ")
+        }
+    }
+
+    /// The overlay's one-click "that was wrong" on the lingering beat. No
+    /// focus steal, no window — it marks the pair gold (protecting its
+    /// Capture Dump audio) and nothing else.
+    func flagLastTakeWrong() {
+        guard let lastTakePairID else { return }
+        pairs?.flagWrong(lastTakePairID)
+    }
+
+    /// The overlay's "edit" on the lingering beat: reveal the take's entry in
+    /// the history (full editing lives there — the overlay stays
+    /// keyboard-free) and summon the window via the delegate hook.
+    func editLastTake() {
+        guard let lastTakePairID else { return }
+        history.requestFocus(pairID: lastTakePairID)
+        onOpenDictationHistory?()
+    }
+
+    private static func pairVerdict(
+        from verdict: ProofreadVerdict?
+    ) -> CorrectionPair.Verdict {
+        switch verdict {
+        case .corrected: return .corrected
+        case .rejected: return .rejected
+        case .unchanged: return .unchanged
+        case nil: return .skipped
         }
     }
 

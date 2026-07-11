@@ -92,6 +92,7 @@ extension View {
             .environment(container.dictationCoordinator)
             .environment(container.transcriptionEngine)
             .environment(container.transcriptionHistory)
+            .environment(container.correctionPairStore)
             .environment(container.audioCaptureEngine)
     }
 

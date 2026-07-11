@@ -54,7 +54,11 @@ struct VoiceCaptureSessionTests {
         private(set) var saved: [RawCapture] = []
         private(set) var deleteAllCount = 0
 
-        func save(_ capture: RawCapture) { saved.append(capture) }
+        @discardableResult
+        func save(_ capture: RawCapture) -> String? {
+            saved.append(capture)
+            return "capture-\(saved.count).wav"
+        }
         func deleteAll() { deleteAllCount += 1 }
     }
 
@@ -127,7 +131,7 @@ struct VoiceCaptureSessionTests {
 
         let result = session.stop()
 
-        guard case .audio(let audio) = result else {
+        guard case .audio(let audio, _) = result else {
             Issue.record("expected .audio, got \(result)")
             return
         }
@@ -164,7 +168,9 @@ struct VoiceCaptureSessionTests {
 
     // MARK: - Capture Dump
 
-    /// A successful stop hands the raw capture — conditions intact — to the dump.
+    /// A successful stop hands the raw capture — conditions intact — to the
+    /// dump, and surfaces the dump's file name on the result (the Correction
+    /// Pair's audio reference, ticket #289).
     @Test func stopSavesTheRawCaptureToTheDump() {
         let raw = makeRaw(voiceProcessed: true)
         let capture = FakeAudioCapture(cannedAudio: makeAudio(duration: 2.0, raw: raw))
@@ -177,12 +183,17 @@ struct VoiceCaptureSessionTests {
         )
         _ = session.start()
 
-        _ = session.stop()
+        let result = session.stop()
 
         #expect(dump.saved.count == 1)
         #expect(dump.saved.first?.samples == raw.samples)
         #expect(dump.saved.first?.sampleRate == raw.sampleRate)
         #expect(dump.saved.first?.voiceProcessed == true)
+        guard case .audio(_, let dumpFile) = result else {
+            Issue.record("expected .audio, got \(result)")
+            return
+        }
+        #expect(dumpFile == "capture-1.wav")
     }
 
     @Test func stopDoesNotDumpARecordingShorterThanMinimum() {
@@ -493,6 +504,85 @@ struct VoiceCaptureSessionTests {
         }
         #expect(edits.isEmpty)
         #expect(recorder.commits.first?.text == TranscriptionPostProcessor().process("hello world"))
+    }
+
+    // MARK: - The take observer (Correction Pair source, ticket #289)
+
+    /// `onTake` delivers the take's full lineage — raw ASR before any
+    /// cleanup, the cleaned text, verdict, committed text — and fires
+    /// *before* the commit, so the caller can link what the commit stores.
+    @Test func onTakeDeliversTheLineageBeforeTheCommit() async throws {
+        let stub = ProofreadStub()
+        stub.verdict = .corrected(text: "piece of cake", edits: [])
+        let recorder = CommitRecorder()
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "  peace of cake  ", segments: [], language: "en", processingTime: 0))
+        let session = VoiceCaptureSession(
+            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+
+        var takes: [VoiceCaptureSession.Take] = []
+        var commitCountAtTake = -1
+        let task = Task {
+            await session.transcribeAndCommit(
+                makeAudio(), language: "en",
+                proofread: { await stub.proofread($0) },
+                onTake: { take in
+                    takes.append(take)
+                    commitCountAtTake = recorder.commits.count
+                }
+            ) { text, duration in
+                try await recorder.commit(text, duration)
+            }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        _ = await task.value
+
+        #expect(takes.count == 1)
+        #expect(takes.first?.rawASR == "  peace of cake  ")
+        #expect(takes.first?.cleaned == TranscriptionPostProcessor().process("  peace of cake  "))
+        #expect(takes.first?.committedText == "piece of cake")
+        #expect(commitCountAtTake == 0)  // observed before the commit ran
+        if case .corrected = takes.first?.verdict {
+        } else {
+            Issue.record("expected a corrected verdict on the take")
+        }
+    }
+
+    /// A rejected take is still observed — with no committed text — so the
+    /// flywheel records the rejection.
+    @Test func onTakeDeliversARejectedTakeWithoutCommittedText() async throws {
+        let stub = ProofreadStub()
+        stub.verdict = .rejected(reason: "unintelligible")
+        let recorder = CommitRecorder()
+
+        var takes: [VoiceCaptureSession.Take] = []
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "asdf ghjk", segments: [], language: "en", processingTime: 0))
+        let session = VoiceCaptureSession(
+            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let task = Task {
+            await session.transcribeAndCommit(
+                makeAudio(), language: "en",
+                proofread: { await stub.proofread($0) },
+                onTake: { takes.append($0) }
+            ) { text, duration in
+                try await recorder.commit(text, duration)
+            }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        let outcome = await task.value
+
+        guard case .rejected = outcome else {
+            Issue.record("expected .rejected, got \(outcome)")
+            return
+        }
+        #expect(takes.count == 1)
+        #expect(takes.first?.committedText == nil)
+        #expect(recorder.commits.isEmpty)
     }
 
     /// A cancel-and-restart that lands while the operation is suspended *inside

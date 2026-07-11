@@ -46,11 +46,29 @@ final class VoiceCaptureSession {
     /// The outcome of ``stop()``.
     enum StopResult {
         /// Capture produced audio at or above the minimum duration.
-        case audio(AudioData)
+        /// `dumpFile` is the Capture Dump recording this stop saved (nil when
+        /// the dump is disabled or absent) — the **Correction Pair**'s audio
+        /// reference.
+        case audio(AudioData, dumpFile: String?)
         /// The capture was shorter than the minimum duration.
         case tooShort
         /// The capture engine returned no audio at all.
         case noAudio
+    }
+
+    /// One take's full text lineage, observed via `transcribeAndCommit`'s
+    /// `onTake` just before the commit (or the rejected return) — the
+    /// **Correction Pair**'s source. Only the session sees the raw ASR text,
+    /// so only the session can hand it out.
+    struct Take: Sendable {
+        /// The recognizer's text before any cleanup.
+        let rawASR: String
+        /// The regex post-processor's output — what the Proofread Pass saw.
+        let cleaned: String
+        /// The Proofread Pass's verdict; `nil` when the pass was skipped.
+        let verdict: ProofreadVerdict?
+        /// What commits; `nil` for a rejected take.
+        let committedText: String?
     }
 
     /// The outcome of ``transcribeAndCommit(_:language:proofread:commit:)``.
@@ -131,16 +149,17 @@ final class VoiceCaptureSession {
     func stop() -> StopResult {
         guard var audioData = audioCapture.stopCapture() else { return .noAudio }
         guard audioData.duration >= Self.minimumRecordingDuration else { return .tooShort }
+        var dumpFile: String?
         if let raw = audioData.raw {
             if let captureDump, isCaptureDumpEnabled() {
-                captureDump.save(raw)
+                dumpFile = captureDump.save(raw)
             }
             // The dump is `raw`'s only consumer. (Bookkeeping more than memory
             // now: `samples` shares the same native-rate storage since the
             // recognizer took over the 16 kHz conversion.)
             audioData.raw = nil
         }
-        return .audio(audioData)
+        return .audio(audioData, dumpFile: dumpFile)
     }
 
     /// Transcribes `audio`, post-processes it, optionally runs the caller's
@@ -158,6 +177,7 @@ final class VoiceCaptureSession {
         _ audio: AudioData,
         language: String,
         proofread: (@MainActor (String) async -> ProofreadVerdict?)? = nil,
+        onTake: (@MainActor (Take) -> Void)? = nil,
         commit: @escaping @MainActor (String, TimeInterval) async throws -> Void
     ) async -> Outcome {
         let ticket = operations.capture()
@@ -174,8 +194,9 @@ final class VoiceCaptureSession {
 
                 var commitText = processedText
                 var edits: [WordEdit] = []
+                var verdict: ProofreadVerdict?
                 if let proofread {
-                    let verdict = await proofread(processedText)
+                    verdict = await proofread(processedText)
                     // The pass awaited — a cancel-and-restart during it means
                     // a newer operation owns the state.
                     guard ticket.isCurrent else { return .superseded }
@@ -184,11 +205,22 @@ final class VoiceCaptureSession {
                         commitText = text
                         edits = correctedEdits
                     case .rejected(let reason):
+                        onTake?(
+                            Take(
+                                rawASR: result.text, cleaned: processedText,
+                                verdict: verdict, committedText: nil))
                         return .rejected(raw: processedText, reason: reason)
                     case .unchanged, nil:
                         break
                     }
                 }
+
+                // Before the commit, so the caller can link what it stores in
+                // the commit (a history entry) to the take it just observed.
+                onTake?(
+                    Take(
+                        rawASR: result.text, cleaned: processedText,
+                        verdict: verdict, committedText: commitText))
 
                 try await commit(commitText, audio.duration)
 

@@ -19,18 +19,19 @@ import SwiftUI
 struct GlobalOverlayHUD: View {
     /// The Overlay Feed — the only pipeline surface this view sees.
     var feed: DictationFeed
+    /// The overlay action surface (ticket #289) — what the lingering beat's
+    /// click affordances invoke. Clicks only; the overlay stays keyboard-free.
+    var actions: OverlayActions = .none
 
     /// The phase the pill currently renders — updated inside `withAnimation`,
     /// so mount/unmount, per-phase size, and content swaps all ride one spring.
     @State private var shownPhase: DictationFeed.Phase = .idle
-    /// A lingering **rejected** beat (Proofread Pass, map #283): shown for a
-    /// couple of seconds after the phase returned to idle — passive feedback;
-    /// the press is the retry.
-    @State private var shownRejection: DictationFeed.Beat?
+    /// A lingering terminal beat (map #283): committed and rejected takes
+    /// hold a small affordance pill for ``DictationFeed/affordanceLinger``
+    /// after the phase returned to idle — flag/edit on a commit, insert-raw
+    /// on a rejection. Passive: it fades on its own; the press is the retry.
+    @State private var shownBeat: DictationFeed.Beat?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// How long the rejection pill lingers before fading on its own.
-    private static let rejectionLinger: Duration = .seconds(2.5)
 
     var body: some View {
         GlassEffectContainer {
@@ -42,8 +43,8 @@ struct GlobalOverlayHUD: View {
                                 ? .opacity
                                 : .scale(scale: 0.85, anchor: .bottom).combined(with: .opacity)
                         )
-                } else if let shownRejection, case .rejected = shownRejection.outcome {
-                    rejectionPill
+                } else if let shownBeat {
+                    beatPill(for: shownBeat)
                         .transition(
                             reduceMotion
                                 ? .opacity
@@ -72,7 +73,7 @@ struct GlobalOverlayHUD: View {
         guard shownPhase != newPhase else { return }
         if newPhase != .idle {
             // A live phase always outranks a lingering beat.
-            shownRejection = nil
+            shownBeat = nil
         }
         if reduceMotion || !animated {
             shownPhase = newPhase
@@ -89,19 +90,26 @@ struct GlobalOverlayHUD: View {
     }
 
     private func applyBeat(_ beat: DictationFeed.Beat?) {
-        guard let beat, case .rejected = beat.outcome else { return }
+        guard let beat else { return }
+        switch beat.outcome {
+        case .committed, .rejected:
+            break
+        case .empty, .cancelled, .superseded:
+            return
+        }
         withAnimation(reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.8)) {
-            shownRejection = beat
+            shownBeat = beat
         }
         Task {
-            try? await Task.sleep(for: Self.rejectionLinger)
-            if shownRejection?.id == beat.id {
-                withAnimation(
-                    reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85)
-                ) {
-                    shownRejection = nil
-                }
-            }
+            try? await Task.sleep(for: DictationFeed.affordanceLinger)
+            dismissBeat(ifStill: beat.id)
+        }
+    }
+
+    private func dismissBeat(ifStill id: UInt64? = nil) {
+        if let id, shownBeat?.id != id { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.85)) {
+            shownBeat = nil
         }
     }
 
@@ -155,25 +163,97 @@ struct GlobalOverlayHUD: View {
         .padding(.vertical, 6)
     }
 
-    /// The lingering rejected-take pill. Passive: it names the outcome and the
-    /// retry gesture; the raw text stays available through the coordinator's
-    /// "insert raw anyway" (click wiring is the panel-interactivity follow-up).
+    /// The lingering terminal-beat pill (ticket #289): the panel is clickable
+    /// for exactly this window (one App Bindings rule), so these are the
+    /// overlay's only interactive moments — one-click, no focus steal.
+    @ViewBuilder
+    private func beatPill(for beat: DictationFeed.Beat) -> some View {
+        switch beat.outcome {
+        case .committed(_, _, let edits):
+            committedPill(edits: edits)
+        case .rejected:
+            rejectionPill
+        case .empty, .cancelled, .superseded:
+            EmptyView()
+        }
+    }
+
+    /// Post-commit: names what happened (polish count when the Proofread
+    /// Pass edited) and carries the flywheel affordances — flag "wrong" and
+    /// "edit in history".
+    private func committedPill(edits: [WordEdit]) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: edits.isEmpty ? "checkmark" : "wand.and.sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.green)
+            Text(edits.isEmpty ? "Inserted" : "Polished \(edits.count)")
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            beatButton("flag", label: "Flag as wrong") {
+                actions.flagLastTakeWrong()
+                dismissBeat()
+            }
+            beatButton("pencil", label: "Edit in history") {
+                actions.editLastTake()
+                dismissBeat()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(width: PillMetrics.beatSize.width, height: PillMetrics.beatSize.height)
+        .glassEffect(.regular, in: .capsule)
+        .accessibilityLabel(
+            edits.isEmpty
+                ? "Inserted"
+                : "Inserted, proofreader polished \(edits.count) words")
+    }
+
+    /// The lingering rejected-take pill. Passive-first: the press is the
+    /// retry; the one affordance inserts the raw take anyway (which also
+    /// flags the pass as wrong).
     private var rejectionPill: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "arrow.uturn.backward")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.orange)
-            Text("Didn't catch that — hold to retry")
+            Text("Didn't catch that")
                 .font(.system(size: 11, weight: .semibold))
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
+                .lineLimit(1)
                 .minimumScaleFactor(0.9)
+            Spacer(minLength: 4)
+            Button {
+                actions.insertRawAnyway()
+                dismissBeat()
+            } label: {
+                Text("Insert anyway")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Insert the raw transcription anyway")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .frame(width: PillMetrics.errorSize.width, height: PillMetrics.errorSize.height)
+        .frame(width: PillMetrics.beatSize.width, height: PillMetrics.beatSize.height)
         .glassEffect(.regular, in: .capsule)
         .accessibilityLabel("Transcription rejected — hold the hotkey to retry")
+    }
+
+    /// One small icon affordance on a lingering pill: plain style (the glass
+    /// pill is the chrome), secondary ink, generous hit target.
+    private func beatButton(
+        _ systemName: String, label: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private func errorContent(for error: DictationError) -> some View {
