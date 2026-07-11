@@ -43,7 +43,11 @@ final class HotkeyManager: ObservableObject {
     }
 
     private var registrations: [String: HotkeyRegistration] = [:]
-    private var pressedHotkeys: Set<String> = []
+
+    /// The one fire-or-not decision, shared by both delivery paths. Both the
+    /// tap callback and the NSEvent fallback normalize their event and fold
+    /// it through this matcher; only delivery timing differs per path.
+    private var matcher = HotkeyMatcher()
 
     /// Chord state for double-Command registrations (`combo.isDoubleCommand`).
     /// Fed raw flag words from both delivery paths; fires `onDown` once per
@@ -75,14 +79,14 @@ final class HotkeyManager: ObservableObject {
 
     func unregisterHotkey(id: String) {
         registrations.removeValue(forKey: id)
-        pressedHotkeys.remove(id)
+        matcher.forget(id: id)
     }
 
     func updateRegisteredHotkey(id: String, combo: KeyCombo) {
         guard var reg = registrations[id] else { return }
         reg = HotkeyRegistration(id: id, combo: combo, onDown: reg.onDown, onUp: reg.onUp)
         registrations[id] = reg
-        pressedHotkeys.remove(id)
+        matcher.forget(id: id)
     }
 
     // MARK: - Listening
@@ -106,7 +110,7 @@ final class HotkeyManager: ObservableObject {
         stopNSEventMonitors()
 
         isListening = false
-        pressedHotkeys.removeAll()
+        matcher.reset()
         isUsingEventTap = false
     }
 
@@ -149,61 +153,27 @@ final class HotkeyManager: ObservableObject {
                 if flags.contains(.maskShift) { modifiers.insert(.shift) }
                 if flags.contains(.maskSecondaryFn) { modifiers.insert(.function) }
 
-                let relevantMods: NSEvent.ModifierFlags = [
-                    .command, .option, .control, .shift, .function,
-                ]
-                let currentRelevant = modifiers.intersection(relevantMods)
-
-                // Handle flagsChanged - check for released modifiers on pressed hotkeys
-                if type == .flagsChanged {
+                let kind: HotkeyMatcher.EventKind
+                switch type {
+                case .flagsChanged:
                     manager.handleDoubleCommandFlags(rawFlags: flags.rawValue)
-                    for id in manager.pressedHotkeys {
-                        guard let reg = manager.registrations[id] else { continue }
-                        let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
-                            .intersection(relevantMods)
-                        if !currentRelevant.contains(hotkeyRelevant) {
-                            DispatchQueue.main.async {
-                                guard manager.pressedHotkeys.contains(id) else { return }
-                                manager.pressedHotkeys.remove(id)
-                                reg.onUp?()
-                            }
-                        }
-                    }
-                    // ALWAYS pass through flagsChanged events
-                    return Unmanaged.passUnretained(event)
+                    kind = .flagsChanged
+                case .keyUp:
+                    kind = .keyUp
+                default:
+                    kind = .keyDown
                 }
 
-                // For keyDown/keyUp, find matching registration(s)
-                var matched = false
-                for (id, reg) in manager.registrations {
-                    let hotkeyRelevant = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
-                        .intersection(relevantMods)
+                let verdict = manager.matcher.handle(
+                    kind, keyCode: keyCode, modifiers: modifiers,
+                    bindings: manager.registrations.mapValues(\.combo))
 
-                    guard keyCode == reg.combo.keyCode else { continue }
+                // Deliver on the next main-queue turn so the tap callback
+                // stays fast; the matcher state is already settled.
+                manager.deliver(verdict.fires, deferred: true)
 
-                    if type == .keyUp {
-                        if manager.pressedHotkeys.contains(id) {
-                            DispatchQueue.main.async {
-                                manager.pressedHotkeys.remove(id)
-                                reg.onUp?()
-                            }
-                            matched = true
-                        }
-                    } else if type == .keyDown {
-                        if currentRelevant == hotkeyRelevant {
-                            if !manager.pressedHotkeys.contains(id) {
-                                DispatchQueue.main.async {
-                                    manager.pressedHotkeys.insert(id)
-                                    reg.onDown()
-                                }
-                            }
-                            matched = true
-                        }
-                    }
-                }
-
-                // Suppress the event if any registration matched
-                if matched {
+                // Suppress matched key events (flagsChanged always passes).
+                if verdict.suppressKeyEvent {
                     return nil
                 }
 
@@ -276,68 +246,45 @@ final class HotkeyManager: ObservableObject {
     }
 
     private func handleKeyEvent(_ event: NSEvent) {
-        let keyCode = event.keyCode
-        let modifiers = event.modifierFlags.intersection([
-            .command, .option, .control, .shift, .function,
-        ])
-        let relevantMods: NSEvent.ModifierFlags = [.command, .option, .control, .shift, .function]
-
-        // Check for releases on pressed hotkeys
-        for id in pressedHotkeys {
-            guard let reg = registrations[id] else { continue }
-            let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
-            let relevantTargetModifiers = targetModifiers.intersection(relevantMods)
-
-            // Main key released
-            if event.type == .keyUp && keyCode == reg.combo.keyCode {
-                pressedHotkeys.remove(id)
-                reg.onUp?()
-                continue
-            }
-
-            // Modifier released
-            if event.type == .flagsChanged {
-                let currentRelevant = modifiers.intersection(relevantMods)
-                if !currentRelevant.contains(relevantTargetModifiers) {
-                    pressedHotkeys.remove(id)
-                    reg.onUp?()
-                    continue
-                }
-            }
-        }
-
-        // Handle modifier-only hotkeys
-        if event.type == .flagsChanged {
+        let kind: HotkeyMatcher.EventKind
+        switch event.type {
+        case .flagsChanged:
             handleDoubleCommandFlags(rawFlags: UInt64(event.modifierFlags.rawValue))
-            for (id, reg) in registrations where reg.combo.keyCode == 0 {
-                let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
-                if modifiers == targetModifiers && !pressedHotkeys.contains(id) {
-                    pressedHotkeys.insert(id)
-                    reg.onDown()
-                } else if modifiers != targetModifiers && pressedHotkeys.contains(id) {
-                    pressedHotkeys.remove(id)
-                    reg.onUp?()
-                }
-            }
-            return
+            kind = .flagsChanged
+        case .keyUp:
+            kind = .keyUp
+        default:
+            kind = .keyDown
         }
 
-        // Hotkey down detection for each registration
-        for (id, reg) in registrations {
-            guard reg.combo.keyCode != 0 else { continue }
-            let targetModifiers = NSEvent.ModifierFlags(rawValue: reg.combo.modifiers)
-            let relevantTargetModifiers = targetModifiers.intersection(relevantMods)
+        let verdict = matcher.handle(
+            kind, keyCode: event.keyCode, modifiers: event.modifierFlags,
+            bindings: registrations.mapValues(\.combo))
 
-            guard keyCode == reg.combo.keyCode,
-                modifiers.intersection(relevantMods) == relevantTargetModifiers
-            else {
-                continue
-            }
+        // Monitors cannot suppress events; deliver synchronously.
+        deliver(verdict.fires, deferred: false)
+    }
 
-            if event.type == .keyDown && !pressedHotkeys.contains(id) {
-                pressedHotkeys.insert(id)
-                reg.onDown()
+    /// Deliver matcher fires to their registrations, looking each one up at
+    /// delivery time so an unregister that lands before a deferred delivery
+    /// quietly drops the fire.
+    private func deliver(_ fires: [HotkeyMatcher.Fire], deferred: Bool) {
+        for fire in fires {
+            if deferred {
+                DispatchQueue.main.async { [weak self] in
+                    self?.deliverOne(fire)
+                }
+            } else {
+                deliverOne(fire)
             }
+        }
+    }
+
+    private func deliverOne(_ fire: HotkeyMatcher.Fire) {
+        guard let reg = registrations[fire.id] else { return }
+        switch fire.direction {
+        case .down: reg.onDown()
+        case .up: reg.onUp?()
         }
     }
 
@@ -419,7 +366,7 @@ final class HotkeyManager: ObservableObject {
 
     func updateHotkey(_ combo: KeyCombo) {
         currentHotkey = combo
-        pressedHotkeys.removeAll()
+        matcher.reset()
     }
 
     // MARK: - Private

@@ -7,7 +7,7 @@ import Foundation
 import AppKit
 import Carbon.HIToolbox
 
-struct KeyCombo: Codable, Equatable, Sendable {
+nonisolated struct KeyCombo: Codable, Equatable, Sendable {
     let keyCode: UInt16
     let modifiers: UInt
 
