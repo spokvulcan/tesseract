@@ -798,12 +798,13 @@ _Avoid_: separate item-spacing / part-spacing knobs; section gap.
 
 **Prose Accent Palette**:
 The named color roles applied to assistant markdown syntax — heading, strong,
-emphasis, inline code, link, list marker — so document structure reads at a
-glance; adapted from OpenCode's default theme, with dark and light variants.
-With the **Code Accent Palette**, one of the two sanctioned exceptions to the
-otherwise monochrome chat content layer.
-_Avoid_: coloring body prose or user messages; per-view ad-hoc colors outside
-the named roles.
+emphasis, inline code, link, list marker, blockquote bar — so document
+structure reads at a glance; colors taken exactly from OpenCode's default
+theme, dark and light variants alike, plus the neutral inline-code chip
+behind the code accent. With the **Code Accent Palette**, one of the two
+sanctioned exceptions to the otherwise monochrome chat content layer.
+_Avoid_: coloring body prose, quoted blockquote prose, or user messages;
+per-view ad-hoc colors outside the named roles.
 
 **Code Accent Palette**:
 The named color roles for code and diffs in the transcript — syntax-highlight
@@ -815,6 +816,16 @@ monochrome chat content layer; diff tints are semantic like error red, never
 decoration.
 _Avoid_: stock .tmTheme colors; using diff green/red outside added/removed
 semantics.
+
+**Markdown Gallery**:
+The always-shipped instrument window for the chat's markdown rendering: an
+editable source pane, pre-filled with the canonical all-construct document,
+rendered live through the chat's own markdown stack in light, dark, or both
+appearances side by side. Markdown chrome is judged and tuned here, against
+the canonical document, in the exact render path the transcript uses.
+_Avoid_: debug-only gating (the dev loop runs Release builds); a second
+preview-only render path (the gallery renders through the chat's, or it
+proves nothing).
 
 **Tool Panel**:
 The specialized expanded body of a tool-call row: a per-tool derived rendering

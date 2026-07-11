@@ -92,7 +92,10 @@ native macOS metrics untouched.
 - **The Prose Accent Palette is chat-local and locked**
   (`ChatMarkdownStyle.swift`): headings purple in dark mode, warm
   strong/emphasis, peach links. It is the *origin* of the accent, not a
-  consumer of it — don't retrofit `accentColor` into it.
+  consumer of it — don't retrofit `accentColor` into it. The lock is on the
+  *colors* (OpenCode-exact, verified 2026-07-11); markdown chrome around them
+  — the neutral inline-code chip, the warm blockquote bar — is tunable, and
+  tuned in the Markdown Gallery (Window menu), never by re-deciding colors.
 
 ## 4. Settings idioms
 

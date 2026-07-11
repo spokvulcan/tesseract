@@ -12,6 +12,9 @@ enum WindowID {
     /// tour): the only window presented on a first launch, an ordinary
     /// on-demand window when relaunched from Settings.
     static let onboarding = "onboarding"
+    /// The Markdown Gallery (see `CONTEXT.md`): the living style reference
+    /// for chat markdown, reached from the Window menu.
+    static let markdownGallery = "markdown-gallery"
 }
 
 /// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
@@ -169,6 +172,15 @@ struct TesseractApp: App {
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
         .defaultLaunchBehavior(isFirstLaunch ? .presented : .suppressed)
+
+        // The Markdown Gallery: on-demand singleton, never presented at
+        // launch; the system Window menu lists it automatically.
+        Window("Markdown Gallery", id: WindowID.markdownGallery) {
+            MarkdownGalleryView()
+        }
+        .defaultSize(width: 1280, height: 860)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
     }
 
     /// Read once per scene evaluation; only the value at launch matters for

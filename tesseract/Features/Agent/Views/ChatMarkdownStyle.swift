@@ -4,9 +4,10 @@
 //
 //  The Prose Accent Palette: assistant markdown syntax rendered in color so
 //  the document structure reads at a glance — the one sanctioned exception to
-//  the monochrome content layer. Roles and values are adapted from OpenCode's
-//  default theme (packages/tui/src/theme/assets/opencode.json), dark and
-//  light variants alike; block layout stays GitHub's.
+//  the monochrome content layer. Color values are taken verbatim from
+//  OpenCode's default theme (packages/tui/src/theme/assets/opencode.json,
+//  compared value-for-value 2026-07-11), dark and light variants alike; block
+//  layout stays GitHub's, and the neutral inline-code chip is ours.
 //
 
 import SwiftUI
@@ -38,6 +39,22 @@ extension DynamicColor {
     /// on purpose: bold, italic, and bullets are all warm, and numbered lists
     /// of bold terms otherwise read as a wall of orange.
     static let proseListEnumeration = DynamicColor(light: rgb(0x318795), dark: rgb(0x56B6C2))
+    /// Blockquote bar — OpenCode `markdownBlockQuote`, applied to the left
+    /// rule only: the palette colors structural markers, never quoted prose,
+    /// which stays muted.
+    static let proseBlockQuoteBar = DynamicColor(light: rgb(0xB0851F), dark: rgb(0xE5C07B))
+    /// Quoted blockquote prose — Textual's internal `gitHubSecondary`,
+    /// value-copied so the quoted text renders exactly as it did before the
+    /// bar was tinted (only the bar changed).
+    static let proseBlockQuoteText = DynamicColor(light: rgb(0x6B6E7B), dark: rgb(0x9294A0))
+    /// Inline-code chip — the neutral highlight behind inline code. Opacity
+    /// over the window background rather than a fixed surface so the chip
+    /// stays visible wherever prose renders (transcript, tool panels,
+    /// Activity), both appearances.
+    static let proseCodeChip = DynamicColor(
+        light: Color(red: 0, green: 0, blue: 0, opacity: 0.06),
+        dark: Color(red: 1, green: 1, blue: 1, opacity: 0.08)
+    )
     /// Failed tool rows — OpenCode `error`. Softer than the system red, which
     /// overpowers the muted transcript.
     static let chatError = DynamicColor(light: rgb(0xD1383D), dark: rgb(0xE06C75))
@@ -45,11 +62,15 @@ extension DynamicColor {
 
 extension InlineStyle {
     /// GitHub's inline metrics with the Prose Accent Palette colors. Inline
-    /// code drops GitHub's gray chip — the accent color alone marks it, as in
-    /// OpenCode.
+    /// code keeps the accent color and sits on a neutral chip (Slack-style
+    /// flat highlight) — color marks *what* it is, the chip marks *where it
+    /// ends*, which bare accent text alone couldn't.
     static var proseAccents: InlineStyle {
         InlineStyle()
-            .code(.monospaced, .fontScale(0.85), .foregroundColor(.proseCode))
+            .code(
+                .monospaced, .fontScale(0.85),
+                .foregroundColor(.proseCode), .backgroundColor(.proseCodeChip)
+            )
             .strong(.fontWeight(.semibold), .foregroundColor(.proseStrong))
             .emphasis(.italic, .foregroundColor(.proseEmphasis))
             .link(.foregroundColor(.proseLink), .underlineStyle(.single))
@@ -64,6 +85,21 @@ struct AccentHeadingStyle: StructuredText.HeadingStyle {
         StructuredText.GitHubHeadingStyle.gitHub
             .makeBody(configuration: configuration)
             .foregroundStyle(DynamicColor.proseHeading)
+    }
+}
+
+/// GitHub's blockquote geometry with the blockquote-bar accent on the left
+/// rule; quoted text stays muted, exactly as GitHub renders it.
+struct AccentBlockQuoteStyle: StructuredText.BlockQuoteStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(DynamicColor.proseBlockQuoteBar)
+                .textual.frame(width: .fontScaled(0.2))
+            configuration.label
+                .foregroundStyle(DynamicColor.proseBlockQuoteText)
+                .textual.padding(.horizontal, .fontScaled(1))
+        }
     }
 }
 
@@ -147,14 +183,14 @@ extension DynamicColor {
 }
 
 /// The chat's markdown style bundle: GitHub block layout with the Prose
-/// Accent Palette applied to headings, inline spans, and list markers. The
-/// code block style here is nominal — `AssistantProseView` overrides it with
-/// `CopyableCodeBlockStyle`.
+/// Accent Palette applied to headings, inline spans, list markers, and the
+/// blockquote bar. The code block style here is nominal — `ChatMarkdownView`
+/// below overrides it with `CopyableCodeBlockStyle`.
 struct ChatMarkdownStyle: StructuredText.Style {
     let inlineStyle: InlineStyle = .proseAccents
     let headingStyle = AccentHeadingStyle()
     let paragraphStyle: StructuredText.GitHubParagraphStyle = .gitHub
-    let blockQuoteStyle: StructuredText.GitHubBlockQuoteStyle = .gitHub
+    let blockQuoteStyle = AccentBlockQuoteStyle()
     let codeBlockStyle: StructuredText.GitHubCodeBlockStyle = .gitHub
     let listItemStyle: StructuredText.DefaultListItemStyle = .default
     let unorderedListMarker = AccentUnorderedListMarker()
@@ -162,4 +198,22 @@ struct ChatMarkdownStyle: StructuredText.Style {
     let tableStyle: StructuredText.GitHubTableStyle = .gitHub
     let tableCellStyle: StructuredText.GitHubTableCellStyle = .gitHub
     let thematicBreakStyle: StructuredText.GitHubThematicBreakStyle = .gitHub
+}
+
+/// The one way chat markdown is rendered: the style bundle above plus the
+/// copyable code blocks, the Code Accent highlighter, and the transcript type
+/// size. The transcript (`AssistantProseView`) and the Markdown Gallery both
+/// render through this view, so the gallery cannot drift from the chat.
+struct ChatMarkdownView: View {
+    let text: String
+
+    var body: some View {
+        StructuredText(markdown: text)
+            .textual.structuredTextStyle(ChatMarkdownStyle())
+            .textual.codeBlockStyle(CopyableCodeBlockStyle())
+            .textual.highlighterTheme(.codeAccents)
+            .textual.textSelection(.enabled)
+            .font(.system(size: chatBodyFontSize))
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }

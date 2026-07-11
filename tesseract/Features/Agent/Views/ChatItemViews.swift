@@ -127,13 +127,7 @@ struct AssistantProseView: View {
         let _ = ChatViewPerf.signposter.emitEvent("AssistantProseView.body")
         #endif
         if settings.agentUseMarkdown {
-            StructuredText(markdown: text)
-                .textual.structuredTextStyle(ChatMarkdownStyle())
-                .textual.codeBlockStyle(CopyableCodeBlockStyle())
-                .textual.highlighterTheme(.codeAccents)
-                .textual.textSelection(.enabled)
-                .font(.system(size: chatBodyFontSize))
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ChatMarkdownView(text: text)
         } else {
             Text(text.chatDisplayTrimmed)
                 .font(.system(size: chatBodyFontSize))
