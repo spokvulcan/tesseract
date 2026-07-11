@@ -64,11 +64,13 @@ extension InlineStyle {
     /// GitHub's inline metrics with the Prose Accent Palette colors. Inline
     /// code keeps the accent color and sits on a neutral chip (Slack-style
     /// flat highlight) — color marks *what* it is, the chip marks *where it
-    /// ends*, which bare accent text alone couldn't.
+    /// ends*, which bare accent text alone couldn't. Full body size on
+    /// purpose (GitHub scales code to 0.85): the color and chip already
+    /// distinguish it, and the smaller run read as a size drop mid-sentence.
     static var proseAccents: InlineStyle {
         InlineStyle()
             .code(
-                .monospaced, .fontScale(0.85),
+                .monospaced,
                 .foregroundColor(.proseCode), .backgroundColor(.proseCodeChip)
             )
             .strong(.fontWeight(.semibold), .foregroundColor(.proseStrong))
@@ -166,8 +168,10 @@ extension DynamicColor {
         light: Color(red: 0, green: 0, blue: 0, opacity: 0.85),
         dark: Color(red: 1, green: 1, blue: 1, opacity: 0.85)
     )
-    /// Block background, matching Textual's GitHub block surface.
-    fileprivate static let codePanelBackground = DynamicColor(
+    /// Block surface, a near-match of Textual's GitHub gray — painted by
+    /// `CopyableCodeBlockStyle` (Textual's theme carries the same value but
+    /// keeps it internal).
+    static let codePanelBackground = DynamicColor(
         light: Color(red: 0.960784, green: 0.960784, blue: 0.968627),
         dark: Color(red: 0.120543, green: 0.122844, blue: 0.141312)
     )

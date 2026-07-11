@@ -5,8 +5,9 @@
 //  Every code block in the chat gets a hover copy button (PRD #174): skills
 //  return paste-ready artifacts (corrected text, tweet variants, translations)
 //  as fenced blocks — one block, one artifact — so one click copies the chosen
-//  variant. Wraps Textual's GitHub code-block rendering and uses its
-//  `CodeBlockProxy` pasteboard action.
+//  variant. Renders Textual's GitHub code-block geometry inline — minus
+//  GitHub's 0.85 font scale, so code reads at the one transcript type size
+//  like everything else — and uses its `CodeBlockProxy` pasteboard action.
 //
 
 import SwiftUI
@@ -27,10 +28,22 @@ private struct CopyableCodeBlock: View {
     @State private var resetTask: Task<Void, Never>?
 
     var body: some View {
-        StructuredText.GitHubCodeBlockStyle()
-            .makeBody(configuration: configuration)
-            .overlay(alignment: .topTrailing) { copyButton }
-            .onHover { isHovering = $0 }
+        // GitHub's block geometry (Overflow, 16pt padding, 6pt radius, same
+        // line spacing) with two deliberate departures: no 0.85 font scale,
+        // and the surface is the Code Accent Palette's panel background
+        // (Textual's theme carries it too, but keeps the property internal).
+        Overflow {
+            configuration.label
+                .textual.lineSpacing(.fontScaled(0.225))
+                .fixedSize(horizontal: false, vertical: true)
+                .monospaced()
+                .padding(16)
+        }
+        .background(DynamicColor.codePanelBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .textual.blockSpacing(.init(top: 0, bottom: 16))
+        .overlay(alignment: .topTrailing) { copyButton }
+        .onHover { isHovering = $0 }
     }
 
     private var copyButton: some View {
