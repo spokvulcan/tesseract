@@ -123,8 +123,7 @@ struct TesseractApp: App {
                         copyLastTranscription: { [weak container] in
                             container?.transcriptionHistory.copyLatestToPasteboard()
                         },
-                        isRecording: container.dictationCoordinator.state == .recording
-                            || container.dictationCoordinator.state == .listening,
+                        isRecording: container.dictationCoordinator.state == .recording,
                         isModelLoaded: container.transcriptionEngine.isModelLoaded,
                         hasHistory: !container.transcriptionHistory.entries.isEmpty
                     )

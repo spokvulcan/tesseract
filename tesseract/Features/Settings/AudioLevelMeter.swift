@@ -10,6 +10,9 @@ import SwiftUI
 /// resample it on stop.
 struct AudioLevelMeter: View {
     var audioCapture: AudioCaptureEngine
+    /// Level source: the Overlay Feed carries the meter for every capture,
+    /// the settings test included (the engine's polled level is retired).
+    var feed: DictationFeed
     @State private var isTestingMic = false
 
     var body: some View {
@@ -21,13 +24,13 @@ struct AudioLevelMeter: View {
 
                     RoundedRectangle(cornerRadius: 4)
                         .fill(levelColor)
-                        .frame(width: geometry.size.width * CGFloat(audioCapture.audioLevel))
-                        .animation(.linear(duration: 0.1), value: audioCapture.audioLevel)
+                        .frame(width: geometry.size.width * CGFloat(feed.level))
+                        .animation(.linear(duration: 0.1), value: feed.level)
                 }
             }
             .accessibilityElement()
             .accessibilityLabel("Audio level meter")
-            .accessibilityValue("\(Int(audioCapture.audioLevel * 100)) percent")
+            .accessibilityValue("\(Int(feed.level * 100)) percent")
 
             Button(isTestingMic ? "Stop" : "Test") {
                 toggleMicTest()
@@ -42,7 +45,7 @@ struct AudioLevelMeter: View {
     }
 
     private var levelColor: Color {
-        let level = audioCapture.audioLevel
+        let level = feed.level
         if level > 0.8 {
             return .red
         } else if level > 0.5 {

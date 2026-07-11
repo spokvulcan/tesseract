@@ -96,11 +96,11 @@ final class MenuBarManager: NSObject {
 
     // MARK: - State pushes (App Bindings)
 
-    func updateState(from dictationState: DictationState) {
-        switch dictationState {
+    func updateState(from phase: DictationFeed.Phase) {
+        switch phase {
         case .idle, .error:
             dictationActivity = .idle
-        case .listening, .recording:
+        case .recording:
             dictationActivity = .listening
         case .processing:
             dictationActivity = .processing

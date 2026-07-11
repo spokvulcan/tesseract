@@ -7,94 +7,93 @@ import AppKit
 import Combine
 import SwiftUI
 
-/// Controls a transparent, click-through global `NSPanel` that floats above all
-/// apps (including full-screen) and reacts to `DictationState`.
+/// The transparent, click-through global `NSPanel` that hosts the dictation
+/// overlay — a dumb host (map #283): it owns panel creation, a fixed
+/// per-placement frame, screen-following, and z-order hygiene, and knows
+/// nothing about dictation phases. Show/hide is entirely the hosted
+/// **Overlay Variant**'s: the variant fades its own content in and out while
+/// the panel stays ordered front at a constant frame, so exactly one
+/// animation system (SwiftUI's, inside the content) ever runs.
 ///
-/// This is the one home for the overlay panel behaviour: panel creation, the
-/// alpha fade with stale-fade cancellation, the four-notification screen
-/// observation, the post-show occlusion re-assertion, and the
-/// `DictationState`→visible rule. The injected difference per instance is the
-/// ``OverlayPlacement`` (the frame math) and the hosted SwiftUI `Content`;
-/// the dictation pill is the one configured instance, wired in
-/// `DependencyContainer`.
-///
-/// Visibility flows through one side-effecting entry, ``handleStateChange(_:)``.
-/// Pure view data (`audioLevel`) carries no panel-side behaviour, so the
-/// caller sets it directly on the exposed ``state`` and the content view reacts.
+/// The frame never animates and never changes with dictation state — it is
+/// the placement's fixed canvas, sized to the largest content the variant
+/// draws (audit #285 item 3: the old animated `NSPanel` resize raced the
+/// un-animated SwiftUI size snap on every stage change).
 @MainActor
-final class OverlayPanel<Content: View> {
-    /// The observable state the caller owns and the hosted content reads. The
-    /// caller mutates `audioLevel` on it directly; only `dictationState`
-    /// (which drives show/hide) flows through a method.
-    let state: OverlayState
+final class OverlayPanel {
 
-    private let placement: OverlayPlacement
+    private var placement: OverlayPlacement
     private let contentAppearance: NSAppearance?
-    private let content: @MainActor (OverlayState) -> Content
 
     private var panel: NSPanel?
-    private var hostingView: NSHostingView<Content>?
+    private var hostingView: NSHostingView<AnyView>?
     private var cancellables = Set<AnyCancellable>()
-    private var hideRequestID: UInt = 0
-    private var visibilityCheckTask: Task<Void, Never>?
 
     /// - Parameters:
-    ///   - state: the `OverlayState` the caller owns; seed any initial pure view
-    ///     data on it *before* calling ``setup()``.
-    ///   - placement: where the panel sits and whether it animates its reposition.
+    ///   - placement: the fixed canvas frame for a given screen.
     ///   - contentAppearance: forced `NSAppearance` for the hosted content, or
     ///     `nil` to follow the system. Glass materials read the AppKit
     ///     appearance (not the SwiftUI color scheme), so this is the seam that
     ///     controls how the pill's Liquid Glass renders.
-    ///   - content: builds the hosted SwiftUI view from the state.
-    init(
-        state: OverlayState,
-        placement: OverlayPlacement,
-        contentAppearance: NSAppearance? = nil,
-        content: @escaping @MainActor (OverlayState) -> Content
-    ) {
-        self.state = state
+    init(placement: OverlayPlacement, contentAppearance: NSAppearance? = nil) {
         self.placement = placement
         self.contentAppearance = contentAppearance
-        self.content = content
     }
 
-    /// Creates the overlay panel and starts screen observation. Call
-    /// ``handleStateChange(_:)`` to drive show/hide afterward.
+    /// Creates the panel and starts screen observation. The panel is ordered
+    /// front immediately and stays there — with no content (or a variant whose
+    /// content is at opacity 0) it is invisible, and materializing the backing
+    /// store now keeps first-render cost off the first press.
     func setup() {
         createPanel()
-        // Materialize the panel's backing store and the hosted content (for
-        // the pill, its Liquid Glass backdrop) once at launch — alpha stays 0
-        // and the panel is click-through, so it's invisible; the first press
-        // then skips the first-render cost. The first completed hide orders
-        // it back out.
         panel?.orderFrontRegardless()
         startScreenObservation()
     }
 
-    /// The single side-effecting entry: updates dictation state and drives show/hide.
-    func handleStateChange(_ dictationState: DictationState) {
-        state.dictationState = dictationState
-        applyVisibility()
+    /// Swaps the hosted variant view. Called at launch (the variant rule's
+    /// initial emission) and whenever the overlay-variant setting changes.
+    func setContent(_ content: AnyView) {
+        guard let panel else { return }
+        if let hostingView {
+            hostingView.rootView = content
+            return
+        }
+        let hosting = NSHostingView(rootView: content)
+        if let contentAppearance {
+            hosting.appearance = contentAppearance
+        }
+        hosting.frame = panel.contentView?.bounds ?? .zero
+        hosting.autoresizingMask = [.width, .height]
+        panel.contentView?.addSubview(hosting)
+        hostingView = hosting
     }
 
-    /// Forward an audio level to the hosted content. Dropped while nothing is on
-    /// screen (e.g. the settings level meter runs while the dictation state is
-    /// idle): a hidden view has no use for 20 Hz level invalidations.
-    func handleAudioLevelChange(_ level: Float) {
-        guard state.dictationState.showsOverlay else { return }
-        state.audioLevel = level
+    /// Swaps the placement (a variant may bring its own canvas) and relayouts.
+    func setPlacement(_ newPlacement: OverlayPlacement) {
+        placement = newPlacement
+        refreshPanelLayout()
+    }
+
+    /// Z-order hygiene on dictation activity: something may have ordered
+    /// above the panel since launch, so a press re-asserts front. Pure
+    /// command — the caller (one App Bindings rule) decides when.
+    func reassertFront() {
+        guard let panel else { return }
+        if !panel.isVisible || !panel.occlusionState.contains(.visible) {
+            panel.orderFrontRegardless()
+        }
+        DictationPerf.markPanelShown()
     }
 
     // MARK: - Panel creation
 
     private func createPanel() {
-        // The initial content rect comes from the placement at `.idle`. If no
-        // screen is resolvable yet (no displays at all — unreachable in a running
-        // UI app), fall back to a zero geometry; the first show / screen-change
-        // relayout repositions the panel onto the real screen.
+        // The initial content rect comes from the placement. If no screen is
+        // resolvable yet (no displays at all — unreachable in a running UI
+        // app), fall back to a zero geometry; the first screen-change relayout
+        // repositions the panel onto the real screen.
         let geometry = currentGeometry() ?? ScreenGeometry(frame: .zero, visibleFrame: .zero)
-        let initialFrame = placement.frame(geometry, .idle)
+        let initialFrame = placement.frame(geometry)
 
         let panel = NSPanel(
             contentRect: initialFrame,
@@ -119,105 +118,14 @@ final class OverlayPanel<Content: View> {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
 
-        // Hosting view reads `state`, which the caller has already seeded. Created
-        // once and never replaced, so SwiftUI animation/`@State` survives updates.
-        let hostingView = NSHostingView(rootView: content(state))
-        if let contentAppearance {
-            hostingView.appearance = contentAppearance
-        }
-        hostingView.frame = panel.contentView?.bounds ?? .zero
-        hostingView.autoresizingMask = [.width, .height]
-        panel.contentView?.addSubview(hostingView)
-
         self.panel = panel
-        self.hostingView = hostingView
-
-        // Initially hidden.
-        panel.alphaValue = 0
-    }
-
-    // MARK: - Visibility
-
-    private func applyVisibility() {
-        if state.dictationState.showsOverlay {
-            showPanel()
-        } else {
-            hidePanel()
-        }
-    }
-
-    private func showPanel() {
-        guard let panel = panel else { return }
-        hideRequestID &+= 1
-
-        // Reposition in case the screen changed. The placement decides whether the
-        // resize animates or snaps. Resolving the screen is window-server IPC (a
-        // full window-list copy), so it's refreshed only on a fresh show —
-        // mid-dictation state changes reuse the cached screen.
-        applyFrame(
-            for: state.dictationState,
-            animated: placement.animatesResizeOnShow,
-            refreshGeometry: !panel.isVisible
-        )
-
-        panel.orderFrontRegardless()
-
-        NSAnimationContext.runAnimationGroup { context in
-            // Near-instant: this exists to retarget an in-flight hide fade, not
-            // to animate the entrance — that's the hosted content's single
-            // animation. The old 0.25 s fade multiplied with it, so the pill
-            // didn't read as "on" until ~200 ms after the press.
-            context.duration = 0.08
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1
-        }
-
-        DictationPerf.markPanelShown()
-        scheduleVisibilityCheck()
-    }
-
-    private func hidePanel() {
-        guard let panel = panel else { return }
-        // Bump the token so an in-flight fade-out from a previous hide can't order
-        // out a panel that has since been re-shown.
-        hideRequestID &+= 1
-        let requestID = hideRequestID
-
-        NSAnimationContext.runAnimationGroup(
-            { context in
-                context.duration = 0.2
-                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                panel.animator().alphaValue = 0
-            },
-            completionHandler: {
-                Task { @MainActor [weak self, weak panel] in
-                    guard let self, requestID == self.hideRequestID else { return }
-                    panel?.orderOut(nil)
-                }
-            })
     }
 
     // MARK: - Frame
 
-    private func applyFrame(
-        for dictationState: DictationState, animated: Bool, refreshGeometry: Bool = true
-    ) {
-        if refreshGeometry || cachedGeometry == nil {
-            cachedGeometry = currentGeometry() ?? cachedGeometry
-        }
-        guard let panel = panel, let geometry = cachedGeometry else { return }
-        let frame = placement.frame(geometry, dictationState)
-        DictationPerf.panelResize(animated: animated)
-        if animated {
-            panel.animator().setFrame(frame, display: false)
-        } else {
-            panel.setFrame(frame, display: false)
-        }
-    }
-
-    /// The screen the panel last resolved to. Refreshed on fresh shows and on
-    /// the screen-change notifications; reused for mid-dictation state changes
-    /// so they skip the window-list IPC in ``currentGeometry()``.
+    /// The screen the panel last resolved to. Refreshed on the screen-change
+    /// notifications; resolving is window-server IPC (a full window-list
+    /// copy), so it is never done per state change.
     private var cachedGeometry: ScreenGeometry?
 
     /// The single screen seam. Lifts the preferred screen's rects into a
@@ -248,32 +156,10 @@ final class OverlayPanel<Content: View> {
     }
 
     private func refreshPanelLayout() {
-        guard let panel = panel else { return }
-        // Screen-change relayout is always instant — `animatesResizeOnShow` governs
-        // only the show / visible-state path, not following the active screen.
-        applyFrame(for: state.dictationState, animated: false)
-        if state.dictationState.showsOverlay {
-            panel.orderFrontRegardless()
-        }
-        ensureVisibleIfNeeded()
-    }
-
-    private func scheduleVisibilityCheck() {
-        visibilityCheckTask?.cancel()
-        visibilityCheckTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(200))
-            self?.ensureVisibleIfNeeded()
-        }
-    }
-
-    private func ensureVisibleIfNeeded() {
-        guard state.dictationState.showsOverlay else { return }
-        guard let panel = panel else { return }
-        if !panel.isVisible || !panel.occlusionState.contains(.visible) {
-            panel.orderFrontRegardless()
-        }
-        if panel.alphaValue < 0.95 {
-            panel.alphaValue = 1
-        }
+        guard let panel else { return }
+        cachedGeometry = currentGeometry() ?? cachedGeometry
+        guard let geometry = cachedGeometry else { return }
+        panel.setFrame(placement.frame(geometry), display: false)
+        panel.orderFrontRegardless()
     }
 }

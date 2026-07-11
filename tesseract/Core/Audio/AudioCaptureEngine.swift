@@ -49,25 +49,6 @@ nonisolated final class SampleBuffer: @unchecked Sendable {
     }
 }
 
-// Thread-safe audio level storage for real-time callback - nonisolated for audio thread access
-nonisolated final class AudioLevelRelay: @unchecked Sendable {
-    private var _level: Float = 0
-    private let lock = NSLock()
-
-    var level: Float {
-        get {
-            lock.lock()
-            defer { lock.unlock() }
-            return _level
-        }
-        set {
-            lock.lock()
-            _level = newValue
-            lock.unlock()
-        }
-    }
-}
-
 @MainActor
 protocol AudioCapturing: AnyObject {
     var isCapturing: Bool { get }
@@ -81,12 +62,19 @@ final class AudioCaptureEngine: AudioCapturing {
     private enum Defaults {
         static let defaultInputSampleRate: Double = 48_000
         static let bufferSize: AVAudioFrameCount = 1024
-        static let meterInterval: TimeInterval = 0.05
         static let reserveSeconds: Int = 60
     }
 
     private(set) var isCapturing = false
-    private(set) var audioLevel: Float = 0
+
+    /// Meter frames (level + spectrum) at tap cadence, straight from the
+    /// real-time tap — the `DictationFeed` pumps this onto the main actor.
+    /// Replaces the retired 20 Hz Timer poll + `@Observable audioLevel` ferry
+    /// (audit #285 item 2). Buffered-newest: a slow consumer sees the latest
+    /// frame, never a backlog.
+    var meters: AsyncStream<MeterFrame> { meterStream.stream }
+    private let meterStream = AsyncStream.makeStream(
+        of: MeterFrame.self, bufferingPolicy: .bufferingNewest(1))
 
     /// Kept alive across captures — engine create/destroy cycles are the
     /// pattern that wedges CoreAudio input. Voice Processing is the standard
@@ -119,8 +107,6 @@ final class AudioCaptureEngine: AudioCapturing {
     private var inputTapInstalled = false
     private let sampleBuffer = SampleBuffer()
     private var captureStartTime: Date?
-    private let levelRelay = AudioLevelRelay()
-    private var levelUpdateTimer: Timer?
 
     /// The current capture records levels only (the settings meter): the tap
     /// appends no samples, and `stopCapture()` discards the empty recording —
@@ -342,33 +328,20 @@ final class AudioCaptureEngine: AudioCapturing {
 
         captureStartTime = Date()
 
-        // Install tap with nonisolated handler to avoid MainActor inheritance
+        // Install tap with nonisolated handler to avoid MainActor inheritance.
+        // The meter tap computes level + spectrum on the audio thread and
+        // yields straight into `meters` — no timer, no main-thread poll.
         let buffer = meteringOnly ? nil : sampleBuffer
-        let relay = levelRelay
+        let meterTap = AudioMeterTap(
+            sampleRate: recordingFormat.sampleRate,
+            continuation: meterStream.continuation)
         inputNode.installTap(
             onBus: 0,
             bufferSize: bufferSize,
             format: recordingFormat,
-            block: Self.makeAudioTapHandler(buffer: buffer, relay: relay)
+            block: Self.makeAudioTapHandler(buffer: buffer, meter: meterTap)
         )
         inputTapInstalled = true
-
-        // Poll the level relay on the main thread. `.common` mode so the meter
-        // doesn't freeze during menu tracking; the epsilon skip keeps silence
-        // from invalidating observers 20×/s for identical values.
-        let timer = Timer(timeInterval: Defaults.meterInterval, repeats: true) {
-            [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                let level = self.levelRelay.level
-                if abs(level - self.audioLevel) > 0.001 {
-                    self.audioLevel = level
-                }
-            }
-        }
-        timer.tolerance = 0.01
-        RunLoop.main.add(timer, forMode: .common)
-        levelUpdateTimer = timer
 
         // Duck other system audio only for a real dictation capture — the
         // settings meter keeps the idle treatment. Set before start so the
@@ -387,12 +360,11 @@ final class AudioCaptureEngine: AudioCapturing {
                 \(String(format: "%.0f", Date().timeIntervalSince(startClock) * 1000)) ms
                 """)
         } catch {
-            levelUpdateTimer?.invalidate()
-            levelUpdateTimer = nil
             inputNode.removeTap(onBus: 0)
             inputTapInstalled = false
             captureStartTime = nil
             duckPolicy.captureDidStop()
+            meterStream.continuation.yield(.zero)
             throw DictationError.audioCaptureFailed(error.localizedDescription)
         }
     }
@@ -401,10 +373,7 @@ final class AudioCaptureEngine: AudioCapturing {
         guard isCapturing else { return nil }
 
         isCapturing = false
-        levelUpdateTimer?.invalidate()
-        levelUpdateTimer = nil
-        audioLevel = 0
-        levelRelay.level = 0
+        meterStream.continuation.yield(.zero)
 
         // Stop IO but keep the engine (and its Voice Processing arm) for the
         // next press. Same order as teardown: stop before removing the tap,
@@ -548,7 +517,7 @@ final class AudioCaptureEngine: AudioCapturing {
     /// This is nonisolated to prevent MainActor isolation inheritance.
     nonisolated private static func makeAudioTapHandler(
         buffer: SampleBuffer?,
-        relay: AudioLevelRelay
+        meter: AudioMeterTap?
     ) -> AVAudioNodeTapBlock {
         return { audioBuffer, _ in
             guard let channelData = audioBuffer.floatChannelData?[0] else { return }
@@ -560,14 +529,14 @@ final class AudioCaptureEngine: AudioCapturing {
 
             // Convert to dB scale (with floor at -60dB)
             let db = 20 * log10(max(rms, 0.001))
-            let normalizedLevel = (db + 60) / 60  // Normalize -60dB to 0dB -> 0 to 1
+            let normalizedLevel = max(0, min(1, (db + 60) / 60))
 
             // Copy samples to the thread-safe buffer (nil for a metering-only
             // capture — the settings meter wants the level, not the audio)
             buffer?.append(UnsafeBufferPointer(start: channelData, count: frameCount))
 
-            // Store level in thread-safe relay (polled by timer on main thread)
-            relay.level = max(0, min(1, normalizedLevel))
+            // Level + spectrum straight into the meter stream.
+            meter?.process(channelData, frameCount: frameCount, level: normalizedLevel)
         }
     }
 

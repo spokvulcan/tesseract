@@ -16,34 +16,32 @@ nonisolated struct ScreenGeometry: Equatable, Sendable {
     let visibleFrame: NSRect
 }
 
-/// The whole injected difference between one ``OverlayPanel`` and another.
+/// Where an ``OverlayPanel``'s fixed canvas sits for a given screen — a pure
+/// value an **Overlay Variant** brings along with its hosted view.
 ///
-/// A small value carrying a pure `frame(ScreenGeometry, DictationState) -> NSRect`
-/// plus `animatesResizeOnShow`, which governs the show / visible-state-apply path
-/// only (screen-change relayout is always instant).
-///
-/// One preset exists: ``pill``.
+/// State-free by design (map #283): the panel frame never changes with
+/// dictation state, so per-phase size and motion live entirely in the hosted
+/// SwiftUI content.
 ///
 /// `nonisolated` so it escapes the build's MainActor default isolation: a pure
 /// value the frame math (and its tests) can use off the main actor.
 nonisolated struct OverlayPlacement: Sendable {
-    /// Where the panel sits for a given screen geometry and dictation state. A pure
-    /// function of CoreGraphics rects (sizes come from the non-isolated
-    /// ``PillMetrics``), so it carries no actor isolation and stays off-main-testable.
-    let frame: @Sendable (ScreenGeometry, DictationState) -> NSRect
-
-    /// Whether the show / visible-state-apply path animates the resize. The pill's
-    /// frame changes size between states, so it animates. Screen-change relayout
-    /// always snaps regardless (see `OverlayPanel.refreshPanelLayout`).
-    let animatesResizeOnShow: Bool
+    /// Where the fixed canvas sits for a given screen geometry. A pure
+    /// function of CoreGraphics rects (the canvas size comes from the
+    /// non-isolated ``PillMetrics``), so it carries no actor isolation and
+    /// stays off-main-testable.
+    let frame: @Sendable (ScreenGeometry) -> NSRect
 }
 
 nonisolated extension OverlayPlacement {
-    /// The dictation HUD: a state-sized rect centred horizontally in the visible
-    /// frame, sitting at a fixed bottom inset. Animates its resize on show.
+    /// The dictation pill's canvas: centred horizontally in the visible
+    /// frame, its bottom edge at a fixed inset above the visible frame's
+    /// bottom. Sized to the largest pill the variant draws (plus entrance
+    /// headroom), so per-phase pill sizes are content layout, never window
+    /// resizes.
     static let pill = OverlayPlacement(
-        frame: { geometry, state in
-            let size = PillMetrics.size(for: state)
+        frame: { geometry in
+            let size = PillMetrics.canvasSize
             let visible = geometry.visibleFrame
             return NSRect(
                 x: visible.midX - size.width / 2,
@@ -51,10 +49,9 @@ nonisolated extension OverlayPlacement {
                 width: size.width,
                 height: size.height
             )
-        },
-        animatesResizeOnShow: true
+        }
     )
 
-    /// The pill floats this far above the bottom of the visible frame.
+    /// The pill canvas floats this far above the bottom of the visible frame.
     private static let pillBottomInset: CGFloat = 60
 }

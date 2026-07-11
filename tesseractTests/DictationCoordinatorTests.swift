@@ -3,8 +3,8 @@
 //  tesseractTests
 //
 //  Exercises `DictationCoordinator` as a thin composer over the **Voice Capture
-//  Session**: the `StopResult`/`Outcome` → `DictationState` mapping, the commit
-//  closure's effects (history write + auto-insert text injection with
+//  Session**: the `StopResult`/`Outcome` → **Overlay Feed** phase/beat mapping,
+//  the commit closure's effects (history write + auto-insert text injection with
 //  restore-clipboard), and `DictationError` mapping. The deep staleness/supersede
 //  races now live once in `VoiceCaptureSessionTests`, driven through the session's
 //  own interface — they are no longer duplicated here.
@@ -124,7 +124,7 @@ struct DictationCoordinatorTests {
         return engine
     }
 
-    // MARK: - Happy path (Outcome → state mapping + commit effects)
+    // MARK: - Happy path (Outcome → phase/beat mapping + commit effects)
 
     @Test
     func runsIdleToRecordingToProcessingToIdleWithHistoryAndInjection() async throws {
@@ -142,30 +142,39 @@ struct DictationCoordinatorTests {
         let injector = FakeTextInjector()
         let store = FakeTranscriptionStore()
         let settings = SettingsManager(store: InMemorySettingsStore())
+        let feed = DictationFeed()
 
         let coordinator = DictationCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: injector,
             history: store,
-            settings: settings
+            settings: settings,
+            feed: feed
         )
 
         #expect(coordinator.state == .idle)
+        #expect(feed.beat == nil)
 
         coordinator.onHotkeyDown()
         #expect(coordinator.state == .recording)
+        #expect(feed.phase == .recording)
+        #expect(feed.recordingStarted != nil)
         #expect(capture.isCapturing)
         #expect(capture.startCount == 1)
 
         coordinator.onHotkeyUp()
         #expect(coordinator.state == .processing)
+        #expect(feed.recordingStarted == nil)
 
         try await waitUntil { coordinator.state == .idle }
 
         let expected = TranscriptionPostProcessor().process("hello world")
         #expect(!expected.isEmpty)
         #expect(coordinator.lastTranscription == expected)
+        // The terminal beat carries the committed text so a variant can end the
+        // happy path (and a future correction affordance can hook it).
+        #expect(feed.beat?.outcome == .committed(text: expected, duration: 2.0))
         #expect(
             store.entries == [
                 FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")
@@ -192,17 +201,16 @@ struct DictationCoordinatorTests {
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()
         coordinator.onHotkeyUp()
 
-        // The too-short guard maps to an error synchronously.
-        #expect(coordinator.state == .error(DictationError.recordingTooShort.localizedDescription))
-        #expect(
-            coordinator.lastError?.localizedDescription
-                == DictationError.recordingTooShort.localizedDescription)
+        // The too-short guard maps to a *typed* error synchronously — variants
+        // receive the case, not a pre-flattened string.
+        #expect(coordinator.state == .error(.recordingTooShort))
         #expect(await recognizer.transcribeCount == 0)
     }
 
@@ -222,19 +230,17 @@ struct DictationCoordinatorTests {
             transcriptionEngine: ControllableTranscribing(),
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()
 
-        #expect(coordinator.state == .error(DictationError.microphoneBusy.localizedDescription))
-        #expect(
-            coordinator.lastError?.localizedDescription
-                == DictationError.microphoneBusy.localizedDescription)
+        #expect(coordinator.state == .error(.microphoneBusy))
         #expect(capture.startCount == 0)
     }
 
-    // MARK: - No speech detected (Outcome.empty → noSpeech error)
+    // MARK: - No speech detected (Outcome.empty → noSpeech error + empty beat)
 
     @Test
     func emptyTranscriptionResultGoesToNoSpeechDetectedError() async throws {
@@ -248,24 +254,22 @@ struct DictationCoordinatorTests {
         let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
 
         let store = FakeTranscriptionStore()
+        let feed = DictationFeed()
         let coordinator = DictationCoordinator(
             audioCapture: FakeAudioCapture(
                 cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0)),
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: store,
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed
         )
 
         coordinator.onHotkeyDown()
         coordinator.onHotkeyUp()
 
-        try await waitUntil {
-            if case .error = coordinator.state { return true } else { return false }
-        }
-        #expect(
-            coordinator.lastError?.localizedDescription
-                == DictationError.noSpeechDetected.localizedDescription)
+        try await waitUntil { coordinator.state == .error(.noSpeechDetected) }
+        #expect(feed.beat?.outcome == .empty)
         #expect(store.entries.isEmpty)
     }
 
@@ -282,7 +286,8 @@ struct DictationCoordinatorTests {
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()
@@ -295,15 +300,16 @@ struct DictationCoordinatorTests {
         try await waitUntil {
             if case .error = coordinator.state { return true } else { return false }
         }
-        if case .transcriptionFailed = coordinator.lastError {
+        if case .error(.transcriptionFailed) = coordinator.state {
             // expected mapping
         } else {
             Issue.record(
-                "expected .transcriptionFailed, got \(String(describing: coordinator.lastError))")
+                "expected .error(.transcriptionFailed), got \(String(describing: coordinator.state))"
+            )
         }
     }
 
-    // MARK: - Cancel (returns to idle, stops capture)
+    // MARK: - Cancel (returns to idle, stops capture, emits the cancelled beat)
 
     @Test
     func cancelFromRecordingReturnsToIdleAndStopsCapture() async throws {
@@ -315,12 +321,14 @@ struct DictationCoordinatorTests {
 
         let capture = FakeAudioCapture(
             cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        let feed = DictationFeed()
         let coordinator = DictationCoordinator(
             audioCapture: capture,
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed
         )
 
         coordinator.onHotkeyDown()
@@ -328,6 +336,7 @@ struct DictationCoordinatorTests {
 
         coordinator.cancel()
         #expect(coordinator.state == .idle)
+        #expect(feed.beat?.outcome == .cancelled)
         #expect(!capture.isCapturing)
         #expect(capture.stopCount == 1)
     }
@@ -346,17 +355,17 @@ struct DictationCoordinatorTests {
             transcriptionEngine: ControllableTranscribing(),
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()
         coordinator.onHotkeyUp()
-        #expect(coordinator.state == .error(DictationError.recordingTooShort.localizedDescription))
+        #expect(coordinator.state == .error(.recordingTooShort))
 
         coordinator.onHotkeyDown()
         #expect(coordinator.state == .recording)
         #expect(capture.startCount == 2)
-        #expect(coordinator.lastError == nil)
     }
 
     /// A press that lands while a previous capture is still transcribing is not
@@ -373,7 +382,8 @@ struct DictationCoordinatorTests {
             transcriptionEngine: engine,
             textInjector: injector,
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()
@@ -402,7 +412,8 @@ struct DictationCoordinatorTests {
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()
@@ -432,7 +443,8 @@ struct DictationCoordinatorTests {
             transcriptionEngine: engine,
             textInjector: FakeTextInjector(),
             history: FakeTranscriptionStore(),
-            settings: SettingsManager(store: InMemorySettingsStore())
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: DictationFeed()
         )
 
         coordinator.onHotkeyDown()

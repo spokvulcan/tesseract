@@ -5,13 +5,12 @@
 
 import CoreGraphics
 
-/// The single source of truth for the dictation pill's per-state size.
+/// The single source of truth for the dictation pill's sizes.
 ///
-/// Both the panel frame math (``OverlayPlacement/pill``, which sizes the NSPanel)
-/// and the rendered HUD (`GlobalOverlayHUD`, which sizes the pill it hosts) read
-/// from here, so the panel frame and its content can't silently diverge. A plain
-/// non-isolated value (no `NSScreen`, no `@MainActor`), which is what lets the
-/// frame math stay a pure, off-main-testable function.
+/// Per-phase sizes are *content layout* consumed by the pill variant
+/// (`GlobalOverlayHUD`); the panel's window is fixed at ``canvasSize`` and
+/// never resizes (map #283) — SwiftUI animates the pill between the phase
+/// sizes inside that canvas.
 ///
 /// `nonisolated` so it escapes the build's MainActor default isolation — that's
 /// what lets ``OverlayPlacement`` and its tests run off the main actor.
@@ -20,16 +19,21 @@ nonisolated enum PillMetrics {
     static let processingSize = CGSize(width: 112, height: 34)
     static let errorSize = CGSize(width: 260, height: 44)
 
-    /// The pill's size for a given dictation state. The non-visible states
-    /// (`.idle`, `.listening`) resolve to the recording size — the size the panel
-    /// is created at before its first show.
-    static func size(for state: DictationState) -> CGSize {
-        switch state {
+    /// The fixed panel canvas: fits the largest pill (`errorSize`) plus
+    /// entrance-scale and antialiasing headroom on every side. The pill is
+    /// bottom-anchored inside it, so the visual bottom inset is constant
+    /// across phases.
+    static let canvasSize = CGSize(width: 300, height: 64)
+
+    /// The pill's content size for a given feed phase; `.idle` resolves to
+    /// the recording size (the size the pill scales out from).
+    static func size(for phase: DictationFeed.Phase) -> CGSize {
+        switch phase {
         case .error:
             return errorSize
         case .processing:
             return processingSize
-        case .recording, .listening, .idle:
+        case .recording, .idle:
             return recordingSize
         }
     }

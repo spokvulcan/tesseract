@@ -21,18 +21,21 @@ struct StatusIndicator: View {
         self.detail = detail
     }
 
-    init(state: DictationState) {
+    init(state: DictationFeed.Phase) {
         switch state {
-        case .error(let message):
-            self.init(badge: .dot(.red), title: "Error", detail: message)
+        case .error(let error):
+            // The typed error carries curated guidance — surface it (the
+            // recoverySuggestion was previously dead, audit #285 item 5).
+            let detail = [error.errorDescription, error.recoverySuggestion]
+                .compactMap { $0 }
+                .joined(separator: " ")
+            self.init(badge: .dot(.red), title: "Error", detail: detail)
         case .idle:
-            self.init(badge: .dot(.green), title: state.statusText, detail: nil)
-        case .listening:
-            self.init(badge: .dot(.yellow), title: state.statusText, detail: nil)
+            self.init(badge: .dot(.green), title: "Ready", detail: nil)
         case .recording:
-            self.init(badge: .dot(.red), title: state.statusText, detail: nil)
+            self.init(badge: .dot(.red), title: "Recording...", detail: nil)
         case .processing:
-            self.init(badge: .dot(.orange), title: state.statusText, detail: nil)
+            self.init(badge: .dot(.orange), title: "Processing...", detail: nil)
         }
     }
 

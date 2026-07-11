@@ -3,22 +3,30 @@
 //  tesseract
 //
 
+import AppKit
 import Foundation
 import Observation
-import AppKit
 
-/// The global system-wide dictation overlay. A thin composer over the shared
+/// The global system-wide dictation driver. A thin composer over the shared
 /// **Voice Capture Session**: it maps the session's `StopResult`/`Outcome` onto
-/// `DictationState` and keeps only what is dictation-specific — its commit
-/// (history + auto-insert text injection), success/error sounds, the
-/// maximum-recording-duration auto-stop, `DictationError` mapping, and the error
-/// auto-reset. Distinct from **Voice Input** (`AgentVoiceInputController`), the
-/// agent composer leaf, which composes the same session for its own presentation.
+/// the **Overlay Feed**'s phases and beats and keeps only what is
+/// dictation-specific — its commit (history + auto-insert text injection),
+/// success/error sounds, the maximum-recording-duration auto-stop,
+/// `DictationError` mapping, and the error auto-reset. Distinct from
+/// **Voice Input** (`AgentVoiceInputController`), the agent composer leaf,
+/// which composes the same session for its own presentation.
+///
+/// The coordinator is the feed's sole phase/beat writer; overlay variants and
+/// the in-window dictation views read the feed, never the coordinator's
+/// internals.
 @Observable @MainActor
 final class DictationCoordinator {
-    private(set) var state: DictationState = .idle
+    let feed: DictationFeed
     private(set) var lastTranscription: String = ""
-    private(set) var lastError: DictationError?
+
+    /// The current lifecycle phase — a read-through to the feed, kept as the
+    /// coordinator's public state surface for the in-window views and tests.
+    var state: DictationFeed.Phase { feed.phase }
 
     private let session: VoiceCaptureSession
     private let textInjector: any TextInjecting
@@ -43,6 +51,7 @@ final class DictationCoordinator {
         textInjector: any TextInjecting,
         history: any TranscriptionStoring,
         settings: SettingsManager,
+        feed: DictationFeed,
         captureDump: (any CaptureDumpStoring)? = nil
     ) {
         self.session = VoiceCaptureSession(
@@ -54,6 +63,7 @@ final class DictationCoordinator {
         self.textInjector = textInjector
         self.history = history
         self.settings = settings
+        self.feed = feed
     }
 
     // MARK: - Public API
@@ -68,18 +78,18 @@ final class DictationCoordinator {
             // so recording starts immediately instead of waiting out the
             // error auto-reset.
             DictationPerf.markPress()
-            state = .idle
+            feed.setPhase(.idle)
             startRecording()
         case .processing:
             startPending = true
-        case .recording, .listening:
+        case .recording:
             break
         }
     }
 
     func onHotkeyUp() {
         startPending = false
-        guard state == .recording || state == .listening else { return }
+        guard state == .recording else { return }
         stopRecordingAndProcess()
     }
 
@@ -87,14 +97,14 @@ final class DictationCoordinator {
         switch state {
         case .idle:
             startRecording()
-        case .listening, .recording:
+        case .recording:
             stopRecordingAndProcess()
         case .processing:
             // Can't stop while processing
             break
         case .error:
             // Reset and try again
-            state = .idle
+            feed.setPhase(.idle)
             startRecording()
         }
     }
@@ -104,17 +114,21 @@ final class DictationCoordinator {
         recordingTask?.cancel()
         recordingTask = nil
         session.cancel()
-        state = .idle
+        feed.setPhase(.idle)
+        feed.emit(.cancelled)
     }
 
     // MARK: - Private
 
     private func startRecording() {
-        lastError = nil
-
+        // Note (audit #285 item 6): the `.recording` emission lands *after*
+        // the synchronous engine start below, but reordering would gain
+        // nothing — emission and `AVAudioEngine.start()` complete inside one
+        // main-actor job, so the pill's first frame can't precede either.
+        // DictationPerf's press→visible measures the whole job.
         switch session.start() {
         case .started:
-            state = .recording
+            feed.setPhase(.recording)
 
             // Start the maximum-duration timeout task.
             recordingTask = Task {
@@ -161,16 +175,18 @@ final class DictationCoordinator {
     }
 
     private func process(_ audioData: AudioData) {
-        state = .processing
+        feed.setPhase(.processing)
 
         // Fire-and-forget: the session owns the in-flight task and its cancellation,
         // so this outer task is untracked — it only maps the outcome back to state.
         Task {
             let sessionStart = DispatchTime.now()
+            var committedDuration: TimeInterval = 0
             let outcome = await session.transcribeAndCommit(
                 audioData, language: settings.language
             ) { [self] text, duration in
                 lastTranscription = text
+                committedDuration = duration
 
                 history.add(
                     text: text,
@@ -194,11 +210,13 @@ final class DictationCoordinator {
                 if settings.playSounds {
                     playSound(.success)
                 }
-                state = .idle
+                feed.setPhase(.idle)
+                feed.emit(.committed(text: lastTranscription, duration: committedDuration))
                 DictationPerf.markResolved("committed")
                 drainPendingStart()
             case .empty:
                 handleError(.noSpeechDetected)
+                feed.emit(.empty)
                 DictationPerf.markResolved("error(noSpeech)")
                 drainPendingStart()
             case .failed(let error):
@@ -210,11 +228,13 @@ final class DictationCoordinator {
                 DictationPerf.markResolved("error(failed)")
                 drainPendingStart()
             case .cancelled:
-                state = .idle
+                feed.setPhase(.idle)
+                feed.emit(.cancelled)
                 DictationPerf.markResolved("cancelled")
             case .superseded:
                 // A cancel-and-restart superseded this operation — the newer
                 // operation owns the state; commit nothing and leave it untouched.
+                feed.emit(.superseded)
                 DictationPerf.markResolved("superseded")
             }
         }
@@ -227,14 +247,13 @@ final class DictationCoordinator {
     private func drainPendingStart() {
         guard startPending else { return }
         startPending = false
-        if case .error = state { state = .idle }
+        if case .error = state { feed.setPhase(.idle) }
         guard state == .idle else { return }
         startRecording()
     }
 
     private func handleError(_ error: DictationError) {
-        lastError = error
-        state = .error(error.localizedDescription)
+        feed.setPhase(.error(error))
 
         if settings.playSounds {
             playSound(.error)
@@ -245,7 +264,7 @@ final class DictationCoordinator {
         Task {
             try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
             if case .error = state {
-                state = .idle
+                feed.setPhase(.idle)
             }
         }
     }
