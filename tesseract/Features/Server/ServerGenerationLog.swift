@@ -258,10 +258,6 @@ final class ServerGenerationLog {
             trace.isCancellable = false
             trace.finishReason = finishReason
             trace.completedAt = at
-            // Close the sparkline on the exact terminal rate when we got one.
-            if trace.tokensPerSecond > 0 {
-                trace.rateSamples.append(trace.tokensPerSecond)
-            }
         }
         bumpStreamingVersion()
     }
@@ -444,7 +440,6 @@ final class ServerGenerationLog {
                 trace.appendToolCallDelta(name: toolCallName, delta: toolCallDelta)
             }
             trace.liveOutputTokens += chunkCount
-            trace.sampleRateIfDue()
         }
         throttledStreamingVersionBump()
     }
@@ -552,13 +547,10 @@ struct RequestTrace: Identifiable, Equatable {
     /// (one chunk ≈ one token on the MLX detokenizer path). Superseded by
     /// the exact `generationTokens` from the terminal `.info` event.
     var liveOutputTokens: Int = 0
-    /// ~1 Hz samples of the live decode rate, for the dashboard sparkline.
-    var rateSamples: [Double] = []
-    var lastRateSampleAt: Date?
     /// True while a transport-level cancel closure is registered for this
-    /// trace — i.e. the dashboard can stop the generation.
+    /// trace — i.e. the Activity page can stop the generation.
     var isCancellable: Bool = false
-    /// Set when the user requested a cancel from the dashboard, so the
+    /// Set when the user requested a cancel from the Activity page, so the
     /// terminal event renders as cancelled whichever exit path fires.
     var cancelRequested: Bool = false
 
@@ -613,21 +605,6 @@ struct RequestTrace: Identifiable, Equatable {
             let newTokensToPrefill, newTokensToPrefill > 0
         else { return nil }
         return Double(newTokensToPrefill) / (prefillMs / 1000)
-    }
-
-    static let maxRateSamples = 120
-
-    /// Record a decode-rate sample if at least a second has passed since the
-    /// last one. Called from the coalesced flush, so it costs nothing on the
-    /// per-chunk path.
-    mutating func sampleRateIfDue(at now: Date = Date()) {
-        guard let rate = liveTokensPerSecond(at: now) else { return }
-        if let last = lastRateSampleAt, now.timeIntervalSince(last) < 1 { return }
-        lastRateSampleAt = now
-        rateSamples.append(rate)
-        if rateSamples.count > Self.maxRateSamples {
-            rateSamples.removeFirst(rateSamples.count - Self.maxRateSamples)
-        }
     }
 
     mutating func markFirstTokenIfNeeded() {

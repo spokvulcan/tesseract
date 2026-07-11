@@ -2,17 +2,16 @@
 //  ActivityTranscriptView.swift
 //  tesseract
 //
-//  PROTOTYPE (wayfinder #273) — THROWAWAY. The Activity page's centerpiece:
-//  one request as a full exchange — per-request header, the inbound
-//  message list collapsed by default, and the response span stream in the
-//  chat's full grammar. Scrolling lifts the chat's 4-rule contract
-//  (`ChatTranscriptView`): follow growth at the bottom, disengage the
-//  moment the user scrolls up, re-arm when they return.
-//
 
 import SwiftUI
 import Textual
 
+/// The Activity page's centerpiece: one request as a full exchange —
+/// per-request header, the inbound message list collapsed by default, and
+/// the response span stream in the chat's full grammar. Scrolling lifts
+/// the chat's 4-rule contract (`ChatTranscriptView`): follow growth at the
+/// bottom, disengage the moment the user scrolls up, re-arm when they
+/// return.
 struct ActivityTranscriptView: View {
     let trace: RequestTrace
     let now: Date
@@ -101,9 +100,9 @@ struct ActivityTranscriptView: View {
 
 // MARK: - Request header
 
-/// The per-request header: model + phase + finish on the first line,
-/// cache outcome / TTFT / rate metrics on the monospace meta line, the
-/// decode sparkline riding the right edge — the Dashboard hero grammar
+/// The per-request header: model + phase + finish on the first line, the
+/// prompt-side cache/prefill metrics and the decode-side latency/rate
+/// metrics on two monospace meta lines — the old Dashboard's hero grammar
 /// compressed to one request's vitals.
 private struct ActivityRequestHeader: View {
     let trace: RequestTrace

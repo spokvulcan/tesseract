@@ -13,28 +13,21 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
     case dictation
     case speech
     case agent
-    case serverDashboard
-    // PROTOTYPE (wayfinder #273) — THROWAWAY: the Activity re-cut, side by
-    // side with the Dashboard until the Activity cutover (#276) replaces it.
-    case serverActivityPrototype
+    case serverActivity
     case serverCache
     case model
 
     var id: String { rawValue }
 
     static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
-    static let serverPages: [NavigationItem] = [
-        .serverDashboard, .serverActivityPrototype,
-        .serverCache, .model,
-    ]
+    static let serverPages: [NavigationItem] = [.serverActivity, .serverCache, .model]
 
     var name: LocalizedStringResource {
         switch self {
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .agent: "Agent"
-        case .serverDashboard: "Dashboard"
-        case .serverActivityPrototype: "Activity"
+        case .serverActivity: "Activity"
         case .serverCache: "Cache"
         case .model: "Models"
         }
@@ -45,8 +38,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
         case .agent: "brain.head.profile"
-        case .serverDashboard: "gauge"
-        case .serverActivityPrototype: "testtube.2"
+        case .serverActivity: "waveform.path.ecg"
         case .serverCache: "tray.2.fill"
         case .model: "brain"
         }

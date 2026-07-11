@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Passive monospace span list for a single `RequestTrace`.
+/// Passive monospace span list for a single `RequestTrace` — the Activity
+/// transcript's `Raw` mode: the exact captured spans, unrendered.
 /// This view intentionally avoids lazy stacks, scroll readers, geometry
 /// callbacks, timeline ticks, and programmatic scrolling; it is rendered from
 /// the current trace snapshot only. Follow-the-stream behavior comes from the

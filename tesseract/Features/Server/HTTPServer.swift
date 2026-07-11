@@ -564,7 +564,7 @@ final class HTTPServer {
     private(set) var boundPort: UInt16?
     /// Non-nil when the most recent enable attempt failed to bind or the listener
     /// transitioned to `.failed`. Cleared on successful start or user-initiated
-    /// stop. Used by the Dashboard to distinguish "starting" from "failed".
+    /// stop. Used by the Activity page to distinguish "starting" from "failed".
     private(set) var lastStartError: String?
 
     // MARK: - Configuration

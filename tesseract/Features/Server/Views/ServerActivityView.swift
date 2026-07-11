@@ -1,19 +1,18 @@
 //
-//  ServerActivityPrototypeView.swift
+//  ServerActivityView.swift
 //  tesseract
-//
-//  PROTOTYPE (wayfinder #273) — THROWAWAY. The Activity page of the locked
-//  direction (#272): "what is it doing now" — a status strip over the
-//  full-exchange transcript, with the recent-requests rail. The ⌘` console
-//  drawer is retired; its jobs live in the strip, the transcript header,
-//  and the rail.
 //
 
 import Charts
 import SwiftUI
 import Textual
 
-struct ServerActivityPrototypeView: View {
+/// The Activity page (map #269, direction locked in #272, prototype
+/// accepted in #273): "what is it doing now" — the server's process vitals
+/// in a status strip over one request as a full exchange, with the
+/// recent-requests rail. The old Dashboard's ⌘` console drawer is retired;
+/// its jobs live in the strip, the transcript header, and the rail.
+struct ServerActivityView: View {
     @Environment(ServerGenerationLog.self) private var log
     @Environment(HTTPServer.self) private var server
 
@@ -23,7 +22,7 @@ struct ServerActivityPrototypeView: View {
     @State private var pinnedTraceID: UUID?
     @State private var contentWidth: CGFloat = 0
 
-    private var isWide: Bool { contentWidth >= Proto273Layout.activityWideBreakpoint }
+    private var isWide: Bool { contentWidth >= ActivityLayout.wideBreakpoint }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,7 +45,7 @@ struct ServerActivityPrototypeView: View {
                         onSelect: { pinnedTraceID = $0 },
                         onGoLive: { pinnedTraceID = nil }
                     )
-                    .frame(width: Proto273Layout.railWidth)
+                    .frame(width: ActivityLayout.railWidth)
                 }
             } else {
                 transcript
@@ -60,7 +59,7 @@ struct ServerActivityPrototypeView: View {
                     onSelect: { pinnedTraceID = $0 },
                     onGoLive: { pinnedTraceID = nil }
                 )
-                .frame(height: Proto273Layout.stackedRailHeight)
+                .frame(height: ActivityLayout.stackedRailHeight)
             }
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -68,7 +67,7 @@ struct ServerActivityPrototypeView: View {
         } action: { width in
             contentWidth = width
         }
-        .navigationTitle("Activity (Prototype)")
+        .navigationTitle("Activity")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 if let cancellable = cancellableTrace {
@@ -85,14 +84,6 @@ struct ServerActivityPrototypeView: View {
                     .keyboardShortcut(".", modifiers: .command)
                     .help("Stop the current generation (⌘.)")
                 }
-
-                Button {
-                    Proto273ReplayDriver.shared.play(into: log)
-                } label: {
-                    Label("Demo Traffic", systemImage: "testtube.2")
-                }
-                .disabled(Proto273ReplayDriver.shared.isPlaying)
-                .help("Stream two synthetic requests through the transcript (prototype only)")
 
                 Menu {
                     ShareLink(item: heroTrace?.concatenatedText ?? "") {
@@ -134,10 +125,7 @@ struct ServerActivityPrototypeView: View {
             ContentUnavailableView {
                 Label("No Requests Yet", systemImage: "waveform")
             } description: {
-                Text(
-                    "Requests to /v1/chat/completions stream in here as full exchanges."
-                        + "\nUse Demo Traffic to preview one without a client."
-                )
+                Text("Requests to /v1/chat/completions stream in here as full exchanges.")
             }
         }
     }
@@ -156,6 +144,18 @@ struct ServerActivityPrototypeView: View {
     private var cancellableTrace: RequestTrace? {
         log.traces.last { $0.isActive && $0.isCancellable && !$0.cancelRequested }
     }
+}
+
+// MARK: - Layout
+
+private enum ActivityLayout {
+    /// Below this content width the page stacks single-column
+    /// (status → transcript → recent) — the ~400 pt bar with margin.
+    static let wideBreakpoint: CGFloat = 700
+    /// The recent rail's fixed width on wide layouts.
+    static let railWidth: CGFloat = 264
+    /// The rail's height when stacked below the transcript at narrow widths.
+    static let stackedRailHeight: CGFloat = 188
 }
 
 // MARK: - Status strip
