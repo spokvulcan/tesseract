@@ -1,4 +1,3 @@
-import CoreImage
 import Foundation
 import Metal
 import MLX
@@ -1077,67 +1076,24 @@ nonisolated final class ServerCompletion {
                 return (value, Date.timeIntervalSinceReferenceDate - started)
             }
 
-            // 1. Tokenize the full conversation (BEFORE cache lookup). Images
-            // ride along positionally: the renderer emits one `"image"` part
-            // per attachment and the processor matches them in order.
-            // `MessageConverter` already proved each payload `CIImage`-decodable.
-            let requestImages = conversation.images
-            let userInputImages: [UserInput.Image] = try requestImages.map { image in
-                guard let decoded = CIImage(data: image.data) else {
-                    throw AgentEngineError.generationFailed(
-                        "image attachment no longer decodes (digest \(image.digest.hexString.prefix(8)))"
-                    )
-                }
-                return .ciImage(decoded)
-            }
-            let fullInput = try await session.prepare(
-                UserInput(
-                    messages: conversation.promptMessages,
-                    images: userInputImages,
-                    tools: canonicalTools,
-                    additionalContext: renderContext.additionalContext()
-                )
-            )
-            // Sequence length is always the LAST dim. For LLM models tokens are
-            // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
-            let fullTokenCount = fullInput.text.tokens.dim(-1)
-            let tokenNDim = fullInput.text.tokens.ndim
-
-            // 2. Extract flat token sequence for radix tree operations.
-            let fullTokens = LLMActor.extractTokenSequence(fullInput.text.tokens)
-
-            // 3. Build the global Marconi partition key for this model
-            //    configuration. Cross-session sharing is intentional:
-            //    identical prompts under the same model config should
-            //    reuse the same radix tree. The conversation's template-
-            //    context digest separates render modes (issue #98) — it is
-            //    the same digest the handler derived from `renderContext`.
-            let partitionKey = CachePartitionKey(
+            // 1–3b. The Request Keying phase: prepared input, flat token
+            // sequence, Marconi partition key, and the request's **Cache Key
+            // Space** — or the degrade signal when key-space construction
+            // fails, in which case the whole request is served unkeyed.
+            let keyed: RequestKeyingPhase.Keyed
+            switch try await RequestKeyingPhase.run(
+                session: session,
+                conversation: conversation,
+                canonicalTools: canonicalTools,
+                renderContext: renderContext,
+                parameters: parameters,
                 modelID: modelID,
-                kvBits: parameters.kvBits,
-                kvGroupSize: parameters.kvGroupSize,
                 modelFingerprint: modelFingerprint,
-                templateContextDigest: conversation.templateContextDigest
-            )
-
-            // 3b. Build the request's **Cache Key Space** from the prepared
-            // tokens, the conversation's images, and the family's image
-            // keying. Identity (and free) for text-only requests. A
-            // construction failure degrades the whole request to an **Unkeyed
-            // Completion** — served normally, zero cache participation.
-            let keySpace: CacheKeySpace
-            switch CacheKeySpace.make(
-                preparedTokens: fullTokens,
-                imageDigests: requestImages.map(\.digest),
-                imageGrids: (fullInput.image?.frames ?? []).map { frame in
-                    let (t, h, w) = frame.values
-                    return (t: t, height: h, width: w)
-                },
                 imageKeying: imageKeying
             ) {
-            case .success(let space):
-                keySpace = space
-            case .failure(let reason):
+            case .keyed(let identities):
+                keyed = identities
+            case .unkeyed(let fullInput, let fullTokens, let partitionKey, let reason):
                 return try await Self.makeUnkeyedGeneration(
                     session: session,
                     fullInput: fullInput,
@@ -1153,29 +1109,13 @@ nonisolated final class ServerCompletion {
                     progressHandler: progressHandler
                 )
             }
-            // Grid instrumentation (ADR-0007 phase 2): the processed image grid
-            // is the ground truth for the M-RoPE span and the pad-run length the
-            // Cache Key Path expands. Logging it cheaply catches the deferred
-            // "one screenshot → ~43,500 pad tokens" anomaly with real numbers if
-            // it recurs — the chunked continuation already makes such an image
-            // non-fatal, so this is observe-only, not a gate.
-            if let frames = fullInput.image?.frames, !frames.isEmpty {
-                let merge = imageKeying?.spatialMergeSize ?? 1
-                let mergeArea = max(1, merge * merge)
-                for (index, frame) in frames.enumerated() {
-                    let (t, h, w) = frame.values
-                    Log.image.debug(
-                        "vision grid #\(index): t=\(t) h=\(h) w=\(w) "
-                            + "patches=\(frame.product) padRun=\(frame.product / mergeArea) "
-                            + "merge=\(merge)"
-                    )
-                }
-            }
-            // The recognized vision container mis-positions M-RoPE on any
-            // nil-state warm forward — text-only restores included — so the
-            // Position Anchor is seeded whenever the family is recognized,
-            // not just when this request carries images.
-            let seedsPositionAnchor = imageKeying != nil
+            let fullInput = keyed.fullInput
+            let fullTokens = keyed.fullTokens
+            let fullTokenCount = keyed.fullTokenCount
+            let tokenNDim = keyed.tokenNDim
+            let partitionKey = keyed.partitionKey
+            let keySpace = keyed.keySpace
+            let seedsPositionAnchor = keyed.seedsPositionAnchor
 
             // 4. Detect the prefill boundaries (stable prefix + last-message +
             // last-user). The Prefill Planner owns this tokenizer-affine work —
