@@ -172,6 +172,7 @@ final class OverlayPanel<Content: View> {
             panel.animator().alphaValue = 1
         }
 
+        DictationPerf.markPanelShown()
         scheduleVisibilityCheck()
     }
 
@@ -206,6 +207,7 @@ final class OverlayPanel<Content: View> {
         }
         guard let panel = panel, let geometry = cachedGeometry else { return }
         let frame = placement.frame(geometry, dictationState)
+        DictationPerf.panelResize(animated: animated)
         if animated {
             panel.animator().setFrame(frame, display: false)
         } else {
