@@ -61,11 +61,13 @@ final class DictationCoordinator {
     func onHotkeyDown() {
         switch state {
         case .idle:
+            DictationPerf.markPress()
             startRecording()
         case .error:
             // An error pill is feedback, never a gate: the press *is* the retry,
             // so recording starts immediately instead of waiting out the
             // error auto-reset.
+            DictationPerf.markPress()
             state = .idle
             startRecording()
         case .processing:
@@ -142,11 +144,17 @@ final class DictationCoordinator {
         recordingTask?.cancel()
         recordingTask = nil
 
-        switch session.stop() {
+        DictationPerf.markRelease()
+        let stopStart = DispatchTime.now()
+        let stopResult = session.stop()
+        DictationPerf.record(span: "stop", ms: DictationPerf.msSince(stopStart))
+        switch stopResult {
         case .noAudio:
             handleError(.audioCaptureFailed("No audio captured"))
+            DictationPerf.markResolved("error(noAudio)")
         case .tooShort:
             handleError(.recordingTooShort)
+            DictationPerf.markResolved("error(tooShort)")
         case .audio(let audioData):
             process(audioData)
         }
@@ -158,6 +166,7 @@ final class DictationCoordinator {
         // Fire-and-forget: the session owns the in-flight task and its cancellation,
         // so this outer task is untracked — it only maps the outcome back to state.
         Task {
+            let sessionStart = DispatchTime.now()
             let outcome = await session.transcribeAndCommit(
                 audioData, language: settings.language
             ) { [self] text, duration in
@@ -172,9 +181,13 @@ final class DictationCoordinator {
 
                 if settings.autoInsertText {
                     textInjector.restoreClipboard = settings.restoreClipboard
+                    let injectStart = DispatchTime.now()
                     try await textInjector.inject(text + " ")
+                    DictationPerf.record(
+                        span: "inject", ms: DictationPerf.msSince(injectStart))
                 }
             }
+            DictationPerf.record(span: "session", ms: DictationPerf.msSince(sessionStart))
 
             switch outcome {
             case .committed:
@@ -182,9 +195,11 @@ final class DictationCoordinator {
                     playSound(.success)
                 }
                 state = .idle
+                DictationPerf.markResolved("committed")
                 drainPendingStart()
             case .empty:
                 handleError(.noSpeechDetected)
+                DictationPerf.markResolved("error(noSpeech)")
                 drainPendingStart()
             case .failed(let error):
                 if let dictationError = error as? DictationError {
@@ -192,13 +207,15 @@ final class DictationCoordinator {
                 } else {
                     handleError(.transcriptionFailed(error.localizedDescription))
                 }
+                DictationPerf.markResolved("error(failed)")
                 drainPendingStart()
             case .cancelled:
                 state = .idle
+                DictationPerf.markResolved("cancelled")
             case .superseded:
                 // A cancel-and-restart superseded this operation — the newer
                 // operation owns the state; commit nothing and leave it untouched.
-                break
+                DictationPerf.markResolved("superseded")
             }
         }
     }
