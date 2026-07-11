@@ -6,7 +6,7 @@ struct ServerCompletionLeafStoreModeTests {
 
     @Test func toolCallTurnsPreferDirectToolLeafOnThinkingTemplates() {
         #expect(
-            ServerCompletion.selectHTTPLeafStoreMode(
+            LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: true,
                 emittedToolCalls: true
             ) == .directToolLeaf
@@ -15,7 +15,7 @@ struct ServerCompletionLeafStoreModeTests {
 
     @Test func stopTurnsUseCanonicalUserLeafOnThinkingTemplates() {
         #expect(
-            ServerCompletion.selectHTTPLeafStoreMode(
+            LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: true,
                 emittedToolCalls: false
             ) == .canonicalUserLeaf
@@ -24,7 +24,7 @@ struct ServerCompletionLeafStoreModeTests {
 
     @Test func nonThinkingTemplatesKeepDirectLeafForNormalReplies() {
         #expect(
-            ServerCompletion.selectHTTPLeafStoreMode(
+            LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: false,
                 emittedToolCalls: false
             ) == .directLeaf
@@ -33,7 +33,7 @@ struct ServerCompletionLeafStoreModeTests {
 
     @Test func toolCallsStillForceDirectToolLeafWithoutThinkingPrompt() {
         #expect(
-            ServerCompletion.selectHTTPLeafStoreMode(
+            LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: false,
                 emittedToolCalls: true
             ) == .directToolLeaf

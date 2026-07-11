@@ -201,15 +201,15 @@ struct PreserveThinkingRenderTests {
     @Test func speculativeSeedingSelfSkipsUnderPreserveThinking() {
         let preserve = TemplateRenderContext(flags: [preserveFlag])
         #expect(
-            ServerCompletion.speculativeSeedPlan(
+            LeafStorePhase.speculativeSeedPlan(
                 boundaryMode: .canonical, renderContext: .canonical
             ) != nil)
         #expect(
-            ServerCompletion.speculativeSeedPlan(
+            LeafStorePhase.speculativeSeedPlan(
                 boundaryMode: .canonical, renderContext: preserve
             ) == nil)
         #expect(
-            ServerCompletion.speculativeSeedPlan(
+            LeafStorePhase.speculativeSeedPlan(
                 boundaryMode: .directTool, renderContext: preserve
             ) == nil)
     }

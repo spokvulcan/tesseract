@@ -486,7 +486,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
                     ssdEnabled: seed.ssdEnabled,
                     extending: extensionBase
                 )
-            let survived = await ServerCompletion.admitStructuredLeaf(
+            let admission = await ServerCompletion.admitStructuredLeaf(
                 leaf,
                 storedTokens: storedTokens,
                 storage: storage,
@@ -497,7 +497,15 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 admissionStage: "speculativePrefill",
                 captureSource: preempted ? "speculativePartialLeaf" : "speculativeLeaf"
             )
-            guard survived else { return }
+            if let store = admission.store {
+                // Classification + correlated logging through the shared
+                // accumulator; the speculative pass keeps no per-request
+                // record, so the tallies are discarded.
+                var trace = CompletionTraceAccumulator()
+                trace.ingest(evictions: store.evictions, diagnostics: diagnostics)
+                trace.logSupersessions(store.supersededLeaves, diagnostics: diagnostics)
+            }
+            guard admission.survived else { return }
 
             diagnostics.log(
                 PrefixCacheDiagnostics.SpeculativePrefillEvent(

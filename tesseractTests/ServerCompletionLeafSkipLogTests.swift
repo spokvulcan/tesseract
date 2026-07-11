@@ -4,20 +4,20 @@ import Testing
 
 /// Byte-for-byte wire format of the leaf-skip diagnostics — the stage / reason /
 /// level / fields the dissolved `captureDirectToolLeaf` and
-/// `captureCanonicalTemplateLeaf` helpers logged. `ServerCompletion.leafSkipLog` is the
+/// `captureCanonicalTemplateLeaf` helpers logged. `LeafStorePhase.leafSkipLog` is the
 /// single pure mapping behind `logLeafSkip`; pinning it here means a renamed
 /// stage label or a flipped log level fails a test rather than silently shifting
 /// dashboards and the diagnostics net. (Prior art: `ssdDropReasonString`.)
 struct ServerCompletionLeafSkipLogTests {
 
-    private func fields(_ log: ServerCompletion.LeafSkipLog) -> [[String]] {
+    private func fields(_ log: LeafStorePhase.LeafSkipLog) -> [[String]] {
         log.extraFields.map { [$0.0, $0.1] }
     }
 
     // MARK: stage prefix follows the boundary mode
 
     @Test func directToolStagePrefixMatchesTheDissolvedHelper() {
-        let log = ServerCompletion.leafSkipLog(for: .noTransientBoundary, mode: .directTool)
+        let log = LeafStorePhase.leafSkipLog(for: .noTransientBoundary, mode: .directTool)
         #expect(log.stage == "directToolLeafStore")
         #expect(log.reason == "no-transient-boundary-snapshot")
         #expect(log.level == .info)
@@ -25,7 +25,7 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func canonicalStagePrefixMatchesTheDissolvedHelper() {
-        let log = ServerCompletion.leafSkipLog(
+        let log = LeafStorePhase.leafSkipLog(
             for: .noResolvedBoundary(canonicalLen: 12), mode: .canonical)
         #expect(log.stage == "canonicalLeafStore")
         #expect(log.reason == "no-canonical-restore-boundary")
@@ -36,7 +36,7 @@ struct ServerCompletionLeafSkipLogTests {
     // MARK: each reason's reason-string / level / fields
 
     @Test func tokenizationFailureIsPrefillThrewAtWarning() {
-        let log = ServerCompletion.leafSkipLog(
+        let log = LeafStorePhase.leafSkipLog(
             for: .tokenizationFailed(error: "boom"), mode: .directTool)
         #expect(log.stage == "directToolLeafStore")
         #expect(log.reason == "prefill-threw")
@@ -45,7 +45,7 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func probeDivergenceIsInfoWithNoFields() {
-        let log = ServerCompletion.leafSkipLog(for: .probeDivergence, mode: .canonical)
+        let log = LeafStorePhase.leafSkipLog(for: .probeDivergence, mode: .canonical)
         #expect(log.stage == "canonicalLeafStore")
         #expect(log.reason == "probe-divergence-failed")
         #expect(log.level == .info)
@@ -53,7 +53,7 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func storedAtOrBeforeBoundaryCarriesStoredLenThenBoundaryOffset() {
-        let log = ServerCompletion.leafSkipLog(
+        let log = LeafStorePhase.leafSkipLog(
             for: .storedAtOrBeforeBoundary(storedLen: 7, boundaryOffset: 7), mode: .directTool
         )
         #expect(log.stage == "directToolLeafStore")
@@ -63,7 +63,7 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func canonicalLongerThanStoredIsWarningWithBothLengths() {
-        let log = ServerCompletion.leafSkipLog(
+        let log = LeafStorePhase.leafSkipLog(
             for: .canonicalLongerThanStored(canonicalLen: 9, storedLen: 4), mode: .canonical
         )
         #expect(log.stage == "canonicalLeafStore")
@@ -73,7 +73,7 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func renderTranslationFailureIsWarningWithTheTypedFailure() {
-        let log = ServerCompletion.leafSkipLog(
+        let log = LeafStorePhase.leafSkipLog(
             for: .renderTranslationFailed(
                 failure: .placeholderOccurrencesExceedImages(occurrences: 2, images: 1)
             ),
@@ -87,7 +87,7 @@ struct ServerCompletionLeafSkipLogTests {
     }
 
     @Test func boundaryInsideImagePrefixIsInfoWithBothOffsets() {
-        let log = ServerCompletion.leafSkipLog(
+        let log = LeafStorePhase.leafSkipLog(
             for: .boundaryInsideImagePrefix(boundaryOffset: 3, minimumWarmOffset: 9),
             mode: .directTool
         )

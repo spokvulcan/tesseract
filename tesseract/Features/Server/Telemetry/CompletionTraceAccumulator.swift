@@ -11,11 +11,11 @@
 //  projections. The drive feeds facts; this value decides what the
 //  record contains.
 //
-//  Known gap carried over verbatim from the pre-accumulator code:
-//  evictions triggered inside the boundary-mode leaf admit
-//  (`admitStructuredLeaf`) are logged there but never tallied into the
-//  per-request record. The Server Completion phase decomposition
-//  (#282, phase C2) routes that path through this accumulator.
+//  Every structured-leaf admission (`admitStructuredLeaf`) also routes its
+//  eviction/supersession events through here: the Leaf Store phase tallies
+//  them into the per-request record; the speculative pass and the
+//  salvage-on-cancel path use a throwaway accumulator for the correlated
+//  logging alone.
 //
 
 import Foundation
@@ -96,6 +96,7 @@ nonisolated struct CompletionTraceAccumulator {
     /// Derive the terminal trace record. `nil` for an **Unkeyed
     /// Completion** (never touched the radix tree — no signal for
     /// policy replay), mirroring `CompletionTraceRecord.make`.
+    // swiftlint:disable:next function_parameter_count
     func makeRecord(
         timestamp: Double,
         requestID: UUID,

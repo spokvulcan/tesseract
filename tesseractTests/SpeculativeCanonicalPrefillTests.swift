@@ -112,7 +112,7 @@ struct SpeculativeCanonicalPrefillTests {
     // MARK: - Stretch Abandonment trigger table (issue #100)
 
     @Test func stopFinishSeedsImmediatelyAndDurably() {
-        let plan = ServerCompletion.speculativeSeedPlan(
+        let plan = LeafStorePhase.speculativeSeedPlan(
             boundaryMode: .canonical, renderContext: .canonical
         )
         #expect(plan?.idleDelay == .zero)
@@ -120,7 +120,7 @@ struct SpeculativeCanonicalPrefillTests {
     }
 
     @Test func toolStretchArmsTheIdleTimerAndStaysRamOnly() {
-        let plan = ServerCompletion.speculativeSeedPlan(
+        let plan = LeafStorePhase.speculativeSeedPlan(
             boundaryMode: .directTool, renderContext: .canonical
         )
         #expect(plan?.idleDelay == SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow)
@@ -132,11 +132,11 @@ struct SpeculativeCanonicalPrefillTests {
             flags: [.preserveThinking]
         )
         #expect(
-            ServerCompletion.speculativeSeedPlan(
+            LeafStorePhase.speculativeSeedPlan(
                 boundaryMode: .canonical, renderContext: preserve
             ) == nil)
         #expect(
-            ServerCompletion.speculativeSeedPlan(
+            LeafStorePhase.speculativeSeedPlan(
                 boundaryMode: .directTool, renderContext: preserve
             ) == nil)
     }
