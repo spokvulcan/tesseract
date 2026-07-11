@@ -40,10 +40,6 @@ final class TranscriptionEngine: Transcribing {
     /// cancel it, and cleared by the task's own identity-guarded `defer`.
     private var currentTranscription: Task<TranscriptionResult, Error>?
 
-    /// The tracked task bridging the synchronous `cancelTranscription()` to the
-    /// recognizer's `async cancel()`.
-    private var recognizerCancelTask: Task<Void, Never>?
-
     /// The in-flight model load. Retained so a transcription that races it
     /// (`ensureModelLoaded` — e.g. a dictation issued while the launch load is
     /// still running) awaits this load instead of starting a second full
@@ -156,29 +152,60 @@ final class TranscriptionEngine: Transcribing {
         let languageCode = language == "auto" ? nil : language
         let timeoutDuration = timeout(audioData.duration)
 
-        // Race transcription against a timeout to prevent stuck processing state
-        return try await withThrowingTaskGroup(of: TranscriptionResult.self) { group in
-            defer { group.cancelAll() }
+        // The recognizer runs as an *unstructured* task so the budget can
+        // abandon it (audit #285 item 10). The previous structured race could
+        // not exit until every child yielded — a recognizer hung between
+        // cancellation checks (deep in CoreML/ANE code) defeated the timeout
+        // entirely and pinned `.processing`. Now the first of {completion,
+        // budget expiry, caller cancellation} releases the caller; the orphan
+        // is cancelled best-effort, and a result it produces later is dropped
+        // both here (the in-flight slot has already cleared) and by the Voice
+        // Capture Session's Operation Guard staleness.
+        let recognizerTask = Task { () throws -> TranscriptionResult in
+            do {
+                return try await recognizer.transcribe(audioData, language: languageCode)
+            } catch let error as DictationError {
+                throw error
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Map model-layer failures onto the facade's error vocabulary.
+                throw DictationError.transcriptionFailed(error.localizedDescription)
+            }
+        }
 
-            group.addTask {
-                do {
-                    return try await recognizer.transcribe(audioData, language: languageCode)
-                } catch let error as DictationError {
-                    throw error
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    // Map model-layer failures onto the facade's error vocabulary.
-                    throw DictationError.transcriptionFailed(error.localizedDescription)
+        let race = TranscriptionRace()
+        var timeoutTask: Task<Void, Never>?
+        defer { timeoutTask?.cancel() }
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                // This closure runs synchronously in the current main-actor
+                // job, so `begin` always lands before any resumer below (each
+                // is a fresh main-actor job) can finish the race.
+                race.begin(continuation)
+
+                Task {
+                    let result: Result<TranscriptionResult, any Error>
+                    do {
+                        result = .success(try await recognizerTask.value)
+                    } catch {
+                        result = .failure(error)
+                    }
+                    race.finish(result)
+                }
+
+                timeoutTask = Task {
+                    guard (try? await Task.sleep(for: timeoutDuration)) != nil else { return }
+                    recognizerTask.cancel()
+                    race.finish(
+                        .failure(DictationError.transcriptionFailed("Transcription timed out")))
                 }
             }
-            group.addTask {
-                try await Task.sleep(for: timeoutDuration)
-                throw DictationError.transcriptionFailed("Transcription timed out")
+        } onCancel: {
+            recognizerTask.cancel()
+            Task { @MainActor in
+                race.finish(.failure(CancellationError()))
             }
-            let result = try await group.next()!
-            try Task.checkCancellation()
-            return result
         }
     }
 
@@ -201,17 +228,34 @@ final class TranscriptionEngine: Transcribing {
     }
 
     /// Synchronous (its call sites in `DictationCoordinator`/`AgentCoordinator`
-    /// invoke it fire-and-forget). Cancels the retained in-flight task — which
-    /// propagates `CancellationError` into the task group and the adapter's
-    /// `transcribe` — and fires a tracked task to call the recognizer's `async
-    /// cancel()` for cooperative model teardown. It does **not** null the
-    /// in-flight slot; the task's identity-guarded `defer` does, so occupancy
-    /// stays accurate until the task actually exits.
+    /// invoke it fire-and-forget). Cancels the retained in-flight task, which
+    /// releases the caller through the race's cancellation arm immediately and
+    /// propagates `CancellationError` into the recognizer task cooperatively.
+    /// It does **not** null the in-flight slot; the task's identity-guarded
+    /// `defer` does, so occupancy stays accurate until the task actually exits.
+    /// (The former bridge to the recognizer's `async cancel()` is gone with
+    /// the port method — WhisperKit's was an empty body; task cancellation is
+    /// the one cancellation channel.)
     func cancelTranscription() {
         currentTranscription?.cancel()
-        if let recognizer {
-            recognizerCancelTask = Task { await recognizer.cancel() }
-        }
         isTranscribing = false
+    }
+}
+
+/// One-shot resumption cell for the transcription race: whichever of
+/// {recognizer completion, budget expiry, caller cancellation} lands first
+/// resumes the caller; later arrivals are dropped. MainActor-confined, so
+/// arrivals are serialized without a lock.
+@MainActor
+private final class TranscriptionRace {
+    private var continuation: CheckedContinuation<TranscriptionResult, any Error>?
+
+    func begin(_ continuation: CheckedContinuation<TranscriptionResult, any Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<TranscriptionResult, any Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }

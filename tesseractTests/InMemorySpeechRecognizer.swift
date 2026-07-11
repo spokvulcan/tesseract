@@ -6,10 +6,10 @@
 //  implementation* of `WhisperKitSpeechRecognizer`, not a mock. It returns a
 //  canned `TranscriptionResult`, can be programmed with a load/transcribe error
 //  or a cancellation-sensitive latency, and records what it saw (loads,
-//  transcribe calls, the languages passed, cancellation arrivals, and whether an
-//  over-running `transcribe` was interrupted). An actor — like the production
-//  adapter — so `Sendable` is free and its recorded state is actor-isolated;
-//  tests `await` it. No model files, no `@unchecked Sendable`.
+//  transcribe calls, the languages passed, and whether an over-running
+//  `transcribe` was interrupted). An actor — like the production adapter — so
+//  `Sendable` is free and its recorded state is actor-isolated; tests `await`
+//  it. No model files, no `@unchecked Sendable`.
 //
 
 import Foundation
@@ -37,7 +37,6 @@ actor InMemorySpeechRecognizer {
     private(set) var loadedPaths: [URL] = []
     private(set) var transcribeCount = 0
     private(set) var recordedLanguages: [String?] = []
-    private(set) var cancelCount = 0
     private(set) var transcribeWasInterrupted = false
 
     init(
@@ -78,10 +77,6 @@ actor InMemorySpeechRecognizer {
 
         if let transcribeError { throw transcribeError }
         return cannedResult
-    }
-
-    func cancel() {
-        cancelCount += 1
     }
 }
 

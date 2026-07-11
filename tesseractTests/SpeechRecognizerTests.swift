@@ -56,11 +56,4 @@ struct SpeechRecognizerTests {
             try await recognizer.load(modelPath: URL(fileURLWithPath: "/tmp/m"))
         }
     }
-
-    @Test
-    func recordsCancel() async {
-        let recognizer = InMemorySpeechRecognizer()
-        await recognizer.cancel()
-        #expect(await recognizer.cancelCount == 1)
-    }
 }

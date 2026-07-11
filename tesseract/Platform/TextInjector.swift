@@ -26,6 +26,22 @@ final class TextInjector: ObservableObject, TextInjecting {
         /// app must read the transcript off the pasteboard first. Runs off the
         /// awaited path (see `inject`), so it delays nothing the user sees.
         static let clipboardRestoreDelay: Duration = .milliseconds(100)
+        /// Ceiling on the pre-injection clipboard snapshot (audit #285 item
+        /// 9): the save is a synchronous deep copy on the awaited injection
+        /// path, so a huge payload (a copied video, a raw image) must not
+        /// stall the paste. Over the cap the save is skipped *entirely* —
+        /// never a partial snapshot, which a later restore would present as
+        /// the full clipboard.
+        static let maxSavedClipboardBytes = 10 * 1024 * 1024
+    }
+
+    /// The <http://nspasteboard.org> marker types (audit #285 item 9):
+    /// `TransientType` tells clipboard managers not to record the write at
+    /// all; `ConcealedType` marks it sensitive. Dictated text is exactly the
+    /// private content a clipboard-history app must not retain.
+    private enum PasteboardMarker {
+        static let transient = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+        static let concealed = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
     }
 
     @Published private(set) var lastInjectionSucceeded = false
@@ -53,8 +69,8 @@ final class TextInjector: ObservableObject, TextInjecting {
             saveClipboardContents()
         }
 
-        // Copy text to clipboard
-        copyToClipboard(text)
+        // Copy text to clipboard, remembering the generation our write minted.
+        let transcriptChangeCount = copyToClipboard(text)
 
         if !isOwnAppFocused {
             // Small delay to ensure clipboard is updated
@@ -73,7 +89,8 @@ final class TextInjector: ObservableObject, TextInjecting {
                 savedClipboardContents = nil
                 Task {
                     try? await Task.sleep(for: Defaults.clipboardRestoreDelay)
-                    Self.restoreClipboardContents(contents)
+                    Self.restoreClipboardContents(
+                        contents, ifChangeCountStill: transcriptChangeCount)
                 }
             }
         }
@@ -97,18 +114,30 @@ final class TextInjector: ObservableObject, TextInjecting {
 
     // MARK: - Clipboard Operations
 
-    private func copyToClipboard(_ text: String) {
+    /// Writes the transcript with the transient + concealed markers and
+    /// returns the pasteboard generation the write minted, so the deferred
+    /// restore can prove the pasteboard is still ours.
+    private func copyToClipboard(_ text: String) -> Int {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
+        pasteboard.setString("", forType: PasteboardMarker.transient)
+        pasteboard.setString("", forType: PasteboardMarker.concealed)
+        return pasteboard.changeCount
     }
 
     private func saveClipboardContents() {
         let pasteboard = NSPasteboard.general
         var contents: [NSPasteboard.PasteboardType: Data] = [:]
+        var totalBytes = 0
 
         for type in pasteboard.types ?? [] {
             if let data = pasteboard.data(forType: type) {
+                totalBytes += data.count
+                if totalBytes > Defaults.maxSavedClipboardBytes {
+                    savedClipboardContents = nil
+                    return
+                }
                 contents[type] = data
             }
         }
@@ -117,11 +146,16 @@ final class TextInjector: ObservableObject, TextInjecting {
     }
 
     private static func restoreClipboardContents(
-        _ contents: [NSPasteboard.PasteboardType: Data]?
+        _ contents: [NSPasteboard.PasteboardType: Data]?, ifChangeCountStill expected: Int
     ) {
         guard let contents else { return }
 
         let pasteboard = NSPasteboard.general
+        // Another writer took the pasteboard after the transcript write (the
+        // user copied, an app synced) — restoring now would stomp *their*
+        // content with our stale snapshot: the wrong-content-pasted race
+        // (audit #285 item 9). Their write wins; the snapshot is dropped.
+        guard pasteboard.changeCount == expected else { return }
         pasteboard.clearContents()
 
         for (type, data) in contents {
