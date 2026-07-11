@@ -391,6 +391,10 @@ private struct TTFTBreakdownChart: View {
                     "Residual": ChartPalette.slot4,
                 ])
                 .chartYScale(domain: 0...domain.upper)
+                // Swift Charts does not clip marks to the plot area; with a
+                // capped domain the off-scale bars would otherwise paint over
+                // the tiles above (verified offscreen).
+                .chartPlotStyle { $0.clipped() }
                 .chartXAxis(.hidden)
                 .chartYAxis {
                     AxisMarks(position: .trailing) { value in

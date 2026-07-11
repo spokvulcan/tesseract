@@ -141,7 +141,10 @@ surfaces are the Cache Overview's three charts and the Activity rail.
 - **Heavy-tailed measures cap the y-domain near p95** (when
   `max > p95 × 1.6`); off-scale marks clip at the top edge and the footnote
   counts them ("N slow requests run off-scale, hover for exact"). Truthful
-  and readable beats fitted and unreadable.
+  and readable beats fitted and unreadable. Swift Charts does not clip
+  marks to the plot area on its own — a capped domain requires
+  `.chartPlotStyle { $0.clipped() }`, or the off-scale marks paint over
+  whatever sits above the chart. (Annotations survive the clip.)
 - **Footnotes state the window and the identity** ("last 80 of 3 781
   requests in 30 d, oldest → newest") in caption-weight secondary text —
   no silent truncation of what a chart covers.
