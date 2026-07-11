@@ -63,4 +63,80 @@ struct OverlayPlacementTests {
             #expect(size.height <= canvas.height)
         }
     }
+
+    // MARK: - Variant batch (map #283)
+
+    @Test
+    func ribbonCanvasHugsTheBottomCentreWithEntranceHeadroom() {
+        let frame = OverlayPlacement.ribbon.frame(geometry)
+        // The canvas dips `entranceRise` below the resting line so the rise
+        // never leaves the fixed window; the resting strip bottom lands at
+        // `bottomInset` above the visible frame's floor.
+        #expect(frame.midX == geometry.visibleFrame.midX)
+        #expect(frame.midX != geometry.frame.midX)
+        #expect(
+            frame.minY
+                == geometry.visibleFrame.minY + RibbonMetrics.bottomInset
+                - RibbonMetrics.entranceRise)
+        #expect(frame.size == RibbonMetrics.canvasSize)
+    }
+
+    @Test
+    func orbCanvasParksInTheBottomRightCorner() {
+        let frame = OverlayPlacement.orb.frame(geometry)
+        // Inset from the *visible* frame's right/bottom edges — a Dock or
+        // menu bar must push the orb inward, not underneath.
+        #expect(frame.maxX == geometry.visibleFrame.maxX - OrbMetrics.canvasScreenInset)
+        #expect(frame.minY == geometry.visibleFrame.minY + OrbMetrics.canvasScreenInset)
+        #expect(frame.size == OrbMetrics.canvasSize)
+    }
+
+    @Test
+    func islandCanvasHangsBelowTheMenuBar() {
+        let frame = OverlayPlacement.island.frame(geometry)
+        // Top-anchored: the canvas top sits `topInset` below the *visible*
+        // frame's top (under the menu bar), never the full frame's.
+        #expect(frame.midX == geometry.visibleFrame.midX)
+        #expect(frame.maxY == geometry.visibleFrame.maxY - IslandMetrics.topInset)
+        #expect(geometry.visibleFrame.maxY != geometry.frame.maxY)
+        #expect(frame.maxY != geometry.frame.maxY - IslandMetrics.topInset)
+        #expect(frame.size == IslandMetrics.canvasSize)
+    }
+
+    @Test
+    func whisperCanvasSitsTightAboveTheBottomEdge() {
+        let frame = OverlayPlacement.whisper.frame(geometry)
+        // 20pt inset — tighter than the pill's 60: the line reads as part of
+        // the desktop's floor.
+        #expect(frame.midX == geometry.visibleFrame.midX)
+        #expect(frame.minY == geometry.visibleFrame.minY + 20)
+        #expect(frame.size == WhisperMetrics.canvasSize)
+    }
+
+    @Test
+    func stageCardCanvasIsBottomCentredBelowThePill() {
+        let frame = OverlayPlacement.stageCard.frame(geometry)
+        // 52pt inset — lower than the pill's 60: the taller card must not
+        // creep toward the screen's centre.
+        #expect(frame.midX == geometry.visibleFrame.midX)
+        #expect(frame.minY == geometry.visibleFrame.minY + 52)
+        #expect(frame.size == StageCardMetrics.canvasSize)
+    }
+
+    @Test
+    func everyRegisteredVariantCanvasFitsTheVisibleFrame() {
+        // Whatever the variant, its fixed canvas must land wholly inside the
+        // visible frame — an overlay that clips at a screen edge is broken on
+        // arrival, before any content draws.
+        let placements: [(String, OverlayPlacement)] = [
+            ("pill", .pill), ("ribbon", .ribbon), ("orb", .orb),
+            ("island", .island), ("whisper", .whisper), ("stageCard", .stageCard),
+        ]
+        for (name, placement) in placements {
+            let frame = placement.frame(geometry)
+            #expect(
+                geometry.visibleFrame.contains(frame),
+                "\(name) canvas \(frame) escapes visible frame \(geometry.visibleFrame)")
+        }
+    }
 }
