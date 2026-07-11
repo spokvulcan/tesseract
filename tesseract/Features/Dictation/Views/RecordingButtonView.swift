@@ -63,6 +63,7 @@ struct RecordingButtonView: View {
         case .idle: return "Start Recording"
         case .recording: return "Recording in progress"
         case .processing: return "Processing transcription"
+        case .proofreading: return "Proofreading transcription"
         case .error: return "Recording error"
         }
     }
@@ -73,7 +74,7 @@ struct RecordingButtonView: View {
             return .accentColor
         case .recording:
             return .red
-        case .processing:
+        case .processing, .proofreading:
             return .orange
         case .error:
             return .red.opacity(0.5)
@@ -86,7 +87,7 @@ struct RecordingButtonView: View {
             return "mic.fill"
         case .recording:
             return "stop.fill"
-        case .processing:
+        case .processing, .proofreading:
             return "waveform"
         }
     }

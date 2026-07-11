@@ -53,13 +53,18 @@ final class VoiceCaptureSession {
         case noAudio
     }
 
-    /// The outcome of ``transcribeAndCommit(_:language:commit:)``.
+    /// The outcome of ``transcribeAndCommit(_:language:proofread:commit:)``.
     enum Outcome {
         /// Transcription succeeded, produced non-empty text, and the injected
         /// `commit` ran to completion while this operation was still current.
-        case committed
+        /// `edits` is the **Proofread Pass**'s word-swap diff (empty when the
+        /// pass was skipped or changed nothing).
+        case committed(edits: [WordEdit])
         /// Post-processing yielded empty text — no speech to commit.
         case empty
+        /// The **Proofread Pass** judged the take unintelligible: nothing was
+        /// committed; `raw` stays available for "insert raw anyway".
+        case rejected(raw: String, reason: String)
         /// Transcription (or the commit) failed; the error is surfaced to map.
         case failed(any Error)
         /// The work was cancelled while still the current operation.
@@ -138,15 +143,21 @@ final class VoiceCaptureSession {
         return .audio(audioData)
     }
 
-    /// Transcribes `audio`, post-processes it, and — while the operation is still
-    /// current — runs the caller-injected `commit` inside the guarded region, so the
-    /// post-commit staleness re-check (which suppresses a success that races a
-    /// cancel mid-commit) is preserved without exposing the ticket. Owns the
-    /// in-flight `Task`; callers spawn a fire-and-forget outer `Task` purely to avoid
+    /// Transcribes `audio`, post-processes it, optionally runs the caller's
+    /// **Proofread Pass**, and — while the operation is still current — runs the
+    /// caller-injected `commit` inside the guarded region, so the post-commit
+    /// staleness re-check (which suppresses a success that races a cancel
+    /// mid-commit) is preserved without exposing the ticket. Owns the in-flight
+    /// `Task`; callers spawn a fire-and-forget outer `Task` purely to avoid
     /// blocking and do not track it.
+    ///
+    /// `proofread` returns a verdict or `nil` for "pass skipped" (disabled,
+    /// model unavailable, GPU busy, error) — every skip commits the
+    /// regex-cleaned text, so the pass can only improve, never gate.
     func transcribeAndCommit(
         _ audio: AudioData,
         language: String,
+        proofread: (@MainActor (String) async -> ProofreadVerdict?)? = nil,
         commit: @escaping @MainActor (String, TimeInterval) async throws -> Void
     ) async -> Outcome {
         let ticket = operations.capture()
@@ -161,13 +172,31 @@ final class VoiceCaptureSession {
                 let processedText = postProcessor.process(result.text)
                 guard !processedText.isEmpty else { return .empty }
 
-                try await commit(processedText, audio.duration)
+                var commitText = processedText
+                var edits: [WordEdit] = []
+                if let proofread {
+                    let verdict = await proofread(processedText)
+                    // The pass awaited — a cancel-and-restart during it means
+                    // a newer operation owns the state.
+                    guard ticket.isCurrent else { return .superseded }
+                    switch verdict {
+                    case .corrected(let text, let correctedEdits):
+                        commitText = text
+                        edits = correctedEdits
+                    case .rejected(let reason):
+                        return .rejected(raw: processedText, reason: reason)
+                    case .unchanged, nil:
+                        break
+                    }
+                }
+
+                try await commit(commitText, audio.duration)
 
                 // The commit may suspend (e.g. text injection); a cancel-and-restart
                 // during it means the newer operation owns the state — suppress the
                 // success the caller would otherwise present.
                 guard ticket.isCurrent else { return .superseded }
-                return .committed
+                return .committed(edits: edits)
             } catch is CancellationError {
                 return ticket.isCurrent ? .cancelled : .superseded
             } catch {

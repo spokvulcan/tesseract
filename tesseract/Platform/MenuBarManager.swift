@@ -102,7 +102,7 @@ final class MenuBarManager: NSObject {
             dictationActivity = .idle
         case .recording:
             dictationActivity = .listening
-        case .processing:
+        case .processing, .proofreading:
             dictationActivity = .processing
         }
         applyActivityToIcon()

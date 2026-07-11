@@ -83,12 +83,22 @@ struct DictationSettingsPane: View {
                 Toggle("Automatically Insert Text", isOn: $settings.autoInsertText)
                 Toggle("Restore Clipboard Contents", isOn: $settings.restoreClipboard)
                     .disabled(!settings.autoInsertText)
+                Toggle("Proofread Dictation", isOn: $settings.proofreadDictation)
             } header: {
                 Text("After Transcription")
             } footer: {
-                Text(
-                    "Types the transcription into the frontmost app, then puts whatever was on the clipboard back."
-                )
+                if settings.proofreadDictation
+                    && !container.modelDownloadManager.isDownloaded(
+                        ModelDefinition.defaultProofreadModelID)
+                {
+                    Text(
+                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back. Proofreading needs the Dictation Proofreader model — download it from the Models page."
+                    )
+                } else {
+                    Text(
+                        "Types the transcription into the frontmost app, then puts whatever was on the clipboard back. Proofreading polishes punctuation and misheard words with a small local model when the system is idle."
+                    )
+                }
             }
 
             Section {

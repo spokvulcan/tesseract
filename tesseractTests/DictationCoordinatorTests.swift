@@ -174,7 +174,7 @@ struct DictationCoordinatorTests {
         #expect(coordinator.lastTranscription == expected)
         // The terminal beat carries the committed text so a variant can end the
         // happy path (and a future correction affordance can hook it).
-        #expect(feed.beat?.outcome == .committed(text: expected, duration: 2.0))
+        #expect(feed.beat?.outcome == .committed(text: expected, duration: 2.0, edits: []))
         #expect(
             store.entries == [
                 FakeTranscriptionStore.Entry(text: expected, duration: 2.0, model: "Whisper Turbo")
@@ -426,6 +426,133 @@ struct DictationCoordinatorTests {
         engine.completeWithSuccess()
         try await waitUntil { coordinator.state == .idle }
         #expect(capture.startCount == 1)
+    }
+
+    // MARK: - Proofread Pass (rejected beat + insert-raw-anyway, edits on the beat)
+
+    /// Records what the coordinator's proofread wrapper narrates while the
+    /// pass runs — the model call must see the `.proofreading` phase.
+    @MainActor
+    final class PhaseProbe {
+        var phase: DictationFeed.Phase?
+    }
+
+    private func makeProofreadPass(
+        replying reply: @escaping @Sendable (String) -> String
+    ) -> ProofreadPass {
+        ProofreadPass(
+            isEnabled: { true },
+            isGPUBusy: { false },
+            modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
+            loadModel: { _ in },
+            runModel: { _, text in reply(text) },
+            unloadModel: {}
+        )
+    }
+
+    /// A rejected take is passive feedback, not an error gate: the phase
+    /// returns to `.idle`, the beat carries the raw text and reason, nothing
+    /// is committed — and "insert raw anyway" still delivers the words.
+    @Test
+    func rejectedTakeEmitsTheBeatAndInsertRawAnywayDelivers() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
+        )
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let injector = FakeTextInjector()
+        let store = FakeTranscriptionStore()
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: store,
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in "REJECT: garbled noise" })
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { feed.beat != nil }
+
+        let expected = TranscriptionPostProcessor().process("hello world")
+        #expect(feed.beat?.outcome == .rejected(raw: expected, reason: "garbled noise"))
+        #expect(coordinator.state == .idle)  // passive: no error gate
+        #expect(coordinator.lastRejectedRaw == expected)
+        #expect(store.entries.isEmpty)
+        #expect(injector.injected.isEmpty)
+
+        coordinator.insertRawAnyway()
+        try await waitUntil { injector.injected.count == 1 }
+        #expect(injector.injected == [expected + " "])
+        #expect(store.entries.count == 1)
+        #expect(store.entries.first?.text == expected)
+        #expect(coordinator.lastRejectedRaw == nil)
+    }
+
+    /// A corrected take commits the corrected text; the terminal beat carries
+    /// the word edits for variant narration, and the model call runs under
+    /// the `.proofreading` phase.
+    @Test
+    func correctedTakeCommitsCorrectedTextAndBeatCarriesEdits() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
+        )
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let raw = TranscriptionPostProcessor().process("hello world")
+        let corrected = raw + " indeed"
+        let probe = PhaseProbe()
+        let feed = DictationFeed()
+        let pass = ProofreadPass(
+            isEnabled: { true },
+            isGPUBusy: { false },
+            modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
+            loadModel: { _ in },
+            runModel: { _, _ in
+                await MainActor.run { probe.phase = feed.phase }
+                return corrected
+            },
+            unloadModel: {}
+        )
+
+        let injector = FakeTextInjector()
+        let store = FakeTranscriptionStore()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: store,
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed,
+            proofreadPass: pass
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { coordinator.state == .idle && feed.beat != nil }
+
+        #expect(
+            feed.beat?.outcome
+                == .committed(
+                    text: corrected, duration: 2.0,
+                    edits: [WordEdit(original: "", replacement: "indeed")]))
+        #expect(coordinator.lastTranscription == corrected)
+        #expect(injector.injected == [corrected + " "])
+        #expect(store.entries.first?.text == corrected)
+        #expect(probe.phase == .proofreading)
     }
 
     /// "No speech detected" resolving under a held key: the error does not gate

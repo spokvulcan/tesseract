@@ -75,6 +75,10 @@ final class AppBindings {
         /// ahead of the first press, so no capture pays the VPIO setup cost
         /// interactively.
         let prewarmAudioCapture: @MainActor () -> Void
+        /// Loads the Proofread Pass's model ahead of the first dictation (a
+        /// no-op while the pass is disabled or its model isn't downloaded),
+        /// so no pass pays the model load interactively.
+        let prewarmProofreader: @MainActor () async -> Void
         let updateDictationHotkey: @MainActor (KeyCombo) -> Void
         let updateTTSHotkey: @MainActor (KeyCombo) -> Void
         let updateAgentHotkey: @MainActor (KeyCombo) -> Void
@@ -94,6 +98,7 @@ final class AppBindings {
             pushDictationStateToMenuBar: @escaping @MainActor (DictationFeed.Phase) -> Void,
             pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
+            prewarmProofreader: @escaping @MainActor () async -> Void = {},
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
@@ -110,6 +115,7 @@ final class AppBindings {
             self.pushDictationStateToMenuBar = pushDictationStateToMenuBar
             self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
             self.prewarmAudioCapture = prewarmAudioCapture
+            self.prewarmProofreader = prewarmProofreader
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
             self.updateAgentHotkey = updateAgentHotkey
@@ -156,6 +162,9 @@ final class AppBindings {
         // the first press arms instead in that case.
         Task { [weak self] in
             self?.effects.prewarmAudioCapture()
+            // After the capture arm (same background task, launch-only): the
+            // proofread model load is MLX weight I/O, harmless to sequence.
+            await self?.effects.prewarmProofreader()
         }
 
         // Load an already-downloaded Whisper model as an owned child task,

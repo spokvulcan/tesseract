@@ -38,6 +38,36 @@ final class DependencyContainer: ObservableObject {
     lazy var transcriptionEngine = TranscriptionEngine()
     lazy var transcriptionHistory = TranscriptionHistory()
 
+    // Proofread Pass (ADR-0034): the second, small co-resident MLX model that
+    // polishes transcriptions. The pass is pure policy over injected closures;
+    // the model actor never touches the arbiter — skip-when-busy reads the
+    // lease instead of queueing on it.
+    lazy var proofreadModel = ProofreadModel()
+    // Built in a method, not inline: a lazy initializer is checked as a
+    // default-argument context, which must have a *single* isolation — and
+    // this wiring necessarily references both the main actor and the
+    // ProofreadModel actor.
+    lazy var proofreadPass: ProofreadPass = makeProofreadPass()
+
+    private func makeProofreadPass() -> ProofreadPass {
+        let model = proofreadModel
+        let settings = settingsManager
+        let arbiter = inferenceArbiter
+        let downloads = modelDownloadManager
+        return ProofreadPass(
+            isEnabled: { settings.proofreadDictation },
+            isGPUBusy: { arbiter.isGPULeaseHeld },
+            modelDirectory: {
+                downloads.isDownloaded(ModelDefinition.defaultProofreadModelID)
+                    ? downloads.modelPath(for: ModelDefinition.defaultProofreadModelID)
+                    : nil
+            },
+            loadModel: { try await model.load(from: $0) },
+            runModel: { try await model.run(system: $0, text: $1) },
+            unloadModel: { await model.unload() }
+        )
+    }
+
     // Text Injection
     lazy var textInjector = TextInjector()
     lazy var hotkeyManager = HotkeyManager()
@@ -167,6 +197,7 @@ final class DependencyContainer: ObservableObject {
         audioCapture: audioCaptureEngine,
         transcriptionEngine: transcriptionEngine,
         settings: settingsManager,
+        proofreadPass: proofreadPass,
         captureDump: captureDumpStore
     )
     lazy var composerDraft = ComposerDraftController(conversationImages: { [agent] in
@@ -295,8 +326,13 @@ final class DependencyContainer: ObservableObject {
         // `AgentEngine.unloadModel` flushes pending SSD writes before the
         // teardown, so a plain offload never costs the disk tier its fresh
         // snapshots.
-        manager.onOffloadModel = { [inferenceArbiter] in
-            Task { await inferenceArbiter.offloadAllModels() }
+        manager.onOffloadModel = { [inferenceArbiter, proofreadPass] in
+            Task {
+                await inferenceArbiter.offloadAllModels()
+                // The proofread model lives outside the arbiter's slots —
+                // "Offload Model" frees it explicitly.
+                await proofreadPass.unload()
+            }
         }
         manager.onClearMemoryCache = { [agentEngine] in
             agentEngine.llmActor.prefixCacheAdmin.clearRAMTier()
@@ -342,6 +378,7 @@ final class DependencyContainer: ObservableObject {
             history: transcriptionHistory,
             settings: settingsManager,
             feed: dictationFeed,
+            proofreadPass: proofreadPass,
             captureDump: captureDumpStore
         )
     }()
@@ -505,6 +542,9 @@ final class DependencyContainer: ObservableObject {
                 },
                 prewarmAudioCapture: { [audioCaptureEngine] in
                     audioCaptureEngine.prewarm()
+                },
+                prewarmProofreader: { [proofreadPass] in
+                    await proofreadPass.prewarm()
                 },
                 updateDictationHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(
