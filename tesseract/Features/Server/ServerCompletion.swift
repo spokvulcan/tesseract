@@ -750,10 +750,10 @@ nonisolated final class ServerCompletion {
         // Set only when a canonical leaf landed: the **Speculative Canonical
         // Prefill** seed handed to the post-finish hook (issue #76).
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
-        // Per-request eviction tallies for the trace record: terminal =
-        // body lost outright, recovered = a Snapshot Ref survived the drop.
-        var terminalEvictionTally = 0
-        var recoveredEvictionTally = 0
+        // The one home for the trace record's derivation rules: eviction
+        // tallies (with their correlated diagnostics events), the
+        // restored-offset rule, and the admitted-snapshot projections.
+        var trace = CompletionTraceAccumulator()
 
         drive: do {
             func handle(_ event: AgentGeneration) {
@@ -771,41 +771,6 @@ nonisolated final class ServerCompletion {
                         ))
                 }
                 continuation.yield(event)
-            }
-
-            func logEvictions(_ evictions: [PrefixCacheManager.EvictionEvent]) {
-                for event in evictions {
-                    if event.isTerminal {
-                        terminalEvictionTally += 1
-                    } else {
-                        recoveredEvictionTally += 1
-                    }
-                    diagnosticsContext.log(PrefixCacheDiagnostics.EvictionEvent(event))
-                    // Body-drop with live Snapshot Ref → pending body-dropped
-                    // or state 4→5 transition. Surface a separate
-                    // `ssdBodyDrop` event so an operator scanning
-                    // the eviction log can correlate the RAM
-                    // freeing with the SSD-tier survival of the
-                    // same node.
-                    if let id = event.bodyDroppedSnapshotRefID {
-                        diagnosticsContext.log(
-                            PrefixCacheDiagnostics.SSDBodyDropEvent(id: id)
-                        )
-                    }
-                }
-            }
-
-            func logSupersededLeaves(
-                _ supersededLeaves: [PrefixCacheManager.LeafSupersession]
-            ) {
-                for supersession in supersededLeaves {
-                    diagnosticsContext.log(
-                        PrefixCacheDiagnostics.LeafSupersessionEvent(
-                            offset: supersession.offset,
-                            snapshotRefID: supersession.bodyDroppedSnapshotRefID,
-                            mode: supersession.mode
-                        ))
-                }
             }
 
             // Restore-state snapshot: what cache state does this generation
@@ -910,7 +875,7 @@ nonisolated final class ServerCompletion {
                 let diagnostics = await MainActor.run {
                     prefixCache.admit(admission)
                 }
-                logEvictions(diagnostics.evictions)
+                trace.ingest(evictions: diagnostics.evictions, diagnostics: diagnosticsContext)
                 storedSnapshotsForTuner = admission.snapshots
             }
 
@@ -1298,8 +1263,9 @@ nonisolated final class ServerCompletion {
                         let d = prefixCache.admit(leafAdmission)
                         return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
                     }
-                logEvictions(diagnostics.evictions)
-                logSupersededLeaves(diagnostics.supersededLeaves)
+                trace.ingest(evictions: diagnostics.evictions, diagnostics: diagnosticsContext)
+                trace.logSupersessions(
+                    diagnostics.supersededLeaves, diagnostics: diagnosticsContext)
                 let directAdmissionEvicted = diagnostics.evictions.contains { event in
                     event.offset == leafSnapshot.tokenOffset
                         && event.checkpointType == .leaf
@@ -1371,50 +1337,28 @@ nonisolated final class ServerCompletion {
             // stream closed without an `.info` event have no TTFT and emit
             // nothing — same condition as the live `ttft` event.
             if let completionInfo = outcome.completionInfo {
-                let restoredOffset: Int = {
-                    if case .hit(let offset, _, _) = mlxStart.lookupReason {
-                        return offset
-                    }
-                    return 0
-                }()
-                let record = CompletionTraceRecord.make(
+                let record = trace.makeRecord(
                     timestamp: Date().timeIntervalSinceReferenceDate,
                     requestID: requestID,
                     modelID: diagnosticsContext.modelID,
-                    partitionDigest: mlxStart.partitionKey.partitionDigest,
-                    unkeyedReason: mlxStart.unkeyedReason,
-                    keyPath: keyPath,
-                    admittedCheckpoints: capturedSnapshots.map { snap in
-                        TraceAdmittedSnapshot(
-                            offset: snap.tokenOffset,
-                            bytes: snap.memoryBytes,
-                            checkpointType: snap.checkpointType.wireString
-                        )
-                    },
-                    admittedLeaf: leafCapture.map { leaf in
-                        TraceAdmittedSnapshot(
-                            offset: leaf.storedTokens.count,
-                            bytes: leaf.bytes,
-                            checkpointType: HybridCacheSnapshot.CheckpointType.leaf.wireString
-                        )
-                    },
-                    ramBudgetBytes: finalBudgetBytes,
-                    restoredOffset: restoredOffset,
-                    restoredFromSSD: mlxStart.restoredFromSSD,
-                    hitTokens: mlxStart.skippedPrefillTokens,
-                    sharedPrefixLength: mlxStart.sharedPrefixLength,
-                    lookupSeconds: mlxStart.lookupMs,
-                    restoreSeconds: mlxStart.restoreMs,
-                    hydrationSeconds: mlxStart.hydrationSeconds,
-                    prefillSeconds: mlxStart.prefillMs,
-                    residualPromptSeconds: completionInfo.promptTime,
-                    terminalEvictionCount: terminalEvictionTally,
-                    recoveredEvictionCount: recoveredEvictionTally,
-                    deviceEstimates: finalEstimates,
-                    rewind: RewindTelemetry.make(
+                    start: CompletionTraceAccumulator.StartFacts(
+                        partitionDigest: mlxStart.partitionKey.partitionDigest,
+                        unkeyedReason: mlxStart.unkeyedReason,
+                        keyPath: keyPath,
+                        lookupReason: mlxStart.lookupReason,
+                        restoredFromSSD: mlxStart.restoredFromSSD,
+                        hitTokens: mlxStart.skippedPrefillTokens,
                         sharedPrefixLength: mlxStart.sharedPrefixLength,
-                        restoredOffset: restoredOffset
-                    )
+                        lookupSeconds: mlxStart.lookupMs,
+                        restoreSeconds: mlxStart.restoreMs,
+                        hydrationSeconds: mlxStart.hydrationSeconds,
+                        prefillSeconds: mlxStart.prefillMs
+                    ),
+                    capturedSnapshots: capturedSnapshots,
+                    leafStore: leafCapture,
+                    ramBudgetBytes: finalBudgetBytes,
+                    residualPromptSeconds: completionInfo.promptTime,
+                    deviceEstimates: finalEstimates
                 )
                 if let record {
                     traceLog.append(record)
