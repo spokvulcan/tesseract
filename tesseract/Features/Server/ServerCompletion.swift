@@ -600,14 +600,16 @@ nonisolated final class ServerCompletion {
         }
 
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
-        let startsInsideThinkBlock = promptStartsThinking
         let loadedModelWeightBytes = modelWeightBytes
 
-        let safeguardConfig = parameters.thinkingSafeguard
-        parameters.warnIfThinkingLoopRiskElevated(startsThinking: startsInsideThinkBlock)
+        let driver = ManagedGenerationDriver(
+            parameters: parameters,
+            startsInsideThinkBlock: promptStartsThinking,
+            logContext: "request_id=\(requestID.uuidString)"
+        )
         let fullTokensForContinuation = mlxStart.fullTokens
         let tokenNDimForContinuation = mlxStart.tokenNDim
-        let continuationInjection = safeguardConfig.continuationHandOff
+        let continuationInjection = driver.safeguard.continuationHandOff
         let continuationToolSpecs = canonicalTools
         let actorRef = actor
         let continuationStarter: @Sendable (String) async throws -> HTTPServerRawGenerationStart = {
@@ -669,8 +671,7 @@ nonisolated final class ServerCompletion {
                 prefixCache: prefixCache,
                 renderContext: renderContext,
                 traceLog: traceLog,
-                startsInsideThinkBlock: startsInsideThinkBlock,
-                safeguardConfig: safeguardConfig,
+                driver: driver,
                 loopCancel: loopCancel,
                 continuationStarter: continuationStarter,
                 continuation: continuation,
@@ -687,26 +688,13 @@ nonisolated final class ServerCompletion {
             await driveBox.value()
         }
 
-        continuation.onTermination = { _ in
-            task.cancel()
-        }
-
-        let completionStart = HTTPServerGenerationStart(
+        let completionStart = ManagedGenerationDriver.makeStart(
             stream: stream,
+            continuation: continuation,
             cachedTokenCount: cachedTokenCount,
-            cancel: {
-                // Cancel the live raw handle (whichever is current after an
-                // intervention swap) to unpark a mid-generation `for await`, then
-                // the driving task.
-                loopCancel()
-                task.cancel()
-            },
-            waitForCompletion: {
-                // The loop awaits the live handle internally before returning, so
-                // waiting on the task is sufficient.
-                _ = await task.result
-            },
-            diagnostics: completionDiagnostics
+            diagnostics: completionDiagnostics,
+            cancelBridge: loopCancel,
+            task: task
         )
         activeCompletion = (id: requestID, handle: completionStart)
         return completionStart
@@ -730,8 +718,7 @@ nonisolated final class ServerCompletion {
         prefixCache: PrefixCacheManager,
         renderContext: TemplateRenderContext,
         traceLog: CompletionTraceLog,
-        startsInsideThinkBlock: Bool,
-        safeguardConfig: ThinkingRepetitionDetector.Config,
+        driver: ManagedGenerationDriver,
         loopCancel: LateBoundCancel,
         continuationStarter:
             @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
@@ -788,20 +775,17 @@ nonisolated final class ServerCompletion {
                     + "prefillMs=\(String(format: "%.1f", mlxStart.prefillMs * 1000))"
             )
 
-            // Drive the shared spine. `handle` is the sink (fold + project +
-            // yield); the loop captures the terminal `.info` and the
-            // silent-close diagnostics into its `Outcome` rather than sinking
-            // them. The server always supplies a continuation starter.
-            let loop = GenerationStreamLoop(
+            // Drive the shared spine through the Managed Generation Driver.
+            // `handle` is the sink (fold + project + yield); the driver's
+            // shared tail re-yields the terminal `.info` through it — so
+            // CompletionHandler's non-streaming and SSE paths still read
+            // final completion metrics from the stream — and emits the
+            // completion log and unparsed-tool-call warning. The server
+            // always supplies a continuation starter.
+            let outcome = try await driver.run(
                 initial: .init(mlxStart),
-                startsInsideThinkBlock: startsInsideThinkBlock,
-                safeguard: safeguardConfig,
-                logContext: "request_id=\(requestID.uuidString)"
-            )
-            loopCancel.fill(loop.cancelCurrent)
-
-            let outcome = try await loop.run(
-                continuation: { safePrefix in
+                cancelBridge: loopCancel,
+                continuationStarter: { safePrefix in
                     GenerationStreamLoop.RawGenerationHandle(
                         try await continuationStarter(safePrefix)
                     )
@@ -816,11 +800,8 @@ nonisolated final class ServerCompletion {
             }
 
             if let completionInfo = outcome.completionInfo {
-                // Re-yield the terminal `.info` so CompletionHandler's
-                // non-streaming and SSE paths still read final completion
-                // metrics (token counts / finish reason) from the stream,
-                // exactly as the previous EOS `handle(.info:)` did.
-                handle(.info(completionInfo))
+                // Server-local extras: the cache-correlated TTFT event and
+                // the raw-chunk debug dump.
                 diagnosticsContext.log(
                     PrefixCacheDiagnostics.TTFTEvent(
                         lookupMs: mlxStart.lookupMs,
@@ -828,19 +809,9 @@ nonisolated final class ServerCompletion {
                         prefillMs: mlxStart.prefillMs,
                         residualPromptMs: completionInfo.promptTime
                     ))
-                Log.agent.info(
-                    "Generation complete — \(completionInfo.generationTokenCount) tokens, "
-                        + "\(String(format: "%.1f", completionInfo.tokensPerSecond)) tok/s, "
-                        + "stopReason=\(describeStopReason(completionInfo.stopReason))"
-                )
                 Log.agent.debug(
                     "Raw library chunks (after ToolCallProcessor):\n\(outcome.diagnostics.rawChunksJoined)"
                 )
-                if outcome.diagnostics.hasUnparsedToolCallMarkers {
-                    Log.agent.warning(
-                        "Raw output contains tool call markers but no .toolCall events were emitted by library"
-                    )
-                }
             } else {
                 // Stream closed without an `.info` event from MLX — the case we
                 // were previously blind to (jundot/omlx#825: Qwen3.6 hybrid
@@ -971,7 +942,7 @@ nonisolated final class ServerCompletion {
                 }
 
                 let leafStoreMode = Self.selectHTTPLeafStoreMode(
-                    promptStartsThinking: startsInsideThinkBlock,
+                    promptStartsThinking: driver.startsInsideThinkBlock,
                     emittedToolCalls: !toolCalls.isEmpty
                 )
                 diagnosticsContext.log(

@@ -424,17 +424,20 @@ final class AgentEngine {
         isGenerating = true
 
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
-        let startsThinking = promptStartsThinking
         let generationID = UUID()
 
         let actor = llmActor
-        let safeguardConfig = parameters.thinkingSafeguard
-        parameters.warnIfThinkingLoopRiskElevated(startsThinking: startsThinking)
+        let driver = ManagedGenerationDriver(
+            parameters: parameters,
+            startsInsideThinkBlock: promptStartsThinking,
+            logContext: "generation_id=\(generationID.uuidString)"
+        )
+        let continuationInjection = driver.safeguard.continuationHandOff
 
         // The loop owns the cross-swap cancel invariant. Its `cancelCurrent` must
         // be wired into `start.cancel` synchronously, but the loop can't be built
         // until `launch` yields the initial handle — bridge through a late-bound
-        // cancel the task fills once the loop exists.
+        // cancel the driver fills once the loop exists.
         let loopCancel = LateBoundCancel()
 
         let task = Task { @MainActor [weak self] in
@@ -447,13 +450,6 @@ final class AgentEngine {
                 try Task.checkCancellation()
 
                 let initialStart = try await launch()
-                let loop = GenerationStreamLoop(
-                    initial: .init(initialStart),
-                    startsInsideThinkBlock: startsThinking,
-                    safeguard: safeguardConfig,
-                    logContext: "generation_id=\(generationID.uuidString)"
-                )
-                loopCancel.fill(loop.cancelCurrent)
 
                 // The agent supplies a continuation starter only when it has an
                 // `originalInput` to re-prefill from; otherwise `nil` ⇒ the loop
@@ -464,7 +460,7 @@ final class AgentEngine {
                         let newStart = try await actor.startThinkingContinuationRaw(
                             originalInput: originalInput,
                             safeThinkingPrefix: safePrefix,
-                            injection: safeguardConfig.continuationHandOff,
+                            injection: continuationInjection,
                             toolSpecs: toolSpecs,
                             parameters: parameters
                         )
@@ -474,30 +470,15 @@ final class AgentEngine {
                     continuationStarter = nil
                 }
 
-                // The sink only yields — the agent keeps no per-event side effects.
-                let outcome = try await loop.run(continuation: continuationStarter) { event in
+                // The sink only yields — the agent keeps no per-event side
+                // effects; the driver's shared tail re-yields the terminal
+                // `.info` through the same sink.
+                _ = try await driver.run(
+                    initial: .init(initialStart),
+                    cancelBridge: loopCancel,
+                    continuationStarter: continuationStarter
+                ) { event in
                     continuation.yield(event)
-                }
-
-                if outcome.cancelled {
-                    continuation.finish()
-                    return
-                }
-
-                // Re-yield the terminal `.info` the loop captured (downstream reads
-                // completion metrics from the stream, not a return value).
-                if let info = outcome.completionInfo {
-                    continuation.yield(.info(info))
-                    Log.agent.info(
-                        "Generation complete — \(info.generationTokenCount) tokens, "
-                            + "\(String(format: "%.1f", info.tokensPerSecond)) tok/s, "
-                            + "stopReason=\(describeStopReason(info.stopReason))"
-                    )
-                }
-                if outcome.diagnostics.hasUnparsedToolCallMarkers {
-                    Log.agent.warning(
-                        "Raw output contains tool call markers but no .toolCall events were emitted by library"
-                    )
                 }
                 continuation.finish()
             } catch is CancellationError {
@@ -511,20 +492,13 @@ final class AgentEngine {
             }
         }
 
-        let start = HTTPServerGenerationStart(
+        let start = ManagedGenerationDriver.makeStart(
             stream: stream,
+            continuation: continuation,
             cachedTokenCount: cachedTokenCount,
-            cancel: {
-                // Cancel the live raw handle (unparks a mid-generation `for await`)
-                // and the driving task.
-                loopCancel()
-                task.cancel()
-            },
-            waitForCompletion: {
-                _ = await task.result
-            }
+            cancelBridge: loopCancel,
+            task: task
         )
-        continuation.onTermination = { _ in start.cancel() }
         return registerActiveGeneration(start, id: generationID)
     }
 
