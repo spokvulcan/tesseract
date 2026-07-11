@@ -5,7 +5,7 @@
 
 import Foundation
 
-struct TranscriptionPostProcessor: Sendable {
+nonisolated struct TranscriptionPostProcessor: Sendable {
     func process(_ text: String) -> String {
         var result = text
 
