@@ -18,6 +18,8 @@ nonisolated enum PillMetrics {
     static let recordingSize = CGSize(width: 120, height: 32)
     static let processingSize = CGSize(width: 112, height: 34)
     static let errorSize = CGSize(width: 260, height: 44)
+    /// The lingering-beat pill (committed/rejected affordances, ticket #289).
+    static let beatSize = CGSize(width: 260, height: 40)
 
     /// The fixed panel canvas: fits the largest pill (`errorSize`) plus
     /// entrance-scale and antialiasing headroom on every side. The pill is

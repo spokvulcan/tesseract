@@ -75,14 +75,22 @@ private enum DateFormatters {
 
 @MainActor
 protocol TranscriptionStoring: AnyObject {
-    func add(text: String, duration: TimeInterval, model: String)
+    func add(text: String, duration: TimeInterval, model: String, pairID: UUID?)
     func copyLatestToPasteboard()
+    /// Asks the history surface to reveal (and offer editing on) the entry
+    /// linked to a **Correction Pair** — the overlay "edit" affordance's hook.
+    func requestFocus(pairID: UUID)
 }
 
 @MainActor
 @Observable
 final class TranscriptionHistory: TranscriptionStoring {
     private(set) var entries: [TranscriptionEntry] = []
+
+    /// A transient reveal request (the overlay "edit" affordance): the
+    /// history view scrolls to this entry and opens its correction editor,
+    /// then clears the request. Never persisted.
+    var focusEntryID: UUID?
 
     /// Flattened list of items for efficient lazy rendering.
     /// Updated only when entries change.
@@ -129,13 +137,19 @@ final class TranscriptionHistory: TranscriptionStoring {
         updateFlattenedItems()
     }
 
-    func add(text: String, duration: TimeInterval, model: String) {
+    func add(text: String, duration: TimeInterval, model: String, pairID: UUID?) {
         let entry = TranscriptionEntry(
             text: text,
             duration: duration,
-            model: model
+            model: model,
+            pairID: pairID
         )
         add(entry)
+    }
+
+    func requestFocus(pairID: UUID) {
+        guard let entry = entries.first(where: { $0.pairID == pairID }) else { return }
+        focusEntryID = entry.id
     }
 
     func delete(_ entry: TranscriptionEntry) {

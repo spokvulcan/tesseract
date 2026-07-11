@@ -63,6 +63,11 @@ final class DictationFeed {
         let outcome: Outcome
     }
 
+    /// How long a terminal beat's affordances linger (ticket #289) — shared
+    /// by the variants' lingering pills and the App Bindings rule that keeps
+    /// the panel clickable for exactly this window, so the two can't drift.
+    static let affordanceLinger: Duration = .seconds(2.5)
+
     private(set) var phase: Phase = .idle
     /// Wall-clock start of the current `.recording` phase; `nil` outside it.
     /// Variants derive elapsed-time displays from this.

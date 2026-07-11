@@ -17,7 +17,12 @@ import Foundation
 
 @MainActor
 protocol CaptureDumpStoring: AnyObject {
-    func save(_ capture: RawCapture)
+    /// Saves one capture; returns the recording's file name (minted
+    /// synchronously — the write itself is background), or `nil` when
+    /// nothing will be saved. The name is the **Correction Pair**'s audio
+    /// reference.
+    @discardableResult
+    func save(_ capture: RawCapture) -> String?
     func deleteAll()
 }
 
@@ -30,6 +35,12 @@ final class CaptureDumpStore: CaptureDumpStoring {
 
     let directory: URL
     private let limits: Limits
+
+    /// File names the ring eviction must skip — gold **Correction Pair**
+    /// audio (ticket #289). Read on the main actor at save time; the
+    /// snapshot rides into the background eviction. `deleteAll()` is not
+    /// eviction: an explicit user delete still removes everything.
+    private let protectedFileNames: @MainActor () -> Set<String>
 
     /// Per-instance tiebreak so rapid saves within one timestamp granule still
     /// order (and thus evict) in save order.
@@ -47,24 +58,33 @@ final class CaptureDumpStore: CaptureDumpStoring {
         return formatter
     }()
 
-    init(directory: URL, limits: Limits = Limits()) {
+    init(
+        directory: URL,
+        limits: Limits = Limits(),
+        protectedFileNames: @escaping @MainActor () -> Set<String> = { [] }
+    ) {
         self.directory = directory
         self.limits = limits
+        self.protectedFileNames = protectedFileNames
     }
 
-    func save(_ capture: RawCapture) {
-        guard !capture.samples.isEmpty else { return }
-        let url = directory.appendingPathComponent(fileName(for: capture))
+    @discardableResult
+    func save(_ capture: RawCapture) -> String? {
+        guard !capture.samples.isEmpty else { return nil }
+        let name = fileName(for: capture)
+        let url = directory.appendingPathComponent(name)
+        let protected = protectedFileNames()
         schedule { [directory, limits] in
             do {
                 try FileManager.default.createDirectory(
                     at: directory, withIntermediateDirectories: true)
                 try Self.write(capture, to: url)
-                Self.enforceLimits(in: directory, limits: limits)
+                Self.enforceLimits(in: directory, limits: limits, protected: protected)
             } catch {
                 Log.audio.error("Capture Dump save failed: \(error.localizedDescription)")
             }
         }
+        return name
     }
 
     func deleteAll() {
@@ -141,16 +161,25 @@ final class CaptureDumpStore: CaptureDumpStoring {
             .sorted { $0.url.lastPathComponent < $1.url.lastPathComponent }
     }
 
-    private nonisolated static func enforceLimits(in directory: URL, limits: Limits) {
-        var recordings = recordingsOldestFirstWithSizes(in: directory)
+    /// Evicts oldest-first among the *evictable* recordings until the limits
+    /// hold (counting every file, protected included). When only protected
+    /// files remain over-limit, eviction stops — gold audio outlives the ring.
+    private nonisolated static func enforceLimits(
+        in directory: URL, limits: Limits, protected: Set<String>
+    ) {
+        let recordings = recordingsOldestFirstWithSizes(in: directory)
+        var totalCount = recordings.count
         var totalBytes = recordings.reduce(0) { $0 + $1.bytes }
+        var evictable = recordings.filter { !protected.contains($0.url.lastPathComponent) }
 
-        while recordings.count > limits.maxRecordings
-            || (totalBytes > limits.maxTotalBytes && recordings.count > 1)
+        while !evictable.isEmpty,
+            totalCount > limits.maxRecordings
+                || (totalBytes > limits.maxTotalBytes && totalCount > 1)
         {
-            let oldest = recordings.removeFirst()
+            let oldest = evictable.removeFirst()
             do {
                 try FileManager.default.removeItem(at: oldest.url)
+                totalCount -= 1
                 totalBytes -= oldest.bytes
             } catch {
                 Log.audio.error("Capture Dump eviction failed: \(error.localizedDescription)")

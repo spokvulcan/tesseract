@@ -60,6 +60,50 @@ struct AppBindingsTests {
             })
     }
 
+    /// The overlay affordance window (ticket #289): a committed/rejected beat
+    /// makes the panel clickable; a live phase ends the window immediately
+    /// (the timed revert is wall-clock and covered by the phase path here).
+    @Test
+    func terminalBeatOpensTheAffordanceWindowAndALivePhaseEndsIt() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        h.driver.dictationBeat = DictationFeed.Beat(
+            id: 1, outcome: .committed(text: "hello", duration: 1.0, edits: []))
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "setOverlayInteractive")
+                    == ["setOverlayInteractive(true)"]
+            })
+
+        h.driver.dictationState = .recording
+
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "setOverlayInteractive")
+                    == ["setOverlayInteractive(true)", "setOverlayInteractive(false)"]
+            })
+    }
+
+    /// Non-terminal beats (cancelled, superseded, empty) never open the window.
+    @Test
+    func nonAffordanceBeatsNeverOpenTheWindow() async {
+        let h = makeHarness()
+        defer { h.bindings.stop() }
+
+        h.bindings.start()
+
+        h.driver.dictationBeat = DictationFeed.Beat(id: 1, outcome: .cancelled)
+        h.driver.dictationBeat = DictationFeed.Beat(id: 2, outcome: .superseded)
+        h.driver.dictationBeat = DictationFeed.Beat(id: 3, outcome: .empty)
+
+        for _ in 0..<200 { await Task.yield() }
+        #expect(h.recorder.events(withPrefix: "setOverlayInteractive").isEmpty)
+    }
+
     @Test
     func speechStateEmissionReachesTheMenuBar() async {
         let h = makeHarness()
@@ -466,6 +510,7 @@ private final class EffectRecorder {
 @Observable @MainActor
 private final class InputDriver {
     var dictationState: DictationFeed.Phase = .idle
+    var dictationBeat: DictationFeed.Beat?
     var speechState: SpeechState = .idle
     var currentDictationHotkey: KeyCombo = .optionSpace
     var isLLMSlotLoaded = false
@@ -514,6 +559,7 @@ private func makeHarness(
         settings: settings,
         inputs: .init(
             dictationState: { driver.dictationState },
+            dictationBeat: { driver.dictationBeat },
             speechState: { driver.speechState },
             currentDictationHotkey: { driver.currentDictationHotkey },
             isLLMSlotLoaded: { driver.isLLMSlotLoaded },
@@ -525,6 +571,7 @@ private func makeHarness(
             setUpOverlayPanel: { recorder("setUpOverlayPanel") },
             setOverlayVariant: { recorder("setOverlayVariant(\($0))") },
             reassertOverlayFront: { recorder("reassertOverlayFront") },
+            setOverlayInteractive: { recorder("setOverlayInteractive(\($0))") },
             pushDictationStateToMenuBar: { recorder("pushDictationStateToMenuBar(\($0))") },
             pushSpeechStateToMenuBar: { recorder("pushSpeechStateToMenuBar(\($0))") },
             updateDictationHotkey: { recorder("updateDictationHotkey(\($0.displayString))") },

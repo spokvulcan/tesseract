@@ -129,6 +129,47 @@ struct CaptureDumpStoreTests {
         #expect(totalBytes <= 50_000)
     }
 
+    /// Protected recordings — gold **Correction Pair** audio (ticket #289) —
+    /// survive ring eviction even as older files; unprotected neighbors go.
+    @Test func protectedRecordingsSurviveRingEviction() async {
+        let directory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var protected: Set<String> = []
+        let store = CaptureDumpStore(
+            directory: directory,
+            limits: .init(maxRecordings: 2, maxTotalBytes: .max),
+            protectedFileNames: { protected }
+        )
+
+        // Oldest recording becomes protected (its pair went gold).
+        let firstName = store.save(makeCapture())
+        await store.flush()
+        if let firstName { protected.insert(firstName) }
+
+        for _ in 0..<3 {
+            store.save(makeCapture())
+        }
+        await store.flush()
+
+        let remaining = Set(wavFiles(in: directory).map(\.lastPathComponent))
+        #expect(remaining.contains(firstName ?? ""))
+        #expect(remaining.count == 2)
+    }
+
+    /// `save` returns the minted file name — the Correction Pair's audio
+    /// reference — and the file it names is the one written.
+    @Test func saveReturnsTheWrittenFileName() async throws {
+        let directory = makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = CaptureDumpStore(directory: directory)
+
+        let name = store.save(makeCapture())
+        await store.flush()
+
+        #expect(name != nil)
+        #expect(wavFiles(in: directory).map(\.lastPathComponent) == [name ?? ""])
+    }
+
     // MARK: - Delete all
 
     @Test func deleteAllEmptiesTheStore() async {

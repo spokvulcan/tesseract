@@ -66,15 +66,26 @@ final class FakeTranscriptionStore: TranscriptionStoring {
         let text: String
         let duration: TimeInterval
         let model: String
+        var pairID: UUID?
+
+        init(text: String, duration: TimeInterval, model: String, pairID: UUID? = nil) {
+            self.text = text
+            self.duration = duration
+            self.model = model
+            self.pairID = pairID
+        }
     }
     private(set) var entries: [Entry] = []
     private(set) var copyCount = 0
+    private(set) var focusRequests: [UUID] = []
 
-    func add(text: String, duration: TimeInterval, model: String) {
-        entries.append(Entry(text: text, duration: duration, model: model))
+    func add(text: String, duration: TimeInterval, model: String, pairID: UUID?) {
+        entries.append(Entry(text: text, duration: duration, model: model, pairID: pairID))
     }
 
     func copyLatestToPasteboard() { copyCount += 1 }
+
+    func requestFocus(pairID: UUID) { focusRequests.append(pairID) }
 }
 
 @MainActor
@@ -553,6 +564,119 @@ struct DictationCoordinatorTests {
         #expect(injector.injected == [corrected + " "])
         #expect(store.entries.first?.text == corrected)
         #expect(probe.phase == .proofreading)
+    }
+
+    // MARK: - Correction Pair flywheel (ticket #289)
+
+    private func makePairStore() -> (store: CorrectionPairStore, cleanup: () -> Void) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("coordinator-pairs-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return (
+            CorrectionPairStore(directory: directory),
+            { try? FileManager.default.removeItem(at: directory) }
+        )
+    }
+
+    /// A committed take records a pair carrying the full lineage, and the
+    /// history entry links to it; the overlay affordances then work the pair.
+    @Test
+    func committedTakeRecordsALinkedPairAndAffordancesWorkIt() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let (pairs, cleanup) = makePairStore()
+        defer { cleanup() }
+
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
+        )
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let raw = TranscriptionPostProcessor().process("hello world")
+        let corrected = raw + " indeed"
+        let store = FakeTranscriptionStore()
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: FakeTextInjector(),
+            history: store,
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in corrected }),
+            pairs: pairs
+        )
+        var historyOpened = 0
+        coordinator.onOpenDictationHistory = { historyOpened += 1 }
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { coordinator.state == .idle && feed.beat != nil }
+
+        let pair = try #require(pairs.pairs.first)
+        #expect(pair.rawASR == "hello world")
+        #expect(pair.cleaned == raw)
+        #expect(pair.proofread == corrected)
+        #expect(pair.verdict == .corrected)
+        #expect(pair.committed == corrected)
+        #expect(coordinator.lastTakePairID == pair.id)
+        #expect(store.entries.first?.pairID == pair.id)
+
+        // One-click flag marks the pair gold…
+        coordinator.flagLastTakeWrong()
+        #expect(pairs.pair(withID: pair.id)?.flaggedWrong == true)
+
+        // …and "edit" stages the history focus and summons the window.
+        coordinator.editLastTake()
+        #expect(store.focusRequests == [pair.id])
+        #expect(historyOpened == 1)
+    }
+
+    /// A rejected take records its pair; "insert raw anyway" flags it (using
+    /// it *is* "the pass was wrong") and links the history entry it creates.
+    @Test
+    func rejectedTakeRecordsAPairAndInsertRawAnywayFlagsIt() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let (pairs, cleanup) = makePairStore()
+        defer { cleanup() }
+
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
+        )
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let store = FakeTranscriptionStore()
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: FakeTextInjector(),
+            history: store,
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in "REJECT: garbled" }),
+            pairs: pairs
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { feed.beat != nil }
+
+        let pair = try #require(pairs.pairs.first)
+        #expect(pair.verdict == .rejected)
+        #expect(pair.rejectReason == "garbled")
+        #expect(pair.committed == nil)
+        #expect(pair.flaggedWrong == false)
+
+        coordinator.insertRawAnyway()
+
+        #expect(pairs.pair(withID: pair.id)?.flaggedWrong == true)
+        #expect(store.entries.first?.pairID == pair.id)
     }
 
     /// "No speech detected" resolving under a held key: the error does not gate
