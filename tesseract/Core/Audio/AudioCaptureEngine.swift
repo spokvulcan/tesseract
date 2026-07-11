@@ -78,6 +78,26 @@ nonisolated final class SampleBuffer: @unchecked Sendable {
         currentChunk = []
         lock.unlock()
     }
+
+    /// A non-destructive copy of everything captured so far — the **Live
+    /// Partial** lane's mid-capture read (ticket #291). The tap keeps
+    /// appending; the coalescing copy happens on the caller's thread, never
+    /// the real-time audio thread.
+    func snapshot() -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        if sealedChunks.isEmpty {
+            return currentChunk
+        }
+        var result: [Float] = []
+        result.reserveCapacity(
+            sealedChunks.reduce(0) { $0 + $1.count } + currentChunk.count)
+        for chunk in sealedChunks {
+            result.append(contentsOf: chunk)
+        }
+        result.append(contentsOf: currentChunk)
+        return result
+    }
 }
 
 @MainActor
@@ -85,6 +105,15 @@ protocol AudioCapturing: AnyObject {
     var isCapturing: Bool { get }
     func startCapture() throws
     func stopCapture() -> AudioData?
+    /// A mid-capture snapshot of the audio so far — the **Live Partial**
+    /// lane's read (ticket #291). `nil` when not capturing or when the
+    /// implementation has nothing to offer (the default) — the partial track
+    /// degrades to silence, never an error.
+    func captureSnapshot() -> AudioData?
+}
+
+extension AudioCapturing {
+    func captureSnapshot() -> AudioData? { nil }
 }
 
 @MainActor
@@ -476,6 +505,18 @@ final class AudioCaptureEngine: AudioCapturing {
                 sampleRate: inputSampleRate,
                 voiceProcessed: wasVoiceProcessed
             )
+        )
+    }
+
+    func captureSnapshot() -> AudioData? {
+        guard isCapturing, !meteringOnly else { return nil }
+        let samples = sampleBuffer.snapshot()
+        guard !samples.isEmpty, inputSampleRate > 0 else { return nil }
+        return AudioData(
+            samples: samples,
+            sampleRate: inputSampleRate,
+            duration: Double(samples.count) / inputSampleRate,
+            raw: nil
         )
     }
 

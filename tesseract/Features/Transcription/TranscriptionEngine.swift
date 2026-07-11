@@ -11,6 +11,14 @@ import os
 protocol Transcribing: AnyObject {
     func transcribe(_ audioData: AudioData, language: String) async throws -> TranscriptionResult
     func cancelTranscription()
+    /// The **Live Partial** lane (ticket #291): best-effort transcription of a
+    /// mid-capture snapshot. Skip-not-queue — `nil` whenever transcribing now
+    /// would contend with the final take (default: always skip).
+    func transcribePartial(_ audioData: AudioData, language: String) async -> String?
+}
+
+extension Transcribing {
+    func transcribePartial(_ audioData: AudioData, language: String) async -> String? { nil }
 }
 
 @Observable @MainActor
@@ -45,6 +53,12 @@ final class TranscriptionEngine: Transcribing {
     /// still running) awaits this load instead of starting a second full
     /// WhisperKit load: double ANE prepare, double transient memory.
     private var inFlightLoad: Task<Void, Error>?
+
+    /// The single in-flight **Live Partial** decode (ticket #291). Retained so
+    /// the final `transcribe` can cancel it at entry — the recognizer actor
+    /// serializes calls, so an uncancelled partial would delay the release→
+    /// inject path by up to one window decode.
+    private var currentPartial: Task<TranscriptionResult, Error>?
 
     init(
         makeRecognizer: @escaping @Sendable () -> any SpeechRecognizer = {
@@ -117,6 +131,10 @@ final class TranscriptionEngine: Transcribing {
         guard currentTranscription == nil else {
             throw DictationError.transcriptionInProgress
         }
+
+        // The final take outranks the partial lane: cancel any partial decode
+        // so this transcription never queues behind it on the recognizer actor.
+        currentPartial?.cancel()
 
         let task = Task { [weak self] () throws -> TranscriptionResult in
             guard let self else { throw DictationError.modelNotLoaded }
@@ -238,7 +256,31 @@ final class TranscriptionEngine: Transcribing {
     /// the one cancellation channel.)
     func cancelTranscription() {
         currentTranscription?.cancel()
+        currentPartial?.cancel()
         isTranscribing = false
+    }
+
+    /// The **Live Partial** lane (ticket #291). Everything about it is
+    /// subordinate to the final take: it skips rather than contends (no decode
+    /// while a final transcription is in flight or another partial is still
+    /// running), it never triggers a model load, it never touches
+    /// `isTranscribing` (observable UI state), and every failure — including
+    /// cancellation by an arriving final — degrades to `nil`, never an error.
+    func transcribePartial(_ audioData: AudioData, language: String) async -> String? {
+        guard currentTranscription == nil, currentPartial == nil,
+            let recognizer, !audioData.isEmpty
+        else { return nil }
+
+        let languageCode = language == "auto" ? nil : language
+        let task = Task { () throws -> TranscriptionResult in
+            try await recognizer.transcribe(audioData, language: languageCode)
+        }
+        currentPartial = task
+        defer {
+            // Identity-guarded, as everywhere: never free a successor's slot.
+            if currentPartial == task { currentPartial = nil }
+        }
+        return (try? await task.value)?.text
     }
 }
 

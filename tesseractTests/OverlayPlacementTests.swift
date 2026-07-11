@@ -124,6 +124,19 @@ struct OverlayPlacementTests {
     }
 
     @Test
+    func captionCanvasIsBottomCentredWithRiseHeadroom() {
+        let frame = OverlayPlacement.caption.frame(geometry)
+        // The canvas dips `riseTravel` below the bar's resting inset so the
+        // entrance rise never leaves the fixed window (the ribbon's trick).
+        #expect(frame.midX == geometry.visibleFrame.midX)
+        #expect(
+            frame.minY
+                == geometry.visibleFrame.minY + CaptionMetrics.bottomInset
+                - CaptionMetrics.riseTravel)
+        #expect(frame.size == CaptionMetrics.canvasSize)
+    }
+
+    @Test
     func everyRegisteredVariantCanvasFitsTheVisibleFrame() {
         // Whatever the variant, its fixed canvas must land wholly inside the
         // visible frame — an overlay that clips at a screen edge is broken on
@@ -131,6 +144,7 @@ struct OverlayPlacementTests {
         let placements: [(String, OverlayPlacement)] = [
             ("pill", .pill), ("ribbon", .ribbon), ("orb", .orb),
             ("island", .island), ("whisper", .whisper), ("stageCard", .stageCard),
+            ("caption", .caption),
         ]
         for (name, placement) in placements {
             let frame = placement.frame(geometry)

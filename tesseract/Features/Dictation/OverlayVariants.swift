@@ -35,7 +35,26 @@ struct OverlayVariant: Identifiable {
     let id: String
     let displayName: String
     let placement: OverlayPlacement
+    /// Whether this variant renders the feed's **Live Partial** signal
+    /// (ticket #291). The partial pump only runs while the live variant
+    /// consumes it — the pipeline reads this through a composition-root
+    /// closure, never the variant itself.
+    let usesLivePartials: Bool
     let makeView: @MainActor (DictationFeed, OverlayActions) -> AnyView
+
+    init(
+        id: String,
+        displayName: String,
+        placement: OverlayPlacement,
+        usesLivePartials: Bool = false,
+        makeView: @escaping @MainActor (DictationFeed, OverlayActions) -> AnyView
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.placement = placement
+        self.usesLivePartials = usesLivePartials
+        self.makeView = makeView
+    }
 }
 
 /// The variant registry the overlay-variant Setting selects from. Exploration
@@ -51,7 +70,9 @@ enum OverlayVariants {
         AnyView(GlobalOverlayHUD(feed: feed, actions: actions))
     }
 
-    static let all: [OverlayVariant] = [classic, ribbon, orb, island, whisper, stageCard]
+    static let all: [OverlayVariant] = [
+        classic, ribbon, orb, island, whisper, stageCard, caption,
+    ]
 
     /// Unknown ids (a removed exploration surviving in defaults) fall back to
     /// the classic pill.
