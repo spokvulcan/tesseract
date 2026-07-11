@@ -31,10 +31,17 @@ enum PromptCacheFormatting {
         percentFormatter.string(from: NSNumber(value: value)) ?? "0%"
     }
 
+    /// Human-scale duration from a millisecond count: milliseconds under a
+    /// second, seconds under a minute, minutes beyond — "20499 ms" reads as
+    /// "20.5 s", nobody converts in their head (owner call, 2026-07-11).
     static func milliseconds(_ value: Double) -> String {
         if value <= 0 { return "-" }
         if value < 10 { return String(format: "%.1f ms", value) }
-        return String(format: "%.0f ms", value)
+        if value < 1_000 { return String(format: "%.0f ms", value) }
+        let seconds = value / 1_000
+        if seconds < 10 { return String(format: "%.2f s", seconds) }
+        if seconds < 60 { return String(format: "%.1f s", seconds) }
+        return String(format: "%dm %02ds", Int(seconds) / 60, Int(seconds) % 60)
     }
 
     static func compactNumber(_ value: Int) -> String {

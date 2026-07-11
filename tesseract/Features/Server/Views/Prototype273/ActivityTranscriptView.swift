@@ -251,10 +251,7 @@ private struct ActivityRequestHeader: View {
     private var decodeMetaLine: String {
         var parts: [String] = []
         if let ttft = trace.ttftMs {
-            parts.append(
-                ttft < 1000
-                    ? String(format: "ttft %.0f ms", ttft)
-                    : String(format: "ttft %.2f s", ttft / 1000))
+            parts.append("ttft " + PromptCacheFormatting.milliseconds(ttft))
         }
         if trace.phase.isTerminal, trace.tokensPerSecond > 0 {
             parts.append(String(format: "%.1f tok/s", trace.tokensPerSecond))

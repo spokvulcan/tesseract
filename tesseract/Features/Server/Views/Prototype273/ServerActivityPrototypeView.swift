@@ -528,10 +528,7 @@ private struct RecentRequestRow: View {
             parts.append(String(format: "hit %.0f%%", ratio * 100))
         }
         if let ttft = trace.ttftMs {
-            parts.append(
-                ttft < 1000
-                    ? String(format: "%.0f ms", ttft)
-                    : String(format: "%.1f s", ttft / 1000))
+            parts.append(PromptCacheFormatting.milliseconds(ttft))
         }
         if trace.tokensPerSecond > 0 {
             parts.append(String(format: "%.0f tok/s", trace.tokensPerSecond))
