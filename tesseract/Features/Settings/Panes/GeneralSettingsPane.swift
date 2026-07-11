@@ -49,25 +49,6 @@ struct GeneralSettingsPane: View {
                 Toggle("Play Sounds", isOn: $settings.playSounds)
             }
 
-            Section {
-                Picker("Overlay Style", selection: $settings.overlayStyle) {
-                    ForEach(OverlayStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                if settings.overlayStyle == .fullScreenBorder {
-                    Picker("Glow Theme", selection: $settings.glowTheme) {
-                        ForEach(GlowTheme.allCases) { theme in
-                            Text(theme.displayName).tag(theme)
-                        }
-                    }
-                }
-            } header: {
-                Text("Recording Overlay")
-            } footer: {
-                Text(settings.overlayStyle.description)
-            }
-
             Section("Setup") {
                 Button("Show Welcome Tour…") {
                     openWindow(id: WindowID.onboarding)

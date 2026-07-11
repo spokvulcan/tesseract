@@ -64,19 +64,12 @@ final class AppBindings {
     }
 
     struct Effects {
-        /// Sets the border overlay's glow theme. Called synchronously *before*
-        /// panel setup so a user's non-default theme shows on the very first frame.
-        let setBorderGlowTheme: @MainActor (GlowTheme) -> Void
-        /// Creates both overlay panels' views.
-        let setUpOverlayPanels: @MainActor () -> Void
-        let setPillOverlayEnabled: @MainActor (Bool) -> Void
-        let setBorderOverlayEnabled: @MainActor (Bool) -> Void
+        /// Creates the overlay panel's view.
+        let setUpOverlayPanel: @MainActor () -> Void
         let pushDictationStateToPill: @MainActor (DictationState) -> Void
-        let pushDictationStateToBorder: @MainActor (DictationState) -> Void
         let pushDictationStateToMenuBar: @MainActor (DictationState) -> Void
         let pushSpeechStateToMenuBar: @MainActor (SpeechState) -> Void
         let pushAudioLevelToPill: @MainActor (Float) -> Void
-        let pushAudioLevelToBorder: @MainActor (Float) -> Void
         /// Builds the capture engine (incl. its Voice Processing configuration)
         /// ahead of the first press, so no capture pays the VPIO setup cost
         /// interactively.
@@ -94,16 +87,11 @@ final class AppBindings {
         let loadWhisperModel: @MainActor (URL) async -> Void
 
         init(
-            setBorderGlowTheme: @escaping @MainActor (GlowTheme) -> Void,
-            setUpOverlayPanels: @escaping @MainActor () -> Void,
-            setPillOverlayEnabled: @escaping @MainActor (Bool) -> Void,
-            setBorderOverlayEnabled: @escaping @MainActor (Bool) -> Void,
+            setUpOverlayPanel: @escaping @MainActor () -> Void,
             pushDictationStateToPill: @escaping @MainActor (DictationState) -> Void,
-            pushDictationStateToBorder: @escaping @MainActor (DictationState) -> Void,
             pushDictationStateToMenuBar: @escaping @MainActor (DictationState) -> Void,
             pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
             pushAudioLevelToPill: @escaping @MainActor (Float) -> Void,
-            pushAudioLevelToBorder: @escaping @MainActor (Float) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
@@ -115,16 +103,11 @@ final class AppBindings {
             reloadLLMIfNeeded: @escaping @MainActor () async throws -> Void,
             loadWhisperModel: @escaping @MainActor (URL) async -> Void
         ) {
-            self.setBorderGlowTheme = setBorderGlowTheme
-            self.setUpOverlayPanels = setUpOverlayPanels
-            self.setPillOverlayEnabled = setPillOverlayEnabled
-            self.setBorderOverlayEnabled = setBorderOverlayEnabled
+            self.setUpOverlayPanel = setUpOverlayPanel
             self.pushDictationStateToPill = pushDictationStateToPill
-            self.pushDictationStateToBorder = pushDictationStateToBorder
             self.pushDictationStateToMenuBar = pushDictationStateToMenuBar
             self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
             self.pushAudioLevelToPill = pushAudioLevelToPill
-            self.pushAudioLevelToBorder = pushAudioLevelToBorder
             self.prewarmAudioCapture = prewarmAudioCapture
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
@@ -158,12 +141,7 @@ final class AppBindings {
         guard !hasStarted else { return }
         hasStarted = true
 
-        // Seed the border's glow theme synchronously *before* its view is
-        // created, so a user's non-default theme shows on the very first frame
-        // instead of flashing the default while the async settings observation
-        // catches up.
-        effects.setBorderGlowTheme(settings.glowTheme)
-        effects.setUpOverlayPanels()
+        effects.setUpOverlayPanel()
 
         installSubscriptions()
 
@@ -236,8 +214,6 @@ final class AppBindings {
 
     // Every subscription relies on `Observations` emitting the current value at
     // subscription time to apply each rule's initial seed.
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable:next cyclomatic_complexity
     private func installSubscriptions() {
         // One rule per status emission, two duties in order: heal the
         // dictation model selection onto a model that exists on disk, then
@@ -317,15 +293,14 @@ final class AppBindings {
                 }
             })
 
-        // The single dictation-state subscription: raw state fans out to both
-        // overlay panels (the disabled one stays hidden) and the menu bar, so
-        // every surface always sees the same emission — no second path, no race.
+        // The single dictation-state subscription: raw state fans out to the
+        // overlay panel and the menu bar, so every surface always sees the same
+        // emission — no second path, no race.
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
                 for await state in Observations({ self.inputs.dictationState() }) {
                     self.effects.pushDictationStateToPill(state)
-                    self.effects.pushDictationStateToBorder(state)
                     self.effects.pushDictationStateToMenuBar(state)
                 }
             })
@@ -340,25 +315,14 @@ final class AppBindings {
                 }
             })
 
-        // Keep the border's glow theme live — pure view data, re-applied on change.
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await glowTheme in Observations({ self.settings.glowTheme }) {
-                    self.effects.setBorderGlowTheme(glowTheme)
-                }
-            })
-
-        // Forward audio level to both overlays; each drops it while disabled, so
-        // the hidden overlay does no SwiftUI work at audio frame-rate. The
-        // enabled gate inside the panel is the single source of truth for which
-        // overlay is live — no separate active-overlay pointer to keep in sync.
+        // Forward audio level to the overlay; the panel drops it while nothing
+        // is on screen, so a hidden overlay does no SwiftUI work at audio
+        // frame-rate.
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
                 for await level in Observations({ self.inputs.audioLevel() }) {
                     self.effects.pushAudioLevelToPill(level)
-                    self.effects.pushAudioLevelToBorder(level)
                 }
             })
 
@@ -377,24 +341,6 @@ final class AppBindings {
         // Re-bind the TTS and agent hotkeys on change; re-applying the current
         // combo at subscription time is a harmless re-register.
         installAuxiliaryHotkeySubscriptions()
-
-        // Enable the overlay matching the current style and disable the other.
-        // Each panel's enabled flag gates both its visibility and its
-        // audio-frame handling, so the inactive overlay stays hidden and idle.
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await style in Observations({ self.settings.overlayStyle }) {
-                    switch style {
-                    case .pill:
-                        self.effects.setPillOverlayEnabled(true)
-                        self.effects.setBorderOverlayEnabled(false)
-                    case .fullScreenBorder:
-                        self.effects.setPillOverlayEnabled(false)
-                        self.effects.setBorderOverlayEnabled(true)
-                    }
-                }
-            })
     }
 
     /// The TTS / agent / appshot hotkey re-binds — same shape as the dictation

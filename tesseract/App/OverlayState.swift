@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-/// Shared observable state for overlay panels.
+/// Shared observable state for the overlay panel.
 /// This allows SwiftUI views to observe state changes without recreating the view hierarchy,
 /// which preserves animation state (TimelineView scheduling, @State variables).
 @Observable
@@ -13,5 +13,4 @@ import SwiftUI
 final class OverlayState {
     var dictationState: DictationState = .idle
     var audioLevel: Float = 0
-    var glowTheme: GlowTheme = .appleIntelligence
 }
