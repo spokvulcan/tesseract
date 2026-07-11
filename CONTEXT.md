@@ -1130,6 +1130,15 @@ field), model config / `config.json` dict (a source, not the value), ModelFinger
 (separate). "Model identity" vs "flop profile" — the latter is one field of the
 former.
 
+**Prepared Checkpoint**:
+The once-converted MLX-native form of a PARO checkpoint, stored beside the
+original so later loads skip the AutoAWQ conversion; rotation parameters remain
+runtime state loaded verbatim — nothing semantic is baked into the artifact.
+Stale or unreadable artifacts self-heal by re-conversion.
+_Avoid_: prerotated cache (rotations are not pre-applied), weights cache / cache
+(collides with the prefix cache), converted weights (holds the stacked MoE
+layout too, not just per-tensor conversion).
+
 ### Cache memory budget
 
 **Pressure-Reactive Budget**:

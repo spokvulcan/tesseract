@@ -101,6 +101,8 @@ actor LLMActor {
         ssdConfig: SSDPrefixCacheConfig? = nil,
         ramBudgetCapBytes: Int? = nil
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
+        let loadClock = ContinuousClock()
+        let loadStart = loadClock.now
         let identity = ModelIdentity(directory: directory)
         let format = identity.toolCallFormat
         Log.agent.info(
@@ -142,7 +144,9 @@ actor LLMActor {
                 visionMode
                 ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
                 : try await loadParoQuantLLMContainer(from: directory, toolCallFormat: format)
-            return try await verifyAndStore(container: container, identity: identity)
+            let result = try await verifyAndStore(container: container, identity: identity)
+            logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
+            return result
         }
 
         // Non-PARO Qwen3.5 checkpoints (e.g. mlx-community/Qwen3.5-*-MLX) ship
@@ -171,7 +175,20 @@ actor LLMActor {
                 context.configuration.toolCallFormat = format
             }
         }
-        return try await verifyAndStore(container: container, identity: identity)
+        let result = try await verifyAndStore(container: container, identity: identity)
+        logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
+        return result
+    }
+
+    /// Notice-level so the duration survives in `log show` (info is not
+    /// persisted) — model loads are rare, load-time regressions matter.
+    private func logLoadCompleted(
+        since start: ContinuousClock.Instant, clock: ContinuousClock, visionMode: Bool
+    ) {
+        let seconds = (clock.now - start) / .seconds(1)
+        Log.agent.notice(
+            "Model load completed in \(String(format: "%.2f", seconds))s — visionMode=\(visionMode)"
+        )
     }
 
     /// Start a raw text/tool generation and surface the underlying vendor task so

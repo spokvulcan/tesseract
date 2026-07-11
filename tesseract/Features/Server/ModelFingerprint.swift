@@ -9,7 +9,9 @@
 //  Hash input: SHA-256 over the identity files' bytes (config.json,
 //  tokenizer.json, and the preparation-identity files — tokenizer_config.json,
 //  preprocessor_config.json, chat_template.json/.jinja; PRD #72) + sorted
-//  list of (filename, size, mtime) for every *.safetensors in the directory.
+//  list of (filename, size, mtime) for every *.safetensors in the directory,
+//  excluding the Prepared Checkpoint artifact names (derived from the hashed
+//  sources, not identity).
 //  Preparation files join the hash because they shape the prepared sequence
 //  (tokenization, chat-template rendering, image patch grids): a processor or
 //  template change must partition the cache rather than leave stale
@@ -20,6 +22,7 @@
 
 import CryptoKit
 import Foundation
+import MLXLMCommon
 
 enum ModelFingerprint {
 
@@ -134,7 +137,14 @@ enum ModelFingerprint {
             throw Error.unableToEnumerate(modelDir, underlying: error)
         }
 
-        let safetensors = contents.filter { $0.pathExtension.lowercased() == "safetensors" }
+        // The Prepared Checkpoint (and its temp/legacy names) is a derived
+        // artifact of the sources hashed here, not weight identity — including
+        // it would shift `CachePartitionKey` on its first background write and
+        // orphan every persisted prefix-cache snapshot for the model.
+        let safetensors = contents.filter {
+            $0.pathExtension.lowercased() == "safetensors"
+                && !ParoQuantPreparedCheckpoint.excludedFileNames.contains($0.lastPathComponent)
+        }
 
         var entries: [SafetensorsEntry] = []
         entries.reserveCapacity(safetensors.count)

@@ -114,7 +114,9 @@ nonisolated private func installTextOnlyProcessor(on container: ModelContainer) 
 /// VLM container loaded by `loadParoQuantVLMContainer`.
 ///
 /// Delegates to MLXLMCommon's `loadParoQuantModel` which handles AutoAWQ weight
-/// conversion, rotation layer patching, and pre-rotation caching.
+/// conversion, rotation layer patching, and the Prepared Checkpoint (the
+/// once-converted MLX-native form persisted beside the checkpoint so later
+/// loads skip conversion; rotations stay runtime state).
 ///
 /// `loadParoQuantModel` is generic over a concrete `LanguageModel` type, so the
 /// shared factory registries (`ModelTypeRegistry<LanguageModel>`, existential

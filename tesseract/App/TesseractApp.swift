@@ -72,6 +72,10 @@ struct TesseractApp: App {
             Self.runHarness("PARO parity bench") {
                 try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--prepared-checkpoint-parity") {
+            Self.runHarness("Prepared Checkpoint parity") {
+                try await PreparedCheckpointParityRunner(runner: BenchmarkRunner()).run()
+            }
         } else if args.contains("--trace-replay") {
             Self.runHarness("Trace replay") {
                 try await TraceReplayRunner(arguments: args).run()

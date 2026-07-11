@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import MLXLMCommon
 import Testing
 
 @testable import Tesseract_Agent
@@ -332,5 +333,32 @@ struct ModelFingerprintTests {
 
         let fp = try ModelFingerprint.computeFingerprint(modelDir: dir)
         #expect(fp.count == 64)
+    }
+
+    @Test
+    func fingerprintIgnoresPreparedCheckpointArtifacts() throws {
+        // The Prepared Checkpoint is derived from the hashed sources, not
+        // weight identity — its background write must not shift
+        // `CachePartitionKey` and orphan persisted prefix-cache snapshots.
+        let dir = try makeScratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        try writeFile(
+            Data("{\"model\":\"test\"}".utf8), at: dir.appendingPathComponent("config.json"),
+            modificationDate: date)
+        try writeFile(
+            Data(repeating: 0xAB, count: 512), at: dir.appendingPathComponent("model.safetensors"),
+            modificationDate: date)
+
+        let before = try ModelFingerprint.computeFingerprint(modelDir: dir)
+
+        for name in ParoQuantPreparedCheckpoint.excludedFileNames {
+            try writeFile(
+                Data(repeating: 0xCD, count: 128), at: dir.appendingPathComponent(name))
+        }
+
+        let after = try ModelFingerprint.computeFingerprint(modelDir: dir)
+        #expect(after == before)
     }
 }
