@@ -84,7 +84,7 @@ struct SnapshotDemotionTests {
         // The demoted node survives in the tree with a pending ref
         // (state 3) until the writer commits it to state 5 (ssdOnly).
         let tree = store.tree(for: key)!
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         let committed = await waitUntil {
             if case .ssdHit = manager.lookup(
                 tokens: victimTokens, partitionKey: key
@@ -206,13 +206,12 @@ struct SnapshotDemotionTests {
             return
         }
 
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         let committed = await waitUntil { node.state.committed }
         #expect(committed)
 
         let now = Date().timeIntervalSinceReferenceDate
-        let demotedAccessAt = store.ssdStoreForTesting!
-            .lastAccessAtForTesting(id: demotedID)
+        let demotedAccessAt = store.ssdResidency()!.lastAccessAt(id: demotedID)
         #expect(demotedAccessAt > 0)
         #expect(
             now - demotedAccessAt > 3_000,
@@ -248,11 +247,11 @@ struct SnapshotDemotionTests {
 
         let demoted = makeStaleDescriptor()
         #expect(ledger.commit(demoted, refreshRecency: false))
-        #expect(ledger.lastAccessAtForTesting(id: demoted.snapshotID) == staleStamp)
+        #expect(ledger.residency().lastAccessAt(id: demoted.snapshotID) == staleStamp)
 
         let ordinary = makeStaleDescriptor()
         #expect(ledger.commit(ordinary))
-        let refreshed = ledger.lastAccessAtForTesting(id: ordinary.snapshotID)
+        let refreshed = ledger.residency().lastAccessAt(id: ordinary.snapshotID)
         #expect(Date().timeIntervalSinceReferenceDate - refreshed < 60)
     }
 }

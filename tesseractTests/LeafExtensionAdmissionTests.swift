@@ -241,16 +241,16 @@ struct LeafExtensionLedgerTests {
         // Unknown base, not queued: rejected, no shield, no claim.
         #expect(
             ledger.beginExtensionTransfer(baseID: "ghost", baseIsQueuedOrInFlight: false) == nil)
-        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
+        #expect(ledger.residency().transferringBaseIDs.isEmpty)
 
         // Unknown base but still in the writer's queue: allowed (FIFO
         // settles it before the extension).
         let queuedClaim = ledger.beginExtensionTransfer(
             baseID: "queued", baseIsQueuedOrInFlight: true)
         #expect(queuedClaim != nil)
-        #expect(ledger.transferringBaseIDsForTesting() == ["queued"])
+        #expect(ledger.residency().transferringBaseIDs == ["queued"])
         queuedClaim?.release()
-        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
+        #expect(ledger.residency().transferringBaseIDs.isEmpty)
 
         // Resident base: allowed.
         let base = makeDescriptor(id: "base-resident")
@@ -258,7 +258,7 @@ struct LeafExtensionLedgerTests {
         let residentClaim = ledger.beginExtensionTransfer(
             baseID: "base-resident", baseIsQueuedOrInFlight: false)
         #expect(residentClaim != nil)
-        #expect(ledger.transferringBaseIDsForTesting() == ["base-resident"])
+        #expect(ledger.residency().transferringBaseIDs == ["base-resident"])
         residentClaim?.disarm()
     }
 
@@ -274,7 +274,7 @@ struct LeafExtensionLedgerTests {
         do {
             _ = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
         }
-        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
+        #expect(ledger.residency().transferringBaseIDs.isEmpty)
 
         // release() is exactly-once; a second settle is a no-op even if
         // another claim re-shields the same base meanwhile.
@@ -282,9 +282,9 @@ struct LeafExtensionLedgerTests {
         first?.release()
         let second = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
         first?.release()
-        #expect(ledger.transferringBaseIDsForTesting() == ["base"])
+        #expect(ledger.residency().transferringBaseIDs == ["base"])
         second?.release()
-        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
+        #expect(ledger.residency().transferringBaseIDs.isEmpty)
     }
 
     @Test func transferShieldExcludesBaseFromLRUCutUntilReleased() {
@@ -306,7 +306,7 @@ struct LeafExtensionLedgerTests {
         let (decision, evicted) = ledger.admit(makeDescriptor(id: "incoming", bytes: 400))
         #expect(decision == .admit)
         #expect(evicted.map(\.snapshotID) == ["other"])
-        #expect(ledger.residentDescriptorForTesting(id: "base") != nil)
+        #expect(ledger.residency().descriptor(id: "base") != nil)
 
         // Released, the base is an ordinary victim again.
         claim?.release()
@@ -370,7 +370,7 @@ struct LeafExtensionLedgerTests {
         let claim = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
         #expect(claim != nil)
         defer { claim?.disarm() }
-        #expect(ledger.currentSSDBytesForTesting() == 800)
+        #expect(ledger.residency().bytes == 800)
 
         let extensionDescriptor = makeDescriptor(
             id: "head", bytes: 200, tokenOffset: 9, segmentBaseOffset: 5
@@ -383,9 +383,9 @@ struct LeafExtensionLedgerTests {
 
         // Base entry gone, head owns the chain total, shield released —
         // and no instant in between double-counted (end-state check).
-        #expect(ledger.residentDescriptorForTesting(id: "base") == nil)
-        #expect(ledger.currentSSDBytesForTesting() == 1_000)
-        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
+        #expect(ledger.residency().descriptor(id: "base") == nil)
+        #expect(ledger.residency().bytes == 1_000)
+        #expect(ledger.residency().transferringBaseIDs.isEmpty)
 
         let chain = try #require(ledger.chainForHydration(id: "head"))
         #expect(
@@ -396,7 +396,7 @@ struct LeafExtensionLedgerTests {
         // Removing the folded head frees the whole chain.
         let removed = try #require(ledger.remove(id: "head"))
         #expect(removed.fileURLs.count == 2)
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
     }
 
     @Test func commitConsumingMissingBaseVetoes() {
@@ -406,8 +406,8 @@ struct LeafExtensionLedgerTests {
 
         let head = makeDescriptor(id: "head", bytes: 200, tokenOffset: 9, segmentBaseOffset: 5)
         #expect(!ledger.commit(head, consumingBase: "ghost"))
-        #expect(ledger.residentDescriptorForTesting(id: "head") == nil)
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().descriptor(id: "head") == nil)
+        #expect(ledger.residency().bytes == 0)
     }
 
     @Test func rebuildKeepsChainHeadAndDropsBaseEntry() throws {
@@ -448,9 +448,9 @@ struct LeafExtensionLedgerTests {
         #expect(
             outcome.validPartitions.first?.descriptors.map(\.snapshotID) == ["head-1"]
         )
-        let restored = try #require(ledger.residentDescriptorForTesting(id: "head-1"))
+        let restored = try #require(ledger.residency().descriptor(id: "head-1"))
         #expect(restored.inheritedSegments == [base.ownSegment])
-        #expect(ledger.currentSSDBytesForTesting() == restored.totalBytes)
+        #expect(ledger.residency().bytes == restored.totalBytes)
         // The base's file is part of the head's chain — never orphaned.
         #expect(
             FileManager.default.fileExists(
@@ -522,8 +522,8 @@ struct LeafExtensionStoreTests {
         )
 
         #expect(result == .rejectedExtensionBaseUnavailable)
-        #expect(store.pendingCountForTesting() == 0)
-        #expect(store.transferringBaseIDsForTesting().isEmpty)
+        #expect(store.pendingWriteCount() == 0)
+        #expect(store.residency().transferringBaseIDs.isEmpty)
     }
 
     /// Thread-safe collector of writer commit payloads.
@@ -566,16 +566,16 @@ struct LeafExtensionStoreTests {
             Issue.record("extension enqueue rejected")
             return
         }
-        #expect(store.transferringBaseIDsForTesting() == ["base"])
+        #expect(store.residency().transferringBaseIDs == ["base"])
         await store.flushAsync()
 
         // Folded: head owns the chain, base entry consumed, shield off.
-        #expect(store.residentDescriptorForTesting(id: "base") == nil)
-        #expect(store.transferringBaseIDsForTesting().isEmpty)
-        let folded = try #require(store.residentDescriptorForTesting(id: "head"))
+        #expect(store.residency().descriptor(id: "base") == nil)
+        #expect(store.residency().transferringBaseIDs.isEmpty)
+        let folded = try #require(store.residency().descriptor(id: "head"))
         #expect(folded.inheritedSegments.map(\.fileRelativePath) == [base.fileRelativePath])
         #expect(folded.totalBytes == 1_000)
-        #expect(store.currentSSDBytesForTesting() == 1_000)
+        #expect(store.residency().bytes == 1_000)
 
         // The commit payloads carry the facts the tree-side router
         // acts on: the consumed base (drives the deferred ref
@@ -630,20 +630,20 @@ struct LeafExtensionStoreTests {
             Issue.record("extension enqueue rejected")
             return
         }
-        #expect(store.transferringBaseIDsForTesting() == ["base"])
+        #expect(store.residency().transferringBaseIDs == ["base"])
 
         // Deleting the still-queued extension must release the shield.
         store.deleteSnapshot(snapshotID: "head")
-        #expect(store.transferringBaseIDsForTesting().isEmpty)
-        #expect(store.pendingCountForTesting() == 1)
+        #expect(store.residency().transferringBaseIDs.isEmpty)
+        #expect(store.pendingWriteCount() == 1)
 
         await gate.open()
         await store.flushAsync()
 
         // The base commits alone, un-superseded.
-        #expect(store.residentDescriptorForTesting(id: "base") != nil)
-        #expect(store.residentDescriptorForTesting(id: "head") == nil)
-        #expect(store.currentSSDBytesForTesting() == 800)
+        #expect(store.residency().descriptor(id: "base") != nil)
+        #expect(store.residency().descriptor(id: "head") == nil)
+        #expect(store.residency().bytes == 800)
     }
 
     @Test func hydrationComposesChainAcrossSegments() async throws {
@@ -769,7 +769,7 @@ struct LeafExtensionStoreTests {
             return
         }
         await store.flushAsync()
-        let folded = try #require(store.residentDescriptorForTesting(id: "head"))
+        let folded = try #require(store.residency().descriptor(id: "head"))
 
         // Sabotage one inherited segment file; hydration must fail and
         // sweep the entire chain — entry and every remaining file.
@@ -786,8 +786,8 @@ struct LeafExtensionStoreTests {
             bytesOnDisk: folded.totalBytes
         )
         #expect(store.loadSync(snapshotRef: ref, expectedFingerprint: testFingerprint) == nil)
-        #expect(store.residentDescriptorForTesting(id: "head") == nil)
-        #expect(store.currentSSDBytesForTesting() == 0)
+        #expect(store.residency().descriptor(id: "head") == nil)
+        #expect(store.residency().bytes == 0)
         #expect(
             !FileManager.default.fileExists(
                 atPath: root.appendingPathComponent(folded.fileRelativePath).path
@@ -895,7 +895,7 @@ struct LeafExtensionSupersessionPolicyTests {
         )
         let ssdStore = try #require(fixture.store.ssdStoreForTesting)
         let committed = await waitUntil {
-            ssdStore.residentDescriptorForTesting(id: refID) != nil
+            ssdStore.residency().descriptor(id: refID) != nil
         }
         #expect(committed, "ancestor leaf never committed")
         return refID
@@ -951,7 +951,7 @@ struct LeafExtensionSupersessionPolicyTests {
         // The ancestor's SSD entry survives and remains the next
         // turn's extension base (the descendant has no SSD copy).
         #expect(
-            fixture.store.ssdStoreForTesting?.residentDescriptorForTesting(id: baseID) != nil
+            fixture.store.ssdResidency()?.descriptor(id: baseID) != nil
         )
         let nextBase = try #require(
             fixture.manager.extensionBase(
@@ -984,9 +984,9 @@ struct LeafExtensionSupersessionPolicyTests {
         #expect(diagnostics.supersededLeaves.count == 1)
         #expect(diagnostics.supersededLeaves[0].mode == .deferredDelete)
 
-        await fixture.store.ssdStoreForTesting!.flushAsync()
+        await fixture.store.flush()
         let deleted = await waitUntil {
-            fixture.store.ssdStoreForTesting?.residentDescriptorForTesting(id: baseID) == nil
+            fixture.store.ssdResidency()?.descriptor(id: baseID) == nil
         }
         #expect(deleted, "the superseded backing dies once the replacing write commits")
     }
@@ -1014,14 +1014,14 @@ struct LeafExtensionSupersessionPolicyTests {
         // After the writer settles, the head owns the folded chain.
         let ssdStore = try #require(fixture.store.ssdStoreForTesting)
         let folded = await waitUntil {
-            ssdStore.residentDescriptorForTesting(id: baseID) == nil
-                && ssdStore.transferringBaseIDsForTesting().isEmpty
+            ssdStore.residency().descriptor(id: baseID) == nil
+                && ssdStore.residency().transferringBaseIDs.isEmpty
         }
         #expect(folded, "extension fold never committed")
         let tree = try #require(fixture.store.tree(for: fixture.key))
         let headRef = try #require(tree.deepestRefBearingLeaf(tokens: Array(1...12)))
         let head = try #require(
-            ssdStore.residentDescriptorForTesting(id: headRef.snapshotID)
+            ssdStore.residency().descriptor(id: headRef.snapshotID)
         )
         #expect(head.inheritedSegments.count == 1)
         #expect(head.segmentBaseOffset == 5)
@@ -1078,14 +1078,14 @@ struct LeafExtensionSupersessionPolicyTests {
 
         let ssdStore = try #require(fixture.store.ssdStoreForTesting)
         let settled = await waitUntil {
-            ssdStore.transferringBaseIDsForTesting().isEmpty
-                && fixture.store.pendingRefCountForTesting == 0
+            ssdStore.residency().transferringBaseIDs.isEmpty
+                && fixture.store.pendingSnapshotRefIDs.isEmpty
         }
         #expect(settled, "writer never settled the dropped extension")
 
         // ...but the drop leaves the base fully reachable: manifest
         // entry alive AND tree ref intact — still the extension base.
-        #expect(ssdStore.residentDescriptorForTesting(id: baseID) != nil)
+        #expect(ssdStore.residency().descriptor(id: baseID) != nil)
         let nextBase = try #require(
             fixture.manager.extensionBase(
                 tokens: Array(1...12), partitionKey: fixture.key
@@ -1134,7 +1134,7 @@ struct LeafExtensionSupersessionPolicyTests {
             ))
         let diagA = fixture.manager.admit(admitA)
         #expect(diagA.supersededLeaves.first?.mode == .transferred)
-        #expect(ssdStore.transferringBaseIDsForTesting().contains(baseID))
+        #expect(ssdStore.residency().transferringBaseIDs.contains(baseID))
         let aID = try #require(
             tree.deepestRefBearingLeaf(tokens: Array(1...8) + [999])?.snapshotID
         )
@@ -1166,25 +1166,25 @@ struct LeafExtensionSupersessionPolicyTests {
                 $0.bodyDroppedSnapshotRefID == baseID && $0.mode == .preserved
             })
         // The smoking gun: B's backing survives C's admission.
-        #expect(ssdStore.residentDescriptorForTesting(id: baseID) != nil)
+        #expect(ssdStore.residency().descriptor(id: baseID) != nil)
 
         // Release the writer: A folds B, then (FIFO) C folds A.
         await pause.resume()
         await ssdStore.flushAsync()
         let settled = await waitUntil {
-            ssdStore.transferringBaseIDsForTesting().isEmpty
-                && fixture.store.pendingRefCountForTesting == 0
+            ssdStore.residency().transferringBaseIDs.isEmpty
+                && fixture.store.pendingSnapshotRefIDs.isEmpty
         }
         #expect(settled, "writer never settled the two folds")
 
         // Both bases consumed into C; C is the sole resident chain head,
         // owning all three segment files (B's, A's, and its own).
-        #expect(ssdStore.residentDescriptorForTesting(id: baseID) == nil)
-        #expect(ssdStore.residentDescriptorForTesting(id: aID) == nil)
+        #expect(ssdStore.residency().descriptor(id: baseID) == nil)
+        #expect(ssdStore.residency().descriptor(id: aID) == nil)
         let headRef = try #require(
             tree.deepestRefBearingLeaf(tokens: Array(1...11) + [999])
         )
-        let head = try #require(ssdStore.residentDescriptorForTesting(id: headRef.snapshotID))
+        let head = try #require(ssdStore.residency().descriptor(id: headRef.snapshotID))
         #expect(head.inheritedSegments.count == 2)
         #expect(head.segmentBaseOffset == 8)
     }

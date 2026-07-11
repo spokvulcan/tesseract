@@ -9,8 +9,8 @@
 //
 //  Each test constructs a `TieredSnapshotStore` over a temp directory,
 //  drives a lifecycle transition via the public API, and asserts the
-//  post-state via `node.state` queries, the `pendingRefCountForTesting`
-//  hook, and (where applicable) the underlying `SSDSnapshotStore`.
+//  post-state via `node.state` queries, the `pendingSnapshotRefIDs`
+//  observation, and (where applicable) the SSD tier's residency.
 //
 //  Note: `admit` requires a resident RAM body (states 1/2/4) — in
 //  production every admission follows a `storeSnapshot`. Tests therefore
@@ -202,7 +202,7 @@ struct TieredSnapshotStoreTests {
         )
         #expect(result == nil)
         #expect(node.state.ref == nil)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
     }
 
     @Test
@@ -249,14 +249,14 @@ struct TieredSnapshotStoreTests {
         // State 2: pending ref attached, not yet committed.
         #expect(node.state.refID == ref.snapshotID)
         #expect(!node.state.committed)
-        #expect(store.pendingRefCountForTesting == 1)
-        #expect(store.isPendingForTesting(id: ref.snapshotID))
+        #expect(store.pendingSnapshotRefIDs.count == 1)
+        #expect(store.pendingSnapshotRefIDs.contains(ref.snapshotID))
 
         // Writer commit drains → state 4.
         let committed = await waitUntil { node.state.committed }
         #expect(committed)
-        #expect(store.pendingRefCountForTesting == 0)
-        #expect(store.isPendingForTesting(id: ref.snapshotID) == false)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
+        #expect(store.pendingSnapshotRefIDs.contains(ref.snapshotID) == false)
     }
 
     // MARK: - Domain-input admission front door
@@ -294,7 +294,7 @@ struct TieredSnapshotStoreTests {
         // …and it was routed into the tree as a pending ref (state 2).
         #expect(node.state.refID == ref.snapshotID)
         #expect(!node.state.committed)
-        #expect(store.isPendingForTesting(id: ref.snapshotID))
+        #expect(store.pendingSnapshotRefIDs.contains(ref.snapshotID))
 
         // The write still drains to a commit end-to-end.
         let committed = await waitUntil { node.state.committed }
@@ -329,13 +329,13 @@ struct TieredSnapshotStoreTests {
         tree.dropBody(node: node)
         #expect(node.state.body == nil)
         #expect(!node.state.committed)
-        #expect(store.isPendingForTesting(id: ref.snapshotID))
+        #expect(store.pendingSnapshotRefIDs.contains(ref.snapshotID))
 
         // Commit callback fires → state 5 (body absent, committed ref).
         let committed = await waitUntil { node.state.committed }
         #expect(committed)
         #expect(node.state.body == nil)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
         // Node stays in the tree as a structural path for future lookups.
         #expect(tree.matchPrompt(tokens: [1, 2, 3]).depth == 3)
     }
@@ -374,7 +374,7 @@ struct TieredSnapshotStoreTests {
         tree.dropBody(node: node)
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .diskFull)
 
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
         #expect(node.state.ref == nil)
         // Target node is hard-deleted via self-heal — the [1,2,3] path no
         // longer reaches a terminal, but the shared [1,2] prefix survives.
@@ -410,7 +410,7 @@ struct TieredSnapshotStoreTests {
         // state 2 → state 1.
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .writerIOError)
 
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
         #expect(node.state.ref == nil)
         #expect(node.state.body != nil)
         // Node remains in the tree; lookup can still hit via the body.
@@ -503,7 +503,7 @@ struct TieredSnapshotStoreTests {
         let systemCommitted = await waitUntil { nodes[2].state.committed }
         #expect(systemCommitted)
 
-        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        let residents = store.ssdResidency()!.idsByRecency
         #expect(residents.contains(leafARef!.snapshotID) == false)
         #expect(residents.contains(leafBRef!.snapshotID))
         #expect(residents.contains(systemRef!.snapshotID))
@@ -567,7 +567,7 @@ struct TieredSnapshotStoreTests {
         let systemCCommitted = await waitUntil { nodes[2].state.committed }
         #expect(systemCCommitted)
 
-        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        let residents = store.ssdResidency()!.idsByRecency
         #expect(residents.contains(systemARef!.snapshotID) == false)
         #expect(residents.contains(systemBRef!.snapshotID))
         #expect(residents.contains(systemCRef!.snapshotID))
@@ -613,10 +613,10 @@ struct TieredSnapshotStoreTests {
 
         // System resident is still intact.
         #expect(systemNode.state.committed)
-        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        let residents = store.ssdResidency()!.idsByRecency
         #expect(residents.contains(systemRef!.snapshotID))
         #expect(residents.contains(leafRef!.snapshotID) == false)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
     }
 
     // MARK: - Back-pressure byte-budget eviction
@@ -653,7 +653,7 @@ struct TieredSnapshotStoreTests {
         let settled = await waitUntil {
             [nodeA, nodeB, nodeC].allSatisfy { node in
                 node.state.ref == nil || node.state.committed
-            } && store.pendingRefCountForTesting == 0
+            } && store.pendingSnapshotRefIDs.isEmpty
         }
         #expect(settled)
 
@@ -662,7 +662,7 @@ struct TieredSnapshotStoreTests {
         #expect(nodeC.state.ref != nil)
 
         // Every surviving committed ref must match a manifest entry.
-        let residentIDs = Set(store.ssdStoreForTesting!.residentIDsByRecencyForTesting())
+        let residentIDs = Set(store.ssdResidency()!.idsByRecency)
         let committedIDs = [nodeA, nodeB, nodeC]
             .compactMap { $0.state.committed ? $0.state.refID : nil }
         #expect(Set(committedIDs).isSubset(of: residentIDs))
@@ -768,7 +768,7 @@ struct TieredSnapshotStoreTests {
 
         #expect(node.state.ref == nil)  // not resurrected
         #expect(node.state.body != nil)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
     }
 
     /// A duplicate commit callback for an already-committed id is a
@@ -803,7 +803,7 @@ struct TieredSnapshotStoreTests {
                 chainBytesOnDisk: ref.bytesOnDisk
             ))
         #expect(node.state.committed)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
     }
 
     /// A drop callback for a committed resident (`.evictedByLRU` /
@@ -834,7 +834,7 @@ struct TieredSnapshotStoreTests {
         let committed = await waitUntil { node.state.committed }
         #expect(committed)
         tree.dropBody(node: node)  // state 4 → 5 (ssdOnly)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
 
         store.markSnapshotRefDropped(id: ref.snapshotID, reason: .evictedByLRU)
         #expect(node.state.ref == nil)
@@ -1008,7 +1008,7 @@ struct TieredSnapshotStoreTests {
         let firstCommitted = await waitUntil { node.state.committed }
         #expect(firstCommitted)
         #expect(
-            store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID)
+            store.ssdResidency()!.idsByRecency.contains(firstRef.snapshotID)
         )
 
         // Re-admit over the committed node (state 4). The node still has a
@@ -1027,16 +1027,16 @@ struct TieredSnapshotStoreTests {
         }
 
         #expect(node.state.refID == secondRef.snapshotID)
-        #expect(store.isPendingForTesting(id: secondRef.snapshotID))
-        #expect(store.isPendingForTesting(id: firstRef.snapshotID) == false)
+        #expect(store.pendingSnapshotRefIDs.contains(secondRef.snapshotID))
+        #expect(store.pendingSnapshotRefIDs.contains(firstRef.snapshotID) == false)
         // The superseded backing is gone — no orphan.
         #expect(
-            store.ssdStoreForTesting!.residentIDsByRecencyForTesting().contains(firstRef.snapshotID)
+            store.ssdResidency()!.idsByRecency.contains(firstRef.snapshotID)
                 == false)
 
         let secondCommitted = await waitUntil { node.state.committed }
         #expect(secondCommitted)
-        let residents = Set(store.ssdStoreForTesting!.residentIDsByRecencyForTesting())
+        let residents = Set(store.ssdResidency()!.idsByRecency)
         #expect(residents.contains(secondRef.snapshotID))
         #expect(residents.contains(firstRef.snapshotID) == false)
     }

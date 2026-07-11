@@ -1630,26 +1630,70 @@ extension SnapshotLedger {
     }
 }
 
-// MARK: - Testing hooks
+// MARK: - Residency observation
 
-extension SnapshotLedger {
+/// One coherent read of the SSD tier's observable state — the manifest's
+/// resident descriptors, the accounted byte total, the extension-transfer
+/// shields, and the partition metas — captured under a single ledger lock
+/// hold, so related facts can never interleave with a writer commit. The
+/// typed observation surface for diagnostics and tests: read this, never
+/// the ledger's private state.
+nonisolated struct SSDResidency: Sendable {
 
-    /// Synchronous accessor for the current SSD byte count.
-    nonisolated func currentSSDBytesForTesting() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return currentSSDBytes
-    }
+    /// Total on-SSD payload bytes the ledger accounts for.
+    let bytes: Int
 
-    /// Manifest descriptor IDs, sorted by `lastAccessAt` ascending —
-    /// the LRU recency order an eviction cut would consume.
-    nonisolated func residentIDsByRecencyForTesting() -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        return manifest.snapshots.values
+    /// Every resident descriptor, keyed by snapshot ID.
+    let descriptors: [String: PersistedSnapshotDescriptor]
+
+    /// Base IDs currently shielded by an in-flight extension transfer
+    /// (ADR-0010) — empty whenever no transfer is in flight.
+    let transferringBaseIDs: Set<String>
+
+    /// Partition metas, keyed by partition digest.
+    let partitions: [String: PartitionMeta]
+
+    /// Descriptor IDs sorted by `lastAccessAt` ascending — the LRU
+    /// recency order an eviction cut would consume.
+    var idsByRecency: [String] {
+        descriptors.values
             .sorted { ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID) }
             .map(\.snapshotID)
     }
+
+    func descriptor(id: String) -> PersistedSnapshotDescriptor? {
+        descriptors[id]
+    }
+
+    /// A descriptor's current recency stamp; `-1` for an unknown ID
+    /// (sorts before every real timestamp).
+    func lastAccessAt(id: String) -> Double {
+        descriptors[id]?.lastAccessAt ?? -1
+    }
+
+    func partitionMeta(digest: String) -> PartitionMeta? {
+        partitions[digest]
+    }
+}
+
+extension SnapshotLedger {
+
+    /// Capture the current **SSD Residency** under one lock hold.
+    nonisolated func residency() -> SSDResidency {
+        lock.lock()
+        defer { lock.unlock() }
+        return SSDResidency(
+            bytes: currentSSDBytes,
+            descriptors: manifest.snapshots,
+            transferringBaseIDs: transferringBaseIDs,
+            partitions: manifest.partitions
+        )
+    }
+}
+
+// MARK: - Testing hooks
+
+extension SnapshotLedger {
 
     /// Inject a descriptor into the manifest without going through the
     /// writer loop. The partition must already be registered so the
@@ -1667,38 +1711,5 @@ extension SnapshotLedger {
         }
         manifest.snapshots[descriptor.snapshotID] = descriptor
         currentSSDBytes += descriptor.totalBytes
-    }
-
-    /// Read a resident descriptor without mutating anything. Used by
-    /// the extension-transfer tests to assert the commit-time fold.
-    nonisolated func residentDescriptorForTesting(id: String) -> PersistedSnapshotDescriptor? {
-        lock.lock()
-        defer { lock.unlock() }
-        return manifest.snapshots[id]
-    }
-
-    /// The currently shielded extension bases. Tests assert the shield
-    /// is released on every terminal writer path.
-    nonisolated func transferringBaseIDsForTesting() -> Set<String> {
-        lock.lock()
-        defer { lock.unlock() }
-        return transferringBaseIDs
-    }
-
-    /// Read a descriptor's current `lastAccessAt` without mutating
-    /// anything. Used by the `recordHit` regression test.
-    nonisolated func lastAccessAtForTesting(id: String) -> Double {
-        lock.lock()
-        defer { lock.unlock() }
-        return manifest.snapshots[id]?.lastAccessAt ?? -1
-    }
-
-    /// Read a partition's in-memory meta without mutating anything.
-    /// Used by the stale-partition GC tests to assert `lastUsedAt`
-    /// stamping (register merge, hit bump, warm-start grace).
-    nonisolated func partitionMetaForTesting(digest: String) -> PartitionMeta? {
-        lock.lock()
-        defer { lock.unlock() }
-        return manifest.partitions[digest]
     }
 }

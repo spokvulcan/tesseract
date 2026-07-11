@@ -1752,31 +1752,29 @@ extension SSDSnapshotStore {
 
 }
 
-// MARK: - Testing hooks
+// MARK: - Residency observation
 
 extension SSDSnapshotStore {
 
-    /// Synchronous accessor for the current SSD byte count. Delegates to
-    /// the ledger, which owns the byte total.
-    nonisolated func currentSSDBytesForTesting() -> Int {
-        ledger.currentSSDBytesForTesting()
+    /// The tier's **SSD Residency** — one coherent observation of the
+    /// ledger's state. Delegates to the ledger, which owns every fact
+    /// in the view.
+    nonisolated func residency() -> SSDResidency {
+        ledger.residency()
     }
 
-    /// Snapshot of the manifest's descriptor IDs, sorted by
-    /// `lastAccessAt` ascending. Exposed for tests that verify the LRU
-    /// ordering after a sequence of commits.
-    nonisolated func residentIDsByRecencyForTesting() -> [String] {
-        ledger.residentIDsByRecencyForTesting()
-    }
-
-    /// Synchronous peek at the pending queue depth. Tests use this to
-    /// assert back-pressure eviction happened immediately rather than
-    /// deferred to the writer. Queue-side state, so it stays on the store.
-    nonisolated func pendingCountForTesting() -> Int {
+    /// Depth of the writer's pending queue — back-pressure diagnostics.
+    /// Queue-side state, so it lives on the store, not the ledger.
+    nonisolated func pendingWriteCount() -> Int {
         queueLock.lock()
         defer { queueLock.unlock() }
         return pending.count
     }
+}
+
+// MARK: - Testing hooks
+
+extension SSDSnapshotStore {
 
     /// Force-flush the debounced manifest persist. Tests call this to
     /// observe on-disk manifest state without waiting on the debounce
@@ -1791,25 +1789,6 @@ extension SSDSnapshotStore {
     /// registered so the manifest invariant holds.
     nonisolated func seedDescriptorForTesting(_ descriptor: PersistedSnapshotDescriptor) {
         ledger.seedDescriptorForTesting(descriptor)
-    }
-
-    /// Read a descriptor's current `lastAccessAt` without mutating
-    /// anything. Used by the `recordHit` regression test.
-    nonisolated func lastAccessAtForTesting(id: String) -> Double {
-        ledger.lastAccessAtForTesting(id: id)
-    }
-
-    /// Read a resident's full descriptor (chain fields included). Used
-    /// by the leaf-extension fold tests.
-    nonisolated func residentDescriptorForTesting(id: String) -> PersistedSnapshotDescriptor? {
-        ledger.residentDescriptorForTesting(id: id)
-    }
-
-    /// The set of base IDs currently shielded by a pending extension
-    /// transfer. Empty when no extension is in flight — the leaf-extension
-    /// tests assert every terminal writer path releases its shield.
-    nonisolated func transferringBaseIDsForTesting() -> Set<String> {
-        ledger.transferringBaseIDsForTesting()
     }
 
     // MARK: - On-disk artifact utilities (no live store required)

@@ -901,7 +901,7 @@ struct SSDSnapshotStoreTests {
             }
         }
         #expect(dropped)
-        #expect(store.lastAccessAtForTesting(id: pending.snapshotID) == -1)
+        #expect(store.residency().lastAccessAt(id: pending.snapshotID) == -1)
 
         let relative = PersistedSnapshotDescriptor.relativeFilePath(
             snapshotID: pending.snapshotID,
@@ -997,8 +997,8 @@ struct SSDSnapshotStoreTests {
         // Writer-side byte accounting also reflects the committed
         // descriptor — pending queue is drained and the item is now
         // resident.
-        #expect(store.currentSSDBytesForTesting() == descriptor.bytes)
-        #expect(store.pendingCountForTesting() == 0)
+        #expect(store.residency().bytes == descriptor.bytes)
+        #expect(store.pendingWriteCount() == 0)
     }
 
     /// `flushAsync` on an empty store wakes the writer for a no-op

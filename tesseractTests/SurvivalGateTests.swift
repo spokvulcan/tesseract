@@ -125,7 +125,7 @@ struct SurvivalGateTests {
         #expect(manager.cumulativeCounters.terminalEvictions == 0)
         #expect(manager.cumulativeCounters.recoveredEvictions == 1)
 
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         let committed = await waitUntil {
             if case .ssdHit = manager.lookup(
                 tokens: victimTokens, partitionKey: key
@@ -254,7 +254,7 @@ struct SurvivalGateTests {
             )!)
 
         #expect(manager.cumulativeCounters.survivalGateSkips == 1)
-        #expect(store.pendingRefCountForTesting == 0)
+        #expect(store.pendingSnapshotRefIDs.isEmpty)
         let result = manager.lookup(tokens: tokens, partitionKey: key)
         #expect(result.snapshot != nil, "the RAM body is untouched by a gate skip")
     }
@@ -286,6 +286,6 @@ struct SurvivalGateTests {
             )!)
 
         #expect(manager.cumulativeCounters.survivalGateSkips == 0)
-        #expect(store.pendingRefCountForTesting == 1)
+        #expect(store.pendingSnapshotRefIDs.count == 1)
     }
 }

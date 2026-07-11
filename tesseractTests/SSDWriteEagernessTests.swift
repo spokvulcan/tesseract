@@ -128,13 +128,13 @@ struct SSDWriteEagernessTests {
         defer { PrefixCacheDiagnostics.removeTestSink(handle) }
 
         admitSSDCheckpoint(manager, prefixTokens: Array(1...10))
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
 
         let state = nodeState(store, tokens: Array(1...10))
         #expect(state?.ref == nil)
         #expect(state?.body != nil)
         #expect(manager.cumulativeCounters.eagernessDeferrals == 1)
-        #expect(store.ssdStoreForTesting!.residentIDsByRecencyForTesting().isEmpty)
+        #expect(store.ssdResidency()!.idsByRecency.isEmpty)
         #expect(sink.drain().contains { $0.contains("event=ssdWriteDeferred") })
     }
 
@@ -150,7 +150,7 @@ struct SSDWriteEagernessTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         admitSSDCheckpoint(manager, prefixTokens: Array(1...10), type: .system)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
 
         let committed = await waitUntil {
             self.nodeState(store, tokens: Array(1...10))?.committed == true
@@ -182,7 +182,7 @@ struct SSDWriteEagernessTests {
                     )),
                 partitionKey: key
             )!)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
 
         let committed = await waitUntil {
             self.nodeState(store, tokens: tokens)?.committed == true
@@ -219,7 +219,7 @@ struct SSDWriteEagernessTests {
         }
 
         admitSSDCheckpoint(manager, prefixTokens: prefix)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
 
         let committed = await waitUntil {
             self.nodeState(store, tokens: prefix)?.committed == true
@@ -261,7 +261,7 @@ struct SSDWriteEagernessTests {
             self.nodeState(store, tokens: prefix)?.ref != nil
         }
         #expect(promoted)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         let committed = await waitUntil {
             self.nodeState(store, tokens: prefix)?.committed == true
         }
@@ -280,7 +280,7 @@ struct SSDWriteEagernessTests {
 
         // Further hits never re-promote.
         _ = manager.lookup(tokens: prefix, partitionKey: key)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         #expect(manager.cumulativeCounters.eagernessPromotions == 1)
     }
 
@@ -294,7 +294,7 @@ struct SSDWriteEagernessTests {
         defer { try? FileManager.default.removeItem(at: root) }
 
         admitSSDCheckpoint(manager, prefixTokens: Array(1...10))
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
 
         let committed = await waitUntil {
             self.nodeState(store, tokens: Array(1...10))?.committed == true

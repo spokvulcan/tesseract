@@ -182,26 +182,26 @@ struct SnapshotLedgerTests {
         defer { cleanup(root) }
         let ledger = makeLedgerWithPartition(root: root)
 
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
 
         let a = makeDescriptor(bytes: 1000)
         #expect(ledger.commit(a) == true)
-        #expect(ledger.currentSSDBytesForTesting() == 1000)
+        #expect(ledger.residency().bytes == 1000)
 
         let b = makeDescriptor(bytes: 2500)
         #expect(ledger.commit(b) == true)
-        #expect(ledger.currentSSDBytesForTesting() == 3500)
+        #expect(ledger.residency().bytes == 3500)
         #expect(ledger.residencyStats().snapshotCount == 2)
 
         let evicted = ledger.remove(id: a.snapshotID)
         #expect(evicted?.snapshotID == a.snapshotID)
         #expect(evicted?.fileURLs == [root.appendingPathComponent(a.fileRelativePath)])
-        #expect(ledger.currentSSDBytesForTesting() == 2500)
+        #expect(ledger.residency().bytes == 2500)
         #expect(ledger.residencyStats().snapshotCount == 1)
 
         // Removing an absent ID is a nil no-op that does not strand bytes.
         #expect(ledger.remove(id: "nonexistent") == nil)
-        #expect(ledger.currentSSDBytesForTesting() == 2500)
+        #expect(ledger.residency().bytes == 2500)
     }
 
     // MARK: - Recency ordering + recordHit
@@ -218,18 +218,18 @@ struct SnapshotLedgerTests {
         [a, b, c].forEach { ledger.seedDescriptorForTesting($0) }
 
         #expect(
-            ledger.residentIDsByRecencyForTesting()
+            ledger.residency().idsByRecency
                 == [a.snapshotID, b.snapshotID, c.snapshotID]
         )
 
-        let before = ledger.lastAccessAtForTesting(id: a.snapshotID)
+        let before = ledger.residency().lastAccessAt(id: a.snapshotID)
         ledger.recordHit(id: a.snapshotID)
-        let after = ledger.lastAccessAtForTesting(id: a.snapshotID)
+        let after = ledger.residency().lastAccessAt(id: a.snapshotID)
         #expect(after > before)
 
         // The bumped entry is now the most-recent, so it sorts last.
         #expect(
-            ledger.residentIDsByRecencyForTesting()
+            ledger.residency().idsByRecency
                 == [b.snapshotID, c.snapshotID, a.snapshotID]
         )
     }
@@ -256,7 +256,7 @@ struct SnapshotLedgerTests {
         let leaf = makeDescriptor(type: .leaf, bytes: 1000, lastAccessAt: 2)
         ledger.seedDescriptorForTesting(system)
         ledger.seedDescriptorForTesting(leaf)
-        #expect(ledger.currentSSDBytesForTesting() == 2000)
+        #expect(ledger.residency().bytes == 2000)
 
         // Incoming needs 1500; only 1000 free. Pass 1 evicts the oldest
         // non-system (the leaf); the system resident is protected.
@@ -265,11 +265,11 @@ struct SnapshotLedgerTests {
 
         #expect(decision == .admit)
         #expect(evicted.map(\.snapshotID) == [leaf.snapshotID])
-        let resident = ledger.residentIDsByRecencyForTesting()
+        let resident = ledger.residency().idsByRecency
         #expect(resident.contains(system.snapshotID))
         #expect(!resident.contains(leaf.snapshotID))
         // `admit` only evicts; the incoming's bytes land at `commit`.
-        #expect(ledger.currentSSDBytesForTesting() == 1000)
+        #expect(ledger.residency().bytes == 1000)
     }
 
     @Test
@@ -286,7 +286,7 @@ struct SnapshotLedgerTests {
 
         #expect(decision == .drop(.systemProtectionWins))
         #expect(evicted.isEmpty)
-        #expect(ledger.currentSSDBytesForTesting() == 1500)
+        #expect(ledger.residency().bytes == 1500)
     }
 
     @Test
@@ -303,7 +303,7 @@ struct SnapshotLedgerTests {
 
         #expect(decision == .admit)
         #expect(evicted.map(\.snapshotID) == [oldSystem.snapshotID])
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
     }
 
     @Test
@@ -349,7 +349,7 @@ struct SnapshotLedgerTests {
 
         let victim = ledger.retryAfterDiskFull(makeDescriptor(type: .leaf, bytes: 500))
         #expect(victim?.snapshotID == leaf1.snapshotID)
-        #expect(ledger.currentSSDBytesForTesting() == 1000)
+        #expect(ledger.residency().bytes == 1000)
     }
 
     // MARK: - In-flight-delete tombstone protocol
@@ -366,7 +366,7 @@ struct SnapshotLedgerTests {
         // The in-flight write's commit is vetoed by the tombstone.
         #expect(ledger.commit(d) == false)
         #expect(ledger.residencyStats().snapshotCount == 0)
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
     }
 
     @Test
@@ -381,7 +381,7 @@ struct SnapshotLedgerTests {
         let evicted = ledger.removeOrTombstone(id: d.snapshotID)
         #expect(evicted?.snapshotID == d.snapshotID)
         #expect(evicted?.fileURLs == [root.appendingPathComponent(d.fileRelativePath)])
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
         #expect(ledger.residencyStats().snapshotCount == 0)
     }
 
@@ -402,7 +402,7 @@ struct SnapshotLedgerTests {
         // no longer vetoed.
         let d = makeDescriptor(id: id, bytes: 100)
         #expect(ledger.commit(d) == true)
-        #expect(ledger.currentSSDBytesForTesting() == 100)
+        #expect(ledger.residency().bytes == 100)
     }
 
     // MARK: - Partition registration + persistence
@@ -465,7 +465,7 @@ struct SnapshotLedgerTests {
 
         #expect(outcome.validPartitions.isEmpty)
         #expect(outcome.invalidatedPartitionDigests.isEmpty)
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
     }
 
     @Test
@@ -491,7 +491,7 @@ struct SnapshotLedgerTests {
             outcome.validPartitions.first?.descriptors.map(\.snapshotID)
                 == [d1.snapshotID, d2.snapshotID]
         )
-        #expect(ledger.currentSSDBytesForTesting() == 3000)
+        #expect(ledger.residency().bytes == 3000)
         // Post-seed the partition is queryable through the live interface.
         #expect(ledger.hasPartition(digest: testDigest) == true)
         #expect(ledger.partitionFingerprint(digest: testDigest) == testFingerprint)
@@ -517,7 +517,7 @@ struct SnapshotLedgerTests {
 
         #expect(outcome.validPartitions.isEmpty)
         #expect(outcome.invalidatedPartitionDigests == [testDigest])
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
         #expect(ledger.hasPartition(digest: testDigest) == false)
     }
 
@@ -546,7 +546,7 @@ struct SnapshotLedgerTests {
             outcome.validPartitions.first?.descriptors.map(\.snapshotID)
                 == [valid.snapshotID]
         )
-        #expect(ledger.currentSSDBytesForTesting() == 1000)
+        #expect(ledger.residency().bytes == 1000)
     }
 
     @Test
@@ -573,7 +573,7 @@ struct SnapshotLedgerTests {
             outcome.validPartitions.first?.descriptors.map(\.snapshotID)
                 == [valid.snapshotID]
         )
-        #expect(ledger.currentSSDBytesForTesting() == 1000)
+        #expect(ledger.residency().bytes == 1000)
     }
 
     @Test
@@ -603,7 +603,7 @@ struct SnapshotLedgerTests {
             outcome.validPartitions.first?.descriptors.map(\.snapshotID)
                 == [valid.snapshotID]
         )
-        #expect(ledger.currentSSDBytesForTesting() == 1000)
+        #expect(ledger.residency().bytes == 1000)
     }
 
     @Test
@@ -625,7 +625,7 @@ struct SnapshotLedgerTests {
         let outcome = ledger.seedFromWarmStart(expectedFingerprint: testFingerprint)
 
         #expect(outcome.validPartitions.isEmpty)
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
         // The mismatched manifest is archived, not left to be re-read.
         let fm = FileManager.default
         #expect(fm.fileExists(atPath: root.appendingPathComponent("manifest.v2.bak").path))
@@ -655,7 +655,7 @@ struct SnapshotLedgerTests {
             outcome.validPartitions.first?.descriptors.map(\.snapshotID)
                 == [descriptor.snapshotID]
         )
-        #expect(ledger.currentSSDBytesForTesting() == 2048)
+        #expect(ledger.residency().bytes == 2048)
 
         // The corrupt manifest was renamed aside for forensics rather
         // than left in place to fail decode again next start.
@@ -772,7 +772,7 @@ struct SnapshotLedgerTests {
         )
         #expect(decision == .admit)
         #expect(evicted.map(\.snapshotID) == ["short-fresh"])
-        #expect(ledger.residentDescriptorForTesting(id: "tall-stale") != nil)
+        #expect(ledger.residency().descriptor(id: "tall-stale") != nil)
     }
 
     /// The density denominator is the **Segment Chain** total, never
@@ -837,6 +837,6 @@ struct SnapshotLedgerTests {
         )
         #expect(decision == .drop(.systemProtectionWins))
         #expect(evicted.isEmpty)
-        #expect(ledger.residentDescriptorForTesting(id: "system-chain") != nil)
+        #expect(ledger.residency().descriptor(id: "system-chain") != nil)
     }
 }

@@ -2067,7 +2067,7 @@ struct PrefixCacheManagerTests {
         }
 
         // The recordHit bump should have moved lastAccessAt forward.
-        let bumped = ssdStore.lastAccessAtForTesting(id: ref.snapshotID)
+        let bumped = ssdStore.residency().lastAccessAt(id: ref.snapshotID)
         #expect(bumped > originalAccess)
     }
 
@@ -2089,7 +2089,7 @@ struct PrefixCacheManagerTests {
                 candidates: [.ramAndSSD(snapshot, payload: payload)],
                 partitionKey: key
             )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
         let manifestURL = root.appendingPathComponent("manifest.json")
         #expect(FileManager.default.fileExists(atPath: manifestURL.path))
@@ -2119,7 +2119,7 @@ struct PrefixCacheManagerTests {
             return
         }
         #expect(ctx.snapshotRef.tokenOffset == snapshot.tokenOffset)
-        #expect(restoredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(restoredStore.ssdResidency()?.bytes == payload.totalBytes)
     }
 
     /// Warm-start tolerates two persisted descriptors that resolve to the
@@ -2179,7 +2179,7 @@ struct PrefixCacheManagerTests {
 
         let first = seed(bytes: 1024)
         let second = seed(bytes: 2048)
-        #expect(ssdStore.currentSSDBytesForTesting() == 1024 + 2048)
+        #expect(ssdStore.residency().bytes == 1024 + 2048)
 
         let now: ContinuousClock.Instant = .now
         mgr.restoreSnapshotRef(
@@ -2203,9 +2203,9 @@ struct PrefixCacheManagerTests {
         // The dropped (second) descriptor's backing is reclaimed: its
         // bytes are gone from the SSD budget and its manifest entry
         // removed — only `first` remains.
-        #expect(ssdStore.currentSSDBytesForTesting() == first.bytesOnDisk)
+        #expect(ssdStore.residency().bytes == first.bytesOnDisk)
         #expect(
-            !ssdStore.residentIDsByRecencyForTesting().contains(second.snapshotID)
+            !ssdStore.residency().idsByRecency.contains(second.snapshotID)
         )
     }
 
@@ -2226,9 +2226,9 @@ struct PrefixCacheManagerTests {
                 candidates: [.ramAndSSD(snapshot, payload: payload)],
                 partitionKey: key
             )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(tieredStore.ssdResidency()?.bytes == payload.totalBytes)
     }
 
     @Test func admitCheckpointSnapshotAdmissionStoresSSDEntriesThroughUnifiedInterface()
@@ -2255,12 +2255,12 @@ struct PrefixCacheManagerTests {
             ))
 
         let diagnostics = mgr.admit(admission)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
         #expect(diagnostics.evictions.isEmpty)
         #expect(diagnostics.supersededLeaves.isEmpty)
         #expect(diagnostics.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(tieredStore.ssdResidency()?.bytes == payload.totalBytes)
     }
 
     @Test func admitLeafSnapshotAdmissionStoresSSDEntryThroughUnifiedInterface() async throws {
@@ -2281,12 +2281,12 @@ struct PrefixCacheManagerTests {
             ))
 
         let diagnostics = mgr.admit(admission)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
         #expect(diagnostics.evictions.isEmpty)
         #expect(diagnostics.supersededLeaves.isEmpty)
         #expect(diagnostics.stats.snapshotCount == 1)
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payload.totalBytes)
+        #expect(tieredStore.ssdResidency()?.bytes == payload.totalBytes)
     }
 
     @Test func leafSSDAdmissionFreesSupersededAncestorBeforeBudgetCut() async throws {
@@ -2306,7 +2306,7 @@ struct PrefixCacheManagerTests {
                 storage: .ramAndSSD(makeSSDPayload(bytes: payloadBytes, checkpointType: .leaf)),
                 partitionKey: key
             )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
         mgr.admit(
             SnapshotAdmission.leaf(
@@ -2315,7 +2315,7 @@ struct PrefixCacheManagerTests {
                 storage: .ramAndSSD(makeSSDPayload(bytes: payloadBytes, checkpointType: .leaf)),
                 partitionKey: key
             )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
         let tree = try #require(tieredStore.tree(for: key))
         let unrelatedID = try #require(
@@ -2330,7 +2330,7 @@ struct PrefixCacheManagerTests {
                 updateAccess: false,
                 includeSnapshotRefs: true
             )?.0.state.refID)
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payloadBytes * 2)
+        #expect(tieredStore.ssdResidency()?.bytes == payloadBytes * 2)
 
         let diagnostics = mgr.admit(
             SnapshotAdmission.leaf(
@@ -2339,7 +2339,7 @@ struct PrefixCacheManagerTests {
                 storage: .ramAndSSD(makeSSDPayload(bytes: payloadBytes, checkpointType: .leaf)),
                 partitionKey: key
             )!)
-        await tieredStore.ssdStoreForTesting!.flushAsync()
+        await tieredStore.flush()
 
         let descendantID = try #require(
             tree.findBestSnapshot(
@@ -2347,11 +2347,11 @@ struct PrefixCacheManagerTests {
                 updateAccess: false,
                 includeSnapshotRefs: true
             )?.0.state.refID)
-        let residentIDs = tieredStore.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        let residentIDs = tieredStore.ssdResidency()!.idsByRecency
         #expect(diagnostics.supersededLeaves.map(\.bodyDroppedSnapshotRefID) == [ancestorID])
         #expect(residentIDs.contains(unrelatedID))
         #expect(residentIDs.contains(descendantID))
         #expect(!residentIDs.contains(ancestorID))
-        #expect(tieredStore.ssdStoreForTesting?.currentSSDBytesForTesting() == payloadBytes * 2)
+        #expect(tieredStore.ssdResidency()?.bytes == payloadBytes * 2)
     }
 }

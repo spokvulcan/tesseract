@@ -348,8 +348,7 @@ struct ChainPrefixRestoreRouterTests {
 
         // Both boundaries sit on the new owner's segment grid.
         let descriptor = try #require(
-            fixture.store.ssdStoreForTesting?
-                .residentDescriptorForTesting(id: head2Ref.snapshotID)
+            fixture.store.ssdResidency()?.descriptor(id: head2Ref.snapshotID)
         )
         #expect(descriptor.inheritedSegments.map(\.tokenOffset) == [5, 9])
     }
@@ -445,8 +444,7 @@ struct ChainPrefixRestoreRouterTests {
         // corrupt the manifest so the rebuild must judge the chain by its
         // on-disk links. The head is condemned — no ref, no points.
         let descriptor = try #require(
-            fixture.store.ssdStoreForTesting?
-                .residentDescriptorForTesting(id: headRef.snapshotID)
+            fixture.store.ssdResidency()?.descriptor(id: headRef.snapshotID)
         )
         let basePath = try #require(descriptor.inheritedSegments.first?.fileRelativePath)
         try FileManager.default.removeItem(

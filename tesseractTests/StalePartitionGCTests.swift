@@ -129,7 +129,7 @@ struct StalePartitionGCTests {
 
         ledger.registerPartition(makePartitionMeta(), digest: testDigest)
 
-        let stored = ledger.partitionMetaForTesting(digest: testDigest)
+        let stored = ledger.residency().partitionMeta(digest: testDigest)
         #expect(stored?.createdAt == 100_000)
         #expect((stored?.lastUsedAt ?? 0) >= before)
     }
@@ -153,7 +153,7 @@ struct StalePartitionGCTests {
             digest: testDigest
         )
 
-        let stored = ledger.partitionMetaForTesting(digest: testDigest)
+        let stored = ledger.residency().partitionMeta(digest: testDigest)
         #expect(stored?.createdAt == 100_000)
         #expect((stored?.lastUsedAt ?? 0) >= before)
     }
@@ -176,7 +176,7 @@ struct StalePartitionGCTests {
             digest: testDigest
         )
 
-        let stored = ledger.partitionMetaForTesting(digest: testDigest)
+        let stored = ledger.residency().partitionMeta(digest: testDigest)
         #expect(stored?.lastUsedAt == recent)
     }
 
@@ -192,7 +192,7 @@ struct StalePartitionGCTests {
         ledger.registerPartition(meta, digest: testDigest)
         ledger.registerPartition(meta, digest: testDigest)
 
-        #expect(ledger.partitionMetaForTesting(digest: testDigest)?.lastUsedAt == stale)
+        #expect(ledger.residency().partitionMeta(digest: testDigest)?.lastUsedAt == stale)
     }
 
     // MARK: - recordHit use stamping
@@ -215,7 +215,7 @@ struct StalePartitionGCTests {
         ledger.recordHit(id: descriptor.snapshotID)
 
         #expect(
-            (ledger.partitionMetaForTesting(digest: testDigest)?.lastUsedAt ?? 0) >= before
+            (ledger.residency().partitionMeta(digest: testDigest)?.lastUsedAt ?? 0) >= before
         )
     }
 
@@ -255,7 +255,7 @@ struct StalePartitionGCTests {
         #expect(outcome.invalidated.first?.reason == .staleUnused)
         #expect(outcome.invalidated.first?.bytes == 3000)
         #expect(outcome.invalidated.first?.modelID == "test-model")
-        #expect(ledger.currentSSDBytesForTesting() == 5000)
+        #expect(ledger.residency().bytes == 5000)
     }
 
     /// Staleness is relative to the tier's freshest use, not the wall
@@ -327,7 +327,7 @@ struct StalePartitionGCTests {
 
         #expect(outcome.validPartitions.map(\.digest) == [testDigest])
         #expect(outcome.invalidated.isEmpty)
-        let stamped = ledger.partitionMetaForTesting(digest: testDigest)?.lastUsedAt
+        let stamped = ledger.residency().partitionMeta(digest: testDigest)?.lastUsedAt
         #expect((stamped ?? 0) >= before)
 
         ledger.persistNow()
@@ -360,7 +360,7 @@ struct StalePartitionGCTests {
         #expect(outcome.invalidated.first?.reason == .fingerprintChanged)
         #expect(outcome.invalidated.first?.bytes == 7000)
         #expect(outcome.invalidated.first?.modelID == "other-model")
-        #expect(ledger.currentSSDBytesForTesting() == 0)
+        #expect(ledger.residency().bytes == 0)
     }
 
     // MARK: - Manager-level event emission

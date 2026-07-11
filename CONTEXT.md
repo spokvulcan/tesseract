@@ -110,6 +110,16 @@ _Avoid_: Snapshot Manifest Store; SSD store (the writer/body-I/O that composes t
 ledger — say "snapshot ledger" vs "SSD store"); eviction effects as ledger work
 (those are the store's).
 
+**SSD Residency**:
+One coherent read of the SSD tier's observable state — resident descriptors,
+the accounted byte total, extension-transfer shields, partition metas —
+captured under a single ledger lock hold. The typed observation surface for
+diagnostics and tests; the only sanctioned way to *read* the tier from
+outside (driving hooks for tests remain separate and effect-only).
+_Avoid_: ForTesting reads (the retired ad-hoc accessors this replaces);
+manifest dump (residency is the in-memory authority's view, not the disk
+file's).
+
 **Survival Gate**:
 The SSD admission pre-check that admits an incoming chain only if it would survive
 the eviction its own write triggers, skipping the write otherwise. It decides

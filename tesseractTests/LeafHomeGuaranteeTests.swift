@@ -204,7 +204,7 @@ struct LeafHomeGuaranteeTests {
 
         let ancestorTokens = Array(1...10)
         _ = admitSSDLeaf(manager, tokens: ancestorTokens, payloadBytes: 2_000)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         let tree = store.tree(for: ssdKey)!
         let ancestorID = tree.findBestSnapshot(
             tokens: ancestorTokens, updateAccess: false, includeSnapshotRefs: true
@@ -217,12 +217,12 @@ struct LeafHomeGuaranteeTests {
             manager, tokens: Array(1...15), payloadBytes: 20_000
         )
         #expect(diagnostics.supersededLeaves.map(\.mode) == [.deferredDelete])
-        await store.ssdStoreForTesting!.flushAsync()
-        let settled = await waitUntil { store.pendingRefCountForTesting == 0 }
+        await store.flush()
+        let settled = await waitUntil { store.pendingSnapshotRefIDs.isEmpty }
         #expect(settled)
 
         // The ancestor is still the SSD resident and still hittable.
-        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        let residents = store.ssdResidency()!.idsByRecency
         #expect(residents == [ancestorID])
         let ancestorLookup = manager.lookup(tokens: ancestorTokens, partitionKey: ssdKey)
         guard case .ssdHit = ancestorLookup.reason else {
@@ -245,7 +245,7 @@ struct LeafHomeGuaranteeTests {
 
         let ancestorTokens = Array(1...10)
         _ = admitSSDLeaf(manager, tokens: ancestorTokens, payloadBytes: 2_000)
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
         let tree = store.tree(for: ssdKey)!
         let ancestorID = tree.findBestSnapshot(
             tokens: ancestorTokens, updateAccess: false, includeSnapshotRefs: true
@@ -255,16 +255,15 @@ struct LeafHomeGuaranteeTests {
             manager, tokens: Array(1...15), payloadBytes: 2_000
         )
         #expect(diagnostics.supersededLeaves.map(\.mode) == [.deferredDelete])
-        await store.ssdStoreForTesting!.flushAsync()
+        await store.flush()
 
         // Commit lands on MainActor asynchronously; the deferred
         // deletion rides it.
         let ancestorGone = await waitUntil {
-            !store.ssdStoreForTesting!
-                .residentIDsByRecencyForTesting().contains(ancestorID)
+            !store.ssdResidency()!.idsByRecency.contains(ancestorID)
         }
         #expect(ancestorGone)
-        let residents = store.ssdStoreForTesting!.residentIDsByRecencyForTesting()
+        let residents = store.ssdResidency()!.idsByRecency
         #expect(residents.count == 1)
         #expect(manager.lookup(tokens: Array(1...15), partitionKey: ssdKey).snapshot != nil)
     }

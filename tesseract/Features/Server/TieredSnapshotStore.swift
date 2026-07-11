@@ -799,24 +799,28 @@ final class TieredSnapshotStore {
         tree.clearCommittedSnapshotRefAfterBackingLoss(node: node)
     }
 
-    // MARK: - Testing hooks
+    // MARK: - Observation
 
-    /// Snapshot of the pending map size. Tests use this to verify
-    /// commit / drop callbacks have landed and the lifecycle state
-    /// machine is in the expected state without reaching into the
-    /// private storage directly.
-    var pendingRefCountForTesting: Int { pendingRefsByID.count }
-
-    /// True when the given snapshot ID is currently tracked in the
-    /// pending map (i.e. the node is in state 2 or state 3).
-    func isPendingForTesting(id: String) -> Bool {
-        pendingRefsByID[id] != nil
+    /// The SSD tier's **SSD Residency**, through the sealed interface —
+    /// `nil` when the SSD tier is disabled.
+    func ssdResidency() -> SSDResidency? {
+        ssdStore?.residency()
     }
 
-    /// Test-only white-box door onto the SSD tier. Production code
-    /// drives the SSD through this store's sealed interface and must
-    /// never reach the `SSDSnapshotStore` directly — tests use this to
-    /// assert resident-set / byte-accounting internals.
+    /// Snapshot IDs currently tracked in the pending map (states 2–3 of
+    /// the Snapshot Ref lifecycle). Count and membership are the facts
+    /// the lifecycle assertions need; the map itself stays private.
+    var pendingSnapshotRefIDs: Set<String> {
+        Set(pendingRefsByID.keys)
+    }
+
+    // MARK: - Testing hooks
+
+    /// Test-only door onto the SSD tier for *driving* it — seeding
+    /// descriptors, registering partitions, forcing writer drains.
+    /// Production code drives the SSD through this store's sealed
+    /// interface and must never reach the `SSDSnapshotStore` directly;
+    /// observations go through `ssdResidency()`, never through here.
     var ssdStoreForTesting: SSDSnapshotStore? { ssdStore }
 
     /// Test-only hydrating override. When set, `makeSSDHitContext` and

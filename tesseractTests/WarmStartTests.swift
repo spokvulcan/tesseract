@@ -128,7 +128,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(ssdStore.currentSSDBytesForTesting() == 0)
+        #expect(ssdStore.residency().bytes == 0)
         #expect(mgr.stats.snapshotCount == 0)
     }
 
@@ -179,7 +179,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(ssdStore.currentSSDBytesForTesting() == totalBytes)
+        #expect(ssdStore.residency().bytes == totalBytes)
 
         let partitionKey = makePartitionKey(fingerprint: testFingerprint)
         for descriptor in descriptors {
@@ -248,7 +248,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(ssdStore.currentSSDBytesForTesting() == validDescriptor.bytes)
+        #expect(ssdStore.residency().bytes == validDescriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)
 
         // The valid descriptor's path still reaches an SSD hit…
@@ -344,7 +344,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(ssdStore.currentSSDBytesForTesting() == 0)
+        #expect(ssdStore.residency().bytes == 0)
         #expect(mgr.stats.partitionCount == 0)
         #expect(
             !FileManager.default.fileExists(
@@ -375,7 +375,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(ssdStore.currentSSDBytesForTesting() == 0)
+        #expect(ssdStore.residency().bytes == 0)
         #expect(!FileManager.default.fileExists(atPath: manifestURL.path))
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
         #expect(contents.contains { $0.hasPrefix("manifest.corrupt.") })
@@ -442,7 +442,7 @@ struct WarmStartTests {
         let (mgr, newStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(newStore.currentSSDBytesForTesting() == descriptor.bytes)
+        #expect(newStore.residency().bytes == descriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)
 
         let lookup = mgr.lookup(
@@ -503,7 +503,7 @@ struct WarmStartTests {
 
         // Only the valid descriptor's bytes are seeded; the dead
         // one is excluded from both the budget and the restored tree.
-        #expect(ssdStore.currentSSDBytesForTesting() == validDescriptor.bytes)
+        #expect(ssdStore.residency().bytes == validDescriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)
 
         // The valid path still hits SSD.
@@ -553,7 +553,7 @@ struct WarmStartTests {
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
         #expect(mgr.stats.partitionCount == 0)
-        #expect(ssdStore.currentSSDBytesForTesting() == 0)
+        #expect(ssdStore.residency().bytes == 0)
     }
 
     /// Same wipe gate, but for a `PersistedSnapshotDescriptor` whose
@@ -602,7 +602,7 @@ struct WarmStartTests {
 
         // Only the current descriptor's bytes are seeded; the stale-schema
         // entry is dropped before the budget is summed.
-        #expect(ssdStore.currentSSDBytesForTesting() == validDescriptor.bytes)
+        #expect(ssdStore.residency().bytes == validDescriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)
     }
 
@@ -627,7 +627,7 @@ struct WarmStartTests {
         let (mgr, ssdStore) = makeManager(rootURL: root)
         try await mgr.warmStart(modelFingerprint: testFingerprint)
 
-        #expect(ssdStore.currentSSDBytesForTesting() == descriptor.bytes)
+        #expect(ssdStore.residency().bytes == descriptor.bytes)
         #expect(mgr.stats.partitionCount == 1)
     }
 
