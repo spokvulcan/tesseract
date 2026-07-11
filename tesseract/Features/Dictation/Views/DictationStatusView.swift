@@ -36,6 +36,8 @@ struct StatusIndicator: View {
             self.init(badge: .dot(.red), title: "Recording...", detail: nil)
         case .processing:
             self.init(badge: .dot(.orange), title: "Processing...", detail: nil)
+        case .proofreading:
+            self.init(badge: .dot(.orange), title: "Proofreading...", detail: nil)
         }
     }
 

@@ -191,6 +191,9 @@ struct ModelsPageView: View {
             return model.id == "qwen3-tts-voicedesign" && container.speechEngine.isModelLoaded
         case .agent:
             return container.inferenceArbiter.loadedLLMModelID == model.id
+        case .proofread:
+            return model.id == ModelDefinition.defaultProofreadModelID
+                && container.proofreadPass.isModelLoaded
         }
     }
 }

@@ -36,6 +36,11 @@ final class AgentVoiceInputController {
     private let session: VoiceCaptureSession?
     private let settings: SettingsManager?
 
+    /// The shared **Proofread Pass** — agent voice input benefits from the
+    /// same polish as dictation (no overlay narration here; `voiceState`
+    /// stays `.transcribing` through the pass).
+    private let proofreadPass: ProofreadPass?
+
     @ObservationIgnored private var voiceErrorResetTask: Task<Void, Never>?
 
     // MARK: - Init
@@ -44,6 +49,7 @@ final class AgentVoiceInputController {
         audioCapture: (any AudioCapturing)? = nil,
         transcriptionEngine: (any Transcribing)? = nil,
         settings: SettingsManager? = nil,
+        proofreadPass: ProofreadPass? = nil,
         captureDump: (any CaptureDumpStoring)? = nil
     ) {
         if let audioCapture, let transcriptionEngine {
@@ -57,6 +63,7 @@ final class AgentVoiceInputController {
             self.session = nil
         }
         self.settings = settings
+        self.proofreadPass = proofreadPass
     }
 
     // MARK: - Capture
@@ -107,8 +114,12 @@ final class AgentVoiceInputController {
             // Fire-and-forget: the session owns the in-flight task and its
             // cancellation; this outer task only maps the outcome.
             Task {
+                var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
+                if let pass = proofreadPass {
+                    proofread = { text in await pass.proofread(text) }
+                }
                 let outcome = await session.transcribeAndCommit(
-                    audioData, language: settings?.language ?? "en"
+                    audioData, language: settings?.language ?? "en", proofread: proofread
                 ) { [self] text, _ in
                     Log.agent.info("Voice transcribed: \(text)")
                     voiceState = .idle
@@ -119,6 +130,11 @@ final class AgentVoiceInputController {
                 case .committed:
                     // The commit already set `.idle` and emitted the text.
                     break
+                case .rejected(let raw, _):
+                    // The composer is an editable field — a rejected take is
+                    // still worth staging there; the user edits or clears it.
+                    voiceState = .idle
+                    onVoiceTranscription?(raw)
                 case .empty:
                     setVoiceError("No speech detected")
                 case .failed:

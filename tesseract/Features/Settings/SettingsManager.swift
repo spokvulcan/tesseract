@@ -63,6 +63,10 @@ final class SettingsManager {
         didSet { SettingsCatalogue.restoreClipboard.write(restoreClipboard, to: store) }
     }
 
+    var proofreadDictation: Bool {
+        didSet { SettingsCatalogue.proofreadDictation.write(proofreadDictation, to: store) }
+    }
+
     var overlayVariantRaw: String {
         didSet { SettingsCatalogue.overlayVariantRaw.write(overlayVariantRaw, to: store) }
     }
@@ -472,6 +476,7 @@ final class SettingsManager {
         self.showInMenuBar = SettingsCatalogue.showInMenuBar.load(from: store)
         self.autoInsertText = SettingsCatalogue.autoInsertText.load(from: store)
         self.restoreClipboard = SettingsCatalogue.restoreClipboard.load(from: store)
+        self.proofreadDictation = SettingsCatalogue.proofreadDictation.load(from: store)
         self.overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
@@ -592,6 +597,7 @@ final class SettingsManager {
         showInMenuBar = SettingsCatalogue.showInMenuBar.default
         autoInsertText = SettingsCatalogue.autoInsertText.default
         restoreClipboard = SettingsCatalogue.restoreClipboard.default
+        proofreadDictation = SettingsCatalogue.proofreadDictation.default
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
         captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default

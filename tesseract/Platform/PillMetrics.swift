@@ -31,7 +31,7 @@ nonisolated enum PillMetrics {
         switch phase {
         case .error:
             return errorSize
-        case .processing:
+        case .processing, .proofreading:
             return processingSize
         case .recording, .idle:
             return recordingSize

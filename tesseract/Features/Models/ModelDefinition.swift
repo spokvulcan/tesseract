@@ -9,6 +9,9 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     case speechToText = "Speech-to-Text"
     case textToSpeech = "Text-to-Speech"
     case agent = "Agent"
+    /// The dictation **Proofread Pass**'s small co-resident model (ADR-0034)
+    /// — its own category so it never appears in the agent-model picker.
+    case proofread = "Proofread"
 
     var id: String { rawValue }
 
@@ -17,6 +20,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         case .speechToText: "mic.fill"
         case .textToSpeech: "speaker.wave.3.fill"
         case .agent: "brain"
+        case .proofread: "text.badge.checkmark"
         }
     }
 }
@@ -70,6 +74,7 @@ extension ModelDefinition {
     static let defaultAgentModelID = "qwen3.5-4b-paro"
     static let defaultSpeechToTextModelID = "whisper-large-v3-turbo"
     static let defaultTextToSpeechModelID = "qwen3-tts-voicedesign"
+    static let defaultProofreadModelID = "qwen3.5-0.8b-proofread"
 
     static let all: [ModelDefinition] = [
         ModelDefinition(
@@ -122,6 +127,19 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~4.2 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3.5-0.8b-proofread",
+            displayName: "Dictation Proofreader",
+            description:
+                "Polishes dictation: punctuation, casing, and misheard words. Runs alongside the agent model.",
+            category: .proofread,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3.5-0.8B-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~0.5 GB",
             dependencies: []
         ),
         ModelDefinition(

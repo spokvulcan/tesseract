@@ -99,6 +99,7 @@ tesseract/
 │   │   ├── DictationCoordinator.swift # Thin composer over Voice Capture Session
 │   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, meter
 │   │   ├── OverlayVariants.swift      # Overlay Variant registry (exploration scaffolding)
+│   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   └── Views/                     # Recording UI components + overlay variants
 │   ├── Speech/
 │   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator

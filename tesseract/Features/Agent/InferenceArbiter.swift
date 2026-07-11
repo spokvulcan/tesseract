@@ -83,6 +83,13 @@ final class InferenceArbiter: InferenceArbitrating {
     /// arbiter composes it with model loading.
     @ObservationIgnored private let lease = GPULeaseQueue()
 
+    /// Whether the GPU lease is held right now — the **Proofread Pass**'s
+    /// skip-when-busy read (ADR-0034): a pass that would queue behind an
+    /// agent turn is skipped instead. A point-in-time read, deliberately not
+    /// a reservation — a lease acquired a moment later merely contends with
+    /// a sub-second 0.8B pass on the MLX stream.
+    var isGPULeaseHeld: Bool { lease.isLeased }
+
     // MARK: - Dependencies
 
     private let agentEngine: AgentEngine

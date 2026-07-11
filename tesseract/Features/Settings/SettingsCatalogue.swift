@@ -30,6 +30,10 @@ enum SettingsCatalogue {
     static let showInMenuBar = Setting.bool("showInMenuBar", default: true)
     static let autoInsertText = Setting.bool("autoInsertText", default: true)
     static let restoreClipboard = Setting.bool("restoreClipboard", default: true)
+    /// The dictation **Proofread Pass** (ADR-0034): the small co-resident
+    /// model polishes each transcription when the GPU is free. On by
+    /// default; the pass silently skips until its model is downloaded.
+    static let proofreadDictation = Setting.bool("proofreadDictation", default: true)
     /// Exploration scaffolding (map #283): selects the live Overlay Variant;
     /// deleted when the redesign prunes to one winner.
     static let overlayVariantRaw = Setting.string("overlayVariant", default: "classic")

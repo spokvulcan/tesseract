@@ -27,11 +27,14 @@ final class DictationFeed {
         case idle
         case recording
         case processing
+        /// The **Proofread Pass** is polishing the transcription — a distinct
+        /// phase so variants can narrate it (map #283).
+        case proofreading
         case error(DictationError)
 
         var isActive: Bool {
             switch self {
-            case .recording, .processing: return true
+            case .recording, .processing, .proofreading: return true
             case .idle, .error: return false
             }
         }
@@ -42,8 +45,13 @@ final class DictationFeed {
     /// path an ending (and a future correction affordance a hook) even though
     /// the phase has already returned to `.idle`.
     enum Outcome: Equatable, Sendable {
-        case committed(text: String, duration: TimeInterval)
+        /// `edits` is the **Proofread Pass**'s word-swap diff — what a
+        /// variant narrates (empty when the pass skipped or changed nothing).
+        case committed(text: String, duration: TimeInterval, edits: [WordEdit])
         case empty
+        /// The Proofread Pass rejected a wrong-words take. Passive: the
+        /// press is the retry; `raw` feeds "insert raw anyway".
+        case rejected(raw: String, reason: String)
         case cancelled
         case superseded
     }

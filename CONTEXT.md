@@ -1086,6 +1086,18 @@ Guard** it composes (the epoch protocol alone).
 _Avoid_: coordinator (it is composed by the coordinators, not one), capture engine
 (`AudioCaptureEngine`, the mic port below it), voice controller, session (unqualified).
 
+**Proofread Pass**:
+The optional LLM polish stage between transcription and commit (ADR-0034): a second,
+small co-resident MLX model — its own, never the agent's — that fixes punctuation,
+capitalization, and misheard words, or rejects an unintelligible take outright.
+Strictly fail-open: disabled, model not downloaded, GPU lease held (skip-when-busy —
+it *reads* the lease, never queues on it), budget overrun, or any error all commit
+the raw text unchanged. Runs inside the **Voice Capture Session**, so dictation and
+**Voice Input** both gain it; its word-level edits ride the commit for overlay
+narration, and a rejected take's raw text stays available for "insert raw anyway".
+_Avoid_: post-processing (the regex cleanup that always runs, pass or no pass),
+autocorrect, grammar check, second agent (it is a fixed-prompt pass, not an agent).
+
 ### Hotkey handling
 
 **Hotkey Matcher**:

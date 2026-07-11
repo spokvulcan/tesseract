@@ -24,6 +24,11 @@ final class DictationCoordinator {
     let feed: DictationFeed
     private(set) var lastTranscription: String = ""
 
+    /// The raw text of the last take the **Proofread Pass** rejected — kept
+    /// so "insert raw anyway" (an overlay affordance, or this API directly)
+    /// can still deliver the user's words.
+    private(set) var lastRejectedRaw: String?
+
     /// The current lifecycle phase — a read-through to the feed, kept as the
     /// coordinator's public state surface for the in-window views and tests.
     var state: DictationFeed.Phase { feed.phase }
@@ -32,6 +37,11 @@ final class DictationCoordinator {
     private let textInjector: any TextInjecting
     private let history: any TranscriptionStoring
     private let settings: SettingsManager
+
+    /// The **Proofread Pass**, injected by the composition root; `nil` in
+    /// tests that don't exercise it. The coordinator wraps it so the feed
+    /// narrates the `.proofreading` phase — the session stays feed-blind.
+    private let proofreadPass: ProofreadPass?
 
     /// The maximum-recording-duration auto-stop. Caller-owned: it finalizes a stuck
     /// recording, which is a dictation-presentation concern, not part of the shared
@@ -52,6 +62,7 @@ final class DictationCoordinator {
         history: any TranscriptionStoring,
         settings: SettingsManager,
         feed: DictationFeed,
+        proofreadPass: ProofreadPass? = nil,
         captureDump: (any CaptureDumpStoring)? = nil
     ) {
         self.session = VoiceCaptureSession(
@@ -64,6 +75,7 @@ final class DictationCoordinator {
         self.history = history
         self.settings = settings
         self.feed = feed
+        self.proofreadPass = proofreadPass
     }
 
     // MARK: - Public API
@@ -80,7 +92,7 @@ final class DictationCoordinator {
             DictationPerf.markPress()
             feed.setPhase(.idle)
             startRecording()
-        case .processing:
+        case .processing, .proofreading:
             startPending = true
         case .recording:
             break
@@ -99,8 +111,8 @@ final class DictationCoordinator {
             startRecording()
         case .recording:
             stopRecordingAndProcess()
-        case .processing:
-            // Can't stop while processing
+        case .processing, .proofreading:
+            // Can't stop while resolving
             break
         case .error:
             // Reset and try again
@@ -182,8 +194,26 @@ final class DictationCoordinator {
         Task {
             let sessionStart = DispatchTime.now()
             var committedDuration: TimeInterval = 0
+
+            // The proofread wrapper narrates the phase around the pass, so
+            // variants can show "polishing" — the session stays feed-blind.
+            var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
+            if let pass = proofreadPass {
+                proofread = { [feed] text in
+                    feed.setPhase(.proofreading)
+                    let proofreadStart = DispatchTime.now()
+                    let verdict = await pass.proofread(text)
+                    DictationPerf.record(
+                        span: "proofread", ms: DictationPerf.msSince(proofreadStart))
+                    if feed.phase == .proofreading {
+                        feed.setPhase(.processing)
+                    }
+                    return verdict
+                }
+            }
+
             let outcome = await session.transcribeAndCommit(
-                audioData, language: settings.language
+                audioData, language: settings.language, proofread: proofread
             ) { [self] text, duration in
                 lastTranscription = text
                 committedDuration = duration
@@ -206,13 +236,25 @@ final class DictationCoordinator {
             DictationPerf.record(span: "session", ms: DictationPerf.msSince(sessionStart))
 
             switch outcome {
-            case .committed:
+            case .committed(let edits):
                 if settings.playSounds {
                     playSound(.success)
                 }
+                lastRejectedRaw = nil
                 feed.setPhase(.idle)
-                feed.emit(.committed(text: lastTranscription, duration: committedDuration))
+                feed.emit(
+                    .committed(
+                        text: lastTranscription, duration: committedDuration, edits: edits))
                 DictationPerf.markResolved("committed")
+                drainPendingStart()
+            case .rejected(let raw, let reason):
+                // Passive by design (map #283): the press is the retry, so the
+                // phase returns to idle — no error gate. The beat carries the
+                // raw text for "insert raw anyway".
+                lastRejectedRaw = raw
+                feed.setPhase(.idle)
+                feed.emit(.rejected(raw: raw, reason: reason))
+                DictationPerf.markResolved("rejected")
                 drainPendingStart()
             case .empty:
                 handleError(.noSpeechDetected)
@@ -237,6 +279,25 @@ final class DictationCoordinator {
                 feed.emit(.superseded)
                 DictationPerf.markResolved("superseded")
             }
+        }
+    }
+
+    /// Injects the raw text of the last rejected take — the "insert raw
+    /// anyway" affordance's hook (map #283; overlay click wiring is the
+    /// panel-interactivity follow-up).
+    func insertRawAnyway() {
+        guard let raw = lastRejectedRaw else { return }
+        lastRejectedRaw = nil
+        history.add(
+            text: raw,
+            duration: 0,
+            model: ModelDefinition.withID(settings.selectedSpeechToTextModelID)?.displayName
+                ?? settings.selectedSpeechToTextModelID
+        )
+        guard settings.autoInsertText else { return }
+        textInjector.restoreClipboard = settings.restoreClipboard
+        Task {
+            try? await textInjector.inject(raw + " ")
         }
     }
 

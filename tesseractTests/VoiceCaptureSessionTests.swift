@@ -389,6 +389,150 @@ struct VoiceCaptureSessionTests {
         #expect(recorder.commits.isEmpty)
     }
 
+    // MARK: - The Proofread Pass arm
+
+    /// A gate-able stand-in for the caller's proofread closure, so a test can
+    /// hold the operation *inside* the pass and race a `cancel()` against it.
+    @MainActor
+    final class ProofreadStub {
+        var verdict: ProofreadVerdict?
+        var gated = false
+        private var gate: CheckedContinuation<Void, Never>?
+        var isAwaitingGate: Bool { gate != nil }
+        private(set) var seenTexts: [String] = []
+
+        func proofread(_ text: String) async -> ProofreadVerdict? {
+            seenTexts.append(text)
+            if gated {
+                await withCheckedContinuation { gate = $0 }
+            }
+            return verdict
+        }
+
+        func releaseGate() {
+            gate?.resume()
+            gate = nil
+        }
+    }
+
+    private func runThroughSession(
+        engineText: String,
+        stub: ProofreadStub,
+        recorder: CommitRecorder
+    ) async -> (outcome: VoiceCaptureSession.Outcome, session: VoiceCaptureSession) {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: engineText, segments: [], language: "en", processingTime: 0))
+        let session = VoiceCaptureSession(
+            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let task = Task {
+            await session.transcribeAndCommit(
+                makeAudio(), language: "en",
+                proofread: { await stub.proofread($0) }
+            ) { text, duration in
+                try await recorder.commit(text, duration)
+            }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+        return (await task.value, session)
+    }
+
+    /// `.corrected` commits the *corrected* text and surfaces the edits.
+    @Test func proofreadCorrectedCommitsTheCorrectedTextWithEdits() async throws {
+        let stub = ProofreadStub()
+        let edit = WordEdit(original: "peace", replacement: "piece")
+        stub.verdict = .corrected(text: "piece of cake", edits: [edit])
+        let recorder = CommitRecorder()
+
+        let (outcome, _) = await runThroughSession(
+            engineText: "peace of cake", stub: stub, recorder: recorder)
+
+        guard case .committed(let edits) = outcome else {
+            Issue.record("expected .committed, got \(outcome)")
+            return
+        }
+        #expect(edits == [edit])
+        #expect(recorder.commits.count == 1)
+        #expect(recorder.commits.first?.text == "piece of cake")
+        // The pass saw the *post-processed* transcription, not the engine raw.
+        #expect(stub.seenTexts == [TranscriptionPostProcessor().process("peace of cake")])
+    }
+
+    /// `.rejected` commits nothing; the raw text rides the outcome for
+    /// "insert raw anyway".
+    @Test func proofreadRejectedCommitsNothingAndCarriesTheRaw() async throws {
+        let stub = ProofreadStub()
+        stub.verdict = .rejected(reason: "unintelligible mumbling")
+        let recorder = CommitRecorder()
+
+        let (outcome, _) = await runThroughSession(
+            engineText: "asdf ghjk", stub: stub, recorder: recorder)
+
+        guard case .rejected(let raw, let reason) = outcome else {
+            Issue.record("expected .rejected, got \(outcome)")
+            return
+        }
+        #expect(raw == TranscriptionPostProcessor().process("asdf ghjk"))
+        #expect(reason == "unintelligible mumbling")
+        #expect(recorder.commits.isEmpty)
+    }
+
+    /// A skipped pass (`nil`) is fail-open: the raw text commits, no edits.
+    @Test func proofreadSkipCommitsTheRawText() async throws {
+        let stub = ProofreadStub()
+        stub.verdict = nil
+        let recorder = CommitRecorder()
+
+        let (outcome, _) = await runThroughSession(
+            engineText: "hello world", stub: stub, recorder: recorder)
+
+        guard case .committed(let edits) = outcome else {
+            Issue.record("expected .committed, got \(outcome)")
+            return
+        }
+        #expect(edits.isEmpty)
+        #expect(recorder.commits.first?.text == TranscriptionPostProcessor().process("hello world"))
+    }
+
+    /// A cancel-and-restart that lands while the operation is suspended *inside
+    /// the pass* must supersede it — the ticket re-check after the proofread
+    /// await is load-bearing.
+    @Test func cancelDuringProofreadSupersedesAndCommitsNothing() async throws {
+        let engine = ControllableTranscribing(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0))
+        let session = VoiceCaptureSession(
+            audioCapture: FakeAudioCapture(cannedAudio: makeAudio()), transcriptionEngine: engine)
+        let stub = ProofreadStub()
+        stub.gated = true
+        stub.verdict = .corrected(text: "hello walrus", edits: [])
+        let recorder = CommitRecorder()
+
+        let task = Task {
+            await session.transcribeAndCommit(
+                makeAudio(), language: "en",
+                proofread: { await stub.proofread($0) }
+            ) { text, duration in
+                try await recorder.commit(text, duration)
+            }
+        }
+        while !engine.isAwaiting { await Task.yield() }
+        engine.completeWithSuccess()
+
+        // The operation is now suspended inside the pass; cancel races it.
+        while !stub.isAwaitingGate { await Task.yield() }
+        session.cancel()
+        stub.releaseGate()
+        let outcome = await task.value
+
+        guard case .superseded = outcome else {
+            Issue.record("expected .superseded, got \(outcome)")
+            return
+        }
+        #expect(recorder.commits.isEmpty)
+    }
+
     /// A cancel that races an in-flight *commit* (the injection-suspension window)
     /// must suppress the success: the commit's side effect is aborted and the
     /// outcome is `.superseded`.
