@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.7.0](https://github.com/spokvulcan/tesseract/compare/v1.6.0...v1.7.0) (2026-07-11)
+
+
+### Features
+
+* **agent:** vendor MoE PARO path — RotateSwitchGLU + loader passes ([#220](https://github.com/spokvulcan/tesseract/issues/220)) ([#225](https://github.com/spokvulcan/tesseract/issues/225)) ([ad3c798](https://github.com/spokvulcan/tesseract/commit/ad3c798f72f42fee84bba4da7030e2ea60e5f603))
+* **agent:** wire the app for Qwen3.6-35B-A3B PARO (MoE) ([#210](https://github.com/spokvulcan/tesseract/issues/210)) ([#226](https://github.com/spokvulcan/tesseract/issues/226)) ([6c168eb](https://github.com/spokvulcan/tesseract/commit/6c168eb82640f796e120a468946ec8940f4b15e3))
+* **bench:** add PARO reference-parity benchmark harness ([#217](https://github.com/spokvulcan/tesseract/issues/217)) ([e01bc8d](https://github.com/spokvulcan/tesseract/commit/e01bc8da7931b04672faa3d9adf7cef400b5ce99))
+* **browser:** local-only tool telemetry for the Browser MCP server (ADR-0031) ([#239](https://github.com/spokvulcan/tesseract/issues/239)) ([a9ed929](https://github.com/spokvulcan/tesseract/commit/a9ed929775c197f66eade5a9c7ecfa6373451e29))
+* **browser:** save screenshot pixel artifacts in MCP telemetry ([#240](https://github.com/spokvulcan/tesseract/issues/240)) ([ae07d98](https://github.com/spokvulcan/tesseract/commit/ae07d98cb7cc1e9a9f5d52edf3bbc9f190de15b3))
+* **design:** adopt the ratified warm-orange AccentColor ([ed67f0c](https://github.com/spokvulcan/tesseract/commit/ed67f0c13740a451a3fa7572b1219892da3d68f7))
+* **dictation:** face-lift the Dictation page to the design language ([#250](https://github.com/spokvulcan/tesseract/issues/250)) ([82a1f89](https://github.com/spokvulcan/tesseract/commit/82a1f8954c6c62f497773740a8073db3745b90c5))
+* **menubar:** rewrite the status-bar surface — animated glyph, feature-aligned menu ([#266](https://github.com/spokvulcan/tesseract/issues/266)) ([de1f2f5](https://github.com/spokvulcan/tesseract/commit/de1f2f56df6edacc5da9fb778cced5d9f87d1f40))
+* **models:** redesign the Models page — native grouped form + Liquid Glass action bar ([#264](https://github.com/spokvulcan/tesseract/issues/264)) ([eeb69eb](https://github.com/spokvulcan/tesseract/commit/eeb69ebd1c2fef3cf468b6487e3cc21aac20b07f))
+* **onboarding:** face-lift the Welcome Tour to the design language ([#265](https://github.com/spokvulcan/tesseract/issues/265)) ([920b373](https://github.com/spokvulcan/tesseract/commit/920b3736caef36c8025d61669a73fe33654491e0))
+* **onboarding:** recommend Qwen3.6-35B-A3B PARO on 48GB+ machines ([#228](https://github.com/spokvulcan/tesseract/issues/228)) ([6ae4a34](https://github.com/spokvulcan/tesseract/commit/6ae4a342af12bbc73330297be7fec56a42bfdb36))
+* **server:** cut the Activity page over from the Dashboard (map [#269](https://github.com/spokvulcan/tesseract/issues/269)) ([#280](https://github.com/spokvulcan/tesseract/issues/280)) ([584cd8b](https://github.com/spokvulcan/tesseract/commit/584cd8b5071335ef4a6017bbeabe7ac105660b69))
+* **server:** cut the Cache page over from Prompt Cache (map [#269](https://github.com/spokvulcan/tesseract/issues/269)) ([#278](https://github.com/spokvulcan/tesseract/issues/278)) ([df5354d](https://github.com/spokvulcan/tesseract/commit/df5354d698e6b5497e5a76dcddfedd51907363b9))
+* **server:** default preserve-thinking on for declaring models ([#237](https://github.com/spokvulcan/tesseract/issues/237)) ([cf3f34a](https://github.com/spokvulcan/tesseract/commit/cf3f34af88ff65a9b3c39478b2862cc4da881858))
+* **settings:** cut over to the native Settings window ([#243](https://github.com/spokvulcan/tesseract/issues/243)) ([ca04210](https://github.com/spokvulcan/tesseract/commit/ca04210b700f3e3176111050cd422f43f3e73c35))
+* **settings:** native Settings window prototype ([#215](https://github.com/spokvulcan/tesseract/issues/215)) ([bfa7a6a](https://github.com/spokvulcan/tesseract/commit/bfa7a6adf3877ba6d1908cb5631e7da4079f1540))
+* **speech:** face-lift the Speech page to the design language ([#263](https://github.com/spokvulcan/tesseract/issues/263)) ([f13c83f](https://github.com/spokvulcan/tesseract/commit/f13c83fcd6d7adcbc8a271e7453805029a69fa01))
+
+
+### Bug Fixes
+
+* **agent:** tool-result images now reach the model instead of being dropped ([#241](https://github.com/spokvulcan/tesseract/issues/241)) ([0e83c9c](https://github.com/spokvulcan/tesseract/commit/0e83c9c4d1fab085a8958fd6468c43ba7b062cb1))
+* **design:** consistency audit of the locked surfaces (map [#211](https://github.com/spokvulcan/tesseract/issues/211), last ticket) ([#267](https://github.com/spokvulcan/tesseract/issues/267)) ([f33c612](https://github.com/spokvulcan/tesseract/commit/f33c6123f7ea420a4e52f5b0d2d1cb110d306e40))
+* **server:** count reclaimable memory in RAM cache headroom ([#236](https://github.com/spokvulcan/tesseract/issues/236)) ([5a29335](https://github.com/spokvulcan/tesseract/commit/5a29335b3e28ffc8bf93a3d5b624b5d042efb9be))
+* **vendor:** adopt upstream AutoAWQ converter fixes (theta-filter, scales dtype) ([#223](https://github.com/spokvulcan/tesseract/issues/223)) ([3f31a43](https://github.com/spokvulcan/tesseract/commit/3f31a4363f18ecd0057c78b430219bf6f0a0ddca))
+* **vlm:** apply sRGB tone curve in Qwen3VL image preprocessing ([#242](https://github.com/spokvulcan/tesseract/issues/242)) ([78334f1](https://github.com/spokvulcan/tesseract/commit/78334f1dd2e6bf8ac2ab067e703464b54ae9d63f))
+
+
+### Performance Improvements
+
+* **agent:** default kvBits to nil (unquantized KV cache) ([#260](https://github.com/spokvulcan/tesseract/issues/260)) ([ca3c744](https://github.com/spokvulcan/tesseract/commit/ca3c7449b55f813741f0a39f862c70cc5a1519ff))
+* **prefill:** balance the prompt chunks instead of leaving a remainder ([#261](https://github.com/spokvulcan/tesseract/issues/261)) ([c993da1](https://github.com/spokvulcan/tesseract/commit/c993da138b6d80a2daca39edc35347f4e43e6250))
+
+
+### Code Refactoring
+
+* **agent:** remove dead app-side ParoQuant duplicate ([#221](https://github.com/spokvulcan/tesseract/issues/221)) ([6086433](https://github.com/spokvulcan/tesseract/commit/6086433e9242f70ce936d848c86f87fa999d758b))
+
+
+### Documentation
+
+* **design:** ratify the app-wide design language one-pager ([cbc7c71](https://github.com/spokvulcan/tesseract/commit/cbc7c7166f71649d7261641ebc5b2c9cf19cff9d))
+
 ## [1.6.0](https://github.com/spokvulcan/tesseract/compare/v1.5.0...v1.6.0) (2026-07-08)
 
 
