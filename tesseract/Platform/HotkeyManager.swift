@@ -17,32 +17,31 @@ struct HotkeyRegistration {
 
 @MainActor
 final class HotkeyManager: ObservableObject {
-    @Published var currentHotkey: KeyCombo = .optionSpace {
-        didSet {
-            // Keep backward compat: updating currentHotkey updates the "dictation" registration
-            if var reg = registrations["dictation"] {
-                reg = HotkeyRegistration(
-                    id: "dictation", combo: currentHotkey, onDown: reg.onDown, onUp: reg.onUp)
-                registrations["dictation"] = reg
-            }
-        }
-    }
+    /// The dictation registration's id — dictation registers through the one
+    /// `registerHotkey` API like every other hotkey (audit #285 item 7; the
+    /// former `currentHotkey`/`onHotkeyDown` mirror was a second source of
+    /// truth for the press that starts everything).
+    static let dictationHotkeyID = "dictation"
+
     @Published private(set) var isListening = false
     @Published private(set) var isUsingEventTap = false
 
-    var onHotkeyDown: (() -> Void)? {
-        didSet {
-            // Backward compat: sync to dictation registration
-            syncDictationRegistration()
-        }
-    }
-    var onHotkeyUp: (() -> Void)? {
-        didSet {
-            syncDictationRegistration()
-        }
+    /// The dictation registration's current combo — the gate read App
+    /// Bindings uses to skip no-op re-binds. Falls back to the default combo
+    /// until the registration lands at setup.
+    var currentDictationHotkey: KeyCombo {
+        registrations[Self.dictationHotkeyID]?.combo ?? .optionSpace
     }
 
-    private var registrations: [String: HotkeyRegistration] = [:]
+    private var registrations: [String: HotkeyRegistration] = [:] {
+        didSet { bindingsSnapshot = registrations.mapValues(\.combo) }
+    }
+
+    /// Prebuilt `id → combo` view of `registrations`, rebuilt on every
+    /// (un)register/update so the per-keystroke hot path hands the matcher an
+    /// existing dictionary instead of allocating one per key event
+    /// system-wide (audit #285 item 7).
+    private var bindingsSnapshot: [String: KeyCombo] = [:]
 
     /// The one fire-or-not decision, shared by both delivery paths. Both the
     /// tap callback and the NSEvent fallback normalize their event and fold
@@ -166,7 +165,7 @@ final class HotkeyManager: ObservableObject {
 
                 let verdict = manager.matcher.handle(
                     kind, keyCode: keyCode, modifiers: modifiers,
-                    bindings: manager.registrations.mapValues(\.combo))
+                    bindings: manager.bindingsSnapshot)
 
                 // Deliver on the next main-queue turn so the tap callback
                 // stays fast; the matcher state is already settled.
@@ -188,6 +187,13 @@ final class HotkeyManager: ObservableObject {
             return
         }
 
+        // The tap deliberately runs on the MAIN run loop (audit #285 item 7,
+        // decided): every fire targets a @MainActor consumer anyway, so a
+        // dedicated tap thread would only move the queuing point without
+        // shortening felt latency — while adding a thread-confinement story
+        // for the matcher. The callback itself stays O(bindings) with zero
+        // allocation (prebuilt `bindingsSnapshot`, deferred delivery), and
+        // the `tapDisabledByTimeout` re-enable above covers a stalled turn.
         runLoopSource = CFMachPortCreateRunLoopSource(nil, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
@@ -259,7 +265,7 @@ final class HotkeyManager: ObservableObject {
 
         let verdict = matcher.handle(
             kind, keyCode: event.keyCode, modifiers: event.modifierFlags,
-            bindings: registrations.mapValues(\.combo))
+            bindings: bindingsSnapshot)
 
         // Monitors cannot suppress events; deliver synchronously.
         deliver(verdict.fires, deferred: false)
@@ -364,21 +370,4 @@ final class HotkeyManager: ObservableObject {
         }
     }
 
-    func updateHotkey(_ combo: KeyCombo) {
-        currentHotkey = combo
-        matcher.reset()
-    }
-
-    // MARK: - Private
-
-    private func syncDictationRegistration() {
-        if let onDown = onHotkeyDown {
-            registrations["dictation"] = HotkeyRegistration(
-                id: "dictation",
-                combo: currentHotkey,
-                onDown: onDown,
-                onUp: onHotkeyUp
-            )
-        }
-    }
 }

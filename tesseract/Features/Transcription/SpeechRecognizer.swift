@@ -7,7 +7,7 @@
 //  and playback".
 //
 //  The port is `Sendable`: `TranscriptionEngine` races `transcribe` against a
-//  timeout inside a `withThrowingTaskGroup`, so the recognizer crosses a
+//  timeout in an unstructured recognizer task, so the recognizer crosses a
 //  `@Sendable` boundary. Above the port stay the timeout race, lazy
 //  `ensureModelLoaded`, model-file (`.mlmodelc`) verification, the `@Observable`
 //  lifecycle state, and the mapping of model failures onto `DictationError`.
@@ -26,8 +26,11 @@ nonisolated protocol SpeechRecognizer: Sendable {
     func load(modelPath: URL) async throws
 
     /// Transcribes the given audio. `language` is `nil` for auto-detect.
+    ///
+    /// Cancellation is `Task` cancellation propagating into this call — the
+    /// port's one cancellation channel (the former separate `cancel()`
+    /// requirement was an empty body in the WhisperKit adapter and is gone,
+    /// audit #285 item 10). Adapters stop at their next cooperative check;
+    /// the engine's budget does not wait for them.
     func transcribe(_ audioData: AudioData, language: String?) async throws -> TranscriptionResult
-
-    /// Cooperatively cancels in-flight recognition / tears down model state.
-    func cancel() async
 }

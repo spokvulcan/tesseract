@@ -112,9 +112,8 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         )
     }
 
-    /// Cooperative cancellation arrives via `Task` cancellation propagating
-    /// into the suspended `transcribe` — WhisperKit checks it between decode
-    /// windows, so an in-flight transcription stops at the next window
-    /// boundary. This satisfies the port contract; nothing else to tear down.
-    func cancel() {}
+    // Cooperative cancellation arrives via `Task` cancellation propagating
+    // into the suspended `transcribe` — WhisperKit checks it between decode
+    // windows, so an in-flight transcription stops at the next window
+    // boundary. That is the port's one cancellation channel.
 }

@@ -399,14 +399,14 @@ final class DependencyContainer: ObservableObject {
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true
-        // Setup hotkey callbacks
-        hotkeyManager.currentHotkey = settingsManager.hotkey
-        hotkeyManager.onHotkeyDown = { [weak self] in
-            self?.dictationCoordinator.onHotkeyDown()
-        }
-        hotkeyManager.onHotkeyUp = { [weak self] in
-            self?.dictationCoordinator.onHotkeyUp()
-        }
+        // Register dictation push-to-talk — through the same registration API
+        // as every other hotkey (audit #285 item 7).
+        hotkeyManager.registerHotkey(
+            id: HotkeyManager.dictationHotkeyID,
+            combo: settingsManager.hotkey,
+            onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
+            onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() }
+        )
         // Register TTS hotkey
         hotkeyManager.registerHotkey(
             id: "tts",
@@ -467,7 +467,7 @@ final class DependencyContainer: ObservableObject {
                     speechCoordinator.state
                 },
                 currentDictationHotkey: { [hotkeyManager] in
-                    hotkeyManager.currentHotkey
+                    hotkeyManager.currentDictationHotkey
                 },
                 isLLMSlotLoaded: { [inferenceArbiter] in
                     inferenceArbiter.loadedSlots.contains(.llm)
@@ -507,7 +507,8 @@ final class DependencyContainer: ObservableObject {
                     audioCaptureEngine.prewarm()
                 },
                 updateDictationHotkey: { [hotkeyManager] in
-                    hotkeyManager.updateHotkey($0)
+                    hotkeyManager.updateRegisteredHotkey(
+                        id: HotkeyManager.dictationHotkeyID, combo: $0)
                 },
                 updateTTSHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(id: "tts", combo: $0)

@@ -53,7 +53,6 @@ actor CancellationIgnoringSpeechRecognizer: SpeechRecognizer {
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var loadCount = 0
     private(set) var transcribeCount = 0
-    private(set) var cancelCount = 0
 
     init(
         result: TranscriptionResult = TranscriptionResult(
@@ -76,10 +75,6 @@ actor CancellationIgnoringSpeechRecognizer: SpeechRecognizer {
         transcribeCount += 1
         await withCheckedContinuation { continuation = $0 }
         return result
-    }
-
-    func cancel() {
-        cancelCount += 1
     }
 
     func release() {
@@ -260,11 +255,8 @@ struct TranscriptionEngineTests {
         // The over-running transcribe is interrupted (CancellationError propagates
         // from the retained task through the race into the adapter).
         await #expect(throws: CancellationError.self) { try await task.value }
+        while await !recognizer.transcribeWasInterrupted { await Task.yield() }
         #expect(await recognizer.transcribeWasInterrupted)
-
-        // And the adapter's cooperative `cancel()` is reached too.
-        while await recognizer.cancelCount == 0 { await Task.yield() }
-        #expect(await recognizer.cancelCount >= 1)
         #expect(!engine.isTranscribing)
     }
 
@@ -286,11 +278,47 @@ struct TranscriptionEngineTests {
         }
 
         engine.cancelTranscription()
-        await recognizer.release()
 
+        // The caller is released by the race's cancellation arm immediately —
+        // even though the recognizer is still suspended and ignoring the
+        // cooperative cancel. Its late success (after release) goes nowhere.
         await #expect(throws: CancellationError.self) { try await task.value }
-        while await recognizer.cancelCount == 0 { await Task.yield() }
+        await recognizer.release()
         #expect(!engine.isTranscribing)
+    }
+
+    /// The item-10 regression (audit #285): a recognizer hung *between*
+    /// cancellation checks used to defeat the timeout entirely — the
+    /// structured race could not exit until the hung child yielded, pinning
+    /// `.processing` forever. The abandonment race must release the caller
+    /// the moment the budget expires, while the recognizer is still suspended.
+    @Test
+    func timeoutReleasesTheCallerWhileTheRecognizerIsStillHung() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = CancellationIgnoringSpeechRecognizer()
+        let engine = TranscriptionEngine(
+            makeRecognizer: { recognizer },
+            timeout: { _ in .milliseconds(20) }
+        )
+        try await engine.loadModel(from: bundle)
+
+        // The transcribe returns (with the timeout error) while the recognizer
+        // is STILL suspended — nothing below the seam has yielded.
+        let error = await captureDictationError {
+            try await engine.transcribe(sampleAudio(), language: "auto")
+        }
+        guard case .transcriptionFailed = error else {
+            Issue.record(
+                "expected .transcriptionFailed (timeout), got \(String(describing: error))")
+            return
+        }
+        #expect(await recognizer.isAwaitingRelease)
+        #expect(!engine.isTranscribing)
+
+        // The slot is free again: a fresh engine cycle works after the orphan
+        // is finally released and its late result is dropped.
+        await recognizer.release()
     }
 
     // MARK: - Error mapping (stays on the facade)

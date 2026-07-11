@@ -9,42 +9,73 @@ import AVFoundation
 import Accelerate
 import Combine
 
-// Thread-safe sample storage - nonisolated for real-time audio thread access
+// Thread-safe sample storage - nonisolated for real-time audio thread access.
+//
+// Chunked (audit #285 item 8): `reserveCapacity` fixes the chunk size, and a
+// capture that outgrows it seals the full chunk and starts a fresh one —
+// growth never reallocates-and-copies the whole capture on the real-time
+// audio thread. The old single-array reserve covered 60 s while recordings
+// run to 1800 s, so every long capture paid multi-MB memmoves at tap cadence
+// past the first minute; now the worst case per append is one zero-copy
+// chunk allocation. The one coalescing copy happens in `getAndClear()`, off
+// the tap (the tap is removed before stop reads the capture) — and the
+// common short dictation never fills a second chunk, keeping its
+// `getAndClear()` an O(1) buffer steal.
 nonisolated final class SampleBuffer: @unchecked Sendable {
-    private var samples: [Float] = []
+    /// Samples per chunk; 0 = unchunked (plain growth) until `reserveCapacity`.
+    private var chunkCapacity = 0
+    private var sealedChunks: [[Float]] = []
+    private var currentChunk: [Float] = []
     private let lock = NSLock()
 
     func append(_ newSamples: [Float]) {
-        lock.lock()
-        samples.append(contentsOf: newSamples)
-        lock.unlock()
+        newSamples.withUnsafeBufferPointer { append($0) }
     }
 
     /// Append straight from the tap's channel pointer — no intermediate `[Float]`
     /// allocation on the real-time audio thread (~47 buffers/s at 48 kHz).
     func append(_ newSamples: UnsafeBufferPointer<Float>) {
         lock.lock()
-        samples.append(contentsOf: newSamples)
+        if chunkCapacity > 0, currentChunk.count + newSamples.count > chunkCapacity {
+            sealedChunks.append(currentChunk)
+            currentChunk = []
+            currentChunk.reserveCapacity(chunkCapacity)
+        }
+        currentChunk.append(contentsOf: newSamples)
         lock.unlock()
     }
 
     func getAndClear() -> [Float] {
         lock.lock()
-        let result = samples
-        samples.removeAll()
-        lock.unlock()
+        defer {
+            sealedChunks = []
+            currentChunk = []
+            lock.unlock()
+        }
+        if sealedChunks.isEmpty {
+            return currentChunk
+        }
+        var result: [Float] = []
+        result.reserveCapacity(
+            sealedChunks.reduce(0) { $0 + $1.count } + currentChunk.count)
+        for chunk in sealedChunks {
+            result.append(contentsOf: chunk)
+        }
+        result.append(contentsOf: currentChunk)
         return result
     }
 
     func reserveCapacity(_ capacity: Int) {
         lock.lock()
-        samples.reserveCapacity(capacity)
+        chunkCapacity = capacity
+        currentChunk.reserveCapacity(capacity)
         lock.unlock()
     }
 
     func clear() {
         lock.lock()
-        samples.removeAll()
+        sealedChunks = []
+        currentChunk = []
         lock.unlock()
     }
 }
@@ -62,6 +93,8 @@ final class AudioCaptureEngine: AudioCapturing {
     private enum Defaults {
         static let defaultInputSampleRate: Double = 48_000
         static let bufferSize: AVAudioFrameCount = 1024
+        /// The `SampleBuffer` chunk size in seconds — one chunk covers the
+        /// common dictation entirely; longer captures grow chunk-at-a-time.
         static let reserveSeconds: Int = 60
     }
 
@@ -321,8 +354,10 @@ final class AudioCaptureEngine: AudioCapturing {
         sampleBuffer.clear()
         if !meteringOnly {
             // Reserve at the rate the tap actually delivers — reserving at the
-            // 16 kHz target rate covered only a third of the capture and let
-            // the array re-grow (multi-MB realloc) on the audio thread.
+            // 16 kHz target rate covered only a third of the capture. The
+            // reserve is the buffer's *chunk* size: a capture that outlives it
+            // (max duration runs to 1800 s) seals the chunk and starts a new
+            // one, so growth never copies the capture on the audio thread.
             sampleBuffer.reserveCapacity(Int(inputSampleRate) * Defaults.reserveSeconds)
         }
 
