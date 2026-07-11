@@ -63,15 +63,6 @@ final class SettingsManager {
         didSet { SettingsCatalogue.restoreClipboard.write(restoreClipboard, to: store) }
     }
 
-    var overlayStyleRaw: String {
-        didSet { SettingsCatalogue.overlayStyleRaw.write(overlayStyleRaw, to: store) }
-    }
-
-    var overlayStyle: OverlayStyle {
-        get { OverlayStyle(rawValue: overlayStyleRaw) ?? .pill }
-        set { overlayStyleRaw = newValue.rawValue }
-    }
-
     var samplingPresetRaw: String {
         didSet { SettingsCatalogue.samplingPresetRaw.write(samplingPresetRaw, to: store) }
     }
@@ -79,15 +70,6 @@ final class SettingsManager {
     var samplingPreset: SamplingPreset {
         get { SamplingPreset(rawValue: samplingPresetRaw) ?? .automatic }
         set { samplingPresetRaw = newValue.rawValue }
-    }
-
-    var glowThemeRaw: String {
-        didSet { SettingsCatalogue.glowThemeRaw.write(glowThemeRaw, to: store) }
-    }
-
-    var glowTheme: GlowTheme {
-        get { GlowTheme(rawValue: glowThemeRaw) ?? .appleIntelligence }
-        set { glowThemeRaw = newValue.rawValue }
     }
 
     // MARK: - Audio Settings
@@ -486,8 +468,6 @@ final class SettingsManager {
         self.showInMenuBar = SettingsCatalogue.showInMenuBar.load(from: store)
         self.autoInsertText = SettingsCatalogue.autoInsertText.load(from: store)
         self.restoreClipboard = SettingsCatalogue.restoreClipboard.load(from: store)
-        self.overlayStyleRaw = SettingsCatalogue.overlayStyleRaw.load(from: store)
-        self.glowThemeRaw = SettingsCatalogue.glowThemeRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
         self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
@@ -607,8 +587,6 @@ final class SettingsManager {
         showInMenuBar = SettingsCatalogue.showInMenuBar.default
         autoInsertText = SettingsCatalogue.autoInsertText.default
         restoreClipboard = SettingsCatalogue.restoreClipboard.default
-        overlayStyleRaw = SettingsCatalogue.overlayStyleRaw.default
-        glowThemeRaw = SettingsCatalogue.glowThemeRaw.default
         selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.default
         captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.default
         language = SettingsCatalogue.language.default

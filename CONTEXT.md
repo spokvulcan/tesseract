@@ -1336,19 +1336,20 @@ _Avoid_: writing a global alpha, tuner→manager callbacks or weak back-referenc
 
 **Overlay Panel**:
 The transparent, click-through global `NSPanel` that floats above all apps and
-shows/hides in reaction to dictation state — the shared behaviour behind both the
-dictation pill HUD and the full-screen border. Two overlays differ only in their
-**Overlay Placement** and hosted content view; the interactive TTS notch is a
-separate panel, not an Overlay Panel.
+shows/hides in reaction to dictation state — the panel behaviour behind the
+dictation pill HUD, taking its **Overlay Placement** and hosted content view as
+the injected difference; the interactive TTS notch is a separate panel, not an
+Overlay Panel.
 _Avoid_: overlay controller / manager, HUD window, generic NSPanel wrapper,
-config-flag panel, the TTS notch panel (a separate, interactive surface).
+config-flag panel, the TTS notch panel (a separate, interactive surface), the
+full-screen border overlay (retired — a legacy MVP exploration).
 
 **Overlay Placement**:
 The whole injected difference between one **Overlay Panel** and another, expressed as
 a pure value: where the panel sits for a given screen and dictation state, plus
-whether it animates its resize. Two presets exist — pill and full-screen border.
-_Avoid_: layout strategy, frame provider, overlay style (the user **Setting** that
-selects which placement is live, not the placement itself).
+whether it animates its resize. One preset exists — pill.
+_Avoid_: layout strategy, frame provider, overlay style (the retired pill-vs-border
+user **Setting**).
 
 **Screen Geometry**:
 The plain screen rectangles — full frame and visible frame — that an **Overlay

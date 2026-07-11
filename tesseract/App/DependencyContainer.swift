@@ -272,8 +272,8 @@ final class DependencyContainer: ObservableObject {
         )
     }()
 
-    // Overlays — two configured instances of the one OverlayPanel module.
-    // The pill follows the system appearance (owner-selected). The
+    // Overlay — the dictation pill, one configured instance of the OverlayPanel
+    // module. The pill follows the system appearance (owner-selected). The
     // `contentAppearance` seam on OverlayPanel remains the lever if a forced
     // light `.clear` glass is ever wanted — glass reads the AppKit
     // appearance, not the SwiftUI color scheme.
@@ -281,11 +281,6 @@ final class DependencyContainer: ObservableObject {
         state: OverlayState(),
         placement: .pill,
         content: { GlobalOverlayHUD(overlayState: $0) }
-    )
-    lazy var borderOverlay = OverlayPanel(
-        state: OverlayState(),
-        placement: .fullScreenBorder,
-        content: { FullScreenBorderOverlayView(overlayState: $0) }
     )
 
     // Menu bar — constructed here so App Bindings can wire its dictation-state
@@ -490,24 +485,11 @@ final class DependencyContainer: ObservableObject {
                 modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher()
             ),
             effects: .init(
-                setBorderGlowTheme: { [borderOverlay] in
-                    borderOverlay.state.glowTheme = $0
-                },
-                setUpOverlayPanels: { [pillOverlay, borderOverlay] in
+                setUpOverlayPanel: { [pillOverlay] in
                     pillOverlay.setup()
-                    borderOverlay.setup()
-                },
-                setPillOverlayEnabled: { [pillOverlay] in
-                    pillOverlay.setEnabled($0)
-                },
-                setBorderOverlayEnabled: { [borderOverlay] in
-                    borderOverlay.setEnabled($0)
                 },
                 pushDictationStateToPill: { [pillOverlay] in
                     pillOverlay.handleStateChange($0)
-                },
-                pushDictationStateToBorder: { [borderOverlay] in
-                    borderOverlay.handleStateChange($0)
                 },
                 pushDictationStateToMenuBar: { [menuBarManager] in
                     menuBarManager.updateState(from: $0)
@@ -517,9 +499,6 @@ final class DependencyContainer: ObservableObject {
                 },
                 pushAudioLevelToPill: { [pillOverlay] in
                     pillOverlay.handleAudioLevelChange($0)
-                },
-                pushAudioLevelToBorder: { [borderOverlay] in
-                    borderOverlay.handleAudioLevelChange($0)
                 },
                 prewarmAudioCapture: { [audioCaptureEngine] in
                     audioCaptureEngine.prewarm()

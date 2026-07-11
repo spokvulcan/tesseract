@@ -19,21 +19,17 @@ import Testing
 struct AppBindingsTests {
 
     @Test
-    func startSeedsBorderGlowThemeBeforeSettingUpOverlayPanels() {
-        let h = makeHarness { $0.glowTheme = .matrix }
+    func startSetsUpTheOverlayPanelFirst() {
+        let h = makeHarness()
         defer { h.bindings.stop() }
 
         h.bindings.start()
 
-        #expect(
-            Array(h.recorder.events.prefix(2)) == [
-                "setBorderGlowTheme(matrix)",
-                "setUpOverlayPanels",
-            ])
+        #expect(h.recorder.events.first == "setUpOverlayPanel")
     }
 
     @Test
-    func oneDictationStateEmissionReachesPillBorderAndMenuBarExactlyOnce() async {
+    func oneDictationStateEmissionReachesPillAndMenuBarExactlyOnce() async {
         let h = makeHarness()
         defer { h.bindings.stop() }
 
@@ -44,7 +40,6 @@ struct AppBindingsTests {
             await waitUntil {
                 h.recorder.events(withPrefix: "pushDictationState") == [
                     "pushDictationStateToPill(idle)",
-                    "pushDictationStateToBorder(idle)",
                     "pushDictationStateToMenuBar(idle)",
                 ]
             })
@@ -55,10 +50,8 @@ struct AppBindingsTests {
             await waitUntil {
                 h.recorder.events(withPrefix: "pushDictationState") == [
                     "pushDictationStateToPill(idle)",
-                    "pushDictationStateToBorder(idle)",
                     "pushDictationStateToMenuBar(idle)",
                     "pushDictationStateToPill(recording)",
-                    "pushDictationStateToBorder(recording)",
                     "pushDictationStateToMenuBar(recording)",
                 ]
             })
@@ -90,7 +83,7 @@ struct AppBindingsTests {
     }
 
     @Test
-    func audioLevelFansOutToBothOverlays() async {
+    func audioLevelReachesThePill() async {
         let h = makeHarness()
         defer { h.bindings.stop() }
 
@@ -99,8 +92,7 @@ struct AppBindingsTests {
         #expect(
             await waitUntil {
                 h.recorder.events(withPrefix: "pushAudioLevel") == [
-                    "pushAudioLevelToPill(0.0)",
-                    "pushAudioLevelToBorder(0.0)",
+                    "pushAudioLevelToPill(0.0)"
                 ]
             })
 
@@ -110,25 +102,8 @@ struct AppBindingsTests {
             await waitUntil {
                 h.recorder.events(withPrefix: "pushAudioLevel") == [
                     "pushAudioLevelToPill(0.0)",
-                    "pushAudioLevelToBorder(0.0)",
                     "pushAudioLevelToPill(0.5)",
-                    "pushAudioLevelToBorder(0.5)",
                 ]
-            })
-    }
-
-    @Test
-    func glowThemeChangeUpdatesTheBorderOverlayLive() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-        h.settings.glowTheme = .ocean
-
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setBorderGlowTheme").last
-                    == "setBorderGlowTheme(ocean)"
             })
     }
 
@@ -450,7 +425,7 @@ struct AppBindingsTests {
         h.bindings.start()
         #expect(
             await waitUntil {
-                !h.recorder.events(withPrefix: "setPillOverlayEnabled").isEmpty
+                !h.recorder.events(withPrefix: "pushDictationStateToPill").isEmpty
             })
 
         h.bindings.stop()
@@ -458,41 +433,11 @@ struct AppBindingsTests {
         let countAfterStop = h.recorder.events.count
 
         h.settings.isServerEnabled = true
-        h.settings.overlayStyle = .fullScreenBorder
         h.driver.dictationState = .recording
         h.statuses.send([ModelDefinition.defaultSpeechToTextModelID: .downloaded(sizeOnDisk: 1)])
 
         for _ in 0..<200 { await Task.yield() }
         #expect(h.recorder.events.count == countAfterStop)
-    }
-
-    @Test
-    func overlayStyleRuleEnablesExactlyTheSelectedOverlay() async {
-        let h = makeHarness()
-        defer { h.bindings.stop() }
-
-        h.bindings.start()
-
-        // Initial emission applies the persisted style (pill by default).
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setPillOverlayEnabled") == [
-                    "setPillOverlayEnabled(true)"
-                ]
-                    && h.recorder.events(withPrefix: "setBorderOverlayEnabled") == [
-                        "setBorderOverlayEnabled(false)"
-                    ]
-            })
-
-        h.settings.overlayStyle = .fullScreenBorder
-
-        #expect(
-            await waitUntil {
-                h.recorder.events(withPrefix: "setPillOverlayEnabled")
-                    == ["setPillOverlayEnabled(true)", "setPillOverlayEnabled(false)"]
-                    && h.recorder.events(withPrefix: "setBorderOverlayEnabled")
-                        == ["setBorderOverlayEnabled(false)", "setBorderOverlayEnabled(true)"]
-            })
     }
 }
 
@@ -573,16 +518,11 @@ private func makeHarness(
             modelDownloadStatuses: statuses.eraseToAnyPublisher()
         ),
         effects: .init(
-            setBorderGlowTheme: { recorder("setBorderGlowTheme(\($0.rawValue))") },
-            setUpOverlayPanels: { recorder("setUpOverlayPanels") },
-            setPillOverlayEnabled: { recorder("setPillOverlayEnabled(\($0))") },
-            setBorderOverlayEnabled: { recorder("setBorderOverlayEnabled(\($0))") },
+            setUpOverlayPanel: { recorder("setUpOverlayPanel") },
             pushDictationStateToPill: { recorder("pushDictationStateToPill(\($0))") },
-            pushDictationStateToBorder: { recorder("pushDictationStateToBorder(\($0))") },
             pushDictationStateToMenuBar: { recorder("pushDictationStateToMenuBar(\($0))") },
             pushSpeechStateToMenuBar: { recorder("pushSpeechStateToMenuBar(\($0))") },
             pushAudioLevelToPill: { recorder("pushAudioLevelToPill(\($0))") },
-            pushAudioLevelToBorder: { recorder("pushAudioLevelToBorder(\($0))") },
             updateDictationHotkey: { recorder("updateDictationHotkey(\($0.displayString))") },
             updateTTSHotkey: { recorder("updateTTSHotkey(\($0.displayString))") },
             updateAgentHotkey: { recorder("updateAgentHotkey(\($0.displayString))") },

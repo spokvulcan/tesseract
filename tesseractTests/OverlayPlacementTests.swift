@@ -28,14 +28,6 @@ struct OverlayPlacementTests {
         visibleFrame: NSRect(x: 1075, y: -175, width: 1845, height: 1030)
     )
 
-    // MARK: - Full-screen border
-
-    @Test
-    func fullScreenBorderFillsTheWholeScreenFrame() {
-        let frame = OverlayPlacement.fullScreenBorder.frame(geometry, .recording)
-        #expect(frame == geometry.frame)
-    }
-
     // MARK: - Pill
 
     @Test
@@ -86,18 +78,7 @@ struct OverlayPlacementTests {
     // MARK: - Resize-animation semantics
 
     @Test
-    func pillAnimatesResizeOnShowWhileBorderSnaps() {
+    func pillAnimatesResizeOnShow() {
         #expect(OverlayPlacement.pill.animatesResizeOnShow == true)
-        #expect(OverlayPlacement.fullScreenBorder.animatesResizeOnShow == false)
-    }
-
-    // MARK: - Border is state-independent
-
-    @Test
-    func fullScreenBorderFillsFrameForEveryState() {
-        let states: [DictationState] = [.idle, .listening, .recording, .processing, .error("x")]
-        for state in states {
-            #expect(OverlayPlacement.fullScreenBorder.frame(geometry, state) == geometry.frame)
-        }
     }
 }

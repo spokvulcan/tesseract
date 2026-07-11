@@ -30,9 +30,6 @@ enum SettingsCatalogue {
     static let showInMenuBar = Setting.bool("showInMenuBar", default: true)
     static let autoInsertText = Setting.bool("autoInsertText", default: true)
     static let restoreClipboard = Setting.bool("restoreClipboard", default: true)
-    static let overlayStyleRaw = Setting.string("overlayStyle", default: OverlayStyle.pill.rawValue)
-    static let glowThemeRaw = Setting.string(
-        "glowTheme", default: GlowTheme.appleIntelligence.rawValue)
     static let samplingPresetRaw = Setting.string(
         "samplingPreset", default: SamplingPreset.automatic.rawValue)
 
