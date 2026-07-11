@@ -15,17 +15,9 @@ import Foundation
 
 @MainActor
 final class VoiceProcessingDuckPolicy {
-    /// Which Voice Processing lifecycle the engine should run (ADR-0025's
-    /// fallback ladder, selected once per process by the un-duck probe).
-    enum Lifecycle {
-        /// The design: armed once at prewarm, never disarmed — idle is
-        /// un-ducked at full volume, so staying armed costs nothing audible.
-        case alwaysArmed
-        /// The SPI is absent: only disarming fully releases the duck, so the
-        /// engine arms per capture and disarms after a grace (the pre-#188
-        /// lifecycle — latency returns, correctness doesn't).
-        case disarmAfterGrace
-    }
+    /// The lifecycle vocabulary lives at top level (`CaptureEngineLifecycle.swift`)
+    /// so the pure Capture Engine Lifecycle policy shares it.
+    typealias Lifecycle = VoiceProcessingLifecycle
 
     let lifecycle: Lifecycle
 

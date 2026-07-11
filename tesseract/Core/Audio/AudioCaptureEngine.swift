@@ -83,30 +83,6 @@ final class AudioCaptureEngine: AudioCapturing {
         static let bufferSize: AVAudioFrameCount = 1024
         static let meterInterval: TimeInterval = 0.05
         static let reserveSeconds: Int = 60
-        /// A capture this long with zero tap buffers is a wedged input, not a
-        /// quick tap — one 1024-frame buffer arrives within ~25 ms even with
-        /// Voice Processing ramp-up. Matches the session's minimum recording
-        /// duration, below which the capture is discarded as "too short" anyway.
-        static let emptyCaptureGrace: TimeInterval = 0.5
-        /// Fallback lifecycle only (un-duck unavailable): how long the kept
-        /// engine stays armed after a capture ends. Within the grace a
-        /// re-record skips the VPIO arm cost; when it lapses, VP is disarmed —
-        /// with no un-duck, disarming is the only full duck release.
-        static let voiceProcessingDisarmGrace: TimeInterval = 10
-        /// Arm/disarm and start/stop reconfigure the engine's own graph and
-        /// fire `AVAudioEngineConfigurationChange` for our own doing; a
-        /// notification landing within this window of an intentional
-        /// reconfiguration is ignored instead of marking the engine dirty.
-        static let selfInflictedConfigChangeWindow: TimeInterval = 1.0
-        /// How long after an external configuration change (device swap,
-        /// format change) the idle rebuild fires — coalesces the notification
-        /// burst a device switch produces into one rebuild, so the arm cost is
-        /// paid while idle instead of on the next press.
-        static let idleRebuildDelay: Duration = .milliseconds(500)
-        /// Back-to-back VPIO arming can flake with an undocumented error
-        /// (WebRTC retries the same way); the idle rebuild retries once after
-        /// this beat before settling for raw capture.
-        static let armRetryDelay: Duration = .milliseconds(150)
     }
 
     private(set) var isCapturing = false
@@ -160,8 +136,14 @@ final class AudioCaptureEngine: AudioCapturing {
     /// watcher).
     private let duckPolicy: VoiceProcessingDuckPolicy
 
+    /// The **Capture Engine Lifecycle** policy: every keep-vs-rebuild
+    /// decision about the kept engine, pinned by its own decision-table
+    /// tests. This engine is the performing adapter.
+    private let lifecycle: CaptureEngineLifecycle
+
     init(duckController: SystemAudioDuckController = SystemAudioDuckController()) {
         self.duckPolicy = VoiceProcessingDuckPolicy(port: duckController)
+        self.lifecycle = CaptureEngineLifecycle(voiceProcessing: duckPolicy.lifecycle)
         duckController.duckingConfigurator = { [weak self] configuration in
             guard let self, let engine = self.audioEngine, self.voiceProcessingArmed else { return }
             engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration = configuration
@@ -179,7 +161,7 @@ final class AudioCaptureEngine: AudioCapturing {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
 
         if audioEngine == nil || engineNeedsRebuild {
-            rebuildEngine(voiceProcessing: duckPolicy.lifecycle == .alwaysArmed)
+            rebuildEngine(voiceProcessing: lifecycle.prewarmBuildsArmed)
         }
     }
 
@@ -200,12 +182,15 @@ final class AudioCaptureEngine: AudioCapturing {
         idleRebuildTask?.cancel()
         idleRebuildTask = nil
 
-        if audioEngine == nil || engineNeedsRebuild {
+        switch lifecycle.pressAction(
+            engineExists: audioEngine != nil, needsRebuild: engineNeedsRebuild)
+        {
+        case .rebuildArmed:
             rebuildEngine(voiceProcessing: true)
             try beginCapture()
-        } else {
+        case .reuse(let reconcileArm):
             do {
-                if duckPolicy.lifecycle == .disarmAfterGrace {
+                if reconcileArm {
                     try reconcileVoiceProcessing(true)
                 }
                 try beginCapture()
@@ -300,8 +285,9 @@ final class AudioCaptureEngine: AudioCapturing {
                 // echo this notification; only an outside change (device swap,
                 // format change) marks the kept engine dirty.
                 guard
-                    Date().timeIntervalSince(self.lastIntentionalReconfigure)
-                        >= Defaults.selfInflictedConfigChangeWindow
+                    self.lifecycle.isExternalConfigChange(
+                        sinceLastIntentionalReconfigure:
+                            Date().timeIntervalSince(self.lastIntentionalReconfigure))
                 else { return }
                 self.engineNeedsRebuild = true
                 // Re-arm while idle so the press after a device change stays
@@ -435,7 +421,7 @@ final class AudioCaptureEngine: AudioCapturing {
             // ends; the fallback lifecycle additionally schedules the disarm
             // that releases its duck for good.
             duckPolicy.captureDidStop()
-            if voiceProcessingArmed, duckPolicy.lifecycle == .disarmAfterGrace {
+            if voiceProcessingArmed, lifecycle.disarmsAfterCapture {
                 scheduleVoiceProcessingDisarm()
             }
         }
@@ -456,15 +442,13 @@ final class AudioCaptureEngine: AudioCapturing {
         let samples = sampleBuffer.getAndClear()
         let wasVoiceProcessed = voiceProcessingArmed
 
-        if samples.isEmpty && duration >= Defaults.emptyCaptureGrace {
-            // The engine ran long enough that the tap must have fired, yet it
-            // delivered nothing — a wedged input. Discard the engine and
-            // report "no audio", which is the truth, rather than letting an
-            // empty transcription claim "no speech detected". The idle rebuild
-            // re-arms in the background so the next press starts fresh at
-            // engine-start cost. Below the grace, an empty capture is just a
-            // tap that beat the first buffer; it falls through to the
-            // session's minimum-duration guard ("too short").
+        if samples.isEmpty,
+            lifecycle.emptyCaptureVerdict(duration: duration) == .wedgedInput
+        {
+            // The idle rebuild re-arms in the background so the next press
+            // starts fresh at engine-start cost. A `tapBeatFirstBuffer`
+            // verdict falls through to the session's minimum-duration guard
+            // ("too short").
             Log.audio.error(
                 """
                 Capture delivered no samples over \
@@ -499,14 +483,17 @@ final class AudioCaptureEngine: AudioCapturing {
     /// progress, and retries a flaky arm once — a refusal on rebuild would
     /// otherwise silently downgrade every following capture to raw.
     private func scheduleIdleRebuild() {
-        guard duckPolicy.lifecycle == .alwaysArmed else { return }
+        guard lifecycle.rebuildsWhileIdle else { return }
         idleRebuildTask?.cancel()
         idleRebuildTask = Task { [weak self] in
-            try? await Task.sleep(for: Defaults.idleRebuildDelay)
+            guard let lifecycle = self?.lifecycle else { return }
+            try? await Task.sleep(for: lifecycle.idleRebuildDelay)
             guard !Task.isCancelled, let self, !self.isCapturing else { return }
             self.prewarm()
-            if self.audioEngine != nil, !self.voiceProcessingArmed {
-                try? await Task.sleep(for: Defaults.armRetryDelay)
+            if lifecycle.idleRebuildNeedsArmRetry(
+                engineExists: self.audioEngine != nil, armed: self.voiceProcessingArmed)
+            {
+                try? await Task.sleep(for: lifecycle.armRetryDelay)
                 guard !Task.isCancelled, !self.isCapturing else { return }
                 self.engineNeedsRebuild = true
                 self.prewarm()
@@ -522,7 +509,8 @@ final class AudioCaptureEngine: AudioCapturing {
     private func scheduleVoiceProcessingDisarm() {
         disarmTask?.cancel()
         disarmTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Defaults.voiceProcessingDisarmGrace))
+            guard let grace = self?.lifecycle.voiceProcessingDisarmGrace else { return }
+            try? await Task.sleep(for: .seconds(grace))
             guard !Task.isCancelled, let self, !self.isCapturing else { return }
             do {
                 try self.reconcileVoiceProcessing(false)
