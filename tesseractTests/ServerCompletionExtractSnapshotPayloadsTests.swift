@@ -362,73 +362,80 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
     // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
     // at `HybridCacheSnapshotTests.swift:539`.
 
-    private func readServerCompletionSource() throws -> String {
+    private func readServerSource(_ fileName: String) throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
-        let projectRoot =
+        let sourceFile =
             testFile
             .deletingLastPathComponent()  // tesseractTests
             .deletingLastPathComponent()  // project root
-        let sourceFile =
-            projectRoot
             .appendingPathComponent("tesseract")
             .appendingPathComponent("Features")
             .appendingPathComponent("Server")
-            .appendingPathComponent("ServerCompletion.swift")
+            .appendingPathComponent(fileName)
         return try String(contentsOf: sourceFile, encoding: .utf8)
     }
 
     @Test
-    func structuredLeafHelperKeepsLeafPayloadCaptureShared() throws {
-        // The tool-loop direct leaf and canonical user leaf now share
-        // one `captureStructuredLeafFromBoundary(...)` helper. That
-        // helper must still extract a local `leafPayload` and pair it
-        // with the leaf snapshot in one admission value; the older dedicated
-        // `strippedLeafPayload` path no longer exists under the
-        // single-leaf policy.
-        let source = try readServerCompletionSource()
+    func structuredLeafAdmissionStaysWithItsSingleOwner() throws {
+        // Post ADR-0033: both Leaf Store phase capture modes (tool-loop
+        // direct and canonical-user boundary) plus the speculative
+        // executor route through the one `admitStructuredLeaf` owner,
+        // which alone constructs the leaf Snapshot Admission value. The
+        // older dedicated `strippedLeafPayload` path no longer exists
+        // under the single-leaf policy.
+        let leafPhase = try readServerSource("LeafStorePhase.swift")
+        let completion = try readServerSource("ServerCompletion.swift")
+        let speculative = try readServerSource("SpeculativePrefill.swift")
         #expect(
-            source.contains("private static func captureStructuredLeafFromBoundary("),
+            leafPhase.contains("private static func captureStructuredLeafFromBoundary("),
             "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
         )
-        // Since the speculative-canonical-prefill carve (#80) only the
-        // direct leaf path constructs its admission inline; the boundary
-        // helper and the speculative executor both route through
-        // `admitStructuredLeaf`, which owns its own construction.
         #expect(
-            source.components(separatedBy: "let leafAdmission = SnapshotAdmission.leaf(").count - 1
-                == 1,
-            "The direct leaf path must construct its leaf Snapshot Admission value inline"
+            completion.components(separatedBy: "SnapshotAdmission.leaf(").count - 1 == 1,
+            "admitStructuredLeaf must be the only structured-leaf admission constructor in the completion module"
         )
         #expect(
-            source.components(separatedBy: "prefixCache.admit(leafAdmission)").count - 1 == 1,
-            "The direct leaf path must mutate the cache through admit"
+            !leafPhase.contains("SnapshotAdmission.leaf(")
+                && !speculative.contains("SnapshotAdmission.leaf("),
+            "Leaf callers must route through admitStructuredLeaf, never construct admissions inline"
         )
         #expect(
-            source.components(separatedBy: "await Self.admitStructuredLeaf(").count - 1 == 1,
-            "The boundary capture path must route through the shared admitStructuredLeaf helper"
+            leafPhase.components(separatedBy: "await ServerCompletion.admitStructuredLeaf(").count
+                - 1 == 2,
+            "Both Leaf Store phase capture modes (direct + boundary) must route through the shared owner"
         )
         #expect(
-            !source.contains("leafPayload: strippedLeafPayload"),
+            speculative.components(separatedBy: "await ServerCompletion.admitStructuredLeaf(")
+                .count - 1 == 1,
+            "The speculative executor must route through the shared owner"
+        )
+        #expect(
+            !completion.contains("leafPayload: strippedLeafPayload"),
             "Single-leaf policy should not retain the removed strippedLeafPayload store path"
         )
     }
 
     @Test
     func mainActorRunClosuresAroundPrefixCacheAdmissionsAreNonSuspending() throws {
-        // The three `MainActor.run` closures wrapping
+        // The `MainActor.run` closures wrapping
         // `prefixCache.admit` must stay
         // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
         // under an `NSLock`; an `await` inside the closure would
         // force the HTTP hot path to suspend mid-admission and break
         // the ordering the pending-ref map was designed around.
-        let source = try readServerCompletionSource()
+        // Post ADR-0033 there are exactly two: the drive's mid-prefill
+        // checkpoint admission and the coalesced admit-plus-stats hop
+        // inside `admitStructuredLeaf` (every leaf path funnels there).
+        let source =
+            try readServerSource("ServerCompletion.swift")
+            + (try readServerSource("LeafStorePhase.swift"))
         let bodies = extractMainActorRunBodies(
             source: source,
             containing: ["prefixCache.admit"]
         )
         #expect(
-            bodies.count == 3,
-            "Expected exactly 3 MainActor.run closures calling prefixCache admission APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated one of the mid-prefill / direct-leaf / structured-leaf-helper sites — review before updating this assertion."
+            bodies.count == 2,
+            "Expected exactly 2 MainActor.run closures calling prefixCache admission APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated the mid-prefill or admitStructuredLeaf site — review before updating this assertion."
         )
         for (index, body) in bodies.enumerated() {
             #expect(
@@ -441,11 +448,12 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
     /// Scan `source` for every `MainActor.run { ... }` trailing-closure
     /// body and return the ones whose body contains at least one of
     /// `anchors`. Uses naive brace matching — adequate because the
-    /// closures of interest in `ServerCompletion.swift` contain no string
-    /// literals with braces, no block comments, and no nested closures
-    /// wider than the enclosing `MainActor.run`. If that changes, the
-    /// call-site count assertion above will start failing and the
-    /// matcher can be upgraded then.
+    /// closures of interest (in `ServerCompletion.swift` and
+    /// `LeafStorePhase.swift`) contain no string literals with braces,
+    /// no block comments, and no nested closures wider than the
+    /// enclosing `MainActor.run`. If that changes, the call-site count
+    /// assertion above will start failing and the matcher can be
+    /// upgraded then.
     private func extractMainActorRunBodies(
         source: String,
         containing anchors: [String]

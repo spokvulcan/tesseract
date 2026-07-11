@@ -38,8 +38,11 @@ struct ChatSessionTests {
         )
     }
 
+    // Generous budget: the full bundle runs many suites in parallel, and a
+    // queued run can sit well past 3 s under that load. The loop exits the
+    // moment the session settles, so a passing test never pays the ceiling.
     private func waitUntilIdle(
-        _ session: ChatSession, timeout: Duration = .seconds(3)
+        _ session: ChatSession, timeout: Duration = .seconds(10)
     ) async throws {
         let deadline = ContinuousClock.now + timeout
         while session.isGenerating {
