@@ -1336,20 +1336,43 @@ _Avoid_: writing a global alpha, tuner→manager callbacks or weak back-referenc
 
 **Overlay Panel**:
 The transparent, click-through global `NSPanel` that floats above all apps and
-shows/hides in reaction to dictation state — the panel behaviour behind the
-dictation pill HUD, taking its **Overlay Placement** and hosted content view as
-the injected difference; the interactive TTS notch is a separate panel, not an
-Overlay Panel.
+hosts the live **Overlay Variant**'s view — a dumb, fixed-frame canvas that is
+created once, stays permanently ordered front, and never resizes, fades, or
+reacts to dictation state itself: all visibility and motion belong to the
+hosted SwiftUI content. Takes its **Overlay Placement** at construction and
+swaps hosted content on demand; the interactive TTS notch is a separate panel,
+not an Overlay Panel.
 _Avoid_: overlay controller / manager, HUD window, generic NSPanel wrapper,
+show/hide or animated-frame panel APIs (retired — SwiftUI owns all motion),
 config-flag panel, the TTS notch panel (a separate, interactive surface), the
 full-screen border overlay (retired — a legacy MVP exploration).
 
 **Overlay Placement**:
-The whole injected difference between one **Overlay Panel** and another, expressed as
-a pure value: where the panel sits for a given screen and dictation state, plus
-whether it animates its resize. One preset exists — pill.
-_Avoid_: layout strategy, frame provider, overlay style (the retired pill-vs-border
-user **Setting**).
+Where an **Overlay Panel**'s fixed canvas sits for a given **Screen Geometry**,
+expressed as a state-free pure value an **Overlay Variant** brings along with
+its hosted view. One preset exists — pill.
+_Avoid_: layout strategy, frame provider, per-state frames or resize-animation
+flags (retired — the canvas is fixed), overlay style (the retired
+pill-vs-border user **Setting**).
+
+**Overlay Feed**:
+The one variant-agnostic surface of dictation signals every **Overlay Variant**
+renders from: typed lifecycle phases, typed errors, terminal outcome beats
+carrying the committed text, and the audio meter (level + spectrum). The
+dictation coordinator is its sole phase/beat writer; the capture engine's meter
+stream drives its meter. Variants consume the feed and nothing else, so the
+dictation pipeline never learns which variant is live.
+_Avoid_: overlay state / OverlayState (retired push-model object), view model,
+pre-flattened error strings, per-variant state surfaces.
+
+**Overlay Variant**:
+One live dictation-overlay design exploration (map #283): a hosted view over
+the shared **Overlay Feed** plus the **Overlay Placement** of the canvas it
+draws in, selected at runtime by a **Setting** and switchable live. Exploration
+scaffolding — the registry and its Setting are deleted when the redesign
+program prunes to one winner.
+_Avoid_: theme, skin, style, prototype window (variants live in the real
+panel), a permanent plugin surface (it is scaffolding).
 
 **Screen Geometry**:
 The plain screen rectangles — full frame and visible frame — that an **Overlay

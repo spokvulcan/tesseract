@@ -5,30 +5,27 @@
 
 import Foundation
 
-enum DictationError: LocalizedError, Sendable {
+/// The typed dictation failure vocabulary the Overlay Feed carries end-to-end
+/// (map #283): every case that exists has a construction site, and the type
+/// reaches the UI intact — variants choose what of `errorDescription` /
+/// `recoverySuggestion` to render, instead of receiving a pre-flattened string.
+enum DictationError: LocalizedError, Equatable, Sendable {
     case microphonePermissionDenied
-    case accessibilityPermissionDenied
     case modelNotLoaded
-    case modelNotDownloaded
     case audioCaptureFailed(String)
     case microphoneBusy
     case transcriptionFailed(String)
     case textInjectionFailed(String)
     case noSpeechDetected
     case recordingTooShort
-    case recordingTimeout
     case transcriptionInProgress
 
     var errorDescription: String? {
         switch self {
         case .microphonePermissionDenied:
             return "Microphone access is required for dictation."
-        case .accessibilityPermissionDenied:
-            return "Accessibility permission is required for text injection."
         case .modelNotLoaded:
             return "No transcription model is loaded."
-        case .modelNotDownloaded:
-            return "Please download a transcription model first."
         case .audioCaptureFailed(let reason):
             return "Audio capture failed: \(reason)"
         case .microphoneBusy:
@@ -41,8 +38,6 @@ enum DictationError: LocalizedError, Sendable {
             return "No speech was detected."
         case .recordingTooShort:
             return "Recording was too short."
-        case .recordingTimeout:
-            return "Recording exceeded maximum duration."
         case .transcriptionInProgress:
             return "A transcription is already in progress."
         }
@@ -53,10 +48,7 @@ enum DictationError: LocalizedError, Sendable {
         case .microphonePermissionDenied:
             return
                 "Open System Settings > Privacy & Security > Microphone and enable access for this app."
-        case .accessibilityPermissionDenied:
-            return
-                "Open System Settings > Privacy & Security > Accessibility and enable access for this app."
-        case .modelNotLoaded, .modelNotDownloaded:
+        case .modelNotLoaded:
             return "Go to Settings > Model and download a transcription model."
         case .audioCaptureFailed:
             return "Check your microphone connection and try again."
@@ -70,8 +62,6 @@ enum DictationError: LocalizedError, Sendable {
             return "Speak clearly and ensure your microphone is working."
         case .recordingTooShort:
             return "Hold the record button longer or speak more."
-        case .recordingTimeout:
-            return "Break up longer dictations into smaller segments."
         case .transcriptionInProgress:
             return "Wait for the current transcription to finish, or cancel it first."
         }

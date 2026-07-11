@@ -23,8 +23,11 @@ struct DictationSettingsPane: View {
                     }
                 }
 
-                AudioLevelMeter(audioCapture: container.audioCaptureEngine)
-                    .frame(height: 20)
+                AudioLevelMeter(
+                    audioCapture: container.audioCaptureEngine,
+                    feed: container.dictationFeed
+                )
+                .frame(height: 20)
             } header: {
                 Text("Microphone")
             } footer: {

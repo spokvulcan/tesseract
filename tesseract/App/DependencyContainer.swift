@@ -272,16 +272,15 @@ final class DependencyContainer: ObservableObject {
         )
     }()
 
-    // Overlay — the dictation pill, one configured instance of the OverlayPanel
-    // module. The pill follows the system appearance (owner-selected). The
-    // `contentAppearance` seam on OverlayPanel remains the lever if a forced
-    // light `.clear` glass is ever wanted — glass reads the AppKit
+    // Overlay — the Overlay Feed every variant renders from, and the dumb
+    // panel that hosts whichever Overlay Variant the setting selects (the
+    // App Bindings variant rule installs the view; the panel itself is
+    // contentless). The pill follows the system appearance (owner-selected);
+    // the `contentAppearance` seam on OverlayPanel remains the lever if a
+    // forced light `.clear` glass is ever wanted — glass reads the AppKit
     // appearance, not the SwiftUI color scheme.
-    lazy var pillOverlay = OverlayPanel(
-        state: OverlayState(),
-        placement: .pill,
-        content: { GlobalOverlayHUD(overlayState: $0) }
-    )
+    lazy var dictationFeed = DictationFeed()
+    lazy var pillOverlay = OverlayPanel(placement: .pill)
 
     // Menu bar — constructed here so App Bindings can wire its dictation-state
     // effect before the app delegate attaches the window-management callbacks.
@@ -342,6 +341,7 @@ final class DependencyContainer: ObservableObject {
             textInjector: textInjector,
             history: transcriptionHistory,
             settings: settingsManager,
+            feed: dictationFeed,
             captureDump: captureDumpStore
         )
     }()
@@ -431,6 +431,10 @@ final class DependencyContainer: ObservableObject {
             }
         )
 
+        // Pump the capture engine's meter frames into the Overlay Feed — the
+        // one attachment point (the feed owns the consuming task).
+        dictationFeed.attachMeters(audioCaptureEngine.meters)
+
         // Register message codecs for the new persistence layer (Epic 2)
         await registerCoreMessageCodecs()
 
@@ -456,14 +460,11 @@ final class DependencyContainer: ObservableObject {
         AppBindings(
             settings: settingsManager,
             inputs: .init(
-                dictationState: { [dictationCoordinator] in
-                    dictationCoordinator.state
+                dictationState: { [dictationFeed] in
+                    dictationFeed.phase
                 },
                 speechState: { [speechCoordinator] in
                     speechCoordinator.state
-                },
-                audioLevel: { [audioCaptureEngine] in
-                    audioCaptureEngine.audioLevel
                 },
                 currentDictationHotkey: { [hotkeyManager] in
                     hotkeyManager.currentHotkey
@@ -488,17 +489,19 @@ final class DependencyContainer: ObservableObject {
                 setUpOverlayPanel: { [pillOverlay] in
                     pillOverlay.setup()
                 },
-                pushDictationStateToPill: { [pillOverlay] in
-                    pillOverlay.handleStateChange($0)
+                setOverlayVariant: { [pillOverlay, dictationFeed] variantID in
+                    let variant = OverlayVariants.variant(for: variantID)
+                    pillOverlay.setPlacement(variant.placement)
+                    pillOverlay.setContent(variant.makeView(dictationFeed))
+                },
+                reassertOverlayFront: { [pillOverlay] in
+                    pillOverlay.reassertFront()
                 },
                 pushDictationStateToMenuBar: { [menuBarManager] in
                     menuBarManager.updateState(from: $0)
                 },
                 pushSpeechStateToMenuBar: { [menuBarManager] in
                     menuBarManager.updateState(fromSpeech: $0)
-                },
-                pushAudioLevelToPill: { [pillOverlay] in
-                    pillOverlay.handleAudioLevelChange($0)
                 },
                 prewarmAudioCapture: { [audioCaptureEngine] in
                     audioCaptureEngine.prewarm()

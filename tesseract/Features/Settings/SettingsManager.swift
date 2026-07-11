@@ -63,6 +63,10 @@ final class SettingsManager {
         didSet { SettingsCatalogue.restoreClipboard.write(restoreClipboard, to: store) }
     }
 
+    var overlayVariantRaw: String {
+        didSet { SettingsCatalogue.overlayVariantRaw.write(overlayVariantRaw, to: store) }
+    }
+
     var samplingPresetRaw: String {
         didSet { SettingsCatalogue.samplingPresetRaw.write(samplingPresetRaw, to: store) }
     }
@@ -468,6 +472,7 @@ final class SettingsManager {
         self.showInMenuBar = SettingsCatalogue.showInMenuBar.load(from: store)
         self.autoInsertText = SettingsCatalogue.autoInsertText.load(from: store)
         self.restoreClipboard = SettingsCatalogue.restoreClipboard.load(from: store)
+        self.overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.load(from: store)
         self.samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.load(from: store)
         self.selectedMicrophoneUID = SettingsCatalogue.selectedMicrophoneUID.load(from: store)
         self.captureDumpEnabled = SettingsCatalogue.captureDumpEnabled.load(from: store)
@@ -617,6 +622,7 @@ final class SettingsManager {
         useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
+        overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default

@@ -70,12 +70,12 @@ tesseract/
 │   ├── AppDelegate.swift        # macOS lifecycle, single instance, window management
 │   ├── AppBindings.swift        # App Bindings: launch sequence + subscription rules
 │   ├── AppTerminationCoordinator.swift # Teardown ordering (closure-struct steps)
-│   ├── OverlayState.swift       # Pure overlay view data (audioLevel, glowTheme)
 │   └── DependencyContainer.swift# Composition root, pure wiring
 │
 ├── Core/                        # Shared services
 │   ├── Audio/
 │   │   ├── AudioCaptureEngine.swift   # @Observable, AVAudioEngine recording
+│   │   ├── AudioMeter.swift           # MeterFrame + real-time FFT meter tap
 │   │   ├── AudioDeviceManager.swift   # Input device enumeration
 │   │   └── AudioConverter.swift       # Format conversion
 │   ├── Permissions/
@@ -88,16 +88,18 @@ tesseract/
 │   ├── TextInjector.swift             # Clipboard-based paste injection
 │   ├── TextExtractor.swift            # Selected text extraction
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
-│   ├── OverlayPanel.swift             # Dictation overlay lifecycle: pill + border (NSPanel)
-│   ├── OverlayPlacement.swift         # Overlay frame math (pure value, unit-tested)
-│   ├── PillMetrics.swift              # Pill per-state sizes (shared by placement + HUD)
+│   ├── OverlayPanel.swift             # Dumb fixed-frame overlay host (NSPanel)
+│   ├── OverlayPlacement.swift         # Overlay canvas frame math (pure value, unit-tested)
+│   ├── PillMetrics.swift              # Pill canvas + per-phase sizes (placement + variants)
 │   ├── OverlayScreenLocator.swift     # Screen detection for overlays
 │   └── TTSNotchPanelController.swift  # TTS notch overlay (separate; not unified)
 │
 ├── Features/                    # Feature modules
 │   ├── Dictation/
-│   │   ├── DictationCoordinator.swift # @Observable state machine
-│   │   └── Views/                     # Recording UI components
+│   │   ├── DictationCoordinator.swift # Thin composer over Voice Capture Session
+│   │   ├── DictationFeed.swift        # Overlay Feed: phases, beats, meter
+│   │   ├── OverlayVariants.swift      # Overlay Variant registry (exploration scaffolding)
+│   │   └── Views/                     # Recording UI components + overlay variants
 │   ├── Speech/
 │   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator
 │   │   ├── SpeechEngine.swift         # @Observable facade over SpeechSynthesizer
@@ -153,7 +155,7 @@ tesseract/
 │   └── Models/                        # Model download management
 │
 └── Models/                      # Shared data types
-    ├── DictationState.swift
+    ├── DictationError.swift
     ├── NavigationItem.swift     # Sidebar routing enum
     ├── KeyCombo.swift
     └── ...
@@ -188,18 +190,19 @@ struct DictationContentView: View {
 Task { [weak self] in
     guard let self else { return }
     for await state in Observations { self.inputs.dictationState() } {
-        self.effects.pushDictationStateToPill(state)
+        self.effects.pushDictationStateToMenuBar(state)
     }
 }
 ```
 
 The app's long-lived runtime subscriptions *with a rule* — selected
 speech-to-text model auto-load and hot-swap, the lazy LLM reload guard, the
-server enable/port reactions, the overlay style switch, hotkey re-binding, the
-dictation-state fan-out — live in **App Bindings** (`App/AppBindings.swift`),
-which also owns the launch ordering: seed the glow theme, set up the panels,
-install every subscription, then run the initial dictation-model load as an
-owned child task so the HTTP server never waits on a model load. Effects leave
+server enable/port reactions, the Overlay Variant switch, hotkey re-binding,
+the dictation-phase rule (menu bar mirror + overlay z-order re-assert) — live
+in **App Bindings** (`App/AppBindings.swift`), which also owns the launch
+ordering: set up the panel, install every subscription, then run the initial
+dictation-model load as an owned child task so the HTTP server never waits on
+a model load. Effects leave
 through a closure-struct the composition root wires —
 the launch mirror of `AppTerminationCoordinator`'s teardown steps — which makes
 every rule hermetically testable (`AppBindingsTests`). See `CONTEXT.md` → App
@@ -414,7 +417,7 @@ All AppKit bridging lives in `Platform/`. These are the features that SwiftUI ca
 - Menu bar status item (NSStatusItem)
 - Notch overlay for TTS
 
-The Overlay Panel receives dictation state via a push method (`handleStateChange`) — it is publisher-agnostic. Pure view data (`audioLevel`, `glowTheme`) carries no panel-side behaviour, so it is set directly on the panel's exposed `OverlayState`. App Bindings owns the `Observations` subscriptions and pushes/sets values through effect closures the composition root wires.
+The Overlay Panel is a dumb, fixed-frame host: created once at launch, permanently ordered front, never resizing or fading. The hosted Overlay Variant view observes the Overlay Feed directly and owns all visibility and motion in SwiftUI; the panel's only runtime inputs are `setContent` (variant switch), `setPlacement`, and `reassertFront` (z-order hygiene, driven by an App Bindings rule on non-idle phases).
 
 ---
 
@@ -462,7 +465,7 @@ Key architectural decisions (durable records live in `docs/adr/`):
 - **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, `SpeechSynthesizer`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003 and `CONTEXT.md` → Speech model ports and playback.
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
-- **Overlay Panel is publisher-agnostic**: Accepts dictation state via `handleStateChange`; pure view data (`audioLevel`, `glowTheme`) is set directly on its exposed `OverlayState`. The subscription mechanism lives in App Bindings and can change independently.
+- **Overlay Panel is a dumb host; the Overlay Feed is the one signal surface**: The panel never animates its own frame or visibility — SwiftUI owns all motion, which removes the two-animation-system jank (map #283). Overlay Variants render from the shared `DictationFeed` (typed phases/errors, outcome beats, level + spectrum); the dictation pipeline never learns which variant is live.
 - **App Bindings owns the launch sequence and subscription rules**: Carved out of the composition root behind a closure-struct interface — the launch mirror of `AppTerminationCoordinator`. One dictation-state subscription feeds the overlays and the menu bar (no second path, no race), and the initial selected speech-to-text model load runs as an owned child task so the HTTP server is reachable immediately at launch. It also heals a missing dictation-model selection onto a downloaded variant and hot-swaps when the user changes the selection. The container stays pure wiring and passes the deletion test. See `CONTEXT.md` → App composition.
 - **Defer Agent package extraction**: Don't extract `Features/Agent` into a separate Swift package until dependency boundaries are clearer.
 - **Defer separate Settings scene**: Keep settings in the main window sidebar.

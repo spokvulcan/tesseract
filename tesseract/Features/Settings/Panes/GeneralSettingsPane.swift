@@ -49,6 +49,18 @@ struct GeneralSettingsPane: View {
                 Toggle("Play Sounds", isOn: $settings.playSounds)
             }
 
+            Section {
+                Picker("Overlay Variant", selection: $settings.overlayVariantRaw) {
+                    ForEach(OverlayVariants.all) { variant in
+                        Text(variant.displayName).tag(variant.id)
+                    }
+                }
+            } header: {
+                Text("Recording Overlay")
+            } footer: {
+                Text("Dictation overlay design explorations — switch live, no restart needed.")
+            }
+
             Section("Setup") {
                 Button("Show Welcome Tour…") {
                     openWindow(id: WindowID.onboarding)

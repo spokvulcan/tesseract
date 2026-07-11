@@ -17,14 +17,12 @@ import Observation
 final class AppBindings {
 
     struct Inputs {
-        /// Tracked read of the dictation coordinator's state. Read inside an
-        /// `Observations` closure, so the rule re-fires on every state change.
-        let dictationState: @MainActor () -> DictationState
+        /// Tracked read of the dictation feed's phase. Read inside an
+        /// `Observations` closure, so the rule re-fires on every phase change.
+        let dictationState: @MainActor () -> DictationFeed.Phase
         /// Tracked read of the speech coordinator's state — feeds the menu
         /// bar's status glyph (the speaking animation).
         let speechState: @MainActor () -> SpeechState
-        /// Tracked read of the audio capture engine's level, observed the same way.
-        let audioLevel: @MainActor () -> Float
         /// Gate read of the hotkey manager's currently bound dictation combo —
         /// read in the rule body (not tracked), to skip no-op re-binds.
         let currentDictationHotkey: @MainActor () -> KeyCombo
@@ -43,9 +41,8 @@ final class AppBindings {
         let modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
 
         init(
-            dictationState: @escaping @MainActor () -> DictationState,
+            dictationState: @escaping @MainActor () -> DictationFeed.Phase,
             speechState: @escaping @MainActor () -> SpeechState,
-            audioLevel: @escaping @MainActor () -> Float,
             currentDictationHotkey: @escaping @MainActor () -> KeyCombo,
             isLLMSlotLoaded: @escaping @MainActor () -> Bool,
             whisperModelPath: @escaping @MainActor () -> URL?,
@@ -54,7 +51,6 @@ final class AppBindings {
         ) {
             self.dictationState = dictationState
             self.speechState = speechState
-            self.audioLevel = audioLevel
             self.currentDictationHotkey = currentDictationHotkey
             self.isLLMSlotLoaded = isLLMSlotLoaded
             self.whisperModelPath = whisperModelPath
@@ -64,12 +60,17 @@ final class AppBindings {
     }
 
     struct Effects {
-        /// Creates the overlay panel's view.
+        /// Creates the overlay panel (contentless; the variant rule's initial
+        /// emission installs the hosted view).
         let setUpOverlayPanel: @MainActor () -> Void
-        let pushDictationStateToPill: @MainActor (DictationState) -> Void
-        let pushDictationStateToMenuBar: @MainActor (DictationState) -> Void
+        /// Installs the Overlay Variant selected by the setting (view +
+        /// placement) into the panel.
+        let setOverlayVariant: @MainActor (String) -> Void
+        /// Z-order hygiene: re-asserts the always-front panel when dictation
+        /// becomes active (something may have ordered above it since launch).
+        let reassertOverlayFront: @MainActor () -> Void
+        let pushDictationStateToMenuBar: @MainActor (DictationFeed.Phase) -> Void
         let pushSpeechStateToMenuBar: @MainActor (SpeechState) -> Void
-        let pushAudioLevelToPill: @MainActor (Float) -> Void
         /// Builds the capture engine (incl. its Voice Processing configuration)
         /// ahead of the first press, so no capture pays the VPIO setup cost
         /// interactively.
@@ -88,10 +89,10 @@ final class AppBindings {
 
         init(
             setUpOverlayPanel: @escaping @MainActor () -> Void,
-            pushDictationStateToPill: @escaping @MainActor (DictationState) -> Void,
-            pushDictationStateToMenuBar: @escaping @MainActor (DictationState) -> Void,
+            setOverlayVariant: @escaping @MainActor (String) -> Void,
+            reassertOverlayFront: @escaping @MainActor () -> Void,
+            pushDictationStateToMenuBar: @escaping @MainActor (DictationFeed.Phase) -> Void,
             pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
-            pushAudioLevelToPill: @escaping @MainActor (Float) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
@@ -104,10 +105,10 @@ final class AppBindings {
             loadWhisperModel: @escaping @MainActor (URL) async -> Void
         ) {
             self.setUpOverlayPanel = setUpOverlayPanel
-            self.pushDictationStateToPill = pushDictationStateToPill
+            self.setOverlayVariant = setOverlayVariant
+            self.reassertOverlayFront = reassertOverlayFront
             self.pushDictationStateToMenuBar = pushDictationStateToMenuBar
             self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
-            self.pushAudioLevelToPill = pushAudioLevelToPill
             self.prewarmAudioCapture = prewarmAudioCapture
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
@@ -293,15 +294,18 @@ final class AppBindings {
                 }
             })
 
-        // The single dictation-state subscription: raw state fans out to the
-        // overlay panel and the menu bar, so every surface always sees the same
-        // emission — no second path, no race.
+        // The single dictation-phase subscription: the menu bar mirrors every
+        // emission, and any non-idle phase re-asserts the overlay panel's
+        // z-order (the variant view renders the phase by observing the feed
+        // directly — no push).
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
                 for await state in Observations({ self.inputs.dictationState() }) {
-                    self.effects.pushDictationStateToPill(state)
                     self.effects.pushDictationStateToMenuBar(state)
+                    if state != .idle {
+                        self.effects.reassertOverlayFront()
+                    }
                 }
             })
 
@@ -315,14 +319,13 @@ final class AppBindings {
                 }
             })
 
-        // Forward audio level to the overlay; the panel drops it while nothing
-        // is on screen, so a hidden overlay does no SwiftUI work at audio
-        // frame-rate.
+        // Keep the live Overlay Variant matched to the setting. The initial
+        // emission installs the launch variant's view into the panel.
         observationTasks.append(
             Task { [weak self] in
                 guard let self else { return }
-                for await level in Observations({ self.inputs.audioLevel() }) {
-                    self.effects.pushAudioLevelToPill(level)
+                for await variantID in Observations({ self.settings.overlayVariantRaw }) {
+                    self.effects.setOverlayVariant(variantID)
                 }
             })
 

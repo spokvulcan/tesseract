@@ -30,6 +30,9 @@ enum SettingsCatalogue {
     static let showInMenuBar = Setting.bool("showInMenuBar", default: true)
     static let autoInsertText = Setting.bool("autoInsertText", default: true)
     static let restoreClipboard = Setting.bool("restoreClipboard", default: true)
+    /// Exploration scaffolding (map #283): selects the live Overlay Variant;
+    /// deleted when the redesign prunes to one winner.
+    static let overlayVariantRaw = Setting.string("overlayVariant", default: "classic")
     static let samplingPresetRaw = Setting.string(
         "samplingPreset", default: SamplingPreset.automatic.rawValue)
 

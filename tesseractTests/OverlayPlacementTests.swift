@@ -8,12 +8,14 @@ import Testing
 
 @testable import Tesseract_Agent
 
-/// Pure-function tests for ``OverlayPlacement`` — the frame math carved out of the
-/// two dictation-overlay controllers during the Overlay Panel carve (#51).
+/// Pure-function tests for ``OverlayPlacement`` — the frame math carved out of
+/// the dictation-overlay controllers during the Overlay Panel carve (#51) and
+/// made state-free by the Overlay Feed rework (map #283): the placement is a
+/// function of ``ScreenGeometry`` alone, so the fixed canvas never moves or
+/// resizes with dictation phase.
 ///
-/// The placement is a pure function of a hand-built ``ScreenGeometry`` and a
-/// `DictationState`, so the suite needs no `NSScreen`, no panel, no running app —
-/// and no actor isolation — it asserts "this geometry + this state → this rect".
+/// Hand-built geometry, no `NSScreen`, no panel, no running app — and no actor
+/// isolation — the suite asserts "this geometry → this rect".
 struct OverlayPlacementTests {
 
     /// A non-origin geometry whose `visibleFrame` is inset from `frame` on *both*
@@ -31,29 +33,12 @@ struct OverlayPlacementTests {
     // MARK: - Pill
 
     @Test
-    func pillIsBottomCentredInVisibleFrameWhenRecording() {
-        let frame = OverlayPlacement.pill.frame(geometry, .recording)
+    func pillCanvasIsBottomCentredInVisibleFrame() {
+        let frame = OverlayPlacement.pill.frame(geometry)
         // Centred horizontally in the *visible* frame, sitting at the 60pt bottom inset.
         #expect(frame.midX == geometry.visibleFrame.midX)
         #expect(frame.minY == geometry.visibleFrame.minY + 60)
-        #expect(frame.size == PillMetrics.recordingSize)
-    }
-
-    @Test
-    func pillTakesProcessingSizeWhenProcessing() {
-        let frame = OverlayPlacement.pill.frame(geometry, .processing)
-        #expect(frame.size == PillMetrics.processingSize)
-        // Still bottom-centred — only the size differs.
-        #expect(frame.midX == geometry.visibleFrame.midX)
-        #expect(frame.minY == geometry.visibleFrame.minY + 60)
-    }
-
-    @Test
-    func pillTakesErrorSizeWhenError() {
-        let frame = OverlayPlacement.pill.frame(geometry, .error("boom"))
-        #expect(frame.size == PillMetrics.errorSize)
-        #expect(frame.midX == geometry.visibleFrame.midX)
-        #expect(frame.minY == geometry.visibleFrame.minY + 60)
+        #expect(frame.size == PillMetrics.canvasSize)
     }
 
     @Test
@@ -61,24 +46,21 @@ struct OverlayPlacementTests {
         // Guards the frame-vs-visibleFrame mix-up directly: with a horizontally
         // inset Dock the two midXs differ, so centring on the full `frame` would
         // land elsewhere.
-        let frame = OverlayPlacement.pill.frame(geometry, .recording)
+        let frame = OverlayPlacement.pill.frame(geometry)
         #expect(geometry.visibleFrame.midX != geometry.frame.midX)
         #expect(frame.midX == geometry.visibleFrame.midX)
         #expect(frame.midX != geometry.frame.midX)
     }
 
     @Test
-    func pillUsesRecordingSizeForIdleAndListening() {
-        // Non-visible states, but the panel is created at the idle size, so the
-        // placement must still resolve them — to the recording size, as today.
-        #expect(OverlayPlacement.pill.frame(geometry, .idle).size == PillMetrics.recordingSize)
-        #expect(OverlayPlacement.pill.frame(geometry, .listening).size == PillMetrics.recordingSize)
-    }
-
-    // MARK: - Resize-animation semantics
-
-    @Test
-    func pillAnimatesResizeOnShow() {
-        #expect(OverlayPlacement.pill.animatesResizeOnShow == true)
+    func pillCanvasCoversEveryPhaseSize() {
+        // The canvas is fixed while the hosted content sizes per phase — so it
+        // must be at least as large as every phase's pill, or a phase would
+        // clip at the panel edge.
+        let canvas = PillMetrics.canvasSize
+        for size in [PillMetrics.recordingSize, PillMetrics.processingSize, PillMetrics.errorSize] {
+            #expect(size.width <= canvas.width)
+            #expect(size.height <= canvas.height)
+        }
     }
 }

@@ -6,7 +6,7 @@
 import SwiftUI
 
 struct RecordingButtonView: View {
-    let state: DictationState
+    let state: DictationFeed.Phase
     let onToggle: () -> Void
 
     @State private var isPulsing = false
@@ -61,7 +61,6 @@ struct RecordingButtonView: View {
     private var accessibilityLabel: String {
         switch state {
         case .idle: return "Start Recording"
-        case .listening: return "Listening for voice"
         case .recording: return "Recording in progress"
         case .processing: return "Processing transcription"
         case .error: return "Recording error"
@@ -72,8 +71,6 @@ struct RecordingButtonView: View {
         switch state {
         case .idle:
             return .accentColor
-        case .listening:
-            return .yellow
         case .recording:
             return .red
         case .processing:
@@ -87,8 +84,6 @@ struct RecordingButtonView: View {
         switch state {
         case .idle, .error:
             return "mic.fill"
-        case .listening:
-            return "ear.fill"
         case .recording:
             return "stop.fill"
         case .processing:
