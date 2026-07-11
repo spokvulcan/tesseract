@@ -129,6 +129,25 @@ final class SpeechCoordinator {
         try await arbiter.withExclusiveGPU(.tts, body: body)
     }
 
+    /// The per-request voice context derived from settings — the one home for
+    /// the "empty voice description means no voice, never an empty prompt"
+    /// rule every generate path shares.
+    private var ttsVoiceContext: (voice: String?, language: String) {
+        (
+            settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription,
+            settings.ttsLanguage
+        )
+    }
+
+    /// The shared transient-error presentation: show the error, linger, then
+    /// auto-reset to idle unless cancelled. Reads the same linger constant
+    /// the dictation side single-sources, so the two families cannot drift.
+    private func presentTransientError(_ message: String) async {
+        state = .error(message)
+        try? await Task.sleep(for: VoiceCaptureSession.errorAutoResetDelay)
+        if !Task.isCancelled { state = .idle }
+    }
+
     private func captureAndSpeak() async {
         state = .capturingText
 
@@ -140,9 +159,7 @@ final class SpeechCoordinator {
             state = .idle
         } catch {
             Log.speech.error("Failed to capture text: \(error)")
-            state = .error(error.localizedDescription)
-            try? await Task.sleep(for: .seconds(3))
-            if !Task.isCancelled { state = .idle }
+            await presentTransientError(error.localizedDescription)
         }
     }
 
@@ -188,9 +205,7 @@ final class SpeechCoordinator {
         } catch {
             Log.speech.error("Long-form generation failed: \(error)")
             cleanupLongForm()
-            state = .error(error.localizedDescription)
-            try? await Task.sleep(for: .seconds(3))
-            if !Task.isCancelled { state = .idle }
+            await presentTransientError(error.localizedDescription)
         }
     }
 
@@ -199,8 +214,7 @@ final class SpeechCoordinator {
     private func generateLongFormSegments(
         _ localSegments: [TextSegment], startingAt startIndex: Int, count segmentCount: Int
     ) async throws -> Bool {
-        let voiceDesc = settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
-        let language = settings.ttsLanguage
+        let (voiceDesc, language) = ttsVoiceContext
 
         isLongFormActive = true
 
@@ -311,9 +325,7 @@ final class SpeechCoordinator {
 
     private func generateAndPlayBatch(text: String) async {
         do {
-            let voiceDesc =
-                settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
-            let language = settings.ttsLanguage
+            let (voiceDesc, language) = ttsVoiceContext
 
             let (samples, sampleRate) = try await withTTSReady {
                 self.state = .generating(progress: "")
@@ -353,17 +365,13 @@ final class SpeechCoordinator {
         } catch {
             Log.speech.error("Speech generation failed: \(error)")
             playback.stop()
-            state = .error(error.localizedDescription)
-            try? await Task.sleep(for: .seconds(3))
-            if !Task.isCancelled { state = .idle }
+            await presentTransientError(error.localizedDescription)
         }
     }
 
     private func generateAndPlayStreaming(text: String) async {
         do {
-            let voiceDesc =
-                settings.ttsVoiceDescription.isEmpty ? nil : settings.ttsVoiceDescription
-            let language = settings.ttsLanguage
+            let (voiceDesc, language) = ttsVoiceContext
 
             try await withTTSReady {
                 try await self.streamingGenerationBody(
@@ -382,9 +390,7 @@ final class SpeechCoordinator {
         } catch {
             Log.speech.error("Streaming speech generation failed: \(error)")
             playback.stop()
-            state = .error(error.localizedDescription)
-            try? await Task.sleep(for: .seconds(3))
-            if !Task.isCancelled { state = .idle }
+            await presentTransientError(error.localizedDescription)
         }
     }
 
