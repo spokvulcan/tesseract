@@ -2,14 +2,14 @@
 //  ServerSpanRows.swift
 //  tesseract
 //
-//  PROTOTYPE (wayfinder #273) — THROWAWAY. The `RequestTrace.Span` → chat
-//  grammar adapter (#271 §3): server spans rendered through the chat's own
-//  markdown styles, prose palette, and tool-panel atoms. Thin server-owned
-//  row views over the shared atoms — the chat's session-coupled rows
-//  (`ThinkingRowView`, `ToolCallRowView`) are not touched (#271 §6).
+//  The `RequestTrace.Span` → chat grammar adapter (map #269, seams in
+//  #271): server spans rendered through the chat's own markdown styles,
+//  prose palette, and tool-panel atoms. Thin server-owned row views over
+//  the shared atoms — the chat's session-coupled rows (`ThinkingRowView`,
+//  `ToolCallRowView`) are not touched.
 //
-//  Streaming discipline (#272): one subview per span — committed spans are
-//  pure value views SwiftUI skips on deltas; only the live span's view
+//  Streaming discipline: one subview per span — committed spans are pure
+//  value views SwiftUI skips on deltas; only the live span's view
 //  invalidates, re-parsing markdown at most every ~100 ms (the chat's
 //  LivePart precedent) even though the store flushes at 30 Hz.
 //

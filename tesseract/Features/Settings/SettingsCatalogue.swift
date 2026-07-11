@@ -20,9 +20,7 @@ import Foundation
 /// (Settings IA, issue #213): pure view state (panel visibility, disclosure)
 /// that belongs to its surface, is never shown in the Settings window, and is
 /// never swept by Reset to Defaults: `ttsParametersPanelVisible`,
-/// `toolPanelPageShowsRaw`, `server.console.open`,
-/// `server.promptCache.events.open`, and
-/// `server.promptCache.writePressure.open`/`.daily`.
+/// `toolPanelPageShowsRaw`, and `server.cache.mode`/`.window`/`.events.open`.
 enum SettingsCatalogue {
 
     // MARK: - General

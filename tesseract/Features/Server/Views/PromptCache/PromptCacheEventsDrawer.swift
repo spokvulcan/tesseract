@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Slide-up event console for the Prompt Cache page (⌘`): every cache
-/// event as one monospace log line with a colored verdict, full fields
-/// under the selected line, and a status bar of lifetime cache vitals.
-/// Same standard-material drawer grammar as `ServerConsoleDrawer`.
+/// Slide-up event console for the Cache page (⌘`): every cache event as
+/// one monospace log line with a colored verdict, full fields under the
+/// selected line, and a status bar of lifetime cache vitals. A
+/// standard-material drawer — no custom glass in the content layer.
 struct PromptCacheEventsDrawer: View {
     /// Newest events rendered; older ones stay reachable via search.
     /// The feed is a plain `VStack` (no lazy-stack re-entrancy traps),

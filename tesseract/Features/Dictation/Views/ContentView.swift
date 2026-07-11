@@ -53,15 +53,8 @@ struct ContentView: View {
                 .environment(container.speechCoordinator)
                 .environment(container.transcriptionEngine)
                 .environmentObject(container.modelDownloadManager)
-        case .serverDashboard:
-            ServerDashboardView()
-                .injectCoreDependencies(from: container)
-                .injectServerDependencies(from: container)
-                .environment(container.inferenceArbiter)
-        // PROTOTYPE (wayfinder #273) — THROWAWAY: Activity re-cut, until the
-        // cutover (#276) replaces the Dashboard.
-        case .serverActivityPrototype:
-            ServerActivityPrototypeView()
+        case .serverActivity:
+            ServerActivityView()
                 .injectCoreDependencies(from: container)
                 .injectServerDependencies(from: container)
         case .serverCache:
