@@ -21,7 +21,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     // Streaming state — progressive chunk scheduling
     private var streamingFormat: AVAudioFormat?
     private var streamFinished = false
-    private var accumulatedSamples: [Float] = []
     private var pendingBufferCount = 0
     private var playerStarted = false
 
@@ -30,17 +29,14 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
     var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
 
-    // MARK: - Debug dump
+    // MARK: - Diagnostics dump
 
-    // Set per streaming session by `startStreaming(sampleRate:diagnostics:)`.
-    private var diagnostics: PlaybackDiagnosticsPolicy = .default
-    private var debugDumpEnabled: Bool { diagnostics == .default }
-    private var debugRawChunks: [[Float]] = []
-    private var debugScheduledSamples: [Float] = []
-    private var debugChunkTimestamps: [CFAbsoluteTime] = []
-    private var debugStreamStartTime: CFAbsoluteTime = 0
-    private var debugSampleRate: Int = 0
-    private var debugOutputDir: URL?
+    // Non-nil while a streaming session captures diagnostics
+    // (per `PlaybackDiagnosticsPolicy` at `startStreaming`). The dump value
+    // owns the encoding; this adapter only feeds chunks and picks the dir.
+    private var diagnosticsDump: PlaybackDiagnosticsDump?
+    private var diagnosticsStreamStart: CFAbsoluteTime = 0
+    private var diagnosticsOutputDir: URL?
 
     // MARK: - Playback time tracking
 
@@ -104,7 +100,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
     func startStreaming(sampleRate: Int, diagnostics: PlaybackDiagnosticsPolicy) {
         stop()
-        self.diagnostics = diagnostics
 
         guard let format = AudioConverter.monoFloat32Format(sampleRate: Double(sampleRate))
         else {
@@ -129,14 +124,13 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         playerNode = player
         streamingFormat = format
         streamFinished = false
-        accumulatedSamples = []
         pendingBufferCount = 0
         playerStarted = false
         totalScheduledSamples = 0
         streamingSampleRate = sampleRate
         isPlaying = true
 
-        if debugDumpEnabled {
+        if diagnostics == .default {
             let dir = DebugPaths.root
                 .appendingPathComponent(DebugPaths.timestamp())
             do {
@@ -146,12 +140,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
                 Log.speech.error(
                     "Failed to create debug dir \(dir.path): \(error.localizedDescription)")
             }
-            debugOutputDir = dir
-            debugRawChunks = []
-            debugScheduledSamples = []
-            debugChunkTimestamps = []
-            debugStreamStartTime = CFAbsoluteTimeGetCurrent()
-            debugSampleRate = sampleRate
+            diagnosticsOutputDir = dir
+            diagnosticsDump = PlaybackDiagnosticsDump(sampleRate: sampleRate)
+            diagnosticsStreamStart = CFAbsoluteTimeGetCurrent()
             Log.speech.info("Debug dump enabled → \(dir.path)")
         }
 
@@ -162,11 +153,8 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         guard let node = playerNode, let format = streamingFormat else { return }
         guard !samples.isEmpty else { return }
 
-        if debugDumpEnabled {
-            debugRawChunks.append(samples)
-            debugChunkTimestamps.append(CFAbsoluteTimeGetCurrent() - debugStreamStartTime)
-            accumulatedSamples.append(contentsOf: samples)
-        }
+        diagnosticsDump?.appendChunk(
+            samples, arrivalTime: CFAbsoluteTimeGetCurrent() - diagnosticsStreamStart)
 
         // Create and schedule a buffer for this chunk
         guard let buffer = AudioConverter.makeMonoFloat32Buffer(samples, format: format)
@@ -198,9 +186,10 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     func finishStreaming() {
         streamFinished = true
 
-        if debugDumpEnabled {
-            debugScheduledSamples = accumulatedSamples
-            writeDebugDump()
+        if let dump = diagnosticsDump, let dir = diagnosticsOutputDir {
+            Log.speech.info(
+                "Writing debug dump: \(dump.chunks.count) chunks → \(dir.path)")
+            dump.write(to: dir)
         }
 
         // If all buffers already drained, finish now
@@ -220,106 +209,12 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         audioEngine = nil
         streamingFormat = nil
         streamFinished = false
-        accumulatedSamples = []
         pendingBufferCount = 0
         playerStarted = false
         totalScheduledSamples = 0
         streamingSampleRate = 0
         isPlaying = false
-        debugOutputDir = nil
-    }
-
-    // MARK: - Debug dump
-
-    private func writeDebugDump() {
-        guard let dir = debugOutputDir else { return }
-        let sampleRate = debugSampleRate
-
-        Log.speech.info(
-            "Writing debug dump: \(self.debugRawChunks.count) chunks, \(self.debugScheduledSamples.count) scheduled samples"
-        )
-
-        // Write raw chunks
-        let rawDir = dir.appendingPathComponent("raw_chunks")
-        try? FileManager.default.createDirectory(at: rawDir, withIntermediateDirectories: true)
-        for (i, chunk) in debugRawChunks.enumerated() {
-            let path = rawDir.appendingPathComponent(String(format: "chunk_%03d.raw", i))
-            chunk.withUnsafeBufferPointer { buf in
-                let data = Data(buffer: buf)
-                try? data.write(to: path)
-            }
-        }
-
-        // Write full_stream.wav
-        writeWAV(
-            samples: debugScheduledSamples, sampleRate: sampleRate,
-            to: dir.appendingPathComponent("full_stream.wav"))
-
-        // Write metadata.json
-        var scheduledOffset = 0
-        var chunks: [[String: Any]] = []
-        for i in 0..<debugRawChunks.count {
-            let rawCount = debugRawChunks[i].count
-            let entry: [String: Any] = [
-                "index": i,
-                "rawSamples": rawCount,
-                "scheduledOffset": scheduledOffset,
-                "scheduledSize": rawCount,
-                "arrivalTimeSec": debugChunkTimestamps[i],
-            ]
-            chunks.append(entry)
-            scheduledOffset += rawCount
-        }
-
-        let metadata: [String: Any] = [
-            "sampleRate": sampleRate,
-            "totalScheduledSamples": debugScheduledSamples.count,
-            "chunks": chunks,
-        ]
-
-        if let jsonData = try? JSONSerialization.data(
-            withJSONObject: metadata, options: [.prettyPrinted, .sortedKeys])
-        {
-            try? jsonData.write(to: dir.appendingPathComponent("metadata.json"))
-        }
-
-        Log.speech.info(
-            "Debug dump written: \(debugRawChunks.count) chunks, \(debugScheduledSamples.count) samples → \(dir.path)"
-        )
-    }
-
-    private func writeWAV(samples: [Float], sampleRate: Int, to url: URL) {
-        var data = Data()
-        let byteRate = UInt32(sampleRate * 4)  // float32 = 4 bytes
-        let dataSize = UInt32(samples.count * 4)
-        let fileSize = 36 + dataSize
-
-        // RIFF header
-        data.append(contentsOf: "RIFF".utf8)
-        data.append(contentsOf: withUnsafeBytes(of: fileSize.littleEndian) { Array($0) })
-        data.append(contentsOf: "WAVE".utf8)
-
-        // fmt chunk — IEEE float
-        data.append(contentsOf: "fmt ".utf8)
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(3).littleEndian) { Array($0) })  // IEEE float
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // mono
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(4).littleEndian) { Array($0) })  // block align
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(32).littleEndian) { Array($0) })  // bits per sample
-
-        // data chunk
-        data.append(contentsOf: "data".utf8)
-        data.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Array($0) })
-        samples.withUnsafeBufferPointer { buf in
-            buf.baseAddress!.withMemoryRebound(
-                to: UInt8.self, capacity: buf.count * MemoryLayout<Float>.size
-            ) { ptr in
-                data.append(ptr, count: buf.count * MemoryLayout<Float>.size)
-            }
-        }
-
-        try? data.write(to: url)
+        diagnosticsDump = nil
+        diagnosticsOutputDir = nil
     }
 }
