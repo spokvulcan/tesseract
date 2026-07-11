@@ -413,6 +413,19 @@ _Avoid_: CompletionHandler (the HTTP framing edge); CompletionProjection (the
 terminal output rules) — both are real types, say which; server engine; HTTP
 generation pipeline.
 
+**Completion Phase Map**:
+The six named phases of one cache-aware **Server Completion** (ADR-0033):
+**Request Keying** (conversation → the identities later phases key on, or the
+**Unkeyed Completion** degrade), resolution + plan (the Prefill Planner),
+plan application (inline by decision — the deletion test fails), the stream
+drive (the Managed Generation Driver, shared with the agent), the leaf store,
+and trace accumulation. Phases are implementation structure inside the
+module's seam — the dispatcher's interface is unchanged — and each phase
+returns values; the completion module owns effects.
+_Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
+new entry points (ADR-0015's seam is untouched); extracting plan application
+(recorded shallow — see ADR-0033).
+
 **Completion Route**:
 The dispatcher's pure decision for one server inference request — cache-aware versus
 standard-with-named-reason — computed from request shape alone, never from model
