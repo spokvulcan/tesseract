@@ -14,15 +14,18 @@ final class ServerGenerationLog {
     static let maxTraces: Int = 20
     /// Byte budgets for the head and tail of any single accumulated text
     /// span. Using UTF-8 byte budgets keeps the `cappedAppend` fast-path
-    /// check and the slicing consistent.
-    static let textHeadBytes: Int = 8 * 1024
-    static let textTailBytes: Int = 24 * 1024
+    /// check and the slicing consistent. Sized for the chat-grammar
+    /// transcript (#274): big enough that real responses render whole,
+    /// bounded so `maxTraces` couldn't hoard unbounded memory.
+    nonisolated static let textHeadBytes: Int = 64 * 1024
+    nonisolated static let textTailBytes: Int = 192 * 1024
     /// Hysteresis on top of the head+tail budget before an over-budget text
     /// span is re-sliced. Without slack, a span that has crossed the budget
     /// re-slices (a full head+marker+tail string rebuild, and a full Text
     /// re-layout downstream) on every coalesced flush; with it, the rebuild
-    /// happens once per this many bytes of new text.
-    static let textSliceSlackBytes: Int = 4 * 1024
+    /// happens once per this many bytes of new text. Scaled with the budget
+    /// (#274) so the re-slice frequency stays the same relative cost.
+    nonisolated static let textSliceSlackBytes: Int = 32 * 1024
     /// Minimum interval between streaming-version bumps during decode.
     /// Kept for compatibility with tests and any non-dashboard consumers;
     /// the dashboard no longer observes this as a scroll driver.
@@ -88,10 +91,11 @@ final class ServerGenerationLog {
         model: String,
         stream: Bool,
         sessionAffinity: String?,
+        inbound: RequestTrace.InboundCapture = .empty,
         startedAt: Date = Date()
     ) -> TraceHandle {
         sequence += 1
-        let trace = RequestTrace(
+        var trace = RequestTrace(
             id: UUID(),
             sequence: sequence,
             completionID: completionID,
@@ -100,6 +104,7 @@ final class ServerGenerationLog {
             sessionAffinity: sessionAffinity,
             startedAt: startedAt
         )
+        trace.inbound = inbound
         traces.append(trace)
         if traces.count > Self.maxTraces {
             let overflow = traces.count - Self.maxTraces
@@ -520,6 +525,11 @@ struct RequestTrace: Identifiable, Equatable {
     var phase: Phase = .queued
     var spans: [Span] = []
 
+    /// Capped copy of the request's inbound message list, captured at
+    /// `startRequest` (#274). Feeds the Activity transcript's collapsed
+    /// inbound section. `.empty` when the request carried no messages.
+    var inbound: InboundCapture = .empty
+
     var leaseAcquiredAt: Date?
     var firstTokenAt: Date?
     var completedAt: Date?
@@ -736,7 +746,7 @@ struct RequestTrace: Identifiable, Equatable {
         }.joined()
     }
 
-    static func cappedAppend(_ current: String, _ chunk: String) -> String {
+    nonisolated static func cappedAppend(_ current: String, _ chunk: String) -> String {
         let headBytes = ServerGenerationLog.textHeadBytes
         let tailBytes = ServerGenerationLog.textTailBytes
         let budget = headBytes + tailBytes
@@ -750,16 +760,250 @@ struct RequestTrace: Identifiable, Equatable {
             return current + chunk
         }
 
-        let merged = current + chunk
-        // Slice on grapheme-aligned prefix/suffix — `String.prefix(_:)` /
-        // `suffix(_:)` work on characters, which never splits a codepoint.
-        // We overshoot the character count from the byte budget since typical
-        // generation is ASCII-heavy (≈1 byte per char).
-        let head = merged.prefix(headBytes)
-        let tail = merged.suffix(tailBytes)
-        let elidedBytes = merged.utf8.count - head.utf8.count - tail.utf8.count
-        return String(head)
-            + "\n--- elided \(elidedBytes) bytes ---\n"
-            + String(tail)
+        return fenceSafeElide(current + chunk, headBytes: headBytes, tailBytes: tailBytes)
+    }
+
+    /// Slice `text` down to ~`headBytes` of head + ~`tailBytes` of tail with
+    /// an `--- elided N bytes ---` marker between, keeping the result valid
+    /// markdown (#274): cuts land on line boundaries, and when a cut falls
+    /// inside a ``` / ~~~ code fence the head gets a synthetic closing fence
+    /// and the tail re-opens with the original opener (info string included,
+    /// so highlighting resumes). The marker itself always sits outside any
+    /// fence. Display-side precedent: `PanelCap.splitMarkdown`.
+    ///
+    /// A text with no usable line boundary near a cut (one giant line) falls
+    /// back to the raw grapheme-aligned slice — fences are line-anchored, so
+    /// a mid-line cut cannot flip fence parity.
+    nonisolated static func fenceSafeElide(
+        _ text: String, headBytes: Int, tailBytes: Int
+    ) -> String {
+        let totalBytes = text.utf8.count
+        let tailTarget = totalBytes - tailBytes
+
+        // One forward pass over line starts, tracking the byte offset and
+        // which fence (if any) is open at each boundary. Runs once per
+        // `textSliceSlackBytes` of new text on ≤ budget+slack bytes.
+        var offset = 0
+        var index = text.startIndex
+        var openFence: Substring?
+        var headCut: (index: String.Index, fence: Substring?)?
+        var tailCut: (index: String.Index, fence: Substring?)?
+        var fenceAtTailTarget: Substring?
+
+        while index < text.endIndex {
+            if offset > 0, offset <= headBytes {
+                headCut = (index, openFence)
+            }
+            if offset >= tailTarget {
+                tailCut = (index, openFence)
+                break
+            }
+            fenceAtTailTarget = openFence
+
+            let lineEnd =
+                text[index...].firstIndex(of: "\n")
+                .map { text.index(after: $0) } ?? text.endIndex
+            let line = text[index..<lineEnd]
+            if Self.isFenceLine(line) {
+                openFence = openFence == nil ? Self.fenceOpener(line) : nil
+            }
+            offset += line.utf8.count
+            index = lineEnd
+        }
+
+        let head: Substring
+        let closeFence: Substring?
+        if let headCut {
+            head = text[..<headCut.index]
+            closeFence = headCut.fence
+        } else {
+            // Grapheme-aligned raw cut inside the first line; no fence line
+            // can precede it, so no repair needed. Character count overshoots
+            // the byte budget on ASCII-heavy generation — same trade the
+            // pre-#274 slice made.
+            head = text.prefix(headBytes)
+            closeFence = nil
+        }
+
+        let tail: Substring
+        let reopenFence: Substring?
+        if let tailCut {
+            tail = text[tailCut.index...]
+            reopenFence = tailCut.fence
+        } else {
+            tail = text.suffix(tailBytes)
+            reopenFence = fenceAtTailTarget
+        }
+
+        let elidedBytes = totalBytes - head.utf8.count - tail.utf8.count
+        var out = String(head)
+        if !out.hasSuffix("\n") { out += "\n" }
+        if let closeFence {
+            out += Self.fenceMarker(of: closeFence) + "\n"
+        }
+        out += "--- elided \(elidedBytes) bytes ---\n"
+        if let reopenFence {
+            out += String(reopenFence) + "\n"
+        }
+        out += tail
+        return out
+    }
+
+    /// Same fence-line vocabulary as `PanelCap.isFenceLine`: a line whose
+    /// space-trimmed prefix is ``` or ~~~ toggles fence state.
+    nonisolated private static func isFenceLine(_ line: Substring) -> Bool {
+        let trimmed = line.drop(while: { $0 == " " })
+        return trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
+    }
+
+    /// The opener line without its trailing newline — re-emitted verbatim
+    /// when the tail re-opens a fence, so the info string (language) survives.
+    nonisolated private static func fenceOpener(_ line: Substring) -> Substring {
+        line.hasSuffix("\n") ? line.dropLast() : line
+    }
+
+    /// The bare fence-character run of `opener` (e.g. "````" of "````swift"),
+    /// used as the synthetic closing line — a close must be at least as long
+    /// as its opener and carries no info string.
+    nonisolated private static func fenceMarker(of opener: Substring) -> String {
+        let trimmed = opener.drop(while: { $0 == " " })
+        guard let fenceChar = trimmed.first else { return "```" }
+        return String(trimmed.prefix(while: { $0 == fenceChar }))
+    }
+}
+
+// MARK: - Inbound capture (#274)
+
+extension RequestTrace {
+
+    /// One inbound request message: wire role plus content flattened to a
+    /// single renderable string. Image parts become placeholders — the
+    /// base64 data URL is never copied into the trace.
+    nonisolated struct InboundMessage: Identifiable, Equatable, Hashable, Sendable {
+        let id: UUID
+        /// Wire role: "system" / "user" / "assistant" / "tool".
+        let role: String
+        /// Flattened, per-message-capped content.
+        let content: String
+
+        init(id: UUID = UUID(), role: String, content: String) {
+            self.id = id
+            self.role = role
+            self.content = content
+        }
+    }
+
+    /// The capped inbound message list attached to a trace at `startRequest`.
+    nonisolated struct InboundCapture: Equatable, Hashable, Sendable {
+        var messages: [InboundMessage] = []
+        /// Middle messages dropped by `inboundTotalBudgetBytes`. The UI
+        /// renders the gap as "… N messages elided …" between the first
+        /// message and the kept recent ones.
+        var elidedMessages: Int = 0
+
+        static let empty = InboundCapture()
+
+        var isEmpty: Bool { messages.isEmpty }
+
+        /// Rough 4-bytes-per-token estimate over the *kept* messages, for
+        /// the collapsed disclosure line; the exact `promptTokens`
+        /// supersedes it once lookup lands.
+        var estimatedTokens: Int {
+            messages.reduce(0) { $0 + $1.content.utf8.count / 4 }
+        }
+    }
+
+    /// Per-message budgets: the pre-#274 span-cap sizes — plenty to read a
+    /// system prompt or tool result, bounded against megabyte outliers.
+    nonisolated static let inboundMessageHeadBytes = 8 * 1024
+    nonisolated static let inboundMessageTailBytes = 24 * 1024
+    /// Per-trace total across all captured messages. Long agent
+    /// conversations (hundreds of tool results) drop middle messages —
+    /// the first message (system prompt) and the most recent turns are
+    /// what the transcript's inbound section is for.
+    nonisolated static let inboundTotalBudgetBytes = 512 * 1024
+
+    /// Build the capped inbound capture from the parsed wire messages.
+    /// Pure value work — called on the handler's isolation before the
+    /// `startRequest` hop.
+    nonisolated static func captureInbound(
+        _ wire: [OpenAI.ChatMessage]
+    ) -> InboundCapture {
+        guard !wire.isEmpty else { return .empty }
+
+        let flattened = wire.map { message in
+            InboundMessage(
+                role: message.role.rawValue,
+                content: cappedInboundContent(flatten(message))
+            )
+        }
+
+        let totalBytes = flattened.reduce(0) { $0 + $1.content.utf8.count }
+        guard totalBytes > inboundTotalBudgetBytes else {
+            return InboundCapture(messages: flattened, elidedMessages: 0)
+        }
+
+        // Over budget: always keep the first message (the system prompt is
+        // half of "what did the client send"), then keep the most recent
+        // messages that fit; the middle is dropped and counted.
+        let first = flattened[0]
+        var remaining = inboundTotalBudgetBytes - first.content.utf8.count
+        var keptTail: [InboundMessage] = []
+        for message in flattened.dropFirst().reversed() {
+            let size = message.content.utf8.count
+            guard size <= remaining else { break }
+            remaining -= size
+            keptTail.append(message)
+        }
+        let kept = [first] + keptTail.reversed()
+        return InboundCapture(
+            messages: kept,
+            elidedMessages: flattened.count - kept.count
+        )
+    }
+
+    /// Flatten one wire message to renderable text: text parts joined,
+    /// image parts as placeholders, prior-turn tool calls as marked lines.
+    /// Client-echoed reasoning (`reasoning_content`) is deliberately not
+    /// captured — it can be huge and the transcript shows the live thinking
+    /// of the *response* side already.
+    nonisolated private static func flatten(_ message: OpenAI.ChatMessage) -> String {
+        var parts: [String] = []
+        switch message.content {
+        case .text(let text):
+            if !text.isEmpty { parts.append(text) }
+        case .parts(let contentParts):
+            for part in contentParts {
+                switch part.type {
+                case .text:
+                    if let text = part.text, !text.isEmpty { parts.append(text) }
+                case .image_url:
+                    parts.append("⟨image⟩")
+                }
+            }
+        case nil:
+            break
+        }
+        for call in message.tool_calls ?? [] {
+            let name = call.function?.name ?? "unknown"
+            let arguments = call.function?.arguments ?? ""
+            parts.append(
+                arguments.isEmpty
+                    ? "⟨tool call ▸ \(name)⟩"
+                    : "⟨tool call ▸ \(name)⟩ \(arguments)"
+            )
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    nonisolated private static func cappedInboundContent(_ text: String) -> String {
+        guard text.utf8.count > inboundMessageHeadBytes + inboundMessageTailBytes else {
+            return text
+        }
+        return fenceSafeElide(
+            text,
+            headBytes: inboundMessageHeadBytes,
+            tailBytes: inboundMessageTailBytes
+        )
     }
 }

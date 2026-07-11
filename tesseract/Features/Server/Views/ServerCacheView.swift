@@ -1,47 +1,76 @@
+//
+//  ServerCacheView.swift
+//  tesseract
+//
+
 import SwiftUI
 
-/// The Prompt Cache page in the Server telemetry grammar: a hero band of
-/// four large numbers over the full-bleed radix-tree canvas, a one-line
-/// selection HUD, and an events console in a slide-up drawer (⌘`).
-/// Filters and actions live in the system toolbar — the content layer is
-/// plain, with no glass and no sub-page navigation.
-struct ServerPromptCacheView: View {
+/// The Cache page (map #269, direction locked in #272, prototype accepted
+/// in #273): one page, two modes behind a remembered toolbar switch.
+/// Overview answers "what is the cache buying me" — headline, tiles, and
+/// three durable-source Swift Charts; Explorer keeps the full-power
+/// radix-tree instrument. The ⌘` event console drawer is available in
+/// both modes.
+struct ServerCacheView: View {
     @Environment(AgentEngine.self) private var agentEngine
     @Environment(PromptCacheTelemetryStore.self) private var telemetry
 
+    @AppStorage("server.cache.mode") private var modeRaw = CacheMode.overview.rawValue
+    @AppStorage("server.cache.window") private var windowRaw = CacheWindow.day.rawValue
+    @AppStorage("server.cache.events.open") private var isEventsOpen = false
+
+    @State private var corpus = CacheCorpusStore()
     @State private var isInspectorPresented = false
-    @AppStorage("server.promptCache.events.open") private var isEventsOpen = false
+
+    private enum CacheMode: String, CaseIterable, Identifiable {
+        case overview
+        case explorer
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .overview: "Overview"
+            case .explorer: "Explorer"
+            }
+        }
+    }
+
+    private var mode: CacheMode {
+        CacheMode(rawValue: modeRaw) ?? .overview
+    }
+
+    private var window: CacheWindow {
+        CacheWindow(rawValue: windowRaw) ?? .day
+    }
 
     var body: some View {
         @Bindable var telemetry = telemetry
 
         VStack(spacing: 0) {
-            PromptCacheHeroBand(
-                snapshot: telemetry.snapshot,
-                aggregate: telemetry.aggregate,
-                samples: telemetry.metricSamples,
-                isLive: telemetry.isLive
-            )
+            switch mode {
+            case .overview:
+                CacheOverviewView(
+                    snapshot: telemetry.snapshot,
+                    endurance: telemetry.endurance,
+                    corpus: corpus,
+                    window: window
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            PromptCacheVitalsStrip(
-                outcome: telemetry.lastRequestOutcome,
-                endurance: telemetry.endurance,
-                ssdEnabled: telemetry.snapshot?.ssd.enabled == true
-            )
+            case .explorer:
+                PromptCacheTreeCanvasView(
+                    tree: telemetry.selectedTree,
+                    selectedNodeID: telemetry.selectedNodeID,
+                    onSelectNode: telemetry.selectNode
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider()
-
-            PromptCacheTreeCanvasView(
-                tree: telemetry.selectedTree,
-                selectedNodeID: telemetry.selectedNodeID,
-                onSelectNode: telemetry.selectNode
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            PromptCacheSelectionHUD(
-                tree: telemetry.selectedTree,
-                node: telemetry.selectedNode
-            )
+                CacheSelectionHUD(
+                    tree: telemetry.selectedTree,
+                    node: telemetry.selectedNode
+                )
+            }
 
             if isEventsOpen {
                 PromptCacheEventsDrawer(onClose: { isEventsOpen = false })
@@ -49,7 +78,7 @@ struct ServerPromptCacheView: View {
             }
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isEventsOpen)
-        .navigationTitle("Prompt Cache")
+        .navigationTitle("Cache")
         .searchable(
             text: $telemetry.searchText,
             placement: .toolbar,
@@ -57,29 +86,52 @@ struct ServerPromptCacheView: View {
         )
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                filterMenu
-
-                Button {
-                    telemetry.toggleLiveUpdates()
-                } label: {
-                    Image(systemName: telemetry.isLive ? "pause.fill" : "play.fill")
+                Picker("Mode", selection: $modeRaw) {
+                    ForEach(CacheMode.allCases) { mode in
+                        Text(mode.label).tag(mode.rawValue)
+                    }
                 }
-                .help(telemetry.isLive ? "Pause Events" : "Resume Events")
+                .pickerStyle(.segmented)
+                .help("Overview: what the cache is buying. Explorer: the radix-tree instrument.")
 
-                Button {
-                    Task { await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor) }
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Refresh Snapshot")
+                switch mode {
+                case .overview:
+                    Picker("Window", selection: $windowRaw) {
+                        ForEach(CacheWindow.allCases) { window in
+                            Text(window.rawValue).tag(window.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("Time window for the tiles and charts")
 
-                Button {
-                    isInspectorPresented.toggle()
-                } label: {
-                    Image(systemName: "sidebar.trailing")
+                    Button {
+                        corpus.reload()
+                        Task {
+                            await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor)
+                        }
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("Reload the trace corpus and snapshot")
+
+                case .explorer:
+                    explorerFilterMenu
+
+                    Button {
+                        telemetry.toggleLiveUpdates()
+                    } label: {
+                        Image(systemName: telemetry.isLive ? "pause.fill" : "play.fill")
+                    }
+                    .help(telemetry.isLive ? "Pause Events" : "Resume Events")
+
+                    Button {
+                        isInspectorPresented.toggle()
+                    } label: {
+                        Image(systemName: "sidebar.trailing")
+                    }
+                    .keyboardShortcut("i", modifiers: [.command, .option])
+                    .help(isInspectorPresented ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
                 }
-                .keyboardShortcut("i", modifiers: [.command, .option])
-                .help(isInspectorPresented ? "Hide Inspector (⌥⌘I)" : "Show Inspector (⌥⌘I)")
 
                 Button {
                     isEventsOpen.toggle()
@@ -100,24 +152,28 @@ struct ServerPromptCacheView: View {
             }
         }
         .inspector(isPresented: $isInspectorPresented) {
-            PromptCacheInspectorPanel(
-                tree: telemetry.selectedTree,
-                node: telemetry.selectedNode,
-                event: telemetry.selectedEvent
-            )
+            ScrollView {
+                PromptCacheInspectorView(
+                    tree: telemetry.selectedTree,
+                    node: telemetry.selectedNode,
+                    event: telemetry.selectedEvent
+                )
+            }
+            .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
         }
         .task {
             telemetry.startPolling(llmActor: agentEngine.llmActor)
             await telemetry.refreshSnapshot(llmActor: agentEngine.llmActor)
+            corpus.reload()
         }
         .onDisappear {
             telemetry.stopPolling()
         }
     }
 
-    // MARK: - Toolbar pieces
+    // MARK: - Explorer filters
 
-    private var filterMenu: some View {
+    private var explorerFilterMenu: some View {
         @Bindable var telemetry = telemetry
 
         return Menu {
@@ -179,10 +235,10 @@ struct ServerPromptCacheView: View {
 
 // MARK: - Selection HUD
 
-/// One monospace status line under the tree canvas: the selected node's
-/// vitals, or the visible tree's summary — the Dashboard meta-line
-/// grammar in place of the old status card + inspector ceremony.
-private struct PromptCacheSelectionHUD: View {
+/// One monospace status line under the Explorer canvas — the selected
+/// node's vitals or the visible tree's summary (the locked Drawer-era
+/// grammar, kept for the instrument mode).
+private struct CacheSelectionHUD: View {
     let tree: PromptCacheTreeSnapshot?
     let node: PromptCacheTreeNodeSnapshot?
 
@@ -226,23 +282,5 @@ private struct PromptCacheSelectionHUD: View {
                 + " · \(PromptCacheFormatting.bytes(tree.totalSnapshotBytes))"
         }
         return "no topology — run an HTTP completion to instantiate the radix tree"
-    }
-}
-
-// MARK: - Inspector panel
-
-/// Trailing system inspector: the selection's deep numbers in a standard
-/// column, not a transient popover. The system supplies the surface —
-/// the content stays plain.
-private struct PromptCacheInspectorPanel: View {
-    let tree: PromptCacheTreeSnapshot?
-    let node: PromptCacheTreeNodeSnapshot?
-    let event: PromptCacheTelemetryEvent?
-
-    var body: some View {
-        ScrollView {
-            PromptCacheInspectorView(tree: tree, node: node, event: event)
-        }
-        .inspectorColumnWidth(min: 260, ideal: 320, max: 420)
     }
 }
