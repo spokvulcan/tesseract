@@ -71,20 +71,10 @@ final class TranscriptionEngine: Transcribing {
 
         // Verify model files exist before loading — stays on the facade so the
         // model port never needs real files.
-        let fileManager = FileManager.default
-        let encoderPath = modelPath.appendingPathComponent("AudioEncoder.mlmodelc")
-        let decoderPath = modelPath.appendingPathComponent("TextDecoder.mlmodelc")
-
-        guard fileManager.fileExists(atPath: encoderPath.path),
-            fileManager.fileExists(atPath: decoderPath.path)
-        else {
-            Log.transcription.error("Model files not found at: \(modelPath.path)")
+        let missing = WhisperModelContract.missingFiles(at: modelPath)
+        guard missing.isEmpty else {
             Log.transcription.error(
-                "AudioEncoder at: \(encoderPath.path) - exists: \(fileManager.fileExists(atPath: encoderPath.path))"
-            )
-            Log.transcription.error(
-                "TextDecoder at: \(decoderPath.path) - exists: \(fileManager.fileExists(atPath: decoderPath.path))"
-            )
+                "Model files missing at \(modelPath.path): \(missing.joined(separator: ", "))")
             throw DictationError.modelNotLoaded
         }
 

@@ -35,10 +35,6 @@ final class DependencyContainer: ObservableObject {
     }()
 
     // Transcription
-    lazy var modelManager = ModelManager(
-        modelDownloadManager: modelDownloadManager,
-        selectedModelID: { [settingsManager] in settingsManager.selectedSpeechToTextModelID }
-    )
     lazy var transcriptionEngine = TranscriptionEngine()
     lazy var transcriptionHistory = TranscriptionHistory()
 
@@ -472,8 +468,13 @@ final class DependencyContainer: ObservableObject {
                 isLLMSlotLoaded: { [inferenceArbiter] in
                     inferenceArbiter.loadedSlots.contains(.llm)
                 },
-                whisperModelPath: { [modelManager] in
-                    modelManager.isModelAvailable() ? modelManager.getModelPath() : nil
+                whisperModelPath: { [modelDownloadManager, settingsManager] in
+                    guard
+                        let path = modelDownloadManager.modelPath(
+                            for: settingsManager.selectedSpeechToTextModelID),
+                        WhisperModelContract.isComplete(at: path)
+                    else { return nil }
+                    return path
                 },
                 isTranscriptionModelLoaded: { [transcriptionEngine] in
                     transcriptionEngine.isModelLoaded
