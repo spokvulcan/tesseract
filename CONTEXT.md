@@ -436,6 +436,15 @@ _Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
 new entry points (ADR-0015's seam is untouched); extracting plan application
 (recorded shallow — see ADR-0033).
 
+**Completion Trace Accumulator**:
+The fold of one cache-aware **Server Completion**'s trace facts into the terminal
+trace record — the terminal-vs-recovered eviction tally paired with its correlated
+diagnostics emission (so tally and log lines cannot drift), the restored-offset
+rule, and the admitted-snapshot projections. The drive feeds facts; the value
+decides what the record contains.
+_Avoid_: telemetry store (the window-scoped event buffer); trace logger (it
+derives, the diagnostics context logs).
+
 **Completion Route**:
 The dispatcher's pure decision for one server inference request — cache-aware versus
 standard-with-named-reason — computed from request shape alone, never from model
@@ -650,6 +659,14 @@ into sound — a collaborator seam, not a model port, and the distinction from
 **Speech Synthesizer** (which makes the samples) is the whole point.
 _Avoid_: AudioPlaybackManager (one adapter), AVAudioEngine (used inside it), player.
 
+**Playback Diagnostics Dump**:
+The pure value that turns one TTS playback's captured samples plus conditions into
+the on-disk diagnostic artifact bytes (WAV + metadata) — the playback-side sibling
+of the dictation **Capture Dump**. The playback adapter feeds it and writes what it
+returns; encoding is byte-testable without an audio engine.
+_Avoid_: capture dump (the dictation ring buffer), WAV encoder (one part of it),
+debug recording.
+
 ### Speech word timeline
 
 **Word Timeline**:
@@ -746,11 +763,21 @@ The one home that consumes a single raw model generation stream into the agent's
 safeguard — owning the parser lifecycle and the safeguard's truncate-and-restart
 across stream swaps. Caller side effects and projections stay with the callers;
 terminal info and diagnostics come back on its outcome.
-_Avoid_: managed generation (an `AgentEngine` method, not this loop); stream consumer
-/ generation pump; GenerationFold (the fold is the **Generation Accumulator**);
-ToolCallParser (upstream); agent loop — this consumes one turn's raw stream, whereas
-the agent double-loop orchestrates turns and tool calls above it (say "stream loop"
-vs "agent loop").
+_Avoid_: managed generation (the **Managed Generation Driver** above it, not this
+loop); stream consumer / generation pump; GenerationFold (the fold is the
+**Generation Accumulator**); ToolCallParser (upstream); agent loop — this consumes
+one turn's raw stream, whereas the agent double-loop orchestrates turns and tool
+calls above it (say "stream loop" vs "agent loop").
+
+**Managed Generation Driver**:
+The one module that drives a raw model stream through the **Generation Stream
+Loop** for both consumers — the agent turn and the cache-aware **Server
+Completion**: safeguard derivation from the request's parameters, loop
+construction, late-bound cancel bridging, stream-termination cancel wiring, and
+the terminal-info re-yield into the caller's sink. Callers keep their own task
+envelopes, diagnostics, and projections.
+_Avoid_: wrapManagedGeneration (the `AgentEngine` call site); stream driver (the
+agent's projection-composing layer above); generation manager.
 
 ### Chat rewrite vocabulary (ADR-0024)
 
@@ -1059,6 +1086,16 @@ Guard** it composes (the epoch protocol alone).
 _Avoid_: coordinator (it is composed by the coordinators, not one), capture engine
 (`AudioCaptureEngine`, the mic port below it), voice controller, session (unqualified).
 
+### Hotkey handling
+
+**Hotkey Matcher**:
+The pure fire-or-not decision for global hotkeys — normalized event + bindings +
+pressed-set in, fires plus suppression verdict out — implemented once and fed by
+two thin event adapters (the CGEvent tap and the NSEvent fallback monitor), which
+differ only in delivery timing. Follows the DoubleCommandDetector template.
+_Avoid_: HotkeyManager (the adapter host above it); event tap (one adapter);
+duplicating the decision per event source (the pre-extraction shape).
+
 ### Microphone capture
 
 **Voice Processing**:
@@ -1079,6 +1116,16 @@ otherwise means audibly ducked; the idle treatment is what makes staying armed f
 (ADR-0025).
 _Avoid_: ducking level (one lever inside a treatment), mute/suppression (it attenuates,
 never silences).
+
+**Capture Engine Lifecycle**:
+The pure policy deciding the capture engine's lifecycle moves — rebuild-vs-reuse
+on press, prewarm arming, external-config-change detection, the empty-capture
+verdict, disarm-after-grace, idle rebuild and arm retry — with the AVFoundation
+engine as the performer. The ADR-0025 policy/performer split, applied to the
+engine itself; the arm mode (always-armed vs disarm-after-grace) is one input.
+_Avoid_: engine defaults (capture mechanics stay on the engine); VPIO lifecycle
+(the arm mode is an input, not the policy); duck policy (the sibling policy for
+system audio).
 
 **Capture Dump**:
 The on-disk ring buffer of recent dictation capture audio — what the microphone tap
