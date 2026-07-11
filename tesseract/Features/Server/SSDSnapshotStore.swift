@@ -430,10 +430,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         // in the manifest, queued, or in the writer's hands (FIFO
         // settles it before this item). `beginExtensionTransfer`
         // shields a resident base from the LRU cut for the pending
-        // window; every terminal writer path releases the shield. The
+        // window; the returned claim guarantees the release (terminal
+        // drop paths settle it, deinit backstops the rest). The
         // queue-lock check runs first and releases before the ledger
         // call — the two locks never nest.
         let extendingBaseID = payload.extending?.baseSnapshotID
+        var transferClaim: ExtensionTransferClaim?
         if let extendingBaseID {
             queueLock.lock()
             let baseIsQueuedOrInFlight =
@@ -450,7 +452,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             }
             queueLock.unlock()
             guard
-                ledger.beginExtensionTransfer(
+                let claim = ledger.beginExtensionTransfer(
                     baseID: extendingBaseID,
                     baseIsQueuedOrInFlight: baseIsQueuedOrInFlight
                 )
@@ -463,6 +465,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                     ))
                 return .rejectedExtensionBaseUnavailable
             }
+            transferClaim = claim
         }
 
         enqueueApplyingBackPressure(
@@ -470,6 +473,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 payload: payload,
                 descriptor: descriptor,
                 extendingBaseID: extendingBaseID,
+                transferClaim: transferClaim,
                 refreshRecencyAtCommit: refreshRecencyAtCommit,
                 scoringConfig: scoringConfig,
                 condemnedResidentIDs: condemnedResidentIDs,
@@ -500,7 +504,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// callbacks fire AFTER releasing it, so a callback body can take
     /// other locks without risking a deadlock.
     private func enqueueApplyingBackPressure(_ item: PendingWrite) {
-        var droppedItems: [(id: String, bytes: Int, extendingBaseID: String?)] = []
+        var droppedItems: [(id: String, bytes: Int, transferClaim: ExtensionTransferClaim?)] = []
         let payloadBytes = item.payload.totalBytes
 
         queueLock.lock()
@@ -527,7 +531,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                     (
                         id: oldest.descriptor.snapshotID,
                         bytes: oldest.payload.totalBytes,
-                        extendingBaseID: oldest.extendingBaseID
+                        transferClaim: oldest.transferClaim
                     ))
             }
         }
@@ -538,9 +542,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         queueLock.unlock()
 
         for dropped in droppedItems {
-            if let baseID = dropped.extendingBaseID {
-                ledger.releaseExtensionTransfer(baseID: baseID)
-            }
+            dropped.transferClaim?.release()
             // Both events fire per bumped item: the admission outcome
             // (`droppedByteBudget` is the terminal verdict for that
             // earlier `tryEnqueue` call), and the lifecycle callback
@@ -691,9 +693,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             pendingBytes -= removed.payload.totalBytes
             if pendingBytes < 0 { pendingBytes = 0 }
             queueLock.unlock()
-            if let baseID = removed.extendingBaseID {
-                ledger.releaseExtensionTransfer(baseID: baseID)
-            }
+            removed.transferClaim?.release()
             return
         }
         queueLock.unlock()
@@ -825,9 +825,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     // swiftlint:disable:next function_body_length
     private func processPendingItem(_ item: PendingWrite) async {
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
-            if let baseID = item.extendingBaseID {
-                ledger.releaseExtensionTransfer(baseID: baseID)
-            }
+            item.transferClaim?.release()
             releasePendingBytes(item.payload.totalBytes)
             return
         }
@@ -857,12 +855,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         }
         finalizeEvictions(evicted)
 
-        // Writer-drop helper local to this item: every terminal drop
-        // path must release the base's LRU shield exactly once.
+        // Writer-drop helper local to this item: a terminal drop settles
+        // the base's LRU shield at the moment the drop is decided.
         func dropItem(reason: SSDDropReason) {
-            if let baseID = item.extendingBaseID {
-                ledger.releaseExtensionTransfer(baseID: baseID)
-            }
+            item.transferClaim?.release()
             releasePendingBytes(item.payload.totalBytes)
             emitWriterDrop(
                 id: item.descriptor.snapshotID,
@@ -946,9 +942,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         }
 
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
-            if let baseID = item.extendingBaseID {
-                ledger.releaseExtensionTransfer(baseID: baseID)
-            }
+            item.transferClaim?.release()
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
             logSSDDelete(
                 id: item.descriptor.snapshotID,
@@ -962,17 +956,19 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         // 3. Write succeeded: register the descriptor in the ledger,
         //    release the pending byte budget, and fire the commit
         //    callback. For an extension the commit consumes the base
-        //    entry atomically (the chain fold). A `false` here is the
+        //    entry atomically (the chain fold) and clears the LRU
+        //    shield itself on both outcomes — disarm the claim so its
+        //    deinit backstop stays quiet. A `false` here is the
         //    tombstone self-veto or a lost base — drop the own file
         //    (inherited files still belong to the surviving base entry,
         //    or were already deleted with it).
-        guard
-            ledger.commit(
-                descriptorToWrite,
-                consumingBase: item.extendingBaseID,
-                refreshRecency: item.refreshRecencyAtCommit
-            )
-        else {
+        let committed = ledger.commit(
+            descriptorToWrite,
+            consumingBase: item.extendingBaseID,
+            refreshRecency: item.refreshRecencyAtCommit
+        )
+        item.transferClaim?.disarm()
+        guard committed else {
             try? FileManager.default.removeItem(at: fileURL(for: item.descriptor))
             logSSDDelete(
                 id: item.descriptor.snapshotID,
@@ -1267,9 +1263,13 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         let payload: SnapshotPayload
         let descriptor: PersistedSnapshotDescriptor
         /// Non-nil for a **Leaf Extension Admission**: the base whose
-        /// chain the commit folds and whose LRU shield every terminal
-        /// path must release.
+        /// chain the commit folds.
         let extendingBaseID: String?
+        /// The base's held LRU shield, paired with `extendingBaseID`.
+        /// Terminal drop paths `release()` it, the commit path
+        /// `disarm()`s it, and its deinit backstop catches any path
+        /// that forgets — the shield cannot leak.
+        let transferClaim: ExtensionTransferClaim?
         /// `false` for a **Snapshot Demotion**: the commit must keep
         /// the descriptor's stale `lastAccessAt` instead of re-stamping
         /// it, so demoted bodies never look hot to the SSD LRU.

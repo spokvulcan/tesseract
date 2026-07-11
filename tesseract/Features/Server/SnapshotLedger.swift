@@ -120,6 +120,58 @@ nonisolated enum AdmissionDecision: Sendable, Equatable {
     case drop(SSDDropReason)
 }
 
+// MARK: - Extension transfer claim
+
+/// The held LRU shield on one **Leaf Extension Admission**'s base —
+/// returned by `SnapshotLedger.beginExtensionTransfer`, settled exactly
+/// once by whichever terminal writer path ends the pending window:
+/// a drop path calls `release()` at the moment the drop is decided; the
+/// commit path calls `disarm()` because `commit(consumingBase:)` clears
+/// the shield itself during the chain fold. `deinit` is a last-resort
+/// backstop — a future path that forgets still releases the shield (the
+/// leak is logged as a defect), so a base stuck shielded forever is
+/// unrepresentable.
+nonisolated final class ExtensionTransferClaim: @unchecked Sendable {
+    let baseID: String
+    private let ledger: SnapshotLedger
+    private let settleLock = NSLock()
+    private var settled = false
+
+    fileprivate init(baseID: String, ledger: SnapshotLedger) {
+        self.baseID = baseID
+        self.ledger = ledger
+    }
+
+    /// Lift the shield now — the terminal drop is decided.
+    func release() {
+        guard settleOnce() else { return }
+        ledger.releaseExtensionTransfer(baseID: baseID)
+    }
+
+    /// The commit path already cleared the shield inside the ledger's
+    /// chain fold — settle the claim without touching the shield.
+    func disarm() {
+        _ = settleOnce()
+    }
+
+    private func settleOnce() -> Bool {
+        settleLock.lock()
+        defer { settleLock.unlock() }
+        if settled { return false }
+        settled = true
+        return true
+    }
+
+    deinit {
+        if !settled {
+            ledger.releaseExtensionTransfer(baseID: baseID)
+            Log.agent.error(
+                "ExtensionTransferClaim for \(self.baseID.prefix(8)) leaked — "
+                    + "released by deinit backstop (missing terminal-path settle)")
+        }
+    }
+}
+
 // MARK: - SnapshotLedger
 
 nonisolated final class SnapshotLedger: @unchecked Sendable {
@@ -329,31 +381,35 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     // MARK: - Leaf extension transfer protocol
 
     /// Front-door validation for a **Leaf Extension Admission**: shield
-    /// the base from the LRU cut for the pending window. Returns `false`
+    /// the base from the LRU cut for the pending window. Returns `nil`
     /// when the base is neither resident nor — per the caller's own
     /// queue check — queued/in-flight, in which case the extension must
     /// be rejected (its suffix payload cannot compose without the base).
+    /// The returned claim is the shield: a terminal drop path releases
+    /// it at the moment the drop is decided, the commit path disarms it
+    /// (`commit(consumingBase:)` clears the shield itself during the
+    /// chain fold), and a path that forgets is caught by the claim's
+    /// deinit backstop — an orphaned shield is unrepresentable.
     /// The caller (`SSDSnapshotStore.tryEnqueue`) checks its pending
     /// queue under the queue lock *before* this call; the two locks
     /// never nest.
     func beginExtensionTransfer(
         baseID: String,
         baseIsQueuedOrInFlight: Bool
-    ) -> Bool {
+    ) -> ExtensionTransferClaim? {
         lock.lock()
         defer { lock.unlock() }
         guard manifest.snapshots[baseID] != nil || baseIsQueuedOrInFlight else {
-            return false
+            return nil
         }
         transferringBaseIDs.insert(baseID)
-        return true
+        return ExtensionTransferClaim(baseID: baseID, ledger: self)
     }
 
-    /// Release the LRU shield on `baseID` without folding — every
-    /// writer path that terminates a pending extension short of commit
-    /// (back-pressure drop, tombstone, write failure, fold failure)
-    /// must call this exactly once.
-    func releaseExtensionTransfer(baseID: String) {
+    /// Release the LRU shield on `baseID` without folding — reached
+    /// only through an `ExtensionTransferClaim`, which guarantees the
+    /// exactly-once pairing the old free function left to each caller.
+    fileprivate func releaseExtensionTransfer(baseID: String) {
         lock.lock()
         defer { lock.unlock() }
         transferringBaseIDs.remove(baseID)

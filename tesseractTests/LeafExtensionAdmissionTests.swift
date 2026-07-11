@@ -238,23 +238,53 @@ struct LeafExtensionLedgerTests {
         defer { cleanup(root) }
         let ledger = makeLedgerWithPartition(root: root)
 
-        // Unknown base, not queued: rejected, no shield.
-        #expect(!ledger.beginExtensionTransfer(baseID: "ghost", baseIsQueuedOrInFlight: false))
+        // Unknown base, not queued: rejected, no shield, no claim.
+        #expect(
+            ledger.beginExtensionTransfer(baseID: "ghost", baseIsQueuedOrInFlight: false) == nil)
         #expect(ledger.transferringBaseIDsForTesting().isEmpty)
 
         // Unknown base but still in the writer's queue: allowed (FIFO
         // settles it before the extension).
-        #expect(ledger.beginExtensionTransfer(baseID: "queued", baseIsQueuedOrInFlight: true))
+        let queuedClaim = ledger.beginExtensionTransfer(
+            baseID: "queued", baseIsQueuedOrInFlight: true)
+        #expect(queuedClaim != nil)
         #expect(ledger.transferringBaseIDsForTesting() == ["queued"])
-        ledger.releaseExtensionTransfer(baseID: "queued")
+        queuedClaim?.release()
         #expect(ledger.transferringBaseIDsForTesting().isEmpty)
 
         // Resident base: allowed.
         let base = makeDescriptor(id: "base-resident")
         ledger.seedDescriptorForTesting(base)
-        #expect(
-            ledger.beginExtensionTransfer(baseID: "base-resident", baseIsQueuedOrInFlight: false))
+        let residentClaim = ledger.beginExtensionTransfer(
+            baseID: "base-resident", baseIsQueuedOrInFlight: false)
+        #expect(residentClaim != nil)
         #expect(ledger.transferringBaseIDsForTesting() == ["base-resident"])
+        residentClaim?.disarm()
+    }
+
+    @Test func claimDeinitBackstopReleasesALeakedShield() {
+        let root = makeScratchDir()
+        defer { cleanup(root) }
+        let ledger = makeLedgerWithPartition(root: root)
+        let base = makeDescriptor(id: "base")
+        ledger.seedDescriptorForTesting(base)
+
+        // A claim that goes out of scope un-settled still lifts the
+        // shield — a forgotten terminal path cannot orphan the base.
+        do {
+            _ = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
+        }
+        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
+
+        // release() is exactly-once; a second settle is a no-op even if
+        // another claim re-shields the same base meanwhile.
+        let first = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
+        first?.release()
+        let second = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
+        first?.release()
+        #expect(ledger.transferringBaseIDsForTesting() == ["base"])
+        second?.release()
+        #expect(ledger.transferringBaseIDsForTesting().isEmpty)
     }
 
     @Test func transferShieldExcludesBaseFromLRUCutUntilReleased() {
@@ -268,7 +298,8 @@ struct LeafExtensionLedgerTests {
         let other = makeDescriptor(id: "other", bytes: 400, lastAccessAt: 2)
         ledger.seedDescriptorForTesting(base)
         ledger.seedDescriptorForTesting(other)
-        #expect(ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false))
+        let claim = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
+        #expect(claim != nil)
 
         // Admitting 400 more requires one eviction; the shield must
         // divert the cut past the older base onto `other`.
@@ -278,7 +309,7 @@ struct LeafExtensionLedgerTests {
         #expect(ledger.residentDescriptorForTesting(id: "base") != nil)
 
         // Released, the base is an ordinary victim again.
-        ledger.releaseExtensionTransfer(baseID: "base")
+        claim?.release()
         let (_, evictedAfter) = ledger.admit(makeDescriptor(id: "incoming-2", bytes: 1_000))
         #expect(evictedAfter.map(\.snapshotID) == ["base"])
     }
@@ -336,7 +367,9 @@ struct LeafExtensionLedgerTests {
 
         let base = makeDescriptor(id: "base", bytes: 800, tokenOffset: 5)
         ledger.seedDescriptorForTesting(base)
-        #expect(ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false))
+        let claim = ledger.beginExtensionTransfer(baseID: "base", baseIsQueuedOrInFlight: false)
+        #expect(claim != nil)
+        defer { claim?.disarm() }
         #expect(ledger.currentSSDBytesForTesting() == 800)
 
         let extensionDescriptor = makeDescriptor(
