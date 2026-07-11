@@ -44,6 +44,13 @@ final class FakeAudioCapture: AudioCapturing {
         isCapturing = false
         return cannedAudio
     }
+
+    /// What the **Live Partial** pump reads mid-capture (ticket #291).
+    var cannedSnapshot: AudioData?
+
+    func captureSnapshot() -> AudioData? {
+        isCapturing ? cannedSnapshot : nil
+    }
 }
 
 @MainActor
@@ -133,6 +140,80 @@ struct DictationCoordinatorTests {
         let engine = TranscriptionEngine(makeRecognizer: { recognizer })
         try await engine.loadModel(from: bundle)
         return engine
+    }
+
+    // MARK: - Live Partial pump (ticket #291)
+
+    @Test
+    func livePartialsFlowIntoTheFeedWhileRecordingAndClearAtStop() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello partial", segments: [], language: "en", processingTime: 0))
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let audio = AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)
+        let capture = FakeAudioCapture(cannedAudio: audio)
+        // A snapshot past the pump's minimum-audio gate.
+        capture.cannedSnapshot = AudioData(
+            samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000, duration: 1.0)
+        let injector = FakeTextInjector()
+        let store = FakeTranscriptionStore()
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        let feed = DictationFeed()
+
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: store,
+            settings: settings,
+            feed: feed
+        )
+        coordinator.isLivePartialsEnabled = { true }
+
+        coordinator.onHotkeyDown()
+        try await waitUntil { feed.partial == "hello partial" }
+
+        coordinator.onHotkeyUp()
+        // The pump's stop clears the caption synchronously — before the final
+        // commit resolves, not after.
+        #expect(feed.partial == nil)
+
+        try await waitUntil { feed.phase == .idle && !injector.injected.isEmpty }
+        #expect(feed.partial == nil)
+    }
+
+    @Test
+    func partialPumpStaysOffUnlessTheVariantConsumesIt() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let recognizer = InMemorySpeechRecognizer()
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let capture = FakeAudioCapture(
+            cannedAudio: AudioData(samples: [0.1], sampleRate: 16_000, duration: 2.0))
+        capture.cannedSnapshot = AudioData(
+            samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000, duration: 1.0)
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        let feed = DictationFeed()
+
+        let coordinator = DictationCoordinator(
+            audioCapture: capture,
+            transcriptionEngine: engine,
+            textInjector: FakeTextInjector(),
+            history: FakeTranscriptionStore(),
+            settings: settings,
+            feed: feed
+        )
+        // Default policy: off. The pump never runs, the recognizer never
+        // hears mid-capture audio — the baseline path is untouched.
+        coordinator.onHotkeyDown()
+        for _ in 0..<2000 { await Task.yield() }
+        #expect(feed.partial == nil)
+        #expect(await recognizer.transcribeCount == 0)
+        coordinator.cancel()
     }
 
     // MARK: - Happy path (Outcome → phase/beat mapping + commit effects)

@@ -38,6 +38,12 @@ final class DictationCoordinator {
     private let history: any TranscriptionStoring
     private let settings: SettingsManager
 
+    /// Retained for the **Live Partial** pump (ticket #291) — mid-capture
+    /// snapshots and the partial decode lane. The capture/transcribe
+    /// *lifecycle* still belongs to the session; the pump only reads.
+    private let audioCapture: any AudioCapturing
+    private let transcriptionEngine: any Transcribing
+
     /// The **Proofread Pass**, injected by the composition root; `nil` in
     /// tests that don't exercise it. The coordinator wraps it so the feed
     /// narrates the `.proofreading` phase — the session stays feed-blind.
@@ -61,6 +67,19 @@ final class DictationCoordinator {
     /// recording, which is a dictation-presentation concern, not part of the shared
     /// capture lifecycle.
     private var recordingTask: Task<Void, Never>?
+
+    /// Whether the live Overlay Variant consumes the feed's partial signal.
+    /// Set by the composition root (which knows the selected variant); the
+    /// coordinator reads a policy, never the variant — the pipeline stays
+    /// variant-blind. Default off: no pump, zero cost, baselines untouched.
+    var isLivePartialsEnabled: @MainActor () -> Bool = { false }
+
+    /// The **Live Partial** pump (ticket #291) and its staleness epoch. The
+    /// epoch guards a decode that resolves after its take ended against
+    /// captioning the *next* take (the feed's phase guard alone can't tell
+    /// two recordings apart).
+    private var partialTask: Task<Void, Never>?
+    private var partialEpoch: UInt64 = 0
 
     /// A hotkey press that arrived while a previous capture was still
     /// `.processing`. Push-to-talk must never swallow a press: the intent is
@@ -92,6 +111,8 @@ final class DictationCoordinator {
         self.feed = feed
         self.proofreadPass = proofreadPass
         self.pairs = pairs
+        self.audioCapture = audioCapture
+        self.transcriptionEngine = transcriptionEngine
     }
 
     // MARK: - Public API
@@ -141,6 +162,7 @@ final class DictationCoordinator {
         startPending = false
         recordingTask?.cancel()
         recordingTask = nil
+        stopPartialPump()
         session.cancel()
         feed.setPhase(.idle)
         feed.emit(.cancelled)
@@ -171,6 +193,8 @@ final class DictationCoordinator {
             if settings.playSounds {
                 playSound(.startRecording)
             }
+
+            startPartialPump()
         case .micBusy:
             handleError(.microphoneBusy)
         case .captureFailed(let error):
@@ -182,9 +206,74 @@ final class DictationCoordinator {
         }
     }
 
+    // MARK: - Live Partial pump (ticket #291)
+
+    /// How much trailing audio a partial decode sees. Capping the window
+    /// bounds the decode (and the worst-case delay a just-released final pays
+    /// waiting out a partial's cancellation) regardless of take length; the
+    /// caption shows the tail anyway.
+    private static let partialWindowSeconds: TimeInterval = 12
+    /// No decode before this much audio exists — sub-second snippets return
+    /// noise, and the first words deserve one clean pass.
+    private static let partialMinimumAudio: TimeInterval = 0.6
+    /// The pause between a decode landing and the next snapshot. Cadence is
+    /// self-pacing: a slow decode simply stretches its own cycle.
+    private static let partialInterval: Duration = .milliseconds(300)
+
+    private func startPartialPump() {
+        guard isLivePartialsEnabled() else { return }
+        partialEpoch &+= 1
+        let epoch = partialEpoch
+        partialTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.partialEpoch == epoch, self.state == .recording
+                else { return }
+                if let snapshot = self.audioCapture.captureSnapshot(),
+                    snapshot.duration >= Self.partialMinimumAudio
+                {
+                    let decodeStart = DispatchTime.now()
+                    let text = await self.transcriptionEngine.transcribePartial(
+                        Self.trailingWindow(of: snapshot), language: self.settings.language)
+                    // The decode awaited: this take may have ended (and another
+                    // begun) meanwhile — a stale caption is worse than none.
+                    guard !Task.isCancelled, self.partialEpoch == epoch,
+                        self.state == .recording
+                    else { return }
+                    if let text, !text.isEmpty {
+                        DictationPerf.record(
+                            span: "partial", ms: DictationPerf.msSince(decodeStart))
+                        self.feed.setPartial(text)
+                    }
+                }
+                try? await Task.sleep(for: Self.partialInterval)
+            }
+        }
+    }
+
+    private func stopPartialPump() {
+        partialEpoch &+= 1
+        partialTask?.cancel()
+        partialTask = nil
+        feed.setPartial(nil)
+    }
+
+    /// The trailing `partialWindowSeconds` of a snapshot (whole snapshot when
+    /// shorter). `raw` stays nil — a partial is never Capture Dump evidence.
+    private static func trailingWindow(of audio: AudioData) -> AudioData {
+        let maxSamples = Int(audio.sampleRate * partialWindowSeconds)
+        guard audio.samples.count > maxSamples else { return audio }
+        return AudioData(
+            samples: Array(audio.samples.suffix(maxSamples)),
+            sampleRate: audio.sampleRate,
+            duration: partialWindowSeconds,
+            raw: nil
+        )
+    }
+
     private func stopRecordingAndProcess() {
         recordingTask?.cancel()
         recordingTask = nil
+        stopPartialPump()
 
         DictationPerf.markRelease()
         let stopStart = DispatchTime.now()

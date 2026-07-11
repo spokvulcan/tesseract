@@ -44,6 +44,33 @@ struct DictationFeedTests {
         #expect(!DictationFeed.Phase.error(.noSpeechDetected).isActive)
     }
 
+    // MARK: - Live Partial (ticket #291)
+
+    @Test
+    func partialIsRecordingScopedAndClearsOnPhaseExit() {
+        let feed = DictationFeed()
+
+        // Writes outside `.recording` are dropped — a decode resolving after
+        // the key release cannot resurrect a caption.
+        feed.setPartial("hello")
+        #expect(feed.partial == nil)
+
+        feed.setPhase(.recording)
+        feed.setPartial("hello")
+        #expect(feed.partial == "hello")
+
+        // Revisions replace wholesale; clearing mid-recording is allowed
+        // (streaming became unavailable).
+        feed.setPartial("hello world")
+        #expect(feed.partial == "hello world")
+        feed.setPartial(nil)
+        #expect(feed.partial == nil)
+
+        feed.setPartial("hello again")
+        feed.setPhase(.processing)
+        #expect(feed.partial == nil)
+    }
+
     // MARK: - Beats
 
     @Test

@@ -380,7 +380,7 @@ final class DependencyContainer: ObservableObject {
 
     // Coordinator
     lazy var dictationCoordinator: DictationCoordinator = {
-        DictationCoordinator(
+        let coordinator = DictationCoordinator(
             audioCapture: audioCaptureEngine,
             transcriptionEngine: transcriptionEngine,
             textInjector: textInjector,
@@ -391,6 +391,15 @@ final class DependencyContainer: ObservableObject {
             captureDump: captureDumpStore,
             pairs: correctionPairStore
         )
+        // The Live Partial pump (ticket #291) runs only while the selected
+        // variant consumes the signal — the coordinator reads a policy
+        // closure; which variant is live never crosses into the pipeline.
+        coordinator.isLivePartialsEnabled = { [weak self] in
+            guard let self else { return false }
+            return OverlayVariants.variant(for: self.settingsManager.overlayVariantRaw)
+                .usesLivePartials
+        }
+        return coordinator
     }()
 
     /// The variant-agnostic overlay action surface (ticket #289): variants

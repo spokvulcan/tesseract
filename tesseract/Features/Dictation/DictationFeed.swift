@@ -74,6 +74,13 @@ final class DictationFeed {
     private(set) var recordingStarted: Date?
     private(set) var beat: Beat?
 
+    /// The **Live Partial** signal (ticket #291): a revising snapshot of what
+    /// ASR hears while recording. Replaced wholesale on each revision (partials
+    /// rewrite themselves — never append), scoped to `.recording`, and `nil`
+    /// whenever streaming is unavailable (partials off, model busy, no words
+    /// yet) — variants that ignore it keep working unchanged.
+    private(set) var partial: String?
+
     /// Overall loudness, 0–1 (normalized from dBFS in the audio tap).
     private(set) var level: Float = 0
     /// Log-spaced frequency bands, each 0–1; `MeterFrame.bandCount` entries.
@@ -90,8 +97,19 @@ final class DictationFeed {
             if recordingStarted == nil { recordingStarted = Date() }
         } else {
             recordingStarted = nil
+            // Recording-scoped: a partial never outlives its take (the pump
+            // clears too, but the phase flip is the authoritative edge).
+            partial = nil
         }
         phase = newPhase
+    }
+
+    /// Publishes a Live Partial revision (or clears with `nil`). Writes are
+    /// dropped outside `.recording` so a decode that resolves after the key
+    /// release cannot resurrect a caption for a finished take.
+    func setPartial(_ text: String?) {
+        guard text == nil || phase == .recording else { return }
+        if partial != text { partial = text }
     }
 
     func emit(_ outcome: Outcome) {
