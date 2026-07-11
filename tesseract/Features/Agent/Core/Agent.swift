@@ -92,36 +92,26 @@ final class Agent {
 
     /// Update the active tool set. Called before each prompt to reflect dynamic settings.
     func updateTools(_ tools: [AgentToolDefinition]) {
-        guard state.phase == .idle else { return }
+        guard !state.isBusy else { return }
         context.tools = tools
         state.tools = tools
     }
 
     // MARK: - Message State Management
 
-    /// Load persisted messages into the agent's context and state.
-    /// Used when restoring a conversation from disk.
+    /// Replace the agent's message log — restoring a conversation from disk,
+    /// switching conversations, or truncating for edit-and-resend.
     func loadMessages(_ messages: [any AgentMessageProtocol & Sendable]) {
-        guard state.phase == .idle else { return }
+        guard !state.isBusy else { return }
         context.messages = messages
         state.messages = messages.map { $0 as any AgentMessageProtocol }
-    }
-
-    /// Reset agent messages (e.g. when creating a new conversation).
-    func resetMessages(_ messages: [any AgentMessageProtocol & Sendable] = []) {
-        guard state.phase == .idle else { return }
-        context.messages = messages
-        state.messages = messages.map { $0 as any AgentMessageProtocol }
-        state.streamMessage = nil
-        state.pendingToolCalls.removeAll()
-        state.error = nil
     }
 
     // MARK: - Public API
 
     /// Start a new agent loop with the given message.
     func prompt(_ message: any AgentMessageProtocol & Sendable) {
-        guard state.phase == .idle else { return }
+        guard !state.isBusy else { return }
         beginRun { [gen = generate, cfg = makeLoopConfig(), emit = makeEmitter()] ctx, token in
             await agentLoop(
                 prompts: [message],
@@ -137,7 +127,7 @@ final class Agent {
 
     /// Continue from existing context without new prompts (retry/resume).
     func `continue`() {
-        guard state.phase == .idle else { return }
+        guard !state.isBusy else { return }
         // Precondition: last message must not be an unfinished assistant turn.
         if context.messages.last is AssistantMessage { return }
         beginRun { [gen = generate, cfg = makeLoopConfig(), emit = makeEmitter()] ctx, token in
@@ -161,10 +151,10 @@ final class Agent {
         contextWindow: Int,
         summarize: @escaping @Sendable (String) async throws -> String
     ) async {
-        guard state.phase == .idle else { return }
+        guard !state.isBusy else { return }
         guard !context.messages.isEmpty else { return }
 
-        state.phase = .transformingContext(.compaction)
+        state.isBusy = true
 
         let messages = context.messages
         let emit = makeEmitter()
@@ -191,16 +181,14 @@ final class Agent {
                     didMutate: false,
                     messages: nil
                 ))
-            state.error = error.localizedDescription
+            Log.agent.error("Forced compaction failed: \(error.localizedDescription)")
         }
 
-        // Standalone run-lifecycle envelope: drain the transform events (the
-        // reducer resumes `.streaming` on `contextTransformEnd`) *then* settle to
-        // `.idle`, mirroring `finishRun`. Draining here makes the final phase
-        // deterministic instead of racing the async event drain — the subtlety
-        // the old two-switch `phase == .idle` compaction gate depended on.
+        // Standalone run-lifecycle envelope: drain the transform events *then*
+        // settle the busy bit, mirroring `finishRun` — subscribers see every
+        // event before the agent reads as idle.
         drainPendingEvents()
-        state.phase = .idle
+        state.isBusy = false
     }
 
     /// Cancel in-progress generation.
@@ -244,8 +232,7 @@ final class Agent {
     ) {
         let token = CancellationToken()
         cancellationToken = token
-        state.phase = .streaming
-        state.error = nil
+        state.isBusy = true
 
         // Copy context out (value type — the loop mutates its own copy).
         let snapshot = context
@@ -273,9 +260,7 @@ final class Agent {
         // subscribers see all events before the idle transition.
         drainPendingEvents()
 
-        state.phase = .idle
-        state.streamMessage = nil
-        state.pendingToolCalls.removeAll()
+        state.isBusy = false
         cancellationToken = nil
         runTask = nil
     }

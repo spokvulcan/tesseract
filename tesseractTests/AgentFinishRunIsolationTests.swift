@@ -60,7 +60,7 @@ struct AgentFinishRunIsolationTests {
 
         // Reaching here at all means `finishRun` completed without tripping the
         // isolation trap. The committed projection must reflect the loop result.
-        #expect(agent.state.phase == .idle)
+        #expect(agent.state.isBusy == false)
         #expect(agent.state.messages.contains { ($0 as? UserMessage)?.content == "hello" })
     }
 }

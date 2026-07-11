@@ -9,7 +9,7 @@
 //
 //  `isGenerating` is set *eagerly* in `send`/`runUnderLease` — before
 //  `agent.prompt` runs — because the run may sit **queued** behind the lease
-//  while `agent.state.phase` is still `.idle`. The flag therefore means "a
+//  while the agent itself is still idle. The flag therefore means "a
 //  foreground run is queued **or** active," a fact only this module knows.
 //
 //  Publisher-agnostic (ARCHITECTURE.md's panel-controller rule): the

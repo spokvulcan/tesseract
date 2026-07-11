@@ -1,32 +1,23 @@
 import Foundation
 import Observation
 
-// MARK: - AgentPhase
-
-/// Lightweight run phase — drives UI indicators for what the agent is doing right now.
-enum AgentPhase: Sendable, Equatable {
-    case idle
-    case transformingContext(ContextTransformReason)
-    case streaming
-    case executingTool(String)  // tool name
-}
-
 // MARK: - AgentState
 
-/// Observable state container for the agent. SwiftUI views read properties directly
+/// Observable state container for the agent: the committed message log plus
+/// the busy bit the idle guards read. SwiftUI views read properties directly
 /// via the Observation framework — no `@Published` wrappers needed.
+///
+/// Run-presentation detail (live stream, phase, pending tool calls) is NOT
+/// here: the **Chat Session**'s event fold owns it (ADR-0024). This state
+/// once mirrored that detail — a second fold nobody read.
 @MainActor
 @Observable
 final class AgentState {
     var systemPrompt: String = ""
-    var model: AgentModelRef?
     var tools: [AgentToolDefinition] = []
     var messages: [any AgentMessageProtocol] = []
-    var phase: AgentPhase = .idle
-    var streamMessage: AssistantMessage?
-    var pendingToolCalls: Set<String> = []
-    var error: String?
 
-    /// Convenience — true when the agent is doing anything (not idle).
-    var isStreaming: Bool { phase != .idle }
+    /// True from run begin (or standalone compaction) until the envelope
+    /// settles — owned by `Agent.beginRun`/`finishRun`, not the event fold.
+    var isBusy: Bool = false
 }

@@ -765,11 +765,7 @@ final class ChatSession {
         }
         mutateStore()
         let destination = conversationStore.currentConversation?.messages ?? []
-        if destination.isEmpty {
-            agent.resetMessages([])
-        } else {
-            agent.loadMessages(destination)
-        }
+        agent.loadMessages(destination)
         resync(from: destination)
         agentRun.finish()  // clear isGenerating synchronously
         clearLiveState()

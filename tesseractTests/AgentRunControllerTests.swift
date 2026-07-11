@@ -86,7 +86,7 @@ struct AgentRunControllerTests {
 
         // Eager: flag is up while the run is still queued and the agent idle.
         #expect(run.isGenerating == true)
-        #expect(agent.state.phase == .idle)
+        #expect(agent.state.isBusy == false)
 
         // The lease throws in ensureLoaded → the catch resets the flag.
         try await waitUntilIdle(run)

@@ -3,10 +3,11 @@
 //  tesseractTests
 //
 //  Tests the **Agent State Reducer** at its own seam: construct an `AgentState`,
-//  feed it a scripted `[AgentEvent]`, assert the resulting state. No `Agent`,
-//  loop, arbiter, or loaded model — the fold rules are verifiable in
-//  milliseconds. Asserts external behavior (resulting `messages`/`streamMessage`/
-//  `phase`/`pendingToolCalls`), never private switch structure.
+//  feed it a scripted `[AgentEvent]`, assert the resulting message log. No
+//  `Agent`, loop, arbiter, or loaded model — the fold rules are verifiable in
+//  milliseconds. The reducer owns the message fold only; run-presentation
+//  detail belongs to the Chat Session's fold (ADR-0024) and the busy bit to
+//  the run envelope.
 //
 
 import Foundation
@@ -23,74 +24,23 @@ struct AgentStateReducerTests {
         }
     }
 
-    // MARK: - Tool execution
-
-    /// A `.toolExecutionStart` records the call id in `pendingToolCalls` and
-    /// drives the phase to `.executingTool(name)`.
-    @Test func toolExecutionStartAddsPendingCallAndExecutingPhase() {
-        let state = AgentState()
-        reduce(
-            [.toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}")],
-            into: state)
-
-        #expect(state.pendingToolCalls == ["call-1"])
-        #expect(state.phase == .executingTool("read_file"))
-    }
-
-    /// `.toolExecutionEnd` drops its id from `pendingToolCalls`; the phase only
-    /// returns to `.streaming` once the *last* outstanding call finishes.
-    @Test func toolExecutionEndResumesStreamingOnlyWhenAllCallsDone() {
-        let state = AgentState()
-        reduce(
-            [
-                .toolExecutionStart(toolCallId: "call-1", toolName: "read_file", argsJSON: "{}"),
-                .toolExecutionStart(toolCallId: "call-2", toolName: "write_file", argsJSON: "{}"),
-                .toolExecutionEnd(
-                    toolCallId: "call-1", toolName: "read_file",
-                    result: AgentToolResult(content: []), isError: false),
-            ], into: state)
-
-        // One still outstanding — stays in the executing phase.
-        #expect(state.pendingToolCalls == ["call-2"])
-        #expect(state.phase == .executingTool("write_file"))
-
-        reduce(
-            [
-                .toolExecutionEnd(
-                    toolCallId: "call-2", toolName: "write_file",
-                    result: AgentToolResult(content: []), isError: false)
-            ], into: state)
-
-        #expect(state.pendingToolCalls.isEmpty)
-        #expect(state.phase == .streaming)
-    }
-
     // MARK: - Message commit
 
-    /// `.messageEnd` clears the progressive `streamMessage` and appends the
-    /// committed assistant message.
-    @Test func messageEndClearsStreamAndAppendsAssistantMessage() {
+    /// `.messageEnd` appends the committed assistant message.
+    @Test func messageEndAppendsAssistantMessage() {
         let state = AgentState()
-        state.streamMessage = AssistantMessage(content: "partial…")
+        reduce([.messageEnd(message: AssistantMessage(content: "final answer"))], into: state)
 
-        let committed = AssistantMessage(content: "final answer")
-        reduce([.messageEnd(message: committed)], into: state)
-
-        #expect(state.streamMessage == nil)
         #expect(state.messages.count == 1)
         #expect(state.messages.first?.asAssistant?.text == "final answer")
     }
 
     /// The `hasContent` guard: an empty assistant message (no text, thinking, or
-    /// tool calls — the shape produced by cancel/error paths) is dropped, but
-    /// `streamMessage` is still cleared.
+    /// tool calls — the shape produced by cancel/error paths) is dropped.
     @Test func messageEndDropsEmptyAssistantTurn() {
         let state = AgentState()
-        state.streamMessage = AssistantMessage(content: "partial…")
-
         reduce([.messageEnd(message: AssistantMessage(content: ""))], into: state)
 
-        #expect(state.streamMessage == nil)
         #expect(state.messages.isEmpty)
     }
 
@@ -134,42 +84,13 @@ struct AgentStateReducerTests {
         #expect(state.messages.last is ToolResultMessage)
     }
 
-    // MARK: - Streaming
+    // MARK: - Context transform
 
-    /// `.messageUpdate` publishes the in-flight assistant message as
-    /// `streamMessage`.
-    @Test func messageUpdateSetsStreamMessage() {
+    /// A mutating `.contextTransformEnd` replaces the log with the compacted
+    /// messages.
+    @Test func contextTransformEndAppliesMutatedMessages() {
         let state = AgentState()
-        let partial = AssistantMessage(content: "stream…")
-        reduce(
-            [
-                .messageUpdate(
-                    message: partial,
-                    event: .textDelta(contentIndex: 0, delta: "stream…", partial: partial))
-            ],
-            into: state)
-
-        #expect(state.streamMessage?.asAssistant?.text == "stream…")
-    }
-
-    // MARK: - Lifecycle phase
-
-    /// `.agentStart` moves the run into `.streaming`.
-    @Test func agentStartEntersStreamingPhase() {
-        let state = AgentState()
-        reduce([.agentStart], into: state)
-        #expect(state.phase == .streaming)
-    }
-
-    // MARK: - Context transform phase
-
-    /// `.contextTransformStart` shows the transform phase; `.contextTransformEnd`
-    /// resumes `.streaming` and applies the mutated messages.
-    @Test func contextTransformStartThenEndDrivesPhaseAndAppliesMessages() {
-        let state = AgentState()
-
-        reduce([.contextTransformStart(reason: .compaction)], into: state)
-        #expect(state.phase == .transformingContext(.compaction))
+        state.messages = [UserMessage(content: "long history")]
 
         let compacted: [any AgentMessageProtocol & Sendable] = [
             AssistantMessage(content: "summary")
@@ -178,13 +99,11 @@ struct AgentStateReducerTests {
             [.contextTransformEnd(reason: .compaction, didMutate: true, messages: compacted)],
             into: state)
 
-        #expect(state.phase == .streaming)
         #expect(state.messages.count == 1)
         #expect(state.messages.first?.asAssistant?.text == "summary")
     }
 
-    /// A non-mutating `.contextTransformEnd` leaves `messages` untouched but
-    /// still resumes `.streaming`.
+    /// A non-mutating `.contextTransformEnd` leaves `messages` untouched.
     @Test func contextTransformEndWithoutMutationKeepsMessages() {
         let state = AgentState()
         state.messages = [UserMessage(content: "keep me")]
@@ -193,16 +112,41 @@ struct AgentStateReducerTests {
             [.contextTransformEnd(reason: .compaction, didMutate: false, messages: nil)],
             into: state)
 
-        #expect(state.phase == .streaming)
         #expect(state.messages.count == 1)
         #expect(state.messages.first?.asUser?.content == "keep me")
     }
 
+    // MARK: - Presentation events
+
+    /// Run-presentation events fold to nothing here — the busy bit belongs to
+    /// the run envelope and the live-stream detail to the Chat Session.
+    @Test func presentationEventsLeaveTheMessageLogAndBusyBitAlone() {
+        let state = AgentState()
+        state.messages = [UserMessage(content: "hi")]
+        let partial = AssistantMessage(content: "stream…")
+
+        reduce(
+            [
+                .agentStart,
+                .messageStart(message: partial),
+                .messageUpdate(
+                    message: partial,
+                    event: .textDelta(contentIndex: 0, delta: "stream…", partial: partial)),
+                .toolExecutionStart(toolCallId: "c1", toolName: "read_file", argsJSON: "{}"),
+                .toolExecutionEnd(
+                    toolCallId: "c1", toolName: "read_file",
+                    result: AgentToolResult(content: []), isError: false),
+                .agentEnd(messages: []),
+            ], into: state)
+
+        #expect(state.messages.count == 1)
+        #expect(state.isBusy == false)
+    }
+
     // MARK: - Scripted sequence
 
-    /// A full scripted turn folds to the expected settled state: start →
-    /// stream → commit, ending streaming with the message committed and no
-    /// residual stream.
+    /// A full scripted turn folds to the expected settled log: start →
+    /// stream → commit, ending with the message committed.
     @Test func scriptedStreamingTurnSettlesToCommittedState() {
         let state = AgentState()
         let partial = AssistantMessage(content: "hel")
@@ -218,8 +162,6 @@ struct AgentStateReducerTests {
                 .messageEnd(message: final),
             ], into: state)
 
-        #expect(state.phase == .streaming)  // finishRun owns the .idle transition, not the fold
-        #expect(state.streamMessage == nil)
         #expect(state.messages.count == 1)
         #expect(state.messages.first?.asAssistant?.text == "hello")
     }

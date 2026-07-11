@@ -880,10 +880,12 @@ coordinator, busy flag as standalone spine state.
 ### Agent state reduction
 
 **Agent State Reducer**:
-The single fold of the `AgentEvent` stream into run-level `AgentState`, total over
-every event. Distinct from the **Generation Accumulator**, which folds one turn's
-*token* stream into message content — the reducer folds *lifecycle* events into the
-observable run state.
+The single fold of the `AgentEvent` stream into the agent's committed message log,
+total over every event. Run-presentation detail (live stream, phase, pending tool
+calls) is the **Chat Session** fold's alone (ADR-0024), and the busy bit belongs to
+the run envelope — the reducer owns only the message log. Distinct from the
+**Generation Accumulator**, which folds one turn's *token* stream into message
+content.
 _Avoid_: Generation Accumulator (the token-stream fold — say which "fold"), event
 handler / `handleEvent` (this is the fold, not the notify wrapper that hosts it),
 dispatcher, state machine, store.
