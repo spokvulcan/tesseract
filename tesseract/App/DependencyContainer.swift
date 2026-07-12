@@ -77,6 +77,57 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
+    // Memory (ADR-0035, map #314): the two-layer living store. The embedder is
+    // a third co-resident MLX model, outside the arbiter like the proofreader
+    // — embedding is a tiny forward pass with no decode, so it does not need
+    // to contend for the lease at all. Built in methods for the same isolation
+    // reason as the Proofread Pass above.
+    lazy var memoryStore: MemoryStore = makeMemoryStore()
+    lazy var memoryEmbedder = MemoryEmbedder()
+    lazy var memoryEngine: MemoryEngine = makeMemoryEngine()
+
+    private func makeMemoryStore() -> MemoryStore {
+        let home = PathSandbox.defaultRoot.appendingPathComponent("memory", isDirectory: true)
+        do {
+            return try MemoryStore(directory: home)
+        } catch {
+            // A memory store that cannot open must not take the app down: the
+            // assistant is usable without memory, and it is not usable crashed.
+            // Fall back to a scratch store so every call site still has
+            // somewhere to go — this launch simply forgets.
+            Log.memory.error(
+                "Memory store failed to open at \(home.path): \(error.localizedDescription)")
+        }
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tesseract-memory-\(UUID().uuidString)", isDirectory: true)
+        do {
+            return try MemoryStore(directory: scratch)
+        } catch {
+            // A fresh temp directory is unwritable: the filesystem is gone, and
+            // nothing else in this app is going to work either.
+            Log.memory.fault("Memory store cannot open anywhere: \(error.localizedDescription)")
+            preconditionFailure("Memory store could not open a scratch database")
+        }
+    }
+
+    private func makeMemoryEngine() -> MemoryEngine {
+        let store = memoryStore
+        let embedder = memoryEmbedder
+        let settings = settingsManager
+        let downloads = modelDownloadManager
+        return MemoryEngine(
+            store: store,
+            embedder: embedder,
+            isEnabled: { settings.memoryEnabled },
+            isDictationCaptureEnabled: { settings.memoryCaptureDictation },
+            embedderDirectory: {
+                downloads.isDownloaded(ModelDefinition.defaultEmbeddingModelID)
+                    ? downloads.modelPath(for: ModelDefinition.defaultEmbeddingModelID)
+                    : nil
+            }
+        )
+    }
+
     // Text Injection
     lazy var textInjector = TextInjector()
     lazy var hotkeyManager = HotkeyManager()

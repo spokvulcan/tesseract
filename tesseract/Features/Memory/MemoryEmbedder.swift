@@ -1,0 +1,110 @@
+//
+//  MemoryEmbedder.swift
+//  tesseract
+//
+//  The memory system's embedding worker (ADR-0035 §5, §8).
+//
+//  A third co-resident MLX model, following ADR-0034's proofreader precedent
+//  exactly: an `actor` so inference runs off the main actor, its own
+//  `ModelContainer`, deliberately OUTSIDE the arbiter's `.llm`/`.tts` slots.
+//  ADR-0034 established there is no single-container assertion in the stack —
+//  a second (or third) co-resident model is architecturally safe.
+//
+//  Qwen3-Embedding-0.6B-4bit-DWQ: ~335 MB, 1024 dims. Measured on this
+//  machine: 0.4 s to load, 334 texts/sec warm.
+//
+//  Like the proofreader, this NEVER touches the process-global
+//  `MLX.Memory.cacheLimit` — that knob belongs to the agent's `LLMActor`.
+//
+//  Unlike the proofreader, it does not skip-when-busy. Embedding is a tiny
+//  forward pass with no decode; it costs milliseconds and contending for it
+//  would cost more in complexity than it saves in GPU time.
+//
+
+import Foundation
+import MLX
+import MLXEmbedders
+import MLXHuggingFace
+import MLXLMCommon
+// `#huggingFaceTokenizerLoader()` expands to code referencing
+// `Tokenizers.AutoTokenizer`, so the module must be in scope at the call site
+// — same as `ProofreadModel`.
+import Tokenizers
+
+actor MemoryEmbedder {
+
+    private var container: EmbedderModelContainer?
+    private var loadedDirectory: URL?
+    private var inFlightLoad: Task<Void, Error>?
+
+    var isLoaded: Bool { container != nil }
+
+    /// Single-flight: concurrent callers await the same load.
+    func load(from directory: URL) async throws {
+        if loadedDirectory == directory, container != nil { return }
+        if let inFlightLoad {
+            try await inFlightLoad.value
+            if loadedDirectory == directory, container != nil { return }
+        }
+        let load = Task { () throws in
+            let loaded = try await EmbedderModelFactory.shared.loadContainer(
+                from: directory,
+                using: #huggingFaceTokenizerLoader()
+            )
+            self.container = loaded
+            self.loadedDirectory = directory
+        }
+        inFlightLoad = load
+        defer { if inFlightLoad == load { inFlightLoad = nil } }
+        try await load.value
+        Log.memory.info("Embedding model loaded from \(directory.lastPathComponent)")
+    }
+
+    func unload() {
+        container = nil
+        loadedDirectory = nil
+    }
+
+    /// Embed a batch. Returns L2-normalized vectors, so cosine similarity is a
+    /// plain dot product downstream.
+    ///
+    /// Returns `[]` when the model isn't loaded — every caller treats an empty
+    /// result as "no vector available" and degrades to keyword-only retrieval
+    /// rather than failing. Memory must never take the primary flow down.
+    func embed(_ texts: [String]) async -> [[Float]] {
+        guard let container, !texts.isEmpty else { return [] }
+        return await container.perform {
+            (model: EmbeddingModel, tokenizer: MLXLMCommon.Tokenizer, pooling: Pooling) -> [[Float]]
+            in
+            let inputs = texts.map { text in
+                tokenizer.encode(text: Self.truncate(text), addSpecialTokens: true)
+            }
+            let maxLength = inputs.reduce(into: 16) { $0 = max($0, $1.count) }
+            let pad = tokenizer.eosTokenId ?? 0
+            let padded = stacked(
+                inputs.map { MLXArray($0 + Array(repeating: pad, count: maxLength - $0.count)) })
+            let mask = (padded .!= pad)
+            let tokenTypes = MLXArray.zeros(like: padded)
+            let result = pooling(
+                model(padded, positionIds: nil, tokenTypeIds: tokenTypes, attentionMask: mask),
+                normalize: true, applyLayerNorm: true
+            )
+            result.eval()
+            return result.map { $0.asArray(Float.self) }
+        }
+    }
+
+    func embed(_ text: String) async -> [Float]? {
+        await embed([text]).first
+    }
+
+    /// The encoder has a context limit and a memory record is short by
+    /// construction; a runaway episode (a pasted logfile) must not blow the
+    /// batch's padding out to its length.
+    private static let characterBudget = 2_000
+
+    private static func truncate(_ text: String) -> String {
+        guard text.count > characterBudget else { return text }
+        return String(text.prefix(characterBudget))
+    }
+}

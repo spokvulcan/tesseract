@@ -12,6 +12,10 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     /// The dictation **Proofread Pass**'s small co-resident model (ADR-0034)
     /// — its own category so it never appears in the agent-model picker.
     case proofread = "Proofread"
+    /// The memory system's embedding model (ADR-0035) — same reasoning as
+    /// `.proofread`: a co-resident, non-generative worker that must never
+    /// appear in the agent-model picker.
+    case embedding = "Memory"
 
     var id: String { rawValue }
 
@@ -21,6 +25,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         case .textToSpeech: "speaker.wave.3.fill"
         case .agent: "brain"
         case .proofread: "text.badge.checkmark"
+        case .embedding: "brain.head.profile"
         }
     }
 }
@@ -75,6 +80,7 @@ extension ModelDefinition {
     static let defaultSpeechToTextModelID = "whisper-large-v3-turbo"
     static let defaultTextToSpeechModelID = "qwen3-tts-voicedesign"
     static let defaultProofreadModelID = "qwen3.5-0.8b-proofread"
+    static let defaultEmbeddingModelID = "qwen3-embedding-0.6b"
 
     static let all: [ModelDefinition] = [
         ModelDefinition(
@@ -140,6 +146,19 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~0.5 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
+            id: "qwen3-embedding-0.6b",
+            displayName: "Memory Embedder",
+            description:
+                "Turns what you say into vectors so the assistant can find the right memory. Runs alongside the agent model.",
+            category: .embedding,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~335 MB",
             dependencies: []
         ),
         ModelDefinition(

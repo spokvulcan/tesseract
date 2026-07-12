@@ -194,6 +194,9 @@ struct ModelsPageView: View {
         case .proofread:
             return model.id == ModelDefinition.defaultProofreadModelID
                 && container.proofreadPass.isModelLoaded
+        case .embedding:
+            return model.id == ModelDefinition.defaultEmbeddingModelID
+                && container.memoryEngine.isEmbedderLoaded
         }
     }
 }

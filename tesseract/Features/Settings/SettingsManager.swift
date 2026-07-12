@@ -270,6 +270,22 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - Memory (ADR-0035)
+
+    var memoryEnabled: Bool {
+        didSet { SettingsCatalogue.memoryEnabled.write(memoryEnabled, to: store) }
+    }
+
+    var memoryCaptureDictation: Bool {
+        didSet {
+            SettingsCatalogue.memoryCaptureDictation.write(memoryCaptureDictation, to: store)
+        }
+    }
+
+    var memorySleepEnabled: Bool {
+        didSet { SettingsCatalogue.memorySleepEnabled.write(memorySleepEnabled, to: store) }
+    }
+
     var selectedAgentModelID: String {
         didSet { SettingsCatalogue.selectedAgentModelID.write(selectedAgentModelID, to: store) }
     }
@@ -518,6 +534,9 @@ final class SettingsManager {
             from: store)
         self.companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.load(
             from: store)
+        self.memoryEnabled = SettingsCatalogue.memoryEnabled.load(from: store)
+        self.memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.load(from: store)
+        self.memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.load(from: store)
         self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
         self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(
             from: store)
@@ -640,6 +659,9 @@ final class SettingsManager {
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
         companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.default
+        memoryEnabled = SettingsCatalogue.memoryEnabled.default
+        memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.default
+        memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.default
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default

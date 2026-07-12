@@ -94,6 +94,20 @@ enum SettingsCatalogue {
         "companionHeartbeatEnabled", default: false)
     static let companionHeartbeatSpeaks = Setting.bool(
         "companionHeartbeatSpeaks", default: false)
+
+    // MARK: - Memory (ADR-0035, map #314)
+
+    /// The master switch for the living memory system. Off disables capture,
+    /// retrieval, and consolidation alike.
+    static let memoryEnabled = Setting.bool("memoryEnabled", default: true)
+    /// Whether dictated content becomes memory. The owner's explicit call
+    /// ("dictated content is your life too", map #314 final grill) — but it is
+    /// the one capture source whose text is usually addressed to *other* apps,
+    /// so it gets its own switch.
+    static let memoryCaptureDictation = Setting.bool("memoryCaptureDictation", default: true)
+    /// Whether sleep consolidation may run when the Mac goes idle.
+    static let memorySleepEnabled = Setting.bool("memorySleepEnabled", default: true)
+
     static let selectedAgentModelID = Setting.string(
         "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)
     static let selectedSpeechToTextModelID = Setting.string(
