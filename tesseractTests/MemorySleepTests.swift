@@ -30,12 +30,13 @@ import Testing
 struct MemorySleepTests {
 
     /// A model that says exactly what the test tells it to, chosen by what it is
-    /// being asked. Sleep's three prompts are distinguishable by their opening
-    /// lines, which is all the routing this needs.
+    /// being asked. Sleep's four prompts are distinguishable by a phrase apiece,
+    /// which is all the routing this needs.
     final class ScriptedModel: @unchecked Sendable {
         var extraction = "NOTHING"
         var verdict = "NEW"
         var grades = ""
+        var reread = "NOTHING"
         private(set) var prompts: [String] = []
 
         var complete: @Sendable (String) async throws -> String {
@@ -43,6 +44,7 @@ struct MemorySleepTests {
                 await MainActor.run { self.prompts.append(prompt) }
                 if prompt.contains("grading your own memory") { return grades }
                 if prompt.contains("whether it is news") { return verdict }
+                if prompt.contains("memories is WRONG") { return reread }
                 return extraction
             }
         }
@@ -204,6 +206,122 @@ struct MemorySleepTests {
         // The successor inherits what the old belief earned: it is its
         // continuation, not a stranger.
         #expect(successor.storageStrength >= superseded.storageStrength)
+    }
+
+    // MARK: - The owner's veto
+
+    /// The whole point of two layers. The episode is testimony and cannot be
+    /// wrong; the belief drawn from it is inference and can be. Contest sends the
+    /// inference back to the testimony.
+    private func contestedMemory(
+        _ text: String, from episodeText: String, in store: MemoryStore, engine: MemoryEngine
+    ) async throws -> (MemoryRecord, Episode) {
+        let episode = Episode(source: .chat, occurredAt: Date(), text: episodeText)
+        try await store.append(episode)
+        try await store.markConsolidated([episode.id], at: Date())
+
+        let memory = MemoryRecord(
+            text: text, kind: .belief, provenance: .inferred,
+            sourceEpisodeIDs: [episode.id], bornAt: Date())
+        try await store.upsert(memory)
+        await engine.contest(memory)
+
+        let contested = try #require(try await store.memory(id: memory.id))
+        #expect(contested.status == .contested)
+        return (contested, episode)
+    }
+
+    @Test("Contesting sends the belief back to what he actually said — and the re-read wins")
+    func contestingRereadsTheSources() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        let (contested, _) = try await contestedMemory(
+            "He goes running every morning.",
+            from: "did my 100 sit-ups and 50 push-ups before breakfast again",
+            in: store, engine: engine)
+        // It had earned something while it was wrong.
+        var strengthened = contested
+        strengthened.storageStrength = 3.0
+        strengthened.confirmations = 4
+        try await store.upsert(strengthened)
+
+        model.reread = "STATED|belief|He does 100 sit-ups and 50 push-ups before breakfast."
+        await makeSleep(engine, model).run()
+
+        let after = try #require(try await store.memory(id: contested.id))
+        #expect(after.status == .superseded, "contested is not a resting state")
+        #expect(after.text == "He goes running every morning.", "what I used to think, verbatim")
+
+        let successor = try #require(
+            try await store.allLiveMemories().first { $0.text.contains("sit-ups") })
+        #expect(after.supersededBy == successor.id)
+        // Nothing is inherited across a veto. Strength the old belief accrued
+        // *while he considered it wrong* is not credit its replacement gets to
+        // spend — unlike an ordinary supersession, where the old belief was right
+        // for a while and the new one is its continuation.
+        #expect(successor.confirmations == 0)
+        #expect(successor.storageStrength < 3.0)
+    }
+
+    @Test("A re-read that just restates the rejected memory is the model arguing — he wins")
+    func aRestatementIsNotACorrection() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        let (contested, _) = try await contestedMemory(
+            "He goes running every morning.",
+            from: "went for a run this morning",
+            in: store, engine: engine)
+
+        // Same claim back, with a full stop and a different case. The evidence
+        // does support it — and he still says it is wrong, and he is the authority
+        // on his own life.
+        model.reread = "STATED|belief|he goes running every morning"
+        await makeSleep(engine, model).run()
+
+        let after = try #require(try await store.memory(id: contested.id))
+        #expect(after.status == .contested, "not resurrected")
+        #expect(after.tier == .cold, "and not offered again")
+        #expect(try await store.memoryCount() == 1, "no successor was invented")
+    }
+
+    @Test("A contested memory the evidence cannot carry goes cold — it is never deleted")
+    func aContestedMemoryGoesColdNotAway() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        let (contested, episode) = try await contestedMemory(
+            "He is bored by his own project.",
+            from: "ugh, this refactor is dragging",
+            in: store, engine: engine)
+
+        model.reread = "NOTHING"
+        await makeSleep(engine, model).run()
+
+        let after = try #require(try await store.memory(id: contested.id))
+        // Still here. Deletion is his hand alone (ADR-0035 §9) — sleep may move a
+        // belief out of reach, never out of existence, and the dispute rides along
+        // with it if he ever recalls it outright.
+        #expect(after.tier == .cold)
+        #expect(after.status == .contested)
+        #expect(after.storageStrength == contested.storageStrength, "strength is monotone")
+        // And the testimony it was drawn from is untouched by any of it.
+        let source = try #require(try await store.episode(id: episode.id))
+        #expect(source.text == "ugh, this refactor is dragging")
+    }
+
+    @Test("A restatement is caught through punctuation and case")
+    func sameClaimNormalises() {
+        #expect(
+            MemorySleep.isSameClaim(
+                "He goes running every morning.", as: "he goes running every morning"))
+        #expect(
+            !MemorySleep.isSameClaim(
+                "He goes running every morning.", as: "He walks every morning."))
     }
 
     // MARK: - Grading

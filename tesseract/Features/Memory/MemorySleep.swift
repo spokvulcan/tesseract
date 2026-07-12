@@ -13,7 +13,7 @@
 //  it decides is unimportant.
 //
 //  So the thinking happens here, later, offline, when the day is over and its
-//  consequences are visible. Four work items, in this order, because each one
+//  consequences are visible. Five work items, in this order, because each one
 //  depends on the last:
 //
 //    1. **Grade** — what did the memories I recalled yesterday actually *do*?
@@ -21,18 +21,23 @@
 //       not judge. "Retrieved" is not "useful", and conflating them is how these
 //       systems come to believe their own priors.
 //
-//    2. **Extract** — read the day's episodes and write down what is worth
+//    2. **Re-examine** — what he told me I got wrong. A contested belief goes
+//       back to the episodes it was drawn from, without the reading he rejected,
+//       and either a corrected claim supersedes it or it goes cold. His word
+//       about his own life outranks anything I concluded.
+//
+//    3. **Extract** — read the day's episodes and write down what is worth
 //       keeping. In batches, by conversation, because a claim only makes sense
 //       against its neighbours.
 //
-//    3. **Reconcile** — for each new claim, ask what I already believe that is
+//    4. **Reconcile** — for each new claim, ask what I already believe that is
 //       closest to it. **Prediction-error gated**: if the claim says nothing new,
 //       the existing belief is *confirmed* and the rewriter is never invoked. A
 //       memory system whose rewriter runs on every observation will drift into
 //       fiction on rephrasing alone. Only a genuine contradiction supersedes, and
 //       superseding never deletes.
 //
-//    4. **Sweep** — move tiers. Promote what has proved itself; retire what has
+//    5. **Sweep** — move tiers. Promote what has proved itself; retire what has
 //       been superseded, or has been shown repeatedly and never once helped.
 //       Storage strength never decreases, so this is a change of *reachability*,
 //       not of existence.
@@ -53,6 +58,7 @@ final class MemorySleep {
     enum Phase: Equatable, Sendable {
         case idle
         case grading
+        case reexamining
         case extracting
         case reconciling
         case sweeping
@@ -60,6 +66,7 @@ final class MemorySleep {
 
     struct Summary: Sendable, Equatable {
         var graded = 0
+        var reexamined = 0
         var episodesRead = 0
         var added = 0
         var confirmed = 0
@@ -69,7 +76,7 @@ final class MemorySleep {
         var yielded = false
 
         var didAnything: Bool {
-            graded + added + confirmed + superseded + promoted + retired > 0
+            graded + reexamined + added + confirmed + superseded + promoted + retired > 0
         }
     }
 
@@ -176,6 +183,10 @@ final class MemorySleep {
             summary.graded = try await gradeRetrievals()
             try Task.checkCancellation()
 
+            // Before anything I concluded on my own: what he told me I got wrong.
+            try await reexamineContested(into: &summary)
+            try Task.checkCancellation()
+
             try await consolidate(into: &summary)
             try Task.checkCancellation()
 
@@ -193,7 +204,8 @@ final class MemorySleep {
         await engine.refreshStats()
         Log.memory.info(
             "Sleep done in \(Int(Date().timeIntervalSince(started)))s — "
-                + "graded \(summary.graded), read \(summary.episodesRead), "
+                + "graded \(summary.graded), re-read \(summary.reexamined), "
+                + "read \(summary.episodesRead), "
                 + "added \(summary.added), confirmed \(summary.confirmed), "
                 + "superseded \(summary.superseded), promoted \(summary.promoted), "
                 + "retired \(summary.retired)\(summary.yielded ? " (yielded)" : "")")
@@ -317,7 +329,128 @@ final class MemorySleep {
         }
     }
 
-    // MARK: - 2 & 3. Extract, then reconcile — one batch at a time
+    // MARK: - 2. The owner's veto
+
+    /// He said "that's wrong." Now do something about it.
+    ///
+    /// Contest is not delete — deletion is his hand alone (ADR-0035 §9). It is a
+    /// **request for a re-read**, and it can be honoured precisely because the
+    /// store has two layers. The episodes are testimony: verbatim, immutable, not
+    /// in doubt. The belief on top of them is *my inference*, and inference is
+    /// exactly the layer that can be wrong. So sleep goes back to the episodes the
+    /// belief was drawn from and asks what they actually support.
+    ///
+    /// Two outcomes, neither of them a deletion:
+    ///
+    ///   - the evidence supports a **corrected** claim — narrower, or the opposite
+    ///     — and it supersedes the contested one, which remains as the record of
+    ///     what I used to think;
+    ///   - the evidence supports **nothing** once the rejected reading is taken
+    ///     away, and the belief goes cold: still stored, still reachable if he asks
+    ///     for it outright, never offered again.
+    ///
+    /// A contested belief never survives its contest intact. He is the authority on
+    /// his own life, so a re-read that merely restates the rejected claim is not a
+    /// correction — it is the model arguing with him, and it is dropped on the
+    /// floor. The successor also inherits none of the rejected belief's strength or
+    /// confirmations: a claim he threw out must not launder its credibility into
+    /// the one that replaces it.
+    private func reexamineContested(into summary: inout Summary) async throws {
+        let contested = try await engine.store.memories(status: .contested, limit: 200)
+        guard !contested.isEmpty else { return }
+        phase = .reexamining
+
+        for memory in contested {
+            try Task.checkCancellation()
+
+            let episodes = await engine.episodes(for: memory)
+            let correction = episodes.isEmpty ? nil : try await reread(memory, from: episodes)
+
+            guard let correction else {
+                // Nothing survives. Note the tier move is all that happens: the
+                // status stays `contested`, so if he ever does recall it explicitly
+                // the dispute travels with it, and storage strength is untouched
+                // because strength is monotone by construction (ADR-0035 §3).
+                var retired = memory
+                retired.tier = .cold
+                try await engine.store.upsert(retired)
+                try await engine.store.appendJournal(
+                    JournalEntry(
+                        at: Date(), mutation: .demoted, memoryID: memory.id,
+                        detail: episodes.isEmpty
+                            ? "He contested this, and there are no source episodes left to "
+                                + "re-read. Retired."
+                            : "He contested this, and re-reading what he actually said does not "
+                                + "support it. Retired.",
+                        before: memory.text))
+                summary.reexamined += 1
+                summary.retired += 1
+                continue
+            }
+
+            try await add(correction, supersedes: memory, inheritStrength: false, into: &summary)
+            summary.reexamined += 1
+        }
+    }
+
+    /// Ask the episodes, not the belief.
+    private func reread(_ memory: MemoryRecord, from episodes: [Episode]) async throws -> Claim? {
+        let day = DateFormatter()
+        day.dateFormat = "yyyy-MM-dd"
+        let evidence =
+            episodes
+            .sorted { $0.occurredAt < $1.occurredAt }
+            .map { "[\(day.string(from: $0.occurredAt))] He said: \($0.text.prefix(1_200))" }
+            .joined(separator: "\n\n")
+
+        let prompt = """
+            The person I serve has told me that one of my memories is WRONG.
+
+            The memory he rejected:
+            \(memory.text)
+
+            What he actually said — verbatim, and not in doubt. This is the evidence \
+            I drew that memory from:
+
+            \(evidence)
+
+            He is the authority on his own life. His word overrules my conclusion; \
+            the rejected memory is not on the table and must not be restated, \
+            softened, or argued for.
+
+            Re-read the evidence and answer with exactly one line:
+
+            - If the evidence supports a genuinely different claim — narrower, more \
+            careful, or the opposite of what I wrote — write that claim, in the \
+            format below.
+            - Otherwise answer with the single word NOTHING. That is a good answer, \
+            and the common one: most rejected memories were over-readings of \
+            evidence that will not carry any claim at all.
+
+            Format — one line, three fields, pipe-separated:
+            STATED|belief|He is allergic to shellfish.
+            INFERRED|pattern|He works in long focused blocks late at night.
+
+            STATED if he said it outright; INFERRED if I would be concluding it.
+            """
+
+        let response = try await generate(prompt)
+        let claims = Self.parseClaims(response, sourceEpisodeIDs: episodes.map(\.id))
+        // A "correction" that says the same thing again is the model arguing with
+        // him. He wins.
+        return claims.first { !Self.isSameClaim($0.text, as: memory.text) }
+    }
+
+    /// Same claim, allowing for punctuation and case — enough to catch a model that
+    /// re-emits the rejected line with a full stop added.
+    static func isSameClaim(_ lhs: String, as rhs: String) -> Bool {
+        func normalise(_ text: String) -> String {
+            text.lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        return normalise(lhs) == normalise(rhs)
+    }
+
+    // MARK: - 3 & 4. Extract, then reconcile — one batch at a time
 
     /// Read the unconsolidated episodes and write down what is worth keeping.
     ///
@@ -454,7 +587,7 @@ final class MemorySleep {
         return claims
     }
 
-    // MARK: - 3. Reconcile (the prediction-error gate)
+    // MARK: - 4. Reconcile (the prediction-error gate)
 
     /// The gate that keeps the store from drifting into fiction.
     ///
@@ -571,9 +704,15 @@ final class MemorySleep {
         return count > 0 ? .same(0) : .new
     }
 
-    private func add(_ claim: Claim, supersedes old: MemoryRecord?, into summary: inout Summary)
-        async throws
-    {
+    /// - Parameter inheritStrength: whether the successor takes on what the old
+    ///   belief earned. True when a belief is superseded because the world moved on
+    ///   — it was right for a while and the new claim is its continuation, not a
+    ///   stranger. **False when the owner rejected it**: strength it accrued while
+    ///   wrong is not credit the correction gets to spend.
+    private func add(
+        _ claim: Claim, supersedes old: MemoryRecord?, inheritStrength: Bool = true,
+        into summary: inout Summary
+    ) async throws {
         let now = Date()
         var memory = MemoryRecord(
             text: claim.text,
@@ -587,17 +726,20 @@ final class MemorySleep {
         if var old {
             // Superseded, never deleted. A belief that has been replaced is still
             // the truth about what was true, and about what I used to think.
+            let wasContested = old.status == .contested
             old.status = .superseded
             old.supersededBy = memory.id
             try await engine.store.upsert(old)
-            // Inherit what the old belief earned: it was right about *something*
-            // for a while, and the new one is its continuation, not a stranger.
-            memory.storageStrength = max(memory.storageStrength, old.storageStrength)
-            memory.confirmations = old.confirmations
+            if inheritStrength {
+                memory.storageStrength = max(memory.storageStrength, old.storageStrength)
+                memory.confirmations = old.confirmations
+            }
             try await engine.store.appendJournal(
                 JournalEntry(
                     at: now, mutation: .superseded, memoryID: old.id,
-                    detail: "Replaced by a later observation.",
+                    detail: wasContested
+                        ? "He said this was wrong. Corrected against what he actually said."
+                        : "Replaced by a later observation.",
                     before: old.text, after: memory.text))
             summary.superseded += 1
         }
@@ -613,7 +755,7 @@ final class MemorySleep {
         summary.added += 1
     }
 
-    // MARK: - 4. Sweep
+    // MARK: - 5. Sweep
 
     /// Move tiers. Nothing is deleted and no strength is ever taken away — this
     /// changes only what retrieval will *reach for* by default.
@@ -621,7 +763,11 @@ final class MemorySleep {
         let memories = try await engine.store.memories(status: nil, limit: 5_000)
         let now = Date()
 
-        for memory in memories where memory.status != .superseded {
+        // Live beliefs only. A superseded one has no tier worth moving, and a
+        // contested one was just placed by phase 2 — sweeping it here would look
+        // at a freshly-born, never-used belief, conclude it belongs in `hot`, and
+        // put the memory he rejected straight back in front of him.
+        for memory in memories where memory.status == .live {
             try Task.checkCancellation()
             let usefulDays = try await engine.store.distinctUsefulDays(memoryID: memory.id)
             let updated = MemoryLifecycle.sweepTier(
@@ -641,10 +787,10 @@ final class MemorySleep {
                     after: memory.text))
         }
 
-        // A memory the owner superseded by hand, or contested, is reconciled here
-        // too: the claim is re-examined against its episodes next pass. For now
-        // the contested flag simply persists and the read path carries the
-        // dispute — never silently.
+        // Contested memories are not swept: they were dealt with in phase 2, which
+        // either corrected them or put them cold. Between the contest and that
+        // sleep the read path still carries them — with the dispute attached, and
+        // never silently.
     }
 
     // MARK: - The GPU
