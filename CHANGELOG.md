@@ -1,5 +1,81 @@
 # Changelog
 
+## [1.8.0](https://github.com/spokvulcan/tesseract/compare/v1.7.0...v1.8.0) (2026-07-12)
+
+
+### Features
+
+* **agent:** full-size type for inline code and code blocks ([7ebd0c8](https://github.com/spokvulcan/tesseract/commit/7ebd0c8fc9ed2668ec40a3c01b473bab65aeaa67))
+* **agent:** inline-code chip, blockquote bar, and the Markdown Gallery ([94e521d](https://github.com/spokvulcan/tesseract/commit/94e521df99f008aaf89738dfa530dc2886fb1d19))
+* **agent:** Prepared Checkpoint for PARO loads (ADR-0032) ([9ee816e](https://github.com/spokvulcan/tesseract/commit/9ee816ed7b12cf01e60e9e3a8ffd7a5156ec9acd))
+* **companion:** walking skeleton — the lived-with heartbeat ([#303](https://github.com/spokvulcan/tesseract/issues/303)) ([#330](https://github.com/spokvulcan/tesseract/issues/330)) ([1538502](https://github.com/spokvulcan/tesseract/commit/1538502072de20ba48cf22e38e99aa777a04e750))
+* **dictation:** baseline latency instrumentation (DictationPerf) ([#296](https://github.com/spokvulcan/tesseract/issues/296)) ([ea2e93f](https://github.com/spokvulcan/tesseract/commit/ea2e93f8a3c249fc16d552ced1b5d522aa453b73))
+* **dictation:** Correction Pair flywheel — capture, affordances, store ([#300](https://github.com/spokvulcan/tesseract/issues/300)) ([e42d8c1](https://github.com/spokvulcan/tesseract/commit/e42d8c13549e2a30b4ffb522a469d1789d45a333))
+* **dictation:** five overlay variant explorations for the redesign batch ([#312](https://github.com/spokvulcan/tesseract/issues/312)) ([b9fb7bb](https://github.com/spokvulcan/tesseract/commit/b9fb7bbcbae2aac7cf4ed4768ec03fb41cf4db2e))
+* **dictation:** live partial transcription + the Caption overlay variant ([#329](https://github.com/spokvulcan/tesseract/issues/329)) ([522e983](https://github.com/spokvulcan/tesseract/commit/522e98340c6e72c661e1d4b2fda0c91b9a39d50f))
+* **dictation:** Proofread Pass v1 — own MLX model, skip-when-busy (ADR-0034) ([#299](https://github.com/spokvulcan/tesseract/issues/299)) ([96fe775](https://github.com/spokvulcan/tesseract/commit/96fe775fc383691c7a3683ba7b95afd3a22a0b6d))
+* **memory:** "that's wrong" now sends the belief back to the evidence ([3a0d4a1](https://github.com/spokvulcan/tesseract/commit/3a0d4a1b1a5c2456eb07bc2ae883d37a42e6f31a))
+* **memory:** ground and check the morning callback before it speaks ([aed962f](https://github.com/spokvulcan/tesseract/commit/aed962f0f53c9dee47cfbbb8abdbd5cc6b0843be))
+* **memory:** sleep consolidation, idle detection, and the morning callback (ADR-0035) ([e5692ea](https://github.com/spokvulcan/tesseract/commit/e5692eadc0f2c584611e779cb1094ce2fa12dc7a))
+* **memory:** the correction gets a door — contest tool, multi-REPLACES, and the reply that never arrived ([#333](https://github.com/spokvulcan/tesseract/issues/333)) ([e0ba7e4](https://github.com/spokvulcan/tesseract/commit/e0ba7e4aceeaeb905a2c96e1ea7fbd62c522ba54))
+* **memory:** the Memory window — what I believe about you, and why (ADR-0035 §9) ([fb3fb29](https://github.com/spokvulcan/tesseract/commit/fb3fb29aff743593ec516006f5d67e57c42c17d5))
+* **memory:** the owner's switches, and a stricter test for "he said it" ([1e59cdf](https://github.com/spokvulcan/tesseract/commit/1e59cdfe391a68a86f5e86301f0d4d96c00ce6af))
+* **memory:** the two-layer living store — schema, lifecycle, SQLite, embedder (ADR-0035) ([ff36885](https://github.com/spokvulcan/tesseract/commit/ff368852cca96d274a3d7505e2024d16afb5de34))
+* **memory:** wire the living memory into chat, dictation, and the cold start (ADR-0035) ([b702c68](https://github.com/spokvulcan/tesseract/commit/b702c68577a3423502001b904ceeaa22920e15f0))
+
+
+### Bug Fixes
+
+* **memory:** every short memory embedded to the same vector — the EOS attractor ([#332](https://github.com/spokvulcan/tesseract/issues/332)) ([13fa8c9](https://github.com/spokvulcan/tesseract/commit/13fa8c962b431ac613713c152cec86476e174b65))
+* **memory:** journal confirmations, and capture through the tested unwrap ([e1994ab](https://github.com/spokvulcan/tesseract/commit/e1994abc48cd36c256ad0e5d74016d74db771910))
+* **memory:** nine seam defects from the first outside look, and the store takes ownership of its writes ([f7371e6](https://github.com/spokvulcan/tesseract/commit/f7371e67ee051b3c2fc496fde1c66e68f09429a9))
+* **memory:** remember speaks the agent's voice, and dictation keeps one door per testimony ([#333](https://github.com/spokvulcan/tesseract/issues/333)) ([7401300](https://github.com/spokvulcan/tesseract/commit/7401300a648888d27b1029e59cd2816e45284afb))
+* **memory:** sleep must not eat the store it is trying to build ([67ed1bc](https://github.com/spokvulcan/tesseract/commit/67ed1bcfa0ce4c6fda3a2835252056d3d6e07d96))
+* **memory:** the model was never actually shown a single memory ([b52e31d](https://github.com/spokvulcan/tesseract/commit/b52e31dcbda2e07ef73e7302804ad42d397d3b66))
+* **memory:** tier comparison ran backwards — retirements were counted as promotions ([aff06d2](https://github.com/spokvulcan/tesseract/commit/aff06d2a671545eed0e5ce9866cc99ef26910f7a))
+
+
+### Code Refactoring
+
+* **agent:** collapse the Agent event double-fold to the message log ([00ef9e6](https://github.com/spokvulcan/tesseract/commit/00ef9e63a30f3086f9f103a5dcbbef5dd8469f64))
+* **agent:** Managed Generation Driver — one envelope for both spines ([afcfe7c](https://github.com/spokvulcan/tesseract/commit/afcfe7cb1a6fa7d8b7e76bc59264327a5beefc78))
+* **agent:** one conversation-switch sequence in Chat Session ([6c6643d](https://github.com/spokvulcan/tesseract/commit/6c6643da10e85183119c1b523f7ce67201c28142))
+* **agent:** Vision Availability leaf controller ([eae7d98](https://github.com/spokvulcan/tesseract/commit/eae7d9819c1f1ec73886fd9dbf277b5fcbe6e2b9))
+* **dictation:** delete the full-screen border overlay style ([#295](https://github.com/spokvulcan/tesseract/issues/295)) ([8ee6dd6](https://github.com/spokvulcan/tesseract/commit/8ee6dd68b39a3d90f4e05e4854d9cb5e24c3b3d4))
+* **dictation:** extract the Capture Engine Lifecycle decision table ([a1fc052](https://github.com/spokvulcan/tesseract/commit/a1fc052abb8596c0b0ee417e54399376dbdc0f3c))
+* **dictation:** pipeline hardening — audit items 7–10 ([#298](https://github.com/spokvulcan/tesseract/issues/298)) ([dd56f9e](https://github.com/spokvulcan/tesseract/commit/dd56f9ea0af27ca96e2cd06e953ce54b4b9f570d))
+* **personal-assistant:** retire the memories.md era — the living memory replaces it ([109ae25](https://github.com/spokvulcan/tesseract/commit/109ae253d1ef4e239968560918e2a236702d6d78))
+* **platform:** one hotkey matcher behind two thin event adapters ([9c127ad](https://github.com/spokvulcan/tesseract/commit/9c127adb707689c190e0b9e9f5b3a10a65e26b74))
+* **server:** carve the Leaf Store phase out of the completion drive ([1bee73a](https://github.com/spokvulcan/tesseract/commit/1bee73abe2e3ae2e80a203c4cb403695a3d5c44c))
+* **server:** carve the Request Keying phase out of the generation build ([7482787](https://github.com/spokvulcan/tesseract/commit/7482787cd6660d744b3e0ea798989164f213933b))
+* **server:** extension-transfer shield becomes a claim the ledger enforces ([2cb881a](https://github.com/spokvulcan/tesseract/commit/2cb881a1197764660038bb91671945f6c12d1596))
+* **server:** one home for completion-trace assembly ([d72d7d0](https://github.com/spokvulcan/tesseract/commit/d72d7d0a46e6a166e522368321722f187c3009d5))
+* **server:** SSD Residency — one typed observation replaces the ForTesting reads ([a067cbb](https://github.com/spokvulcan/tesseract/commit/a067cbbae3d300ceb0a2be77911bd23b17242246))
+* **speech:** extract PlaybackDiagnosticsDump from the playback adapter ([803e819](https://github.com/spokvulcan/tesseract/commit/803e81950b5fd6f5ebb1fc14ed1a2d023cea2c15))
+* **speech:** one home for the TTS transient-error tail and voice context ([245161f](https://github.com/spokvulcan/tesseract/commit/245161fc3b1e3207c19da7e83d0d81119f216a9b))
+* **transcription:** one owner for the Whisper model file contract ([68a0179](https://github.com/spokvulcan/tesseract/commit/68a0179d61b0928766dc75925dd488dfdf033567))
+
+
+### Documentation
+
+* **adr-0035:** record round two — the correction had no door, and the journal corrects the attribution ([c9aa673](https://github.com/spokvulcan/tesseract/commit/c9aa673b219e1288bc4ee535285e6d600d649e48))
+* **adr-0035:** record the EOS attractor — and name the three read paths ([#332](https://github.com/spokvulcan/tesseract/issues/332)) ([6edb475](https://github.com/spokvulcan/tesseract/commit/6edb475c47d65e2b023ff4bb36e13c6948bada58))
+* **adr-0035:** record the first outside look — nine defects, two kept departures ([0af817a](https://github.com/spokvulcan/tesseract/commit/0af817a012a0e340c6447fd3ac43bbc26a0c5ffa))
+* **adr-0035:** record the inverted voice and the doubled doors ([#333](https://github.com/spokvulcan/tesseract/issues/333)) ([86c216e](https://github.com/spokvulcan/tesseract/commit/86c216ecaf4eb7823e599424606dfb79df015380))
+* **adr-0035:** record the sixth finding — the line the owner would actually read ([c82a863](https://github.com/spokvulcan/tesseract/commit/c82a863498dfe9570746a00b39be48f28456c2fa))
+* **adr-0035:** record what was actually built, and what the eval really said ([831b72c](https://github.com/spokvulcan/tesseract/commit/831b72c6bedec4b3e874ce3a13d7287bc6d00d34))
+* **adr-0035:** the five bugs the live run caught, and the eval's post-clean numbers ([9c9fa0c](https://github.com/spokvulcan/tesseract/commit/9c9fa0c9b954a9c3b6b819414246d1b4f66e0e50))
+* **adr:** record the Server Completion phase decomposition (ADR-0033) ([cac66be](https://github.com/spokvulcan/tesseract/commit/cac66be62b936633d3fe368aa7b78a2526710893))
+* **context:** glossary entries for the deepening program's new modules ([7882750](https://github.com/spokvulcan/tesseract/commit/7882750bed57fb156ab8495a9aa6cdd4a0f68f41))
+
+
+### Tests
+
+* **memory:** the gates that would have caught the attractor, and the belief-recall yardstick ([#332](https://github.com/spokvulcan/tesseract/issues/332)) ([c26e9fd](https://github.com/spokvulcan/tesseract/commit/c26e9fdfbb578961ebe50f6d68a1dfc0c09e51ea))
+* **memory:** the yardstick — and it says the retrieval win is not real ([5731ff3](https://github.com/spokvulcan/tesseract/commit/5731ff3b69e67100e43c02afde9facf016d9ec86))
+* **server:** retarget the source-shape pins to the ADR-0033 phase files ([e31c957](https://github.com/spokvulcan/tesseract/commit/e31c9579ab8a770d4f60f7f7b1024a930d852fee))
+* **transcription:** pin TranscriptionPostProcessor behaviour directly ([349dbb0](https://github.com/spokvulcan/tesseract/commit/349dbb0a26a4816730192af03a898c7bc2f4d034))
+
 ## [1.7.0](https://github.com/spokvulcan/tesseract/compare/v1.6.0...v1.7.0) (2026-07-11)
 
 
