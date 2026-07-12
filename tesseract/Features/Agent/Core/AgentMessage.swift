@@ -77,13 +77,26 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     let images: [ImageAttachment]
     let timestamp: Date
 
+    /// Context the app rides along with this message into the model, but which
+    /// the *user* never wrote and must never see in their own bubble — today,
+    /// the memory system's `<memory>` block (ADR-0035 §5).
+    ///
+    /// Stored on the message rather than recomputed at load, for two reasons.
+    /// The context a turn was actually answered with is the only honest record
+    /// of it. And the radix prefix cache requires that reopening a conversation
+    /// reproduce byte-identical context — a fresh retrieval at load time would
+    /// silently rewrite history and miss the cache on every turn of the thread.
+    let injectedContext: String?
+
     init(
-        id: UUID = UUID(), content: String, images: [ImageAttachment] = [], timestamp: Date = Date()
+        id: UUID = UUID(), content: String, images: [ImageAttachment] = [],
+        timestamp: Date = Date(), injectedContext: String? = nil
     ) {
         self.id = id
         self.content = content
         self.images = images
         self.timestamp = timestamp
+        self.injectedContext = injectedContext
     }
 
     init(from decoder: Decoder) throws {
@@ -92,14 +105,20 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
         content = try container.decode(String.self, forKey: .content)
         images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
+        injectedContext = try container.decodeIfPresent(String.self, forKey: .injectedContext)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, images, timestamp
+        case id, content, images, timestamp, injectedContext
     }
 
+    /// The wrapper goes *before* the user's words, mirroring `<skill>`: what I
+    /// know, then what I was asked.
     func toLLMMessage() -> LLMMessage? {
-        .user(content: content, images: images)
+        guard let injectedContext, !injectedContext.isEmpty else {
+            return .user(content: content, images: images)
+        }
+        return .user(content: "\(injectedContext)\n\n\(content)", images: images)
     }
 }
 

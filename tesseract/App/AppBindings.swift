@@ -88,6 +88,10 @@ final class AppBindings {
         /// no-op while the pass is disabled or its model isn't downloaded),
         /// so no pass pays the model load interactively.
         let prewarmProofreader: @MainActor () async -> Void
+        /// Brings the living memory up (ADR-0035): loads the embedder, then
+        /// seeds the store from the owner's existing corpus on first run. A
+        /// no-op once seeded, and while memory is off.
+        let startMemory: @MainActor () async -> Void
         let updateDictationHotkey: @MainActor (KeyCombo) -> Void
         let updateTTSHotkey: @MainActor (KeyCombo) -> Void
         let updateAgentHotkey: @MainActor (KeyCombo) -> Void
@@ -109,6 +113,7 @@ final class AppBindings {
             pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
             prewarmProofreader: @escaping @MainActor () async -> Void = {},
+            startMemory: @escaping @MainActor () async -> Void = {},
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
@@ -127,6 +132,7 @@ final class AppBindings {
             self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
             self.prewarmAudioCapture = prewarmAudioCapture
             self.prewarmProofreader = prewarmProofreader
+            self.startMemory = startMemory
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
             self.updateAgentHotkey = updateAgentHotkey
@@ -178,6 +184,11 @@ final class AppBindings {
             // After the capture arm (same background task, launch-only): the
             // proofread model load is MLX weight I/O, harmless to sequence.
             await self?.effects.prewarmProofreader()
+            // And last, behind both: the memory embedder, and — on a machine
+            // that has never run this before — the backfill of the owner's
+            // existing conversations. Last because it is the one launch task
+            // nothing else waits on, and on first run it is the long one.
+            await self?.effects.startMemory()
         }
 
         // Load an already-downloaded Whisper model as an owned child task,

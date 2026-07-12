@@ -142,6 +142,37 @@ final class MemoryEngine {
         }
     }
 
+    /// Append many episodes at once — the cold-start backfill's write path.
+    ///
+    /// Batched because the embedder is dramatically better used that way: 334
+    /// texts/sec in a batch against roughly one per 3 ms one at a time. Chunked
+    /// because a single batch pads every sequence to the longest one in it, and
+    /// one pasted logfile in the corpus would otherwise pad all 207.
+    ///
+    /// Returns the number appended. `INSERT OR IGNORE` upstream means an episode
+    /// whose id is already present is silently skipped — which is what makes the
+    /// whole backfill re-runnable.
+    @discardableResult
+    func append(_ episodes: [Episode], chunk: Int = 32) async -> Int {
+        guard isEnabled(), !episodes.isEmpty else { return 0 }
+        var appended = 0
+        for slice in stride(from: 0, to: episodes.count, by: chunk).map({
+            Array(episodes[$0..<min($0 + chunk, episodes.count)])
+        }) {
+            let vectors = await embed(slice.map(\.text))
+            for (index, episode) in slice.enumerated() {
+                do {
+                    try await store.append(
+                        episode, embedding: index < vectors.count ? vectors[index] : nil)
+                    appended += 1
+                } catch {
+                    Log.memory.error("Episode append failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        return appended
+    }
+
     /// The owner said "remember this". The one deliberate exception to
     /// "no memory formation on the hot path" — an explicit instruction is not
     /// a heuristic, and it should not have to wait for the next sleep.
@@ -350,6 +381,51 @@ final class MemoryEngine {
         // When the embedder is unavailable, keyword carries the whole load.
         guard cueVector != nil else { return sparse }
         return 0.75 * dense + 0.25 * sparse
+    }
+
+    /// Deliberate search — the agent asking, rather than the app injecting.
+    ///
+    /// This is the **second of the two paths back from the cold tier** (the
+    /// other is the ε-exploration slot in `retrieve`). Automatic injection
+    /// excludes retired memories on purpose; an agent that has been *asked*
+    /// about something old should still be able to find it. So `search` scores
+    /// by relevance alone and looks at everything, including what was retired
+    /// and what was superseded — with the superseded plainly marked, because a
+    /// belief that has been replaced is still evidence about the past.
+    func search(query: String, limit: Int = 10, now: Date = Date()) async -> [ScoredMemory] {
+        guard isEnabled() else { return [] }
+        do {
+            let all = try await store.memories(status: nil, limit: 5_000)
+            let cueVector = await embed(query)
+            let vectors = try await store.embeddings(kind: "memory")
+            let vectorByID = Dictionary(vectors) { first, _ in first }
+            let keyword = try await store.keywordScores(query: query, table: "memories", limit: 50)
+
+            var scored: [ScoredMemory] = []
+            for memory in all {
+                let relevance = Self.relevance(
+                    cueVector: cueVector, id: memory.id, vectorByID: vectorByID, keyword: keyword)
+                guard relevance > 0.2 else { continue }
+                scored.append(
+                    ScoredMemory(
+                        memory: memory, score: relevance, relevance: relevance, isExploration: false
+                    )
+                )
+            }
+            scored.sort { $0.score > $1.score }
+            let hits = Array(scored.prefix(limit))
+
+            // A deliberate search is a real retrieval: it marks the memory seen,
+            // which is what makes "surfaced repeatedly and never once useful"
+            // into evidence the lifecycle can act on.
+            for hit in hits {
+                try? await store.upsert(MemoryLifecycle.markSeen(hit.memory, now: now))
+            }
+            return hits
+        } catch {
+            Log.memory.error("Search failed: \(error.localizedDescription)")
+            return []
+        }
     }
 
     // MARK: - Inspection (the Memory window)

@@ -86,10 +86,24 @@ final class AgentRunController {
 
     /// Begin a foreground turn for `message`. Syncs the active tool set for the
     /// current web-access setting, then drives `agent.prompt` under the lease.
-    func send(_ message: any AgentMessageProtocol & Sendable) {
+    ///
+    /// `prepare` gets one last async pass at the message *inside* the run task,
+    /// after the busy flag is up and before it reaches the agent — the seam the
+    /// memory system uses to attach its `<memory>` block (ADR-0035 §5). Doing it
+    /// here rather than in the caller keeps sends strictly ordered (they are
+    /// serialized by the same task the lease is) and lets the Pending Row rise
+    /// the instant the user hits send, with retrieval hidden behind it.
+    func send(
+        _ message: any AgentMessageProtocol & Sendable,
+        prepare: (
+            @MainActor (any AgentMessageProtocol & Sendable) async -> any AgentMessageProtocol
+                & Sendable
+        )? = nil
+    ) {
         syncToolsForWebAccess()
         runUnderLease { [agent] in
-            agent.prompt(message)
+            let outgoing = await prepare?(message) ?? message
+            agent.prompt(outgoing)
             await agent.waitForIdle()
         }
     }

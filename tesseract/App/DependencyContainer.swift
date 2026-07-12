@@ -87,7 +87,13 @@ final class DependencyContainer: ObservableObject {
     lazy var memoryEngine: MemoryEngine = makeMemoryEngine()
 
     private func makeMemoryStore() -> MemoryStore {
-        let home = PathSandbox.defaultRoot.appendingPathComponent("memory", isDirectory: true)
+        // TEMP (Memory window verification) — REMOVE BEFORE MERGE: point the
+        // store at a scratch directory so seeded screenshot fixtures never
+        // touch the real store.
+        var home = PathSandbox.defaultRoot.appendingPathComponent("memory", isDirectory: true)
+        if let override = ProcessInfo.processInfo.environment["TESSERACT_MEMORY_DIR"] {
+            home = URL(fileURLWithPath: override, isDirectory: true)
+        }
         do {
             return try MemoryStore(directory: home)
         } catch {
@@ -155,7 +161,13 @@ final class DependencyContainer: ObservableObject {
     lazy var packageRegistry = PackageRegistry()
     lazy var contextManager = ContextManager(settings: .standard)
     lazy var newToolRegistry: ToolRegistry = {
-        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
+        let registry = ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
+        // The living memory's two hands (ADR-0035). Appended rather than built
+        // into the factory because they need the engine, which the factory —
+        // a `nonisolated` free function over a sandbox — has no way to reach.
+        registry.appendBuiltInTool(createRememberTool(memory: memoryEngine))
+        registry.appendBuiltInTool(createRecallTool(memory: memoryEngine))
+        return registry
     }()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {
@@ -332,7 +344,8 @@ final class DependencyContainer: ObservableObject {
                 composerDraft.resetEphemeral()
                 agentSystemPromptInspector.reset()
                 skillPills.refreshPills()
-            }
+            },
+            memory: memoryEngine
         )
     }()
 
@@ -450,7 +463,8 @@ final class DependencyContainer: ObservableObject {
             feed: dictationFeed,
             proofreadPass: proofreadPass,
             captureDump: captureDumpStore,
-            pairs: correctionPairStore
+            pairs: correctionPairStore,
+            memory: memoryEngine
         )
         // The Live Partial pump (ticket #291) runs only while the selected
         // variant consumes the signal — the coordinator reads a policy
@@ -643,6 +657,10 @@ final class DependencyContainer: ObservableObject {
                 },
                 prewarmProofreader: { [proofreadPass] in
                     await proofreadPass.prewarm()
+                },
+                startMemory: { [memoryEngine] in
+                    await memoryEngine.prewarm()
+                    await MemoryBackfill.run(engine: memoryEngine)
                 },
                 updateDictationHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(

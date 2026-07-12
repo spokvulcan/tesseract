@@ -54,6 +54,16 @@ final class DictationCoordinator {
     /// overlay affordances and the history editor turn candidates gold.
     private let pairs: CorrectionPairStore?
 
+    /// The living memory (ADR-0035). Dictation is a memory write source by the
+    /// owner's explicit call (map #314): what he dictates into other apps is
+    /// often the most revealing thing he says all day, and a memory that only
+    /// hears him when he is *talking to the assistant* knows a stranger.
+    ///
+    /// Gated twice — `memoryEnabled` and `memoryCaptureDictation`, both checked
+    /// inside the engine — because this is the one source that captures speech
+    /// the owner did not aim at this app.
+    private let memory: MemoryEngine?
+
     /// The pair of the last take that surfaced a beat — what the overlay's
     /// flag/edit affordances target while the beat lingers.
     private(set) var lastTakePairID: UUID?
@@ -97,8 +107,10 @@ final class DictationCoordinator {
         feed: DictationFeed,
         proofreadPass: ProofreadPass? = nil,
         captureDump: (any CaptureDumpStoring)? = nil,
-        pairs: CorrectionPairStore? = nil
+        pairs: CorrectionPairStore? = nil,
+        memory: MemoryEngine? = nil
     ) {
+        self.memory = memory
         self.session = VoiceCaptureSession(
             audioCapture: audioCapture,
             transcriptionEngine: transcriptionEngine,
@@ -366,6 +378,20 @@ final class DictationCoordinator {
                         ?? settings.selectedSpeechToTextModelID,
                     pairID: recordedPairID
                 )
+
+                // Memory rides the *committed* text, not the raw ASR: what the
+                // owner actually meant to say, after proofreading, is the thing
+                // worth remembering. Detached — dictation's whole promise is that
+                // the words land in the frontmost app instantly, and nothing in
+                // the memory system gets to stand between the take and the
+                // keystroke.
+                if let memory {
+                    Task { [memory] in
+                        await memory.record(
+                            source: .dictation, text: text,
+                            meta: ["duration": String(format: "%.1f", duration)])
+                    }
+                }
 
                 if settings.autoInsertText {
                     textInjector.restoreClipboard = settings.restoreClipboard
