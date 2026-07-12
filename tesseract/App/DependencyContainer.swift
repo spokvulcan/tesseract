@@ -293,6 +293,16 @@ final class DependencyContainer: ObservableObject {
         composerDraft: composerDraft
     )
 
+    // The Companion walking skeleton (map #301, ticket #303): a deliberately
+    // crude lived-with heartbeat — an instrument the owner wears while the
+    // Companion grillings run. Absorbed or retired by the map's exit PRDs.
+    lazy var companionHeartbeat = CompanionHeartbeat(
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
+        speaks: { [settingsManager] in settingsManager.companionHeartbeatSpeaks },
+        speak: { [weak self] in self?.speechCoordinator.speakText($0) },
+        onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() }
+    )
+
     // Speech (TTS)
     lazy var textExtractor = TextExtractor()
     lazy var speechEngine = SpeechEngine()
@@ -510,6 +520,10 @@ final class DependencyContainer: ObservableObject {
         // Hand off to App Bindings: the launch ordering and every runtime
         // subscription with a rule live (and are tested) there.
         appBindings.start()
+
+        // Arm the Companion walking skeleton (#303) — a sleeping tick task and
+        // one date comparison per 30 s unless the experimental toggle is on.
+        companionHeartbeat.start()
 
         // Wire the MCP client (PRD #190). Materialize the agent first so its
         // MCP tools extension is registered with the ExtensionHost before the

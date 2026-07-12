@@ -122,8 +122,28 @@ struct AgentSettingsPane: View {
                     "The floating ✦ button above the composer fans out your skills on hover. Translate To sets the Translate skill's default target; naming a language in your message always wins."
                 )
             }
+
+            // PROTOTYPE — the Companion walking skeleton (map #301, #303).
+            Section {
+                Toggle("Companion Heartbeat", isOn: $settings.companionHeartbeatEnabled)
+                Toggle("Speak Pings Aloud", isOn: $settings.companionHeartbeatSpeaks)
+                    .disabled(!settings.companionHeartbeatEnabled)
+                Button("Send Test Ping") {
+                    container.companionHeartbeat.sendTestPing()
+                }
+                .disabled(!settings.companionHeartbeatEnabled)
+            } header: {
+                Text("Companion (Experimental)")
+            } footer: {
+                Text(
+                    "Walking-skeleton prototype: three fixed daily pings (9:00, 13:30, 21:30) as notifications you can click through, reply to, or dismiss. Every ping and outcome is recorded to companion/heartbeat.jsonl in the agent's folder. If no ping appears, allow notifications in System Settings → Notifications → Tesseract."
+                )
+            }
         }
         .formStyle(.grouped)
+        .onChange(of: settings.companionHeartbeatEnabled) { _, enabled in
+            if enabled { container.companionHeartbeat.activate() }
+        }
         .onAppear {
             refreshSelectedAgentModelCapabilities()
         }

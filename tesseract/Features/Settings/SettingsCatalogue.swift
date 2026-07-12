@@ -88,6 +88,12 @@ enum SettingsCatalogue {
     static let ttsLanguage = Setting.string("ttsLanguage", default: "English")
     static let ttsStreamingEnabled = Setting.bool("ttsStreamingEnabled", default: true)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
+    /// Walking-skeleton scaffolding (map #301, ticket #303): the lived-with
+    /// Companion heartbeat prototype. Absorbed or retired by the exit PRDs.
+    static let companionHeartbeatEnabled = Setting.bool(
+        "companionHeartbeatEnabled", default: false)
+    static let companionHeartbeatSpeaks = Setting.bool(
+        "companionHeartbeatSpeaks", default: false)
     static let selectedAgentModelID = Setting.string(
         "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)
     static let selectedSpeechToTextModelID = Setting.string(

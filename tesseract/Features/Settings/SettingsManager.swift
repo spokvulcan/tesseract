@@ -257,6 +257,19 @@ final class SettingsManager {
         didSet { SettingsCatalogue.agentAutoSpeak.write(agentAutoSpeak, to: store) }
     }
 
+    var companionHeartbeatEnabled: Bool {
+        didSet {
+            SettingsCatalogue.companionHeartbeatEnabled.write(
+                companionHeartbeatEnabled, to: store)
+        }
+    }
+
+    var companionHeartbeatSpeaks: Bool {
+        didSet {
+            SettingsCatalogue.companionHeartbeatSpeaks.write(companionHeartbeatSpeaks, to: store)
+        }
+    }
+
     var selectedAgentModelID: String {
         didSet { SettingsCatalogue.selectedAgentModelID.write(selectedAgentModelID, to: store) }
     }
@@ -501,6 +514,10 @@ final class SettingsManager {
         self.ttsLanguage = SettingsCatalogue.ttsLanguage.load(from: store)
         self.ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.load(from: store)
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
+        self.companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.load(
+            from: store)
+        self.companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.load(
+            from: store)
         self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
         self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(
             from: store)
@@ -621,6 +638,8 @@ final class SettingsManager {
         ttsLanguage = SettingsCatalogue.ttsLanguage.default
         ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.default
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
+        companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
+        companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.default
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
