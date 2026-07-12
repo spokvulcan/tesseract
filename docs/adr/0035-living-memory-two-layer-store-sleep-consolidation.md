@@ -190,6 +190,20 @@ Backfill imported the markdown claims and the corpus; idle detection fired; slee
 
 `memories.md` was also destroyed once and restored: the migration archived the file when the claims *parsed*, not when they were *stored*. It now archives only after they are in the store, and the two seeds are gated independently.
 
+### The sixth finding: the line itself
+
+The first real morning beat, fired at 09:00 on the owner's machine, said:
+
+> Morning. What's the one hard thing today, the AI agent or that pending task?
+
+Every piece of the machine worked — it recalled, it composed, it spoke — and the *product* still failed, because "the AI agent **or** that pending task" is a hedge. Offering him two things is telling him you know neither, and #302's bar is one **specific** callback. `MemoryCallback`'s own header meanwhile claimed it "verifies the composition is grounded", which was simply untrue: it checked for `PASS`, took the first line, and measured the length.
+
+So the promise is now kept in code. A line clears three gates or the beat falls back to its hardcoded prompt: `clean` (one sentence), `grounded` (it re-uses a distinctive stem from what was actually recalled — the generic line shares nothing but stopwords, the invented one shares nothing at all, and this runs *before* the model so no GPU is spent judging a fabrication), and `critique` (a second pass over the same evidence whose only job is to refuse; anything short of an unambiguous `KEEP` is a `PASS`). The compose prompt forbids the hedge outright, and both passes share one GPU lease.
+
+After the fix, two live test pings, both kept: *"Ти просив адаптувати чат Tesseract під різні екрани — продовжимо?"* and *"Ти просив доопрацювати адаптивний чат агента Tesseract — чи встиг ти завершити це завдання?"* — specific, true, first-person, one thing each. **The language is the model's own choice**, drawn from the language of the recalled material; no rule constrains it, and for a bilingual owner that seems right rather than wrong. Worth watching, not worth legislating yet.
+
+The lesson is the same one the five bugs teach, one level up: every component passed its tests, and the thing the owner would actually *read* was still wrong. The only test that finds this is looking at the sentence.
+
 ## Consequences
 
 **Accepted costs.**
