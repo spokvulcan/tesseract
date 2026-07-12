@@ -261,7 +261,13 @@ nonisolated enum MemoryEvalCorpus: Sendable {
                     // The one shape where content is a bare String.
                     guard let content = payload["content"] as? String else { continue }
                     role = .user
-                    text = content
+                    // The same door the app's capture goes through: a skill fire
+                    // puts the skill's whole body in the user message, and those
+                    // are the app's words, not his. Grading a retriever on its
+                    // ability to find its own boilerplate would be a fine way to
+                    // score well and learn nothing.
+                    guard let spoken = MemorySpeech.spoken(content) else { continue }
+                    text = spoken
                 case "assistant":
                     // Parts. `thinking` is the model's private monologue and
                     // `toolCall` is machine chatter — neither is "something that
