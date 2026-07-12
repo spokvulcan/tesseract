@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/spokvulcan/tesseract/compare/v1.8.0...v1.8.1) (2026-07-12)
+
+
+### Tests
+
+* **memory:** the corpus gate fails open on an empty directory — CI ran the eval against nothing ([566c46e](https://github.com/spokvulcan/tesseract/commit/566c46eca9e2963b71d22884ec48594b599a1caa))
+
 ## [1.8.0](https://github.com/spokvulcan/tesseract/compare/v1.7.0...v1.8.0) (2026-07-12)
 
 
