@@ -634,6 +634,15 @@ final class MemorySleep {
                 // nothing was recalled and nothing proved useful.
                 let confirmed = MemoryLifecycle.confirm(neighbours[index])
                 try await engine.store.upsert(confirmed)
+                // Journalled, because the *absence* of a rewrite is the whole
+                // design and the owner should be able to watch it happen: I met
+                // this belief again in what he said, and I left it alone.
+                try await engine.store.appendJournal(
+                    JournalEntry(
+                        at: Date(), mutation: .confirmed, memoryID: confirmed.id,
+                        detail: "Said again, in different words — confirmed, not rewritten "
+                            + "(\(confirmed.confirmations)×).",
+                        after: confirmed.text))
                 summary.confirmed += 1
 
             case .new:

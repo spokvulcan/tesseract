@@ -174,6 +174,13 @@ struct MemorySleepTests {
         #expect(after.id == existing.id)
         #expect(after.text == "He is allergic to shellfish.", "the wording is untouched")
         #expect(after.confirmations == existing.confirmations + 1)
+
+        // And it is written down. The *absence* of a rewrite is the whole design,
+        // so it had better be something the owner can watch happen rather than
+        // something he has to take on faith.
+        let journal = try await store.journal(limit: 20)
+        let confirmation = try #require(journal.first { $0.mutation == .confirmed })
+        #expect(confirmation.memoryID == existing.id)
     }
 
     @Test("A contradiction supersedes — and supersession is not deletion")

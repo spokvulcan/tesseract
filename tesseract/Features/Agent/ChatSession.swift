@@ -875,8 +875,13 @@ final class ChatSession {
         reply: AssistantMessage, context: [any AgentMessageProtocol & Sendable]
     ) {
         guard let memory else { return }
+        // Through the same tested unwrap as the injection, and for the same
+        // reason: the pipeline carries both shapes (`AgentConversation` already
+        // defends against both), and a bare cast here would silently stop
+        // capturing the moment a caller wrapped its message. That failure looks
+        // exactly like "he said nothing today".
         guard
-            let user = context.reversed().lazy.compactMap({ $0 as? UserMessage }).first,
+            let user = context.reversed().lazy.compactMap({ Self.userMessage(in: $0) }).first,
             !user.content.isEmpty
         else { return }
 
