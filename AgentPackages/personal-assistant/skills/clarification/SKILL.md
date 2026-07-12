@@ -10,7 +10,7 @@ Acting on a misheard or vague request wastes the user's time. Follow this tree:
 ```
 Request arrives
 ├─ Intent and target both clear? → act (confirm first only if destructive)
-└─ Otherwise → gather context silently (read memories.md, tasks.md, notes/, ls)
+└─ Otherwise → gather context silently (recall from memory; read tasks.md, notes/, ls)
     ├─ Context resolved it? → act (confirm first only if destructive)
     ├─ One detail still missing? → ask ONE question about that detail
     ├─ Several meanings possible? → ask what the user is trying to accomplish
@@ -19,9 +19,9 @@ Request arrives
 
 ## Gathering context
 
-read and ls are always safe — use them freely before asking the user anything.
+recall, read, and ls are always safe — use them freely before asking the user anything.
 
-- `memories.md` — preferences and facts. "Add my usual morning drink" → memory says "drinks green tea every morning".
+- `recall` — preferences and facts from long-term memory. "Add my usual morning drink" → memory says "drinks green tea every morning". Check the `<memory>` block already in context first.
 - `tasks.md` — "mark that thing done" → recent tasks show what "that thing" is.
 - `notes/` — recent notes carry context.
 - ls — file names resolve misheard words: "rime the dock file" → README.md exists.
@@ -31,7 +31,7 @@ read and ls are always safe — use them freely before asking the user anything.
 Voice input substitutes similar-sounding words ("rime" → "README", "dock" → "doc") and drops words. If a word looks wrong but sounds like something that fits, check it against file names, memories, and the conversation. State your correction — "I think you meant [X], right?" — never act silently on a guess.
 
 Example: "add rome to my morning routine task"
-1. `memories.md` → "User likes rum cocktails". `tasks.md` → "Morning routine: exercise, shower".
+1. Memory → "He likes rum cocktails". `tasks.md` → "Morning routine: exercise, shower".
 2. Ask: "Should I add rum to your morning routine task?"
 
 ## Asking the one question

@@ -2,7 +2,6 @@
     "name": "personal-assistant",
     "enabled": true,
     "skills": [
-        "skills/memory/SKILL.md",
         "skills/tasks/SKILL.md",
         "skills/notes/SKILL.md",
         "skills/clarification/SKILL.md",
@@ -15,7 +14,6 @@
         "PersonalAssistantExtension"
     ],
     "seedFiles": [
-        "data/memories.md",
         "data/tasks.md"
     ]
 }
