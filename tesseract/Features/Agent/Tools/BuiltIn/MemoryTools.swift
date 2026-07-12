@@ -101,9 +101,11 @@ nonisolated func createRecallTool(memory: MemoryEngine) -> AgentToolDefinition {
             half-remember, or a direct question about what you know ("what do you know \
             about me?", "have I mentioned my sister?").
 
-            Unlike the automatic recall, this searches everything, including memories that \
-            have gone quiet and ones that were later replaced. Replaced beliefs come back \
-            marked as such — they are what you used to think, not what you think now.
+            Unlike the automatic recall, this searches everything: your distilled \
+            beliefs — including ones that have gone quiet and ones that were later \
+            replaced, plainly marked as what you used to think — and the raw record of \
+            past conversations, so it also finds things said recently that have not yet \
+            been distilled into a belief.
             """,
         parameterSchema: JSONSchema(
             type: "object",
@@ -127,11 +129,17 @@ nonisolated func createRecallTool(memory: MemoryEngine) -> AgentToolDefinition {
             }
             let limit = min(ToolArgExtractor.int(argsJSON, key: "limit") ?? 10, 30)
 
-            let hits = await memory.search(query: query, limit: limit)
-            guard !hits.isEmpty else {
+            let (memories, episodes) = await memory.searchEverything(query: query, limit: limit)
+            guard !memories.isEmpty || !episodes.isEmpty else {
                 return .text("Nothing in memory about that.")
             }
-            return .text(hits.map(MemoryToolFormatter.line).joined(separator: "\n"))
+            var lines = memories.map(MemoryToolFormatter.line)
+            if !episodes.isEmpty {
+                lines.append("")
+                lines.append("From past conversations (not yet distilled into beliefs):")
+                lines.append(contentsOf: episodes.map(MemoryToolFormatter.line))
+            }
+            return .text(lines.joined(separator: "\n"))
         }
     )
 }
@@ -155,5 +163,14 @@ private nonisolated enum MemoryToolFormatter {
 
         let suffix = flags.isEmpty ? "" : " [\(flags.joined(separator: "; "))]"
         return "- \(hit.memory.text)\(suffix)"
+    }
+
+    /// An episode line — raw testimony, so it is dated and quoted rather than
+    /// asserted: what was *said*, not what I believe.
+    static func line(_ hit: ScoredEpisode) -> String {
+        let date = hit.episode.occurredAt.formatted(date: .abbreviated, time: .omitted)
+        var text = hit.episode.text
+        if text.count > 240 { text = String(text.prefix(240)) + "…" }
+        return "- (\(date)) \"\(text)\""
     }
 }

@@ -68,10 +68,47 @@ final class MemoryEngine {
         do {
             try await embedder.load(from: directory)
             isEmbedderLoaded = await embedder.isLoaded
+            await reconcileEmbeddingScheme()
             await refreshStats()
         } catch {
             Log.memory.error("Embedder load failed: \(error.localizedDescription)")
             isEmbedderLoaded = false
+        }
+    }
+
+    /// Vectors are artifacts of an embedding scheme (#332). When the running
+    /// scheme differs from the one the store's vectors were made under, every
+    /// vector — and the cue affinities learned from ranking them — is stale
+    /// evidence: wipe, regenerate, stamp. The stamp lands only on completion,
+    /// so an interrupted pass re-runs from the wipe instead of leaving a store
+    /// that claims vectors it does not have. Measured cost: ~2 s for the
+    /// owner's 442 records at 334 texts/sec.
+    private func reconcileEmbeddingScheme() async {
+        guard isEmbedderLoaded else { return }
+        do {
+            let stored = try await store.embeddingScheme()
+            guard stored != MemoryEmbedder.scheme else { return }
+            Log.memory.info(
+                "Embedding scheme \(stored) → \(MemoryEmbedder.scheme): regenerating every stored vector"
+            )
+            try await store.resetEmbeddings()
+            var total = 0
+            for owner in [MemoryOwner.memory, MemoryOwner.episode] {
+                let rows = try await store.allTexts(of: owner)
+                for start in stride(from: 0, to: rows.count, by: 32) {
+                    let slice = Array(rows[start..<min(start + 32, rows.count)])
+                    let vectors = await embedder.embed(slice.map(\.text))
+                    guard vectors.count == slice.count else { continue }
+                    try await store.setEmbeddings(
+                        Array(zip(slice.map(\.id), vectors)), of: owner)
+                    total += slice.count
+                }
+            }
+            try await store.stampEmbeddingScheme(MemoryEmbedder.scheme)
+            Log.memory.info("Re-embedded \(total) records under scheme \(MemoryEmbedder.scheme)")
+        } catch {
+            Log.memory.error(
+                "Embedding-scheme reconcile failed: \(error.localizedDescription)")
         }
     }
 
@@ -91,6 +128,8 @@ final class MemoryEngine {
 
     // MARK: - Embedding
 
+    /// Documents — what gets stored. Cues go through `embedQuery`; the two
+    /// sides are embedded differently on purpose (#332).
     func embed(_ text: String) async -> [Float]? {
         guard isEmbedderLoaded else { return nil }
         return await embedder.embed(text)
@@ -99,6 +138,13 @@ final class MemoryEngine {
     func embed(_ texts: [String]) async -> [[Float]] {
         guard isEmbedderLoaded, !texts.isEmpty else { return [] }
         return await embedder.embed(texts)
+    }
+
+    /// Queries — what does the asking. Carries the instruct prefix the
+    /// embedder was trained to expect on the query side only.
+    func embedQuery(_ text: String) async -> [Float]? {
+        guard isEmbedderLoaded else { return nil }
+        return await embedder.embedQuery(text)
     }
 
     // MARK: - The write path (ADR-0035 §6)
@@ -246,7 +292,7 @@ final class MemoryEngine {
             // `recall` tool.
             let candidates = all.filter { $0.tier != .core && $0.tier != .cold }
 
-            let cueVector = await embed(cue)
+            let cueVector = await embedQuery(cue)
             let vectors = try await store.embeddings(of: .memory)
             let vectorByID = Dictionary(vectors) { first, _ in first }
             let keyword = try await store.keywordScores(query: cue, in: .memory)
@@ -419,7 +465,7 @@ final class MemoryEngine {
         guard isEnabled() else { return [] }
         do {
             let all = try await store.memories(status: nil, limit: 5_000)
-            let cueVector = await embed(query)
+            let cueVector = await embedQuery(query)
             let vectors = try await store.embeddings(of: .memory)
             let vectorByID = Dictionary(vectors) { first, _ in first }
             let keyword = try await store.keywordScores(query: query, in: .memory, limit: 50)
@@ -448,6 +494,27 @@ final class MemoryEngine {
         } catch {
             Log.memory.error("Search failed: \(error.localizedDescription)")
             return []
+        }
+    }
+
+    /// The recall tool's full sweep (#332): distilled beliefs AND the raw
+    /// episodic record. The second half is not optional — a fact told this
+    /// morning exists only as an episode until sleep distills it, so a
+    /// beliefs-only recall has a same-day blind spot, and "searches
+    /// everything" in the tool's contract would be a lie.
+    func searchEverything(query: String, limit: Int = 10, episodeBudget: Int = 5) async
+        -> (memories: [ScoredMemory], episodes: [ScoredEpisode])
+    {
+        guard isEnabled() else { return ([], []) }
+        let memories = await search(query: query, limit: limit)
+        do {
+            let cueVector = await embedQuery(query)
+            let episodes = try await retrieveEpisodes(
+                cue: query, cueVector: cueVector, budget: episodeBudget, excluding: nil)
+            return (memories, episodes)
+        } catch {
+            Log.memory.error("Episode search failed: \(error.localizedDescription)")
+            return (memories, [])
         }
     }
 

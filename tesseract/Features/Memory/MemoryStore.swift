@@ -45,7 +45,8 @@ nonisolated enum MemoryOwner: String, Sendable {
 
 actor MemoryStore {
 
-    static let schemaVersion = 1
+    /// v2: the `meta` table — the embedding-scheme stamp lives there (#332).
+    static let schemaVersion = 2
 
     private let db: SQLiteDatabase
     let directory: URL
@@ -160,6 +161,11 @@ actor MemoryStore {
                 text,
                 content='episodes',
                 content_rowid='rowid'
+            );
+
+            CREATE TABLE IF NOT EXISTS meta (
+                key   TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL
             );
             """
         )
@@ -615,6 +621,60 @@ actor MemoryStore {
     }
 
     // MARK: - Embeddings
+
+    /// The embedding scheme whose vectors this store holds. A store from
+    /// before the stamp existed reports 1 — the pre-#332 era.
+    func embeddingScheme() throws -> Int {
+        let stmt = try db.prepare("SELECT value FROM meta WHERE key = 'embedding_scheme'")
+        guard try stmt.step(), let value = stmt.string(0) else { return 1 }
+        return Int(value) ?? 1
+    }
+
+    /// Wipe every vector — and the cue affinities, which were learned from
+    /// ranking those vectors and are exactly as stale as they are. The scheme
+    /// stamp is deliberately NOT touched here: `stampEmbeddingScheme` runs
+    /// after the re-embed completes, so a crash mid-refill re-runs the whole
+    /// job instead of leaving a store that claims vectors it does not have.
+    func resetEmbeddings() throws {
+        try db.transaction {
+            try db.execute("DELETE FROM embeddings; DELETE FROM cue_affinity;")
+        }
+    }
+
+    func stampEmbeddingScheme(_ scheme: Int) throws {
+        let stmt = try db.prepare(
+            """
+            INSERT INTO meta (key, value) VALUES ('embedding_scheme', ?1)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """)
+        stmt.bind(1, String(scheme))
+        try stmt.run()
+    }
+
+    /// (id, text) for every row of `owner` — the re-embed worklist.
+    func allTexts(of owner: MemoryOwner, limit: Int = 100_000) throws -> [(id: UUID, text: String)]
+    {
+        let stmt = try db.prepare("SELECT id, text FROM \(owner.table) LIMIT ?1")
+        stmt.bind(1, limit)
+        var out: [(id: UUID, text: String)] = []
+        while try stmt.step() {
+            guard let raw = stmt.string(0), let id = UUID(uuidString: raw),
+                let text = stmt.string(1)
+            else { continue }
+            out.append((id: id, text: text))
+        }
+        return out
+    }
+
+    /// One transaction per batch: a re-embed that dies mid-batch leaves whole
+    /// rows or no rows, never a torn vector.
+    func setEmbeddings(_ rows: [(UUID, [Float])], of owner: MemoryOwner) throws {
+        try db.transaction {
+            for (id, vector) in rows {
+                try writeEmbedding(ownerID: id, owner: owner, vector: vector)
+            }
+        }
+    }
 
     private func writeEmbedding(ownerID: UUID, owner: MemoryOwner, vector: [Float]) throws {
         let stmt = try db.prepare(
