@@ -143,6 +143,105 @@ struct MemoryInjectionTests {
         #expect(block.contains("\"my sister is flying in on Thursday\""))
         #expect(block.contains("2025-10-09"))
     }
+
+    // MARK: - What counts as something he said
+
+    @Test("A skill fire is the app talking — only his words survive it")
+    func skillWrappersAreNotTestimony() throws {
+        let fired = """
+            <skill name="proofread" location="/Users/owl/…/proofread/SKILL.md">
+            References are relative to /Users/owl/…/proofread.
+
+            You are a proofreader. Fix grammar. Do not change meaning.
+            </skill>
+
+            proofread this: their going to the office
+            """
+        #expect(MemorySpeech.spoken(fired) == "proofread this: their going to the office")
+
+        // A bare fire with no arguments is the app talking to itself. It is not
+        // an episode, and recording it would put the app's own instructions into
+        // the record of his life — which is exactly what happened to 28 of the
+        // first 207.
+        let bare = """
+            <skill name="translate" location="/x/SKILL.md">
+            Translate to Ukrainian.
+            </skill>
+            """
+        #expect(MemorySpeech.spoken(bare) == nil)
+
+        // Ordinary messages are untouched, angle brackets and all.
+        #expect(
+            MemorySpeech.spoken("is a<b true when b>a?") == "is a<b true when b>a?")
+        // A word that merely starts with the tag name is not the tag.
+        #expect(MemorySpeech.spoken("<skills> what can you do?") == "<skills> what can you do?")
+        // An unterminated wrapper takes the rest with it — a truncated wrapper
+        // is not testimony either.
+        #expect(MemorySpeech.spoken("<skill name=\"x\"> body with no end") == nil)
+    }
+
+    @Test("The same sentence is quoted once, however many times he said it")
+    func identicalQuotesAreCollapsed() throws {
+        let when = Date(timeIntervalSince1970: 1_760_000_000)
+        let episodes = (0..<3).map { index in
+            Episode(
+                source: .chat,
+                occurredAt: when.addingTimeInterval(Double(index) * 60),
+                text: "Continue, please")
+        }
+        let block = try #require(
+            MemoryPrompt.block(memories: [], episodes: episodes, now: Date()))
+        let occurrences = block.components(separatedBy: "\"Continue, please\"").count - 1
+        #expect(occurrences == 1)
+    }
+
+    // MARK: - The seam the block actually has to cross
+
+    /// This is the test that was missing, and its absence cost a whole feature.
+    ///
+    /// Everything above passed while the running app injected *nothing*: the
+    /// pipeline hands `prepare` a `CoreMessage.user`, not a bare `UserMessage`,
+    /// so the unwrap in `attachMemory` matched nothing and every retrieved
+    /// memory was dropped between the store and the model. Nothing failed, no
+    /// error was logged, the store kept filling up — the model was simply never
+    /// told. Only asking the live app what it remembered found it.
+    @Test("The user message is found inside the wrapper the pipeline actually sends")
+    func theWrapperIsUnwrapped() throws {
+        let user = UserMessage(content: "where did I say I'm based?")
+
+        let fromWrapped = try #require(ChatSession.userMessage(in: CoreMessage.user(user)))
+        #expect(fromWrapped.id == user.id)
+
+        // And bare, which is what every test before this one assumed.
+        let fromBare = try #require(ChatSession.userMessage(in: user))
+        #expect(fromBare.id == user.id)
+
+        // Not a user message at all: left alone.
+        #expect(
+            ChatSession.userMessage(in: CoreMessage.assistant(AssistantMessage(content: "hi")))
+                == nil)
+    }
+
+    @Test("An enriched message goes back in the same wrapper it arrived in")
+    func theWrapperIsRestored() throws {
+        let user = UserMessage(content: "where did I say I'm based?")
+        let enriched = UserMessage(
+            id: user.id, content: user.content, injectedContext: "<memory>…</memory>")
+
+        // Wrapped in, wrapped out — hand the agent a bare `UserMessage` where it
+        // expects a `CoreMessage` and the injection is lost a second way.
+        let rewrapped = ChatSession.rewrap(enriched, like: CoreMessage.user(user))
+        let core = try #require(rewrapped as? CoreMessage)
+        guard case .user(let unwrapped) = core else {
+            Issue.record("rewrapped into the wrong case")
+            return
+        }
+        #expect(unwrapped.injectedContext == "<memory>…</memory>")
+        #expect(unwrapped.id == user.id)
+
+        // Bare in, bare out.
+        #expect((ChatSession.rewrap(enriched, like: user) as? UserMessage)?.id == user.id)
+    }
 }
 
 // MARK: - The cold start

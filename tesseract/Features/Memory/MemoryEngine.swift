@@ -126,8 +126,10 @@ final class MemoryEngine {
     ) async -> Episode? {
         guard isEnabled() else { return nil }
         guard source != .dictation || isDictationCaptureEnabled() else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        // His words, not the app's: a skill fire puts the skill's entire body in
+        // the user message (see `MemorySpeech`). An episode is testimony, and the
+        // wrapper is not his testimony.
+        guard let trimmed = MemorySpeech.spoken(text) else { return nil }
 
         let episode = Episode(
             source: source, conversationID: conversationID, occurredAt: occurredAt,

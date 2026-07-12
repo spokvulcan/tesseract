@@ -606,7 +606,7 @@ final class ChatSession {
     private func attachMemory(
         to outgoing: any AgentMessageProtocol & Sendable
     ) async -> any AgentMessageProtocol & Sendable {
-        guard let memory, let user = outgoing as? UserMessage else { return outgoing }
+        guard let memory, let user = Self.userMessage(in: outgoing) else { return outgoing }
 
         let injection = await memory.injection(cue: user.content, excluding: injectedMemoryIDs)
         guard let text = injection.text else { return outgoing }
@@ -620,7 +620,32 @@ final class ChatSession {
         // and the message that reached the agent byte-identical, which the
         // `turnEnd` resync then relies on.
         if pendingUserMessage?.id == user.id { pendingUserMessage = enriched }
-        return enriched
+        return Self.rewrap(enriched, like: outgoing)
+    }
+
+    /// The user message inside whatever the pipeline is carrying.
+    ///
+    /// `sendMessage` hands `send` a **`CoreMessage.user`**, and `prepare` is
+    /// called on that wrapper — so the obvious `outgoing as? UserMessage` matches
+    /// nothing, and this is not hypothetical: it shipped, and memory was
+    /// retrieved and then silently dropped on the floor on every single turn. The
+    /// app looked healthy from the outside — episodes were captured, sleep ran,
+    /// the store filled up — and the model never saw a word of it. Not one unit
+    /// test caught it, because none of them went through `send`; only asking the
+    /// running app what it remembered did.
+    nonisolated static func userMessage(
+        in outgoing: any AgentMessageProtocol & Sendable
+    ) -> UserMessage? {
+        if case .user(let user)? = outgoing as? CoreMessage { return user }
+        return outgoing as? UserMessage
+    }
+
+    /// Put it back in the same wrapper it arrived in — the agent pipeline is
+    /// entitled to whatever shape it handed us.
+    nonisolated static func rewrap(
+        _ user: UserMessage, like outgoing: any AgentMessageProtocol & Sendable
+    ) -> any AgentMessageProtocol & Sendable {
+        outgoing is CoreMessage ? CoreMessage.user(user) : user
     }
 
     func cancelGeneration() {

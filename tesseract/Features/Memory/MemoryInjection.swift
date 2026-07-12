@@ -90,10 +90,19 @@ nonisolated enum MemoryPrompt {
             }
         }
 
-        if !episodes.isEmpty {
+        // Distinct ids can carry identical words — he says "Continue, please" a
+        // lot — and quoting the same sentence three times spends the budget three
+        // times and reads to the model as emphasis it was never given.
+        var quoted = Set<String>()
+        let distinct =
+            episodes
+            .sorted { $0.occurredAt < $1.occurredAt }
+            .filter { quoted.insert($0.text).inserted }
+
+        if !distinct.isEmpty {
             lines.append("")
             lines.append("Things that were actually said, verbatim:")
-            for episode in episodes.sorted(by: { $0.occurredAt < $1.occurredAt }) {
+            for episode in distinct {
                 lines.append("- \(Self.day.string(from: episode.occurredAt)) — \(quote(episode))")
             }
         }

@@ -75,7 +75,11 @@ nonisolated enum ConversationCorpus {
         var out: [Episode] = []
         for (index, message) in file.messages.enumerated() where message.type == "user" {
             let payload = message.payload
-            guard let text = payload.content?.plainText, !text.isEmpty else { continue }
+            // The same door the live capture goes through: a skill fire is the
+            // app's words in his message, and 28 of the owner's first 207
+            // episodes were nothing but that (see `MemorySpeech`).
+            guard let raw = payload.content?.plainText, let text = MemorySpeech.spoken(raw)
+            else { continue }
             let reply = nextAssistantText(in: file.messages, after: index)
             out.append(
                 Episode(
