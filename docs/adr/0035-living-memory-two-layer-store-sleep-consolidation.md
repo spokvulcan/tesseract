@@ -153,6 +153,33 @@ The published benchmarks are unusable as targets (LoCoMo's answer key is 6.4% br
 - **promotion-predicts-usefulness** — does a promotion decision beat recency and random at forecasting future hits;
 - **the sleep-consolidation differential** — is the store measurably better after a pass, with nothing load-bearing lost.
 
+## As built (2026-07-12)
+
+The design above was written before the code. This section records what actually shipped, where it departs from the design, and what the yardstick measured — so the ADR is read as a record, not a wish.
+
+### What the eval found, in full
+
+The harness (`tesseractTests/MemoryEvalHarness.swift`, +`MemoryEvalTests`, `MemoryBaselineTests`) runs on the owner's real corpus: **65 conversations, 461 episodes, a 5-day span**. Probes are derived mechanically from the corpus's own structure — no LLM, no hand-written key — in three families (`sessionContinuation`, `referenceBack`, `titleTopic`). Three arms rank the *same* records, differing only in the ranker: baseline (relevance alone), lifecycle (§5's score), and a **null arm that discards the cue entirely and ranks by age**.
+
+- **The lifecycle beats the baseline everywhere** — ΔMRR +0.02 to +0.27, ΔR@5 +0.06 to +0.38, cold-start and held-out.
+- **And that number must not be cited as evidence.** The null wins by a mile (MRR 0.68–1.00). Gold sits in the **newest 10% of the pool for 100% of probes in all three families** (mean gold percentile 0.000): the owner's conversations are near-independent one-offs over five days, so every answer is in the turns immediately before its question. This corpus cannot distinguish a memory system from `ORDER BY timestamp DESC` — which is precisely the flaw §10 diagnoses in LoCoMo, now measured in our own yard. **Retrieval scoring is therefore UNPROVEN**, and stays so until the corpus grows real cross-session fact reuse. The harness prints `THE NULL WINS` next to its own win rather than let the number be quoted.
+- **Retirement safety is PROVEN, and it is the load-bearing result.** Run §4's policy on a clock two years on: **346 of 461 records retire, and all 98 memories that were ever useful survive — regret 0.000.** The rejected Law of Disuse ("retire the unused", what almost every shipped agent memory does) retires 363 and pushes **100% of the genuinely-needed gold out of the pool — regret 1.000**. The guard in §4 is the difference between those two numbers.
+- **Promotion-predicts-usefulness is unmeasurable here**: no memory born before the cutoff is needed after it. Reported as unmeasurable rather than dressed up.
+- **The sleep differential** is asserted as invariants, not a score (a score would need the corpus the eval just showed we do not have): episodes are never mutated, replay never strengthens, and no ever-useful memory is retired.
+
+### Where the code departs from the design above
+
+- **§6's four-way PE table is a three-way one.** Reconcile answers `SAME` (confirm, rewriter never invoked), `NEW` (add), or `REPLACES` (supersede). The "small PE ⇒ in-place gist update" row is **not built** — it is a rewrite of a belief's text, which is exactly the serial-reproduction risk §1 exists to prevent, and nothing in v1 needs it. The "conflict ⇒ mark CONTESTED" row is also not built: `CONTESTED` is now reserved for **the owner's veto**, and a model-detected conflict supersedes outright.
+- **`CONTESTED` does something.** §9 promised contested beliefs get "queued for reconciliation in the next sleep". Sleep now has that phase (`reexamineContested`), and it is honourable only because of §1: the belief goes back to the immutable episodes it was drawn from, *without* the reading he rejected, and either a corrected claim supersedes it or it goes cold. A re-read that merely restates the rejected claim is dropped — he is the authority on his own life — and the successor inherits none of the vetoed belief's strength or confirmations.
+- **One sleep cadence, not two.** §7's micro-consolidation/full-sleep split collapsed into a single idle-triggered run (180 s idle threshold) that does the whole work list and yields instantly on the owner's return. Batches are digested atomically (extract → reconcile → mark consolidated), so a yield loses nothing and re-reading a batch is free under the PE gate. A second cadence buys nothing until the first one is under load.
+- **Steps 4 (contrastive separation) and 5 (pattern distillation) of §7's work list are not built.** Both are real, both are deferred: separation needs a store dense enough to have near-duplicates, and pattern distillation needs more than five days of history to have a pattern in it. The shipped work list is grade → re-examine → extract → reconcile → sweep, each journaled.
+- **The hot path does no k-NN.** §6 has it computing "store-relative distinctiveness" per turn and staging it. It does not: `MemoryEngine.record` is an insert plus an embedding (~3 ms), and the k-NN happens in sleep where the neighbours are needed anyway. This is more faithful to "the hot path makes no importance judgment", not less.
+- **`memories.md` migration is guarded on *storing*, not parsing.** The first implementation archived the file once it parsed the bullets, and an early launch archived the owner's real file while the claims went nowhere. It now archives only after the claims are in the store, and the markdown and corpus seeds are gated independently.
+
+### Verified live, on the owner's own machine
+
+Backfill imported 6 markdown claims + 207 episodes; idle detection fired; the first sleep ran to completion under the GPU lease and learned real memories from the corpus. Three bugs only a live run could have found, all fixed and pinned by tests: sleep's internal lookups were marking memories **seen** (which is what the retirement path acts on — sleep was slowly retiring the store out from under itself); a cancelled run could clear its successor's task handle and let two sleeps run at once; and the batch cap assumed 8 episodes per batch when batches are per-conversation and average three.
+
 ## Consequences
 
 **Accepted costs.**
