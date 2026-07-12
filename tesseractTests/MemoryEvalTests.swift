@@ -42,6 +42,9 @@ struct MemoryEvalTests {
     /// lifecycle may learn from; everything after is held out.
     private func cutoff(_ conversations: [EvalConversation], fraction: Double = 0.6) -> Date {
         let times = conversations.map(\.createdAt).sorted()
+        // An empty corpus that slipped past the gate must fail the test's own
+        // expectations, not trap on `times[-1]` and kill the whole runner.
+        guard !times.isEmpty else { return .distantPast }
         let index = min(times.count - 1, max(0, Int(Double(times.count) * fraction)))
         return times[index]
     }

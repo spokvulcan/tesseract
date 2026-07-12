@@ -185,12 +185,24 @@ nonisolated enum MemoryEvalCorpus: Sendable {
     }
 
     /// The gate. CI has no corpus, so every suite that needs one skips rather
-    /// than fails.
+    /// than fails. Directory existence is NOT the test: the test host boots
+    /// the app, and `AgentConversationStore.init` creates the conversations
+    /// directory empty — an existence gate fails open on CI and the suites
+    /// run against nothing (four expectation failures and an
+    /// `Index out of range` crash, run 29198624167).
     static var isAvailable: Bool {
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(
-            atPath: directory.path, isDirectory: &isDirectory)
-        return exists && isDirectory.boolValue
+        hasConversations(at: directory)
+    }
+
+    /// At least one conversation file, by the same filter `load` applies —
+    /// `index.json` is the manifest, not a conversation.
+    static func hasConversations(at directory: URL) -> Bool {
+        let contents =
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil)) ?? []
+        return contents.contains {
+            $0.pathExtension == "json" && $0.lastPathComponent != "index.json"
+        }
     }
 
     /// The embedder (`Qwen3-Embedding-0.6B-4bit-DWQ`, 1024-dim). Optional: with

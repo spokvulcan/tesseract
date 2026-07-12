@@ -382,9 +382,12 @@ struct MemoryBackfillTests {
     /// quirk. A green suite over invented data is not evidence about real data.
     ///
     /// Skips where there is no corpus (CI), so it is a guard, not a dependency.
+    /// "No corpus" means no conversation files, not a missing directory — the
+    /// test host's app boot creates the directory empty, so an existence check
+    /// fails open on CI.
     @Test(
         "The real corpus decodes — not a fixture of it",
-        .enabled(if: FileManager.default.fileExists(atPath: MemoryBackfillTests.realCorpus.path)))
+        .enabled(if: MemoryEvalCorpus.hasConversations(at: MemoryBackfillTests.realCorpus)))
     func theRealCorpusDecodes() throws {
         let episodes = ConversationCorpus.episodes(in: Self.realCorpus)
 
