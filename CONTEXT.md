@@ -1056,7 +1056,33 @@ conversation.
 _Avoid_: frecency (not the V1 mechanism), MRU/recently-used (counts, not recency),
 live re-sort (explicitly rejected — the order never shifts mid-conversation).
 
-### Operation staleness
+### Living memory read paths
+
+The three distinct ways memory reaches the model (ADR-0035); they are not
+synonyms, and the 2026-07-12 recall defect (#332) hid partly in the gap.
+
+**Memory Injection**:
+The automatic read path — the lifecycle-scored working set (core tier, top-ranked
+beliefs, relevant episodes) put in front of the model on a turn without being
+asked, riding a user message. Deliberately excludes the cold tier apart from the
+ε-exploration draw.
+_Avoid_: auto-recall, context stuffing; **Recall** (the deliberate tool, not this).
+
+**Memory Search**:
+The deliberate relevance-only lookup over *every* belief — retired and superseded
+included, tiers and lifecycle ignored — that marks what it surfaces as seen.
+The engine verb beneath **Recall**; sleep's internal reconcile lookups use it
+without marking.
+_Avoid_: retrieval (unqualified — say injection or search), semantic search (it
+is hybrid dense ⊕ keyword).
+
+**Recall**:
+The agent's tool over memory: **Memory Search** across beliefs *plus* the raw
+episodic record, so a fact told the same morning — an episode not yet distilled
+into a belief — is still findable. Superseded beliefs come back plainly marked;
+episodes come back dated and quoted.
+_Avoid_: memory_search (the ADR's design-phase name; the tool shipped as
+`recall`), beliefs-only search (the pre-#332 blind spot).
 
 **Operation Guard**:
 The shared stale-result protocol for the capture→transcribe→commit coordinators: a
