@@ -183,6 +183,68 @@ struct MemorySleepTests {
         #expect(confirmation.memoryID == existing.id)
     }
 
+    @Test("A step up is journalled as a promotion — and does not claim core's standing")
+    func aStepUpIsAPromotion() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        // Warm, fresh, and never useless — the sweep lifts it back to hot. That is
+        // a promotion, and it must be *called* one. But it is nowhere near core
+        // (which wants 60 days of stability and useful uses on three separate
+        // days), so the journal may not promise core's standing — "always present
+        // now" is what core concretely grants, and a hot memory has not earned it.
+        var warm = MemoryRecord(
+            text: "He prefers automatic defaults over manual configuration.",
+            kind: .belief, provenance: .inferred, bornAt: Date())
+        warm.tier = .warm
+        try await store.upsert(warm)
+
+        await makeSleep(engine, model).run()
+
+        let after = try #require(try await store.memory(id: warm.id))
+        #expect(after.tier == .hot)
+
+        let entry = try #require(
+            (try await store.journal(limit: 20)).first { $0.mutation == .promoted })
+        #expect(entry.memoryID == warm.id)
+        #expect(entry.detail.contains("hot"))
+        #expect(
+            !entry.detail.contains("Always present"),
+            "only core is unconditionally present — do not promise it of a hot memory")
+    }
+
+    @Test("A retirement is journalled as a demotion — never as a promotion")
+    func aRetirementIsNeverCalledAPromotion() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        // Surfaced eight times, never once useful: retirement path two. It goes
+        // cold — and the owner must be *told* it went cold. The live store had
+        // four journal rows announcing "always present now" about memories that
+        // had in fact just been moved out of the default pool, because the tier
+        // comparison ran backwards. Never again.
+        var noise = MemoryRecord(
+            text: "He says 'Continue, please' a lot.",
+            kind: .pattern, provenance: .inferred, bornAt: Date())
+        noise.seenCount = 9
+        noise.usefulUseCount = 0
+        noise.storageStrength = 0
+        try await store.upsert(noise)
+
+        await makeSleep(engine, model).run()
+
+        let after = try #require(try await store.memory(id: noise.id))
+        #expect(after.tier == .cold, "shown nine times, never once useful")
+
+        let journal = try await store.journal(limit: 20)
+        let entry = try #require(journal.first { $0.memoryID == noise.id && $0.mutation != .added })
+        #expect(entry.mutation == .demoted)
+        #expect(journal.allSatisfy { $0.mutation != .promoted }, "nothing here was promoted")
+        #expect(!entry.detail.contains("Always present"))
+    }
+
     @Test("A contradiction supersedes — and supersession is not deletion")
     func contradictionSupersedes() async throws {
         let store = try makeStore()

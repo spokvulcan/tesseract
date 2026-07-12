@@ -124,12 +124,19 @@ nonisolated enum MemoryTier: String, Codable, Sendable, CaseIterable, Comparable
     /// explicit search and by the ε-exploration slot. **Not deleted.**
     case cold
 
+    /// **Bigger means more important.** Both call sites read the comparison that
+    /// way — `updated.tier > memory.tier` is "it went up", and the injected block
+    /// sorts descending so core leads — so the rank has to agree with them, and
+    /// once it did not: with `core` ranked 0 and `cold` ranked 3, a demotion
+    /// compared as a promotion. Sleep then counted retirements as promotions and
+    /// wrote "always present now" into the journal about a memory it had just
+    /// pushed *out* of the default pool.
     private var rank: Int {
         switch self {
-        case .core: 0
-        case .hot: 1
-        case .warm: 2
-        case .cold: 3
+        case .core: 3
+        case .hot: 2
+        case .warm: 1
+        case .cold: 0
         }
     }
 

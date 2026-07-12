@@ -795,7 +795,15 @@ final class MemorySleep {
                 JournalEntry(
                     at: now, mutation: promoted ? .promoted : .demoted, memoryID: memory.id,
                     detail: promoted
-                        ? "Proved itself \(usefulDays) days running — always present now."
+                        // "Always present now" is a promise only `.core` keeps —
+                        // it is what promotion to core concretely *grants*. Saying
+                        // it of a warm→hot move claims a standing the memory has
+                        // not earned, and the journal is the one place in this
+                        // system that must never overstate what happened.
+                        ? (updated.tier == .core
+                            ? "Useful on \(usefulDays) separate days — it has stopped "
+                                + "being a retrieval and become identity. Always present now."
+                            : "Moved up to \(updated.tier.rawValue): offered ahead of the rest.")
                         : "Moved to \(updated.tier.rawValue): still reachable, "
                             + "no longer offered by default.",
                     after: memory.text))

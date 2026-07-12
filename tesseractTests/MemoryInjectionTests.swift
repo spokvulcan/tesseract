@@ -402,4 +402,26 @@ struct MemoryBackfillTests {
         #expect(episodes.count == 1)
         #expect(episodes.first?.text == "still here")
     }
+
+    @Test("The block leads with core — identity before the tail")
+    func coreLeadsTheBlock() throws {
+        let now = Date()
+        var cold = MemoryRecord(
+            text: "He once asked about a Dota tournament.", kind: .event,
+            provenance: .inferred, bornAt: now)
+        cold.tier = .cold
+        var core = MemoryRecord(
+            text: "He is the developer of Tesseract.", kind: .belief,
+            provenance: .stated, bornAt: now)
+        core.tier = .core
+
+        // Handed over worst-first on purpose: the sort is the thing under test.
+        let block = try #require(
+            MemoryPrompt.block(memories: [cold, core], episodes: [], now: now))
+        let coreAt = try #require(block.range(of: "developer of Tesseract"))
+        let coldAt = try #require(block.range(of: "Dota tournament"))
+        #expect(
+            coreAt.lowerBound < coldAt.lowerBound,
+            "a core belief has stopped being a retrieval — the model meets it first")
+    }
 }

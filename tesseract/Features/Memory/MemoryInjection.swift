@@ -85,6 +85,10 @@ nonisolated enum MemoryPrompt {
 
         if !memories.isEmpty {
             lines.append("")
+            // Core first: these have stopped being retrievals and become identity,
+            // and a model reading top-down should meet them before the tail. (This
+            // sort was silently backwards while `MemoryTier`'s rank ran the other
+            // way — the block led with the coldest thing in it.)
             for memory in memories.sorted(by: { $0.tier > $1.tier }) {
                 lines.append(line(for: memory))
             }

@@ -353,4 +353,19 @@ struct MemoryLifecycleTests {
             MemoryLifecycle.consolidationPriority(slipping, now: now)
                 > MemoryLifecycle.consolidationPriority(settled, now: now))
     }
+
+    // MARK: - Tier ordering
+
+    @Test("Bigger tier means more important — every caller reads it that way")
+    func tiersOrderByImportance() {
+        // This is not pedantry. When this was inverted, sleep counted a retirement
+        // as a promotion and told the owner a memory it had just pushed out of the
+        // pool was "always present now" — and the injected block led with the cold
+        // tail instead of the core beliefs. One `switch` decided both.
+        #expect(MemoryTier.core > MemoryTier.hot)
+        #expect(MemoryTier.hot > MemoryTier.warm)
+        #expect(MemoryTier.warm > MemoryTier.cold)
+        #expect(MemoryTier.allCases.max() == .core)
+        #expect(MemoryTier.allCases.min() == .cold)
+    }
 }
