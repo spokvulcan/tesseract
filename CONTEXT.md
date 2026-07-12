@@ -1106,6 +1106,19 @@ itself.
 _Avoid_: episode dedup(lication) — the rule turns the twin away at the door
 rather than deleting it later; episode merging.
 
+**Owner's Veto**:
+The revision path that answers "that's wrong": the memory flips to *contested*
+— a status change, never an edit or a delete — and the next sleep re-reads its
+source episodes with the owner's rejection note beside them, minting a
+corrected successor (which inherits none of the rejected belief's strength) or
+retiring it cold. Two doors relay the veto: the Memory window, and the agent's
+`contest` tool, which names a memory by the short handle on its `recall` line
+and records what he said when he rejected it.
+_Avoid_: forget/delete (deletion is the owner's hand alone, in the window),
+belief editing (the agent never rewrites a memory's text), negation belief (the
+pre-#333 workaround — `remember`ing the correction beside the wrong memory left
+both live, contradicting each other).
+
 **Operation Guard**:
 The shared stale-result protocol for the capture→transcribe→commit coordinators: a
 monotonic epoch that advances on cancel and on each new operation, so a post-`await`
