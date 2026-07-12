@@ -26,7 +26,7 @@ struct SettingsWindowView: View {
             }
             Tab("Agent", systemImage: "brain.head.profile") {
                 AgentSettingsPane()
-                    .frame(width: 620, height: 620)
+                    .frame(width: 620, height: 700)
             }
             Tab("Dictation", systemImage: "mic.fill") {
                 DictationSettingsPane()
