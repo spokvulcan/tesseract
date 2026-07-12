@@ -392,7 +392,20 @@ final class MemoryEngine {
     /// by relevance alone and looks at everything, including what was retired
     /// and what was superseded — with the superseded plainly marked, because a
     /// belief that has been replaced is still evidence about the past.
-    func search(query: String, limit: Int = 10, now: Date = Date()) async -> [ScoredMemory] {
+    ///
+    /// `marksSeen` is not a convenience. "Seen" means **surfaced to someone** —
+    /// it is evidence, and it is the evidence the third retirement path acts on
+    /// ("shown eight times and never once helped"). Sleep's own reconcile uses
+    /// this method to find a claim's neighbours, and those lookups are not
+    /// surfacings: nobody saw them. Left marking, sleep inflates the counter it
+    /// then retires against, and the store cannibalises itself over successive
+    /// nights — measured on the owner's real store, where "He runs an X/Twitter
+    /// account: @spok_vulkan" reached `seenCount 8` and went cold without ever
+    /// being shown to anyone. So sleep passes `false`; the agent's `recall` tool
+    /// — which genuinely puts a memory in front of the model — does not.
+    func search(query: String, limit: Int = 10, now: Date = Date(), marksSeen: Bool = true) async
+        -> [ScoredMemory]
+    {
         guard isEnabled() else { return [] }
         do {
             let all = try await store.memories(status: nil, limit: 5_000)
@@ -417,9 +430,11 @@ final class MemoryEngine {
 
             // A deliberate search is a real retrieval: it marks the memory seen,
             // which is what makes "surfaced repeatedly and never once useful"
-            // into evidence the lifecycle can act on.
-            for hit in hits {
-                try? await store.upsert(MemoryLifecycle.markSeen(hit.memory, now: now))
+            // into evidence the lifecycle can act on. An *internal* lookup is not.
+            if marksSeen {
+                for hit in hits {
+                    try? await store.upsert(MemoryLifecycle.markSeen(hit.memory, now: now))
+                }
             }
             return hits
         } catch {

@@ -84,17 +84,25 @@ final class MemorySleep {
     private let isEnabled: @MainActor () -> Bool
 
     private var runTask: Task<Void, Never>?
+    /// Which run owns `runTask`. See `start()`.
+    private var runGeneration = 0
 
     /// How many episodes one extraction call reads. Small enough that the model
     /// can hold them all, large enough that a claim can be seen recurring —
     /// which is most of what distinguishes a pattern from an accident.
     private let extractionBatch = 8
 
-    /// How many extraction batches one run will do. A cap, not a target: the
-    /// first sleep after the backfill has 200-odd episodes waiting, and grinding
-    /// through all of them in one sitting would hold the GPU for an hour. It
-    /// picks up where it left off next time.
-    private let maxBatchesPerRun = 12
+    /// How many batches one run will do — a runaway guard, not a budget.
+    ///
+    /// It was 12, on the assumption that a batch holds 8 episodes. It does not:
+    /// batches are per-conversation, and the owner's conversations average three
+    /// user turns, so 12 batches read 40 episodes of 207 and the first night got
+    /// through a fifth of his history. Now that a batch is digested atomically,
+    /// there is nothing to protect against by stopping early — the owner's return
+    /// cancels the run mid-generation whatever the cap says, and the unread
+    /// batches are simply still there tomorrow. So the cap sits above any real
+    /// backlog and the *yield* does the work it was pretending to do.
+    private let maxBatchesPerRun = 100
 
     init(
         engine: MemoryEngine,
@@ -112,11 +120,22 @@ final class MemorySleep {
 
     /// Start a consolidation pass. Returns immediately; the work runs in a
     /// cancellable task.
+    ///
+    /// The generation counter is not ceremony. A cancelled run keeps executing
+    /// until its `await` unwinds, so it can outlive the `yield()` that killed it
+    /// — and by then, if the owner has stepped away again, a *new* run is already
+    /// installed in `runTask`. Without the check, the dying run's cleanup would
+    /// clear its successor's handle, `isRunning` would read false while a run was
+    /// live, and the next idle tick would start a **second concurrent sleep** over
+    /// the same episodes. Two consolidations racing to distil the same day is how
+    /// a memory store fills with duplicates.
     func start() {
         guard isEnabled(), runTask == nil else { return }
+        runGeneration += 1
+        let generation = runGeneration
         runTask = Task { [weak self] in
             await self?.run()
-            self?.runTask = nil
+            self?.finish(generation: generation)
         }
     }
 
@@ -126,11 +145,22 @@ final class MemorySleep {
     /// The work item that died is redone next sleep; nothing was half-written.
     func yield() {
         guard let task = runTask else { return }
+        // Retire this generation *before* cancelling: the task unwinds on its own
+        // schedule, and it must not be able to clear a handle that by then belongs
+        // to its successor.
+        runGeneration += 1
         task.cancel()
         runTask = nil
         phase = .idle
         lastSummary.yielded = true
         Log.memory.info("Sleep yielded — the owner is back")
+    }
+
+    /// A run finished under its own power. Only the *current* run may release the
+    /// handle; a cancelled predecessor unwinding late must not.
+    private func finish(generation: Int) {
+        guard generation == runGeneration else { return }
+        runTask = nil
     }
 
     /// The whole work list. Public so a test — and the owner's "consolidate now"
@@ -146,12 +176,7 @@ final class MemorySleep {
             summary.graded = try await gradeRetrievals()
             try Task.checkCancellation()
 
-            phase = .extracting
-            let claims = try await extractClaims(summary: &summary)
-            try Task.checkCancellation()
-
-            phase = .reconciling
-            try await reconcile(claims, into: &summary)
+            try await consolidate(into: &summary)
             try Task.checkCancellation()
 
             phase = .sweeping
@@ -292,16 +317,30 @@ final class MemorySleep {
         }
     }
 
-    // MARK: - 2. Extract
+    // MARK: - 2 & 3. Extract, then reconcile — one batch at a time
 
     /// Read the unconsolidated episodes and write down what is worth keeping.
     ///
-    /// Batched *by conversation* rather than by count alone: a claim is only
-    /// legible against its neighbours ("the second one" means nothing on its
-    /// own), and a conversation is the natural unit in which context holds.
-    private func extractClaims(summary: inout Summary) async throws -> [Claim] {
-        let episodes = try await engine.store.unconsolidatedEpisodes(limit: 500)
-        guard !episodes.isEmpty else { return [] }
+    /// **A batch is digested whole or not at all**, and that ordering is the
+    /// point. Extraction used to run to completion across every batch, marking
+    /// episodes consumed as it went, and only then reconcile the accumulated
+    /// claims. Yield in the gap — which is to say, the owner touching his
+    /// keyboard — and the claims were dropped while the episodes that produced
+    /// them stayed marked consolidated. The knowledge was gone, and no later
+    /// sleep would ever look at those turns again. Silent, permanent, and
+    /// invisible in every summary line.
+    ///
+    /// So each batch now extracts, reconciles, and only *then* marks its episodes
+    /// consumed. A cancel at any point leaves that batch untouched in the queue.
+    /// Re-reading it next sleep is free: the prediction-error gate meets its own
+    /// claims again and answers SAME, which confirms rather than duplicates.
+    ///
+    /// Batched *by conversation*: a claim is only legible against its neighbours
+    /// ("the second one" means nothing alone), and a conversation is the natural
+    /// unit in which that context holds.
+    private func consolidate(into summary: inout Summary) async throws {
+        let episodes = try await engine.store.unconsolidatedEpisodes(limit: 1_000)
+        guard !episodes.isEmpty else { return }
 
         var batches: [[Episode]] = []
         for group in Dictionary(grouping: episodes, by: { $0.conversationID ?? $0.id.uuidString })
@@ -316,22 +355,23 @@ final class MemorySleep {
             }
         }
 
-        var claims: [Claim] = []
         for batch in batches.prefix(maxBatchesPerRun) {
             try Task.checkCancellation()
-            let extracted = try await extract(from: batch)
-            claims.append(contentsOf: extracted)
+
+            phase = .extracting
+            let claims = try await extract(from: batch)
+
+            phase = .reconciling
+            try await reconcile(claims, into: &summary)
+
             summary.episodesRead += batch.count
-            // Marked consumed only once the call *returned*. A cancelled batch
-            // stays unconsolidated and is read again next sleep — which is what
-            // makes yielding free.
             try await engine.store.markConsolidated(batch.map(\.id), at: Date())
         }
+
         if batches.count > maxBatchesPerRun {
             Log.memory.info(
                 "Sleep: \(batches.count - maxBatchesPerRun) batches left for the next pass")
         }
-        return claims
     }
 
     private func extract(from episodes: [Episode]) async throws -> [Claim] {
@@ -433,7 +473,11 @@ final class MemorySleep {
         for claim in claims {
             try Task.checkCancellation()
 
-            let neighbours = await engine.search(query: claim.text, limit: 4)
+            // `marksSeen: false` — finding a claim's neighbours is bookkeeping, not
+            // a surfacing. Nobody saw these. Marking them would inflate the very
+            // counter the third retirement path acts on, and sleep would slowly
+            // retire the store out from under itself.
+            let neighbours = await engine.search(query: claim.text, limit: 4, marksSeen: false)
                 .filter { $0.memory.status != .superseded }
                 .map(\.memory)
 

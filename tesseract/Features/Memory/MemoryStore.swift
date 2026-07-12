@@ -159,6 +159,18 @@ actor MemoryStore {
     // MARK: - Episodes (append-only)
 
     /// Append an episode. There is deliberately no `updateEpisode`.
+    /// **Dates are stored as Unix seconds, and the round-trip is lossy below the
+    /// microsecond.** `Date` holds seconds since the 2001 reference date; writing
+    /// `timeIntervalSince1970` adds ~1.78e9 to that and reading it back subtracts
+    /// the same, which costs the low bits of the mantissa. So a `Date` that goes
+    /// into this store and comes out is *equal to within ~100 ns, and not
+    /// bit-identical* — never compare one with `==`.
+    ///
+    /// Kept anyway, deliberately: Unix seconds are what `sqlite3
+    /// "SELECT datetime(occurredAt,'unixepoch')"` understands, and being able to
+    /// read your own memory store from a terminal is worth more in a local-first
+    /// app than a nanosecond nobody will ever observe. Nothing in the lifecycle
+    /// works at a finer grain than a day.
     func append(_ episode: Episode, embedding: [Float]? = nil) throws {
         try db.transaction {
             let metaJSON =
