@@ -203,11 +203,12 @@ final class DependencyContainer: ObservableObject {
     lazy var contextManager = ContextManager(settings: .standard)
     lazy var newToolRegistry: ToolRegistry = {
         let registry = ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
-        // The living memory's two hands (ADR-0035). Appended rather than built
+        // The living memory's three hands (ADR-0035). Appended rather than built
         // into the factory because they need the engine, which the factory —
         // a `nonisolated` free function over a sandbox — has no way to reach.
         registry.appendBuiltInTool(createRememberTool(memory: memoryEngine))
         registry.appendBuiltInTool(createRecallTool(memory: memoryEngine))
+        registry.appendBuiltInTool(createContestTool(memory: memoryEngine))
         return registry
     }()
     lazy var agentConversationStore = AgentConversationStore()

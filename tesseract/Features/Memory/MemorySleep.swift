@@ -402,7 +402,13 @@ final class MemorySleep {
             try Task.checkCancellation()
 
             let episodes = await engine.episodes(for: memory)
-            let correction = episodes.isEmpty ? nil : try await reread(memory, from: episodes)
+            // What he said when he rejected it — captured by the contest, and
+            // often the only thing that separates "mint the correction" from
+            // "re-derive the same mistake": the source episodes alone are
+            // exactly the evidence that produced the wrong belief.
+            let note = try? await store.latestContestNote(memoryID: memory.id)
+            let correction =
+                episodes.isEmpty ? nil : try await reread(memory, from: episodes, note: note)
 
             guard let correction else {
                 // Nothing survives. Note the tier move is all that happens: the
@@ -429,20 +435,24 @@ final class MemorySleep {
         }
     }
 
-    /// Ask the episodes, not the belief.
-    private func reread(_ memory: MemoryRecord, from episodes: [Episode]) async throws -> Claim? {
+    /// Ask the episodes, not the belief — with his rejection alongside them,
+    /// when the contest recorded one.
+    private func reread(
+        _ memory: MemoryRecord, from episodes: [Episode], note: String? = nil
+    ) async throws -> Claim? {
         let evidence =
             episodes
             .sorted { $0.occurredAt < $1.occurredAt }
             .map(Self.saidLine)
             .joined(separator: "\n\n")
+        let rejection = note.map { "\nWhen he rejected it: \($0.prefix(400))\n" } ?? ""
 
         let prompt = """
             The person I serve has told me that one of my memories is WRONG.
 
             The memory he rejected:
             \(memory.text)
-
+            \(rejection)
             What he actually said — verbatim, and not in doubt. This is the evidence \
             I drew that memory from:
 
@@ -687,12 +697,25 @@ final class MemorySleep {
             case .new:
                 try await add(claim, supersedes: nil, into: &summary)
 
-            case .replaces(let index):
-                guard index < neighbours.count else {
+            case .replaces(let indexList):
+                let targets = indexList.filter { $0 < neighbours.count }.map { neighbours[$0] }
+                guard let primary = targets.first else {
                     try await add(claim, supersedes: nil, into: &summary)
                     break
                 }
-                try await add(claim, supersedes: neighbours[index], into: &summary)
+                // One successor, several retirements: the claim supersedes its
+                // first target (inheriting its strength — the continuation),
+                // and every further contradicted belief is retired in favour
+                // of the same successor, so no live contradiction survives
+                // the night.
+                let successor = try await add(claim, supersedes: primary, into: &summary)
+                if let successor {
+                    for extra in targets.dropFirst() {
+                        let retired = try await store.markSuperseded(
+                            id: extra.id, by: successor.id, at: Date())
+                        if retired != nil { summary.superseded += 1 }
+                    }
+                }
 
             case .drop:
                 // The adjudicator's answer was noise. Adding a memory the judge
@@ -712,7 +735,11 @@ final class MemorySleep {
     enum Verdict: Equatable {
         case same(Int)
         case new
-        case replaces(Int)
+        /// One observation can falsify several beliefs at once — the owner's
+        /// "that's not my name" contradicted both the stated belief and the
+        /// inferred event, and a single-index verdict could only retire one of
+        /// them, leaving a live contradiction the store had no way to notice.
+        case replaces([Int])
         /// The response was noise. The claim is discarded — never confirmed
         /// onto a neighbour, never added.
         case drop
@@ -745,9 +772,11 @@ final class MemorySleep {
 
             Answer with exactly one line, nothing else:
 
-            SAME <n>      — belief <n> already says this. The new observation adds nothing.
-            NEW           — this is genuinely new. Nothing I believe covers it.
-            REPLACES <n>  — this CONTRADICTS belief <n>, or supersedes it. Belief <n> is no longer true.
+            SAME <n>        — belief <n> already says this. The new observation adds nothing.
+            NEW             — this is genuinely new. Nothing I believe covers it.
+            REPLACES <n,m>  — this CONTRADICTS those beliefs, or supersedes them. \
+            List every belief it makes untrue — one ("REPLACES 2") or several \
+            ("REPLACES 1, 3").
 
             Be conservative. SAME is the most common answer and the safest: a \
             rephrasing, a narrower case, or the same fact said again is SAME, not \
@@ -773,7 +802,25 @@ final class MemorySleep {
             guard let number = Int(tail.filter(\.isNumber).prefix(1)) else { return nil }
             return number - 1
         }
-        if let i = index(after: "REPLACES"), i >= 0, i < count { return .replaces(i) }
+        // REPLACES may list several indices ("REPLACES 1, 3"). Read integer
+        // tokens until the first word of prose — "REPLACES 1 BECAUSE 2 IS
+        // OLD" names one belief, not two — accepting "AND" as a separator.
+        func indices(after keyword: String) -> [Int]? {
+            guard let range = text.range(of: keyword) else { return nil }
+            let line = text[range.upperBound...].prefix(40).split(separator: "\n").first ?? ""
+            var out: [Int] = []
+            var seen: Set<Int> = []
+            for token in line.split(whereSeparator: { !$0.isNumber && !$0.isLetter }) {
+                if let n = Int(token) {
+                    guard n >= 1, n <= count else { break }
+                    if seen.insert(n).inserted { out.append(n - 1) }
+                } else if token != "AND" {
+                    break
+                }
+            }
+            return out.isEmpty ? nil : out
+        }
+        if let list = indices(after: "REPLACES") { return .replaces(list) }
         if let i = index(after: "SAME"), i >= 0, i < count { return .same(i) }
         if text.contains("NEW") { return .new }
         // Unparseable: drop the claim. Silently adding a memory the judge could
@@ -787,10 +834,14 @@ final class MemorySleep {
     ///   — it was right for a while and the new claim is its continuation, not a
     ///   stranger. **False when the owner rejected it**: strength it accrued while
     ///   wrong is not credit the correction gets to spend.
+    /// Returns the memory as written (the successor, when superseding), so a
+    /// multi-belief contradiction can retire its further targets against the
+    /// same successor. Nil when the supersede lost its race.
+    @discardableResult
     private func add(
         _ claim: Claim, supersedes old: MemoryRecord?, inheritStrength: Bool = true,
         into summary: inout Summary
-    ) async throws {
+    ) async throws -> MemoryRecord? {
         // The embedding comes first and the store writes happen in one
         // transaction (`store.supersede`) — so neither a crash nor a yield can
         // leave the old belief retired while its successor was never born.
@@ -809,14 +860,14 @@ final class MemorySleep {
         if let old {
             // Superseded, never deleted. A belief that has been replaced is still
             // the truth about what was true, and about what I used to think.
-            if try await store.supersede(
-                oldID: old.id, with: memory, embedding: vector,
-                inheritStrength: inheritStrength, at: now) != nil
-            {
-                summary.superseded += 1
-                summary.added += 1
-            }
-            return
+            guard
+                let successor = try await store.supersede(
+                    oldID: old.id, with: memory, embedding: vector,
+                    inheritStrength: inheritStrength, at: now)
+            else { return nil }
+            summary.superseded += 1
+            summary.added += 1
+            return successor
         }
 
         try await store.upsert(
@@ -825,6 +876,7 @@ final class MemorySleep {
                 at: now, mutation: .added, memoryID: memory.id,
                 detail: "Learned this in consolidation.", after: memory.text))
         summary.added += 1
+        return memory
     }
 
     // MARK: - 5. Sweep

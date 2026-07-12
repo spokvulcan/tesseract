@@ -559,15 +559,48 @@ final class MemoryEngine {
     /// The store flips the status against the *fresh* row, guarded on it still
     /// being live — the window's snapshot may be hours old, and a contest must
     /// not resurrect a belief sleep has since superseded.
-    func contest(_ memory: MemoryRecord, now: Date = Date()) async {
+    func contest(_ memory: MemoryRecord, reason: String? = nil, now: Date = Date()) async {
         do {
-            if try await store.contest(id: memory.id, at: now) == nil {
+            if try await store.contest(id: memory.id, at: now, reason: reason) == nil {
                 Log.memory.info(
                     "Contest skipped — the belief is no longer live: \(memory.id.uuidString)")
             }
             await refreshStats()
         } catch {
             Log.memory.error("Contest failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// What the `contest` tool found when it tried to act — the agent relays
+    /// the owner's veto by handle, and every miss needs its own answer, because
+    /// "nothing happened" teaches the model nothing.
+    enum ContestOutcome: Sendable, Equatable {
+        case contested(MemoryRecord)
+        case alreadyContested(MemoryRecord)
+        case alreadySuperseded(MemoryRecord)
+        case notFound
+    }
+
+    /// The agent's door to the owner's veto (ADR-0035 §9), addressed by the
+    /// short handle `recall` prints — the first eight hex digits of the id.
+    ///
+    /// The handle must resolve to exactly one memory; anything else is
+    /// `.notFound`, and the right move is to `recall` again for a fresh handle
+    /// rather than guess. Only a live memory can be contested — a superseded
+    /// one is already history, and a contested one is already queued.
+    func contest(handle: String, reason: String, now: Date = Date()) async -> ContestOutcome {
+        let key = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard key.count >= 6, key.allSatisfy(\.isHexDigit) else { return .notFound }
+        let all = (try? await store.memories(status: nil, limit: 5_000)) ?? []
+        let matches = all.filter { $0.id.uuidString.lowercased().hasPrefix(key) }
+        guard matches.count == 1, let match = matches.first else { return .notFound }
+
+        switch match.status {
+        case .contested: return .alreadyContested(match)
+        case .superseded: return .alreadySuperseded(match)
+        case .live:
+            await contest(match, reason: reason, now: now)
+            return .contested(match)
         }
     }
 }

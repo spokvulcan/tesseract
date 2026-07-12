@@ -213,7 +213,31 @@ actor MemoryStore {
             // twice, and `keywordScores` would then return the same id twice —
             // reachable once episode ids are the messages' own and a turn can
             // be re-captured.
-            guard db.changes > 0 else { return }
+            //
+            // One field may still move: the attached reply. A turn that opens
+            // with a tool call has no answer text at its first `turnEnd`, and
+            // the real answer only exists at the last one — so a re-capture of
+            // the same turn carrying a fuller reply updates `meta.reply` in
+            // place. The testimony (text, source, time) never changes; the
+            // reply is context riding alongside it, and the newest non-empty
+            // one wins.
+            guard db.changes > 0 else {
+                if let reply = episode.meta["reply"], !reply.isEmpty,
+                    let current = try self.episode(id: episode.id),
+                    current.meta["reply"] != reply
+                {
+                    var meta = current.meta
+                    meta["reply"] = reply
+                    let updatedJSON =
+                        (try? JSONEncoder().encode(meta)).flatMap {
+                            String(data: $0, encoding: .utf8)
+                        } ?? metaJSON
+                    let update = try db.prepare("UPDATE episodes SET meta = ?2 WHERE id = ?1")
+                    update.bind(1, episode.id.uuidString).bind(2, updatedJSON)
+                    try update.run()
+                }
+                return
+            }
 
             let fts = try db.prepare(
                 """
@@ -520,7 +544,12 @@ actor MemoryStore {
     /// a stale window snapshot cannot resurrect a belief sleep has since
     /// superseded. Returns the contested record, or nil if it was no longer
     /// live and nothing happened.
-    func contest(id: UUID, at now: Date) throws -> MemoryRecord? {
+    ///
+    /// `reason` is what he said when he rejected it. It rides in the journal
+    /// line — the same line `latestContestNote` hands to sleep's re-read, so
+    /// the correction is minted against his words, not just against the old
+    /// evidence that produced the wrong belief in the first place.
+    func contest(id: UUID, at now: Date, reason: String? = nil) throws -> MemoryRecord? {
         try db.transaction {
             guard let before = try memory(id: id), before.status == .live else { return nil }
             let stmt = try db.prepare(
@@ -532,8 +561,49 @@ actor MemoryStore {
             try appendJournal(
                 JournalEntry(
                     at: now, mutation: .contested, memoryID: id,
-                    detail: "The owner contested this. Queued for reconciliation in sleep.",
+                    detail: reason.map { "He rejected this: \($0)" }
+                        ?? "The owner contested this. Queued for reconciliation in sleep.",
                     before: before.text))
+            return try memory(id: id)
+        }
+    }
+
+    /// The note left when a memory was contested — what he said when he
+    /// rejected it. Sleep's re-read wants this next to the evidence: the
+    /// source episodes alone are exactly what produced the wrong belief.
+    func latestContestNote(memoryID: UUID) throws -> String? {
+        let stmt = try db.prepare(
+            """
+            SELECT detail FROM journal
+            WHERE memoryID = ?1 AND mutation = ?2
+            ORDER BY at DESC LIMIT 1
+            """)
+        stmt.bind(1, memoryID.uuidString).bind(2, MemoryMutation.contested.rawValue)
+        guard try stmt.step() else { return nil }
+        return stmt.string(0)
+    }
+
+    /// Retire `id` in favour of a successor that already exists — the second
+    /// and further targets when one observation contradicts several beliefs at
+    /// once. Guarded like `supersede`: acts on the fresh row, does nothing if
+    /// it was already superseded or is the successor itself.
+    func markSuperseded(id: UUID, by successorID: UUID, at now: Date) throws -> MemoryRecord? {
+        try db.transaction {
+            guard id != successorID,
+                let old = try memory(id: id), old.status != .superseded,
+                let successor = try memory(id: successorID)
+            else { return nil }
+            let stmt = try db.prepare(
+                "UPDATE memories SET status = ?2, supersededBy = ?3 WHERE id = ?1")
+            stmt.bind(1, id.uuidString)
+                .bind(2, MemoryStatus.superseded.rawValue)
+                .bind(3, successorID.uuidString)
+            try stmt.run()
+            try appendJournal(
+                JournalEntry(
+                    at: now, mutation: .superseded, memoryID: id,
+                    detail: "Contradicted by the same observation that replaced a sibling belief.",
+                    before: old.text, after: successor.text))
             return try memory(id: id)
         }
     }

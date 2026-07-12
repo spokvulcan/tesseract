@@ -894,7 +894,11 @@ final class ChatSession {
 
         let conversationID = conversationStore.currentConversation?.id.uuidString
         let text = user.content
-        let replyText = reply.text
+        // Trimmed, because a turn that opens with a tool call has emitted only
+        // whitespace by its first `turnEnd` — and an episode whose stored reply
+        // is "\n\n" has lost the context this field exists to carry. The store
+        // lets a later re-capture of the same turn fill the reply in.
+        let replyText = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
         // The episode takes the user message's own id — the same id
         // `attachMemory` logged this turn's retrievals against, and the same
         // grain the backfill writes. One turn, one id, in both directions.

@@ -398,6 +398,120 @@ struct MemoryStoreTests {
         #expect(try #require(try await store.memory(id: old.id)).supersededBy == written.id)
     }
 
+    @Test("markSuperseded retires a second belief in favour of an existing successor")
+    func markSupersededRetiresSiblings() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // The #333 shape: one observation contradicts two live beliefs. The
+        // first is superseded normally; the second must be retirable in favour
+        // of the SAME successor.
+        let stated = MemoryRecord(
+            text: "He gave me the nickname \"Pelican.\"", kind: .belief,
+            provenance: .stated, bornAt: Date())
+        let inferred = MemoryRecord(
+            text: "He gave the assistant the nickname \"Pelican.\"", kind: .event,
+            provenance: .inferred, bornAt: Date())
+        try await store.upsert(stated)
+        try await store.upsert(inferred)
+
+        let correction = MemoryRecord(
+            text: "\"Pelican\" referred to an SVG image he asked for, not a name for me.",
+            kind: .belief, provenance: .stated, bornAt: Date())
+        let successor = try #require(
+            try await store.supersede(
+                oldID: stated.id, with: correction, embedding: nil,
+                inheritStrength: true, at: Date()))
+
+        let retired = try #require(
+            try await store.markSuperseded(id: inferred.id, by: successor.id, at: Date()))
+        #expect(retired.status == .superseded)
+        #expect(retired.supersededBy == successor.id)
+
+        let journal = try await store.journal(limit: 10)
+        #expect(
+            journal.contains {
+                $0.mutation == .superseded && $0.memoryID == inferred.id
+                    && $0.after == successor.text
+            })
+
+        // Guards: already superseded, self-succession, and a successor that
+        // does not exist are all no-ops.
+        #expect(
+            try await store.markSuperseded(id: inferred.id, by: successor.id, at: Date()) == nil)
+        #expect(
+            try await store.markSuperseded(id: successor.id, by: successor.id, at: Date()) == nil)
+        #expect(try await store.markSuperseded(id: successor.id, by: UUID(), at: Date()) == nil)
+        #expect(try #require(try await store.memory(id: successor.id)).status == .live)
+    }
+
+    @Test("A contest carries his rejection, and the re-read can ask for it")
+    func contestNoteRoundTrips() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let wrong = MemoryRecord(
+            text: "He gave me the nickname \"Pelican.\"", kind: .belief,
+            provenance: .stated, bornAt: Date())
+        try await store.upsert(wrong)
+
+        // Never contested: no note.
+        #expect(try await store.latestContestNote(memoryID: wrong.id) == nil)
+
+        _ = try await store.contest(
+            id: wrong.id, at: Date(),
+            reason: "It referred to the SVG pelican image, not a name for the assistant.")
+        let note = try #require(try await store.latestContestNote(memoryID: wrong.id))
+        #expect(note.contains("SVG pelican image"))
+        // The note is what separates "mint the correction" from "re-derive the
+        // same mistake" — the source episodes alone are the evidence that
+        // produced the wrong belief.
+        #expect(note.hasPrefix("He rejected this:"))
+    }
+
+    @Test("Re-capturing a turn fills in the reply it did not have yet")
+    func episodeReplyIsFilledByRecapture() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // First `turnEnd` of a tool-using turn: the model has emitted only a
+        // tool call, so the capture carries no reply.
+        let id = UUID()
+        let first = Episode(
+            id: id, source: .chat, conversationID: "conv-1",
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            text: "Are you sure about that?", meta: [:])
+        try await store.append(first, embedding: vector(1))
+
+        // Last `turnEnd`: same turn, same id, now with the real answer.
+        let second = Episode(
+            id: id, source: .chat, conversationID: "conv-1",
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            text: "Are you sure about that?",
+            meta: ["reply": "Yes. You called me Pelican on July 7th."])
+        try await store.append(second, embedding: vector(1))
+
+        var loaded = try #require(try await store.episode(id: id))
+        #expect(loaded.meta["reply"] == "Yes. You called me Pelican on July 7th.")
+        // The testimony itself never moved, and no duplicate row appeared.
+        #expect(loaded.text == "Are you sure about that?")
+        #expect(try await store.episodeCount() == 1)
+
+        // A newer non-empty reply wins; an empty one changes nothing.
+        let third = Episode(
+            id: id, source: .chat, conversationID: "conv-1",
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            text: "Are you sure about that?", meta: ["reply": "Checked again — corrected."])
+        try await store.append(third, embedding: nil)
+        let fourth = Episode(
+            id: id, source: .chat, conversationID: "conv-1",
+            occurredAt: Date(timeIntervalSince1970: 1_700_000_000),
+            text: "Are you sure about that?", meta: [:])
+        try await store.append(fourth, embedding: nil)
+        loaded = try #require(try await store.episode(id: id))
+        #expect(loaded.meta["reply"] == "Checked again — corrected.")
+    }
+
     @Test("Deleting a memory takes its retrieval events with it")
     func deleteMemoryPurgesItsRetrievals() async throws {
         let (store, directory) = try makeStore()

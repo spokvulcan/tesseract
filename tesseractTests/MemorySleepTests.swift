@@ -648,7 +648,7 @@ struct MemorySleepTests {
 
     @Test("A verdict the model garbles drops the claim rather than inventing a memory")
     func unparseableVerdictsAreConservative() {
-        #expect(MemorySleep.parseVerdict("REPLACES 2", count: 3) == .replaces(1))
+        #expect(MemorySleep.parseVerdict("REPLACES 2", count: 3) == .replaces([1]))
         #expect(MemorySleep.parseVerdict("SAME 1", count: 3) == .same(0))
         #expect(MemorySleep.parseVerdict("NEW", count: 3) == .new)
         // Local models preface and hedge. "I think this is probably SAME 1..."
@@ -659,6 +659,22 @@ struct MemorySleepTests {
         // what folding garbage into `SAME 1` used to do.
         #expect(MemorySleep.parseVerdict("¯\\_(ツ)_/¯", count: 3) == .drop)
         #expect(MemorySleep.parseVerdict("¯\\_(ツ)_/¯", count: 0) == .new)
+    }
+
+    @Test("REPLACES reads every listed belief — one correction can falsify several")
+    func replacesParsesLists() {
+        // The #333 shape: "that's not my name" contradicted a stated belief AND
+        // an inferred event. A single-index verdict could retire only one.
+        #expect(MemorySleep.parseVerdict("REPLACES 1, 3", count: 3) == .replaces([0, 2]))
+        #expect(MemorySleep.parseVerdict("REPLACES 2 and 3", count: 3) == .replaces([1, 2]))
+        #expect(MemorySleep.parseVerdict("I'd say REPLACES 1,2.", count: 3) == .replaces([0, 1]))
+        // A digit inside trailing prose is not a target: the list ends at the
+        // first word that is not a separator.
+        #expect(
+            MemorySleep.parseVerdict("REPLACES 1 because 2 is older", count: 3) == .replaces([0]))
+        // Repeats collapse; out-of-range ends the list.
+        #expect(MemorySleep.parseVerdict("REPLACES 2, 2", count: 3) == .replaces([1]))
+        #expect(MemorySleep.parseVerdict("REPLACES 9", count: 3) == .drop)
     }
 
     @Test("A garbled verdict leaves the store exactly as it was")
@@ -692,5 +708,79 @@ struct MemorySleepTests {
         // Not "useful by default": a memory has to *earn* its strength, and the
         // absence of a verdict is not evidence of one.
         #expect(MemorySleep.parseGrades("", count: 2) == [.ignored, .ignored])
+    }
+
+    // MARK: - Multi-belief contradictions (#333)
+
+    @Test("One correction retires every belief it falsifies — no live contradiction survives")
+    func replacesRetiresAllListedNeighbours() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        // The live #333 store: the same wrong fact as a stated belief AND an
+        // inferred event. A single-index REPLACES could retire only one, and
+        // recall would keep serving the other beside its own correction.
+        let stated = MemoryRecord(
+            text: "He gave me the nickname \"Pelican.\"", kind: .belief,
+            provenance: .stated, bornAt: Date())
+        let inferred = MemoryRecord(
+            text: "He gave the assistant the nickname \"Pelican.\"", kind: .event,
+            provenance: .inferred, bornAt: Date())
+        try await store.upsert(stated)
+        try await store.upsert(inferred)
+
+        try await store.append(
+            Episode(
+                source: .chat, occurredAt: Date(),
+                text: "Pelican is not your name — that was the SVG image I asked for."))
+        model.extraction =
+            "STATED|belief|\"Pelican\" referred to an SVG image he requested, not a name."
+        model.verdict = "REPLACES 1, 2"
+        await makeSleep(engine, store, model).run()
+
+        let oldStated = try #require(try await store.memory(id: stated.id))
+        let oldInferred = try #require(try await store.memory(id: inferred.id))
+        #expect(oldStated.status == .superseded)
+        #expect(oldInferred.status == .superseded)
+        // Both retired in favour of the SAME successor.
+        #expect(oldStated.supersededBy != nil)
+        #expect(oldStated.supersededBy == oldInferred.supersededBy)
+
+        let live = try await store.allLiveMemories()
+        #expect(live.count == 1)
+        #expect(live.first?.text.contains("SVG image") == true)
+    }
+
+    @Test("The re-read sees what he said when he rejected the belief")
+    func rereadCarriesTheContestNote() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        // The evidence alone re-derives the mistake — the July 7 episode reads
+        // like a christening. His rejection is what points the other way.
+        let episode = Episode(
+            source: .chat, occurredAt: Date(),
+            text: "Very nice, Pelican. You are an artist.")
+        try await store.append(episode)
+        try await store.markConsolidated([episode.id], at: Date())
+        let wrong = MemoryRecord(
+            text: "He gave me the nickname \"Pelican.\"", kind: .belief,
+            provenance: .inferred, sourceEpisodeIDs: [episode.id], bornAt: Date())
+        try await store.upsert(wrong)
+        _ = try await store.contest(
+            id: wrong.id, at: Date(),
+            reason: "It referred to the SVG pelican image, not a name for the assistant.")
+
+        model.reread = "NOTHING"
+        await makeSleep(engine, store, model).run()
+
+        let rereadPrompt = try #require(
+            model.prompts.first { $0.contains("memories is WRONG") })
+        #expect(rereadPrompt.contains("When he rejected it:"))
+        #expect(rereadPrompt.contains("SVG pelican image"))
+        // And NOTHING still retires it cold, note or no note.
+        #expect(try #require(try await store.memory(id: wrong.id)).tier == .cold)
     }
 }
