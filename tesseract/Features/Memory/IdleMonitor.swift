@@ -16,10 +16,12 @@
 //      the case the idle timer cannot: a locked screen is *definitely* away,
 //      immediately, with no three-minute wait.
 //
-//  The return signal is the one that must never be slow, so it does not wait for
-//  a poll: any HID activity at all, or an unlock, or a wake, fires `onReturn`
-//  synchronously. Sleep's whole contract with the owner is that coming back to
-//  the machine costs him nothing.
+//  The return signal is the one that must never be slow. Unlock and wake fire
+//  `onReturn` synchronously; HID return has no event to subscribe to without
+//  Input Monitoring entitlements, so it is caught by the poll — which tightens
+//  to one second the moment the machine goes idle. Sleep's contract with the
+//  owner is that coming back to the machine costs him at most about a second
+//  of queueing, on top of the one in-flight generation `yield()` cancels.
 //
 
 import AppKit
@@ -48,18 +50,24 @@ final class IdleMonitor {
     private var pollTask: Task<Void, Never>?
     private var observers: [any NSObjectProtocol] = []
 
-    /// The idle poll interval. Fifteen seconds: this decides how late sleep can
-    /// *start*, never how late it stops — waking is event-driven.
+    /// The poll interval while the owner is present. Fifteen seconds only
+    /// decides how late sleep can *start* — cheap to be lazy about.
     private let pollInterval: Duration
+    /// The poll interval while idle — this is the HID half of the return
+    /// latency, so it is tight. One `secondsSinceLastEventType` call per second
+    /// is negligible.
+    private let returnPollInterval: Duration
 
     /// Injected for tests, which cannot move the real HID clock.
     private let secondsSinceLastEvent: @MainActor () -> TimeInterval
 
     init(
         pollInterval: Duration = .seconds(15),
+        returnPollInterval: Duration = .seconds(1),
         secondsSinceLastEvent: @escaping @MainActor () -> TimeInterval = IdleMonitor.hidIdleSeconds
     ) {
         self.pollInterval = pollInterval
+        self.returnPollInterval = returnPollInterval
         self.secondsSinceLastEvent = secondsSinceLastEvent
     }
 
@@ -96,7 +104,6 @@ final class IdleMonitor {
                 MainActor.assumeIsolated { self?.ownerReturned() }
             })
 
-        let interval = pollInterval
         pollTask = Task { [weak self] in
             // `guard let self` rather than `self?.` so the loop ends when the
             // monitor does — there is no `deinit` to cancel it from (a nonisolated
@@ -104,7 +111,10 @@ final class IdleMonitor {
             while !Task.isCancelled {
                 guard let self else { return }
                 self.poll()
-                try? await Task.sleep(for: interval)
+                // Tight while idle: the poll is how a keyboard return gets
+                // noticed, and a sleeping consolidation may be holding the GPU.
+                try? await Task.sleep(
+                    for: self.isIdle ? self.returnPollInterval : self.pollInterval)
             }
         }
         Log.memory.info("Idle monitor started")
@@ -121,8 +131,7 @@ final class IdleMonitor {
         isIdle = false
     }
 
-    /// Exposed for the poll's test seam and for a caller that wants to force a
-    /// re-evaluation (the sleep scheduler does, after a run ends).
+    /// Exposed as the poll's test seam.
     func poll() {
         // A locked screen is idle regardless of what the HID clock says — and it
         // says zero right after the lock keystroke.

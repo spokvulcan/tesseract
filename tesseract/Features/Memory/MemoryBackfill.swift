@@ -278,39 +278,57 @@ enum MemoryBackfill {
         //     is a shortcut, not a correctness guard);
         //   - the markdown is gated on the *file still being there*, which is the
         //     only honest record of whether it has been consumed.
-        let existing = (try? await engine.store.episodeCount()) ?? 0
+        let existing = await engine.episodeCount()
 
         let markdown = sandboxRoot.appendingPathComponent("memories.md")
         let claims = LegacyMemoriesFile.claims(at: markdown)
-        for claim in claims {
-            // STATED: the owner wrote this file with his own hand. There is no
-            // episode behind it, and that is the truth of its provenance — it
-            // came from the old regime, not from a conversation.
-            if await engine.remember(claim, kind: .belief, now: now) != nil {
-                result.claims += 1
+        if !claims.isEmpty {
+            // A partial import leaves the file in place for the next launch, so
+            // the import must be re-runnable without duplicating what already
+            // landed: skip any claim whose exact text is already a memory.
+            let alreadyStored = Set(await engine.allMemories().map(\.text))
+            var stored = 0
+            for claim in claims {
+                if alreadyStored.contains(claim) {
+                    stored += 1
+                    continue
+                }
+                // STATED: the owner wrote this file with his own hand. There is
+                // no episode behind it, and that is the truth of its provenance
+                // — it came from the old regime, not from a conversation.
+                if await engine.remember(claim, kind: .belief, now: now) != nil {
+                    stored += 1
+                    result.claims += 1
+                }
+            }
+
+            // **Archive only when every claim is durably stored.** This said
+            // `!claims.isEmpty` — it archived on having *parsed* the claims, not
+            // on having *kept* them — and so, on a run where the writes silently
+            // failed, it moved the only copy of six hand-written facts out of
+            // the import path and reported success. A migration that can destroy
+            // its own source before the destination is durable is not a
+            // migration.
+            if stored == claims.count {
+                let archived = sandboxRoot.appendingPathComponent("memories.md.migrated")
+                try? FileManager.default.removeItem(at: archived)
+                try? FileManager.default.moveItem(at: markdown, to: archived)
+                Log.memory.info(
+                    "Migrated \(result.claims) claims from memories.md; archived the file")
+            } else {
+                Log.memory.error(
+                    "memories.md has \(claims.count) claims and only \(stored) could be stored — "
+                        + "leaving the file alone so nothing is lost")
             }
         }
 
-        // **Archive only what was actually stored.** This said `!claims.isEmpty`
-        // — it archived on having *parsed* the claims, not on having *kept* them
-        // — and so, on a run where the writes silently failed, it moved the only
-        // copy of six hand-written facts out of the import path and reported
-        // success. A migration that can destroy its own source before the
-        // destination is durable is not a migration.
-        if result.claims > 0 {
-            let archived = sandboxRoot.appendingPathComponent("memories.md.migrated")
-            try? FileManager.default.removeItem(at: archived)
-            try? FileManager.default.moveItem(at: markdown, to: archived)
-            Log.memory.info("Migrated \(result.claims) claims from memories.md; archived the file")
-        } else if !claims.isEmpty {
-            Log.memory.error(
-                "memories.md has \(claims.count) claims but none could be stored — "
-                    + "leaving the file alone so nothing is lost")
-        }
-
         if existing == 0 {
-            let corpus = ConversationCorpus.episodes(
-                in: sandboxRoot.appendingPathComponent("conversations", isDirectory: true))
+            // The corpus read is plain file IO over every conversation on disk —
+            // off the main actor, or it stalls the launch it runs on.
+            let directory = sandboxRoot.appendingPathComponent("conversations", isDirectory: true)
+            let corpus = await Task.detached(priority: .utility) {
+                ConversationCorpus.episodes(in: directory)
+            }.value
             result.episodes = await engine.append(corpus)
         } else {
             result.alreadyDone = true

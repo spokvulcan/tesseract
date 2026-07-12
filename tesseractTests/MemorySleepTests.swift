@@ -63,9 +63,12 @@ struct MemorySleepTests {
             embedderDirectory: { nil })
     }
 
-    private func makeSleep(_ engine: MemoryEngine, _ model: ScriptedModel) -> MemorySleep {
+    private func makeSleep(
+        _ engine: MemoryEngine, _ store: MemoryStore, _ model: ScriptedModel
+    ) -> MemorySleep {
         MemorySleep(
-            engine: engine, arbiter: InMemoryInferenceArbiter(), complete: model.complete)
+            engine: engine, store: store, arbiter: InMemoryInferenceArbiter(),
+            complete: model.complete)
     }
 
     // MARK: - Extraction
@@ -82,7 +85,7 @@ struct MemorySleepTests {
 
         try await store.append(
             Episode(source: .chat, occurredAt: Date(), text: "remember I can't eat shellfish"))
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let memories = try await store.allLiveMemories()
         #expect(memories.count == 2)
@@ -113,7 +116,7 @@ struct MemorySleepTests {
             source: .chat, occurredAt: Date(), text: "remember I can't eat shellfish")
         try await store.append(episode)
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.episode(id: episode.id))
         // Verbatim, forever. The episodic layer is the only thing that can ever
@@ -136,7 +139,7 @@ struct MemorySleepTests {
 
         try await store.append(
             Episode(source: .chat, occurredAt: Date(), text: "what's 2+2"))
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         // Most turns are not worth remembering. A consolidation that finds
         // something profound in "what's 2+2" is a consolidation that will fill
@@ -163,7 +166,7 @@ struct MemorySleepTests {
         try await store.append(
             Episode(source: .chat, occurredAt: Date(), text: "no shellfish for me"))
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let memories = try await store.allLiveMemories()
         // The store did NOT grow. This is the whole gate: a system whose rewriter
@@ -200,7 +203,7 @@ struct MemorySleepTests {
         warm.tier = .warm
         try await store.upsert(warm)
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: warm.id))
         #expect(after.tier == .hot)
@@ -233,7 +236,7 @@ struct MemorySleepTests {
         noise.storageStrength = 0
         try await store.upsert(noise)
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: noise.id))
         #expect(after.tier == .cold, "shown nine times, never once useful")
@@ -260,7 +263,7 @@ struct MemorySleepTests {
         try await store.append(
             Episode(source: .chat, occurredAt: Date(), text: "I moved to Lisbon last month"))
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let superseded = try #require(try await store.memory(id: old.id))
         // Still there. What I used to believe is evidence about the past, and
@@ -317,7 +320,7 @@ struct MemorySleepTests {
         try await store.upsert(strengthened)
 
         model.reread = "STATED|belief|He does 100 sit-ups and 50 push-ups before breakfast."
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: contested.id))
         #expect(after.status == .superseded, "contested is not a resting state")
@@ -349,7 +352,7 @@ struct MemorySleepTests {
         // does support it — and he still says it is wrong, and he is the authority
         // on his own life.
         model.reread = "STATED|belief|he goes running every morning"
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: contested.id))
         #expect(after.status == .contested, "not resurrected")
@@ -369,7 +372,7 @@ struct MemorySleepTests {
             in: store, engine: engine)
 
         model.reread = "NOTHING"
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: contested.id))
         // Still here. Deletion is his hand alone (ADR-0035 §9) — sleep may move a
@@ -381,6 +384,64 @@ struct MemorySleepTests {
         // And the testimony it was drawn from is untouched by any of it.
         let source = try #require(try await store.episode(id: episode.id))
         #expect(source.text == "ugh, this refactor is dragging")
+    }
+
+    @Test("A contested belief that went cold is not re-tried every night")
+    func aColdContestedBeliefStaysDisposedOf() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        let (contested, _) = try await contestedMemory(
+            "He is bored by his own project.",
+            from: "ugh, this refactor is dragging",
+            in: store, engine: engine)
+
+        model.reread = "NOTHING"
+        await makeSleep(engine, store, model).run()
+        #expect(try #require(try await store.memory(id: contested.id)).tier == .cold)
+        let promptsAfterVerdict = model.prompts.count
+
+        // Night two. The verdict does not expire: no re-read, no fresh chance
+        // for the model to mint a successor to a belief already disposed of,
+        // no second "Retired" journal line.
+        await makeSleep(engine, store, model).run()
+        #expect(
+            model.prompts.count == promptsAfterVerdict,
+            "sleep re-read a contested belief it had already retired")
+        let retirements = await engine.journal(limit: 100).filter {
+            $0.memoryID == contested.id && $0.mutation == .demoted
+        }
+        #expect(retirements.count == 1)
+    }
+
+    @Test("A claim matching a vetoed belief stands on its own — it never confirms the veto away")
+    func aVetoedBeliefIsNotConfirmedByReconcile() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        // A contested belief, still hot — the owner vetoed it moments ago and
+        // sleep has not re-examined it yet when reconcile meets a lookalike.
+        let vetoed = MemoryRecord(
+            text: "He goes running every morning.", kind: .belief, provenance: .inferred,
+            bornAt: Date())
+        try await store.upsert(vetoed)
+        await engine.contest(vetoed)
+
+        // The extractor produces the same claim again; the adjudicator would
+        // call it SAME — but a contested belief must never be offered as a
+        // neighbour, so the claim is judged against nothing and enters as NEW.
+        model.reread = "NOTHING"
+        model.extraction = "INFERRED|belief|He goes running every morning."
+        model.verdict = "SAME 1"
+        try await store.append(
+            Episode(source: .chat, occurredAt: Date(), text: "went for a run"))
+        await makeSleep(engine, store, model).run()
+
+        let after = try #require(try await store.memory(id: vetoed.id))
+        #expect(after.confirmations == 0, "reconcile confirmed a belief the owner vetoed")
+        #expect(after.status == .contested)
     }
 
     @Test("A restatement is caught through punctuation and case")
@@ -422,7 +483,7 @@ struct MemorySleepTests {
         ])
         model.grades = "1: decisive\n2: ignored"
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: helpful.id))
         #expect(after.usefulUseCount == 1)
@@ -457,7 +518,7 @@ struct MemorySleepTests {
         try await store.append(
             Episode(source: .chat, occurredAt: Date(), text: "no shellfish"))
 
-        await makeSleep(engine, model).run()
+        await makeSleep(engine, store, model).run()
 
         let after = try #require(try await store.memory(id: existing.id))
         // A confirmation raises *confidence*, not strength. Sleep re-reading its
@@ -499,7 +560,7 @@ struct MemorySleepTests {
         for night in 0..<10 {
             try await store.append(
                 Episode(source: .chat, occurredAt: Date(), text: "night \(night)"))
-            await makeSleep(engine, model).run()
+            await makeSleep(engine, store, model).run()
         }
 
         let after = try #require(try await store.memory(id: told.id))
@@ -523,7 +584,7 @@ struct MemorySleepTests {
                 Episode(source: .chat, occurredAt: Date(), text: "turn number \(index)"))
         }
 
-        let sleep = makeSleep(engine, model)
+        let sleep = makeSleep(engine, store, model)
         sleep.start()
         sleep.yield()
 
@@ -550,7 +611,7 @@ struct MemorySleepTests {
                 Episode(source: .chat, occurredAt: Date(), text: "turn \(index)"))
         }
 
-        let sleep = makeSleep(engine, model)
+        let sleep = makeSleep(engine, store, model)
         sleep.start()
         sleep.yield()  // run 1 is cancelled but still unwinding
         sleep.start()  // run 2 takes the handle
@@ -592,11 +653,36 @@ struct MemorySleepTests {
         #expect(MemorySleep.parseVerdict("NEW", count: 3) == .new)
         // Local models preface and hedge. "I think this is probably SAME 1..."
         #expect(MemorySleep.parseVerdict("Looking at these, I'd say SAME 1.", count: 3) == .same(0))
-        // Garbage with existing neighbours: fold into the nearest rather than add.
-        // Silently adding a memory the judge could not vouch for is the worse
-        // failure — an unrecoverable one.
-        #expect(MemorySleep.parseVerdict("¯\\_(ツ)_/¯", count: 3) == .same(0))
+        // Garbage with existing neighbours: drop the claim outright. Adding a
+        // memory the judge could not vouch for is the worse failure — and so is
+        // confirming a neighbour the judge never actually matched, which is
+        // what folding garbage into `SAME 1` used to do.
+        #expect(MemorySleep.parseVerdict("¯\\_(ツ)_/¯", count: 3) == .drop)
         #expect(MemorySleep.parseVerdict("¯\\_(ツ)_/¯", count: 0) == .new)
+    }
+
+    @Test("A garbled verdict leaves the store exactly as it was")
+    func unparseableVerdictTouchesNothing() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        let existing = MemoryRecord(
+            text: "He is allergic to shellfish.", kind: .belief, provenance: .stated,
+            bornAt: Date())
+        try await store.upsert(existing)
+        try await store.append(
+            Episode(source: .chat, occurredAt: Date(), text: "no shellfish for me"))
+
+        model.extraction = "STATED|belief|He cannot eat shellfish."
+        model.verdict = "¯\\_(ツ)_/¯"
+        await makeSleep(engine, store, model).run()
+
+        let after = try #require(try await store.memory(id: existing.id))
+        // Neither confirmed on the strength of garbage…
+        #expect(after.confirmations == 0)
+        // …nor a new memory added the judge could not vouch for.
+        #expect(try await store.memoryCount() == 1)
     }
 
     @Test("Grades default to ignored when the judge does not say")

@@ -53,14 +53,19 @@ struct MemoryBeliefDetailView: View {
 
     /// The safety field, unmissable: who this belief came from.
     private var provenanceBanner: some View {
-        Label(memory.provenance.bannerText, systemImage: memory.provenance.symbol)
+        banner(
+            memory.provenance.bannerText, symbol: memory.provenance.symbol,
+            color: memory.provenance.color)
+    }
+
+    /// The tinted banner shape provenance and contest share.
+    private func banner(_ text: String, symbol: String, color: Color) -> some View {
+        Label(text, systemImage: symbol)
             .fontWeight(.medium)
-            .foregroundStyle(memory.provenance.color)
+            .foregroundStyle(color)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(MemoryWindowLayout.rhythm)
-            .background(
-                memory.provenance.color.opacity(0.1),
-                in: RoundedRectangle(cornerRadius: 8))
+            .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -69,15 +74,9 @@ struct MemoryBeliefDetailView: View {
         case .live:
             EmptyView()
         case .contested:
-            Label(
+            banner(
                 "Contested — I'll reconcile this against its sources in my next sleep.",
-                systemImage: "exclamationmark.triangle"
-            )
-            .fontWeight(.medium)
-            .foregroundStyle(.red)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(MemoryWindowLayout.rhythm)
-            .background(.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+                symbol: "exclamationmark.triangle", color: .red)
         case .superseded:
             VStack(alignment: .leading, spacing: 4) {
                 Label(

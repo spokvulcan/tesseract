@@ -544,7 +544,7 @@ final class MemoryEvalHarness {
     {
         guard !pool.isEmpty else { return [] }
         let keyword = try await store.keywordScores(
-            query: probe.cue, table: "memories", limit: 1_000)
+            query: probe.cue, in: .memory, limit: 1_000)
         let cueVector = cueVectors[probe.cue]
 
         var scored: [(UUID, Double)] = []
@@ -689,9 +689,10 @@ final class MemoryEvalHarness {
     @discardableResult
     func sweepTiers(now: Date) async throws -> [MemoryTier: Int] {
         var counts: [MemoryTier: Int] = [:]
+        let daysByMemory = try await store.distinctUsefulDaysByMemory()
         for (id, memory) in memories {
-            let days = try await store.distinctUsefulDays(memoryID: id)
-            let swept = MemoryLifecycle.sweepTier(memory, distinctUsefulDays: days, now: now)
+            let swept = MemoryLifecycle.sweepTier(
+                memory, distinctUsefulDays: daysByMemory[id] ?? 0, now: now)
             memories[id] = swept
             try await store.upsert(swept)
             counts[swept.tier, default: 0] += 1

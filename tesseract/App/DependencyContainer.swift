@@ -142,19 +142,26 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
+    /// The internal completion path — the agent's own model, streamed through
+    /// the shared inference service and folded to plain text. One closure
+    /// serves compaction, sleep, and the Companion's memory callback; they run
+    /// on the same model *on purpose* (the owner's call: the thinking that
+    /// turns a day into beliefs is the last place to economise).
+    lazy var internalCompletion: @Sendable (String) async throws -> String =
+        makeSummarizeClosure(
+            inferenceService: serverInferenceService,
+            parametersProvider: { [settingsManager] in
+                settingsManager.makeAgentGenerateParameters()
+            }
+        )
+
     private func makeMemorySleep() -> MemorySleep {
         let settings = settingsManager
         return MemorySleep(
             engine: memoryEngine,
+            store: memoryStore,
             arbiter: inferenceArbiter,
-            // The agent's own model, through the same internal completion path
-            // the compactor uses. A smaller model would be cheaper, and the
-            // owner's call was explicit: the thinking that turns a day into
-            // beliefs is the last thing in this system to economise on.
-            complete: makeSummarizeClosure(
-                inferenceService: serverInferenceService,
-                parametersProvider: { settings.makeAgentGenerateParameters() }
-            ),
+            complete: internalCompletion,
             isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled }
         )
     }
@@ -357,12 +364,7 @@ final class DependencyContainer: ObservableObject {
             speechCoordinator: speechCoordinator,
             contextManager: contextManager,
             contextWindow: 262_144,
-            summarize: makeSummarizeClosure(
-                inferenceService: serverInferenceService,
-                parametersProvider: { [settingsManager] in
-                    settingsManager.makeAgentGenerateParameters()
-                }
-            ),
+            summarize: internalCompletion,
             commandRegistry: { [commandPalette] in commandPalette.commandRegistry },
             assembleSkillArguments: { [skillPills] name, text in
                 skillPills.assembleArguments(skillName: name, userText: text)
@@ -409,12 +411,7 @@ final class DependencyContainer: ObservableObject {
                 cue: beat.prompt,
                 engine: self.memoryEngine,
                 arbiter: self.inferenceArbiter,
-                complete: makeSummarizeClosure(
-                    inferenceService: self.serverInferenceService,
-                    parametersProvider: { [settingsManager = self.settingsManager] in
-                        settingsManager.makeAgentGenerateParameters()
-                    }
-                )
+                complete: self.internalCompletion
             )
             return line ?? beat.prompt
         }

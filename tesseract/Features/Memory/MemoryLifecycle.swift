@@ -268,6 +268,14 @@ nonisolated enum MemoryLifecycle: Sendable {
             m.tier = .core
             return m
         }
+        // Retirement sticks. `shouldRetireToCold` deliberately refuses to
+        // re-retire what is already cold, so without this guard a retired
+        // memory would fall through to the hot/warm re-derivation below and be
+        // resurrected the very next night — retirement as a one-night stand.
+        // The only way back from cold on the sweep's authority is a graded
+        // useful use (the ε-slot or explicit recall surfaced it, and it
+        // helped); until then, cold stays cold.
+        if m.tier == .cold && m.usefulUseCount == 0 { return m }
         // Between the two poles, need-probability sorts hot from warm. The
         // boundary sits above `coldNeedThreshold` so the ladder is monotone:
         // hot ≥ 0.6 > warm ≥ 0.45 > cold.
@@ -281,26 +289,6 @@ nonisolated enum MemoryLifecycle: Sendable {
     /// Above this, a memory is hot (roughly: usefully used within the last
     /// ~3 months at initial stability).
     static let warmNeedThreshold: Double = 0.6
-
-    // MARK: - The sleep priority queue
-
-    /// Rank consolidation candidates by how fast their need-probability is
-    /// *falling* — `R(t−1) − R(t)`, the memories on the edge of slipping —
-    /// scaled by entrenchment.
-    ///
-    /// Inherits both of prioritized-experience-replay's post-mortem fixes:
-    /// priorities are **recomputed**, never cached (PER's "outdated
-    /// priorities"), and the caller must mix in a uniform floor (PER's
-    /// "insufficient coverage of the sample space") so the cold tail is ever
-    /// visited at all.
-    static func consolidationPriority(_ memory: MemoryRecord, now: Date) -> Double {
-        let t = days(from: memory.lastUsefulUseAt, to: now)
-        let rNow = needProbability(daysSinceUsefulUse: t, stability: memory.stability)
-        let rPrev = needProbability(
-            daysSinceUsefulUse: max(0, t - 1), stability: memory.stability)
-        let slope = max(0, rPrev - rNow)
-        return slope * (1.0 + log1p(max(0, memory.storageStrength)))
-    }
 
     // MARK: - ε-exploration
 

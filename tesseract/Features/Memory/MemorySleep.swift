@@ -86,6 +86,12 @@ final class MemorySleep {
     var isRunning: Bool { runTask != nil }
 
     private let engine: MemoryEngine
+    /// Injected alongside the engine: sleep is a *peer* of the read/write
+    /// facade, not a client of it, and it talks to the store in the store's own
+    /// vocabulary (targeted mutations, single-transaction compounds). The
+    /// engine is still here for what is genuinely its business — embedding,
+    /// search, stats.
+    private let store: MemoryStore
     private let arbiter: any InferenceArbitrating
     private let complete: @Sendable (String) async throws -> String
     private let isEnabled: @MainActor () -> Bool
@@ -113,11 +119,13 @@ final class MemorySleep {
 
     init(
         engine: MemoryEngine,
+        store: MemoryStore,
         arbiter: any InferenceArbitrating,
         complete: @escaping @Sendable (String) async throws -> String,
         isEnabled: @escaping @MainActor () -> Bool = { true }
     ) {
         self.engine = engine
+        self.store = store
         self.arbiter = arbiter
         self.complete = complete
         self.isEnabled = isEnabled
@@ -141,7 +149,7 @@ final class MemorySleep {
         runGeneration += 1
         let generation = runGeneration
         runTask = Task { [weak self] in
-            await self?.run()
+            await self?.run(generation: generation)
             self?.finish(generation: generation)
         }
     }
@@ -172,7 +180,13 @@ final class MemorySleep {
 
     /// The whole work list. Public so a test — and the owner's "consolidate now"
     /// affordance — can drive one pass to completion synchronously.
-    func run() async {
+    ///
+    /// `generation` is non-nil when `start()` owns the run. A cancelled run
+    /// keeps unwinding after `yield()` has already installed its successor, and
+    /// the guard at the end stops that ghost from stamping `phase = .idle` and
+    /// clobbering `lastSummary` while the live run is mid-flight — the same
+    /// discipline `finish(generation:)` applies to the task handle.
+    func run(generation: Int? = nil) async {
         guard isEnabled() else { return }
         let started = Date()
         var summary = Summary()
@@ -198,6 +212,7 @@ final class MemorySleep {
             Log.memory.error("Sleep failed: \(error.localizedDescription)")
         }
 
+        if let generation, generation != runGeneration { return }
         phase = .idle
         lastRun = started
         lastSummary = summary
@@ -221,7 +236,7 @@ final class MemorySleep {
     /// truth, and it is deliberately not available at retrieval time — you cannot
     /// know whether a memory helped until you see what was said next.
     private func gradeRetrievals() async throws -> Int {
-        let events = try await engine.store.ungradedRetrievals(limit: 200)
+        let events = try await store.ungradedRetrievals(limit: 200)
         guard !events.isEmpty else { return 0 }
 
         // Grade a turn at a time: the judge needs to see all the memories that
@@ -231,17 +246,22 @@ final class MemorySleep {
 
         for (episodeID, group) in byEpisode {
             try Task.checkCancellation()
-            guard let episode = try await engine.store.episode(id: episodeID) else {
+            guard let episode = try await store.episode(id: episodeID) else {
                 // The turn is gone; the events are unjudgeable. Retire them as
                 // ignored so they don't clog the queue forever.
-                for event in group { try await engine.store.setGrade(.ignored, for: event.id) }
+                for event in group { try await store.setGrade(.ignored, for: event.id) }
                 continue
             }
 
             var memories: [(RetrievalEvent, MemoryRecord)] = []
             for event in group {
-                if let memory = try await engine.store.memory(id: event.memoryID) {
+                if let memory = try await store.memory(id: event.memoryID) {
                     memories.append((event, memory))
+                } else {
+                    // The memory is gone (the owner deleted it). Ungradeable —
+                    // retire the event as ignored, or it sits at the head of
+                    // the queue every night forever.
+                    try await store.setGrade(.ignored, for: event.id)
                 }
             }
             guard !memories.isEmpty else { continue }
@@ -309,22 +329,33 @@ final class MemorySleep {
     }
 
     /// Apply the judge's verdict — the one place the lifecycle moves.
+    ///
+    /// `store.grade` does the whole move in one transaction against the fresh
+    /// row: the event's grade, the strength update, and (for `.ignored`) the
+    /// per-cue affinity decay. `.ignored` is NOT a lapse — it touches nothing
+    /// about the memory itself, only the cue pairing.
     private func apply(grade: UseGrade, to memory: MemoryRecord, event: RetrievalEvent) async throws
     {
-        try await engine.store.setGrade(grade, for: event.id)
-        let updated = MemoryLifecycle.applyGrade(grade, to: memory, now: Date())
-        try await engine.store.upsert(updated)
-
-        // `.ignored` is NOT a lapse. It touches nothing about the memory itself —
-        // it only says this memory was a poor answer to *this cue*, which is a
-        // fact about the pairing, not about the belief.
-        if grade == .ignored {
-            try await engine.store.decayCueAffinity(cue: event.cue, memoryID: memory.id)
+        let now = Date()
+        guard let updated = try await store.grade(grade, event: event, now: now) else {
+            return
+        }
+        // The journal sees every mutation — a strengthening included. Without
+        // this line the owner can watch a belief be confirmed, demoted, and
+        // superseded, but never watch it *earn* anything.
+        if grade.isUseful {
+            try await store.appendJournal(
+                JournalEntry(
+                    at: now, mutation: .graded, memoryID: updated.id,
+                    detail: grade == .decisive
+                        ? "The answer turned on this when he asked: \(event.cue.prefix(80))"
+                        : "Shaped the answer when he asked: \(event.cue.prefix(80))",
+                    after: updated.text))
         }
         if grade == .harmful {
-            try await engine.store.appendJournal(
+            try await store.appendJournal(
                 JournalEntry(
-                    at: Date(), mutation: .demoted, memoryID: memory.id,
+                    at: now, mutation: .demoted, memoryID: updated.id,
                     detail: "Led me wrong when recalled for: \(event.cue.prefix(80))"))
         }
     }
@@ -356,7 +387,14 @@ final class MemorySleep {
     /// confirmations: a claim he threw out must not launder its credibility into
     /// the one that replaces it.
     private func reexamineContested(into summary: inout Summary) async throws {
-        let contested = try await engine.store.memories(status: .contested, limit: 200)
+        // A contested belief that already went cold has *had* its re-read: the
+        // evidence would not carry a correction, and the verdict does not
+        // expire. Without this filter it would be re-read every night — an
+        // unbounded LLM bill, a journal that repeats "Retired" forever, and a
+        // fresh chance each sleep for the model to mint a successor to a belief
+        // the owner already disposed of.
+        let contested = try await store.memories(status: .contested, limit: 200)
+            .filter { $0.tier != .cold }
         guard !contested.isEmpty else { return }
         phase = .reexamining
 
@@ -371,11 +409,9 @@ final class MemorySleep {
                 // status stays `contested`, so if he ever does recall it explicitly
                 // the dispute travels with it, and storage strength is untouched
                 // because strength is monotone by construction (ADR-0035 §3).
-                var retired = memory
-                retired.tier = .cold
-                try await engine.store.upsert(retired)
-                try await engine.store.appendJournal(
-                    JournalEntry(
+                try await store.setTier(
+                    id: memory.id, to: .cold,
+                    journal: JournalEntry(
                         at: Date(), mutation: .demoted, memoryID: memory.id,
                         detail: episodes.isEmpty
                             ? "He contested this, and there are no source episodes left to "
@@ -395,12 +431,10 @@ final class MemorySleep {
 
     /// Ask the episodes, not the belief.
     private func reread(_ memory: MemoryRecord, from episodes: [Episode]) async throws -> Claim? {
-        let day = DateFormatter()
-        day.dateFormat = "yyyy-MM-dd"
         let evidence =
             episodes
             .sorted { $0.occurredAt < $1.occurredAt }
-            .map { "[\(day.string(from: $0.occurredAt))] He said: \($0.text.prefix(1_200))" }
+            .map(Self.saidLine)
             .joined(separator: "\n\n")
 
         let prompt = """
@@ -472,7 +506,7 @@ final class MemorySleep {
     /// ("the second one" means nothing alone), and a conversation is the natural
     /// unit in which that context holds.
     private func consolidate(into summary: inout Summary) async throws {
-        let episodes = try await engine.store.unconsolidatedEpisodes(limit: 1_000)
+        let episodes = try await store.unconsolidatedEpisodes(limit: 1_000)
         guard !episodes.isEmpty else { return }
 
         var batches: [[Episode]] = []
@@ -498,7 +532,7 @@ final class MemorySleep {
             try await reconcile(claims, into: &summary)
 
             summary.episodesRead += batch.count
-            try await engine.store.markConsolidated(batch.map(\.id), at: Date())
+            try await store.markConsolidated(batch.map(\.id), at: Date())
         }
 
         if batches.count > maxBatchesPerRun {
@@ -507,13 +541,17 @@ final class MemorySleep {
         }
     }
 
-    private func extract(from episodes: [Episode]) async throws -> [Claim] {
-        let day = DateFormatter()
-        day.dateFormat = "yyyy-MM-dd"
+    /// One line of evidence: the day it was said, and what he said, verbatim.
+    /// Shared by the extraction transcript and the contested re-read, so the
+    /// two prompts can never drift apart on what "the evidence" looks like.
+    private static func saidLine(_ episode: Episode) -> String {
+        "[\(MemoryPrompt.day.string(from: episode.occurredAt))] "
+            + "He said: \(episode.text.prefix(1_200))"
+    }
 
+    private func extract(from episodes: [Episode]) async throws -> [Claim] {
         let transcript = episodes.map { episode -> String in
-            var block =
-                "[\(day.string(from: episode.occurredAt))] He said: \(episode.text.prefix(1_200))"
+            var block = Self.saidLine(episode)
             if let reply = episode.meta["reply"] {
                 block += "\n    I answered: \(reply.prefix(600))"
             }
@@ -615,8 +653,15 @@ final class MemorySleep {
             // a surfacing. Nobody saw these. Marking them would inflate the very
             // counter the third retirement path acts on, and sleep would slowly
             // retire the store out from under itself.
+            //
+            // Live beliefs only. A superseded one is history, and a *contested*
+            // one is under the owner's veto: letting a new claim confirm it
+            // would raise the credibility of the exact belief he rejected, and
+            // letting it be superseded here would launder that credibility into
+            // a successor. If the day's evidence genuinely supports the claim
+            // again, it stands as a NEW belief on its own feet.
             let neighbours = await engine.search(query: claim.text, limit: 4, marksSeen: false)
-                .filter { $0.memory.status != .superseded }
+                .filter { $0.memory.status == .live }
                 .map(\.memory)
 
             let verdict: Verdict
@@ -631,19 +676,13 @@ final class MemorySleep {
                 guard index < neighbours.count else { break }
                 // No prediction error. Confirm — cheap, and *not* a retrieval:
                 // this raises confidence without touching stability, because
-                // nothing was recalled and nothing proved useful.
-                let confirmed = MemoryLifecycle.confirm(neighbours[index])
-                try await engine.store.upsert(confirmed)
-                // Journalled, because the *absence* of a rewrite is the whole
-                // design and the owner should be able to watch it happen: I met
-                // this belief again in what he said, and I left it alone.
-                try await engine.store.appendJournal(
-                    JournalEntry(
-                        at: Date(), mutation: .confirmed, memoryID: confirmed.id,
-                        detail: "Said again, in different words — confirmed, not rewritten "
-                            + "(\(confirmed.confirmations)×).",
-                        after: confirmed.text))
-                summary.confirmed += 1
+                // nothing was recalled and nothing proved useful. The store
+                // increments against the fresh row and journals in the same
+                // transaction — the *absence* of a rewrite is the whole design,
+                // and the owner should be able to watch it happen.
+                if try await store.confirm(id: neighbours[index].id, at: Date()) != nil {
+                    summary.confirmed += 1
+                }
 
             case .new:
                 try await add(claim, supersedes: nil, into: &summary)
@@ -654,6 +693,16 @@ final class MemorySleep {
                     break
                 }
                 try await add(claim, supersedes: neighbours[index], into: &summary)
+
+            case .drop:
+                // The adjudicator's answer was noise. Adding a memory the judge
+                // could not vouch for is the worse failure — and so is quietly
+                // boosting a neighbour's confidence on the strength of garbage.
+                // The claim is dropped whole; the episodes stay unconsolidated
+                // only if the batch as a whole is cancelled, so this claim is
+                // simply gone — which is what an unvouched claim deserves.
+                Log.memory.info(
+                    "Reconcile dropped an unadjudicable claim: \(claim.text.prefix(80))")
             }
         }
     }
@@ -664,13 +713,24 @@ final class MemorySleep {
         case same(Int)
         case new
         case replaces(Int)
+        /// The response was noise. The claim is discarded — never confirmed
+        /// onto a neighbour, never added.
+        case drop
     }
 
     private func adjudicate(claim: Claim, against neighbours: [MemoryRecord]) async throws
         -> Verdict
     {
+        // The confirmation count is the destabilization threshold in prompt
+        // form (ADR-0035 §6): a belief re-observed many times must cost a
+        // correspondingly explicit contradiction to overturn. The judge cannot
+        // weigh what it cannot see.
         let listed = neighbours.enumerated()
-            .map { "[\($0.offset + 1)] \($0.element.text)" }
+            .map { offset, memory in
+                let confirmed =
+                    memory.confirmations > 0 ? " (confirmed \(memory.confirmations)×)" : ""
+                return "[\(offset + 1)]\(confirmed) \(memory.text)"
+            }
             .joined(separator: "\n")
 
         let prompt = """
@@ -692,7 +752,10 @@ final class MemorySleep {
             Be conservative. SAME is the most common answer and the safest: a \
             rephrasing, a narrower case, or the same fact said again is SAME, not \
             NEW. Use REPLACES only for a real contradiction — a changed fact, a \
-            reversed preference — never for a mere elaboration.
+            reversed preference — never for a mere elaboration. The more often a \
+            belief has been confirmed, the stronger and more explicit the \
+            contradiction must be: one offhand remark does not overturn a belief \
+            confirmed ten times.
             """
 
         let response = try await generate(prompt)
@@ -713,9 +776,10 @@ final class MemorySleep {
         if let i = index(after: "REPLACES"), i >= 0, i < count { return .replaces(i) }
         if let i = index(after: "SAME"), i >= 0, i < count { return .same(i) }
         if text.contains("NEW") { return .new }
-        // Unparseable: treat as SAME-nothing, i.e. drop the claim. Silently
-        // adding a memory the judge could not vouch for is the worse failure.
-        return count > 0 ? .same(0) : .new
+        // Unparseable: drop the claim. Silently adding a memory the judge could
+        // not vouch for is the worse failure — and so is confirming a neighbour
+        // the judge never actually matched.
+        return count > 0 ? .drop : .new
     }
 
     /// - Parameter inheritStrength: whether the successor takes on what the old
@@ -727,8 +791,12 @@ final class MemorySleep {
         _ claim: Claim, supersedes old: MemoryRecord?, inheritStrength: Bool = true,
         into summary: inout Summary
     ) async throws {
+        // The embedding comes first and the store writes happen in one
+        // transaction (`store.supersede`) — so neither a crash nor a yield can
+        // leave the old belief retired while its successor was never born.
+        try Task.checkCancellation()
         let now = Date()
-        var memory = MemoryRecord(
+        let memory = MemoryRecord(
             text: claim.text,
             kind: claim.kind,
             provenance: claim.provenance,
@@ -736,36 +804,26 @@ final class MemorySleep {
             tier: .hot,
             sourceEpisodeIDs: claim.sourceEpisodeIDs,
             bornAt: now)
+        let vector = await engine.embed(memory.text)
 
-        if var old {
+        if let old {
             // Superseded, never deleted. A belief that has been replaced is still
             // the truth about what was true, and about what I used to think.
-            let wasContested = old.status == .contested
-            old.status = .superseded
-            old.supersededBy = memory.id
-            try await engine.store.upsert(old)
-            if inheritStrength {
-                memory.storageStrength = max(memory.storageStrength, old.storageStrength)
-                memory.confirmations = old.confirmations
+            if try await store.supersede(
+                oldID: old.id, with: memory, embedding: vector,
+                inheritStrength: inheritStrength, at: now) != nil
+            {
+                summary.superseded += 1
+                summary.added += 1
             }
-            try await engine.store.appendJournal(
-                JournalEntry(
-                    at: now, mutation: .superseded, memoryID: old.id,
-                    detail: wasContested
-                        ? "He said this was wrong. Corrected against what he actually said."
-                        : "Replaced by a later observation.",
-                    before: old.text, after: memory.text))
-            summary.superseded += 1
+            return
         }
 
-        let vector = await engine.embed(memory.text)
-        try await engine.store.upsert(memory, embedding: vector)
-        try await engine.store.appendJournal(
-            JournalEntry(
+        try await store.upsert(
+            memory, embedding: vector,
+            journal: JournalEntry(
                 at: now, mutation: .added, memoryID: memory.id,
-                detail: old == nil
-                    ? "Learned this in consolidation." : "Learned this, replacing an older belief.",
-                after: memory.text))
+                detail: "Learned this in consolidation.", after: memory.text))
         summary.added += 1
     }
 
@@ -774,7 +832,11 @@ final class MemorySleep {
     /// Move tiers. Nothing is deleted and no strength is ever taken away — this
     /// changes only what retrieval will *reach for* by default.
     private func sweep(into summary: inout Summary) async throws {
-        let memories = try await engine.store.memories(status: nil, limit: 5_000)
+        let memories = try await store.memories(status: nil, limit: 5_000)
+        // One grouped query, not one per memory: the sweep visits the whole
+        // store, and the per-row version was 5,000 round-trips into the actor
+        // for a number most rows don't have (absent means zero).
+        let usefulDaysByMemory = try await store.distinctUsefulDaysByMemory()
         let now = Date()
 
         // Live beliefs only. A superseded one has no tier worth moving, and a
@@ -783,16 +845,19 @@ final class MemorySleep {
         // put the memory he rejected straight back in front of him.
         for memory in memories where memory.status == .live {
             try Task.checkCancellation()
-            let usefulDays = try await engine.store.distinctUsefulDays(memoryID: memory.id)
+            let usefulDays = usefulDaysByMemory[memory.id] ?? 0
             let updated = MemoryLifecycle.sweepTier(
                 memory, distinctUsefulDays: usefulDays, now: now)
             guard updated.tier != memory.tier else { continue }
-            try await engine.store.upsert(updated)
 
             let promoted = updated.tier > memory.tier
             if promoted { summary.promoted += 1 } else { summary.retired += 1 }
-            try await engine.store.appendJournal(
-                JournalEntry(
+            // A targeted tier move, with its journal line in the same
+            // transaction — never a full-row write of a snapshot that predates
+            // the `await` above.
+            try await store.setTier(
+                id: memory.id, to: updated.tier,
+                journal: JournalEntry(
                     at: now, mutation: promoted ? .promoted : .demoted, memoryID: memory.id,
                     detail: promoted
                         // "Always present now" is a promise only `.core` keeps —

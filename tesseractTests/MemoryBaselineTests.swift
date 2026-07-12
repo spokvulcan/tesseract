@@ -96,7 +96,7 @@ struct MemoryBaselineTests {
         #expect(tiers[.cold, default: 0] == 0, "a freshly-stored corpus must retire nothing")
 
         if MemoryEvalCorpus.isEmbedderAvailable {
-            let vectors = try await harness.store.embeddings(kind: "memory")
+            let vectors = try await harness.store.embeddings(of: .memory)
             #expect(vectors.count == expected, "every memory must carry a vector")
             #expect(vectors.first?.1.count == memoryEmbeddingDimension)
         }

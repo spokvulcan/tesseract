@@ -71,6 +71,13 @@ struct MemoryStoreTests {
         let loaded = try await store.episode(id: episode.id)
         #expect(loaded?.text == "Original text.")
         #expect(try await store.episodeCount() == 1)
+
+        // And the FTS mirror was not double-indexed by the skipped insert: a
+        // duplicate row would surface the same id twice in keyword search.
+        // (Reachable in production: chat episodes take the user message's own
+        // id, so a re-captured turn re-appends under the same id.)
+        let scores = try await store.keywordScores(query: "original text", in: .episode)
+        #expect(scores.count == 1)
     }
 
     @Test("Unconsolidated episodes are the sleep queue, and get drained")
@@ -201,7 +208,7 @@ struct MemoryStoreTests {
 
         // The proper-noun case: exactly what dense embeddings smear and
         // keyword search nails.
-        let scores = try await store.keywordScores(query: "Spock", table: "memories")
+        let scores = try await store.keywordScores(query: "Spock", in: .memory)
         #expect(scores[hit.id] != nil)
         #expect(scores[miss.id] == nil)
     }
@@ -219,7 +226,7 @@ struct MemoryStoreTests {
         // FTS5 treats a lot of punctuation as syntax; a raw user string would
         // blow up the query.
         let scores = try await store.keywordScores(
-            query: "what's he like? (rain — yes!)", table: "memories")
+            query: "what's he like? (rain — yes!)", in: .memory)
         #expect(scores[memory.id] != nil)
     }
 
@@ -267,7 +274,7 @@ struct MemoryStoreTests {
             try await store.setGrade(.used, for: e.id)
         }
 
-        #expect(try await store.distinctUsefulDays(memoryID: memory.id) == 2)
+        #expect(try await store.distinctUsefulDaysByMemory()[memory.id] == 2)
     }
 
     @Test("Ignored retrievals decay per-cue affinity, and nothing else")
@@ -297,6 +304,122 @@ struct MemoryStoreTests {
         let a = MemoryStore.cueKey("What does Bohdan do in the morning?")
         let b = MemoryStore.cueKey("in the MORNING, what does Bohdan do")
         #expect(a == b)
+    }
+
+    // MARK: - Targeted mutations (stale snapshots must not roll anything back)
+
+    @Test("markSeen increments the fresh row — a stale snapshot cannot roll back a grade")
+    func markSeenIsTargeted() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let memory = MemoryRecord(
+            text: "He is allergic to shellfish.", kind: .belief, provenance: .stated,
+            bornAt: Date())
+        try await store.upsert(memory)
+
+        // Something lands between the caller's read and its seen-mark: a grade
+        // raises storage strength.
+        let episode = Episode(source: .chat, occurredAt: Date(), text: "what should I order?")
+        try await store.append(episode)
+        let event = RetrievalEvent(
+            memoryID: memory.id, episodeID: episode.id, retrievedAt: Date(), cue: "order")
+        try await store.log([event])
+        _ = try await store.grade(.decisive, event: event, now: Date())
+
+        // The seen-mark arrives late, computed from the pre-grade snapshot.
+        try await store.markSeen([memory.id], at: Date())
+
+        let after = try #require(try await store.memory(id: memory.id))
+        #expect(after.seenCount == 1)
+        #expect(after.storageStrength > 0, "the seen-mark rolled back the grade's strength bump")
+        #expect(after.usefulUseCount == 1)
+    }
+
+    @Test("Contest flips only a live belief — a stale window snapshot cannot resurrect one")
+    func contestGuardsOnLiveStatus() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let old = MemoryRecord(
+            text: "He lives in Kyiv.", kind: .belief, provenance: .stated, bornAt: Date())
+        try await store.upsert(old)
+        let successor = MemoryRecord(
+            text: "He lives in Lisbon.", kind: .belief, provenance: .stated, bornAt: Date())
+        _ = try await store.supersede(
+            oldID: old.id, with: successor, embedding: nil, inheritStrength: true, at: Date())
+
+        // The Memory window is still showing the pre-supersession snapshot and
+        // the owner clicks Contest on it.
+        let contested = try await store.contest(id: old.id, at: Date())
+        #expect(contested == nil, "contest resurrected a superseded belief")
+
+        let after = try #require(try await store.memory(id: old.id))
+        #expect(after.status == .superseded)
+        #expect(after.supersededBy == successor.id)
+    }
+
+    @Test("Supersession is one transaction and inherits from the fresh row")
+    func supersessionIsAtomicAndFresh() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        var old = MemoryRecord(
+            text: "He lives in Kyiv.", kind: .belief, provenance: .stated, bornAt: Date())
+        try await store.upsert(old)
+        // The row moves on after the caller snapshotted it.
+        old.storageStrength = 5
+        old.confirmations = 7
+        try await store.upsert(old)
+
+        let successor = MemoryRecord(
+            text: "He lives in Lisbon.", kind: .belief, provenance: .stated, bornAt: Date())
+        let written = try #require(
+            try await store.supersede(
+                oldID: old.id, with: successor, embedding: nil, inheritStrength: true,
+                at: Date()))
+
+        // Inheritance read the fresh row, not the caller's snapshot.
+        #expect(written.storageStrength == 5)
+        #expect(written.confirmations == 7)
+
+        // Both journal lines landed with the rows.
+        let journal = try await store.journal(limit: 10)
+        #expect(journal.contains { $0.mutation == .superseded && $0.memoryID == old.id })
+        #expect(journal.contains { $0.mutation == .added && $0.memoryID == successor.id })
+
+        // And superseding what is already superseded is a no-op, not a rewrite.
+        let again = try await store.supersede(
+            oldID: old.id,
+            with: MemoryRecord(
+                text: "He lives in Berlin.", kind: .belief, provenance: .stated, bornAt: Date()),
+            embedding: nil, inheritStrength: true, at: Date())
+        #expect(again == nil)
+        #expect(try #require(try await store.memory(id: old.id)).supersededBy == written.id)
+    }
+
+    @Test("Deleting a memory takes its retrieval events with it")
+    func deleteMemoryPurgesItsRetrievals() async throws {
+        let (store, directory) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let memory = MemoryRecord(
+            text: "He is allergic to shellfish.", kind: .belief, provenance: .stated,
+            bornAt: Date())
+        try await store.upsert(memory)
+        let episode = Episode(source: .chat, occurredAt: Date(), text: "what should I order?")
+        try await store.append(episode)
+        try await store.log([
+            RetrievalEvent(
+                memoryID: memory.id, episodeID: episode.id, retrievedAt: Date(), cue: "order")
+        ])
+
+        try await store.deleteMemory(id: memory.id)
+
+        // Otherwise the judge meets an ungradeable event at the head of the
+        // queue every night, forever.
+        #expect(try await store.ungradedRetrievals().isEmpty)
+        #expect(try await store.ungradedRetrievalCount() == 0)
     }
 
     // MARK: - Schema

@@ -608,7 +608,14 @@ final class ChatSession {
     ) async -> any AgentMessageProtocol & Sendable {
         guard let memory, let user = Self.userMessage(in: outgoing) else { return outgoing }
 
-        let injection = await memory.injection(cue: user.content, excluding: injectedMemoryIDs)
+        // `forEpisode: user.id` is what makes the lifecycle live. The episode
+        // for this turn does not exist yet — `captureEpisode` writes it at turn
+        // end *under the same id* — but the retrieval log can already point at
+        // it, and that log is the only input the sleep judge ever gets. Without
+        // this id nothing is ever logged, nothing is ever graded, and the whole
+        // usefulness signal the lifecycle runs on is silently never produced.
+        let injection = await memory.injection(
+            cue: user.content, forEpisode: user.id, excluding: injectedMemoryIDs)
         guard let text = injection.text else { return outgoing }
         injectedMemoryIDs.formUnion(injection.memoryIDs)
 
@@ -888,8 +895,13 @@ final class ChatSession {
         let conversationID = conversationStore.currentConversation?.id.uuidString
         let text = user.content
         let replyText = reply.text
+        // The episode takes the user message's own id — the same id
+        // `attachMemory` logged this turn's retrievals against, and the same
+        // grain the backfill writes. One turn, one id, in both directions.
+        let episodeID = user.id
         Task { [memory] in
             await memory.record(
+                id: episodeID,
                 source: .chat,
                 text: text,
                 conversationID: conversationID,

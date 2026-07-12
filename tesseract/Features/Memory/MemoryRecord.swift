@@ -304,12 +304,12 @@ nonisolated struct RetrievalEvent: Identifiable, Codable, Sendable, Equatable {
 nonisolated enum MemoryMutation: String, Codable, Sendable {
     case added
     case confirmed
-    case extended
     case contested
     case superseded
-    case separated
     case promoted
     case demoted
+    /// A retrieval the judge graded useful — the one path by which strength
+    /// rises, and it gets a journal line like every other mutation.
     case graded
     /// The owner's hand. The only true deletion in the system.
     case deletedByOwner

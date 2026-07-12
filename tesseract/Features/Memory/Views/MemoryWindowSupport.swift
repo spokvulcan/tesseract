@@ -58,18 +58,30 @@ extension Provenance {
     }
 }
 
+/// The one badge shape of the window: a tinted capsule whose color *is* the
+/// meaning. Provenance and status both wear it, so they can never drift apart
+/// visually.
+struct TintedCapsule: View {
+    let label: String
+    let color: Color
+
+    var body: some View {
+        Text(label)
+            .fontWeight(.medium)
+            .foregroundStyle(color)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.14), in: Capsule())
+    }
+}
+
 /// The row-level provenance marker: a tinted capsule leading every memory
 /// row, so no belief is ever read without its origin.
 struct ProvenanceBadge: View {
     let provenance: Provenance
 
     var body: some View {
-        Text(provenance.label)
-            .fontWeight(.medium)
-            .foregroundStyle(provenance.color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 1)
-            .background(provenance.color.opacity(0.14), in: Capsule())
+        TintedCapsule(label: provenance.label, color: provenance.color)
     }
 }
 
@@ -99,12 +111,7 @@ struct MemoryStatusBadge: View {
 
     var body: some View {
         if let label = status.badgeLabel {
-            Text(label)
-                .fontWeight(.medium)
-                .foregroundStyle(status.color)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 1)
-                .background(status.color.opacity(0.14), in: Capsule())
+            TintedCapsule(label: label, color: status.color)
         }
     }
 }
@@ -173,13 +180,11 @@ extension MemoryMutation {
         switch self {
         case .added: "Added"
         case .confirmed: "Confirmed"
-        case .extended: "Extended"
         case .contested: "Contested"
         case .superseded: "Superseded"
-        case .separated: "Separated"
         case .promoted: "Promoted"
         case .demoted: "Demoted"
-        case .graded: "Graded"
+        case .graded: "Useful"
         case .deletedByOwner: "Deleted by you"
         }
     }
@@ -188,10 +193,8 @@ extension MemoryMutation {
         switch self {
         case .added: "plus.circle"
         case .confirmed: "checkmark.circle"
-        case .extended: "text.badge.plus"
         case .contested: "exclamationmark.triangle"
         case .superseded: "arrow.right.circle"
-        case .separated: "arrow.triangle.branch"
         case .promoted: "arrow.up.circle"
         case .demoted: "arrow.down.circle"
         case .graded: "checkmark.seal"
@@ -203,10 +206,10 @@ extension MemoryMutation {
     /// the quiet rest secondary.
     var color: Color {
         switch self {
-        case .added, .confirmed: .green
+        case .added, .confirmed, .graded: .green
         case .contested, .deletedByOwner: .red
-        case .promoted, .extended, .separated: .blue
-        case .superseded, .demoted, .graded: .secondary
+        case .promoted: .blue
+        case .superseded, .demoted: .secondary
         }
     }
 }

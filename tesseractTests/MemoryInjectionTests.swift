@@ -107,7 +107,7 @@ struct MemoryInjectionTests {
                     memory("He loves cats.", provenance: .stated),
                     memory("He works late most evenings.", provenance: .inferred),
                 ],
-                episodes: [], now: Date()))
+                episodes: []))
 
         #expect(block.contains("- He loves cats."))
         #expect(block.contains("- ~ He works late most evenings."))
@@ -121,7 +121,7 @@ struct MemoryInjectionTests {
         let block = try #require(
             MemoryPrompt.block(
                 memories: [memory("He hates rain.", status: .contested)],
-                episodes: [], now: Date()))
+                episodes: []))
         #expect(block.contains("disputed"))
     }
 
@@ -130,7 +130,7 @@ struct MemoryInjectionTests {
         // The common case mid-conversation: everything relevant was already
         // injected on an earlier turn and is still in the window. Memory should
         // cost exactly zero tokens then.
-        #expect(MemoryPrompt.block(memories: [], episodes: [], now: Date()) == nil)
+        #expect(MemoryPrompt.block(memories: [], episodes: []) == nil)
     }
 
     @Test("Episodes are quoted verbatim, with the day they were said")
@@ -139,7 +139,7 @@ struct MemoryInjectionTests {
         let episode = Episode(
             source: .chat, occurredAt: when, text: "my sister is flying in on Thursday")
         let block = try #require(
-            MemoryPrompt.block(memories: [], episodes: [episode], now: Date()))
+            MemoryPrompt.block(memories: [], episodes: [episode]))
         #expect(block.contains("\"my sister is flying in on Thursday\""))
         #expect(block.contains("2025-10-09"))
     }
@@ -190,7 +190,7 @@ struct MemoryInjectionTests {
                 text: "Continue, please")
         }
         let block = try #require(
-            MemoryPrompt.block(memories: [], episodes: episodes, now: Date()))
+            MemoryPrompt.block(memories: [], episodes: episodes))
         let occurrences = block.components(separatedBy: "\"Continue, please\"").count - 1
         #expect(occurrences == 1)
     }
@@ -241,6 +241,43 @@ struct MemoryInjectionTests {
 
         // Bare in, bare out.
         #expect((ChatSession.rewrap(enriched, like: user) as? UserMessage)?.id == user.id)
+    }
+
+    /// The lifecycle's sensor. Without an episode id, `retrieve` logs nothing —
+    /// and that is exactly what shipped: `attachMemory` called
+    /// `injection(cue:excluding:)`, the `retrievals` table stayed empty forever,
+    /// grading had no input, and every surfacing still counted as "seen". Seen
+    /// climbing with useful-use pinned at zero is the second retirement path's
+    /// trigger: the lifecycle inverts into a retire-everything machine. The id
+    /// is the user message's own — the same id `captureEpisode` later writes
+    /// the turn under, which is what lets the log point at an episode that does
+    /// not exist yet.
+    @Test("Injection logs its retrievals against the turn's episode id")
+    @MainActor
+    func injectionLogsRetrievals() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("memory-injection-log-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try MemoryStore(directory: directory)
+        let engine = MemoryEngine(
+            store: store, embedder: MemoryEmbedder(),
+            isEnabled: { true }, isDictationCaptureEnabled: { true },
+            embedderDirectory: { nil })
+
+        try await store.upsert(
+            MemoryRecord(
+                text: "He is allergic to shellfish.", kind: .belief, provenance: .stated,
+                bornAt: Date()))
+
+        // The user message's id, minted before its episode exists.
+        let turnID = UUID()
+        let injection = await engine.injection(
+            cue: "can I order the shellfish platter?", forEpisode: turnID)
+        #expect(injection.text != nil)
+
+        let events = try await store.ungradedRetrievals()
+        #expect(!events.isEmpty, "nothing was logged — grading has no input")
+        #expect(events.allSatisfy { $0.episodeID == turnID })
     }
 }
 
@@ -417,7 +454,7 @@ struct MemoryBackfillTests {
 
         // Handed over worst-first on purpose: the sort is the thing under test.
         let block = try #require(
-            MemoryPrompt.block(memories: [cold, core], episodes: [], now: now))
+            MemoryPrompt.block(memories: [cold, core], episodes: []))
         let coreAt = try #require(block.range(of: "developer of Tesseract"))
         let coldAt = try #require(block.range(of: "Dota tournament"))
         #expect(

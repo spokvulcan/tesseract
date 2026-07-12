@@ -157,10 +157,6 @@ nonisolated final class SQLiteDatabase {
             return Data(bytes: bytes, count: count)
         }
 
-        func isNull(_ column: Int32) -> Bool {
-            sqlite3_column_type(stmt, column) == SQLITE_NULL
-        }
-
         /// Advances one row. Returns false when the result set is exhausted.
         func step() throws -> Bool {
             let rc = sqlite3_step(stmt)
@@ -222,6 +218,13 @@ nonisolated final class SQLiteDatabase {
             try? execute("ROLLBACK")
             throw error
         }
+    }
+
+    /// Rows changed by the most recent INSERT/UPDATE/DELETE — the way to tell
+    /// whether an `INSERT OR IGNORE` actually inserted.
+    var changes: Int {
+        guard let handle else { return 0 }
+        return Int(sqlite3_changes64(handle))
     }
 
     var userVersion: Int {

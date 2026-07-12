@@ -345,7 +345,8 @@ struct MemoryEvalTests {
         model.extraction = "INFERRED|pattern|He works late."
         model.verdict = "NEW"
         let sleep = MemorySleep(
-            engine: engine, arbiter: InMemoryInferenceArbiter(), complete: model.complete)
+            engine: engine, store: store, arbiter: InMemoryInferenceArbiter(),
+            complete: model.complete)
         await sleep.run()
 
         // 1. The episodic layer is append-only. Sleep reads it and never writes it.

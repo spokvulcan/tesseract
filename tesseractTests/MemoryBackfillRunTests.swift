@@ -27,10 +27,12 @@ struct MemoryBackfillRunTests {
         return url
     }
 
+    /// The store comes back alongside the engine: these tests assert against
+    /// what actually landed on disk, and the engine no longer exposes its store.
     @MainActor
-    private func engine(at root: URL) throws -> MemoryEngine {
+    private func engine(at root: URL) throws -> (store: MemoryStore, engine: MemoryEngine) {
         let store = try MemoryStore(directory: root.appendingPathComponent("memory"))
-        return MemoryEngine(
+        let engine = MemoryEngine(
             store: store,
             embedder: MemoryEmbedder(),
             isEnabled: { true },
@@ -40,6 +42,7 @@ struct MemoryBackfillRunTests {
             // model being present to record what happened.
             embedderDirectory: { nil }
         )
+        return (store, engine)
     }
 
     private func writeMarkdown(_ root: URL) throws {
@@ -70,7 +73,7 @@ struct MemoryBackfillRunTests {
         let root = try sandbox()
         try writeMarkdown(root)
         try writeConversation(root, said: "I am allergic to shellfish")
-        let engine = try engine(at: root)
+        let (store, engine) = try engine(at: root)
 
         let result = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
 
@@ -80,18 +83,18 @@ struct MemoryBackfillRunTests {
         #expect(result.claims == 3)
         #expect(result.episodes == 1)
 
-        let memories = try await engine.store.memories(status: nil)
+        let memories = try await store.memories(status: nil)
         #expect(memories.count == 3)
         #expect(memories.contains { $0.text == "He loves cats." })
         // The owner wrote them, so they are testimony, not inference.
         #expect(memories.allSatisfy { $0.provenance == .stated })
 
-        let episodes = try await engine.store.episodeCount()
+        let episodes = try await store.episodeCount()
         #expect(episodes == 1)
 
         // Every claim is journalled — the Memory window's record of where a
         // belief came from.
-        let journal = try await engine.store.journal()
+        let journal = try await store.journal()
         #expect(journal.count == 3)
 
         // Archived, not deleted: it is the only copy of those facts.
@@ -109,14 +112,14 @@ struct MemoryBackfillRunTests {
         let root = try sandbox()
         try writeMarkdown(root)
         try writeConversation(root, said: "hello")
-        let engine = try engine(at: root)
+        let (store, engine) = try engine(at: root)
 
         _ = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
         let second = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
 
         #expect(second.alreadyDone)
-        #expect(try await engine.store.memoryCount() == 3)
-        #expect(try await engine.store.episodeCount() == 1)
+        #expect(try await store.memoryCount() == 3)
+        #expect(try await store.episodeCount() == 1)
     }
 
     /// The one that actually bit.
@@ -144,7 +147,7 @@ struct MemoryBackfillRunTests {
         let result = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
 
         #expect(result.claims == 0)
-        #expect(try await engine.store.memoryCount() == 0)
+        #expect(try await store.memoryCount() == 0)
         // The file is still there. It is the only copy.
         #expect(
             FileManager.default.fileExists(atPath: root.appendingPathComponent("memories.md").path))
@@ -160,12 +163,12 @@ struct MemoryBackfillRunTests {
     func theTwoSeedsAreGatedIndependently() async throws {
         let root = try sandbox()
         try writeConversation(root, said: "already here")
-        let engine = try engine(at: root)
+        let (store, engine) = try engine(at: root)
 
         // First run: corpus only, no markdown yet.
         _ = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
-        #expect(try await engine.store.episodeCount() == 1)
-        #expect(try await engine.store.memoryCount() == 0)
+        #expect(try await store.episodeCount() == 1)
+        #expect(try await store.memoryCount() == 0)
 
         // The markdown turns up afterwards. The episode gate has already flipped;
         // the claims must import anyway.
@@ -173,9 +176,9 @@ struct MemoryBackfillRunTests {
         let second = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
 
         #expect(second.claims == 3)
-        #expect(try await engine.store.memoryCount() == 3)
+        #expect(try await store.memoryCount() == 3)
         // And the corpus is not re-imported.
-        #expect(try await engine.store.episodeCount() == 1)
+        #expect(try await store.episodeCount() == 1)
     }
 
     @MainActor
@@ -185,7 +188,7 @@ struct MemoryBackfillRunTests {
         try "".write(
             to: root.appendingPathComponent("memories.md"), atomically: true, encoding: .utf8)
         try writeConversation(root, said: "still recorded")
-        let engine = try engine(at: root)
+        let (_, engine) = try engine(at: root)
 
         let result = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
 
@@ -203,14 +206,14 @@ struct MemoryBackfillRunTests {
     func episodesAwaitTheFirstSleep() async throws {
         let root = try sandbox()
         try writeConversation(root, said: "my sister is flying in on Thursday")
-        let engine = try engine(at: root)
+        let (store, engine) = try engine(at: root)
 
         _ = await MemoryBackfill.run(engine: engine, sandboxRoot: root)
 
-        let pending = try await engine.store.unconsolidatedEpisodes()
+        let pending = try await store.unconsolidatedEpisodes()
         #expect(pending.count == 1)
         // Nothing is distilled by the backfill itself. That is sleep's job, and
         // the first sleep is simply a long one.
-        #expect(try await engine.store.memoryCount() == 0)
+        #expect(try await store.memoryCount() == 0)
     }
 }

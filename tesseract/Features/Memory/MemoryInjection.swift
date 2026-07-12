@@ -33,9 +33,6 @@ import Foundation
 nonisolated struct MemoryInjection: Sendable {
     var text: String?
     var memoryIDs: Set<UUID> = []
-    var context: RetrievedContext = RetrievedContext()
-
-    var isEmpty: Bool { text == nil }
 
     static let none = MemoryInjection(text: nil)
 }
@@ -47,10 +44,9 @@ extension MemoryEngine {
     func injection(
         cue: String,
         forEpisode episodeID: UUID? = nil,
-        excluding: Set<UUID> = [],
-        now: Date = Date()
+        excluding: Set<UUID> = []
     ) async -> MemoryInjection {
-        let context = await retrieve(cue: cue, forEpisode: episodeID, now: now)
+        let context = await retrieve(cue: cue, forEpisode: episodeID)
         guard !context.isEmpty else { return .none }
 
         let memories =
@@ -60,14 +56,14 @@ extension MemoryEngine {
         // still in the window on turn 7.
         let episodes = context.episodes.map(\.episode).filter { !excluding.contains($0.id) }
 
-        guard let text = MemoryPrompt.block(memories: memories, episodes: episodes, now: now)
+        guard let text = MemoryPrompt.block(memories: memories, episodes: episodes)
         else { return .none }
 
         let ids = Set(memories.map(\.id)).union(episodes.map(\.id))
         Log.memory.info(
             "Injecting \(memories.count) memories, \(episodes.count) episodes (\(text.count) chars)"
         )
-        return MemoryInjection(text: text, memoryIDs: ids, context: context)
+        return MemoryInjection(text: text, memoryIDs: ids)
     }
 }
 
@@ -78,7 +74,7 @@ nonisolated enum MemoryPrompt {
     /// Render the block. Returns nil when there is nothing new to say — the
     /// common case on a mid-conversation turn, and the reason memory costs
     /// almost nothing per turn.
-    static func block(memories: [MemoryRecord], episodes: [Episode], now: Date) -> String? {
+    static func block(memories: [MemoryRecord], episodes: [Episode]) -> String? {
         guard !memories.isEmpty || !episodes.isEmpty else { return nil }
 
         var lines: [String] = [preamble]
@@ -154,7 +150,9 @@ nonisolated enum MemoryPrompt {
         return "\(who)\"\(clipped)\""
     }
 
-    private static let day: DateFormatter = {
+    /// The day stamp every memory prompt uses — the injection block here, and
+    /// sleep's evidence transcripts. One formatter, allocated once.
+    static let day: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
         return f

@@ -14,13 +14,12 @@
 
 import Foundation
 
-/// What retrieval put in front of the model, and the events it logged so sleep
-/// can grade them later.
+/// What retrieval put in front of the model. The retrieval events it logged
+/// live in the store, not here — sleep reads them from its own queue.
 nonisolated struct RetrievedContext: Sendable {
     var core: [MemoryRecord] = []
     var recalled: [ScoredMemory] = []
     var episodes: [ScoredEpisode] = []
-    var events: [RetrievalEvent] = []
 
     var isEmpty: Bool { core.isEmpty && recalled.isEmpty && episodes.isEmpty }
 }
@@ -36,7 +35,7 @@ nonisolated struct MemoryStats: Sendable, Equatable {
 @Observable
 final class MemoryEngine {
 
-    let store: MemoryStore
+    private let store: MemoryStore
     private let embedder: MemoryEmbedder
 
     private let isEnabled: @MainActor () -> Bool
@@ -76,17 +75,12 @@ final class MemoryEngine {
         }
     }
 
-    func offload() async {
-        await embedder.unload()
-        isEmbedderLoaded = false
-    }
-
     func refreshStats() async {
         do {
             let episodes = try await store.episodeCount()
             let memories = try await store.memoryCount()
             let byTier = try await store.countsByTier()
-            let ungraded = try await store.ungradedRetrievals(limit: 10_000).count
+            let ungraded = try await store.ungradedRetrievalCount()
             stats = MemoryStats(
                 episodes: episodes, memories: memories, byTier: byTier,
                 ungradedRetrievals: ungraded)
@@ -118,6 +112,7 @@ final class MemoryEngine {
     /// never await it on a turn boundary.
     @discardableResult
     func record(
+        id: UUID = UUID(),
         source: MemorySource,
         text: String,
         conversationID: String? = nil,
@@ -131,8 +126,12 @@ final class MemoryEngine {
         // wrapper is not his testimony.
         guard let trimmed = MemorySpeech.spoken(text) else { return nil }
 
+        // `id` is the caller's when the episode has a natural identity — chat
+        // capture passes the user message's own id, which is what lets the
+        // retrieval log point at this turn *before* it is written, and what
+        // makes re-capture (and the backfill meeting live history) a no-op.
         let episode = Episode(
-            source: source, conversationID: conversationID, occurredAt: occurredAt,
+            id: id, source: source, conversationID: conversationID, occurredAt: occurredAt,
             text: trimmed, meta: meta)
         let vector = await embed(trimmed)
         do {
@@ -200,9 +199,10 @@ final class MemoryEngine {
             bornAt: now)
         let vector = await embed(trimmed)
         do {
-            try await store.upsert(memory, embedding: vector)
-            try await store.appendJournal(
-                JournalEntry(
+            // One transaction: the memory and its journal line land together.
+            try await store.upsert(
+                memory, embedding: vector,
+                journal: JournalEntry(
                     at: now, mutation: .added, memoryID: memory.id,
                     detail: "The owner asked me to remember this.", after: trimmed))
             await refreshStats()
@@ -235,18 +235,21 @@ final class MemoryEngine {
         guard isEnabled() else { return RetrievedContext() }
 
         do {
-            let core = try await store.memories(tier: .core, status: .live)
             let all = try await store.allLiveMemories()
+            // Core is a subset of the same scan — no second query, no second
+            // decode. `status == .live` matters: a *contested* core belief has
+            // lost its unconditional seat until sleep resolves the dispute.
+            let core = all.filter { $0.tier == .core && $0.status == .live }
             // `.cold` is genuinely out of the default pool — that is what
             // retirement *means* here. It is reachable two ways, and only two:
             // the ε-exploration draw below, and the agent's explicit
-            // `memory_search` tool.
+            // `recall` tool.
             let candidates = all.filter { $0.tier != .core && $0.tier != .cold }
 
             let cueVector = await embed(cue)
-            let vectors = try await store.embeddings(kind: "memory")
+            let vectors = try await store.embeddings(of: .memory)
             let vectorByID = Dictionary(vectors) { first, _ in first }
-            let keyword = try await store.keywordScores(query: cue, table: "memories")
+            let keyword = try await store.keywordScores(query: cue, in: .memory)
             let affinity = try await store.cueAffinities(cue: cue)
 
             var scored: [ScoredMemory] = []
@@ -297,32 +300,26 @@ final class MemoryEngine {
                 cue: cue, cueVector: cueVector, budget: episodeBudget, excluding: episodeID)
 
             // Mark seen — diagnostic only. This must never touch the lifecycle.
-            for item in recalled {
-                let seen = MemoryLifecycle.markSeen(item.memory, now: now)
-                try? await store.upsert(seen)
-            }
-            for memory in core {
-                let seen = MemoryLifecycle.markSeen(memory, now: now)
-                try? await store.upsert(seen)
-            }
+            // A targeted increment, not a snapshot upsert: the records in hand
+            // were read before several `await`s, and writing them back whole
+            // would roll back anything that landed in between.
+            try? await store.markSeen(recalled.map(\.memory.id) + core.map(\.id), at: now)
 
-            var events: [RetrievalEvent] = []
             if let episodeID {
-                events =
-                    (core.map {
+                let events =
+                    core.map {
                         RetrievalEvent(
                             memoryID: $0.id, episodeID: episodeID, retrievedAt: now, cue: cue)
                     }
-                        + recalled.map {
-                            RetrievalEvent(
-                                memoryID: $0.memory.id, episodeID: episodeID, retrievedAt: now,
-                                cue: cue, isExploration: $0.isExploration)
-                        })
+                    + recalled.map {
+                        RetrievalEvent(
+                            memoryID: $0.memory.id, episodeID: episodeID, retrievedAt: now,
+                            cue: cue, isExploration: $0.isExploration)
+                    }
                 try await store.log(events)
             }
 
-            return RetrievedContext(
-                core: core, recalled: recalled, episodes: episodes, events: events)
+            return RetrievedContext(core: core, recalled: recalled, episodes: episodes)
         } catch {
             Log.memory.error("Retrieval failed: \(error.localizedDescription)")
             return RetrievedContext()
@@ -336,8 +333,8 @@ final class MemoryEngine {
         cue: String, cueVector: [Float]?, budget: Int, excluding: UUID?
     ) async throws -> [ScoredEpisode] {
         guard budget > 0 else { return [] }
-        let keyword = try await store.keywordScores(query: cue, table: "episodes", limit: 30)
-        let vectors = try await store.embeddings(kind: "episode")
+        let keyword = try await store.keywordScores(query: cue, in: .episode, limit: 30)
+        let vectors = try await store.embeddings(of: .episode)
         let vectorByID = Dictionary(vectors) { first, _ in first }
 
         var candidateIDs = Set(keyword.keys)
@@ -352,16 +349,27 @@ final class MemoryEngine {
         }
         candidateIDs.subtract([excluding].compactMap { $0 })
 
-        var out: [ScoredEpisode] = []
-        for id in candidateIDs {
-            guard let episode = try await store.episode(id: id) else { continue }
-            let relevance = Self.relevance(
-                cueVector: cueVector, id: id, vectorByID: vectorByID, keyword: keyword)
-            guard relevance > 0.2 else { continue }
-            out.append(ScoredEpisode(episode: episode, relevance: relevance))
+        // Score before fetching: most of the ~60 candidates fall to the
+        // relevance floor, and the survivors come back in one batch query
+        // rather than a store round-trip apiece.
+        let scored =
+            candidateIDs
+            .map {
+                (
+                    id: $0,
+                    relevance: Self.relevance(
+                        cueVector: cueVector, id: $0, vectorByID: vectorByID, keyword: keyword)
+                )
+            }
+            .filter { $0.relevance > 0.2 }
+            .sorted { $0.relevance > $1.relevance }
+            .prefix(budget)
+        let byID = Dictionary(
+            try await store.episodes(ids: scored.map(\.id)).map { ($0.id, $0) }
+        ) { first, _ in first }
+        return scored.compactMap { candidate in
+            byID[candidate.id].map { ScoredEpisode(episode: $0, relevance: candidate.relevance) }
         }
-        out.sort { $0.relevance > $1.relevance }
-        return Array(out.prefix(budget))
     }
 
     /// Hybrid relevance: dense cosine fused with FTS5/BM25.
@@ -405,16 +413,16 @@ final class MemoryEngine {
     /// account: @spok_vulkan" reached `seenCount 8` and went cold without ever
     /// being shown to anyone. So sleep passes `false`; the agent's `recall` tool
     /// — which genuinely puts a memory in front of the model — does not.
-    func search(query: String, limit: Int = 10, now: Date = Date(), marksSeen: Bool = true) async
+    func search(query: String, limit: Int = 10, marksSeen: Bool = true) async
         -> [ScoredMemory]
     {
         guard isEnabled() else { return [] }
         do {
             let all = try await store.memories(status: nil, limit: 5_000)
             let cueVector = await embed(query)
-            let vectors = try await store.embeddings(kind: "memory")
+            let vectors = try await store.embeddings(of: .memory)
             let vectorByID = Dictionary(vectors) { first, _ in first }
-            let keyword = try await store.keywordScores(query: query, table: "memories", limit: 50)
+            let keyword = try await store.keywordScores(query: query, in: .memory, limit: 50)
 
             var scored: [ScoredMemory] = []
             for memory in all {
@@ -434,9 +442,7 @@ final class MemoryEngine {
             // which is what makes "surfaced repeatedly and never once useful"
             // into evidence the lifecycle can act on. An *internal* lookup is not.
             if marksSeen {
-                for hit in hits {
-                    try? await store.upsert(MemoryLifecycle.markSeen(hit.memory, now: now))
-                }
+                try? await store.markSeen(hits.map(\.memory.id), at: Date())
             }
             return hits
         } catch {
@@ -449,6 +455,11 @@ final class MemoryEngine {
 
     func allMemories() async -> [MemoryRecord] {
         (try? await store.memories(status: nil, limit: 5_000)) ?? []
+    }
+
+    /// The backfill's "has anything ever been recorded" gate.
+    func episodeCount() async -> Int {
+        (try? await store.episodeCount()) ?? 0
     }
 
     func episodes(for memory: MemoryRecord) async -> [Episode] {
@@ -477,16 +488,16 @@ final class MemoryEngine {
     /// "That's wrong." Marks the belief contested and queues it for
     /// reconciliation in the next sleep — never an inline overwrite, because
     /// one contradiction must not be able to rewrite a settled belief.
+    ///
+    /// The store flips the status against the *fresh* row, guarded on it still
+    /// being live — the window's snapshot may be hours old, and a contest must
+    /// not resurrect a belief sleep has since superseded.
     func contest(_ memory: MemoryRecord, now: Date = Date()) async {
-        var m = memory
-        m.status = .contested
         do {
-            try await store.upsert(m)
-            try await store.appendJournal(
-                JournalEntry(
-                    at: now, mutation: .contested, memoryID: m.id,
-                    detail: "The owner contested this. Queued for reconciliation in sleep.",
-                    before: memory.text))
+            if try await store.contest(id: memory.id, at: now) == nil {
+                Log.memory.info(
+                    "Contest skipped — the belief is no longer live: \(memory.id.uuidString)")
+            }
             await refreshStats()
         } catch {
             Log.memory.error("Contest failed: \(error.localizedDescription)")

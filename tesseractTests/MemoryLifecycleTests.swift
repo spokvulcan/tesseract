@@ -341,17 +341,30 @@ struct MemoryLifecycleTests {
         #expect(fading.tier == .warm, "still reachable — demoted, not deleted")
     }
 
-    @Test("Consolidation priority favours memories whose need is falling fastest")
-    func consolidationPriorityTracksTheSlope() {
+    @Test("Retirement sticks — a cold memory is not resurrected by the next sweep")
+    func retirementSticks() {
         let now = Date()
-        // Steep part of the curve — recently used, low stability.
-        let slipping = makeMemory(stability: 2, lastUsefulUseDaysAgo: 2, now: now)
-        // Flat part — long dormant, so its need has already bottomed out.
-        let settled = makeMemory(stability: 2, lastUsefulUseDaysAgo: 900, now: now)
+        // Retired last night by path 2: surfaced eight times, never once useful.
+        // Its need-probability is still high (it is young), which is exactly the
+        // trap: `shouldRetireToCold` refuses to re-retire what is already cold,
+        // and the hot/warm re-derivation would haul it straight back into the
+        // default pool — retirement as a one-night stand.
+        var retired = makeMemory(stability: 3, tier: .cold, now: now)
+        retired.seenCount = 8
 
-        #expect(
-            MemoryLifecycle.consolidationPriority(slipping, now: now)
-                > MemoryLifecycle.consolidationPriority(settled, now: now))
+        let swept = MemoryLifecycle.sweepTier(retired, distinctUsefulDays: 0, now: now)
+        #expect(swept.tier == .cold, "the sweep resurrected a retired memory")
+    }
+
+    @Test("A graded useful use is the one way back from cold")
+    func coldComesBackOnUsefulUse() {
+        let now = Date()
+        // The ε-slot surfaced it, and this time it helped: the judge graded it
+        // useful. That — and only that — re-tiers it.
+        let revived = makeMemory(stability: 3, usefulUseCount: 1, tier: .cold, now: now)
+
+        let swept = MemoryLifecycle.sweepTier(revived, distinctUsefulDays: 1, now: now)
+        #expect(swept.tier == .hot, "demonstrated usefulness must reopen the default pool")
     }
 
     // MARK: - Tier ordering

@@ -34,10 +34,14 @@ struct MemoryBeliefListView: View {
 
     // MARK: - List
 
-    /// Tiers in ladder order, empty tiers omitted.
+    /// Tiers in ladder order — most important first, so the list leads with
+    /// core identity and the retired tail comes last. `MemoryTier` compares
+    /// bigger-is-more-important, so the ladder is the *descending* sort; a
+    /// plain ascending `sorted()` here once led the owner's belief list with
+    /// the cold tail. Empty tiers omitted.
     private var tiers: [(tier: MemoryTier, records: [MemoryRecord])] {
         let grouped = Dictionary(grouping: memories, by: \.tier)
-        return MemoryTier.allCases.sorted().compactMap { tier in
+        return MemoryTier.allCases.sorted(by: >).compactMap { tier in
             guard let records = grouped[tier], !records.isEmpty else { return nil }
             return (tier, records)
         }
@@ -107,7 +111,7 @@ struct MemoryBeliefListView: View {
     }
 
     private var tierBreakdown: String {
-        MemoryTier.allCases.sorted()
+        MemoryTier.allCases.sorted(by: >)
             .compactMap { tier in
                 guard let count = stats.byTier[tier], count > 0 else { return nil }
                 return "\(count) \(tier.label.lowercased())"

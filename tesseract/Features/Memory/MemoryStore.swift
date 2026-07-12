@@ -8,9 +8,9 @@
 //
 //    episodes      — APPEND-ONLY. The immutable layer. Nothing in this file
 //                    updates or deletes an episode except `deleteEverything`
-//                    (the owner's reset) and `deleteEpisode` (the owner's hand
-//                    in the Memory window). No consolidation path can reach
-//                    them, and that is the point.
+//                    (the owner's reset); consolidation only ever stamps
+//                    `consolidatedAt`. No path rewrites what was said, and
+//                    that is the point.
 //    memories      — the derived, first-person, mutable layer.
 //    embeddings    — 1024-dim float32 BLOBs, for episodes and memories alike.
 //    retrievals    — the lifecycle's sensor log: what was surfaced, for which
@@ -31,6 +31,17 @@ import Foundation
 
 /// The vector width of `Qwen3-Embedding-0.6B` (measured: 1024).
 let memoryEmbeddingDimension = 1024
+
+/// The two owners a side-table row can belong to. One switch, owned here —
+/// instead of "memory"/"memories"/"memories_fts" strings threaded through
+/// every signature with a re-derivation branch at each site.
+nonisolated enum MemoryOwner: String, Sendable {
+    case memory
+    case episode
+
+    var table: String { self == .memory ? "memories" : "episodes" }
+    var fts: String { table + "_fts" }
+}
 
 actor MemoryStore {
 
@@ -191,6 +202,13 @@ actor MemoryStore {
                 .bind(6, metaJSON)
             try stmt.run()
 
+            // `INSERT OR IGNORE` skipped an existing row: skip its side tables
+            // too. Re-inserting the FTS row for the same rowid would index it
+            // twice, and `keywordScores` would then return the same id twice —
+            // reachable once episode ids are the messages' own and a turn can
+            // be re-captured.
+            guard db.changes > 0 else { return }
+
             let fts = try db.prepare(
                 """
                 INSERT INTO episodes_fts (rowid, text)
@@ -200,7 +218,7 @@ actor MemoryStore {
             try fts.run()
 
             if let embedding {
-                try writeEmbedding(ownerID: episode.id, kind: "episode", vector: embedding)
+                try writeEmbedding(ownerID: episode.id, owner: .episode, vector: embedding)
             }
         }
     }
@@ -210,6 +228,21 @@ actor MemoryStore {
         stmt.bind(1, id.uuidString)
         guard try stmt.step() else { return nil }
         return decodeEpisode(stmt)
+    }
+
+    /// Batch fetch — the retrieval scan collects ~60 candidate ids per turn,
+    /// and one `IN` query beats sixty actor round-trips.
+    func episodes(ids: [UUID]) throws -> [Episode] {
+        guard !ids.isEmpty else { return [] }
+        let placeholders = (1...ids.count).map { "?\($0)" }.joined(separator: ",")
+        let stmt = try db.prepare(
+            "SELECT \(episodeColumns) FROM episodes WHERE id IN (\(placeholders))")
+        for (index, id) in ids.enumerated() {
+            stmt.bind(Int32(index + 1), id.uuidString)
+        }
+        var out: [Episode] = []
+        while try stmt.step() { out.append(decodeEpisode(stmt)) }
+        return out
     }
 
     /// Episodes that consolidation has not yet processed. This is the sleep
@@ -239,18 +272,6 @@ actor MemoryStore {
         }
     }
 
-    func recentEpisodes(since: Date, limit: Int = 100) throws -> [Episode] {
-        let stmt = try db.prepare(
-            """
-            SELECT \(episodeColumns) FROM episodes
-            WHERE occurredAt >= ?1 ORDER BY occurredAt DESC LIMIT ?2
-            """)
-        stmt.bind(1, since.timeIntervalSince1970).bind(2, limit)
-        var out: [Episode] = []
-        while try stmt.step() { out.append(decodeEpisode(stmt)) }
-        return out
-    }
-
     func episodeCount() throws -> Int {
         let stmt = try db.prepare("SELECT COUNT(*) FROM episodes")
         guard try stmt.step() else { return 0 }
@@ -259,68 +280,78 @@ actor MemoryStore {
 
     // MARK: - Memories
 
-    func upsert(_ memory: MemoryRecord, embedding: [Float]? = nil) throws {
+    /// Write a memory — and, when given, its journal line — in one transaction,
+    /// so a crash can never leave a mutation the journal knows nothing about.
+    func upsert(_ memory: MemoryRecord, embedding: [Float]? = nil, journal: JournalEntry? = nil)
+        throws
+    {
         try db.transaction {
-            let stmt = try db.prepare(
-                """
-                INSERT INTO memories (
-                    id, text, kind, provenance, specificity, status, tier, bornAt,
-                    stability, storageStrength, difficulty, lastUsefulUseAt,
-                    usefulUseCount, lastSeenAt, seenCount, confirmations,
-                    supersededBy, cueClusterID
-                ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
-                ON CONFLICT(id) DO UPDATE SET
-                    text=excluded.text, kind=excluded.kind, provenance=excluded.provenance,
-                    specificity=excluded.specificity, status=excluded.status, tier=excluded.tier,
-                    stability=excluded.stability, storageStrength=excluded.storageStrength,
-                    difficulty=excluded.difficulty, lastUsefulUseAt=excluded.lastUsefulUseAt,
-                    usefulUseCount=excluded.usefulUseCount, lastSeenAt=excluded.lastSeenAt,
-                    seenCount=excluded.seenCount, confirmations=excluded.confirmations,
-                    supersededBy=excluded.supersededBy, cueClusterID=excluded.cueClusterID
-                """)
-            stmt.bind(1, memory.id.uuidString)
-                .bind(2, memory.text)
-                .bind(3, memory.kind.rawValue)
-                .bind(4, memory.provenance.rawValue)
-                .bind(5, memory.specificity.rawValue)
-                .bind(6, memory.status.rawValue)
-                .bind(7, memory.tier.rawValue)
-                .bind(8, memory.bornAt.timeIntervalSince1970)
-                .bind(9, memory.stability)
-                .bind(10, memory.storageStrength)
-                .bind(11, memory.difficulty)
-                .bind(12, memory.lastUsefulUseAt.timeIntervalSince1970)
-                .bind(13, memory.usefulUseCount)
-                .bind(14, memory.lastSeenAt.timeIntervalSince1970)
-                .bind(15, memory.seenCount)
-                .bind(16, memory.confirmations)
-                .bind(17, memory.supersededBy?.uuidString)
-                .bind(18, memory.cueClusterID?.uuidString)
-            try stmt.run()
+            try upsertInTransaction(memory, embedding: embedding)
+            if let journal { try appendJournal(journal) }
+        }
+    }
 
-            // Keep the FTS mirror in step (external-content table).
-            let delFTS = try db.prepare(
-                "INSERT INTO memories_fts(memories_fts, rowid, text) "
-                    + "SELECT 'delete', rowid, text FROM memories WHERE id = ?1")
-            delFTS.bind(1, memory.id.uuidString)
-            try? delFTS.run()
-            let insFTS = try db.prepare(
-                "INSERT INTO memories_fts(rowid, text) SELECT rowid, ?2 FROM memories WHERE id = ?1"
-            )
-            insFTS.bind(1, memory.id.uuidString).bind(2, memory.text)
-            try insFTS.run()
+    /// The row write itself — callers must already hold a transaction.
+    private func upsertInTransaction(_ memory: MemoryRecord, embedding: [Float]?) throws {
+        let stmt = try db.prepare(
+            """
+            INSERT INTO memories (
+                id, text, kind, provenance, specificity, status, tier, bornAt,
+                stability, storageStrength, difficulty, lastUsefulUseAt,
+                usefulUseCount, lastSeenAt, seenCount, confirmations,
+                supersededBy, cueClusterID
+            ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
+            ON CONFLICT(id) DO UPDATE SET
+                text=excluded.text, kind=excluded.kind, provenance=excluded.provenance,
+                specificity=excluded.specificity, status=excluded.status, tier=excluded.tier,
+                stability=excluded.stability, storageStrength=excluded.storageStrength,
+                difficulty=excluded.difficulty, lastUsefulUseAt=excluded.lastUsefulUseAt,
+                usefulUseCount=excluded.usefulUseCount, lastSeenAt=excluded.lastSeenAt,
+                seenCount=excluded.seenCount, confirmations=excluded.confirmations,
+                supersededBy=excluded.supersededBy, cueClusterID=excluded.cueClusterID
+            """)
+        stmt.bind(1, memory.id.uuidString)
+            .bind(2, memory.text)
+            .bind(3, memory.kind.rawValue)
+            .bind(4, memory.provenance.rawValue)
+            .bind(5, memory.specificity.rawValue)
+            .bind(6, memory.status.rawValue)
+            .bind(7, memory.tier.rawValue)
+            .bind(8, memory.bornAt.timeIntervalSince1970)
+            .bind(9, memory.stability)
+            .bind(10, memory.storageStrength)
+            .bind(11, memory.difficulty)
+            .bind(12, memory.lastUsefulUseAt.timeIntervalSince1970)
+            .bind(13, memory.usefulUseCount)
+            .bind(14, memory.lastSeenAt.timeIntervalSince1970)
+            .bind(15, memory.seenCount)
+            .bind(16, memory.confirmations)
+            .bind(17, memory.supersededBy?.uuidString)
+            .bind(18, memory.cueClusterID?.uuidString)
+        try stmt.run()
 
-            let src = try db.prepare(
-                "INSERT OR IGNORE INTO memory_sources (memoryID, episodeID) VALUES (?1, ?2)")
-            for episodeID in memory.sourceEpisodeIDs {
-                src.bind(1, memory.id.uuidString).bind(2, episodeID.uuidString)
-                try src.run()
-                src.reset()
-            }
+        // Keep the FTS mirror in step (external-content table).
+        let delFTS = try db.prepare(
+            "INSERT INTO memories_fts(memories_fts, rowid, text) "
+                + "SELECT 'delete', rowid, text FROM memories WHERE id = ?1")
+        delFTS.bind(1, memory.id.uuidString)
+        try? delFTS.run()
+        let insFTS = try db.prepare(
+            "INSERT INTO memories_fts(rowid, text) SELECT rowid, ?2 FROM memories WHERE id = ?1"
+        )
+        insFTS.bind(1, memory.id.uuidString).bind(2, memory.text)
+        try insFTS.run()
 
-            if let embedding {
-                try writeEmbedding(ownerID: memory.id, kind: "memory", vector: embedding)
-            }
+        let src = try db.prepare(
+            "INSERT OR IGNORE INTO memory_sources (memoryID, episodeID) VALUES (?1, ?2)")
+        for episodeID in memory.sourceEpisodeIDs {
+            src.bind(1, memory.id.uuidString).bind(2, episodeID.uuidString)
+            try src.run()
+            src.reset()
+        }
+
+        if let embedding {
+            try writeEmbedding(ownerID: memory.id, owner: .memory, vector: embedding)
         }
     }
 
@@ -341,9 +372,7 @@ actor MemoryStore {
         sql += " ORDER BY bornAt DESC LIMIT ?3"
         let stmt = try db.prepare(sql)
         stmt.bind(1, tier?.rawValue).bind(2, status?.rawValue).bind(3, limit)
-        var out: [MemoryRecord] = []
-        while try stmt.step() { out.append(try decodeMemory(stmt)) }
-        return out
+        return try decodeMemories(stmt)
     }
 
     /// Every live memory. The retrieval scan reads this — at personal scale
@@ -352,8 +381,29 @@ actor MemoryStore {
     func allLiveMemories() throws -> [MemoryRecord] {
         let stmt = try db.prepare(
             "SELECT \(memoryColumns) FROM memories WHERE status != 'superseded'")
+        return try decodeMemories(stmt)
+    }
+
+    /// Decode a scan's rows with **one** grouped sources query instead of one
+    /// sub-query per row — the scan paths (retrieve per turn, sweep and
+    /// reconcile per sleep item) were paying N statements for arrays most of
+    /// them never read.
+    private func decodeMemories(_ stmt: SQLiteDatabase.Statement) throws -> [MemoryRecord] {
+        let sources = try sourceEpisodeIDsByMemory()
         var out: [MemoryRecord] = []
-        while try stmt.step() { out.append(try decodeMemory(stmt)) }
+        while try stmt.step() { out.append(try decodeMemory(stmt, sources: sources)) }
+        return out
+    }
+
+    private func sourceEpisodeIDsByMemory() throws -> [UUID: [UUID]] {
+        let stmt = try db.prepare("SELECT memoryID, episodeID FROM memory_sources")
+        var out: [UUID: [UUID]] = [:]
+        while try stmt.step() {
+            guard let m = stmt.string(0).flatMap(UUID.init(uuidString:)),
+                let e = stmt.string(1).flatMap(UUID.init(uuidString:))
+            else { continue }
+            out[m, default: []].append(e)
+        }
         return out
     }
 
@@ -390,6 +440,9 @@ actor MemoryStore {
                 "DELETE FROM embeddings WHERE ownerID = ?1",
                 "DELETE FROM memory_sources WHERE memoryID = ?1",
                 "DELETE FROM cue_affinity WHERE memoryID = ?1",
+                // Its retrieval events go too: the judge can never grade them,
+                // and left behind they would sit in the ungraded queue forever.
+                "DELETE FROM retrievals WHERE memoryID = ?1",
             ] {
                 let stmt = try db.prepare(sql)
                 stmt.bind(1, id.uuidString)
@@ -402,20 +455,175 @@ actor MemoryStore {
         }
     }
 
+    // MARK: - Targeted mutations
+    //
+    // Every read-modify-write below happens inside one actor call, against the
+    // freshly-read row — never against a snapshot a caller has been holding
+    // across `await`s. The full-row `upsert` is for *inserting* records; using
+    // it to bump a counter lets a stale copy silently roll back whatever landed
+    // in between (a seen-mark clobbering a grade's strength bump, a contest
+    // resurrecting a superseded belief). These methods exist so no caller has
+    // to make that mistake.
+
+    /// Retrieved into context — diagnostic only, never the lifecycle.
+    func markSeen(_ ids: [UUID], at now: Date) throws {
+        guard !ids.isEmpty else { return }
+        try db.transaction {
+            let stmt = try db.prepare(
+                "UPDATE memories SET seenCount = seenCount + 1, lastSeenAt = ?2 WHERE id = ?1")
+            for id in ids {
+                stmt.bind(1, id.uuidString).bind(2, now.timeIntervalSince1970)
+                try stmt.run()
+                stmt.reset()
+            }
+        }
+    }
+
+    /// A re-encounter with no surprise: `confirmations += 1`, journaled, in one
+    /// transaction. The rewriter is never invoked — that absence is the design,
+    /// and the journal line is how the owner gets to watch it happen.
+    func confirm(id: UUID, at now: Date) throws -> MemoryRecord? {
+        try db.transaction {
+            let stmt = try db.prepare(
+                "UPDATE memories SET confirmations = confirmations + 1 WHERE id = ?1")
+            stmt.bind(1, id.uuidString)
+            try stmt.run()
+            guard let fresh = try memory(id: id) else { return nil }
+            try appendJournal(
+                JournalEntry(
+                    at: now, mutation: .confirmed, memoryID: id,
+                    detail: "Said again, in different words — confirmed, not rewritten "
+                        + "(\(fresh.confirmations)×).",
+                    after: fresh.text))
+            return fresh
+        }
+    }
+
+    /// Move a memory's tier and nothing else, with its journal line in the same
+    /// transaction.
+    func setTier(id: UUID, to tier: MemoryTier, journal: JournalEntry? = nil) throws {
+        try db.transaction {
+            let stmt = try db.prepare("UPDATE memories SET tier = ?2 WHERE id = ?1")
+            stmt.bind(1, id.uuidString).bind(2, tier.rawValue)
+            try stmt.run()
+            if let journal { try appendJournal(journal) }
+        }
+    }
+
+    /// The owner's veto. Guarded on `status = 'live'` so a contest clicked over
+    /// a stale window snapshot cannot resurrect a belief sleep has since
+    /// superseded. Returns the contested record, or nil if it was no longer
+    /// live and nothing happened.
+    func contest(id: UUID, at now: Date) throws -> MemoryRecord? {
+        try db.transaction {
+            guard let before = try memory(id: id), before.status == .live else { return nil }
+            let stmt = try db.prepare(
+                "UPDATE memories SET status = ?2 WHERE id = ?1 AND status = ?3")
+            stmt.bind(1, id.uuidString)
+                .bind(2, MemoryStatus.contested.rawValue)
+                .bind(3, MemoryStatus.live.rawValue)
+            try stmt.run()
+            try appendJournal(
+                JournalEntry(
+                    at: now, mutation: .contested, memoryID: id,
+                    detail: "The owner contested this. Queued for reconciliation in sleep.",
+                    before: before.text))
+            return try memory(id: id)
+        }
+    }
+
+    /// Supersede `oldID` with `new` — both rows, the inheritance, and both
+    /// journal lines in **one transaction**, so a crash can never leave the old
+    /// belief retired while its successor was never born (ADR-0035 §8:
+    /// "together or not at all"). Inheritance reads the *fresh* old row, not
+    /// whatever snapshot the caller reconciled against.
+    ///
+    /// Returns the successor as written, or nil (nothing changed) when the old
+    /// belief has vanished or was already superseded in the meantime.
+    func supersede(
+        oldID: UUID, with new: MemoryRecord, embedding: [Float]?,
+        inheritStrength: Bool, at now: Date
+    ) throws -> MemoryRecord? {
+        try db.transaction {
+            guard let old = try memory(id: oldID), old.status != .superseded else { return nil }
+
+            let stmt = try db.prepare(
+                "UPDATE memories SET status = ?2, supersededBy = ?3 WHERE id = ?1")
+            stmt.bind(1, oldID.uuidString)
+                .bind(2, MemoryStatus.superseded.rawValue)
+                .bind(3, new.id.uuidString)
+            try stmt.run()
+
+            var successor = new
+            if inheritStrength {
+                // The world moved on; the successor is the belief's continuation
+                // and keeps what it earned. `max` keeps storage strength monotone
+                // across the succession.
+                successor.storageStrength = max(successor.storageStrength, old.storageStrength)
+                successor.confirmations = old.confirmations
+            }
+            try upsertInTransaction(successor, embedding: embedding)
+
+            try appendJournal(
+                JournalEntry(
+                    at: now, mutation: .superseded, memoryID: old.id,
+                    detail: old.status == .contested
+                        ? "He said this was wrong. Corrected against what he actually said."
+                        : "Replaced by a later observation.",
+                    before: old.text, after: successor.text))
+            try appendJournal(
+                JournalEntry(
+                    at: now, mutation: .added, memoryID: successor.id,
+                    detail: "Learned this, replacing an older belief.", after: successor.text))
+            return successor
+        }
+    }
+
+    /// Grade one retrieval event and move the memory's lifecycle, atomically:
+    /// the grade, the strength update (computed against the freshly-read row),
+    /// and — for `.ignored` — the per-cue affinity decay commit together.
+    /// Returns the updated memory, or nil when it no longer exists (the event
+    /// is still marked graded so it leaves the queue).
+    func grade(_ grade: UseGrade, event: RetrievalEvent, now: Date) throws -> MemoryRecord? {
+        try db.transaction {
+            let mark = try db.prepare("UPDATE retrievals SET grade = ?2 WHERE id = ?1")
+            mark.bind(1, event.id.uuidString).bind(2, grade.rawValue)
+            try mark.run()
+
+            guard let fresh = try memory(id: event.memoryID) else { return nil }
+            let updated = MemoryLifecycle.applyGrade(grade, to: fresh, now: now)
+            let stmt = try db.prepare(
+                """
+                UPDATE memories SET
+                    stability = ?2, storageStrength = ?3, difficulty = ?4,
+                    lastUsefulUseAt = ?5, usefulUseCount = ?6
+                WHERE id = ?1
+                """)
+            stmt.bind(1, updated.id.uuidString)
+                .bind(2, updated.stability)
+                .bind(3, updated.storageStrength)
+                .bind(4, updated.difficulty)
+                .bind(5, updated.lastUsefulUseAt.timeIntervalSince1970)
+                .bind(6, updated.usefulUseCount)
+            try stmt.run()
+
+            if grade == .ignored {
+                try decayCueAffinity(cue: event.cue, memoryID: event.memoryID)
+            }
+            return updated
+        }
+    }
+
     // MARK: - Embeddings
 
-    private func writeEmbedding(ownerID: UUID, kind: String, vector: [Float]) throws {
+    private func writeEmbedding(ownerID: UUID, owner: MemoryOwner, vector: [Float]) throws {
         let stmt = try db.prepare(
             """
             INSERT INTO embeddings (ownerID, ownerKind, vector) VALUES (?1, ?2, ?3)
             ON CONFLICT(ownerID) DO UPDATE SET vector = excluded.vector, ownerKind = excluded.ownerKind
             """)
-        stmt.bind(1, ownerID.uuidString).bind(2, kind).bind(3, Self.data(from: vector))
+        stmt.bind(1, ownerID.uuidString).bind(2, owner.rawValue).bind(3, Self.data(from: vector))
         try stmt.run()
-    }
-
-    func setEmbedding(ownerID: UUID, kind: String, vector: [Float]) throws {
-        try db.transaction { try writeEmbedding(ownerID: ownerID, kind: kind, vector: vector) }
     }
 
     func embedding(for ownerID: UUID) throws -> [Float]? {
@@ -425,32 +633,17 @@ actor MemoryStore {
         return Self.vector(from: blob)
     }
 
-    /// All embeddings of one kind, as (id, vector). The retrieval scan's input.
-    func embeddings(kind: String) throws -> [(UUID, [Float])] {
+    /// All embeddings of one owner, as (id, vector). The retrieval scan's input.
+    func embeddings(of owner: MemoryOwner) throws -> [(UUID, [Float])] {
         let stmt = try db.prepare(
             "SELECT ownerID, vector FROM embeddings WHERE ownerKind = ?1")
-        stmt.bind(1, kind)
+        stmt.bind(1, owner.rawValue)
         var out: [(UUID, [Float])] = []
         while try stmt.step() {
             guard let idString = stmt.string(0), let id = UUID(uuidString: idString),
                 let blob = stmt.data(1)
             else { continue }
             out.append((id, Self.vector(from: blob)))
-        }
-        return out
-    }
-
-    func idsMissingEmbeddings(kind: String) throws -> [UUID] {
-        let table = kind == "memory" ? "memories" : "episodes"
-        let stmt = try db.prepare(
-            """
-            SELECT t.id FROM \(table) t
-            LEFT JOIN embeddings e ON e.ownerID = t.id
-            WHERE e.ownerID IS NULL
-            """)
-        var out: [UUID] = []
-        while try stmt.step() {
-            if let s = stmt.string(0), let id = UUID(uuidString: s) { out.append(id) }
         }
         return out
     }
@@ -487,16 +680,16 @@ actor MemoryStore {
     /// Keyword relevance via FTS5/BM25 — a model-free signal that costs
     /// nothing and catches the proper nouns embeddings smear.
     /// Returns id → normalized score in [0, 1].
-    func keywordScores(query: String, table: String, limit: Int = 50) throws -> [UUID: Double] {
+    func keywordScores(query: String, in owner: MemoryOwner, limit: Int = 50) throws
+        -> [UUID: Double]
+    {
         let sanitized = Self.ftsQuery(query)
         guard !sanitized.isEmpty else { return [:] }
-        let content = table == "memories" ? "memories" : "episodes"
-        let fts = table == "memories" ? "memories_fts" : "episodes_fts"
         let stmt = try db.prepare(
             """
-            SELECT c.id, bm25(\(fts)) AS rank
-            FROM \(fts) f JOIN \(content) c ON c.rowid = f.rowid
-            WHERE \(fts) MATCH ?1
+            SELECT c.id, bm25(\(owner.fts)) AS rank
+            FROM \(owner.fts) f JOIN \(owner.table) c ON c.rowid = f.rowid
+            WHERE \(owner.fts) MATCH ?1
             ORDER BY rank LIMIT ?2
             """)
         stmt.bind(1, sanitized).bind(2, limit)
@@ -507,7 +700,9 @@ actor MemoryStore {
             raw.append((id, -stmt.double(1)))
         }
         guard let best = raw.map(\.1).max(), best > 0 else { return [:] }
-        return Dictionary(uniqueKeysWithValues: raw.map { ($0.0, $0.1 / best) })
+        // `uniquingKeysWith`, defensively: an FTS mirror that ever double-indexed
+        // a row must degrade to a duplicate score, not a crash.
+        return Dictionary(raw.map { ($0.0, $0.1 / best) }, uniquingKeysWith: max)
     }
 
     /// FTS5 treats a lot of punctuation as syntax. Quote every bare term so a
@@ -571,24 +766,37 @@ actor MemoryStore {
         return out
     }
 
+    /// How many events await the judge — the stats line's number, without
+    /// decoding ten thousand rows to count them.
+    func ungradedRetrievalCount() throws -> Int {
+        let stmt = try db.prepare("SELECT COUNT(*) FROM retrievals WHERE grade IS NULL")
+        guard try stmt.step() else { return 0 }
+        return stmt.int(0)
+    }
+
     func setGrade(_ grade: UseGrade, for retrievalID: UUID) throws {
         let stmt = try db.prepare("UPDATE retrievals SET grade = ?2 WHERE id = ?1")
         stmt.bind(1, retrievalID.uuidString).bind(2, grade.rawValue)
         try stmt.run()
     }
 
-    /// How many *distinct days* this memory was usefully used on. The spacing
-    /// effect: three uses inside one conversation are one massed episode, and
-    /// promotion must not be fooled by them.
-    func distinctUsefulDays(memoryID: UUID) throws -> Int {
+    /// How many *distinct days* each memory was usefully used on, in one
+    /// grouped query — the sweep asks this for every live memory, and one
+    /// round-trip per memory per night was the store's biggest query loop.
+    /// The spacing effect: three uses inside one conversation are one massed
+    /// episode, and promotion must not be fooled by them.
+    func distinctUsefulDaysByMemory() throws -> [UUID: Int] {
         let stmt = try db.prepare(
             """
-            SELECT COUNT(DISTINCT CAST(retrievedAt / 86400 AS INTEGER))
-            FROM retrievals WHERE memoryID = ?1 AND grade IN ('decisive','used')
+            SELECT memoryID, COUNT(DISTINCT CAST(retrievedAt / 86400 AS INTEGER))
+            FROM retrievals WHERE grade IN ('decisive','used') GROUP BY memoryID
             """)
-        stmt.bind(1, memoryID.uuidString)
-        guard try stmt.step() else { return 0 }
-        return stmt.int(0)
+        var out: [UUID: Int] = [:]
+        while try stmt.step() {
+            guard let id = stmt.string(0).flatMap(UUID.init(uuidString:)) else { continue }
+            out[id] = stmt.int(1)
+        }
+        return out
     }
 
     // MARK: - Cue affinity
@@ -701,7 +909,11 @@ actor MemoryStore {
         seenCount, confirmations, supersededBy, cueClusterID
         """
 
-    private func decodeMemory(_ s: SQLiteDatabase.Statement) throws -> MemoryRecord {
+    /// `sources` is the pre-grouped map on scan paths; nil falls back to the
+    /// per-row sub-query, which is right for single-record fetches.
+    private func decodeMemory(_ s: SQLiteDatabase.Statement, sources: [UUID: [UUID]]? = nil)
+        throws -> MemoryRecord
+    {
         let id = UUID(uuidString: s.string(0) ?? "") ?? UUID()
         return MemoryRecord(
             id: id,
@@ -711,7 +923,7 @@ actor MemoryStore {
             specificity: Specificity(rawValue: s.string(4) ?? "") ?? .general,
             status: MemoryStatus(rawValue: s.string(5) ?? "") ?? .live,
             tier: MemoryTier(rawValue: s.string(6) ?? "") ?? .hot,
-            sourceEpisodeIDs: try sourceEpisodeIDs(memoryID: id),
+            sourceEpisodeIDs: try sources.map { $0[id] ?? [] } ?? sourceEpisodeIDs(memoryID: id),
             bornAt: Date(timeIntervalSince1970: s.double(7)),
             stability: s.double(8),
             storageStrength: s.double(9),
