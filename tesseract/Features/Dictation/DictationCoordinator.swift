@@ -61,7 +61,9 @@ final class DictationCoordinator {
     ///
     /// Gated twice — `memoryEnabled` and `memoryCaptureDictation`, both checked
     /// inside the engine — because this is the one source that captures speech
-    /// the owner did not aim at this app.
+    /// the owner did not aim at this app. Speech he *did* aim at this app is
+    /// skipped at commit: the chat door records it with the reply attached, and
+    /// one utterance must not enter the store through two doors.
     private let memory: MemoryEngine?
 
     /// The pair of the last take that surfaced a beat — what the overlay's
@@ -384,8 +386,14 @@ final class DictationCoordinator {
                 // worth remembering. Detached — dictation's whole promise is that
                 // the words land in the frontmost app instantly, and nothing in
                 // the memory system gets to stand between the take and the
-                // keystroke.
-                if let memory {
+                // keystroke. Words headed into Tesseract itself are the one
+                // exception: the chat door captures what he *sends* with the
+                // reply attached, and the same utterance must not become two
+                // episodes (one door per testimony).
+                let targetIsSelf =
+                    NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                    == Bundle.main.bundleIdentifier
+                if let memory, !targetIsSelf {
                     Task { [memory] in
                         await memory.record(
                             source: .dictation, text: text,

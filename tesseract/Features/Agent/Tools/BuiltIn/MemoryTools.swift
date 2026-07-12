@@ -10,9 +10,10 @@
 //
 //  Deliberately only two, and deliberately asymmetric in power:
 //
-//  - `remember` writes **one atomic first-person claim**, marked STATED. It is
-//    the single exception to "no memory formation on the hot path", and it earns
-//    that exception by not being a heuristic: the owner *asked*.
+//  - `remember` writes **one atomic claim in the agent's voice** — the owner is
+//    "he", the assistant is "I" — marked STATED. It is the single exception to
+//    "no memory formation on the hot path", and it earns that exception by not
+//    being a heuristic: the owner *asked*.
 //  - `recall` reads, and is the agent's way into the part of memory that
 //    automatic injection will not show it — the retired tail and the superseded.
 //
@@ -42,10 +43,15 @@ nonisolated func createRememberTool(memory: MemoryEngine) -> AgentToolDefinition
             preference, a fact, a standing instruction, an event that matters — or when \
             they explicitly ask you to remember something.
 
-            Write ONE self-contained claim per call, in the first person, as you would \
-            want to recall it months from now with no other context: "He prefers terse \
-            answers when he is debugging", not "prefers terse". If they told you three \
-            things, call this three times. Do not use it for anything you merely inferred \
+            This is YOUR memory of HIM. Write ONE self-contained claim per call, about \
+            him in the third person, as you would want to recall it months from now with \
+            no other context: "He prefers terse answers when he is debugging", not \
+            "prefers terse". Never store his words in his own voice: he says "I like to \
+            eat apples in the morning", you store "He likes to eat apples in the \
+            morning." In a memory, "I" always means you, the assistant — "He gave me the \
+            nickname Pelican" — and a standing instruction is anchored on him: "He wants \
+            me to answer briefly when he is debugging." If they told you three things, \
+            call this three times. Do not use it for anything you merely inferred \
             from their behaviour — that is a job for consolidation, not for you, and a \
             guess recorded here would be indistinguishable from something they said.
 
@@ -59,7 +65,8 @@ nonisolated func createRememberTool(memory: MemoryEngine) -> AgentToolDefinition
                 "text": PropertySchema(
                     type: "string",
                     description:
-                        "The claim, first person, self-contained. One claim only."
+                        "The claim, self-contained, about him in the third person "
+                        + "(\"I\" means you, the assistant). One claim only."
                 ),
                 "kind": PropertySchema(
                     type: "string",
