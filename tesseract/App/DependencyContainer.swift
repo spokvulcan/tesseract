@@ -85,14 +85,22 @@ final class DependencyContainer: ObservableObject {
     lazy var memoryStore: MemoryStore = makeMemoryStore()
     lazy var memoryEmbedder = MemoryEmbedder()
     lazy var memoryEngine: MemoryEngine = makeMemoryEngine()
+    /// The only thing in the app that watches for the *absence* of a person.
+    lazy var idleMonitor = IdleMonitor()
+    /// Consolidation (ADR-0035 §7). Runs on the agent's own model — the owner's
+    /// call: the thinking that turns a day into beliefs is the last place to
+    /// economise. It takes the `.llm` lease per generation and drops it between,
+    /// so a foreground turn never waits behind more than one call.
+    lazy var memorySleep: MemorySleep = makeMemorySleep()
 
     private func makeMemoryStore() -> MemoryStore {
-        // TEMP (Memory window verification) — REMOVE BEFORE MERGE: point the
-        // store at a scratch directory so seeded screenshot fixtures never
-        // touch the real store.
+        // `TESSERACT_MEMORY_DIR` runs the app against a scratch store — the seam
+        // for driving the Memory window against seeded fixtures, and for any
+        // future experiment that must not touch what the owner actually said.
         var home = PathSandbox.defaultRoot.appendingPathComponent("memory", isDirectory: true)
         if let override = ProcessInfo.processInfo.environment["TESSERACT_MEMORY_DIR"] {
             home = URL(fileURLWithPath: override, isDirectory: true)
+            Log.memory.info("Memory store overridden to \(home.path)")
         }
         do {
             return try MemoryStore(directory: home)
@@ -132,6 +140,32 @@ final class DependencyContainer: ObservableObject {
                     : nil
             }
         )
+    }
+
+    private func makeMemorySleep() -> MemorySleep {
+        let settings = settingsManager
+        return MemorySleep(
+            engine: memoryEngine,
+            arbiter: inferenceArbiter,
+            // The agent's own model, through the same internal completion path
+            // the compactor uses. A smaller model would be cheaper, and the
+            // owner's call was explicit: the thinking that turns a day into
+            // beliefs is the last thing in this system to economise on.
+            complete: makeSummarizeClosure(
+                inferenceService: serverInferenceService,
+                parametersProvider: { settings.makeAgentGenerateParameters() }
+            ),
+            isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled }
+        )
+    }
+
+    /// Wire idleness to consolidation (ADR-0035 §7). The owner walking away is
+    /// the *only* thing that starts a sleep, and him coming back is the only
+    /// thing that stops one — instantly, by cancelling it mid-generation.
+    func startMemoryConsolidationLoop() {
+        idleMonitor.onIdle = { [memorySleep] in memorySleep.start() }
+        idleMonitor.onReturn = { [memorySleep] in memorySleep.yield() }
+        idleMonitor.start()
     }
 
     // Text Injection
@@ -364,7 +398,26 @@ final class DependencyContainer: ObservableObject {
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
         speaks: { [settingsManager] in settingsManager.companionHeartbeatSpeaks },
         speak: { [weak self] in self?.speechCoordinator.speakText($0) },
-        onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() }
+        onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() },
+        // The beat asks the question; memory supplies the *particular* one. A
+        // nil here — memory empty, model unsure, output unusable — falls back to
+        // the beat's own hardcoded line, which is the whole safety story: generic
+        // is a disappointment, invented would be a betrayal.
+        composeBody: { [weak self] beat in
+            guard let self else { return beat.prompt }
+            let line = await MemoryCallback.compose(
+                cue: beat.prompt,
+                engine: self.memoryEngine,
+                arbiter: self.inferenceArbiter,
+                complete: makeSummarizeClosure(
+                    inferenceService: self.serverInferenceService,
+                    parametersProvider: { [settingsManager = self.settingsManager] in
+                        settingsManager.makeAgentGenerateParameters()
+                    }
+                )
+            )
+            return line ?? beat.prompt
+        }
     )
 
     // Speech (TTS)
@@ -658,9 +711,10 @@ final class DependencyContainer: ObservableObject {
                 prewarmProofreader: { [proofreadPass] in
                     await proofreadPass.prewarm()
                 },
-                startMemory: { [memoryEngine] in
+                startMemory: { [self] in
                     await memoryEngine.prewarm()
                     await MemoryBackfill.run(engine: memoryEngine)
+                    startMemoryConsolidationLoop()
                 },
                 updateDictationHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(

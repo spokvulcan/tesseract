@@ -65,6 +65,18 @@ final class CompanionHeartbeat {
     private let notifier: CompanionNotifier
     private let log: CompanionHeartbeatLog
 
+    /// What this beat actually *says* — the memory system's job (ADR-0035; the
+    /// acceptance bar of #302).
+    ///
+    /// The skeleton shipped with three hardcoded prompts, and "Morning. What's
+    /// the one hard thing today?" is a thing a cron job says. What makes a
+    /// companion a companion is that it knows which hard thing you said it was
+    /// last week. So the body is composed, from memory, at fire time — and falls
+    /// back to the hardcoded line whenever memory has nothing true to say, which
+    /// is the only acceptable failure mode: generic is survivable, invented is
+    /// not.
+    private let composeBody: @MainActor (Beat) async -> String
+
     private var tickTask: Task<Void, Never>?
     private var next: (beat: Beat, at: Date)?
     /// The last ping still waiting for an outcome; the next fire expires it.
@@ -77,7 +89,8 @@ final class CompanionHeartbeat {
         speak: @escaping (String) -> Void,
         onEngage: @escaping () -> Void,
         notifier: CompanionNotifier = CompanionNotifier(),
-        log: CompanionHeartbeatLog = CompanionHeartbeatLog()
+        log: CompanionHeartbeatLog = CompanionHeartbeatLog(),
+        composeBody: @escaping @MainActor (Beat) async -> String = { $0.prompt }
     ) {
         self.isEnabled = isEnabled
         self.speaks = speaks
@@ -85,6 +98,7 @@ final class CompanionHeartbeat {
         self.onEngage = onEngage
         self.notifier = notifier
         self.log = log
+        self.composeBody = composeBody
     }
 
     /// Arms the tick loop for the app's lifetime — a sleeping task and one
@@ -152,13 +166,19 @@ final class CompanionHeartbeat {
             event: "fired", beat: beat.id, ping: pingID, scheduledFor: scheduledFor,
             lateSeconds: Int(now.timeIntervalSince(scheduledFor)), trigger: trigger)
         Log.companion.info("Ping '\(beat.id)' fired (\(pingID.uuidString))")
-        Task { [notifier] in
-            await notifier.post(
-                pingID: pingID, beatID: beat.id, title: beat.title, body: beat.prompt)
-        }
-        if speaks() {
-            speak(beat.prompt)
-            log.append(event: "spoken", beat: beat.id, ping: pingID)
+        Task { [weak self] in
+            guard let self else { return }
+            // Composed before the post, and spoken as the *same words* — a banner
+            // that says one thing while the voice says another is two companions,
+            // not one.
+            let body = await self.composeBody(beat)
+            await self.notifier.post(
+                pingID: pingID, beatID: beat.id, title: beat.title, body: body)
+            self.log.append(event: "composed", beat: beat.id, ping: pingID, note: body)
+            if self.speaks() {
+                self.speak(body)
+                self.log.append(event: "spoken", beat: beat.id, ping: pingID)
+            }
         }
     }
 

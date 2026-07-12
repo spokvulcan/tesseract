@@ -108,10 +108,32 @@ nonisolated enum ConversationCorpus {
 
     // MARK: On-disk shapes
 
+    /// **A conversation file encodes dates two different ways**, and this cost an
+    /// evening to find because the failure is total and silent: the envelope's
+    /// `createdAt` is an ISO-8601 *string* (`"2026-07-06T21:45:36Z"`), while each
+    /// message's own `timestamp` is a bare reference-epoch `Double` — Swift's
+    /// default `Date` coding, applied to the message structs but not to the
+    /// envelope the store writes around them.
+    ///
+    /// No single `JSONDecoder.dateDecodingStrategy` reads both. Pick `.iso8601`
+    /// and every message timestamp fails; leave it `.deferredToDate` — as this
+    /// did — and every *file* fails on its first key, so the backfill quietly
+    /// imports nothing at all and looks for all the world like it ran. So the
+    /// dates here are decoded by hand, leniently, accepting either shape.
     private struct StoredConversation: Decodable {
         let id: UUID
         let createdAt: Date
         let messages: [StoredMessage]
+
+        private enum CodingKeys: String, CodingKey { case id, createdAt, messages }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try container.decode(UUID.self, forKey: .id)
+            messages = try container.decode([StoredMessage].self, forKey: .messages)
+            createdAt =
+                LenientDate.decode(from: container, forKey: .createdAt) ?? Date.distantPast
+        }
     }
 
     private struct StoredMessage: Decodable {
@@ -123,6 +145,43 @@ nonisolated enum ConversationCorpus {
         let id: UUID?
         let timestamp: Date?
         let content: StoredContent?
+
+        private enum CodingKeys: String, CodingKey { case id, timestamp, content }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            id = try? container.decodeIfPresent(UUID.self, forKey: .id)
+            content = try? container.decodeIfPresent(StoredContent.self, forKey: .content)
+            timestamp = LenientDate.decode(from: container, forKey: .timestamp)
+        }
+    }
+
+    /// Either encoding, whichever this key happens to carry.
+    private enum LenientDate {
+        static func decode<Key: CodingKey>(
+            from container: KeyedDecodingContainer<Key>, forKey key: Key
+        ) -> Date? {
+            if let seconds = try? container.decodeIfPresent(Double.self, forKey: key) {
+                // Swift's default: seconds since the 2001 reference date, not 1970.
+                // Reading these as Unix time shifts every episode by 31 years.
+                return Date(timeIntervalSinceReferenceDate: seconds)
+            }
+            if let text = try? container.decodeIfPresent(String.self, forKey: key) {
+                return iso.date(from: text) ?? isoWithFraction.date(from: text)
+            }
+            return nil
+        }
+
+        // `ISO8601DateFormatter` is not `Sendable`. These are configured once and
+        // then only ever read from, so the unchecked annotation is the truth here
+        // rather than a papering-over — and the backfill reads the corpus from
+        // one task anyway.
+        nonisolated(unsafe) static let iso = ISO8601DateFormatter()
+        nonisolated(unsafe) static let isoWithFraction: ISO8601DateFormatter = {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            return formatter
+        }()
     }
 
     /// User content is a string; assistant content is an array of parts. One
@@ -205,14 +264,17 @@ enum MemoryBackfill {
     ) async -> Result {
         var result = Result()
 
-        // The gate. An episode count above zero means this machine has already
-        // been through here (or has simply been used), and the corpus import
-        // would be re-inserting ids the store already holds.
+        // **Two imports, two gates.** They were one, and that was a bug: a run in
+        // which the corpus imported but the markdown did not (or the reverse)
+        // left the survivor permanently locked out, because the single gate had
+        // already flipped. The two seeds are independent, so their gates are too:
+        //
+        //   - the corpus is gated on the store being empty of episodes (ids are
+        //     the messages' own, so a re-run would insert nothing anyway — this
+        //     is a shortcut, not a correctness guard);
+        //   - the markdown is gated on the *file still being there*, which is the
+        //     only honest record of whether it has been consumed.
         let existing = (try? await engine.store.episodeCount()) ?? 0
-        guard existing == 0 else {
-            result.alreadyDone = true
-            return result
-        }
 
         let markdown = sandboxRoot.appendingPathComponent("memories.md")
         let claims = LegacyMemoriesFile.claims(at: markdown)
@@ -224,23 +286,37 @@ enum MemoryBackfill {
                 result.claims += 1
             }
         }
-        if !claims.isEmpty {
-            // Renamed, never deleted: this file is the only copy of these six
-            // facts, and the owner gets to keep it.
+
+        // **Archive only what was actually stored.** This said `!claims.isEmpty`
+        // — it archived on having *parsed* the claims, not on having *kept* them
+        // — and so, on a run where the writes silently failed, it moved the only
+        // copy of six hand-written facts out of the import path and reported
+        // success. A migration that can destroy its own source before the
+        // destination is durable is not a migration.
+        if result.claims > 0 {
             let archived = sandboxRoot.appendingPathComponent("memories.md.migrated")
             try? FileManager.default.removeItem(at: archived)
             try? FileManager.default.moveItem(at: markdown, to: archived)
-            Log.memory.info("Migrated \(claims.count) claims from memories.md, archived the file")
+            Log.memory.info("Migrated \(result.claims) claims from memories.md; archived the file")
+        } else if !claims.isEmpty {
+            Log.memory.error(
+                "memories.md has \(claims.count) claims but none could be stored — "
+                    + "leaving the file alone so nothing is lost")
         }
 
-        let corpus = ConversationCorpus.episodes(
-            in: sandboxRoot.appendingPathComponent("conversations", isDirectory: true))
-        result.episodes = await engine.append(corpus)
+        if existing == 0 {
+            let corpus = ConversationCorpus.episodes(
+                in: sandboxRoot.appendingPathComponent("conversations", isDirectory: true))
+            result.episodes = await engine.append(corpus)
+        } else {
+            result.alreadyDone = true
+        }
 
         await engine.refreshStats()
         Log.memory.info(
-            "Backfill complete: \(result.claims) claims, \(result.episodes) episodes. "
-                + "They are unconsolidated — the first sleep will distil them.")
+            "Backfill: \(result.claims) claims, \(result.episodes) episodes"
+                + "\(result.alreadyDone ? " (corpus already imported)" : "")"
+                + ". Episodes are unconsolidated — the first sleep will distil them.")
         return result
     }
 }

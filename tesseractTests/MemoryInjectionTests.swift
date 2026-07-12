@@ -186,8 +186,8 @@ struct MemoryBackfillTests {
         {
           "id": "\(conversationID.uuidString)",
           "title": "t",
-          "createdAt": 700000000,
-          "updatedAt": 700000000,
+          "createdAt": "2026-07-06T21:45:36Z",
+          "updatedAt": "2026-07-06T21:45:36Z",
           "messages": [
             {"type": "user", "payload": {"id": "\(userID.uuidString)",
               "timestamp": 700000001, "content": "I am allergic to shellfish", "images": []}},
@@ -224,8 +224,8 @@ struct MemoryBackfillTests {
         let conversationID = UUID()
         let userID = UUID()
         try """
-        {"id": "\(conversationID.uuidString)", "title": "t", "createdAt": 700000000,
-         "updatedAt": 700000000, "messages": [
+        {"id": "\(conversationID.uuidString)", "title": "t", "createdAt": "2026-07-06T21:45:36Z",
+         "updatedAt": "2026-07-06T21:45:36Z", "messages": [
            {"type": "user", "payload": {"id": "\(userID.uuidString)",
             "timestamp": 700000001, "content": "hello", "images": []}}]}
         """.write(
@@ -237,13 +237,56 @@ struct MemoryBackfillTests {
         #expect(first == second)
     }
 
+    /// The test that should have existed first.
+    ///
+    /// Every hand-written fixture above passed while the production reader
+    /// decoded **exactly zero** of the owner's 65 real conversations: the
+    /// envelope's `createdAt` is an ISO-8601 string, the messages' timestamps are
+    /// reference-epoch Doubles, and a fixture written from memory had neither
+    /// quirk. A green suite over invented data is not evidence about real data.
+    ///
+    /// Skips where there is no corpus (CI), so it is a guard, not a dependency.
+    @Test(
+        "The real corpus decodes — not a fixture of it",
+        .enabled(if: FileManager.default.fileExists(atPath: MemoryBackfillTests.realCorpus.path)))
+    func theRealCorpusDecodes() throws {
+        let episodes = ConversationCorpus.episodes(in: Self.realCorpus)
+
+        // If this reads zero, the backfill silently imports nothing and the memory
+        // system starts amnesiac — exactly the bug that shipped and had to be
+        // caught by hand in the log.
+        #expect(episodes.count > 50, "the real corpus should yield real episodes")
+
+        for episode in episodes {
+            #expect(!episode.text.isEmpty)
+            // A date that failed to decode lands on `distantPast`; a Unix-vs-2001
+            // epoch mix-up lands 31 years off. Both are caught here.
+            #expect(episode.occurredAt > Date(timeIntervalSince1970: 1_600_000_000))
+            #expect(episode.occurredAt < Date().addingTimeInterval(86_400))
+        }
+
+        // Ids come from the messages, so a second read is the same set — which is
+        // what makes the backfill safe to re-run on every launch.
+        #expect(Set(episodes.map(\.id)).count == episodes.count, "episode ids are unique")
+    }
+
+    /// The production path, resolved the production way.
+    ///
+    /// Not `homeDirectoryForCurrentUser` + a literal container path: the test host
+    /// runs *inside* the sandbox, where the home directory already **is** the
+    /// container — so that spelling silently pointed at a directory that does not
+    /// exist, `.enabled(if:)` went false, and the test skipped instead of failing.
+    /// A guard that skips itself is not a guard.
+    static let realCorpus = PathSandbox.defaultRoot
+        .appendingPathComponent("conversations", isDirectory: true)
+
     @Test("One unreadable conversation does not take the backfill down")
     func corruptFilesAreSkipped() throws {
         let dir = try temporaryDirectory()
         let good = UUID()
         try """
-        {"id": "\(good.uuidString)", "title": "t", "createdAt": 700000000,
-         "updatedAt": 700000000, "messages": [
+        {"id": "\(good.uuidString)", "title": "t", "createdAt": "2026-07-06T21:45:36Z",
+         "updatedAt": "2026-07-06T21:45:36Z", "messages": [
            {"type": "user", "payload": {"id": "\(UUID().uuidString)",
             "timestamp": 700000001, "content": "still here", "images": []}}]}
         """.write(
