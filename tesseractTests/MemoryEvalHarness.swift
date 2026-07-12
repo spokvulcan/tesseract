@@ -455,7 +455,7 @@ final class MemoryEvalHarness {
     /// `vectors` is a text → embedding map owned by `MemoryEvalFixture`, so the
     /// 335 MB embedder is loaded and run exactly once across the whole suite
     /// while every test still gets a pristine store.
-    func backfill(vectors: [String: [Float]]) async throws {
+    func backfill(vectors: [String: [Float]], cueVectors: [String: [Float]] = [:]) async throws {
         let turns = conversations.flatMap { conversation in
             conversation.turns.map { (conversation.id, $0) }
         }.sorted { $0.1.occurredAt < $1.1.occurredAt }
@@ -491,7 +491,7 @@ final class MemoryEvalHarness {
         }
 
         for probe in probes {
-            if let vector = vectors[probe.cue] { cueVectors[probe.cue] = vector }
+            if let vector = cueVectors[probe.cue] { self.cueVectors[probe.cue] = vector }
         }
     }
 
@@ -829,7 +829,7 @@ enum MemoryEvalFixture {
 
     private static var conversationsCache: [EvalConversation]?
     private static var probesCache: [EvalProbe]?
-    private static var vectorCache: [String: [Float]]?
+    private static var vectorCache: (documents: [String: [Float]], cues: [String: [Float]])?
     private static var embedder: MemoryEmbedder?
 
     static func conversations() throws -> [EvalConversation] {
@@ -846,14 +846,21 @@ enum MemoryEvalFixture {
         return generated
     }
 
-    /// Every text the eval will ever need a vector for, embedded in one batch.
-    /// Empty when the embedder is not downloaded — the harness then runs
+    /// Document vectors for every turn text, and query vectors for every probe
+    /// cue — two maps because the two sides embed differently (#332): cues
+    /// carry the instruct prefix the way `MemoryEngine` embeds them, documents
+    /// never do. A cue that is textually identical to a turn must NOT share
+    /// its vector: the turn is a document, the cue is a question about it.
+    ///
+    /// Both empty when the embedder is not downloaded — the harness then runs
     /// keyword-only, which is the same fail-open path `MemoryEngine` takes.
-    static func vectors() async throws -> [String: [Float]] {
+    static func vectors() async throws -> (
+        documents: [String: [Float]], cues: [String: [Float]]
+    ) {
         if let vectorCache { return vectorCache }
         guard let directory = MemoryEvalCorpus.embedderDirectory else {
-            vectorCache = [:]
-            return [:]
+            vectorCache = ([:], [:])
+            return ([:], [:])
         }
         let model = embedder ?? MemoryEmbedder()
         embedder = model
@@ -861,32 +868,39 @@ enum MemoryEvalFixture {
             try await model.load(from: directory)
         } catch {
             Log.memory.error("[eval] embedder load failed: \(error.localizedDescription)")
-            vectorCache = [:]
-            return [:]
+            vectorCache = ([:], [:])
+            return ([:], [:])
         }
 
         let conversations = try conversations()
-        var texts = Set(conversations.flatMap { $0.turns.map(\.text) })
-        texts.formUnion(try probes().map(\.cue))
-        let ordered = Array(texts).sorted()
+        let documents = Array(Set(conversations.flatMap { $0.turns.map(\.text) })).sorted()
+        let cues = Array(Set(try probes().map(\.cue))).sorted()
 
-        var out: [String: [Float]] = [:]
+        var documentVectors: [String: [Float]] = [:]
         // Chunked: one 691-text batch would pad to the longest sequence in it.
-        for chunk in stride(from: 0, to: ordered.count, by: 32) {
-            let slice = Array(ordered[chunk..<min(chunk + 32, ordered.count)])
+        for chunk in stride(from: 0, to: documents.count, by: 32) {
+            let slice = Array(documents[chunk..<min(chunk + 32, documents.count)])
             let embedded = await model.embed(slice)
             guard embedded.count == slice.count else { continue }
-            for (text, vector) in zip(slice, embedded) { out[text] = vector }
+            for (text, vector) in zip(slice, embedded) { documentVectors[text] = vector }
         }
-        vectorCache = out
-        return out
+        var cueVectors: [String: [Float]] = [:]
+        for chunk in stride(from: 0, to: cues.count, by: 32) {
+            let slice = Array(cues[chunk..<min(chunk + 32, cues.count)])
+            let embedded = await model.embedQueries(slice)
+            guard embedded.count == slice.count else { continue }
+            for (text, vector) in zip(slice, embedded) { cueVectors[text] = vector }
+        }
+        vectorCache = (documentVectors, cueVectors)
+        return (documentVectors, cueVectors)
     }
 
     /// A fresh store, backfilled. Never shared — the usage simulation mutates it.
     static func makeHarness() async throws -> MemoryEvalHarness {
         let harness = try MemoryEvalHarness(
             conversations: try conversations(), probes: try probes())
-        try await harness.backfill(vectors: try await vectors())
+        let (documents, cues) = try await vectors()
+        try await harness.backfill(vectors: documents, cueVectors: cues)
         return harness
     }
 }
