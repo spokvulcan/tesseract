@@ -15,6 +15,9 @@ enum WindowID {
     /// The Markdown Gallery (see `CONTEXT.md`): the living style reference
     /// for chat markdown, reached from the Window menu.
     static let markdownGallery = "markdown-gallery"
+    /// The Memory window (ADR-0035 §9): what the assistant believes and why —
+    /// browse, drill into source episodes, contest, delete.
+    static let memory = "memory"
 }
 
 /// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
@@ -178,6 +181,16 @@ struct TesseractApp: App {
             MarkdownGalleryView()
         }
         .defaultSize(width: 1280, height: 860)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        // The Memory window (ADR-0035 §9): on-demand singleton, never
+        // presented at launch; the system Window menu lists it automatically.
+        Window("Memory", id: WindowID.memory) {
+            MemoryWindowView()
+                .environment(container.memoryEngine)
+        }
+        .defaultSize(width: 1000, height: 680)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
     }
