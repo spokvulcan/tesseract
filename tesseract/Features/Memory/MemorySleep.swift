@@ -533,9 +533,14 @@ final class MemorySleep {
             months with no other context: "He is allergic to shellfish", never \
             "he's allergic to it".
             - Write about him in the third person.
-            - Mark each claim STATED if he said it outright, or INFERRED if you \
-            concluded it from what he did or chose. Be scrupulous about this: a \
-            guess recorded as testimony is the one error you can never undo.
+            - Mark each claim STATED or INFERRED. A guess recorded as testimony is \
+            the one error you can never undo, so the test is strict: STATED means he \
+            *asserted the claim himself, in words* — you could point at the sentence. \
+            Everything you read off what he did, asked for, or chose is INFERRED, \
+            however obvious it seems. **Asking about a thing is not stating an \
+            interest in it.** "Research the Dota 2 tournament for me" supports \
+            INFERRED|belief|He follows Dota 2 esports — never STATED. When in doubt, \
+            INFERRED.
             - Keep only what is durable. Skip the task he was doing, the bug he was \
             chasing, the code you wrote — unless it reveals something lasting about \
             him. Ask of every line: would this still matter in six months?

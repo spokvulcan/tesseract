@@ -11,8 +11,22 @@ import SwiftUI
 /// manager is a task surface, not a Settings pane (#213).
 struct AgentSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var container: DependencyContainer
     @State private var selectedAgentModelDeclaresPreserveThinking = false
+
+    /// What sleep is doing right now, in the owner's words rather than the
+    /// engine's.
+    private var sleepStatus: String {
+        switch container.memorySleep.phase {
+        case .idle: "Working…"
+        case .grading: "Judging what helped…"
+        case .reexamining: "Re-reading what you disputed…"
+        case .extracting: "Reading what you said…"
+        case .reconciling: "Checking it against what I know…"
+        case .sweeping: "Tidying…"
+        }
+    }
 
     private var selectedAgentModelStatus: ModelStatus {
         container.modelDownloadManager.status(for: settings.selectedAgentModelID)
@@ -120,6 +134,36 @@ struct AgentSettingsPane: View {
             } footer: {
                 Text(
                     "The floating ✦ button above the composer fans out your skills on hover. Translate To sets the Translate skill's default target; naming a language in your message always wins."
+                )
+            }
+
+            // The living memory (ADR-0035, map #314). Dictation gets its own
+            // switch because it is the one capture source whose text is usually
+            // addressed to *other* apps — the owner's call was to capture it, and
+            // a call like that is only really the owner's if he can take it back.
+            Section {
+                Toggle("Memory", isOn: $settings.memoryEnabled)
+                Toggle("Remember Dictated Text", isOn: $settings.memoryCaptureDictation)
+                    .disabled(!settings.memoryEnabled)
+                Toggle("Consolidate While Idle", isOn: $settings.memorySleepEnabled)
+                    .disabled(!settings.memoryEnabled)
+                HStack {
+                    Button("Open Memory…") { openWindow(id: WindowID.memory) }
+                    Button("Consolidate Now") { container.memorySleep.start() }
+                        .disabled(
+                            !settings.memoryEnabled || !settings.memorySleepEnabled
+                                || container.memorySleep.isRunning)
+                    if container.memorySleep.isRunning {
+                        ProgressView().controlSize(.small)
+                        Text(sleepStatus)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Memory")
+            } footer: {
+                Text(
+                    "What you say is stored verbatim as it happens, and distilled into memories while the Mac is idle — nothing leaves this machine. Consolidation yields the moment you touch the keyboard. Open Memory to see what I believe about you, why, and to contest or delete any of it."
                 )
             }
 
