@@ -1084,6 +1084,28 @@ episodes come back dated and quoted.
 _Avoid_: memory_search (the ADR's design-phase name; the tool shipped as
 `recall`), beliefs-only search (the pre-#332 blind spot).
 
+**Agent Voice**:
+The deictic convention every stored belief obeys: memories are the assistant's
+own, so every pronoun must resolve with no conversational context — "he" is
+always the owner, "I" is always the assistant ("He gave me the nickname
+Pelican"). A directive stays anchored on its ordainer: "He wants me to answer
+briefly when he is debugging". Holds at both write doors (`remember` and sleep
+consolidation); the owner's words as spoken are episodes, quoted verbatim,
+never beliefs.
+_Avoid_: first person (unqualified — ADR-0035's "first-person layer" means the
+*assistant's* first person, and the unqualified phrase inverted the referent
+and caused #333), user voice (the owner's "I" stored as if it could survive
+recall).
+
+**One Door Per Testimony**:
+The episodic-capture rule: one utterance becomes exactly one episode, entering
+through the door that knows the most about it. Words sent to the agent enter
+through chat capture, which attaches the reply; dictation capture takes only
+speech aimed at *other* apps and skips when the frontmost app is Tesseract
+itself.
+_Avoid_: episode dedup(lication) — the rule turns the twin away at the door
+rather than deleting it later; episode merging.
+
 **Operation Guard**:
 The shared stale-result protocol for the capture→transcribe→commit coordinators: a
 monotonic epoch that advances on cancel and on each new operation, so a post-`await`
