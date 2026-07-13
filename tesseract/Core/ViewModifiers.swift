@@ -96,12 +96,12 @@ extension View {
             .environment(container.audioCaptureEngine)
     }
 
-    /// Speech/TTS feature: coordinator and engine.
+    /// Speech/TTS feature: coordinator and engine presenter.
     @MainActor
     func injectSpeechDependencies(from container: DependencyContainer) -> some View {
         self
             .environment(container.speechCoordinator)
-            .environment(container.speechEngine)
+            .environment(container.speechEnginePresenter)
     }
 
     /// Agent feature: the Chat Session, its leaf controllers, engine, store.

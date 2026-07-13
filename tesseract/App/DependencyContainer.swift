@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import SwiftUI
 import MLX
+import TesseractSpeech
 import os
 
 @MainActor
@@ -213,11 +214,15 @@ final class DependencyContainer: ObservableObject {
     }()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {
+        // TTS residency arrives as closures (evaluated lazily) because the
+        // speech engine's GPU lease adapter needs the arbiter — stored
+        // references in both directions would recurse at construction.
         InferenceArbiter(
             agentEngine: agentEngine,
-            speechEngine: speechEngine,
             settingsManager: settingsManager,
-            modelDownloadManager: modelDownloadManager
+            modelDownloadManager: modelDownloadManager,
+            isTTSLoaded: { [weak self] in self?.speechEnginePresenter.isModelLoaded ?? false },
+            unloadTTS: { [weak self] in await self?.speechEnginePresenter.unload() }
         )
     }()
     lazy var serverInferenceService = ServerInferenceService(
@@ -418,9 +423,20 @@ final class DependencyContainer: ObservableObject {
         }
     )
 
-    // Speech (TTS)
+    // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
+    // TesseractSpeech package behind its ports; the presenter mirrors
+    // residency for views and the arbiter; the coordinator drives sessions.
     lazy var textExtractor = TextExtractor()
-    lazy var speechEngine = SpeechEngine()
+    lazy var speechEnginePresenter = SpeechEnginePresenter(
+        engine: SpeechEngine(
+            // ADR-0037 precision gate, measured 2026-07-13 (v2-listen longform,
+            // 480-word article, release): q8 peaks at 3.29 GB — over the ≤3 GB
+            // envelope — q6 at 2.88 GB. q6 is the shipped default.
+            model: .voiceDesign17B(.q6),
+            synthesizer: Qwen3Synthesizer(),
+            gpu: ArbiterGPULease(arbiter: inferenceArbiter)
+        )
+    )
     lazy var ttsNotchPanelController = TTSNotchPanelController()
     lazy var speechCoordinator: SpeechCoordinator = {
         // `playback` is left to the coordinator's production default
@@ -430,10 +446,9 @@ final class DependencyContainer: ObservableObject {
         // `UserDefaultsSettingsStore()` default. Tests inject `InMemoryAudioPlayback`.
         SpeechCoordinator(
             textExtractor: textExtractor,
-            speechEngine: speechEngine,
+            engine: speechEnginePresenter,
             settings: settingsManager,
-            notchOverlay: ttsNotchPanelController,
-            arbiter: inferenceArbiter
+            notchOverlay: ttsNotchPanelController
         )
     }()
 
@@ -564,20 +579,14 @@ final class DependencyContainer: ObservableObject {
                 stopSpeech: { [speechCoordinator] in
                     speechCoordinator.stop()
                 },
-                cancelSpeechGeneration: { [speechEngine] in
-                    await speechEngine.cancelGeneration()
-                },
-                clearSpeechVoiceAnchor: { [speechEngine] in
-                    await speechEngine.clearVoiceAnchor()
-                },
                 unloadLLM: { [agentEngine] in
                     agentEngine.unloadModel()
                 },
                 awaitLLMUnload: { [agentEngine] in
                     await agentEngine.awaitPendingUnload()
                 },
-                unloadSpeech: { [speechEngine] in
-                    speechEngine.unloadModel()
+                unloadSpeech: { [speechEnginePresenter] in
+                    await speechEnginePresenter.unload()
                 },
                 synchronizeGPU: {
                     Stream.gpu.synchronize()

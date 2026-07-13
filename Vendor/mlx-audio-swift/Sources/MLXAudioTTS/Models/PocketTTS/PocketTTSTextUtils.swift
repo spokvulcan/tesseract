@@ -26,7 +26,7 @@ public enum PocketTTSTextUtils {
     }
 
     public static func splitIntoBestSentences(
-        _ tokenizer: SentencePieceTokenizer,
+        _ tokenizer: PocketTTSSentencePieceTokenizer,
         _ textToGenerate: String
     ) throws -> [String] {
         let (prepared, _) = try prepareTextPrompt(textToGenerate)

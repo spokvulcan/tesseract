@@ -47,7 +47,7 @@ nonisolated struct WordTimeline: Equatable, Sendable {
 
     init(text: String, tokenCharOffsets: [Int] = []) {
         // One shared definition of "a word" (see StringWordSplitting) so the rendered
-        // model and TextSegmenter's token estimate can't drift on what splits a word.
+        // model and the engine's token estimate can't drift on what splits a word.
         let normalized = text.splitIntoWords().map(String.init)
 
         var built: [Word] = []

@@ -570,6 +570,16 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
         return configuration.sampleRate
     }
 
+    public var defaultGenerationParameters: GenerateParameters {
+        GenerateParameters(
+            maxTokens: 1200,
+            temperature: 0.6,
+            topP: 0.8,
+            repetitionPenalty: 1.3,
+            repetitionContextSize: 20
+        )
+    }
+
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
         var weights = weights.filter {
             !$0.key.contains("self_attn.rotary_emb.inv_freq")
@@ -582,12 +592,12 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
         return weights
     }
 
-    public func post_load_hook(model: LlamaTTSModel, modelDir: URL) async throws {
+    public func post_load_hook(model: LlamaTTSModel, modelDir: URL, cache: HubCache = .default) async throws {
         if model.tokenizer == nil {
             model.tokenizer = try await AutoTokenizer.from(modelFolder: modelDir)
         }
         if model._snacModel == nil {
-            model._snacModel = try await SNAC.fromPretrained("mlx-community/snac_24khz")
+            model._snacModel = try await SNAC.fromPretrained("mlx-community/snac_24khz", cache: cache)
         }
     }
 
@@ -702,6 +712,7 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
 
         // Generate tokens
         for i in 0..<maxTokens {
+            try Task.checkCancellation()
             let tokenValue: Int = autoreleasepool {
                 var lastLogits = logits[0..., -1, 0...]
                 lastLogits = processor?.process(logits: lastLogits) ?? lastLogits
@@ -733,6 +744,7 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
         }
 
         Memory.clearCache()
+        try Task.checkCancellation()
 
         let allTokens = MLXArray(generatedTokens).expandedDimensions(axis: 0)
 
@@ -777,9 +789,9 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
         )
     ) -> AsyncThrowingStream<LlamaTTSGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<LlamaTTSGeneration, Error>.makeStream()
-        Task { @Sendable [weak self] in
+        let task = Task { @Sendable [weak self] in
             guard let self else { return }
-            
+
             do {
                 guard let snacModel = self._snacModel else {
                     throw LlamaTTSError.modelNotInitialized("SNAC model not loaded")
@@ -826,7 +838,7 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
                 
                 // Generate tokens
                 for i in 0..<maxTokens {
-                    if Task.isCancelled { break }
+                    try Task.checkCancellation()
                     
                     let tokenValue: Int = autoreleasepool {
                         var lastLogits = logits[0..., -1, 0...]
@@ -860,6 +872,7 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
                     }
                 }
                 
+                try Task.checkCancellation()
                 let generateTime = Date().timeIntervalSince(generateStartTime)
                 
                 let allTokens = MLXArray(generatedTokens).expandedDimensions(axis: 0)
@@ -895,6 +908,7 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
                 continuation.finish(throwing: error)
             }
         }
+        continuation.onTermination = { @Sendable _ in task.cancel() }
         return stream
     }
 
@@ -904,10 +918,10 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
     ///
     /// - Parameter modelRepo: The model repository ID (e.g., "mlx-community/orpheus-3b-0.1-ft-bf16")
     /// - Returns: The loaded model
-    public static func fromPretrained(_ modelRepo: String) async throws -> LlamaTTSModel {
-        let client = HubClient.default
-        let cache = client.cache ?? HubCache.default
-
+    public static func fromPretrained(
+        _ modelRepo: String,
+        cache: HubCache = .default
+    ) async throws -> LlamaTTSModel {
         guard let repoID = Repo.ID(rawValue: modelRepo) else {
             throw NSError(
                 domain: "LlamaTTSModel",
@@ -916,13 +930,19 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
             )
         }
 
-        let modelDir = try await llamaTTSResolveOrDownloadModel(
-            client: client,
-            cache: cache,
+        let modelDir = try await ModelUtils.resolveOrDownloadModel(
             repoID: repoID,
-            requiredExtension: "safetensors"
+            requiredExtension: ".safetensors",
+            cache: cache
         )
 
+        return try await fromModelDirectory(modelDir)
+    }
+
+    public static func fromModelDirectory(
+        _ modelDir: URL,
+        cache: HubCache = .default
+    ) async throws -> LlamaTTSModel {
         let configPath = modelDir.appendingPathComponent("config.json")
         let configData = try Data(contentsOf: configPath)
         let config = try JSONDecoder().decode(LlamaTTSConfiguration.self, from: configData)
@@ -948,10 +968,10 @@ public class LlamaTTSModel: Module, KVCacheDimensionProvider, SpeechGenerationMo
             }
         }
 
-        try model.update(parameters: ModuleParameters.unflattened(sanitizedWeights), verify: [.all])
+        try model.update(parameters: ModuleParameters.unflattened(sanitizedWeights), verify: .all)
         eval(model)
 
-        try await model.post_load_hook(model: model, modelDir: modelDir)
+        try await model.post_load_hook(model: model, modelDir: modelDir, cache: cache)
 
         return model
     }
@@ -970,53 +990,4 @@ private func llamaTTSLoadWeights(from directory: URL) throws -> [String: MLXArra
         weights.merge(fileWeights) { _, new in new }
     }
     return weights
-}
-
-private func llamaTTSResolveOrDownloadModel(
-    client: HubClient,
-    cache: HubCache,
-    repoID: Repo.ID,
-    requiredExtension: String
-) async throws -> URL {
-    let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        .appendingPathComponent(ModelUtils.storageDirectoryName)
-        .appendingPathComponent(modelSubdir)
-
-    // Check if model already exists with required files (config.json + safetensors)
-    let configPath = modelDir.appendingPathComponent("config.json")
-    if FileManager.default.fileExists(atPath: configPath.path) {
-        let files = try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
-        let hasRequiredFiles = files?.contains { $0.pathExtension == requiredExtension } ?? false
-
-        if hasRequiredFiles {
-            print("Using cached model at: \(modelDir.path)")
-            return modelDir
-        }
-    }
-
-    // Create directory if needed
-    try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
-
-    // Remove any partial downloads to avoid "file exists" errors
-    if FileManager.default.fileExists(atPath: modelDir.path) {
-        let files = try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
-        for file in files ?? [] {
-            try? FileManager.default.removeItem(at: file)
-        }
-    }
-
-    print("Downloading model \(repoID)...")
-    _ = try await client.downloadSnapshot(
-        of: repoID,
-        kind: .model,
-        to: modelDir,
-        revision: "main",
-        progressHandler: { progress in
-            print("\(progress.completedUnitCount)/\(progress.totalUnitCount) files")
-        }
-    )
-
-    print("Model downloaded to: \(modelDir.path)")
-    return modelDir
 }

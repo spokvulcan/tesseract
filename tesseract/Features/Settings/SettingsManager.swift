@@ -8,6 +8,7 @@ import Observation
 import ServiceManagement
 import AppKit
 import MLXLMCommon
+import TesseractSpeech
 
 /// The Settings Facade: an `@Observable` `@MainActor` class that keeps one
 /// bindable stored property per setting (so SwiftUI `$settings.foo` bindings and
@@ -297,14 +298,17 @@ final class SettingsManager {
         }
     }
 
+    /// The v2 engine's sampler parameters (TesseractSpeech). Deliberately
+    /// seed-free: the seed is a per-utterance reproducibility knob
+    /// (`SpeechOptions`), never part of the sampler (ADR-0038) — the
+    /// coordinator reads `ttsSeed` separately.
     var ttsParameters: TTSParameters {
         get {
             TTSParameters(
                 temperature: Float(ttsTemperature),
                 topP: Float(ttsTopP),
                 repetitionPenalty: Float(ttsRepetitionPenalty),
-                maxTokens: ttsMaxTokens,
-                seed: UInt64(ttsSeed)
+                maxTokens: ttsMaxTokens
             )
         }
         set {
@@ -312,7 +316,6 @@ final class SettingsManager {
             ttsTopP = Double(newValue.topP)
             ttsRepetitionPenalty = Double(newValue.repetitionPenalty)
             ttsMaxTokens = newValue.maxTokens
-            ttsSeed = Int(newValue.seed)
         }
     }
 

@@ -6,10 +6,10 @@
 //
 
 import Foundation
-import HuggingFace
 import MLX
-import MLXAudioCore
 import MLXNN
+import HuggingFace
+import MLXAudioCore
 
 // MARK: - Encodec Encoder
 
@@ -399,7 +399,10 @@ public class Encodec: Module {
     // MARK: - Loading
 
     /// Load a pretrained Encodec model from HuggingFace Hub.
-    public static func fromPretrained(_ pathOrRepo: String) async throws -> Encodec {
+    public static func fromPretrained(
+        _ pathOrRepo: String,
+        cache: HubCache = .default
+    ) async throws -> Encodec {
         guard let repoID = Repo.ID(rawValue: pathOrRepo) else {
             throw NSError(
                 domain: "Encodec",
@@ -408,12 +411,16 @@ public class Encodec: Module {
             )
         }
 
-        // Download model files via the v3 swift-huggingface client
         let modelURL = try await ModelUtils.resolveOrDownloadModel(
             repoID: repoID,
-            requiredExtension: "safetensors"
+            requiredExtension: ".safetensors",
+            cache: cache
         )
 
+        return try fromModelDirectory(modelURL)
+    }
+
+    public static func fromModelDirectory(_ modelURL: URL) throws -> Encodec {
         // Load config
         let configURL = modelURL.appendingPathComponent("config.json")
         let configData = try Data(contentsOf: configURL)
@@ -428,6 +435,32 @@ public class Encodec: Module {
         try model.update(parameters: ModuleParameters.unflattened(weights), verify: .noUnusedKeys)
 
         return model
+    }
+}
+
+/// Encoded payload for Encodec where decode requires both codes and per-frame scales.
+public struct EncodecEncodedAudio {
+    public let codes: MLXArray
+    public let scales: [MLXArray?]
+
+    public init(codes: MLXArray, scales: [MLXArray?]) {
+        self.codes = codes
+        self.scales = scales
+    }
+}
+
+extension Encodec: AudioCodecModel {
+    public typealias EncodedAudio = EncodecEncodedAudio
+
+    public var codecSampleRate: Double? { Double(samplingRate) }
+
+    public func encodeAudio(_ waveform: MLXArray) -> EncodecEncodedAudio {
+        let (codes, scales) = encode(waveform, paddingMask: nil, bandwidth: nil)
+        return EncodecEncodedAudio(codes: codes, scales: scales)
+    }
+
+    public func decodeAudio(_ input: EncodecEncodedAudio) -> MLXArray {
+        decode(input.codes, input.scales, paddingMask: nil)
     }
 }
 

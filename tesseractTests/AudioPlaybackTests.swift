@@ -25,19 +25,25 @@ struct AudioPlaybackTests {
         #expect(playback.playedSamples == [[0.1, 0.2]])
         #expect(playback.playedSampleRates == [48_000])
 
-        playback.startStreaming(sampleRate: 24_000, diagnostics: .disabled)
+        playback.startStreaming(sampleRate: 24_000)
         playback.appendChunk(samples: [0.0, 0.0, 0.0])
         playback.appendChunk(samples: [0.0])
 
         #expect(playback.startStreamingCount == 1)
         #expect(playback.startedSampleRates == [24_000])
-        #expect(playback.recordedDiagnostics == [.disabled])
         #expect(playback.appendedChunks == [[0.0, 0.0, 0.0], [0.0]])
         // 4 scheduled samples at 24 kHz.
         #expect(playback.totalScheduledDuration == 4.0 / 24_000.0)
 
         playback.finishStreaming()
         #expect(playback.finishStreamingCount == 1)
+
+        playback.pause()
+        #expect(playback.isPaused)
+        playback.resume()
+        #expect(!playback.isPaused)
+        #expect(playback.pauseCount == 1)
+        #expect(playback.resumeCount == 1)
     }
 
     @Test
@@ -51,7 +57,7 @@ struct AudioPlaybackTests {
         #expect(playback.currentPlaybackTime() == 3.5)
 
         // The clock is purely test-controlled — lifecycle calls neither move nor reset it.
-        playback.startStreaming(sampleRate: 16_000, diagnostics: .default)
+        playback.startStreaming(sampleRate: 16_000)
         playback.appendChunk(samples: [0.0])
         playback.stop()
         #expect(playback.currentPlaybackTime() == 3.5)

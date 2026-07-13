@@ -2,9 +2,22 @@
 //  SpeechCoordinator.swift
 //  tesseract
 //
+//  The presentation loop over the v2 speech engine (ADR-0038): open a session
+//  for the settings voice, `speak`, and drain one typed event stream into
+//  playback and the notch overlay. Segmentation, anchoring, pacing, GPU
+//  leasing, and memory discipline all live behind the engine seam — v1's
+//  six-responsibility, 432-line orchestration is deleted, not moved.
+//
+//  Pacing: the stream is the demand signal. After each segment lands we wait
+//  until the scheduled-but-unplayed audio drops below a small window before
+//  pulling the next event; the engine's `.lookahead` policy converts that
+//  back-pressure into a lease-free park, so the GPU is free between bursts.
+//  Pause is real: the player pauses instantly and we simply stop pulling.
+//
 
 import Foundation
 import Observation
+import TesseractSpeech
 import os
 
 @Observable @MainActor
@@ -15,39 +28,40 @@ final class SpeechCoordinator {
     private(set) var totalSegments: Int = 0
 
     private let textExtractor: any TextExtracting
-    private let speechEngine: SpeechEngine
+    private let engine: SpeechEnginePresenter
     private let playback: any AudioPlayback
     private let settings: SettingsManager
     private let notchOverlay: (any WordHighlightSurface)?
-    private let arbiter: any InferenceArbitrating
 
-    private enum Defaults {
-        static let voiceAnchorTokenCount = 48
+    private enum Pacing {
+        /// Pull the next segment once less than this much scheduled audio
+        /// remains unplayed — enough runway that generation (RTF ~0.27)
+        /// always wins the race, small enough that stop/pause discard little.
+        static let bufferAheadSeconds: TimeInterval = 8
+        static let pollInterval: Duration = .milliseconds(150)
     }
 
     private var activeTask: Task<Void, Never>?
-    private var isLongFormActive = false
-    private var pausedSegmentIndex: Int?
-    private var segments: [TextSegment] = []
+    private var session: SpeechSession?
+    private var sessionVoiceKey: String?
+    private var isPaused = false
     private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
 
     init(
         textExtractor: any TextExtracting,
-        speechEngine: SpeechEngine,
+        engine: SpeechEnginePresenter,
         playback: any AudioPlayback = AudioPlaybackManager(),
         settings: SettingsManager,
-        notchOverlay: (any WordHighlightSurface)? = nil,
-        arbiter: any InferenceArbitrating
+        notchOverlay: (any WordHighlightSurface)? = nil
     ) {
         self.textExtractor = textExtractor
-        self.speechEngine = speechEngine
+        self.engine = engine
         self.playback = playback
         self.settings = settings
         self.notchOverlay = notchOverlay
-        self.arbiter = arbiter
 
         playback.onPlaybackFinished = { [weak self] in
-            guard let self, !self.isLongFormActive else { return }
+            guard let self else { return }
             self.state = .idle
             let callback = self.speechCompletionCallback
             self.speechCompletionCallback = nil
@@ -76,58 +90,50 @@ final class SpeechCoordinator {
         speechCompletionCallback = onSuccess
         activeTask = Task {
             await generateAndPlay(text: text)
-            // Only keep the callback alive if playback actually started.
-            // onPlaybackFinished will fire it on successful completion.
-            // Clear it for all other exits: cancellation, error, empty samples, etc.
-            if state != .playing && !isLongFormActive {
-                speechCompletionCallback = nil
-            }
         }
     }
 
+    /// Cancelling the consuming task is the engine-side cancellation token
+    /// (ADR-0038): generation stops within one decoder step.
     func stop() {
         Log.speech.info("[Coordinator] stop() called — state=\(String(describing: self.state))")
         speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
+        isPaused = false
         playback.stop()
-        isLongFormActive = false
-        pausedSegmentIndex = nil
-        segments = []
         currentSegmentIndex = 0
         totalSegments = 0
         state = .idle
         currentText = ""
         notchOverlay?.dismiss()
-        Task {
-            await speechEngine.cancelGeneration()
-            await speechEngine.clearVoiceAnchor()
-        }
     }
 
+    /// Real pause: the player pauses instantly and the drain loop stops
+    /// pulling, which parks the engine lease-free at the next segment
+    /// boundary. (v1 could only finish the in-flight segment.)
     func pause() {
-        guard isLongFormActive else { return }
-        // Mark where to resume — current segment will finish generating,
-        // then the loop checks pausedSegmentIndex and breaks
-        pausedSegmentIndex = currentSegmentIndex
-        state = .paused(segment: currentSegmentIndex + 1, of: totalSegments)
+        guard !isPaused else { return }
+        switch state {
+        case .streaming, .streamingLongForm, .playing: break
+        default: return
+        }
+        isPaused = true
+        playback.pause()
+        state = .paused(segment: currentSegmentIndex + 1, of: max(totalSegments, 1))
     }
 
     func resume() {
-        guard let resumeIndex = pausedSegmentIndex, !segments.isEmpty else { return }
-        pausedSegmentIndex = nil
-
-        activeTask = Task {
-            await generateAndPlayLongForm(startingAt: resumeIndex + 1)
-        }
+        guard isPaused else { return }
+        isPaused = false
+        playback.resume()
+        state =
+            totalSegments > 1
+            ? .streamingLongForm(segment: currentSegmentIndex + 1, of: totalSegments)
+            : .streaming
     }
 
     // MARK: - Private
-
-    /// Wraps a TTS operation in the arbiter lease (GPU serialization + model loading).
-    private func withTTSReady<T: Sendable>(_ body: () async throws -> T) async throws -> T {
-        try await arbiter.withExclusiveGPU(.tts, body: body)
-    }
 
     /// The per-request voice context derived from settings — the one home for
     /// the "empty voice description means no voice, never an empty prompt"
@@ -163,270 +169,128 @@ final class SpeechCoordinator {
         }
     }
 
-    private func generateAndPlay(text: String) async {
-        if settings.ttsStreamingEnabled && TextSegmenter.isLongForm(text) {
-            segments = TextSegmenter.segment(text)
-            totalSegments = segments.count
-            Log.speech.info("Long-form detected: \(segments.count) segments")
-            await generateAndPlayLongForm(startingAt: 0)
-        } else if settings.ttsStreamingEnabled {
-            await generateAndPlayStreaming(text: text)
-        } else {
-            await generateAndPlayBatch(text: text)
+    /// A session binds the settings voice to cached model state; reopen only
+    /// when the voice changes (the instruct prefix re-primes off the hot path).
+    private func openOrReuseSession() async throws -> SpeechSession {
+        let (voiceDescription, language) = ttsVoiceContext
+        let key = "\(voiceDescription ?? "")|\(language)"
+        if let session, sessionVoiceKey == key { return session }
+
+        await session?.close()
+        session = nil
+        sessionVoiceKey = nil
+
+        if !engine.isModelLoaded {
+            engine.noteLoading("Loading voice model…")
         }
-    }
-
-    private func generateAndPlayLongForm(startingAt startIndex: Int) async {
-        // Capture segments locally — stop() may clear the property from another call site
-        let localSegments = segments
-        let segmentCount = localSegments.count
-
-        guard startIndex < segmentCount else { return }
-
         do {
-            let completed = try await withTTSReady {
-                try await self.generateLongFormSegments(
-                    localSegments, startingAt: startIndex, count: segmentCount
-                )
-            }
-
-            if completed {
-                // All segments done — GPU no longer needed.
-                // Clear isLongFormActive BEFORE finishStreaming() because
-                // finishStreaming() may fire onPlaybackFinished synchronously
-                // when all buffers have already drained.
-                isLongFormActive = false
-                playback.finishStreaming()
-                notchOverlay?.markGenerationComplete()
-                // onPlaybackFinished callback will set state = .idle
-            }
-        } catch is CancellationError {
-            cleanupLongForm()
+            let voice: Voice =
+                voiceDescription.map { .designed(description: $0, language: language) }
+                ?? .standard(language: language)
+            let opened = try await engine.engine.session(.readAloud, voice: voice)
+            engine.noteReady()
+            session = opened
+            sessionVoiceKey = key
+            return opened
         } catch {
-            Log.speech.error("Long-form generation failed: \(error)")
-            cleanupLongForm()
-            await presentTransientError(error.localizedDescription)
+            engine.noteFailed()
+            throw error
         }
     }
 
-    /// Generates all long-form segments. Returns `true` if all segments completed,
-    /// `false` if paused or cancelled mid-generation.
-    private func generateLongFormSegments(
-        _ localSegments: [TextSegment], startingAt startIndex: Int, count segmentCount: Int
-    ) async throws -> Bool {
-        let (voiceDesc, language) = ttsVoiceContext
-
-        isLongFormActive = true
-
-        let segmentPlayback = SegmentPlayback(playback: playback, surface: notchOverlay)
-        let onState: (SpeechState) -> Void = { [weak self] in self?.state = $0 }
-        let isPaused: () -> Bool = { [weak self] in self?.pausedSegmentIndex != nil }
-
-        // First segment in this session — discover sample rate and start streaming
-        state = .generating(progress: "Segment \(startIndex + 1) of \(segmentCount)")
-
-        let (firstStream, sampleRate) = try await speechEngine.generateStreaming(
-            text: localSegments[startIndex].text,
-            voice: voiceDesc,
-            language: language,
-            parameters: settings.ttsParameters
-        )
-
-        playback.startStreaming(sampleRate: sampleRate, diagnostics: .disabled)
-        currentSegmentIndex = startIndex
-        state = .streamingLongForm(segment: startIndex + 1, of: segmentCount)
-
-        // Show notch overlay with the first segment's text, then drain it.
-        let firstOffsets = await speechEngine.computeTokenCharOffsets(
-            text: localSegments[startIndex].text)
-        notchOverlay?.show(
-            text: localSegments[startIndex].text, tokenCharOffsets: firstOffsets,
-            playbackTimeProvider: { [weak self] in
-                self?.playback.currentPlaybackTime() ?? 0
-            })
-
-        let firstDrained = try await segmentPlayback.run(
-            .first(text: localSegments[startIndex].text, tokenOffsets: firstOffsets),
-            stream: firstStream,
-            onState: onState,
-            isPaused: isPaused
-        )
-        guard firstDrained else {
-            if Task.isCancelled { cleanupLongForm() }
-            return false
-        }
-
-        Log.speech.info("Segment \(startIndex + 1)/\(segmentCount) complete")
-
-        // Build voice anchor from first segment's generated codes
-        if startIndex == 0 && segmentCount > 1 {
-            Log.speech.info("Building voice anchor from segment 1")
-            await speechEngine.buildVoiceAnchor(
-                referenceCount: Defaults.voiceAnchorTokenCount,
-                voice: voiceDesc,
-                language: language
-            )
-        }
-
-        if pausedSegmentIndex != nil { return false }
-
-        // Continue with remaining segments (with voice anchor for consistency).
-        for i in (startIndex + 1)..<segmentCount {
-            if Task.isCancelled {
-                cleanupLongForm()
-                return false
-            }
-            if pausedSegmentIndex != nil { return false }
-
-            currentSegmentIndex = i
-            state = .streamingLongForm(segment: i + 1, of: segmentCount)
-            Log.speech.info("Starting segment \(i + 1)/\(segmentCount) (with voice anchor)")
-
-            // Record where the previous segment's audio ends in cumulative playback time;
-            // the overlay stays on the previous segment until the head reaches this point.
-            let prevSegEndDuration = playback.totalScheduledDuration
-
-            // Start generation immediately for throughput (don't wait for playback).
-            let segOffsets = await speechEngine.computeTokenCharOffsets(text: localSegments[i].text)
-            let (segStream, _) = try await speechEngine.generateStreaming(
-                text: localSegments[i].text,
-                voice: voiceDesc,
-                language: language,
-                parameters: settings.ttsParameters,
-                useVoiceAnchor: true
-            )
-
-            let drained = try await segmentPlayback.run(
-                .next(
-                    text: localSegments[i].text, tokenOffsets: segOffsets,
-                    boundary: prevSegEndDuration),
-                stream: segStream,
-                onState: onState,
-                isPaused: isPaused
-            )
-            guard drained else {
-                if Task.isCancelled { cleanupLongForm() }
-                return false
-            }
-
-            Log.speech.info("Segment \(i + 1)/\(segmentCount) complete")
-            if pausedSegmentIndex != nil { return false }
-        }
-
-        return true
-    }
-
-    private func cleanupLongForm() {
-        playback.stop()
-        isLongFormActive = false
-        notchOverlay?.dismiss()
-        state = .idle
-    }
-
-    private func generateAndPlayBatch(text: String) async {
+    private func generateAndPlay(text: String) async {
         do {
-            let (voiceDesc, language) = ttsVoiceContext
+            let session = try await openOrReuseSession()
+            state = .generating(progress: "")
 
-            let (samples, sampleRate) = try await withTTSReady {
-                self.state = .generating(progress: "")
-                return try await self.speechEngine.generate(
-                    text: text,
-                    voice: voiceDesc,
-                    language: language,
-                    parameters: self.settings.ttsParameters
-                )
+            let seed = UInt64(clamping: settings.ttsSeed)
+            let utterance = try await session.speak(
+                text,
+                options: SpeechOptions(seed: .fixed(seed), parameters: settings.ttsParameters)
+            )
+            totalSegments = utterance.segmentCount
+            playback.startStreaming(sampleRate: utterance.sampleRate)
+
+            var overlayShown = false
+            for try await event in utterance.events {
+                switch event {
+                case .segment(let script):
+                    currentSegmentIndex = script.index
+                    state =
+                        utterance.segmentCount > 1
+                        ? .streamingLongForm(
+                            segment: script.index + 1, of: utterance.segmentCount)
+                        : .streaming
+                    presentScript(
+                        script, framesPerSecond: utterance.framesPerSecond,
+                        overlayShown: &overlayShown)
+
+                case .audio(let chunk):
+                    playback.appendChunk(samples: chunk.samples)
+
+                case .segmentDone(let index):
+                    notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
+                    Log.speech.info("Segment \(index + 1)/\(self.totalSegments) complete")
+                    if index + 1 < utterance.segmentCount {
+                        notchOverlay?.markSegmentComplete()
+                        // The demand signal: don't pull the next segment until
+                        // playback needs it (or we're paused).
+                        try await waitForPlaybackDemand()
+                    }
+
+                case .finished:
+                    playback.finishStreaming()
+                    notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
+                    notchOverlay?.markGenerationComplete()
+                // onPlaybackFinished advances state to .idle and fires
+                // the completion callback once audio drains.
+                }
             }
-
-            guard !Task.isCancelled else {
-                state = .idle
-                return
-            }
-
-            guard !samples.isEmpty else {
-                state = .idle
-                return
-            }
-
-            state = .playing
-            playback.play(samples: samples, sampleRate: sampleRate)
-
-            let duration = Double(samples.count) / Double(sampleRate)
-            let tokenOffsets = await speechEngine.computeTokenCharOffsets(text: text)
-            notchOverlay?.show(
-                text: text, tokenCharOffsets: tokenOffsets,
-                playbackTimeProvider: { [weak self] in
-                    self?.playback.currentPlaybackTime() ?? 0
-                })
-            notchOverlay?.updateTotalDuration(duration)
-            notchOverlay?.markGenerationComplete()
         } catch is CancellationError {
-            playback.stop()
-            state = .idle
+            // stop() already tore playback and overlay down.
+            speechCompletionCallback = nil
+            if state != .idle { state = .idle }
         } catch {
             Log.speech.error("Speech generation failed: \(error)")
-            playback.stop()
-            await presentTransientError(error.localizedDescription)
-        }
-    }
-
-    private func generateAndPlayStreaming(text: String) async {
-        do {
-            let (voiceDesc, language) = ttsVoiceContext
-
-            try await withTTSReady {
-                try await self.streamingGenerationBody(
-                    text: text, voiceDesc: voiceDesc, language: language
-                )
-            }
-
-            // GPU no longer needed — finish playback
-            playback.finishStreaming()
-            notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
-            notchOverlay?.markGenerationComplete()
-            // onPlaybackFinished callback will set state = .idle
-        } catch is CancellationError {
-            playback.stop()
-            state = .idle
-        } catch {
-            Log.speech.error("Streaming speech generation failed: \(error)")
-            playback.stop()
-            await presentTransientError(error.localizedDescription)
-        }
-    }
-
-    private func streamingGenerationBody(
-        text: String, voiceDesc: String?, language: String?
-    ) async throws {
-        state = .generating(progress: "")
-
-        let (stream, sampleRate) = try await speechEngine.generateStreaming(
-            text: text,
-            voice: voiceDesc,
-            language: language,
-            parameters: settings.ttsParameters
-        )
-
-        playback.startStreaming(sampleRate: sampleRate, diagnostics: .default)
-        let tokenOffsets = await speechEngine.computeTokenCharOffsets(text: text)
-        notchOverlay?.show(
-            text: text, tokenCharOffsets: tokenOffsets,
-            playbackTimeProvider: { [weak self] in
-                self?.playback.currentPlaybackTime() ?? 0
-            })
-
-        let segmentPlayback = SegmentPlayback(playback: playback, surface: notchOverlay)
-        let drained = try await segmentPlayback.run(
-            .single(text: text, tokenOffsets: tokenOffsets, firstChunkState: .streaming),
-            stream: stream,
-            onState: { [weak self] in self?.state = $0 },
-            isPaused: { false }
-        )
-
-        if !drained {
-            // Cancelled mid-stream — tear down inline, matching the previous behavior.
+            speechCompletionCallback = nil
             playback.stop()
             notchOverlay?.dismiss()
-            state = .idle
+            await presentTransientError(error.localizedDescription)
+        }
+    }
+
+    /// Segment Windows arrive as data (`startFrame` is ground truth): the
+    /// overlay switches exactly when the playback head crosses the boundary.
+    private func presentScript(
+        _ script: SegmentScript, framesPerSecond: Double, overlayShown: inout Bool
+    ) {
+        guard let notchOverlay else { return }
+        if overlayShown {
+            notchOverlay.switchText(
+                script.text,
+                tokenCharOffsets: script.tokenCharOffsets,
+                segmentBase: Double(script.startFrame) / framesPerSecond
+            )
+        } else {
+            notchOverlay.show(
+                text: script.text,
+                tokenCharOffsets: script.tokenCharOffsets,
+                playbackTimeProvider: { [weak self] in
+                    self?.playback.currentPlaybackTime() ?? 0
+                }
+            )
+            overlayShown = true
+        }
+    }
+
+    private func waitForPlaybackDemand() async throws {
+        while true {
+            try Task.checkCancellation()
+            if !isPaused {
+                let ahead = playback.totalScheduledDuration - playback.currentPlaybackTime()
+                if ahead < Pacing.bufferAheadSeconds { return }
+            }
+            try await Task.sleep(for: Pacing.pollInterval)
         }
     }
 }

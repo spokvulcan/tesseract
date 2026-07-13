@@ -24,19 +24,14 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     private var pendingBufferCount = 0
     private var playerStarted = false
 
+    // Non-nil while paused: the clock position to hold. `AVAudioPlayerNode`
+    // reports no render time while paused, which would read as a rewind to 0.
+    private var pausedTime: TimeInterval?
+
     private(set) var totalScheduledSamples: Int = 0
     private var streamingSampleRate: Int = 0
 
     var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
-
-    // MARK: - Diagnostics dump
-
-    // Non-nil while a streaming session captures diagnostics
-    // (per `PlaybackDiagnosticsPolicy` at `startStreaming`). The dump value
-    // owns the encoding; this adapter only feeds chunks and picks the dir.
-    private var diagnosticsDump: PlaybackDiagnosticsDump?
-    private var diagnosticsStreamStart: CFAbsoluteTime = 0
-    private var diagnosticsOutputDir: URL?
 
     // MARK: - Playback time tracking
 
@@ -46,6 +41,7 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     }
 
     func currentPlaybackTime() -> TimeInterval {
+        if let pausedTime { return pausedTime }
         guard let node = playerNode,
             let nodeTime = node.lastRenderTime,
             let playerTime = node.playerTime(forNodeTime: nodeTime)
@@ -98,7 +94,7 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
     // MARK: - Streaming playback (push-based AVAudioPlayerNode)
 
-    func startStreaming(sampleRate: Int, diagnostics: PlaybackDiagnosticsPolicy) {
+    func startStreaming(sampleRate: Int) {
         stop()
 
         guard let format = AudioConverter.monoFloat32Format(sampleRate: Double(sampleRate))
@@ -126,25 +122,10 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         streamFinished = false
         pendingBufferCount = 0
         playerStarted = false
+        pausedTime = nil
         totalScheduledSamples = 0
         streamingSampleRate = sampleRate
         isPlaying = true
-
-        if diagnostics == .default {
-            let dir = DebugPaths.root
-                .appendingPathComponent(DebugPaths.timestamp())
-            do {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                Log.speech.info("Created debug dir: \(dir.path)")
-            } catch {
-                Log.speech.error(
-                    "Failed to create debug dir \(dir.path): \(error.localizedDescription)")
-            }
-            diagnosticsOutputDir = dir
-            diagnosticsDump = PlaybackDiagnosticsDump(sampleRate: sampleRate)
-            diagnosticsStreamStart = CFAbsoluteTimeGetCurrent()
-            Log.speech.info("Debug dump enabled → \(dir.path)")
-        }
 
         Log.speech.info("Started streaming at \(sampleRate)Hz (push-based AVAudioPlayerNode)")
     }
@@ -152,9 +133,6 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     func appendChunk(samples: [Float]) {
         guard let node = playerNode, let format = streamingFormat else { return }
         guard !samples.isEmpty else { return }
-
-        diagnosticsDump?.appendChunk(
-            samples, arrivalTime: CFAbsoluteTimeGetCurrent() - diagnosticsStreamStart)
 
         // Create and schedule a buffer for this chunk
         guard let buffer = AudioConverter.makeMonoFloat32Buffer(samples, format: format)
@@ -176,8 +154,8 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
             }
         }
 
-        // Start playback on first chunk
-        if !playerStarted {
+        // Start playback on first chunk — unless paused before audio arrived.
+        if !playerStarted && pausedTime == nil {
             node.play()
             playerStarted = true
         }
@@ -186,18 +164,31 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     func finishStreaming() {
         streamFinished = true
 
-        if let dump = diagnosticsDump, let dir = diagnosticsOutputDir {
-            Log.speech.info(
-                "Writing debug dump: \(dump.chunks.count) chunks → \(dir.path)")
-            dump.write(to: dir)
-        }
-
         // If all buffers already drained, finish now
         if pendingBufferCount <= 0 {
             isPlaying = false
             onPlaybackFinished?()
         }
         // Otherwise the last buffer's completion callback handles it
+    }
+
+    // MARK: - Pause / resume
+
+    func pause() {
+        guard pausedTime == nil else { return }
+        pausedTime = currentPlaybackTime()
+        playerNode?.pause()
+        isPlaying = false
+    }
+
+    func resume() {
+        guard pausedTime != nil else { return }
+        pausedTime = nil
+        if let node = playerNode {
+            node.play()
+            playerStarted = true
+            isPlaying = true
+        }
     }
 
     // MARK: - Stop
@@ -211,10 +202,9 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         streamFinished = false
         pendingBufferCount = 0
         playerStarted = false
+        pausedTime = nil
         totalScheduledSamples = 0
         streamingSampleRate = 0
         isPlaying = false
-        diagnosticsDump = nil
-        diagnosticsOutputDir = nil
     }
 }

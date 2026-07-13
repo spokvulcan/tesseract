@@ -1,12 +1,13 @@
 import Foundation
 @preconcurrency import MLX
 import MLXNN
+import MLXAudioCore
 public struct TokenizedText {
     public let tokens: MLXArray
 }
 
-public final class SentencePieceTokenizer {
-    public let tokenizer: UnigramTokenizer
+public final class PocketTTSSentencePieceTokenizer {
+    public let tokenizer: MLXAudioCore.SentencePieceTokenizer
 
     public init(nBins: Int, modelFolder: URL) async throws {
         let tokenizerJSON = modelFolder.appendingPathComponent("tokenizer.json")
@@ -18,8 +19,7 @@ public final class SentencePieceTokenizer {
                 userInfo: [NSLocalizedDescriptionKey: "Missing tokenizer.json in \(modelFolder.path)"]
             )
         }
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        self.tokenizer = try UnigramTokenizer(tokenizerJSON: json)
+        self.tokenizer = try MLXAudioCore.SentencePieceTokenizer(tokenizerJSONData: data)
     }
 
     public func callAsFunction(_ text: String) -> TokenizedText {
@@ -38,7 +38,7 @@ public final class SentencePieceTokenizer {
 }
 
 public final class LUTConditioner: Module {
-    public let tokenizer: SentencePieceTokenizer
+    public let tokenizer: PocketTTSSentencePieceTokenizer
     public let dim: Int
     public let outputDim: Int
 
@@ -46,7 +46,7 @@ public final class LUTConditioner: Module {
     @ModuleInfo(key: "output_proj") public var output_proj: Linear?
 
     public init(nBins: Int, modelFolder: URL, dim: Int, outputDim: Int) async throws {
-        self.tokenizer = try await SentencePieceTokenizer(nBins: nBins, modelFolder: modelFolder)
+        self.tokenizer = try await PocketTTSSentencePieceTokenizer(nBins: nBins, modelFolder: modelFolder)
         self.dim = dim
         self.outputDim = outputDim
         self._embed = ModuleInfo(wrappedValue: Embedding(embeddingCount: nBins + 1, dimensions: dim))

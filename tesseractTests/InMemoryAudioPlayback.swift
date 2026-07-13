@@ -4,8 +4,8 @@
 //
 //  A hermetic, in-memory `AudioPlayback` for tests — a *peer implementation* of
 //  `AudioPlaybackManager`, not a mock. It records what the coordinator scheduled
-//  (one-shot plays, the streaming session + its diagnostics policy, appended
-//  chunks, finish/stop) and computes `totalScheduledDuration` the same way the
+//  (one-shot plays, the streaming session, appended chunks, pause/resume,
+//  finish/stop) and computes `totalScheduledDuration` the same way the
 //  real manager does. Its playback clock is a *pure virtual clock*: it reads 0
 //  until a test calls `advance(by:)`, never tracks wall-clock, and is untouched by
 //  the lifecycle methods — so long-form pacing logic can be driven deterministically.
@@ -32,10 +32,12 @@ final class InMemoryAudioPlayback: AudioPlayback {
     private(set) var playedSampleRates: [Int] = []
     private(set) var startStreamingCount = 0
     private(set) var startedSampleRates: [Int] = []
-    private(set) var recordedDiagnostics: [PlaybackDiagnosticsPolicy] = []
     private(set) var appendedChunks: [[Float]] = []
     private(set) var finishStreamingCount = 0
+    private(set) var pauseCount = 0
+    private(set) var resumeCount = 0
     private(set) var stopCount = 0
+    private(set) var isPaused = false
 
     private var totalScheduledSamples = 0
     private var streamingSampleRate = 0
@@ -52,10 +54,9 @@ final class InMemoryAudioPlayback: AudioPlayback {
         playedSampleRates.append(sampleRate)
     }
 
-    func startStreaming(sampleRate: Int, diagnostics: PlaybackDiagnosticsPolicy) {
+    func startStreaming(sampleRate: Int) {
         startStreamingCount += 1
         startedSampleRates.append(sampleRate)
-        recordedDiagnostics.append(diagnostics)
         totalScheduledSamples = 0
         streamingSampleRate = sampleRate
     }
@@ -67,6 +68,16 @@ final class InMemoryAudioPlayback: AudioPlayback {
 
     func finishStreaming() {
         finishStreamingCount += 1
+    }
+
+    func pause() {
+        pauseCount += 1
+        isPaused = true
+    }
+
+    func resume() {
+        resumeCount += 1
+        isPaused = false
     }
 
     func stop() {

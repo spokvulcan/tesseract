@@ -1,3 +1,5 @@
+<a href="https://trendshift.io/repositories/20684" target="_blank"><img src="https://trendshift.io/api/badge/repositories/20684" alt="Blaizzy%2Fmlx-audio-swift | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+
 # MLX Audio Swift
 
 A modular Swift SDK for audio processing with MLX on Apple Silicon
@@ -11,10 +13,11 @@ A modular Swift SDK for audio processing with MLX on Apple Silicon
 MLXAudio follows a modular design allowing you to import only what you need:
 
 - **MLXAudioCore**: Base types, protocols, and utilities
-- **MLXAudioCodecs**: Audio codec implementations (SNAC, Vocos, Mimi)
-- **MLXAudioTTS**: Text-to-Speech models (Soprano, Qwen3, LlamaTTS)
-- **MLXAudioSTT**: Speech-to-Text models (GLMASR, Whisper)
-- **MLXAudioSTS**: Speech-to-Speech (future)
+- **MLXAudioCodecs**: Audio codec implementations (SNAC, Encodec, Vocos, Mimi, DACVAE, Descript DAC, Fish S1 DAC, S3TokenizerV2, MOSS Audio Tokenizer, Higgs Audio Tokenizer, Step-Audio-2 token-to-wav)
+- **MLXAudioTTS**: Text-to-Speech models (Qwen3-TTS, OmniVoice, Fish Audio S2 Pro, IndexTTS, Soprano, VyvoTTS, Orpheus, MOSS-TTS, Marvis TTS, Pocket TTS, Irodori TTS)
+- **MLXAudioSTT**: Speech-to-Text models (Qwen3-ASR, Qwen3-ForcedAligner, Voxtral Realtime, Cohere Transcribe, Parakeet, Nemotron ASR, GLMASR, FireRedASR2, SenseVoice, Granite Speech, Whisper, Canary, Moonshine, Wav2Vec2, MMS)
+- **MLXAudioVAD**: Voice Activity Detection & Speaker Diarization (Sortformer, SmartTurn, FSMN VAD, Silero VAD)
+- **MLXAudioSTS**: Speech-to-Speech models (LFM2.5-Audio, SAM-Audio, MossFormer2-SE, DeepFilterNet)
 - **MLXAudioUI**: SwiftUI components for audio interfaces
 
 ## Installation
@@ -73,6 +76,27 @@ let output = model.generate(audio: audioData)
 print(output.text)
 ```
 
+### Speaker Diarization
+
+```swift
+import MLXAudioVAD
+import MLXAudioCore
+
+// Load audio file
+let (sampleRate, audioData) = try loadAudioArray(from: audioURL)
+
+// Load diarization model
+let model = try await SortformerModel.fromPretrained(
+    "mlx-community/diar_streaming_sortformer_4spk-v2.1-fp16"
+)
+
+// Detect who is speaking when
+let output = try await model.generate(audio: audioData, threshold: 0.5)
+for segment in output.segments {
+    print("Speaker \(segment.speaker): \(segment.start)s - \(segment.end)s")
+}
+```
+
 ### Streaming Generation
 
 ```swift
@@ -90,12 +114,76 @@ for try await event in model.generateStream(text: text, parameters: parameters) 
 
 ## Supported Models
 
-| Model | Type | HuggingFace Repo |
-|-------|------|------------------|
-| Soprano | TTS | mlx-community/Soprano-80M-bf16 |
-| Qwen3 | TTS | mlx-community/VyvoTTS-EN-Beta-4bit |
-| LlamaTTS (Orpheus) | TTS | mlx-community/orpheus-3b-0.1-ft-bf16 |
-| GLMASR | STT | mlx-community/GLM-ASR-Nano-2512-4bit |
+### TTS Models
+
+| Model | Model README | HuggingFace Repo |
+|-------|--------------|------------------|
+| Qwen3-TTS | [Qwen3-TTS README](Sources/MLXAudioTTS/Models/Qwen3TTS/README.md) | [mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit](https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit) |
+| OmniVoice | [OmniVoice README](Sources/MLXAudioTTS/Models/OmniVoice/README.md) | [mlx-community/OmniVoice](https://huggingface.co/mlx-community/OmniVoice) |
+| Fish Audio S2 Pro | [Fish Audio S2 Pro README](Sources/MLXAudioTTS/Models/FishSpeech/README.md) | [mlx-community/fish-audio-s2-pro-8bit](https://huggingface.co/mlx-community/fish-audio-s2-pro-8bit) |
+| Soprano | [Soprano README](Sources/MLXAudioTTS/Models/Soprano/README.md) | [mlx-community/Soprano-80M-bf16](https://huggingface.co/mlx-community/Soprano-80M-bf16) |
+| VyvoTTS | [VyvoTTS README](Sources/MLXAudioTTS/Models/Qwen3/README.md) | [mlx-community/VyvoTTS-EN-Beta-4bit](https://huggingface.co/mlx-community/VyvoTTS-EN-Beta-4bit) |
+| Orpheus | [Orpheus README](Sources/MLXAudioTTS/Models/Llama/README.md) | [mlx-community/orpheus-3b-0.1-ft-bf16](https://huggingface.co/mlx-community/orpheus-3b-0.1-ft-bf16) |
+| MOSS-TTS | [MOSS-TTS README](Sources/MLXAudioTTS/Models/MossTTS/README.md) | [OpenMOSS-Team/MOSS-TTS](https://huggingface.co/OpenMOSS-Team/MOSS-TTS), [OpenMOSS-Team/MOSS-TTSD-v1.0](https://huggingface.co/OpenMOSS-Team/MOSS-TTSD-v1.0), [OpenMOSS-Team/MOSS-TTS-Local-Transformer](https://huggingface.co/OpenMOSS-Team/MOSS-TTS-Local-Transformer) |
+| IndexTTS | — | [mlx-community/IndexTTS](https://huggingface.co/mlx-community/IndexTTS), [mlx-community/IndexTTS-1.5](https://huggingface.co/mlx-community/IndexTTS-1.5) |
+| Marvis TTS | [Marvis TTS README](Sources/MLXAudioTTS/Models/Marvis/README.md) | [Marvis-AI/marvis-tts-250m-v0.2-MLX-8bit](https://huggingface.co/Marvis-AI/marvis-tts-250m-v0.2-MLX-8bit) |
+| Pocket TTS | [Pocket TTS README](Sources/MLXAudioTTS/Models/PocketTTS/README.md) | [mlx-community/pocket-tts](https://huggingface.co/mlx-community/pocket-tts) |
+| Irodori TTS | [Irodori TTS README](Sources/MLXAudioTTS/Models/IrodoriTTS/README.md) | [mlx-community/Irodori-TTS-600M-v3-VoiceDesign-8bit](https://huggingface.co/mlx-community/Irodori-TTS-600M-v3-VoiceDesign-8bit) |
+
+### STT Models
+
+| Model | Model README | HuggingFace Repo |
+|-------|--------------|------------------|
+| Qwen3-ASR | [Qwen3-ASR README](Sources/MLXAudioSTT/Models/Qwen3ASR/README.md) | [mlx-community/Qwen3-ASR-1.7B-bf16](https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-bf16) |
+| Qwen3-ForcedAligner | [Qwen3-ASR README](Sources/MLXAudioSTT/Models/Qwen3ASR/README.md) | [mlx-community/Qwen3-ForcedAligner-0.6B-bf16](https://huggingface.co/mlx-community/Qwen3-ForcedAligner-0.6B-bf16) |
+| MOSS-Transcribe-Diarize | [MOSS-Transcribe-Diarize README](Sources/MLXAudioSTT/Models/MossTranscribeDiarize/README.md) | [OpenMOSS-Team/MOSS-Transcribe-Diarize](https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize) |
+| Voxtral Realtime | [Voxtral README](Sources/MLXAudioSTT/Models/VoxtralRealtime/README.md) | [mlx-community/Voxtral-Mini-4B-Realtime-2602-fp16](https://huggingface.co/mlx-community/Voxtral-Mini-4B-Realtime-2602-fp16) |
+| Cohere Transcribe | [Cohere Transcribe README](Sources/MLXAudioSTT/Models/CohereTranscribe/README.md) | [beshkenadze/cohere-transcribe-03-2026-mlx-fp16](https://huggingface.co/beshkenadze/cohere-transcribe-03-2026-mlx-fp16) |
+| Parakeet | [Parakeet README](Sources/MLXAudioSTT/Models/Parakeet/README.md) | [mlx-community/parakeet-tdt-0.6b-v3](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v3) |
+| Nemotron ASR | [Nemotron ASR README](Sources/MLXAudioSTT/Models/NemotronASR/README.md) | [mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit](https://huggingface.co/mlx-community/nemotron-3.5-asr-streaming-0.6b-8bit) |
+| GLMASR | [GLMASR README](Sources/MLXAudioSTT/Models/GLMASR/README.md) | [mlx-community/GLM-ASR-Nano-2512-4bit](https://huggingface.co/mlx-community/GLM-ASR-Nano-2512-4bit) |
+| FireRedASR2 | [FireRedASR2 README](Sources/MLXAudioSTT/Models/FireRedASR2/README.md) | Converted FireRedASR2-compatible MLX checkpoints |
+| SenseVoice | [SenseVoice README](Sources/MLXAudioSTT/Models/SenseVoice/README.md) | Converted SenseVoice-compatible MLX checkpoints |
+| Granite Speech | [Granite Speech README](Sources/MLXAudioSTT/Models/GraniteSpeech/README.md) | Converted Granite Speech-compatible MLX checkpoints |
+| Whisper | [Whisper README](Sources/MLXAudioSTT/Models/Whisper/README.md) | [openai/whisper-large-v3-turbo](https://huggingface.co/openai/whisper-large-v3-turbo), [mlx-community/whisper-large-v3-turbo](https://huggingface.co/mlx-community/whisper-large-v3-turbo), and every other [openai/whisper-\*](https://huggingface.co/openai) / [mlx-community/whisper-\*](https://huggingface.co/mlx-community) size and `.en` variant |
+| Canary | — | [Mediform/canary-1b-v2-mlx-q8](https://huggingface.co/Mediform/canary-1b-v2-mlx-q8), Canary-compatible MLX/NeMo checkpoints |
+| Moonshine | — | [UsefulSensors/moonshine-tiny](https://huggingface.co/UsefulSensors/moonshine-tiny), Moonshine-compatible MLX checkpoints |
+| Wav2Vec2 CTC | — | [facebook/wav2vec2-base-960h](https://huggingface.co/facebook/wav2vec2-base-960h), Wav2Vec2 CTC-compatible checkpoints |
+| MMS | — | [facebook/mms-1b-fl102](https://huggingface.co/facebook/mms-1b-fl102), MMS adapter checkpoints |
+
+### Audio Codecs
+
+| Codec | Notes | HuggingFace Repo |
+|-------|-------|------------------|
+| SNAC | Neural audio codec with encode/decode support | [mlx-community/snac_24khz](https://huggingface.co/mlx-community/snac_24khz) |
+| Encodec | Encodec-compatible audio codec runtime | Converted Encodec-compatible MLX checkpoints |
+| Vocos | Vocoder/codec decode components | Converted Vocos-compatible MLX checkpoints |
+| Mimi | Mimi encoder/decoder codec used by speech models | Mimi-compatible MLX checkpoints |
+| DACVAE | DAC-style VAE audio codec | Converted DACVAE-compatible MLX checkpoints |
+| Descript DAC | Descript DAC-compatible audio codec | Descript DAC-compatible checkpoints |
+| Fish S1 DAC | Fish Speech S1 audio codec | Fish S1 DAC-compatible checkpoints |
+| S3TokenizerV2 | S3 acoustic tokenizer exposed in `MLXAudioCodecs` | [mlx-community/S3TokenizerV2](https://huggingface.co/mlx-community/S3TokenizerV2) |
+| MOSS Audio Tokenizer | MOSS audio tokenizer runtime shared with MOSS TTS models | [mlx-community/MOSS-Audio-Tokenizer-Nano](https://huggingface.co/mlx-community/MOSS-Audio-Tokenizer-Nano) |
+| Higgs Audio Tokenizer | Higgs acoustic tokenizer decode and acoustic encode support | [bosonai/higgs-audio-v3-tts-4b](https://huggingface.co/bosonai/higgs-audio-v3-tts-4b) bundled tokenizer weights |
+| Step-Audio-2 Token2Wav | Token-to-waveform stack for Step-Audio-2 style prompts | [mlx-community/Step-Audio-2-token2wav](https://huggingface.co/mlx-community/Step-Audio-2-token2wav) |
+
+### STS Models
+
+| Model | Model README | HuggingFace Repo |
+|-------|--------------|------------------|
+| LFM2.5-Audio | [LFM Audio README](Sources/MLXAudioSTS/Models/LFMAudio/README.md) | [mlx-community/LFM2.5-Audio-1.5B-6bit](https://huggingface.co/mlx-community/LFM2.5-Audio-1.5B-6bit) |
+| SAM-Audio | [SAM Audio README](Sources/MLXAudioSTS/Models/SAMAudio/README.md) | [mlx-community/sam-audio-large-fp16](https://huggingface.co/mlx-community/sam-audio-large-fp16) |
+| MossFormer2-SE | — | [starkdmi/MossFormer2-SE-fp16](https://huggingface.co/starkdmi/MossFormer2-SE-fp16) |
+| DeepFilterNet | [DeepFilterNet README](Sources/MLXAudioSTS/Models/DeepFilterNet/README.md) | [mlx-community/DeepFilterNet-mlx](https://huggingface.co/mlx-community/DeepFilterNet-mlx) |
+
+### VAD / Speaker Diarization Models
+
+| Model | Model README | HuggingFace Repo |
+|-------|--------------|------------------|
+| Sortformer | [Sortformer README](Sources/MLXAudioVAD/Models/Sortformer/README.md) | [mlx-community/diar_streaming_sortformer_4spk-v2.1-fp16](https://huggingface.co/mlx-community/diar_streaming_sortformer_4spk-v2.1-fp16) |
+| SmartTurn | [SmartTurn README](Sources/MLXAudioVAD/Models/SmartTurn/README.md) | [mlx-community/smart-turn-v3](https://huggingface.co/mlx-community/smart-turn-v3) |
+| FSMN VAD | — | [mlx-community/fsmn-vad](https://huggingface.co/mlx-community/fsmn-vad) |
+| Silero VAD | [Silero VAD README](Sources/MLXAudioVAD/Models/SileroVAD/README.md) | Silero VAD-compatible MLX checkpoints |
 
 ## Features
 
@@ -163,6 +251,10 @@ Check out the [Examples/VoicesApp](Examples/VoicesApp) directory for a complete 
 - UI components for model interaction
 
 Additional usage examples can be found in the test files.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## Credits
 

@@ -72,12 +72,15 @@ struct HuggingFaceModelFetching: ModelFetching {
         requiredExtension: String,
         onProgress: @escaping @MainActor @Sendable (Double) -> Void
     ) async throws {
+        // Upstream v0.1.3 exposes the progress handler only on the
+        // client-explicit overload; the storage location itself is vendor
+        // patch #11 (Application Support/models, the port's layout).
         _ = try await ModelUtils.resolveOrDownloadModel(
+            client: HubClient.default,
             repoID: validated(repo),
             requiredExtension: requiredExtension,
-            progressHandler: { @Sendable progress in
-                let fraction = progress.fractionCompleted
-                Task { @MainActor in onProgress(fraction) }
+            progressHandler: { progress in
+                onProgress(progress.fractionCompleted)
             }
         )
     }

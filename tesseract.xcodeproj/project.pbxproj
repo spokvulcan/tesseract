@@ -17,8 +17,9 @@
 		E0A111082F41A000003C1B55 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111092F41A000003C1B55 /* MLXEmbedders */; };
 		E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */ = {isa = PBXBuildFile; fileRef = E0A5AC012F50B000003C1B55 /* AgentPackages */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
-		E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudio */; };
+		E0C655502F3BA000003C1B55 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudioTTS */; };
 		E07E1A032F80B000003C1B55 /* TesseractHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = E07E1A022F80B000003C1B55 /* TesseractHighlight */; };
+		E07E1A132F80B000003C1B55 /* TesseractSpeech in Frameworks */ = {isa = PBXBuildFile; productRef = E07E1A122F80B000003C1B55 /* TesseractSpeech */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,7 +70,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
-				E0C655502F3BA000003C1B55 /* MLXAudio in Frameworks */,
+				E0C655502F3BA000003C1B55 /* MLXAudioTTS in Frameworks */,
 				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
 				E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */,
 				E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */,
@@ -79,6 +80,7 @@
 				AAE67E6C2F80A000003C1B55 /* SwiftReadability in Frameworks */,
 				A9FF2A6C2F80A000003C1B55 /* Demark in Frameworks */,
 				E07E1A032F80B000003C1B55 /* TesseractHighlight in Frameworks */,
+				E07E1A132F80B000003C1B55 /* TesseractSpeech in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -141,7 +143,7 @@
 			name = tesseract;
 			packageProductDependencies = (
 				E0C655412F2EA000003C1B55 /* WhisperKit */,
-				E0C655512F3BA000003C1B55 /* MLXAudio */,
+				E0C655512F3BA000003C1B55 /* MLXAudioTTS */,
 				E0A111012F41A000003C1B55 /* MLXLLM */,
 				E0A111032F41A000003C1B55 /* MLXLMCommon */,
 				E0A111052F41A000003C1B55 /* MLXVLM */,
@@ -151,6 +153,7 @@
 				AD72427E2F80A000003C1B55 /* SwiftReadability */,
 				A1C54C8E2F80A000003C1B55 /* Demark */,
 				E07E1A022F80B000003C1B55 /* TesseractHighlight */,
+				E07E1A122F80B000003C1B55 /* TesseractSpeech */,
 			);
 			productName = tesseract;
 			productReference = E0C654902F2E946A003C1B55 /* tesseract.app */;
@@ -239,6 +242,7 @@
 				AA6841922F80A000003C1B55 /* XCRemoteSwiftPackageReference "swift-readability" */,
 				A8F92BD32F80A000003C1B55 /* XCRemoteSwiftPackageReference "Demark" */,
 				E07E1A012F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-highlight" */,
+				E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E0C654912F2E946A003C1B55 /* Products */;
@@ -691,6 +695,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/tesseract-highlight";
 		};
+		E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/tesseract-speech";
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -782,15 +790,20 @@
 			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
 			productName = WhisperKit;
 		};
-		E0C655512F3BA000003C1B55 /* MLXAudio */ = {
+		E0C655512F3BA000003C1B55 /* MLXAudioTTS */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */;
-			productName = MLXAudio;
+			productName = MLXAudioTTS;
 		};
 		E07E1A022F80B000003C1B55 /* TesseractHighlight */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E07E1A012F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-highlight" */;
 			productName = TesseractHighlight;
+		};
+		E07E1A122F80B000003C1B55 /* TesseractSpeech */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */;
+			productName = TesseractSpeech;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

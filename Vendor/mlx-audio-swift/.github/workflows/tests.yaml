@@ -9,7 +9,7 @@ on:
       - main
 
 jobs:
-  build:
+  tests:
     runs-on: macos-latest
 
     steps:
@@ -20,11 +20,7 @@ jobs:
           xcode-version: 'latest'
       - name: Install Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain
-      - name: Clean build folder
-        run: xcodebuild clean -scheme MLXAudio-Package -destination 'platform=macOS'
       - name: Build
         run: xcodebuild build-for-testing -scheme MLXAudio-Package -destination 'platform=macOS' MACOSX_DEPLOYMENT_TARGET=14.0 CODE_SIGNING_ALLOWED=NO
-      - name: Test Codecs
-        run: xcodebuild test-without-building -scheme MLXAudio-Package -destination 'platform=macOS' -only-testing:MLXAudioTests/MLXAudioCodecsTests CODE_SIGNING_ALLOWED=NO
-      - name: Test TTS
-        run: xcodebuild test-without-building -scheme MLXAudio-Package -destination 'platform=macOS' -only-testing:MLXAudioTests/MLXAudioTTSTests CODE_SIGNING_ALLOWED=NO
+      - name: Run tests
+        run: xcodebuild test-without-building -scheme MLXAudio-Package -destination 'platform=macOS' -skip-testing:'MLXAudioTests/SmokeTests' -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
