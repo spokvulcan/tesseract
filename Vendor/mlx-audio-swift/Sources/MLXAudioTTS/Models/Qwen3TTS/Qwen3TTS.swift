@@ -168,6 +168,30 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
         lastGeneratedCodes = nil
     }
 
+    // Tesseract patch #10 (TESSERACT-PATCHES.md): anchor code frames as plain
+    // values, so voice identity can leave the process (PinnedVoice) and an
+    // anchor can be rebuilt without re-generating its source audio.
+
+    /// The last generation's code frames as plain integers, one `[Int32]` of
+    /// `numCodeGroups` entries per codec step. Empty when nothing generated.
+    public var lastGeneratedCodeFrames: [[Int32]] {
+        guard let codes = lastGeneratedCodes else { return [] }
+        return codes.map { $0.asArray(Int32.self) }
+    }
+
+    /// Rebuild the voice anchor from previously exported code frames instead
+    /// of `lastGeneratedCodes` — same anchor construction, value-driven input.
+    public func buildVoiceAnchor(
+        fromCodeFrames frames: [[Int32]],
+        referenceCount: Int,
+        instruct: String?,
+        language: String?
+    ) {
+        guard !frames.isEmpty else { return }
+        lastGeneratedCodes = frames.map { MLXArray($0).reshaped(1, $0.count) }
+        buildVoiceAnchor(referenceCount: referenceCount, instruct: instruct, language: language)
+    }
+
     public func cancelGeneration() {
         activeGenerationTask?.cancel()
         activeGenerationTask = nil

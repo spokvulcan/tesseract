@@ -26,6 +26,7 @@ ledger onto the new tag, then re-run the pinning tests and the #339 bench gates.
 | 7 | Dependency block: mlx-swift pinned `dc43e62d` (= tag 0.31.4), `mlx-swift-lm` → `.package(path: "../mlx-swift-lm")` (Tesseract's vendored fork), `swift-huggingface` floor 0.8.1 | `Package.swift`, `Package.resolved` | SwiftPM can't mix revision pins and version ranges for one identity; the app's graph pins by revision. Three-way pin coupling documented in ADR-0036 accepted costs. | spike `0af3270` + relative-path fix |
 | 8 | `spike-smoke` tool — runtime smoke harness (seed determinism, alignment, anchor) | `Sources/Tools/spike-smoke/` | Tesseract-only verification tooling; runs the #337 smoke suite against real weights. Not linked by the app. | spike `f20e50c` |
 | 9 | `bench-339` tool + simcheck modes — TTFA/RTF/memory matrix, machine sanity gates, speaker-similarity tripwire | `Sources/Tools/bench-339/` (per bench patches) | The permanent #339/#338 measurement harness; feeds the ADR-0037 precision gate and every future re-vendor's budget scorecard. Not linked by the app. | bench `0001`+`0002` |
+| 10 | `lastGeneratedCodeFrames` getter + `buildVoiceAnchor(fromCodeFrames:...)` overload | `Models/Qwen3TTS/Qwen3TTS.swift` | Anchor code frames as plain values: enables `PinnedVoice` (ADR-0038) — voice identity serialized across relaunch, anchors rebuilt without regenerating source audio. ~25 LOC additive. | v2 engine (2026-07-13) |
 
 ## Upstreaming queue (ADR-0036 §4, post-v2, opportunistic)
 
