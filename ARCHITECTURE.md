@@ -39,13 +39,13 @@ Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation 
 ├──────────────────────────────────────────────────────────────────────┤
 │  Engines (@Observable, @MainActor)                                   │
 │  ┌────────────────┐ ┌────────────────┐ ┌──────────────────────────┐  │
-│  │ Transcription  │ │ Speech         │ │  Agent                   │  │
-│  │ Engine         │ │ Engine         │ │  Engine                  │  │
+│  │ Transcription  │ │ SpeechEngine   │ │  Agent                   │  │
+│  │ Engine         │ │ Presenter      │ │  Engine                  │  │
 │  └────────────────┘ └────────────────┘ └──────────────────────────┘  │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Model adapters behind ports (actor-isolated inference)              │
 │  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────┐  │
-│  │ SpeechRecognizer     │ │ SpeechSynthesizer    │ │ LLMActor     │  │
+│  │ SpeechRecognizer     │ │ SpeechEngine (pkg)   │ │ LLMActor     │  │
 │  │ WhisperKit (ASR)     │ │ Qwen3 TTS (MLX)      │ │ MLX LLM      │  │
 │  └──────────────────────┘ └──────────────────────┘ └──────────────┘  │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -102,14 +102,12 @@ tesseract/
 │   │   ├── Proofread/                 # Proofread Pass (ADR-0034): policy, verdicts, MLX adapter
 │   │   ├── Corrections/               # Correction Pair flywheel (#289): value + bounded store
 │   │   └── Views/                     # Recording UI components + overlay variants
-│   ├── Speech/
-│   │   ├── SpeechCoordinator.swift    # @Observable TTS orchestrator
-│   │   ├── SpeechEngine.swift         # @Observable facade over SpeechSynthesizer
-│   │   ├── SpeechSynthesizer.swift    # Model port (seam) for TTS
-│   │   ├── Qwen3SpeechSynthesizer.swift   # MLX adapter
+│   ├── Speech/                        # engine v2 lives in Vendor/tesseract-speech
+│   │   ├── SpeechCoordinator.swift    # @Observable orchestrator; drains engine events
+│   │   ├── SpeechEnginePresenter.swift# @Observable residency mirror of the pkg engine
+│   │   ├── ArbiterGPULease.swift      # GPULeasing adapter over InferenceArbiter
 │   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
-│   │   ├── AudioPlaybackManager.swift # AVFoundation adapter
-│   │   ├── SegmentPlayback.swift      # Shared stream→playback loop
+│   │   ├── AudioPlaybackManager.swift # AVFoundation adapter (real pause/resume)
 │   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
 │   │   └── Views/ + NotchOverlay/     # TTS UI; WordTimeline + TTSWordTracker
 │   ├── Transcription/
@@ -275,31 +273,42 @@ playback**):
 - **`SpeechRecognizer`** — the ASR model port below `TranscriptionEngine`. The engine
   keeps the timeout race, lazy load, `.mlmodelc` verification, lifecycle state, and
   `DictationError` mapping *above* the port; the port is model-only.
-- **`SpeechSynthesizer`** — the TTS model port below `SpeechEngine`, faithful to the
-  model surface (`generate`/`generateStreaming`, voice anchoring, token offsets).
+- **TTS (engine v2)** — the TTS engine is the `SpeechEngine` **actor** in the
+  `Vendor/tesseract-speech` package (ADR-0038/0039), consumed through its
+  session/utterance API. Its own ports live in the package: `SpeechSynthesizing`
+  (model port; production adapter `Qwen3Synthesizer` → re-vendored MLXAudioTTS)
+  and `GPULeasing` (app adapter `ArbiterGPULease` over `InferenceArbiter`). The
+  app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
+  mirror for views and the arbiter — a presenter, not a facade: orchestration
+  lives in the package engine.
 - **`AudioPlayback`** — a `@MainActor` *sibling* seam (not a model port) below
   `SpeechCoordinator`, turning generated samples into sound. It is
   `@MainActor protocol AudioPlayback: AnyObject` (the coordinator calls it
-  *synchronously* inside the long-form loop), unlike the two model ports which are
+  *synchronously* while draining engine events), unlike the model ports which are
   `Sendable nonisolated protocol` actor-backed ports `await`-ed off-main.
 
 ```
 DictationCoordinator ─(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter
-SpeechCoordinator   ───────────────→  SpeechEngine        ─(SpeechSynthesizer)→ adapter
+SpeechCoordinator   ───────────────→  SpeechEngine (pkg)  ─(SpeechSynthesizing)→ adapter
 SpeechCoordinator   ──(AudioPlayback)────────────────────────────────────────→ adapter
-                       engine/coordinator-facing            facade            model-facing port
+                       engine/coordinator-facing        actor engine          model-facing port
 ```
 
-Each seam has two adapters — a framework-backed one in the app target
-(`WhisperKitSpeechRecognizer`, `Qwen3SpeechSynthesizer`, `AudioPlaybackManager`; the
-only production code touching WhisperKit / MLX / AVFoundation for these features) and
-an in-memory peer in `tesseractTests` (`InMemorySpeechRecognizer`,
-`InMemorySpeechSynthesizer`, `InMemoryAudioPlayback`). The model ports are **actors**
-(so `Sendable` is free); the playback adapters are `@MainActor final class`es. Two
-behavior-neutral refinements ride on the playback seam: diagnostics is a value
-(`PlaybackDiagnosticsPolicy`) passed at `startStreaming` rather than a mutable toggle,
-and the in-memory adapter exposes a **non-wall-clock virtual clock** (`advance(by:)`)
-so the long-form segment-boundary wait loop is deterministic.
+Each seam has two adapters — a framework-backed one
+(`WhisperKitSpeechRecognizer` in the app; `Qwen3Synthesizer` in the package;
+`AudioPlaybackManager` in the app — the only production code touching
+WhisperKit / MLX / AVFoundation for these features) and a scripted/in-memory
+peer in the tests (`InMemorySpeechRecognizer`, `ScriptedSpeechSynthesizer`,
+`InMemoryAudioPlayback`; the package's contract tests use their own
+`ScriptedSynthesizer`). Coordinator tests run the **real package engine** over
+the scripted synthesizer — replace-don't-layer. The model ports are **actors**
+(so `Sendable` is free); the playback adapters are `@MainActor final class`es.
+The in-memory playback adapter exposes a **non-wall-clock virtual clock**
+(`advance(by:)`) so pacing waits are deterministic. One execution-convention
+trap rides these seams: the app target builds with
+`NonisolatedNonsendingByDefault`, the package does not, so app-side witnesses
+of package protocols spell `@concurrent` explicitly on `async` closure
+parameters (`ArbiterGPULease`, test leases).
 
 ### Dependency Injection
 
@@ -310,7 +319,7 @@ so the long-form segment-boundary wait loop is deterministic.
 // Expands to:
 //   .injectCoreDependencies(...)       — settings, permissions, container
 //   .injectDictationDependencies(...)  — coordinator, engine, history, audio
-//   .injectSpeechDependencies(...)     — coordinator, engine
+//   .injectSpeechDependencies(...)     — coordinator, engine presenter
 //   .injectAgentDependencies(...)      — coordinator, engine, conversation store
 //   .injectModelDependencies(...)      — download manager, inference arbiter
 //   .injectServerDependencies(...)     — HTTP server, generation log, cache telemetry
@@ -331,7 +340,7 @@ The app uses `Window("Tesseract", id: "main")` — a single-instance window. Thi
 Coordinators manage user-facing flows as state machines:
 
 - **DictationCoordinator**: idle → recording → processing → idle (text injection happens during processing)
-- **SpeechCoordinator**: idle → capturingText → generating → streaming/playing → idle
+- **SpeechCoordinator**: idle → capturingText → generating → streaming/playing (⇄ paused) → idle
 - **ChatSession**: folds the Agent double-loop's events into committed `ChatItem` values plus one streaming `LivePart` (ADR-0024)
 
 ### 3. Actor Isolation
@@ -341,7 +350,7 @@ Thread safety uses Swift concurrency. The app target builds with
 `@MainActor` unless it opts out (`actor`, `nonisolated`).
 
 - **@MainActor** (the implicit default): all coordinators, engines, managers, views
-- **Actors**: `WhisperKitSpeechRecognizer` (CoreML ASR adapter), `Qwen3SpeechSynthesizer` (MLX TTS adapter), `LLMActor` (MLX LLM), `ContextManager` (compaction)
+- **Actors**: `WhisperKitSpeechRecognizer` (CoreML ASR adapter), `SpeechEngine` + `Qwen3Synthesizer` (TTS engine + MLX adapter, TesseractSpeech package), `LLMActor` (MLX LLM), `ContextManager` (compaction)
 - **@unchecked Sendable**: `SampleBuffer`, `AudioLevelRelay` (manual NSLock for real-time audio thread)
 
 Trap: a protocol that an actor adapter satisfies must be declared
@@ -464,7 +473,7 @@ Key architectural decisions (durable records live in `docs/adr/`):
 - **`@Observable` not `ObservableObject`**: Observation framework tracks property access precisely (no coarse object-wide invalidation). Better SwiftUI performance.
 - **No `@AppStorage` in `@Observable`**: Compiler incompatibility. All settings use manual `UserDefaults` with `didSet`.
 - **No `SettingsManager.shared` singleton**: Injected via `DependencyContainer`. AppKit consumers get it via constructor injection.
-- **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, `SpeechSynthesizer`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003 and `CONTEXT.md` → Speech model ports and playback.
+- **Speech model ports below the engines/coordinator**: `SpeechRecognizer`, the TesseractSpeech package's `SpeechSynthesizing`/`GPULeasing`, and the `@MainActor` `AudioPlayback` sibling seam make the speech engines' and coordinator's orchestration testable without models, a mic, or `AVAudioEngine` — same facade-above / port-below shape as the Settings Store. See ADR-0003/0038 and `CONTEXT.md` → Speech model ports and playback.
 - **`Observations` async sequence for non-view code**: Replaces Combine `$property.sink` for observing `@Observable` types outside SwiftUI views.
 - **`AgentFactory` separate from container**: Container wires dependencies; factory orchestrates multi-step bootstrap.
 - **Overlay Panel is a dumb host; the Overlay Feed is the one signal surface**: The panel never animates its own frame or visibility — SwiftUI owns all motion, which removes the two-animation-system jank (map #283). Overlay Variants render from the shared `DictationFeed` (typed phases/errors, outcome beats, level + spectrum); the dictation pipeline never learns which variant is live.
