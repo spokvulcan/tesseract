@@ -28,5 +28,17 @@ let package = Package(
             dependencies: ["TesseractSpeech"],
             path: "Tests/TesseractSpeechTests"
         ),
+        // Listening-artifact + measurement harness (NOT linked by the app):
+        // drives the production engine + adapter end-to-end against real
+        // weights; produces the morning-listen WAVs and the ADR-0037
+        // precision-gate RSS numbers.
+        .executableTarget(
+            name: "v2-listen",
+            dependencies: [
+                "TesseractSpeech",
+                .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
+            ],
+            path: "Sources/Tools/v2-listen"
+        ),
     ]
 )

@@ -235,11 +235,12 @@ private let shortText = "Hello there, this is a short utterance."
             #expect(later.captureAnchorSteps == nil)
         }
 
-        // Per-utterance anchor dies with the utterance: a second utterance re-captures.
+        // Per-utterance anchor dies with the utterance — and a single-segment
+        // utterance skips capture entirely (nothing later to condition).
         let second = try await session.speak(shortText)
         for try await _ in second.events {}
         let secondFirst = await synth.requests[utterance.segmentCount]
-        #expect(secondFirst.captureAnchorSteps == 48)
+        #expect(secondFirst.captureAnchorSteps == nil)
         #expect(secondFirst.anchor == nil)
     }
 

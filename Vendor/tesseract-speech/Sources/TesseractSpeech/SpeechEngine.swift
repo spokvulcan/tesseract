@@ -223,7 +223,8 @@ public actor SpeechEngine {
                 try Task.checkCancellation()
 
                 let captureSteps = anchorCaptureSteps(
-                    profile: profile, segmentIndex: segment.index, anchor: utteranceAnchor)
+                    profile: profile, segmentIndex: segment.index,
+                    segmentCount: segments.count, anchor: utteranceAnchor)
                 let request = SegmentRequest(
                     text: segment.text,
                     voiceDescription: voice.description,
@@ -301,12 +302,15 @@ public actor SpeechEngine {
     }
 
     private func anchorCaptureSteps(
-        profile: SessionProfile, segmentIndex: Int, anchor: AnchorHandle?
+        profile: SessionProfile, segmentIndex: Int, segmentCount: Int, anchor: AnchorHandle?
     ) -> Int? {
         guard anchor == nil, segmentIndex == 0 else { return nil }
         switch profile.anchor {
         case .none: return nil
-        case .perUtterance(let steps), .pinned(let steps): return steps
+        // A single-segment utterance has nothing later to condition, and a
+        // per-utterance anchor dies with it — skip the capture cost.
+        case .perUtterance(let steps): return segmentCount > 1 ? steps : nil
+        case .pinned(let steps): return steps
         }
     }
 

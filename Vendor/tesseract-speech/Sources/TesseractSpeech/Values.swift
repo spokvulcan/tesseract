@@ -283,3 +283,20 @@ public enum SpeechEngineError: Error, Sendable, Equatable {
     case sessionClosed
     case engineUnloaded
 }
+
+extension SpeechEngineError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .modelUnavailable(let detail):
+            return "Voice model unavailable: \(detail)"
+        case .voiceIncompatible(let expected, let found):
+            return "This pinned voice was made with \(found); the engine is running \(expected)."
+        case .generationFailed(let detail):
+            return "Speech generation failed: \(detail)"
+        case .sessionClosed:
+            return "The speech session is closed."
+        case .engineUnloaded:
+            return "The speech engine is unloaded."
+        }
+    }
+}
