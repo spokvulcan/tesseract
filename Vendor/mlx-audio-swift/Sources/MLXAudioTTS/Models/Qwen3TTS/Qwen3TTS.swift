@@ -776,9 +776,10 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
                 }
             }
 
-            if step > 0, step % 50 == 0 {
-                Memory.clearCache()
-            }
+            // No in-loop Memory.clearCache(): dropping the buffer pool
+            // mid-generation costs throughput (allocator churn, degrading over
+            // long runs) for no residency benefit — peak RSS is flat either
+            // way. Callers trim once per utterance end (patch #12).
         }
 
         try Task.checkCancellation()
