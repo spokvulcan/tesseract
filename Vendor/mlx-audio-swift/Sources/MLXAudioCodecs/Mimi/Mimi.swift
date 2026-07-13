@@ -4,6 +4,7 @@ import MLX
 import MLXAudioCore
 import MLXNN
 import MLXLMCommon
+import Tokenizers
 
 // MARK: - Configs
 
@@ -232,7 +233,12 @@ public final class MimiStreamingDecoder {
 }
 
 public extension Mimi {
-    static func fromPretrained(repoId: String = "kyutai/moshiko-pytorch-bf16", filename: String = "tokenizer-e351c8d8-checkpoint125.safetensors", progressHandler: @Sendable @escaping (Progress) -> Void) async throws -> Mimi {
+    static func fromPretrained(
+        repoId: String = "kyutai/moshiko-pytorch-bf16",
+        filename: String = "tokenizer-e351c8d8-checkpoint125.safetensors",
+        cache: HubCache = .default,
+        progressHandler: @Sendable @escaping (Progress) -> Void
+    ) async throws -> Mimi {
         print("[Mimi] Starting Mimi model loading from \(repoId)")
 
         print("[Mimi] Creating configuration...")
@@ -253,21 +259,33 @@ public extension Mimi {
                 userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: \(repoId)"]
             )
         }
-        let client = HubClient.default
         let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-        let modelDir = URL.applicationSupportDirectory
-            .appendingPathComponent(ModelUtils.storageDirectoryName)
+        let modelDir = cache.cacheDirectory
+            .appendingPathComponent("mlx-audio")
             .appendingPathComponent(modelSubdir)
-        try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
-        _ = try await client.downloadSnapshot(
-            of: repoID,
-            kind: .model,
-            to: modelDir,
-            revision: "main",
-            matching: [filename],
-            progressHandler: progressHandler
-        )
-        let weightFileURL = modelDir.appending(path: filename)
+        let weightFileURL = modelDir.appendingPathComponent(filename)
+
+        if !FileManager.default.fileExists(atPath: weightFileURL.path) {
+            try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+
+            let client = HubClient(cache: cache)
+            _ = try await client.downloadSnapshot(
+                of: repoID,
+                kind: .model,
+                to: modelDir,
+                revision: "main",
+                matching: [filename],
+                progressHandler: progressHandler
+            )
+        }
+
+        guard FileManager.default.fileExists(atPath: weightFileURL.path) else {
+            throw NSError(
+                domain: "Mimi",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Expected weights file not found at \(weightFileURL.path)"]
+            )
+        }
         let snapshotTime = CFAbsoluteTimeGetCurrent() - snapshotStart
         print(String(format: "[Mimi] Weights file snapshot completed in %.2f seconds", snapshotTime))
 
@@ -302,7 +320,7 @@ public extension Mimi {
         print("[Mimi] Updating model parameters...")
         let updateStart = CFAbsoluteTimeGetCurrent()
         let parameters = ModuleParameters.unflattened(weights)
-        try model.update(parameters: parameters, verify: [.all])
+        try model.update(parameters: parameters, verify: .all)
         let updateTime = CFAbsoluteTimeGetCurrent() - updateStart
         print(String(format: "[Mimi] Model parameters updated in %.2f seconds", updateTime))
 
@@ -377,9 +395,14 @@ public extension Mimi {
             }
             if k.hasSuffix(".convtr.weight") {
                 if v.ndim == 3 {
-                    var w = swappedAxes(v, 0, 1) // [1,0,2]
-                    w = swappedAxes(w, 1, 2) // [1,2,0]
-                    v = w
+                    // PyTorch (inCh, outCh/groups, ksize) → MLX (outCh, ksize, inCh/groups)
+                    if v.shape[1] == 1 {
+                        // Depthwise: (dim, 1, ksize) → (dim, ksize, 1)
+                        v = swappedAxes(v, 1, 2)
+                    } else {
+                        // Regular: (inCh, outCh, ksize) → (outCh, ksize, inCh)
+                        v = v.transposed(1, 2, 0)
+                    }
                 }
             }
 
@@ -397,5 +420,19 @@ public final class MimiTokenizer {
     public init(_ codec: Mimi) {
         codec.train(false)
         self.codec = codec
+    }
+}
+
+extension Mimi: AudioCodecModel {
+    public typealias EncodedAudio = MLXArray
+
+    public var codecSampleRate: Double? { sampleRate }
+
+    public func encodeAudio(_ waveform: MLXArray) -> MLXArray {
+        encode(waveform)
+    }
+
+    public func decodeAudio(_ input: MLXArray) -> MLXArray {
+        decode(input)
     }
 }

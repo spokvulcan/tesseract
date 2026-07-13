@@ -1,4 +1,5 @@
 import Foundation
+import Hub
 import HuggingFace
 @preconcurrency import MLX
 import MLXAudioCodecs
@@ -47,6 +48,25 @@ public final class MarvisTTSModel: Module {
         model.resetCaches()
     }
 
+    public convenience init(
+        config: CSMModelArgs,
+        hub: HubApi = .shared,
+        repoId: String,
+        promptURLs: [URL]? = nil,
+        progressHandler: @Sendable @escaping (Progress) -> Void
+    ) async throws {
+        let textTokenizer = try await AutoTokenizer.from(pretrained: repoId, hubApi: hub)
+        let codec = try await Mimi.fromPretrained(progressHandler: progressHandler)
+        let audioTokenizer = MimiTokenizer(codec)
+        self.init(
+            config: config,
+            repoId: repoId,
+            promptURLs: promptURLs,
+            textTokenizer: textTokenizer,
+            audioTokenizer: audioTokenizer
+        )
+    }
+    
     private func tokenizeTextSegment(text: String, speaker: Int) -> (MLXArray, MLXArray) {
         let K = model.args.audioNumCodebooks
         let frameW = K + 1
@@ -77,13 +97,6 @@ public final class MarvisTTSModel: Module {
         }
         
         return (frame, mask)
-    }
-    
-    private func cacheURL(for audioURL: URL) -> URL {
-        let cacheFilename = audioURL.deletingPathExtension().appendingPathExtension("npy").lastPathComponent
-        let cacheDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!.appending(component: "MarvisTTSModel/prompt_cache")
-        try? FileManager.default.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-        return cacheDirectory.appending(component: cacheFilename)
     }
     
     private func tokenizeAudio(_ audio: MLXArray, addEOS: Bool = true) throws -> (MLXArray, MLXArray) {
@@ -129,7 +142,8 @@ public final class MarvisTTSModel: Module {
 
 public extension MarvisTTSModel {
     static func fromPretrained(
-        _ modelRepo: String = "Marvis-AI/marvis-tts-250m-v0.2-MLX-6bit",
+        _ modelRepo: String = "Marvis-AI/marvis-tts-250m-v0.2-MLX-8bit",
+        cache: HubCache = .default,
         progressHandler: @Sendable @escaping (Progress) -> Void = { _ in }
     ) async throws -> MarvisTTSModel {
         Memory.cacheLimit = 100 * 1024 * 1024
@@ -148,7 +162,8 @@ public extension MarvisTTSModel {
         let modelDirectoryURL = try await ModelUtils.resolveOrDownloadModel(
             repoID: repoID,
             requiredExtension: "safetensors",
-            hfToken: hfToken
+            hfToken: hfToken,
+            cache: cache
         )
 
         let promptFileURLs = modelDirectoryURL.appendingPathComponent("prompts", isDirectory: true)
@@ -165,7 +180,7 @@ public extension MarvisTTSModel {
         let args = try JSONDecoder().decode(CSMModelArgs.self, from: Data(contentsOf: configFileURL))
 
         let textTokenizer = try await AutoTokenizer.from(modelFolder: modelDirectoryURL)
-        let codec = try await Mimi.fromPretrained(progressHandler: progressHandler)
+        let codec = try await Mimi.fromPretrained(cache: cache, progressHandler: progressHandler)
         let audioTokenizer = MimiTokenizer(codec)
         let model = MarvisTTSModel(
             config: args,
@@ -197,6 +212,16 @@ public extension MarvisTTSModel {
         return model
     }
 
+    static func fromPretrained(
+        hub: HubApi = .shared,
+        repoId: String = "Marvis-AI/marvis-tts-250m-v0.2-MLX-8bit",
+        cache: HubCache = .default,
+        progressHandler: @Sendable @escaping (Progress) -> Void
+    ) async throws -> MarvisTTSModel {
+        _ = hub
+        return try await fromPretrained(repoId, cache: cache, progressHandler: progressHandler)
+    }
+    
     private static func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
         var out: [String: MLXArray] = [:]
         out.reserveCapacity(weights.count)
@@ -340,8 +365,8 @@ public extension MarvisTTSModel {
         streamingInterval: Double = 0.5
     ) -> AsyncThrowingStream<GenerationResult, Error> {
         let (stream, continuation) = AsyncThrowingStream<GenerationResult, Error>.makeStream()
-        
-        Task { @Sendable [weak self, continuation] in
+
+        let task = Task { @Sendable [weak self, continuation] in
             guard let self else { return }
             do {
                 guard voice != nil || refAudio != nil else {
@@ -456,9 +481,10 @@ public extension MarvisTTSModel {
                 continuation.finish(throwing: error)
             }
         }
+        continuation.onTermination = { @Sendable _ in task.cancel() }
         return stream
     }
-    
+
     private static func textPieces(_ text: String, splitPattern: String?) -> [String] {
         let pieces: [String]
         if let pat = splitPattern, let re = try? NSRegularExpression(pattern: pat) {
@@ -518,6 +544,14 @@ private extension MarvisTTSModel {
 // MARK: - SpeechGenerationModel conformance
 
 extension MarvisTTSModel: SpeechGenerationModel, @unchecked Sendable {
+    public var defaultGenerationParameters: GenerateParameters {
+        GenerateParameters(
+            maxTokens: Int(60000 / 80.0),
+            temperature: 0.9,
+            topP: 0.8
+        )
+    }
+
     public func generate(
         text: String,
         voice: String?,
@@ -549,32 +583,53 @@ extension MarvisTTSModel: SpeechGenerationModel, @unchecked Sendable {
         language: String?,
         generationParameters: GenerateParameters
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
+        generateStream(
+            text: text,
+            voice: voice,
+            refAudio: refAudio,
+            refText: refText,
+            language: language,
+            generationParameters: generationParameters,
+            streamingInterval: 2.0
+        )
+    }
+
+    public func generateStream(
+        text: String,
+        voice: String?,
+        refAudio: MLXArray?,
+        refText: String?,
+        language: String?,
+        generationParameters: GenerateParameters,
+        streamingInterval: Double
+    ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
-        
-        Task { @Sendable [weak self, continuation] in
+
+        let task = Task { @Sendable [weak self, continuation] in
             guard let self else { return }
-            
+
             do {
                 _ = generationParameters
                 let resolvedVoice = try resolveVoice(from: voice)
-                
+
                 for try await chunk in generate(
                     text: text,
                     voice: resolvedVoice,
                     qualityLevel: .maximum,
                     refAudio: refAudio,
                     refText: refText,
-                    streamingInterval: 0.5
+                    streamingInterval: streamingInterval
                 ) {
                     continuation.yield(.audio(MLXArray(chunk.audio)))
                 }
-                
+
                 continuation.finish()
             } catch {
                 continuation.finish(throwing: error)
             }
         }
-        
+        continuation.onTermination = { @Sendable _ in task.cancel() }
+
         return stream
     }
 }

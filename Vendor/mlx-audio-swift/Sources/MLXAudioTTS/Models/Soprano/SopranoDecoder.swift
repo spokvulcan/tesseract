@@ -87,13 +87,13 @@ func interpolate1d(_ input: MLXArray, size: Int, alignCorners: Bool = true) -> M
 public class ISTFTHead: Module {
     let nFft: Int
     let hopLength: Int
-    let out: Linear
+    @ModuleInfo(key: "out") var out: Linear
 
     public init(dim: Int, nFft: Int, hopLength: Int) {
         self.nFft = nFft
         self.hopLength = hopLength
         // Output n_fft + 2 for magnitude and phase (n_fft/2 + 1 each)
-        self.out = Linear(dim, nFft + 2)
+        self._out.wrappedValue = Linear(dim, nFft + 2)
     }
 
     public func callAsFunction(_ x: MLXArray) -> MLXArray {
@@ -231,11 +231,12 @@ public class SopranoDecoder: Module {
     public init(
         numInputChannels: Int = 512,
         decoderNumLayers: Int = 8,
-        decoderDim: Int = 512,
+        decoderDim: Int = 768,
         decoderIntermediateDim: Int? = nil,
         hopLength: Int = 512,
         nFft: Int = 2048,
         upscale: Int = 4,
+        inputKernel: Int = 1,
         dwKernel: Int = 3
     ) {
         self.decoderInitialChannels = numInputChannels
@@ -248,7 +249,7 @@ public class SopranoDecoder: Module {
             dim: decoderDim,
             intermediateDim: intermediateDim,
             numLayers: decoderNumLayers,
-            inputKernelSize: dwKernel,
+            inputKernelSize: inputKernel,
             dwKernelSize: dwKernel
         )
 

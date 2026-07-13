@@ -1,9 +1,13 @@
 .build
 .swiftpm
+.scratch
+.xcodebuild
 .DS_Store
 .xcbkptlist
 .claude
 Examples/VoicesApp/Config/Local.xcconfig
+Examples/SimpleChat/Config/Local.xcconfig
+Examples/SimpleChat/SimpleChat.xcodeproj/
 xcuserdata/*
 *.pbxproj
 *.resolved
@@ -13,3 +17,9 @@ xcuserdata/*
 *.xcuserdatad
 *.xcuserdatad/xcdebugger
 *.xcuserdatad/xcdebugger/Breakpoints_v2.xcbkptlist
+.xcode_derived/
+default.profraw
+scripts/
+.tmp/
+audit-repo/
+/scratchpad

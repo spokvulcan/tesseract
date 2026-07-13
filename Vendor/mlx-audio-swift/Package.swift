@@ -17,33 +17,53 @@ let package = Package(
         // Speech-to-Text (placeholder)
         .library(name: "MLXAudioSTT", targets: ["MLXAudioSTT"]),
 
+        // Voice Activity Detection / Speaker Diarization
+        .library(name: "MLXAudioVAD", targets: ["MLXAudioVAD"]),
+
+        // Language Identification
+        .library(name: "MLXAudioLID", targets: ["MLXAudioLID"]),
+
         // Speech-to-Speech
         .library(name: "MLXAudioSTS", targets: ["MLXAudioSTS"]),
 
         // SwiftUI components
         .library(name: "MLXAudioUI", targets: ["MLXAudioUI"]),
 
+        // Grapheme-to-Phoneme (neural ByT5 + dictionary lexicons)
+        .library(name: "MLXAudioG2P", targets: ["MLXAudioG2P"]),
+
         // Legacy combined library (for backwards compatibility)
         .library(
             name: "MLXAudio",
-            targets: ["MLXAudioCore", "MLXAudioCodecs", "MLXAudioTTS", "MLXAudioSTT", "MLXAudioSTS", "MLXAudioUI"]
+            targets: ["MLXAudioCore", "MLXAudioCodecs", "MLXAudioTTS", "MLXAudioSTT", "MLXAudioVAD", "MLXAudioLID", "MLXAudioSTS", "MLXAudioUI", "MLXAudioG2P"]
         ),
         .executable(
             name: "mlx-audio-swift-tts",
             targets: ["mlx-audio-swift-tts"],
         ),
+        .executable(
+            name: "mlx-audio-swift-codec",
+            targets: ["mlx-audio-swift-codec"],
+        ),
+        .executable(
+            name: "mlx-audio-swift-sts",
+            targets: ["mlx-audio-swift-sts"],
+        ),
+        .executable(
+            name: "mlx-audio-swift-stt",
+            targets: ["mlx-audio-swift-stt"],
+        ),
+        .executable(
+            name: "mlx-audio-swift-lid",
+            targets: ["mlx-audio-swift-lid"],
+        ),
+
     ],
     dependencies: [
-        // Upstream ml-explore/mlx-swift. The retained-CB fork
-        // (spokvulcan/mlx-swift) previously pinned here was dropped — the crash
-        // it masked was app-side KV-snapshot aliasing, fixed in
-        // HybridCacheSnapshot.deepCopyState. See mlx-swift-lm/Package.swift for
-        // the full rationale. Pin must match mlx-swift-lm exactly (SwiftPM
-        // requires one consistent revision per package identity).
         .package(url: "https://github.com/ml-explore/mlx-swift", revision: "dc43e62d7055353c7f99fa071a4e71d29dfddc44"),
         .package(path: "../mlx-swift-lm"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
-        .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.6.0"))
+        .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.8.1"))
     ],
     targets: [
         // MARK: - MLXAudioCore
@@ -66,9 +86,11 @@ let package = Package(
             dependencies: [
                 "MLXAudioCore",
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "Transformers", package: "swift-transformers"),
             ],
             path: "Sources/MLXAudioCodecs"
         ),
@@ -79,7 +101,9 @@ let package = Package(
             dependencies: [
                 "MLXAudioCore",
                 "MLXAudioCodecs",
+                "MLXAudioG2P",
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
@@ -87,10 +111,18 @@ let package = Package(
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
             path: "Sources/MLXAudioTTS",
-            swiftSettings: [
-                // TTS generation is CPU-bound on graph construction in debug.
-                // Compile this target optimized while preserving debug workflow.
-                .unsafeFlags(["-O"], .when(configuration: .debug))
+            exclude: [
+                "Models/Chatterbox/README.md",
+                "Models/EchoTTS/README.md",
+                "Models/FishSpeech/README.md",
+                "Models/Llama/README.md",
+                "Models/Marvis/README.md",
+                "Models/PocketTTS/README.md",
+                "Models/Qwen3/README.md",
+                "Models/Qwen3TTS/README.md",
+                "Models/Soprano/README.md",
+                "Models/StyleTTS2/KittenTTS/README.md",
+                "Models/StyleTTS2/Kokoro/README.md",
             ]
         ),
 
@@ -100,14 +132,62 @@ let package = Package(
             dependencies: [
                 "MLXAudioCore",
                 "MLXAudioCodecs",
+                "MLXAudioVAD",
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
                 .product(name: "MLXNN", package: "mlx-swift"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Transformers", package: "swift-transformers"),
             ],
-            path: "Sources/MLXAudioSTT"
+            path: "Sources/MLXAudioSTT",
+            exclude: [
+                "Models/CohereTranscribe/README.md",
+                "Models/FireRedASR2/README.md",
+                "Models/GLMASR/README.md",
+                "Models/GraniteSpeech/README.md",
+                "Models/MossTranscribeDiarize/README.md",
+                "Models/NemotronASR/README.md",
+                "Models/Parakeet/README.md",
+                "Models/Qwen3ASR/README.md",
+                "Models/SenseVoice/README.md",
+                "Models/VoxtralRealtime/README.md",
+                "Models/Whisper/README.md",
+            ]
+        ),
+
+        // MARK: - MLXAudioVAD
+        .target(
+            name: "MLXAudioVAD",
+            dependencies: [
+                "MLXAudioCore",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
+            path: "Sources/MLXAudioVAD",
+            exclude: [
+                "Models/SmartTurn/README.md",
+                "Models/Sortformer/README.md",
+            ]
+        ),
+
+        // MARK: - MLXAudioLID
+        .target(
+            name: "MLXAudioLID",
+            dependencies: [
+                "MLXAudioCore",
+                "MLXAudioCodecs",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+            ],
+            path: "Sources/MLXAudioLID",
+            exclude: [
+                "README.md",
+            ]
         ),
 
         // MARK: - MLXAudioSTS
@@ -115,11 +195,32 @@ let package = Package(
             name: "MLXAudioSTS",
             dependencies: [
                 "MLXAudioCore",
+                "MLXAudioCodecs",
                 "MLXAudioTTS",
                 "MLXAudioSTT",
                 .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+                .product(name: "MLXFast", package: "mlx-swift"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
+                .product(name: "Transformers", package: "swift-transformers"),
             ],
-            path: "Sources/MLXAudioSTS"
+            path: "Sources/MLXAudioSTS",
+            exclude: [
+                "Models/LFMAudio/README.md",
+                "Models/SAMAudio/README.md",
+            ]
+        ),
+
+        // MARK: - MLXAudioG2P
+        .target(
+            name: "MLXAudioG2P",
+            dependencies: [
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+            ],
+            path: "Sources/MLXAudioG2P"
         ),
 
         // MARK: - MLXAudioUI
@@ -136,7 +237,54 @@ let package = Package(
         .executableTarget(
             name: "mlx-audio-swift-tts",
             dependencies: ["MLXAudioCore", "MLXAudioTTS", "MLXAudioSTT"],
-            path: "Sources/mlx-audio-swift-tts"
+            path: "Sources/Tools/mlx-audio-swift-tts",
+            exclude: [
+                "README.md",
+            ]
+        ),
+        // spike(337) smoke harness — not part of the port.
+        .executableTarget(
+            name: "spike-smoke",
+            dependencies: ["MLXAudioCore", "MLXAudioTTS"],
+            path: "Sources/Tools/spike-smoke"
+        ),
+        // bench(339) benchmark harness — not part of the port.
+        .executableTarget(
+            name: "bench-339",
+            dependencies: ["MLXAudioCore", "MLXAudioTTS"],
+            path: "Sources/Tools/bench-339"
+        ),
+        .executableTarget(
+            name: "mlx-audio-swift-codec",
+            dependencies: ["MLXAudioCore", "MLXAudioCodecs"],
+            path: "Sources/Tools/mlx-audio-swift-codec",
+            exclude: [
+                "README.md",
+            ]
+        ),
+        .executableTarget(
+            name: "mlx-audio-swift-sts",
+            dependencies: ["MLXAudioCore", "MLXAudioSTS"],
+            path: "Sources/Tools/mlx-audio-swift-sts",
+            exclude: [
+                "README.md",
+            ]
+        ),
+        .executableTarget(
+            name: "mlx-audio-swift-stt",
+            dependencies: ["MLXAudioCore", "MLXAudioSTT"],
+            path: "Sources/Tools/mlx-audio-swift-stt",
+            exclude: [
+                "README.md",
+            ]
+        ),
+        .executableTarget(
+            name: "mlx-audio-swift-lid",
+            dependencies: ["MLXAudioCore", "MLXAudioLID"],
+            path: "Sources/Tools/mlx-audio-swift-lid",
+            exclude: [
+                "README.md",
+            ]
         ),
 
         // MARK: - Tests
@@ -147,7 +295,11 @@ let package = Package(
                 "MLXAudioCodecs",
                 "MLXAudioTTS",
                 "MLXAudioSTT",
+                "MLXAudioVAD",
                 "MLXAudioSTS",
+                "MLXAudioLID",
+                "mlx-audio-swift-lid",
+                "MLXAudioG2P",
             ],
             path: "Tests",
             resources: [

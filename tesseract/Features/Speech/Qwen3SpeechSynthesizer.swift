@@ -97,6 +97,7 @@ actor Qwen3SpeechSynthesizer: SpeechSynthesizer {
             refText: nil,
             language: language,
             generationParameters: genParams,
+            streamingInterval: 0.4,
             useVoiceAnchor: useVoiceAnchor
         )
 
@@ -152,11 +153,6 @@ actor Qwen3SpeechSynthesizer: SpeechSynthesizer {
         continuation: AsyncThrowingStream<[Float], Error>.Continuation
     ) {
         switch event {
-        case .audioChunk(let chunk):
-            let samples = chunk.asArray(Float.self)
-            if !samples.isEmpty {
-                continuation.yield(samples)
-            }
         case .audio(let audio):
             let samples = audio.asArray(Float.self)
             if !samples.isEmpty {

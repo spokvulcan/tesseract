@@ -28,6 +28,9 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
     public var eos_threshold: Float = defaultEosThreshold
 
     public var sampleRate: Int { config.mimi.sampleRate }
+    public var defaultGenerationParameters: GenerateParameters {
+        GenerateParameters(temperature: defaultTemperature)
+    }
 
     private init(config: PocketTTSModelConfig, modelFolder: URL, flowLM: FlowLMModel, mimi: MimiAdapter) {
         self.config = config
@@ -115,10 +118,10 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
     public static func loadPredefinedVoice(
         _ voiceName: String,
         modelFolder: URL,
-        progressHandler: @escaping (Progress) -> Void = { _ in }
+        progressHandler: @Sendable @escaping (Progress) -> Void = { _ in }
     ) async throws -> MLXArray? {
         _ = progressHandler
-        let fileURL = modelFolder.appendingPathComponent("\(voiceName).safetensors")
+        let fileURL = modelFolder.appendingPathComponent("embeddings/\(voiceName).safetensors")
         if !FileManager.default.fileExists(atPath: fileURL.path) {
             return nil
         }
@@ -132,7 +135,7 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
     private func resolveAudioPrompt(
         voice: String?,
         refAudio: MLXArray?,
-        progressHandler: @escaping (Progress) -> Void = { _ in }
+        progressHandler: @Sendable @escaping (Progress) -> Void = { _ in }
     ) async throws -> AudioPrompt {
         if let refAudio {
             return .audio(normalizeAudio(refAudio))
@@ -164,18 +167,28 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
     }
 
     private func sliceFlowCache(_ state: inout PocketTTSState, to length: Int) {
-        guard length > 0 else { return }
+        let targetLength = max(length, 0)
         for cache in state.flowCache {
             let s = cache.state
             guard s.count == 2 else { continue }
             let keys = s[0]
             let values = s[1]
-            let end = min(length, keys.shape[2])
+            let end = min(targetLength, keys.shape[2])
             let slicedKeys = keys[.ellipsis, ..<end, 0...]
             let slicedValues = values[.ellipsis, ..<end, 0...]
             cache.state = [slicedKeys, slicedValues]
             cache.offset = min(cache.offset, end)
         }
+    }
+
+    private func getFlowCacheNumFrames(_ state: PocketTTSState) -> Int {
+        for cache in state.flowCache {
+            let s = cache.state
+            guard s.count == 2 else { continue }
+            let keys = s[0]
+            return min(cache.offset, keys.shape[2])
+        }
+        return 0
     }
 
     public func generateAudio(
@@ -202,8 +215,11 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
             throw NSError(domain: "PocketTTSModel", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing generation state"])
         }
         var outputs: [MLXArray] = []
+        let promptNumFrames = getFlowCacheNumFrames(state)
         let chunks = try PocketTTSTextUtils.splitIntoBestSentences(flow_lm.conditioner.tokenizer, text)
         for chunk in chunks {
+            try Task.checkCancellation()
+            sliceFlowCache(&state, to: promptNumFrames)
             let (_, guess) = try PocketTTSTextUtils.prepareTextPrompt(chunk)
             let frames = framesAfterEos ?? (guess + 2)
             let audioChunks = try generateAudioStreamShortText(state: &state, text: chunk, framesAfterEos: frames, maxFrames: maxFrames)
@@ -233,7 +249,9 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
         var eosStep: Int?
 
         for step in 0 ..< maxGenLen {
+            try Task.checkCancellation()
             let (nextLatent, isEos) = runFlowLMAndIncrementStep(&state, backboneInputLatents: backboneInput)
+            try Task.checkCancellation()
             if eosStep == nil {
                 let eos = isEos.asArray(Bool.self).first ?? false
                 if eos { eosStep = step }
@@ -248,6 +266,8 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
             outputs.append(audioChunk.squeezed())
             backboneInput = nextLatent
         }
+
+        try Task.checkCancellation()
 
         return outputs
     }
@@ -295,7 +315,7 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
 
-        Task { @Sendable [weak self] in
+        let task = Task { @Sendable [weak self] in
             guard let self else { return }
             do {
                 let audio = try await self.generate(
@@ -312,70 +332,45 @@ public final class PocketTTSModel: Module, SpeechGenerationModel, @unchecked Sen
                 continuation.finish(throwing: error)
             }
         }
+        continuation.onTermination = { @Sendable _ in task.cancel() }
 
         return stream
     }
 
     // MARK: - Loading
 
-    public static func fromPretrained(_ modelRepo: String) async throws -> PocketTTSModel {
+    public static func fromPretrained(
+        _ modelRepo: String,
+        cache: HubCache = .default
+    ) async throws -> PocketTTSModel {
         let hfToken: String? = ProcessInfo.processInfo.environment["HF_TOKEN"]
             ?? Bundle.main.object(forInfoDictionaryKey: "HF_TOKEN") as? String
-
-        let client = if let token = hfToken, !token.isEmpty {
-            HubClient(host: HubClient.defaultHost, bearerToken: token)
-        } else {
-            HubClient.default
-        }
-        let cache = client.cache ?? HubCache.default
 
         guard let repoID = Repo.ID(rawValue: modelRepo) else {
             throw NSError(domain: "PocketTTSModel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid repository ID: \(modelRepo)"])
         }
 
-        let modelDir = try await resolveOrDownloadPocketTTSModel(client: client, cache: cache, repoID: repoID)
+        let modelDir = try await ModelUtils.resolveOrDownloadModel(
+            repoID: repoID,
+            requiredExtension: ".safetensors",
+            hfToken: hfToken,
+            cache: cache
+        )
+
+        return try await fromModelDirectory(modelDir)
+    }
+
+    public static func fromModelDirectory(_ modelDir: URL) async throws -> PocketTTSModel {
         let configURL = modelDir.appendingPathComponent("config.json")
         let config = try PocketTTSModelConfig.load(from: configURL)
 
         let model = try await PocketTTSModel.fromConfig(config, modelFolder: modelDir)
         let weights = try await loadPocketTTSWeights(modelDir: modelDir)
-        try model.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
+        try model.update(parameters: ModuleParameters.unflattened(weights), verify: .all)
 
         eval(model)
         return model
     }
-}
-
-private func resolveOrDownloadPocketTTSModel(
-    client: HubClient,
-    cache: HubCache,
-    repoID: Repo.ID
-) async throws -> URL {
-    let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        .appendingPathComponent(ModelUtils.storageDirectoryName)
-        .appendingPathComponent(modelSubdir)
-
-    if FileManager.default.fileExists(atPath: modelDir.path) {
-        let files = try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
-        let hasConfig = files?.contains { $0.lastPathComponent == "config.json" } ?? false
-        let hasWeights = files?.contains { $0.pathExtension == "safetensors" } ?? false
-        if hasConfig, hasWeights {
-            return modelDir
-        }
-    }
-
-    try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
-    _ = try await client.downloadSnapshot(
-        of: repoID,
-        kind: .model,
-        to: modelDir,
-        revision: "main",
-        progressHandler: { progress in
-            print("\(progress.completedUnitCount)/\(progress.totalUnitCount) files")
-        }
-    )
-    return modelDir
 }
 
 private func loadPocketTTSWeights(modelDir: URL) async throws -> [String: MLXArray] {

@@ -215,6 +215,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
             hopLength: config.hopLength,
             nFft: config.nFft,
             upscale: config.upscale,
+            inputKernel: config.inputKernel,
             dwKernel: config.dwKernel
         )
 
@@ -225,6 +226,16 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
 
     public var sampleRate: Int {
         return configuration.sampleRate
+    }
+
+    public var defaultGenerationParameters: GenerateParameters {
+        GenerateParameters(
+            maxTokens: 1200,
+            temperature: 0.7,
+            topP: 0.95,
+            repetitionPenalty: 1.5,
+            repetitionContextSize: 30
+        )
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
@@ -306,25 +317,36 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
         for (key, value) in weights {
             var newKey = key
 
-            // Remove "model." prefix if present (this appears before language_model in some cases)
+            // Remove "model." prefix if present (e.g. "model.language_model.*" → "language_model.*")
             if newKey.hasPrefix("model.") {
-                newKey = String(newKey.dropFirst(6))
+                newKey = String(newKey.dropFirst("model.".count))
             }
 
-            // Map language_model weights to our model structure
-            // lm_head stays at the top level, other language_model weights go to model.*
-            if newKey.hasPrefix("language_model.lm_head") {
+            // Keep packed quantized weights in their stored dtype.
+            let isPackedQuantizedWeight: Bool = {
+                guard key.hasSuffix(".weight") else { return false }
+                let base = String(key.dropLast(".weight".count))
+                return weights["\(base).scales"] != nil
+            }()
+
+            // Decoder weights should be float32 in non-quantized checkpoints.
+            var newValue = value
+            if newKey.hasPrefix("decoder.") {
+                if !newKey.hasSuffix(".scales"),
+                   !newKey.hasSuffix(".biases"),
+                   !isPackedQuantizedWeight {
+                    newValue = value.asType(.float32)
+                }
+            } else if newKey.hasPrefix("language_model.lm_head") {
                 // lm_head is directly on SopranoModel, not inside model
                 newKey = newKey.replacingOccurrences(of: "language_model.", with: "")
             } else if newKey.hasPrefix("language_model.") {
                 // Other language_model weights go to model.* (SopranoModelInner)
                 newKey = newKey.replacingOccurrences(of: "language_model.", with: "model.")
-            }
-
-            // Decoder weights should be float32
-            var newValue = value
-            if newKey.hasPrefix("decoder.") {
-                newValue = value.asType(.float32)
+            } else if !newKey.hasPrefix("lm_head") {
+                // Bare inner model keys (e.g. "embed_tokens.*", "layers.*", "norm.*")
+                // need "model." prefix to map to SopranoModelInner
+                newKey = "model." + newKey
             }
 
             sanitized[newKey] = newValue
@@ -607,6 +629,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
 
         // Process each chunk separately
         for promptChunk in prompts {
+            try Task.checkCancellation()
             let sentenceData = self.preprocessText([promptChunk])
 
 
@@ -628,6 +651,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                         totalTokens += 1
                     }
                 }
+                try Task.checkCancellation()
 
                 let tokenCount = allHiddenStates.count
 
@@ -649,6 +673,8 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                 audioParts.append(audio)
             }
         }
+
+        try Task.checkCancellation()
 
         // Concatenate all audio parts
         let finalAudio: MLXArray
@@ -676,9 +702,9 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
         )
     ) -> AsyncThrowingStream<SopranoGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<SopranoGeneration, Error>.makeStream()
-        Task { @Sendable [weak self, continuation] in
+        let task = Task { @Sendable [weak self, continuation] in
             guard let self else { return }
-            
+
             do {
                 guard self.tokenizer != nil else {
                     throw SopranoError.modelNotInitialized("Tokenizer not loaded")
@@ -695,6 +721,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                 let maxTokens = parameters.maxTokens ?? 512
                 
                 for (promptText, _, _) in sentenceData {
+                    try Task.checkCancellation()
                     let inputIds = self.tokenize(promptText)
                     var allHiddenStates: [MLXArray] = []
                     
@@ -712,6 +739,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                             continuation.yield(.token(tokenVal))
                         }
                     }
+                    try Task.checkCancellation()
                     
                     let tokenCount = allHiddenStates.count
                     totalTokens += tokenCount
@@ -734,6 +762,8 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                     audioParts.append(audio)
                 }
                 
+                try Task.checkCancellation()
+
                 // Concatenate audio
                 let finalAudio: MLXArray
                 if audioParts.count > 1 {
@@ -763,6 +793,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                 continuation.finish(throwing: error)
             }
         }
+        continuation.onTermination = { @Sendable _ in task.cancel() }
         return stream
     }
 
@@ -776,7 +807,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
         repetitionContextSize: Int = 30
     ) -> AsyncStream<(Int?, MLXArray)> {
         AsyncStream { continuation in
-            Task {
+            let task = Task {
                 var ids = inputIds
                 if ids.ndim == 1 {
                     ids = ids.expandedDimensions(axis: 0)
@@ -803,6 +834,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
                 var currentLogits = logits
 
                 for _ in 0..<maxTokens {
+                    if Task.isCancelled { break }
                     // Get last logits
                     var lastLogits = currentLogits[0..., -1, 0...]
                     eval(lastLogits)
@@ -848,6 +880,7 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
 
                 continuation.finish()
             }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
         }
     }
 
@@ -869,17 +902,12 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
 
     // MARK: - Loading
 
-    public static func fromPretrained(_ modelRepo: String) async throws -> SopranoModel {
+    public static func fromPretrained(
+        _ modelRepo: String,
+        cache: HubCache = .default
+    ) async throws -> SopranoModel {
         let hfToken: String? = ProcessInfo.processInfo.environment["HF_TOKEN"]
             ?? Bundle.main.object(forInfoDictionaryKey: "HF_TOKEN") as? String
-
-        let client: HubClient
-        if let token = hfToken, !token.isEmpty {
-            client = HubClient(host: HubClient.defaultHost, bearerToken: token)
-        } else {
-            client = HubClient.default
-        }
-        let cache = client.cache ?? HubCache.default
 
         guard let repoID = Repo.ID(rawValue: modelRepo) else {
             throw NSError(domain: "SopranoModel", code: 1, userInfo: [
@@ -887,16 +915,30 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
             ])
         }
 
-        let modelDir = try await resolveOrDownloadSopranoModel(
-            client: client,
-            cache: cache,
-            repoID: repoID
+        let modelDir = try await ModelUtils.resolveOrDownloadModel(
+            repoID: repoID,
+            requiredExtension: ".safetensors",
+            hfToken: hfToken,
+            cache: cache
         )
 
+        return try await fromModelDirectory(modelDir, repo: modelRepo)
+    }
+
+    public static func fromModelDirectory(_ modelDir: URL, repo modelRepo: String) async throws -> SopranoModel {
         // Load config
         let configPath = modelDir.appendingPathComponent("config.json")
         let configData = try Data(contentsOf: configPath)
-        let config = try JSONDecoder().decode(SopranoConfiguration.self, from: configData)
+        var config = try JSONDecoder().decode(SopranoConfiguration.self, from: configData)
+
+        // Adjust decoder config based on model version (matching Python's __post_init__)
+        // Soprano-1.1 uses the defaults (decoder_dim=768, input_kernel=1)
+        // Older models use decoder_dim=512, input_kernel=3
+        if !modelRepo.lowercased().contains("soprano-1.1") {
+            config.decoderDim = 512
+            config.decoderIntermediateDim = 1536
+            config.inputKernel = 3
+        }
 
         let model = SopranoModel(config)
 
@@ -905,16 +947,22 @@ public class SopranoModel: Module, KVCacheDimensionProvider, SpeechGenerationMod
         let sanitizedWeights = model.sanitize(weights: weights)
 
         // Apply quantization if needed
-        if let perLayerQuant = config.perLayerQuantization {
+        if config.quantization != nil || config.perLayerQuantization != nil {
             quantize(model: model) { path, _ in
-                if weights["\(path).scales"] != nil {
-                    return perLayerQuant.quantization(layer: path)?.asTuple
+                guard sanitizedWeights["\(path).scales"] != nil else {
+                    return nil
                 }
-                return nil
+
+                if let perLayerQuant = config.perLayerQuantization,
+                    let layerQuant = perLayerQuant.quantization(layer: path) {
+                    return layerQuant.asTuple
+                }
+
+                return config.quantization?.asTuple
             }
         }
 
-        try model.update(parameters: ModuleParameters.unflattened(sanitizedWeights), verify: [.all])
+        try model.update(parameters: ModuleParameters.unflattened(sanitizedWeights), verify: .all)
 
         eval(model)
 
@@ -941,45 +989,6 @@ private func loadSopranoWeights(from directory: URL) throws -> [String: MLXArray
         weights.merge(fileWeights) { _, new in new }
     }
     return weights
-}
-
-private func resolveOrDownloadSopranoModel(
-    client: HubClient,
-    cache: HubCache,
-    repoID: Repo.ID
-) async throws -> URL {
-    let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-    let modelDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        .appendingPathComponent(ModelUtils.storageDirectoryName)
-        .appendingPathComponent(modelSubdir)
-
-    if FileManager.default.fileExists(atPath: modelDir.path) {
-        let files = try? FileManager.default.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
-        let hasWeights = files?.contains { $0.pathExtension == "safetensors" } ?? false
-
-        if hasWeights {
-            let configPath = modelDir.appendingPathComponent("config.json")
-            if FileManager.default.fileExists(atPath: configPath.path),
-               let configData = try? Data(contentsOf: configPath),
-               (try? JSONSerialization.jsonObject(with: configData)) != nil {
-                return modelDir
-            }
-        }
-    }
-
-    try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
-
-    _ = try await client.downloadSnapshot(
-        of: repoID,
-        kind: .model,
-        to: modelDir,
-        revision: "main",
-        progressHandler: { progress in
-            print("\(progress.completedUnitCount)/\(progress.totalUnitCount) files")
-        }
-    )
-
-    return modelDir
 }
 
 // MARK: - TopP Sampler (matching Python's mlx_lm implementation)

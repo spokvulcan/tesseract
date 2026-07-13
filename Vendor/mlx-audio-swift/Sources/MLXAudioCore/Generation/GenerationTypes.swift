@@ -54,8 +54,6 @@ public enum AudioGeneration: Sendable {
     case info(AudioGenerationInfo)
     /// Final generated audio
     case audio(MLXArray)
-    /// A streaming audio chunk (partial decode during generation)
-    case audioChunk(MLXArray)
 }
 
 // MARK: - Generation Errors
