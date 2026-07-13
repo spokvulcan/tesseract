@@ -693,20 +693,63 @@ _Avoid_: segmentTimeBase / segmentDurationBase (the old coupled pair this replac
 segment offset, time base.
 
 **Segment Playback**:
-The deep module owning the consume-one-TTS-stream-into-playback loop shared by every
-speech path; the only per-segment difference is a small `Segment` value (optional
-boundary plus initial state), never flags. It drains samples into **Audio
-Playback** and drives the **Word Highlight Surface**, leaving cleanup to each
-caller.
+Retired in engine v2 (ADR-0038): its stream-drain became the caller's
+`for try await` over an **Utterance**, its boundary poll became **Segment
+Script**'s `startFrame`, its pause poll became demand-based pacing. Kept here
+until the last v1 reference dies.
 _Avoid_: chunk loop, stream pump, playback driver, a config-flag loop.
 
 **Word Highlight Surface**:
-The main-actor port that **Segment Playback** and `SpeechCoordinator` drive to
-render spoken-word highlighting (show, switch, mark complete, dismiss). The
-production adapter is the notch panel; a recording test peer makes the
-segment-boundary switch assertable.
+The main-actor port that `SpeechCoordinator` drives to render spoken-word
+highlighting (show, switch, mark complete, dismiss). The production adapter is
+the notch panel; a recording test peer makes the segment-boundary switch
+assertable. In engine v2 its switch timing comes from **Segment Script**
+ground truth, not playback bookkeeping.
 _Avoid_: notch overlay / TTSNotchPanelController (one adapter, not the seam),
 highlight view, **Overlay Panel** (the separate dictation HUD surface).
+
+### Speech engine v2 (ADR-0038)
+
+**Speech Session**:
+The voice-identity owner at the engine boundary: opened from a `SessionProfile`
+and a **Voice**, it holds the voice-prefix KV and the anchor per policy, admits
+utterances one at a time, and dies by `close()`. Sessions survive engine unload
+as ingredient values and rebuild KV transparently.
+_Avoid_: generation session (an LLM concept), voice handle, session manager.
+
+**Utterance**:
+One admitted text→speech run: admission-time facts (sample rate, frames/s,
+segment count) plus the single event stream that is simultaneously the audio
+transport, the timing channel, the backpressure channel, and the cancellation
+token. Dropping it stops generation; cancelling the consuming task surfaces
+`CancellationError` untranslated.
+_Avoid_: speech stream (one field of it), generation handle, request.
+
+**Segment Script**:
+The per-segment value announced on the stream before its audio: text slice,
+token→char offsets, and the utterance-global `startFrame` — the **Segment
+Window** as ground truth from the generation loop, ending the estimator era.
+_Avoid_: segment metadata, offsets payload.
+
+**Pinned Voice**:
+Voice identity as a serializable value: voice spec + the ≤48 anchor code frames
++ a {model, precision, schema} fingerprint — a few KB, rebuildable into KV, the
+thing that makes the companion's voice survive relaunch. Restore validates the
+fingerprint or throws; a seed is never voice identity (#339).
+_Avoid_: voice anchor (the KV realization inside a session), seed, voice id.
+
+**Readiness**:
+The engine lifecycle ladder — `.unloaded` / `.loaded` / `.warm(priming:)` —
+driven by one idempotent `prepare` verb; warmup and voice-prefix priming are
+rungs, not separate APIs.
+_Avoid_: engine state (the observable presenter concept above the seam), load
+status.
+
+**Pacing Policy**:
+The demand-based backpressure contract: `.eager` or `.lookahead(segments: n)` —
+at most n undelivered segments beyond the in-flight one, every engine wait
+happening outside the GPU lease. Pause is its consequence, not an API.
+_Avoid_: throttling, playhead clock (rejected design), lookahead buffer.
 
 ### Generation accumulation
 
