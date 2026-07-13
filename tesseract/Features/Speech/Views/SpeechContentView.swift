@@ -14,7 +14,7 @@ enum SpeechPageStyle {
 
 struct SpeechContentView: View {
     @Environment(SpeechCoordinator.self) private var speechCoordinator
-    @Environment(SpeechEngine.self) private var speechEngine
+    @Environment(SpeechEnginePresenter.self) private var speechEngine
     @Environment(SettingsManager.self) private var settings
 
     @AppStorage("ttsParametersPanelVisible") private var isParametersPanelVisible: Bool = true

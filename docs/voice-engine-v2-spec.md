@@ -47,11 +47,21 @@ final class SpeechSession: Sendable {
 }
 struct Utterance: Sendable {
     let sampleRate: Int; let framesPerSecond: Double; let segmentCount: Int
-    let events: AsyncThrowingStream<SpeechEvent, Error>
+    var events: some AsyncSequence<SpeechEvent>   // single-consumer; see amendment 2026-07-13
     var audio: some AsyncSequence<AudioChunk>
 }
 enum SpeechEvent { case segment(SegmentScript), audio(AudioChunk), segmentDone(index: Int), finished(SessionSummary) }
 ```
+
+> **Amendment (2026-07-13, implementation):** the sketch above originally
+> spelled `events` as `AsyncThrowingStream<SpeechEvent, Error>`. That type
+> buffers without exposing consumer demand — and demand IS the pacing signal
+> (contract 3). The shipped `events` is a custom single-consumer
+> `AsyncSequence` over a pull-signaled channel (`UtteranceChannel`): the
+> producer parks lease-free at segment boundaries when
+> `produced − delivered ≥ lookahead`, and consumer-side task cancellation or
+> dropping the `Utterance` cancels the driver (contract 2). Same surface for
+> callers (`for try await`), same contracts — only the concrete type changed.
 
 Values: `TTSModelSpec{repo, precision}`, `Voice{.standard|.designed|.pinned}`, `PinnedVoice` (opaque: voice spec + ≤48 anchor code frames + {model, precision, schema} fingerprint; Codable envelope; restore validates or throws `voiceIncompatible`), `SessionProfile{anchor, defaults, pacing}`, `AnchorPolicy{.none|.perUtterance(48)|.pinned(48)}`, `PacingPolicy{.eager|.lookahead(segments:)}`, `SpeechOptions{seed: .entropy|.fixed, parameters?}`, `SegmentScript{index, text, tokenCharOffsets, startFrame}`, `AudioChunk{samples, frames: Range<Int>, segmentIndex}`, `Readiness{.unloaded|.loaded|.warm(priming:)}`, `EnginePhase`, `SpeechEngineError{modelUnavailable, voiceIncompatible, generationFailed}`.
 

@@ -188,7 +188,8 @@ struct ModelsPageView: View {
             return model.id == container.settingsManager.selectedSpeechToTextModelID
                 && container.transcriptionEngine.isModelLoaded
         case .textToSpeech:
-            return model.id == "qwen3-tts-voicedesign" && container.speechEngine.isModelLoaded
+            return model.id == "qwen3-tts-voicedesign"
+                && container.speechEnginePresenter.isModelLoaded
         case .agent:
             return container.inferenceArbiter.loadedLLMModelID == model.id
         case .proofread:

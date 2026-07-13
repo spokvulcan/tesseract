@@ -3,9 +3,9 @@
 //  tesseract
 //
 //  One definition of "a word" for the Speech feature: whitespace- and
-//  newline-separated, empty runs omitted. Shared by Word Timeline (the rendered word
-//  model) and TextSegmenter (token-count estimation) so the two can't drift on what
-//  counts as a word boundary.
+//  newline-separated, empty runs omitted. Used by Word Timeline (the rendered word
+//  model); the v2 engine's Segmenter (TesseractSpeech) applies the same
+//  whitespace rule for its token-count estimation.
 //
 
 import Foundation

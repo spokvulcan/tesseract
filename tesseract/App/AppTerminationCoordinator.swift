@@ -8,11 +8,11 @@ final class AppTerminationCoordinator {
         let stopHTTPServerAndDrain: @MainActor () async -> Void
         let cancelLLMGenerationAndWait: @MainActor () async -> Void
         let stopSpeech: @MainActor () -> Void
-        let cancelSpeechGeneration: @MainActor () async -> Void
-        let clearSpeechVoiceAnchor: @MainActor () async -> Void
         let unloadLLM: @MainActor () -> Void
         let awaitLLMUnload: @MainActor () async -> Void
-        let unloadSpeech: @MainActor () -> Void
+        /// The v2 engine's deterministic teardown (ADR-0039): cancels any
+        /// active utterance, frees weights/KV/caches, syncs the GPU stream.
+        let unloadSpeech: @MainActor () async -> Void
         let synchronizeGPU: @MainActor () -> Void
 
         init(
@@ -21,11 +21,9 @@ final class AppTerminationCoordinator {
             stopHTTPServerAndDrain: @escaping @MainActor () async -> Void,
             cancelLLMGenerationAndWait: @escaping @MainActor () async -> Void,
             stopSpeech: @escaping @MainActor () -> Void,
-            cancelSpeechGeneration: @escaping @MainActor () async -> Void,
-            clearSpeechVoiceAnchor: @escaping @MainActor () async -> Void,
             unloadLLM: @escaping @MainActor () -> Void,
             awaitLLMUnload: @escaping @MainActor () async -> Void,
-            unloadSpeech: @escaping @MainActor () -> Void,
+            unloadSpeech: @escaping @MainActor () async -> Void,
             synchronizeGPU: @escaping @MainActor () -> Void
         ) {
             self.stopHotkeys = stopHotkeys
@@ -33,8 +31,6 @@ final class AppTerminationCoordinator {
             self.stopHTTPServerAndDrain = stopHTTPServerAndDrain
             self.cancelLLMGenerationAndWait = cancelLLMGenerationAndWait
             self.stopSpeech = stopSpeech
-            self.cancelSpeechGeneration = cancelSpeechGeneration
-            self.clearSpeechVoiceAnchor = clearSpeechVoiceAnchor
             self.unloadLLM = unloadLLM
             self.awaitLLMUnload = awaitLLMUnload
             self.unloadSpeech = unloadSpeech
@@ -60,12 +56,10 @@ final class AppTerminationCoordinator {
         await steps.cancelLLMGenerationAndWait()
 
         steps.stopSpeech()
-        await steps.cancelSpeechGeneration()
-        await steps.clearSpeechVoiceAnchor()
 
         steps.unloadLLM()
         await steps.awaitLLMUnload()
-        steps.unloadSpeech()
+        await steps.unloadSpeech()
         steps.synchronizeGPU()
     }
 }

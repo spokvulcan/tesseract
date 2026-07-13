@@ -40,7 +40,7 @@ final class InferenceArbiter: InferenceArbitrating {
     var loadedSlots: Set<ModelSlot> {
         var slots: Set<ModelSlot> = []
         if agentEngine.isModelLoaded { slots.insert(.llm) }
-        if speechEngine.isModelLoaded { slots.insert(.tts) }
+        if isTTSLoaded() { slots.insert(.tts) }
         return slots
     }
 
@@ -93,20 +93,28 @@ final class InferenceArbiter: InferenceArbitrating {
     // MARK: - Dependencies
 
     private let agentEngine: AgentEngine
-    private let speechEngine: SpeechEngine
     private let settingsManager: SettingsManager
     private let modelDownloadManager: ModelDownloadManager
 
+    /// The v2 speech engine self-loads under `withSpeechGPULease` (ADR-0039),
+    /// so the arbiter only *observes* TTS residency and can *release* it —
+    /// closures rather than a stored engine, which also keeps the container's
+    /// arbiter ↔ speech wiring acyclic.
+    private let isTTSLoaded: @MainActor () -> Bool
+    private let unloadTTS: @MainActor () async -> Void
+
     init(
         agentEngine: AgentEngine,
-        speechEngine: SpeechEngine,
         settingsManager: SettingsManager,
-        modelDownloadManager: ModelDownloadManager
+        modelDownloadManager: ModelDownloadManager,
+        isTTSLoaded: @escaping @MainActor () -> Bool,
+        unloadTTS: @escaping @MainActor () async -> Void
     ) {
         self.agentEngine = agentEngine
-        self.speechEngine = speechEngine
         self.settingsManager = settingsManager
         self.modelDownloadManager = modelDownloadManager
+        self.isTTSLoaded = isTTSLoaded
+        self.unloadTTS = unloadTTS
     }
 
     // MARK: - Public API
@@ -133,6 +141,19 @@ final class InferenceArbiter: InferenceArbitrating {
                 llmVision: llmVision
             )
             return try await body()
+        }
+    }
+
+    /// The raw GPU lease for the v2 speech engine's bursts (ADR-0038): the
+    /// same FIFO queue as `.llm` work — so TTS generation, model loads, and
+    /// LLM turns stay mutually exclusive — but with no slot loading: the
+    /// engine loads its own model under this lease (ADR-0039 lazy load).
+    /// `ArbiterGPULease` adapts this onto the engine's `GPULeasing` port.
+    func withSpeechGPULease<T: Sendable>(
+        _ body: @concurrent @Sendable () async throws -> T
+    ) async throws -> T {
+        try await lease.withExclusive {
+            try await body()
         }
     }
 
@@ -184,7 +205,7 @@ final class InferenceArbiter: InferenceArbitrating {
                 return
             }
             // Model or vision mode changed, or not loaded — (re)load
-            if loadedSlots.contains(.llm) { unload(.llm) }
+            if loadedSlots.contains(.llm) { await unload(.llm) }
             // Drain the detached unload task before the next load. Without
             // this, the actor-level `llmActor.unloadModel()` can interleave
             // after the new `llmActor.loadModel()` and tear down the freshly
@@ -198,8 +219,9 @@ final class InferenceArbiter: InferenceArbitrating {
             loadedLLMState = desired
 
         case .tts:
-            if loadedSlots.contains(.tts) { return }
-            try await loadSlot(.tts)
+            // The v2 engine loads itself lazily under `withSpeechGPULease`
+            // (ADR-0039); there is nothing for the arbiter to load here.
+            return
         }
     }
 
@@ -233,8 +255,8 @@ final class InferenceArbiter: InferenceArbitrating {
             )
 
         case .tts:
-            Log.general.info("InferenceArbiter: loading TTS model")
-            try await speechEngine.loadModel()
+            // Unreachable: `ensureLoaded(.tts)` returns without loading.
+            return
         }
     }
 
@@ -251,7 +273,7 @@ final class InferenceArbiter: InferenceArbitrating {
                 let slots = loadedSlots
                 guard !slots.isEmpty else { return }
                 for slot in slots {
-                    unload(slot)
+                    await unload(slot)
                 }
             }
         } catch {
@@ -261,7 +283,7 @@ final class InferenceArbiter: InferenceArbitrating {
         }
     }
 
-    private func unload(_ slot: ModelSlot) {
+    private func unload(_ slot: ModelSlot) async {
         switch slot {
         case .llm:
             agentEngine.unloadModel()
@@ -269,7 +291,10 @@ final class InferenceArbiter: InferenceArbitrating {
             Log.general.info("InferenceArbiter: unloaded LLM")
 
         case .tts:
-            speechEngine.unloadModel()
+            // Safe while we hold the lease: the engine cancels its active
+            // driver first, and a driver queued on this same lease is
+            // removed by the queue's cancellation-while-queued rule.
+            await unloadTTS()
             Log.general.info("InferenceArbiter: unloaded TTS")
         }
     }
