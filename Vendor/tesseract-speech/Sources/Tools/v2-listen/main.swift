@@ -23,6 +23,7 @@ struct Args {
     var outDir = "."
     var textFile: String?
     var seed: UInt64 = 42
+    var timing = false
 }
 
 func parseArgs() -> Args {
@@ -39,6 +40,7 @@ func parseArgs() -> Args {
         case "--out-dir": a.outDir = next(flag)
         case "--text-file": a.textFile = next(flag)
         case "--seed": a.seed = UInt64(next(flag))!
+        case "--timing": a.timing = true
         default: fatalError("unknown flag \(flag)")
         }
     }
@@ -50,6 +52,16 @@ func parseArgs() -> Args {
 struct ImmediateLease: GPULeasing {
     func withLease<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
         try await body()
+    }
+}
+
+/// Prints engine burst events with a monotonic timestamp so per-segment burst
+/// wall and inter-segment gaps can be attributed (perf pass, spec §6).
+struct StderrTimingTap: SpeechDiagnosticsTap {
+    let epoch = DispatchTime.now()
+    func event(_ name: StaticString, _ detail: @autoclosure @Sendable () -> String) {
+        let t = Double(DispatchTime.now().uptimeNanoseconds - epoch.uptimeNanoseconds) / 1e3
+        fputs(String(format: "[timing] %10.0fµs %@ — %@\n", t, "\(name)", detail()), stderr)
     }
 }
 
@@ -136,7 +148,8 @@ try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories:
 let engine = SpeechEngine(
     model: spec(for: args.precision),
     synthesizer: Qwen3Synthesizer(),
-    gpu: ImmediateLease()
+    gpu: ImmediateLease(),
+    diagnostics: args.timing ? StderrTimingTap() : nil
 )
 
 let narrator = "A calm, warm female narrator with a clear, steady tone."

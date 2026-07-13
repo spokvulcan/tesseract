@@ -114,6 +114,11 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                         refText: nil,
                         language: request.language,
                         generationParameters: params,
+                        // 0.4s chunks: pacing/cancel granularity. Not a perf
+                        // lever — the 2026-07-13 perf pass measured RTF flat at
+                        // interval 2.0, and the streaming decoder is NOT
+                        // chunk-size invariant (samples diverge), so changing
+                        // this alters output audio at a fixed seed.
                         streamingInterval: 0.4,
                         useVoiceAnchor: request.anchor != nil)
 
