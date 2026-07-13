@@ -27,6 +27,7 @@ ledger onto the new tag, then re-run the pinning tests and the #339 bench gates.
 | 8 | `spike-smoke` tool — runtime smoke harness (seed determinism, alignment, anchor) | `Sources/Tools/spike-smoke/` | Tesseract-only verification tooling; runs the #337 smoke suite against real weights. Not linked by the app. | spike `f20e50c` |
 | 9 | `bench-339` tool + simcheck modes — TTFA/RTF/memory matrix, machine sanity gates, speaker-similarity tripwire | `Sources/Tools/bench-339/` (per bench patches) | The permanent #339/#338 measurement harness; feeds the ADR-0037 precision gate and every future re-vendor's budget scorecard. Not linked by the app. | bench `0001`+`0002` |
 | 10 | `lastGeneratedCodeFrames` getter + `buildVoiceAnchor(fromCodeFrames:...)` overload | `Models/Qwen3TTS/Qwen3TTS.swift` | Anchor code frames as plain values: enables `PinnedVoice` (ADR-0038) — voice identity serialized across relaunch, anchors rebuilt without regenerating source audio. ~25 LOC additive. | v2 engine (2026-07-13) |
+| 11 | Model store location: `Application Support/models/<repo>` + public `storageDirectoryName` | `Sources/MLXAudioCore/ModelUtils.swift` | Upstream stores snapshots under the Hub cache root — a purgeable Caches dir in a sandboxed app — which would orphan users' existing multi-GB downloads and split storage from the app's Models page (`ModelDownloadManager.modelStorageURL`). Restores the pre-v0.1.3 port layout. NOT an upstream candidate (app-specific policy). | v2 wiring (2026-07-13) |
 
 ## Upstreaming queue (ADR-0036 §4, post-v2, opportunistic)
 

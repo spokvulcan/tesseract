@@ -2,6 +2,11 @@ import Foundation
 import HuggingFace
 
 public enum ModelUtils {
+    /// TESSERACT PATCH #11 (TESSERACT-PATCHES.md): the on-disk model store
+    /// name under Application Support — the pre-v0.1.3 port location, kept so
+    /// staged checkpoints and prior user downloads keep resolving.
+    public static let storageDirectoryName = "models"
+
     public static func resolveModelType(
         repoID: Repo.ID,
         hfToken: String? = nil,
@@ -73,10 +78,14 @@ public enum ModelUtils {
             ? String(requiredExtension.dropFirst())
             : requiredExtension
 
-        // Store downloaded model snapshots under the configured Hugging Face cache root.
+        // TESSERACT PATCH #11: store model snapshots under Application
+        // Support/models — the pre-v0.1.3 port location — so staged
+        // checkpoints and prior user downloads keep resolving. Upstream
+        // stores under the Hub cache root (a purgeable Caches dir in a
+        // sandboxed app), which would orphan existing multi-GB downloads.
         let modelSubdir = repoID.description.replacingOccurrences(of: "/", with: "_")
-        let modelDir = cache.cacheDirectory
-            .appendingPathComponent("mlx-audio")
+        let modelDir = URL.applicationSupportDirectory
+            .appendingPathComponent(storageDirectoryName)
             .appendingPathComponent(modelSubdir)
 
         // Check if model already exists with required files
