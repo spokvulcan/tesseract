@@ -1215,6 +1215,19 @@ _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
 
+### Text injection
+
+**Clipboard Loan**:
+How dictated text reaches the frontmost app: the system pasteboard is borrowed as
+the transport for a synthetic Cmd+V and always returned — the pre-dictation
+contents restored, or cleared when there was nothing to save (empty before, or
+over the snapshot cap) — so a transcript never lingers for a later Cmd+V to
+re-paste. The return only lands if the pasteboard generation is still ours; a
+mid-window copy wins. Restore mode off is not a loan at all: dictate-to-clipboard
+keeps the transcript deliberately.
+_Avoid_: clipboard restore (half the contract — the return also clears),
+clipboard backup, paste injection (the Cmd+V is one step of the loan).
+
 ### Hotkey handling
 
 **Hotkey Matcher**:
