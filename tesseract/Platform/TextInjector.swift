@@ -31,16 +31,17 @@ final class TextInjector: ObservableObject, TextInjecting {
         /// app must read the transcript off the pasteboard first. Runs off the
         /// awaited path (see `inject`), so it delays nothing the user sees.
         static let clipboardRestoreDelay: Duration = .milliseconds(100)
-        /// Ceiling on the pre-injection clipboard snapshot. Sized for the
-        /// dominant real payload — a copied screenshot, whose TIFF
-        /// representation is width x height x 4 (~59 MB full-screen at 5K,
-        /// ~81 MB at 6K) plus a PNG sibling. The original 10 MB cap silently
-        /// dropped exactly that case and the dictation squatted on the
-        /// pasteboard. Note the loop below reads each representation *before*
-        /// counting it, so the cap bounds retained memory and the remaining
-        /// reads, not the first big read. Over the cap the save is skipped
-        /// *entirely* — never a partial snapshot, which a later restore would
-        /// present as the full clipboard — and the loan return clears instead.
+        /// Ceiling on the pre-injection clipboard snapshot, measured against
+        /// *item-declared* content only. That distinction is the screenshot
+        /// bug: a copied screenshot is one item declaring a ~2 MB PNG, but the
+        /// pasteboard-level type list also offers server-derived
+        /// representations (TIFF at width x height x 4+, each doubled by its
+        /// legacy-name alias) — 65 MB of synthesized reads for 1.7 MB of
+        /// content, and beyond any fixed cap for HDR captures. Derived types
+        /// are never saved; the server re-derives them from the restored
+        /// content. Over the cap the save is skipped *entirely* — never a
+        /// partial snapshot, which a later restore would present as the full
+        /// clipboard — and the loan return clears instead.
         static let maxSavedClipboardBytes = 128 * 1024 * 1024
     }
 
@@ -55,7 +56,10 @@ final class TextInjector: ObservableObject, TextInjecting {
 
     @Published private(set) var lastInjectionSucceeded = false
 
-    private var savedClipboardContents: [NSPasteboard.PasteboardType: Data]?
+    /// Per-item snapshot of the pre-dictation clipboard: each element is one
+    /// pasteboard item's declared types and data. Item-shaped so the restore
+    /// preserves multi-item clipboards instead of flattening them.
+    private var savedClipboardContents: [[NSPasteboard.PasteboardType: Data]]?
     var restoreClipboard = true
 
     /// The in-flight deferred loan return, exposed so tests can await the
@@ -162,22 +166,43 @@ final class TextInjector: ObservableObject, TextInjecting {
         return pasteboard.changeCount
     }
 
+    /// Snapshots what each pasteboard item *declares* — never the
+    /// pasteboard-level type list, whose server-derived representations
+    /// (PNG→TIFF, modern/legacy aliases) multiply a screenshot's 1.7 MB of
+    /// content into tens of megabytes of synthesized reads. The server
+    /// re-derives those for whatever the restore puts back.
     private func saveClipboardContents() {
-        var contents: [NSPasteboard.PasteboardType: Data] = [:]
+        var items: [[NSPasteboard.PasteboardType: Data]] = []
         var totalBytes = 0
+        var shape: [String] = []
 
-        for type in pasteboard.types ?? [] {
-            if let data = pasteboard.data(forType: type) {
-                totalBytes += data.count
-                if totalBytes > maxSavedClipboardBytes {
-                    savedClipboardContents = nil
-                    return
+        for item in pasteboard.pasteboardItems ?? [] {
+            var contents: [NSPasteboard.PasteboardType: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    shape.append("\(type.rawValue):\(data.count)")
+                    totalBytes += data.count
+                    if totalBytes > maxSavedClipboardBytes {
+                        savedClipboardContents = nil
+                        Log.transcription.warning(
+                            "clipboard loan: snapshot SKIPPED over cap at \(totalBytes)B [\(shape.joined(separator: " "))]"
+                        )
+                        return
+                    }
+                    contents[type] = data
+                } else {
+                    shape.append("\(type.rawValue):nil")
                 }
-                contents[type] = data
+            }
+            if !contents.isEmpty {
+                items.append(contents)
             }
         }
 
-        savedClipboardContents = contents.isEmpty ? nil : contents
+        savedClipboardContents = items.isEmpty ? nil : items
+        Log.transcription.info(
+            "clipboard loan: saved \(items.count) item(s), \(totalBytes)B [\(shape.joined(separator: " "))]"
+        )
     }
 
     /// Returns the Clipboard Loan: puts the pre-dictation snapshot back, or —
@@ -187,20 +212,38 @@ final class TextInjector: ObservableObject, TextInjecting {
     /// (dictate-to-clipboard is a deliberate workflow); this only runs with
     /// it on.
     private static func returnClipboardLoan(
-        _ contents: [NSPasteboard.PasteboardType: Data]?, to pasteboard: NSPasteboard,
+        _ items: [[NSPasteboard.PasteboardType: Data]]?, to pasteboard: NSPasteboard,
         ifChangeCountStill expected: Int
     ) {
         // Another writer took the pasteboard after the transcript write (the
         // user copied, an app synced) — restoring or clearing now would stomp
         // *their* content: the wrong-content-pasted race (audit #285 item 9).
         // Their write wins; the snapshot is dropped.
-        guard pasteboard.changeCount == expected else { return }
+        guard pasteboard.changeCount == expected else {
+            Log.transcription.warning(
+                "clipboard loan: return dropped — changeCount \(pasteboard.changeCount) != expected \(expected)"
+            )
+            return
+        }
         pasteboard.clearContents()
 
-        guard let contents else { return }
-        for (type, data) in contents {
-            pasteboard.setData(data, forType: type)
+        guard let items else {
+            Log.transcription.info("clipboard loan: nothing saved — cleared transcript")
+            return
         }
+        // Pasteboard items are single-use once written, so the snapshot holds
+        // raw data and the return mints fresh items from it.
+        let rebuilt = items.map { contents -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            for (type, data) in contents {
+                item.setData(data, forType: type)
+            }
+            return item
+        }
+        pasteboard.writeObjects(rebuilt)
+        Log.transcription.info(
+            "clipboard loan: restored \(rebuilt.count) item(s), changeCount now \(pasteboard.changeCount)"
+        )
     }
 
     // MARK: - Key Simulation

@@ -7,9 +7,14 @@
 //  The focus probe and paste trigger are seamed so the external-app path runs
 //  deterministically and no synthetic Cmd+V ever escapes to the test machine.
 //
-//  The regression that motivated this suite: the 10 MB snapshot cap silently
-//  skipped saving screenshot-sized clipboards (a full-screen TIFF is 20–80 MB),
-//  so the dictation squatted on the pasteboard and the screenshot was lost.
+//  The regression that motivated this suite: the snapshot cap silently
+//  skipped saving screenshot clipboards. The deeper cause: a screenshot is
+//  one item declaring a ~2 MB PNG, but the pasteboard-level type list also
+//  offers server-derived representations (TIFF at 4+ bytes/pixel, each
+//  doubled by its legacy-name alias), so a type-level snapshot read tens of
+//  megabytes — past any fixed cap for HDR captures — for megabytes of real
+//  content. The loan snapshots item-declared content only; the pasteboard
+//  server re-derives the rest after restore.
 //
 
 import AppKit
@@ -23,6 +28,19 @@ import Testing
 struct TextInjectorTests {
     private static let transientMarker = NSPasteboard.PasteboardType(
         "org.nspasteboard.TransientType")
+
+    /// Real PNG bytes — genuine image content, so the pasteboard server
+    /// synthesizes the derived representations a screenshot clipboard has.
+    private static func makePNG() throws -> Data {
+        let image = NSImage(size: NSSize(width: 200, height: 120), flipped: false) { rect in
+            NSColor.systemTeal.setFill()
+            rect.fill()
+            return true
+        }
+        let tiff = try #require(image.tiffRepresentation)
+        let rep = try #require(NSBitmapImageRep(data: tiff))
+        return try #require(rep.representation(using: .png, properties: [:]))
+    }
 
     /// An injector wired to a fresh unique pasteboard, never our own app,
     /// with the synthetic paste stubbed out.
@@ -55,8 +73,52 @@ struct TextInjectorTests {
         #expect(pasteboard.string(forType: .string) == "https://example.com")
     }
 
-    /// The regression test for the mis-sized cap: a screenshot-scale payload
-    /// (well over the old 10 MB ceiling) must be saved and restored.
+    /// The screenshot regression test. Real PNG content on the pasteboard
+    /// makes the server synthesize derived representations (TIFF + legacy
+    /// aliases, ~245x the content size), and the cap here sits between the
+    /// two: a type-level snapshot overflows it and the screenshot is lost; the
+    /// item-level snapshot saves the PNG and the loan returns it — with the
+    /// derived TIFF available again to whoever pastes.
+    @Test func snapshotSavesContentNotDerivedRepresentations() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let png = try Self.makePNG()
+        pasteboard.clearContents()
+        pasteboard.setData(png, forType: .png)
+        #expect(pasteboard.data(forType: .tiff) != nil)  // derivation is live
+
+        let injector = makeInjector(
+            pasteboard: pasteboard, maxSavedClipboardBytes: 64 * 1024)
+        try await injector.inject("dictated text")
+        await injector.clipboardReturnTask?.value
+
+        #expect(pasteboard.data(forType: .png) == png)
+        #expect(pasteboard.data(forType: .tiff) != nil)
+        #expect(pasteboard.string(forType: .string) == nil)
+    }
+
+    /// A multi-item clipboard (several files copied at once) must come back
+    /// as the same items, not flattened into one.
+    @Test func restoresMultiItemClipboard() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        let items = ["first", "second"].map { text -> NSPasteboardItem in
+            let item = NSPasteboardItem()
+            item.setString(text, forType: .string)
+            return item
+        }
+        pasteboard.writeObjects(items)
+
+        let injector = makeInjector(pasteboard: pasteboard)
+        try await injector.inject("dictated text")
+        await injector.clipboardReturnTask?.value
+
+        let restored = pasteboard.pasteboardItems ?? []
+        #expect(restored.map { $0.string(forType: .string) } == ["first", "second"])
+    }
+
+    /// A payload well over the old 10 MB ceiling must be saved and restored.
     @Test func restoresScreenshotSizedPayload() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
