@@ -479,7 +479,16 @@ final class DictationCoordinator {
         guard settings.autoInsertText else { return }
         textInjector.restoreClipboard = settings.restoreClipboard
         Task {
-            try? await textInjector.inject(raw + " ")
+            // Surface a failed injection: the loan can refuse to borrow the
+            // pasteboard (unreadable, or an earlier return still unrestored),
+            // and a silent no-op here reads as the button doing nothing.
+            do {
+                try await textInjector.inject(raw + " ")
+            } catch let error as DictationError {
+                handleError(error)
+            } catch {
+                handleError(.textInjectionFailed(error.localizedDescription))
+            }
         }
     }
 

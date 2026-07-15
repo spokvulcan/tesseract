@@ -56,6 +56,7 @@ final class FakeAudioCapture: AudioCapturing {
 @MainActor
 final class FakeTextInjector: TextInjecting {
     var restoreClipboard = false
+    var injectError: DictationError?
     private(set) var injected: [String] = []
 
     func inject(_ text: String) async throws {
@@ -63,6 +64,7 @@ final class FakeTextInjector: TextInjecting {
         // cancellation-aware `Task.sleep`: if the processing task is cancelled,
         // the side effect (recording the injection) must NOT happen.
         try Task.checkCancellation()
+        if let injectError { throw injectError }
         injected.append(text)
     }
 }
@@ -587,6 +589,46 @@ struct DictationCoordinatorTests {
         #expect(store.entries.count == 1)
         #expect(store.entries.first?.text == expected)
         #expect(coordinator.lastRejectedRaw == nil)
+    }
+
+    /// "Insert raw anyway" runs detached from any commit flow, so a failed
+    /// injection there has no outcome switch to surface it — the coordinator
+    /// must report it itself, never leave the press a silent no-op.
+    @Test
+    func insertRawAnywaySurfacesInjectionFailure() async throws {
+        let bundle = try makeFakeModelBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+
+        let recognizer = InMemorySpeechRecognizer(
+            result: TranscriptionResult(
+                text: "hello world", segments: [], language: "en", processingTime: 0)
+        )
+        let engine = try await makeEngine(recognizer: recognizer, bundle: bundle)
+
+        let injector = FakeTextInjector()
+        let feed = DictationFeed()
+        let coordinator = DictationCoordinator(
+            audioCapture: FakeAudioCapture(
+                cannedAudio: AudioData(samples: [0.1, 0.2], sampleRate: 16_000, duration: 2.0)),
+            transcriptionEngine: engine,
+            textInjector: injector,
+            history: FakeTranscriptionStore(),
+            settings: SettingsManager(store: InMemorySettingsStore()),
+            feed: feed,
+            proofreadPass: makeProofreadPass(replying: { _ in "REJECT: garbled noise" })
+        )
+
+        coordinator.onHotkeyDown()
+        coordinator.onHotkeyUp()
+        try await waitUntil { feed.beat != nil }
+
+        injector.injectError = .textInjectionFailed("Clipboard contents could not be read safely")
+        coordinator.insertRawAnyway()
+        try await waitUntil {
+            coordinator.state
+                == .error(.textInjectionFailed("Clipboard contents could not be read safely"))
+        }
+        #expect(injector.injected.isEmpty)
     }
 
     /// A corrected take commits the corrected text; the terminal beat carries
