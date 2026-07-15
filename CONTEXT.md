@@ -1222,12 +1222,14 @@ How dictated text reaches the frontmost app: the system pasteboard is borrowed a
 the transport for a synthetic Cmd+V and returned — the pre-dictation contents
 restored, or cleared when there was nothing to save (empty before, or over the
 snapshot cap) — so a transcript never lingers for a later Cmd+V to re-paste. One
-loan is out at a time (a new dictation settles the pending return first), and the
-return outlives a cancelled dictation. Two deliberate exceptions: the return only
-lands if the pasteboard generation is still ours (a mid-window copy wins), and a
-pasteboard that could not be read is left untouched — never destroy what could
-not be seen. Restore mode off is not a loan at all: dictate-to-clipboard keeps
-the transcript deliberately.
+loan is out at a time: a new dictation waits through the prior app-read window and
+return before taking the pasteboard, and the return outlives a cancelled dictation.
+Transient return-write failures retry; a persistently refused snapshot is retained
+for recovery before the next clipboard use. Two deliberate exceptions: the return
+only lands if the pasteboard generation is still ours (a mid-window copy wins), and
+a pasteboard that could not be read aborts before mutation — never destroy what
+could not be seen. Restore mode off is not a loan at all: dictate-to-clipboard
+keeps the transcript deliberately.
 _Avoid_: clipboard restore (half the contract — the return also clears),
 clipboard backup, paste injection (the Cmd+V is one step of the loan).
 

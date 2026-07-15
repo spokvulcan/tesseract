@@ -2,10 +2,11 @@
 //  TextInjectorTests.swift
 //  tesseractTests
 //
-//  Exercises the **Clipboard Loan** contract of `TextInjector` against a real,
-//  uniquely-named `NSPasteboard` — genuine changeCount semantics, no mocking.
-//  The focus probe and paste trigger are seamed so the external-app path runs
-//  deterministically and no synthetic Cmd+V ever escapes to the test machine.
+//  Exercises the **Clipboard Loan** contract of `TextInjector` primarily
+//  against real, uniquely-named `NSPasteboard`s for genuine changeCount
+//  semantics. A narrow pasteboard fake covers AppKit failure results that a
+//  real server cannot produce deterministically. The focus probe and paste
+//  trigger are seamed so no synthetic Cmd+V escapes to the test machine.
 //
 //  The regression that motivated this suite: the snapshot cap silently
 //  skipped saving screenshot clipboards. The deeper cause: a screenshot is
@@ -24,10 +25,71 @@ import Testing
 @testable import Tesseract_Agent
 
 @MainActor
+private final class TestPasteboard: ClipboardPasteboard {
+    private(set) var mutationCount = 0
+    private(set) var changeCount = 41
+    private(set) var restoreWriteAttempts = 0
+    private var items: [NSPasteboardItem]?
+    private var restoreFailuresRemaining: Int
+    private var stringWriteFailuresRemaining: Int
+
+    var pasteboardItems: [NSPasteboardItem]? { items }
+
+    init(
+        items: [NSPasteboardItem]?, restoreFailures: Int = 0,
+        stringWriteFailures: Int = 0
+    ) {
+        self.items = items
+        restoreFailuresRemaining = restoreFailures
+        stringWriteFailuresRemaining = stringWriteFailures
+    }
+
+    func clearContents() -> Int {
+        mutationCount += 1
+        changeCount += 1
+        items = []
+        return changeCount
+    }
+
+    func setString(_ string: String, forType dataType: NSPasteboard.PasteboardType) -> Bool {
+        mutationCount += 1
+        if stringWriteFailuresRemaining > 0 {
+            stringWriteFailuresRemaining -= 1
+            return false
+        }
+        let item: NSPasteboardItem
+        if let first = items?.first {
+            item = first
+        } else {
+            item = NSPasteboardItem()
+            items = [item]
+        }
+        return item.setString(string, forType: dataType)
+    }
+
+    func writeObjects(_ objects: [any NSPasteboardWriting]) -> Bool {
+        mutationCount += 1
+        restoreWriteAttempts += 1
+        if restoreFailuresRemaining > 0 {
+            restoreFailuresRemaining -= 1
+            return false
+        }
+        items = objects.compactMap { $0 as? NSPasteboardItem }
+        return items?.count == objects.count
+    }
+
+    func string(forType type: NSPasteboard.PasteboardType) -> String? {
+        items?.first?.string(forType: type)
+    }
+}
+
+@MainActor
 @Suite("TextInjector clipboard loan")
 struct TextInjectorTests {
     private static let transientMarker = NSPasteboard.PasteboardType(
         "org.nspasteboard.TransientType")
+    private static let concealedMarker = NSPasteboard.PasteboardType(
+        "org.nspasteboard.ConcealedType")
 
     /// Real PNG bytes — genuine image content, so the pasteboard server
     /// synthesizes the derived representations a screenshot clipboard has.
@@ -102,20 +164,44 @@ struct TextInjectorTests {
     @Test func restoresMultiItemClipboard() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
-        pasteboard.clearContents()
-        let items = ["first", "second"].map { text -> NSPasteboardItem in
-            let item = NSPasteboardItem()
-            item.setString(text, forType: .string)
-            return item
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("text-injector-files-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let urls = ["first.txt", "second.txt"].map { directory.appendingPathComponent($0) }
+        for (index, url) in urls.enumerated() {
+            try Data("file \(index)".utf8).write(to: url)
         }
-        pasteboard.writeObjects(items)
+        pasteboard.clearContents()
+        #expect(pasteboard.writeObjects(urls.map { $0 as NSURL }))
 
         let injector = makeInjector(pasteboard: pasteboard)
         try await injector.inject("dictated text")
         await injector.clipboardReturnTask?.value
 
-        let restored = pasteboard.pasteboardItems ?? []
-        #expect(restored.map { $0.string(forType: .string) } == ["first", "second"])
+        let restored =
+            (pasteboard.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]) as? [NSURL])?.map { $0 as URL }
+        #expect(restored == urls)
+    }
+
+    @Test func restoresWebURLClipboard() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        let url = try #require(NSURL(string: "https://example.com/path?q=1"))
+        pasteboard.clearContents()
+        #expect(pasteboard.writeObjects([url]))
+
+        let injector = makeInjector(pasteboard: pasteboard)
+        try await injector.inject("dictated text")
+        await injector.clipboardReturnTask?.value
+
+        let restored =
+            pasteboard.readObjects(forClasses: [NSURL.self], options: nil)
+            as? [NSURL]
+        #expect(restored == [url])
     }
 
     /// A payload well over the old 10 MB ceiling must be saved and restored.
@@ -186,11 +272,7 @@ struct TextInjectorTests {
         #expect(pasteboard.string(forType: .string) == "user copy")
     }
 
-    /// The loan must survive its caller being cancelled:
-    /// VoiceCaptureSession.cancel() aborts an in-flight commit, and a
-    /// cancellation landing after the transcript write must not strand the
-    /// transcript with the original content unreturned.
-    @Test func loanReturnsWhenCallerIsCancelled() async throws {
+    @Test func cancellationBeforeInjectionDoesNotMutateClipboard() async throws {
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
@@ -207,6 +289,30 @@ struct TextInjectorTests {
         #expect(pasteboard.string(forType: .string) == "before")
     }
 
+    /// Once Cmd+V is posted, cancellation of the owning commit task must not
+    /// cancel the independent loan return.
+    @Test func loanReturnOutlivesCallerCancellation() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("before", forType: .string)
+
+        var caller: Task<Void, Error>?
+        let injector = makeInjector(
+            pasteboard: pasteboard,
+            onPaste: { caller?.cancel() })
+        caller = Task {
+            try await injector.inject("dictated text")
+            try await Task.sleep(for: .seconds(10))
+        }
+
+        let callerTask = try #require(caller)
+        _ = await callerTask.result
+        await injector.clipboardReturnTask?.value
+
+        #expect(pasteboard.string(forType: .string) == "before")
+    }
+
     /// One loan at a time: an injection arriving while the previous return is
     /// still pending settles that loan first, so its own snapshot sees the
     /// restored original — never the previous transcript — and the original
@@ -217,18 +323,46 @@ struct TextInjectorTests {
         pasteboard.clearContents()
         pasteboard.setString("before", forType: .string)
 
-        var pasteCount = 0
-        let injector = makeInjector(pasteboard: pasteboard, onPaste: { pasteCount += 1 })
-        let first = Task { try await injector.inject("first take") }
-        // Let the first injection reach its settle sleep (transcript written,
-        // loan out), then inject again inside its return window.
-        await Task.yield()
+        var pastedTexts: [String?] = []
+        let injector = makeInjector(
+            pasteboard: pasteboard,
+            onPaste: { pastedTexts.append(pasteboard.string(forType: .string)) })
+        try await injector.inject("first take")
+        // The first call returns with its loan still out, so the next call
+        // deterministically enters inside the read/return window.
         try await injector.inject("second take")
-        _ = await first.result
 
         await injector.clipboardReturnTask?.value
-        #expect(pasteCount == 2)
+        #expect(pastedTexts == ["first take", "second take"])
         #expect(pasteboard.string(forType: .string) == "before")
+    }
+
+    /// Waiting for the previous loan can span a focus change. The route must
+    /// be chosen from the current frontmost app after that wait, not a stale
+    /// pre-wait sample.
+    @Test func focusIsReevaluatedAfterWaitingForPreviousLoan() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("before", forType: .string)
+
+        var ownAppFocused = false
+        var pastedTexts: [String?] = []
+        let injector = TextInjector(
+            pasteboard: pasteboard,
+            ownAppFocused: { ownAppFocused },
+            paste: { pastedTexts.append(pasteboard.string(forType: .string)) })
+        try await injector.inject("first take")
+
+        let focusChange = Task {
+            try await Task.sleep(for: .milliseconds(10))
+            ownAppFocused = true
+        }
+        try await injector.inject("second take")
+        _ = await focusChange.result
+
+        #expect(pastedTexts == ["first take"])
+        #expect(pasteboard.string(forType: .string) == "second take")
     }
 
     /// The restore must replay each item's type declaration order — it is the
@@ -254,6 +388,86 @@ struct TextInjectorTests {
         #expect(restored.data(forType: declared[0]) == Data([0]))
     }
 
+    /// A retrieval failure is not an empty clipboard. The loan must abort
+    /// before its first mutation so unseen user content cannot be destroyed.
+    @Test func unreadableClipboardIsNeverMutated() async {
+        let pasteboard = TestPasteboard(items: nil)
+        var pasted = false
+        let injector = TextInjector(
+            pasteboard: pasteboard,
+            ownAppFocused: { false },
+            paste: { pasted = true })
+
+        await #expect(throws: DictationError.self) {
+            try await injector.inject("dictated text")
+        }
+
+        #expect(pasteboard.mutationCount == 0)
+        #expect(pasted == false)
+        #expect(injector.clipboardReturnTask == nil)
+    }
+
+    /// A transient AppKit write failure must not turn the non-atomic
+    /// clear-then-write restore into permanent clipboard data loss.
+    @Test func transientRestoreFailureRetriesOriginalClipboard() async throws {
+        let original = NSPasteboardItem()
+        _ = original.setString("before", forType: .string)
+        let pasteboard = TestPasteboard(items: [original], restoreFailures: 1)
+        let injector = TextInjector(
+            pasteboard: pasteboard,
+            ownAppFocused: { false },
+            paste: {})
+
+        try await injector.inject("dictated text")
+        await injector.clipboardReturnTask?.value
+
+        #expect(pasteboard.restoreWriteAttempts == 2)
+        #expect(pasteboard.string(forType: .string) == "before")
+    }
+
+    /// Failed transcript transport is not a successful paste. The saved
+    /// clipboard is rolled back and Cmd+V is never posted.
+    @Test func transcriptWriteFailureRollsBackWithoutPasting() async {
+        let original = NSPasteboardItem()
+        _ = original.setString("before", forType: .string)
+        let pasteboard = TestPasteboard(items: [original], stringWriteFailures: 1)
+        var pasted = false
+        let injector = TextInjector(
+            pasteboard: pasteboard,
+            ownAppFocused: { false },
+            paste: { pasted = true })
+
+        await #expect(throws: DictationError.self) {
+            try await injector.inject("dictated text")
+        }
+        await injector.clipboardReturnTask?.value
+
+        #expect(pasted == false)
+        #expect(pasteboard.string(forType: .string) == "before")
+    }
+
+    /// Exhausting the immediate retry budget must retain the snapshot. The
+    /// next clipboard use recovers it before taking another loan.
+    @Test func persistentRestoreFailureIsRecoveredBeforeNextInjection() async throws {
+        let original = NSPasteboardItem()
+        _ = original.setString("before", forType: .string)
+        let pasteboard = TestPasteboard(items: [original], restoreFailures: 3)
+        let injector = TextInjector(
+            pasteboard: pasteboard,
+            ownAppFocused: { false },
+            paste: {})
+
+        try await injector.inject("first take")
+        await injector.clipboardReturnTask?.value
+        #expect(pasteboard.restoreWriteAttempts == 3)
+
+        try await injector.inject("second take")
+        await injector.clipboardReturnTask?.value
+
+        #expect(pasteboard.restoreWriteAttempts == 5)
+        #expect(pasteboard.string(forType: .string) == "before")
+    }
+
     /// Restore mode off is dictate-to-clipboard: the transcript stays, no
     /// return task runs, and the privacy markers ride the write.
     @Test func restoreOffLeavesTranscriptWithPrivacyMarkers() async throws {
@@ -269,5 +483,6 @@ struct TextInjectorTests {
         #expect(injector.clipboardReturnTask == nil)
         #expect(pasteboard.string(forType: .string) == "dictated text")
         #expect(pasteboard.types?.contains(Self.transientMarker) == true)
+        #expect(pasteboard.types?.contains(Self.concealedMarker) == true)
     }
 }
