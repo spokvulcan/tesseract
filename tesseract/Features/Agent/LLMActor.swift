@@ -249,16 +249,17 @@ actor LLMActor {
             // prompts through the app's prefill driver to keep peak memory
             // bounded (ADR-0006). Image-bearing inputs stay single-shot.
             let iterator: TokenIterator
+            let prefillStep = genParams.prefillStepSize ?? 512
             if prepared.text.tokens.ndim >= 2,
                 prepared.image == nil, prepared.video == nil,
-                prepared.text.tokens.dim(-1) > genParams.prefillStepSize
+                prepared.text.tokens.dim(-1) > prefillStep
             {
                 var cache = context.model.newCache(parameters: genParams)
                 let warmed = try PrefillExecutor.run(
                     model: context.model,
                     text: prepared.text,
                     cache: cache,
-                    prefillStepSize: genParams.prefillStepSize
+                    prefillStepSize: prefillStep
                 )
                 iterator = try PrefillExecutor.makeIterator(
                     model: context.model,
@@ -405,13 +406,14 @@ actor LLMActor {
         // `prepare` is single-shot, so pre-chunk long token-only prompts
         // through the app driver (ADR-0006).
         let iterator: TokenIterator
-        if tokenNDim >= 2, combined.count > parameters.prefillStepSize {
+        let prefillStep = parameters.prefillStepSize ?? 512
+        if tokenNDim >= 2, combined.count > prefillStep {
             var cache = context.model.newCache(parameters: parameters)
             let warmed = try PrefillExecutor.run(
                 model: context.model,
                 text: continuedText,
                 cache: cache,
-                prefillStepSize: parameters.prefillStepSize
+                prefillStepSize: prefillStep
             )
             iterator = try PrefillExecutor.makeIterator(
                 model: context.model,

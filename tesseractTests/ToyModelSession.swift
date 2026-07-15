@@ -61,7 +61,10 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
 
     /// Single-shot prepare, the vendor-LLM shape: forward the whole prompt,
     /// return the `.logits` the decode iterator samples its first token from.
-    func prepare(_ input: LMInput, cache: [KVCache], windowSize: Int?) throws -> PrepareResult {
+    /// The toy keeps no positional state, so `state` is ignored.
+    func prepare(
+        _ input: LMInput, cache: [KVCache], state _: LMOutput.State?, windowSize: Int?
+    ) throws -> PrepareResult {
         let tokens = input.text.tokens
         let batched = tokens.ndim >= 2 ? tokens : tokens[.newAxis]
         return .logits(LMOutput(logits: callAsFunction(batched, cache: cache)))
@@ -237,9 +240,9 @@ nonisolated struct RecordingModelSession: ModelSession {
 
     var configuration: ModelConfiguration { base.configuration }
     var tokenizer: any Tokenizer { base.tokenizer }
-    var windowedVisionContinuation: (any WindowedVisionContinuation)? {
+    var anchoredVisionPrepare: AnchoredVisionPrepare? {
         recorder.record(.visionContinuationQuery)
-        return base.windowedVisionContinuation
+        return base.anchoredVisionPrepare
     }
 
     func prepare(_ input: UserInput) async throws -> LMInput {
@@ -302,7 +305,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         _ input: LMInput,
         cache: [any KVCache],
         parameters: GenerateParameters,
-        prepare: ((LMInput, [any KVCache], Int) throws -> PrepareResult)?
+        prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)?
     ) throws -> StateThreadedTokenIterator {
         recorder.record(.makePreparingDecodeIterator)
         return try base.makePreparingDecodeIterator(

@@ -220,7 +220,7 @@ final class ParoQuantVLMSmokeRunner {
         input: LMInput
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
         let cache = context.model.newCache(parameters: nil)
-        let result = try context.model.prepare(input, cache: cache, windowSize: nil)
+        let result = try context.model.prepare(input, cache: cache, state: nil, windowSize: nil)
         guard case .logits(let output) = result else {
             return (false, "prepare returned .tokens — unexpected for the VLM container", [])
         }
@@ -269,7 +269,9 @@ final class ParoQuantVLMSmokeRunner {
             text: .init(tokens: prefix, mask: ones(like: prefix).asType(.int8)),
             image: input.image
         )
-        guard case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil)
+        guard
+            case .logits = try context.model.prepare(
+                prefixInput, cache: cache, state: nil, windowSize: nil)
         else {
             return (false, "prepare returned .tokens", [])
         }
@@ -414,7 +416,7 @@ final class ParoQuantVLMSmokeRunner {
         let coldCache = context.model.newCache(parameters: nil)
         guard
             case .logits(let coldTurn1) = try context.model.prepare(
-                input, cache: coldCache, windowSize: nil
+                input, cache: coldCache, state: nil, windowSize: nil
             )
         else {
             return (false, "cold turn-1 prepare returned .tokens", [])
@@ -440,7 +442,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let singleOut) = try context.model.prepare(
-                singleInput, cache: singleCache, windowSize: nil
+                singleInput, cache: singleCache, state: nil, windowSize: nil
             )
         else {
             return (false, "single-shot cold prepare returned .tokens", [])
@@ -457,7 +459,7 @@ final class ParoQuantVLMSmokeRunner {
         let warmSetup = context.model.newCache(parameters: nil)
         guard
             case .logits(let turn1Out) = try context.model.prepare(
-                input, cache: warmSetup, windowSize: nil
+                input, cache: warmSetup, state: nil, windowSize: nil
             )
         else {
             return (false, "turn-1 prepare returned .tokens", [])
@@ -540,7 +542,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let coldOut) = try context.model.prepare(
-                coldInput, cache: coldCache, windowSize: nil
+                coldInput, cache: coldCache, state: nil, windowSize: nil
             )
         else {
             return (false, "cold prepare returned .tokens", [])
@@ -569,7 +571,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let warmOut) = try context.model.prepare(
-                remainderInput, cache: restored, windowSize: nil
+                remainderInput, cache: restored, state: nil, windowSize: nil
             )
         else {
             return (false, "remainder prepare returned .tokens", [])
@@ -672,7 +674,7 @@ final class ParoQuantVLMSmokeRunner {
                 image: prepared.image
             )
             guard
-                case .logits(let out) = try vlm.prepareContinuation(
+                case .logits(let out) = try vlm.prepare(
                     remainderInput, cache: working, state: anchor, windowSize: 512
                 )
             else {
@@ -800,7 +802,8 @@ final class ParoQuantVLMSmokeRunner {
                     pixels: pixels[0..<image1Patches, 0...], frames: [frames[0]])
             )
             guard
-                case .logits = try context.model.prepare(prefixInput, cache: cache, windowSize: nil)
+                case .logits = try context.model.prepare(
+                    prefixInput, cache: cache, state: nil, windowSize: nil)
             else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
             }
@@ -829,7 +832,7 @@ final class ParoQuantVLMSmokeRunner {
                     pixels: pixels[image1Patches..., 0...], frames: [frames[1]])
             )
             guard
-                case .logits(let out) = try vlm.prepareContinuation(
+                case .logits(let out) = try vlm.prepare(
                     remainderInput, cache: working, state: anchor, windowSize: 512
                 )
             else {
@@ -909,7 +912,7 @@ final class ParoQuantVLMSmokeRunner {
             image: input.image
         )
         guard
-            case .logits(let out) = try vlm.prepareContinuation(
+            case .logits(let out) = try vlm.prepare(
                 wholeInput, cache: cache, state: nil, windowSize: 512
             )
         else {
@@ -947,7 +950,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let out) = try context.model.prepare(
-                prefixInput, cache: cache, windowSize: nil
+                prefixInput, cache: cache, state: nil, windowSize: nil
             )
         else {
             throw ParoQuantVLMSmokeError.unexpectedPrepareResult

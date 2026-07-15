@@ -65,8 +65,8 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     ///
     /// `prepare` overrides how the prompt is prefilled (input, cache,
     /// windowSize) → `PrepareResult`. The default is the model's single-shot
-    /// `prepare`; the unkeyed *image* path injects the windowed vision
-    /// continuation (`prepareContinuation` from zero) so an image-bearing prompt
+    /// `prepare`; the unkeyed *image* path injects the anchored vision
+    /// `prepare` (state nil ⇒ from zero) so an image-bearing prompt
     /// that failed cache keying is still prefilled in bounded `[heads, chunk,
     /// L]` windows instead of the crash-prone single `[heads, L, L]` allocation.
     init(
@@ -74,7 +74,7 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         model: any LanguageModel,
         cache: [any KVCache],
         parameters: GenerateParameters,
-        prepare: ((LMInput, [any KVCache], Int) throws -> PrepareResult)? = nil
+        prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)? = nil
     ) throws {
         self.model = model
         self.cache = cache
@@ -87,7 +87,7 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         let started = Date.timeIntervalSinceReferenceDate
         let runPrepare =
             prepare ?? { input, cache, windowSize in
-                try model.prepare(input, cache: cache, windowSize: windowSize)
+                try model.prepare(input, cache: cache, state: nil, windowSize: windowSize)
             }
         switch try runPrepare(input, cache, parameters.prefillStepSize) {
         case .tokens(let tail):

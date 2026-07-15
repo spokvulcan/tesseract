@@ -162,7 +162,7 @@ private nonisolated final class ProgressEventLog: @unchecked Sendable {
                 UserInput(messages: [["role": "user", "content": Self.userText]])
             )
             // Attach a tiny processed image so the arm takes its image
-            // branch; the toy model is not a `WindowedVisionContinuation`,
+            // branch; the toy model has no anchored vision `prepare`,
             // so the query returns nil and the single-shot path runs.
             let fullInput = LMInput(
                 text: prepared.text,

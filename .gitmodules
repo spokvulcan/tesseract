@@ -6,7 +6,8 @@
 	# pinned commits until they merge upstream.
 	# https (not ssh) so CI checkout can fetch the public fork anonymously.
 	url = https://github.com/spokvulcan/mlx-swift-lm.git
-	# The pinned commit rides this feature branch until it merges upstream;
-	# `--remote` must track it, not the fork's `main` (which mirrors upstream
-	# and would revert the pin). Re-point to `main` once the change lands.
+	# The pinned commit rides this branch, rebuilt on every re-pin (upstream
+	# main + carried commits); `--remote` must track it, not the fork's `main`
+	# (which mirrors upstream and would drop the carried commits). What the
+	# pin carries and why: docs/mlx-swift-lm-fork.md.
 	branch = pin-upstream-mlx-swift

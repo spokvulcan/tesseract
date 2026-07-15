@@ -1417,37 +1417,37 @@ nonisolated final class ServerCompletion {
                             // bounded to `[heads, window, executionBaseOffset]`,
                             // not the single-shot `[heads, L, L]`.
                             try Self.checkChunkedVisionBackstop(
-                                windowSize: genParams.prefillStepSize,
+                                windowSize: genParams.prefillStepSize ?? 512,
                                 contextTokens: executionBaseOffset,
                                 profile: fullAttentionScratchProfile,
                                 diagnosticsContext: diagnosticsContext
                             )
 
-                            // Warm/cold image span (ADR-0007 phase 2): the windowed
-                            // continuation runs the vision tower once, positions the
+                            // Warm/cold image span (ADR-0007 phase 2): the anchored
+                            // `prepare` runs the vision tower once, positions the
                             // new image from the restored Position Anchor
                             // (`imageContinuationAnchor`; nil ⇒ anchored at zero, a
-                            // crash-safe cold prefill), and chunks the forward so the
-                            // scratch is bounded. Its returned state anchors the
+                            // crash-safe cold prefill), and windows the forward so
+                            // the scratch is bounded. Its returned state anchors the
                             // chunked text tail. A non-identity key space implies the
-                            // recognized vision container, which conforms to
-                            // `WindowedVisionContinuation`.
-                            guard let continuation = session.windowedVisionContinuation
+                            // recognized vision container, whose session exposes
+                            // the anchored `prepare`.
+                            guard let anchoredPrepare = session.anchoredVisionPrepare
                             else {
                                 throw AgentEngineError.generationFailed(
-                                    "loaded model does not support windowed vision continuation"
+                                    "loaded model does not support anchored vision continuation"
                                 )
                             }
                             guard
-                                case .logits(let prepared) = try continuation.prepareContinuation(
+                                case .logits(let prepared) = try anchoredPrepare(
                                     imagePrefixInput,
-                                    cache: liveCache,
-                                    state: imageContinuationAnchor,
-                                    windowSize: genParams.prefillStepSize
+                                    liveCache,
+                                    imageContinuationAnchor,
+                                    genParams.prefillStepSize
                                 )
                             else {
                                 throw AgentEngineError.generationFailed(
-                                    "vision container returned .tokens from prepareContinuation"
+                                    "vision container returned .tokens from anchored prepare"
                                 )
                             }
                             try error.check()
@@ -1481,7 +1481,7 @@ nonisolated final class ServerCompletion {
                                 cache: liveCache,
                                 checkpoints: allCheckpoints,
                                 checkpointBaseOffset: executionBaseOffset,
-                                prefillStepSize: genParams.prefillStepSize,
+                                prefillStepSize: genParams.prefillStepSize ?? 512,
                                 consumeAll: false,
                                 initialState: initialState,
                                 evalPolicy: imagePrefixInput == nil
@@ -1630,7 +1630,7 @@ nonisolated final class ServerCompletion {
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                prefillStepSize: parameters.prefillStepSize,
+                prefillStepSize: parameters.prefillStepSize ?? 512,
                 tokenNDim: tokenNDim
             )
         }
@@ -1824,20 +1824,20 @@ nonisolated final class ServerCompletion {
 
         let iterator: StateThreadedTokenIterator
         if fullInput.image != nil,
-            let continuation = session.windowedVisionContinuation
+            let anchoredPrepare = session.anchoredVisionPrepare
         {
             // Image-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
             // keying failed (e.g. a placeholder/grid mismatch), but the prompt
-            // still carries pixels — the vendor's single-shot `prepare` would
+            // still carries pixels — a single-shot `prepare` would
             // allocate the crash-prone `[heads, L, L]` full-attention scratch.
-            // Drive the windowed vision continuation from zero instead (state
+            // Drive the anchored vision `prepare` from zero instead (state
             // nil ⇒ anchored at offset 0), so even this fallback prefills in
             // bounded `[heads, chunk, L]` windows. The backstop guard fires only
             // if a single window cannot fit (effectively unreachable). The whole
             // continuation runs under a scoped MLX error handler so a runtime
             // failure surfaces as a throw, not a process-fatal dispatch.
             try checkChunkedVisionBackstop(
-                windowSize: parameters.prefillStepSize,
+                windowSize: parameters.prefillStepSize ?? 512,
                 contextTokens: fullTokenCount,
                 profile: fullAttentionScratchProfile,
                 diagnosticsContext: diagnosticsContext
@@ -1848,9 +1848,7 @@ nonisolated final class ServerCompletion {
                     cache: cache,
                     parameters: iteratorParams,
                     prepare: { input, cache, windowSize in
-                        try continuation.prepareContinuation(
-                            input, cache: cache, state: nil, windowSize: windowSize
-                        )
+                        try anchoredPrepare(input, cache, nil, windowSize)
                     }
                 )
                 try error.check()
@@ -1905,7 +1903,7 @@ nonisolated final class ServerCompletion {
             partitionKey: partitionKey,
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
-            prefillStepSize: parameters.prefillStepSize,
+            prefillStepSize: parameters.prefillStepSize ?? 512,
             tokenNDim: fullInput.text.tokens.ndim
         )
     }

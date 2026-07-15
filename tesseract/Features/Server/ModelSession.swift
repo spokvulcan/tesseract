@@ -1,6 +1,14 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import MLXVLM
+
+/// The anchored vision `prepare` verb: `(input, cache, state, windowSize)` →
+/// `PrepareResult`. Present on a session only when the loaded family anchors
+/// warm continuations — M-RoPE positions seeded from `state`, image-bearing
+/// forwards windowed to `[heads, window, L]`.
+typealias AnchoredVisionPrepare =
+    (LMInput, [any KVCache], LMOutput.State?, Int?) throws -> PrepareResult
 
 /// **Model Session** (CONTEXT.md → Server completion; ADR-0016): the scoped,
 /// Metal-affine model handle the **Server Completion** enters for one batch of
@@ -25,10 +33,10 @@ nonisolated protocol ModelSession {
     /// (boundary detection, the generation loop's detokenizer).
     var tokenizer: any Tokenizer { get }
 
-    /// The loaded model's windowed vision continuation, when the family has
-    /// wired the chunked image path (`nil` otherwise). The feature-detect
-    /// `as?` cast, as a queryable fact.
-    var windowedVisionContinuation: (any WindowedVisionContinuation)? { get }
+    /// The loaded model's anchored vision `prepare`, when the family has
+    /// wired the state-threaded windowed path (`nil` otherwise). The
+    /// feature-detect `as?` cast, as a queryable fact.
+    var anchoredVisionPrepare: AnchoredVisionPrepare? { get }
 
     /// Run the model's input processor: `UserInput` (messages, images,
     /// tools) → tokenized `LMInput`.
@@ -72,7 +80,7 @@ nonisolated protocol ModelSession {
         _ input: LMInput,
         cache: [any KVCache],
         parameters: GenerateParameters,
-        prepare: ((LMInput, [any KVCache], Int) throws -> PrepareResult)?
+        prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)?
     ) throws -> StateThreadedTokenIterator
 
     /// Quantize the cache in place per the parameters' `kvBits`/`kvGroupSize`
@@ -108,8 +116,16 @@ nonisolated struct ContextBackedModelSession: ModelSession {
 
     var configuration: ModelConfiguration { context.configuration }
     var tokenizer: any Tokenizer { context.tokenizer }
-    var windowedVisionContinuation: (any WindowedVisionContinuation)? {
-        context.model as? WindowedVisionContinuation
+    var anchoredVisionPrepare: AnchoredVisionPrepare? {
+        // Concrete-class feature detect: since upstream #399 the anchored
+        // windowed continuation is the Qwen3.5/3.6 container's own `prepare`
+        // (the old `WindowedVisionContinuation` protocol is gone). Other VLM
+        // families accept `state:` but ignore it (mlx-swift-lm issue #420),
+        // so only the class that anchors qualifies.
+        guard let model = context.model as? Qwen35 else { return nil }
+        return { input, cache, state, windowSize in
+            try model.prepare(input, cache: cache, state: state, windowSize: windowSize)
+        }
     }
 
     func prepare(_ input: UserInput) async throws -> LMInput {
@@ -169,7 +185,7 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         _ input: LMInput,
         cache: [any KVCache],
         parameters: GenerateParameters,
-        prepare: ((LMInput, [any KVCache], Int) throws -> PrepareResult)?
+        prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)?
     ) throws -> StateThreadedTokenIterator {
         try StateThreadedTokenIterator(
             preparing: input,
