@@ -31,12 +31,12 @@ protocol TextInjecting: AnyObject {
 
 /// Injects dictated text into the frontmost app via a **Clipboard Loan**: the
 /// system pasteboard is borrowed as the transport for a synthetic Cmd+V and
-/// then returned — the pre-dictation contents restored, cleared when there
-/// was nothing to save, or left untouched in the one case the pasteboard
-/// could not be read (never destroy what could not be seen). One loan is out
-/// at a time: a new injection waits for the pending return first, and the
-/// transcript write + Cmd+V transport never suspends, while the return runs in
-/// an independent task so it outlives cancellation of the caller.
+/// then returned — the pre-dictation contents restored, or cleared when there
+/// was nothing to save. A pasteboard that cannot be read aborts the injection
+/// before anything is mutated: never destroy what could not be seen. One loan
+/// is out at a time: a new injection waits for the pending return first, and
+/// the transcript write + Cmd+V transport never suspends, while the return
+/// runs in an independent task so it outlives cancellation of the caller.
 @MainActor
 final class TextInjector: ObservableObject, TextInjecting {
     private enum Defaults {
@@ -125,20 +125,25 @@ final class TextInjector: ObservableObject, TextInjecting {
     private let pasteboard: any ClipboardPasteboard
     private let maxSavedClipboardBytes: Int
     private let ownAppFocused: @MainActor () -> Bool
+    private let insertText: @MainActor (String) -> Bool
     private let paste: @MainActor () -> Void
 
-    /// The seams (pasteboard, focus probe, paste trigger) exist for tests:
-    /// the loan contract runs against a uniquely-named pasteboard with no
-    /// synthetic Cmd+V escaping to whatever app has focus on the test machine.
+    /// The seams (pasteboard, focus probe, direct insertion, paste trigger)
+    /// exist for tests: the loan contract runs against a uniquely-named
+    /// pasteboard with no synthetic Cmd+V escaping to whatever app has focus
+    /// on the test machine, and no text landing in the test host's own UI.
     init(
         pasteboard: any ClipboardPasteboard = NSPasteboard.general,
         maxSavedClipboardBytes: Int = Defaults.maxSavedClipboardBytes,
         ownAppFocused: @escaping @MainActor () -> Bool = TextInjector.ownAppIsFocused,
+        insertText: @escaping @MainActor (String) -> Bool =
+            TextInjector.insertIntoFocusedTextView,
         paste: @escaping @MainActor () -> Void = TextInjector.postSyntheticPaste
     ) {
         self.pasteboard = pasteboard
         self.maxSavedClipboardBytes = maxSavedClipboardBytes
         self.ownAppFocused = ownAppFocused
+        self.insertText = insertText
         self.paste = paste
     }
 
@@ -153,7 +158,7 @@ final class TextInjector: ObservableObject, TextInjecting {
         // skipped outright, stranding the transcript on the clipboard — issue
         // #168). Insert in-process at the caret instead, no clipboard round-trip.
         var isOwnAppFocused = ownAppFocused()
-        if isOwnAppFocused, insertIntoFocusedTextView(text) {
+        if isOwnAppFocused, insertText(text) {
             lastInjectionSucceeded = true
             return
         }
@@ -168,7 +173,7 @@ final class TextInjector: ObservableObject, TextInjecting {
         // delivery route, and retry direct insertion if Tesseract gained an
         // editable responder while the prior loan was returning.
         isOwnAppFocused = ownAppFocused()
-        if isOwnAppFocused, insertIntoFocusedTextView(text) {
+        if isOwnAppFocused, insertText(text) {
             lastInjectionSucceeded = true
             return
         }
@@ -219,7 +224,7 @@ final class TextInjector: ObservableObject, TextInjecting {
     /// composer, or any field editor). Returns false when nothing editable has
     /// focus, in which case the caller falls back to leaving the text on the
     /// clipboard.
-    private func insertIntoFocusedTextView(_ text: String) -> Bool {
+    static func insertIntoFocusedTextView(_ text: String) -> Bool {
         guard let textView = NSApp.keyWindow?.firstResponder as? NSTextView,
             textView.isEditable
         else { return false }
@@ -236,7 +241,7 @@ final class TextInjector: ObservableObject, TextInjecting {
     /// Writes the transcript with the transient + concealed markers. All
     /// three writes are one contract: partial success is a failed transport.
     private func copyToClipboard(_ text: String) -> Result<Int, ClipboardWriteFailure> {
-        let expectedChangeCount = pasteboard.clearContents()
+        let clearedChangeCount = pasteboard.clearContents()
         let writes: [(value: String, type: NSPasteboard.PasteboardType)] = [
             (text, .string),
             ("", PasteboardMarker.transient),
@@ -249,20 +254,27 @@ final class TextInjector: ObservableObject, TextInjecting {
                     "clipboard loan: transcript write failed for \(write.type.rawValue)")
                 return .failure(
                     ClipboardWriteFailure(
-                        expectedChangeCount: expectedChangeCount,
+                        expectedChangeCount: clearedChangeCount,
                         reason: "The clipboard rejected the dictated text"))
             }
         }
 
-        guard pasteboard.changeCount == expectedChangeCount else {
+        // Ownership check by content, not changeCount arithmetic: whether
+        // adding data to a cleared pasteboard bumps the count is not
+        // documented, and every dictation would die on a macOS that changed
+        // it. If another writer took the pasteboard since our clear, the
+        // read-back differs and Cmd+V must not deliver their content.
+        guard pasteboard.pasteboardItems?.first?.string(forType: .string) == text else {
             Log.transcription.warning(
                 "clipboard loan: transcript write lost ownership before paste")
             return .failure(
                 ClipboardWriteFailure(
-                    expectedChangeCount: expectedChangeCount,
+                    expectedChangeCount: clearedChangeCount,
                     reason: "The clipboard changed before the text could be pasted"))
         }
-        return .success(expectedChangeCount)
+        // Read after the writes so the loan's generation is correct even if
+        // the writes above did bump it.
+        return .success(pasteboard.changeCount)
     }
 
     /// Dictate-to-clipboard and the own-app/no-field fallback deliberately do

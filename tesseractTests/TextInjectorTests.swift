@@ -5,8 +5,9 @@
 //  Exercises the **Clipboard Loan** contract of `TextInjector` primarily
 //  against real, uniquely-named `NSPasteboard`s for genuine changeCount
 //  semantics. A narrow pasteboard fake covers AppKit failure results that a
-//  real server cannot produce deterministically. The focus probe and paste
-//  trigger are seamed so no synthetic Cmd+V escapes to the test machine.
+//  real server cannot produce deterministically. The focus probe, direct
+//  insertion, and paste trigger are seamed so no synthetic Cmd+V or inserted
+//  text escapes to the test machine.
 //
 //  The regression that motivated this suite: the snapshot cap silently
 //  skipped saving screenshot clipboards. The deeper cause: a screenshot is
@@ -32,16 +33,19 @@ private final class TestPasteboard: ClipboardPasteboard {
     private var items: [NSPasteboardItem]?
     private var restoreFailuresRemaining: Int
     private var stringWriteFailuresRemaining: Int
+    private var foreignWriteAfterTranscript: String?
+    private var setStringCalls = 0
 
     var pasteboardItems: [NSPasteboardItem]? { items }
 
     init(
         items: [NSPasteboardItem]?, restoreFailures: Int = 0,
-        stringWriteFailures: Int = 0
+        stringWriteFailures: Int = 0, foreignWriteAfterTranscript: String? = nil
     ) {
         self.items = items
         restoreFailuresRemaining = restoreFailures
         stringWriteFailuresRemaining = stringWriteFailures
+        self.foreignWriteAfterTranscript = foreignWriteAfterTranscript
     }
 
     func clearContents() -> Int {
@@ -64,7 +68,19 @@ private final class TestPasteboard: ClipboardPasteboard {
             item = NSPasteboardItem()
             items = [item]
         }
-        return item.setString(string, forType: dataType)
+        let written = item.setString(string, forType: dataType)
+        setStringCalls += 1
+        // Simulate another process taking the pasteboard the instant the
+        // transcript's three writes (text + both privacy markers) complete —
+        // the narrowest window between transport write and Cmd+V.
+        if setStringCalls == 3, let foreign = foreignWriteAfterTranscript {
+            foreignWriteAfterTranscript = nil
+            changeCount += 1
+            let foreignItem = NSPasteboardItem()
+            _ = foreignItem.setString(foreign, forType: .string)
+            items = [foreignItem]
+        }
+        return written
     }
 
     func writeObjects(_ objects: [any NSPasteboardWriting]) -> Bool {
@@ -351,6 +367,7 @@ struct TextInjectorTests {
         let injector = TextInjector(
             pasteboard: pasteboard,
             ownAppFocused: { ownAppFocused },
+            insertText: { _ in false },  // own app focused, but no editable field
             paste: { pastedTexts.append(pasteboard.string(forType: .string)) })
         try await injector.inject("first take")
 
@@ -444,6 +461,29 @@ struct TextInjectorTests {
 
         #expect(pasted == false)
         #expect(pasteboard.string(forType: .string) == "before")
+    }
+
+    /// A foreign writer taking the pasteboard between the transcript write
+    /// and the paste must abort the injection — Cmd+V would deliver *their*
+    /// content as the dictation — and the rollback must not stomp their copy.
+    @Test func foreignWriteBeforePasteAbortsWithoutStompingIt() async throws {
+        let original = NSPasteboardItem()
+        _ = original.setString("before", forType: .string)
+        let pasteboard = TestPasteboard(
+            items: [original], foreignWriteAfterTranscript: "their copy")
+        var pasted = false
+        let injector = TextInjector(
+            pasteboard: pasteboard,
+            ownAppFocused: { false },
+            paste: { pasted = true })
+
+        await #expect(throws: DictationError.self) {
+            try await injector.inject("dictated text")
+        }
+        await injector.clipboardReturnTask?.value
+
+        #expect(pasted == false)
+        #expect(pasteboard.string(forType: .string) == "their copy")
     }
 
     /// Exhausting the immediate retry budget must retain the snapshot. The
