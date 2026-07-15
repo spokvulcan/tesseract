@@ -186,6 +186,74 @@ struct TextInjectorTests {
         #expect(pasteboard.string(forType: .string) == "user copy")
     }
 
+    /// The loan must survive its caller being cancelled:
+    /// VoiceCaptureSession.cancel() aborts an in-flight commit, and a
+    /// cancellation landing after the transcript write must not strand the
+    /// transcript with the original content unreturned.
+    @Test func loanReturnsWhenCallerIsCancelled() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("before", forType: .string)
+
+        var pasted = false
+        let injector = makeInjector(pasteboard: pasteboard, onPaste: { pasted = true })
+        let caller = Task { try await injector.inject("dictated text") }
+        caller.cancel()
+        _ = await caller.result
+
+        await injector.clipboardReturnTask?.value
+        #expect(pasted == false)
+        #expect(pasteboard.string(forType: .string) == "before")
+    }
+
+    /// One loan at a time: an injection arriving while the previous return is
+    /// still pending settles that loan first, so its own snapshot sees the
+    /// restored original — never the previous transcript — and the original
+    /// content survives the whole burst.
+    @Test func rapidReinjectionPreservesOriginalClipboard() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("before", forType: .string)
+
+        var pasteCount = 0
+        let injector = makeInjector(pasteboard: pasteboard, onPaste: { pasteCount += 1 })
+        let first = Task { try await injector.inject("first take") }
+        // Let the first injection reach its settle sleep (transcript written,
+        // loan out), then inject again inside its return window.
+        await Task.yield()
+        try await injector.inject("second take")
+        _ = await first.result
+
+        await injector.clipboardReturnTask?.value
+        #expect(pasteCount == 2)
+        #expect(pasteboard.string(forType: .string) == "before")
+    }
+
+    /// The restore must replay each item's type declaration order — it is the
+    /// source app's fidelity preference, and consumers may walk it in order.
+    @Test func restoredItemPreservesTypeOrder() async throws {
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        let declared = ["com.example.rich", "com.example.mid", "com.example.plain"]
+            .map { NSPasteboard.PasteboardType($0) }
+        let item = NSPasteboardItem()
+        for (index, type) in declared.enumerated() {
+            item.setData(Data([UInt8(index)]), forType: type)
+        }
+        pasteboard.writeObjects([item])
+
+        let injector = makeInjector(pasteboard: pasteboard)
+        try await injector.inject("dictated text")
+        await injector.clipboardReturnTask?.value
+
+        let restored = try #require(pasteboard.pasteboardItems?.first)
+        #expect(restored.types == declared)
+        #expect(restored.data(forType: declared[0]) == Data([0]))
+    }
+
     /// Restore mode off is dictate-to-clipboard: the transcript stays, no
     /// return task runs, and the privacy markers ride the write.
     @Test func restoreOffLeavesTranscriptWithPrivacyMarkers() async throws {
