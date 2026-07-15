@@ -74,3 +74,17 @@ into a typed `VisionRejection` instead of an OOM abort.
 - The guard's vision profile is the first GPU-cost model of the tower; eviction
   still prices image positions as plain text tokens, so this changes crash
   safety, not cache economics.
+
+## Amendment (2026-07-15)
+
+The default budget is lowered **2 560 → 1 280 vision tokens** (≈ 1.31 MP),
+following review on the upstreamed PR (mlx-swift-lm #398): both cited
+precedents — mlx-vlm's `14·14·4·1280` max_pixels (a patch-14 constant ⇒
+~1.0 MP ≈ 980 tokens on patch-16 qwen3) and `Qwen25VL.swift`'s
+`1280 * factor²` — cap at ~1.0 MP per image, so 1 280 tokens is still the
+most generous of the three. Owner A/B'd real workloads at both budgets
+(dense-text 5 MP screenshot, UI reads): information parity held except two
+single-glyph username misreads in the smallest byline text, judged an
+acceptable trade for a default since `processing.maxPixels` still yields.
+Everything else in this ADR is unchanged; the numbers above describe the
+original 2 560 measurement.
