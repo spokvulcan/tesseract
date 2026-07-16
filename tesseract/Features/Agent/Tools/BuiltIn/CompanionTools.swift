@@ -181,6 +181,71 @@ nonisolated func createBookWakeTool(
     )
 }
 
+// MARK: - revise_instructions
+
+/// The entity's pen on its own standing document (ADR-0040 §12). Full-text
+/// replacement, appended as a new version — never an edit in place, so the
+/// owner's history view always shows what conduct was in force when.
+nonisolated func createReviseInstructionsTool(
+    store: MemoryStore,
+    recorder: CompanionFlightRecorder,
+    context: CompanionTurnContext
+) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: "revise_instructions",
+        label: "revise instructions",
+        description: """
+            Rewrite your standing instructions — the document injected at the top \
+            of every one of your turns. Pass the COMPLETE new text (it replaces the \
+            old version wholesale) and a one-line why. Use it when you learn \
+            something durable: a rhythm that fits him, a register correction he \
+            gave, a rule he set, a lesson from your own flight log. Versioned and \
+            owner-visible; he can read and edit every revision. Keep it short \
+            enough to live by — it rides in every prompt.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "text": PropertySchema(
+                    type: "string",
+                    description: "The complete new instructions document."
+                ),
+                "why": PropertySchema(
+                    type: "string",
+                    description: "One line: what changed and what prompted it."
+                ),
+            ],
+            required: ["text", "why"]
+        ),
+        execute: { _, argsJSON, _, _ in
+            guard let text = ToolArgExtractor.string(argsJSON, key: "text"),
+                !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                throw CompanionToolError(message: "revise_instructions requires 'text'")
+            }
+            guard let why = ToolArgExtractor.string(argsJSON, key: "why"), !why.isEmpty else {
+                throw CompanionToolError(
+                    message: "revise_instructions requires 'why' — the history must say.")
+            }
+            guard text.count <= CompanionInstructions.maxLength else {
+                return .text(
+                    "Too long (\(text.count) chars, cap \(CompanionInstructions.maxLength)). "
+                        + "These ride in every prompt — cut before you grow.")
+            }
+            let version = try await store.appendInstructions(
+                text: text, author: "entity", note: why)
+            await recorder.record(
+                "instructions.revised",
+                turnID: context.turnID,
+                conversationID: context.conversationID,
+                snapshot: ["version": String(version), "chars": String(text.count)],
+                note: why
+            )
+            return .text("Instructions revised — now v\(version). In force from your next turn.")
+        }
+    )
+}
+
 // MARK: - Delivery rungs
 
 /// `notify` and `speak` — thin typed doors over the loop's delivery plumbing,

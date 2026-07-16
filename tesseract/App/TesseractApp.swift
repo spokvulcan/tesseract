@@ -18,6 +18,9 @@ enum WindowID {
     /// The Memory window (ADR-0035 §9): what the assistant believes and why —
     /// browse, drill into source episodes, contest, delete.
     static let memory = "memory"
+    /// The Companion's standing instructions (ADR-0040 §12): the versioned
+    /// document the entity authors for itself — owner-readable and -editable.
+    static let companionInstructions = "companion-instructions"
 }
 
 /// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
@@ -191,6 +194,18 @@ struct TesseractApp: App {
                 .environment(container.memoryEngine)
         }
         .defaultSize(width: 1000, height: 680)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        // The Companion's standing instructions (ADR-0040 §12): on-demand
+        // singleton — the entity's self-authored conduct, owner-editable.
+        Window("Companion Instructions", id: WindowID.companionInstructions) {
+            CompanionInstructionsView(
+                store: container.memoryStore,
+                recorder: container.companionFlightRecorder
+            )
+        }
+        .defaultSize(width: 860, height: 560)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
     }

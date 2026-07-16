@@ -262,6 +262,12 @@ final class DependencyContainer: ObservableObject {
             createSpeakTool(deliver: { [weak self] text in
                 self?.companionLoop.deliverSpoken(text)
             }))
+        registry.appendBuiltInTool(
+            createReviseInstructionsTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
         return registry
     }()
 

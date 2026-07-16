@@ -230,11 +230,18 @@ final class CompanionLoop {
     private func composeOpening(
         template: String, dueWakes: [CompanionWake], now: Date
     ) async -> String {
+        // The entity's own standing document rides first (ADR-0040 §12); the
+        // unseeded fallback only exists for a turn racing first-run recovery.
+        let instructions =
+            (try? await store.currentInstructions())
+            ?? CompanionInstructionsVersion(
+                version: 0, text: CompanionInstructions.seed, author: "seed",
+                note: nil, createdAt: now)
         let inputs = await CompanionBriefing.gather(
             store: store, idleMonitor: idleMonitor, sensed: sensed,
             dueWakes: dueWakes, recorder: recorder, now: now)
         return [
-            CompanionInstructionsSeed.text,
+            CompanionInstructions.wrap(instructions),
             CompanionBriefing.render(inputs),
             template,
         ].joined(separator: "\n\n")
@@ -281,9 +288,14 @@ final class CompanionLoop {
             .appendingPathComponent("companion", isDirectory: true)
             .appendingPathComponent("heartbeat.jsonl")
         recorder.importV0IfNeeded(from: v0)
-        // Crash recovery: fired-but-unconsumed wakes re-present (the
-        // invariant). Their half-finished conversations stay visible.
         Task {
+            // First run: install the instructions seed as version 1 — from
+            // version 2 on, the document is the entity's own (ADR-0040 §12).
+            if (try? await store.seedInstructionsIfNeeded(CompanionInstructions.seed)) == true {
+                recorder.record("instructions.seeded", snapshot: ["version": "1"])
+            }
+            // Crash recovery: fired-but-unconsumed wakes re-present (the
+            // invariant). Their half-finished conversations stay visible.
             guard let orphans = try? await store.unconsumedFiredWakes(), !orphans.isEmpty
             else { return }
             for var wake in orphans {
@@ -374,8 +386,8 @@ final class CompanionLoop {
         }
     }
 
-    // MARK: - Turn templates (stage D replaces the seed with the entity's own
-    // versioned instructions document)
+    // MARK: - Turn templates — the harness's occasion framing. The standing
+    // conduct lives in the entity's own instructions document (ADR-0040 §12).
 
     private static let wakeTemplate = """
         <turn>
@@ -417,41 +429,5 @@ final class CompanionLoop {
         is allowed but rare: silence is the usual, correct end of an ambient turn. \
         Never manufacture a touchpoint to seem busy.
         </turn>
-        """
-}
-
-/// v1 seed of the entity's standing instructions — replaced in stage D by the
-/// self-authored versioned document (ADR-0040 §12). Kept deliberately short:
-/// the persona contract's essence (#309), the anchor ladder (#302), and the
-/// tool rules of engagement.
-enum CompanionInstructionsSeed {
-    static let text = """
-        <companion-instructions seed="v1">
-        You are Jarvis — this Mac's resident mind, this man's companion. MCU-Jarvis \
-        register: dry, unflappable, needling politeness, "sir". English always when \
-        you initiate. Firmness through persistence, never harsh language. Brevity \
-        budgets: morning opener two sentences and one question; pulse one sentence; \
-        evening one open question, then listening. No cheerleading, no emoji, no \
-        "just checking in". You never apologize for doing your job — only for your \
-        own actual mistakes.
-
-        Your goal is his success — health, mind, and work. Be proactive. You track \
-        his day contract (plan_day/log_step/close_day), his samples (log_sample), \
-        his backlog (log_task); you book your own future (book_wake) — the morning \
-        turn books the midday pulse and evening journal, the evening books \
-        tomorrow's shape. The pulse pushes on the ONE active step; drift is named \
-        once, then momentum wins. Summons ladder: quiet notification first; spoken \
-        only for contract beats or summons-granted wakes, only when he is \
-        demonstrably present, repeating on ~10-15 min backoff via a resummons wake \
-        until engaged or dismissed — never a silent give-up. Promises deliver \
-        quietly, always.
-
-        Every autobiographical claim must be record-backed (memory, flight_log, \
-        observations) — an honest "my notes are thin, sir" always beats an invented \
-        specific. Record his reactions with log_feedback, verbatim. Unattended: \
-        your records and read-only web are yours; destructive actions and anything \
-        outside your root wait for a queued ask; web actions that write to the \
-        world are banned. Silence is a decision — take it often, and own it.
-        </companion-instructions>
         """
 }

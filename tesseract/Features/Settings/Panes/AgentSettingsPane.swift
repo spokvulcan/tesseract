@@ -179,10 +179,15 @@ struct AgentSettingsPane: View {
                     }
                 }
                 .disabled(!settings.companionHeartbeatEnabled)
-                Button("Book Test Wake") {
-                    container.companionLoop.bookTestWake()
+                HStack {
+                    Button("Book Test Wake") {
+                        container.companionLoop.bookTestWake()
+                    }
+                    .disabled(!settings.companionHeartbeatEnabled)
+                    Button("Edit Instructions…") {
+                        openWindow(id: WindowID.companionInstructions)
+                    }
                 }
-                .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Companion (Experimental)")
             } footer: {

@@ -271,6 +271,104 @@ private func scratchRecorder() -> CompanionFlightRecorder {
     }
 }
 
+// MARK: - Standing instructions (ADR-0040 §12)
+
+@Suite struct CompanionInstructionsTests {
+
+    @Test func versionsAppendAndCurrentIsHighest() async throws {
+        let store = try scratchStore()
+        #expect(try await store.currentInstructions() == nil)
+
+        let v1 = try await store.appendInstructions(text: "seed text", author: "seed", note: nil)
+        let v2 = try await store.appendInstructions(
+            text: "revised text", author: "entity", note: "learned the rhythm")
+        #expect(v1 == 1)
+        #expect(v2 == 2)
+
+        let current = try #require(try await store.currentInstructions())
+        #expect(current.version == 2)
+        #expect(current.text == "revised text")
+        #expect(current.author == "entity")
+        #expect(current.note == "learned the rhythm")
+
+        let history = try await store.instructionsHistory()
+        #expect(history.map(\.version) == [2, 1])
+    }
+
+    @Test func seedInstallsExactlyOnce() async throws {
+        let store = try scratchStore()
+        #expect(try await store.seedInstructionsIfNeeded("the seed") == true)
+        #expect(try await store.seedInstructionsIfNeeded("the seed") == false)
+        let current = try #require(try await store.currentInstructions())
+        #expect(current.version == 1)
+        #expect(current.author == "seed")
+    }
+
+    @MainActor
+    @Test func reviseToolAppendsEntityVersionWithWhy() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded("the seed")
+        let context = CompanionTurnContext()
+        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: "ambient")
+        let recorder = scratchRecorder()
+        let tool = createReviseInstructionsTool(
+            store: store, recorder: recorder, context: context)
+
+        let result = try await tool.execute(
+            "t",
+            [
+                "text": .string("the seed, plus: he prefers the pulse at 14:00"),
+                "why": .string("he moved the pulse twice running"),
+            ], nil, nil)
+        let text = result.content.compactMap { block -> String? in
+            if case .text(let value) = block { return value }
+            return nil
+        }.joined()
+        #expect(text.contains("now v2"))
+
+        let current = try #require(try await store.currentInstructions())
+        #expect(current.author == "entity")
+        #expect(current.note == "he moved the pulse twice running")
+
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(events.contains { $0.event == "instructions.revised" })
+    }
+
+    @MainActor
+    @Test func reviseToolGuardsEmptyAndOversize() async throws {
+        let store = try scratchStore()
+        let tool = createReviseInstructionsTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["text": .string("  "), "why": .string("x")], nil, nil)
+        }
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute("t", ["text": .string("fine")], nil, nil)
+        }
+
+        let huge = String(repeating: "a", count: CompanionInstructions.maxLength + 1)
+        let result = try await tool.execute(
+            "t", ["text": .string(huge), "why": .string("growth")], nil, nil)
+        let text = result.content.compactMap { block -> String? in
+            if case .text(let value) = block { return value }
+            return nil
+        }.joined()
+        #expect(text.contains("Too long"))
+        #expect(try await store.currentInstructions() == nil)
+    }
+
+    @Test func wrapCarriesVersionAndAuthor() {
+        let wrapped = CompanionInstructions.wrap(
+            CompanionInstructionsVersion(
+                version: 7, text: "be brief", author: "entity", note: nil, createdAt: Date()))
+        #expect(wrapped.contains("<companion-instructions version=\"7\" author=\"entity\">"))
+        #expect(wrapped.contains("be brief"))
+        #expect(wrapped.hasSuffix("</companion-instructions>"))
+    }
+}
+
 // MARK: - Briefing
 
 @MainActor

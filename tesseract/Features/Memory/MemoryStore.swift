@@ -49,7 +49,8 @@ actor MemoryStore {
     /// v3: the Companion's tracking + loop tables beside memory's (#308,
     /// ADR-0040) — same database on purpose: FK-able provenance, one backup
     /// and inspection story. Their methods live in `MemoryStore+Tracking.swift`.
-    static let schemaVersion = 3
+    /// v4: the entity's standing-instructions versions (ADR-0040 §12).
+    static let schemaVersion = 4
 
     /// Internal, not private: the tracking extension (a separate file by
     /// design — Companion domain, memory's connection) prepares against it.
@@ -236,6 +237,19 @@ actor MemoryStore {
                 date      TEXT PRIMARY KEY NOT NULL,   -- local 'yyyy-MM-dd'
                 state     TEXT NOT NULL DEFAULT '{}',  -- JSON CompanionLoopDayState
                 updatedAt REAL NOT NULL
+            );
+
+            -- The entity's standing instructions (ADR-0040 §12): append-only
+            -- versions; the highest version is what every turn injects. The
+            -- entity revises through its tool, the owner through the editor —
+            -- both append, nothing is ever silently rewritten.
+
+            CREATE TABLE IF NOT EXISTS companion_instructions (
+                version   INTEGER PRIMARY KEY AUTOINCREMENT,
+                text      TEXT NOT NULL,
+                author    TEXT NOT NULL,               -- seed | entity | owner
+                note      TEXT,                        -- why this revision
+                createdAt REAL NOT NULL
             );
             """
         )
