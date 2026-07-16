@@ -82,14 +82,19 @@ final class SpeechCoordinator {
         }
     }
 
-    /// Speak text directly (for in-app usage)
-    func speakText(_ text: String, onSuccess: (@MainActor @Sendable () -> Void)? = nil) {
+    /// Speak text directly (for in-app usage). `showsOverlay: false` plays
+    /// audio-only — for callers that bring their own visual surface (the
+    /// Companion voice overlay, #328) and must not raise the TTS notch too.
+    func speakText(
+        _ text: String, showsOverlay: Bool = true,
+        onSuccess: (@MainActor @Sendable () -> Void)? = nil
+    ) {
         guard !text.isEmpty else { return }
 
         stop()
         speechCompletionCallback = onSuccess
         activeTask = Task {
-            await generateAndPlay(text: text)
+            await generateAndPlay(text: text, showsOverlay: showsOverlay)
         }
     }
 
@@ -198,7 +203,10 @@ final class SpeechCoordinator {
         }
     }
 
-    private func generateAndPlay(text: String) async {
+    private func generateAndPlay(text: String, showsOverlay: Bool = true) async {
+        // One resolution for the whole utterance: nil means audio-only, and
+        // every overlay touch below no-ops.
+        let overlay = showsOverlay ? notchOverlay : nil
         do {
             let session = try await openOrReuseSession()
             state = .generating(progress: "")
@@ -222,17 +230,17 @@ final class SpeechCoordinator {
                             segment: script.index + 1, of: utterance.segmentCount)
                         : .streaming
                     presentScript(
-                        script, framesPerSecond: utterance.framesPerSecond,
+                        script, on: overlay, framesPerSecond: utterance.framesPerSecond,
                         overlayShown: &overlayShown)
 
                 case .audio(let chunk):
                     playback.appendChunk(samples: chunk.samples)
 
                 case .segmentDone(let index):
-                    notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
+                    overlay?.updateTotalDuration(playback.totalScheduledDuration)
                     Log.speech.info("Segment \(index + 1)/\(self.totalSegments) complete")
                     if index + 1 < utterance.segmentCount {
-                        notchOverlay?.markSegmentComplete()
+                        overlay?.markSegmentComplete()
                         // The demand signal: don't pull the next segment until
                         // playback needs it (or we're paused).
                         try await waitForPlaybackDemand()
@@ -240,8 +248,8 @@ final class SpeechCoordinator {
 
                 case .finished:
                     playback.finishStreaming()
-                    notchOverlay?.updateTotalDuration(playback.totalScheduledDuration)
-                    notchOverlay?.markGenerationComplete()
+                    overlay?.updateTotalDuration(playback.totalScheduledDuration)
+                    overlay?.markGenerationComplete()
                 // onPlaybackFinished advances state to .idle and fires
                 // the completion callback once audio drains.
                 }
@@ -262,7 +270,8 @@ final class SpeechCoordinator {
     /// Segment Windows arrive as data (`startFrame` is ground truth): the
     /// overlay switches exactly when the playback head crosses the boundary.
     private func presentScript(
-        _ script: SegmentScript, framesPerSecond: Double, overlayShown: inout Bool
+        _ script: SegmentScript, on notchOverlay: (any WordHighlightSurface)?,
+        framesPerSecond: Double, overlayShown: inout Bool
     ) {
         guard let notchOverlay else { return }
         if overlayShown {

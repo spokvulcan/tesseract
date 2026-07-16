@@ -405,7 +405,13 @@ final class DependencyContainer: ObservableObject {
     lazy var companionHeartbeat = CompanionHeartbeat(
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
         speaks: { [settingsManager] in settingsManager.companionHeartbeatSpeaks },
-        speak: { [weak self] in self?.speechCoordinator.speakText($0) },
+        // Audio-only while the voice overlay is the summons surface — one
+        // beat must never raise two visual surfaces (TTS notch + overlay).
+        speak: { [weak self] text in
+            guard let self else { return }
+            self.speechCoordinator.speakText(
+                text, showsOverlay: !self.settingsManager.companionBeatsUseOverlay)
+        },
         onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() },
         // #328 wearing instrument: beats summon the picked overlay concept
         // when the toggle is on; unanswered falls back to the banner.
