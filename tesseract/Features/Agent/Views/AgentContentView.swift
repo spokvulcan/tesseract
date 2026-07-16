@@ -22,8 +22,6 @@ struct AgentContentView: View {
     @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(SettingsManager.self) private var settings
-    @Environment(CompanionPresence.self) private var companionPresence
-    @Environment(MemorySleep.self) private var memorySleep
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var conversationStore: AgentConversationStore
 
@@ -37,18 +35,6 @@ struct AgentContentView: View {
         if case .idle = speechCoordinator.state { return false }
         if case .error = speechCoordinator.state { return false }
         return true
-    }
-
-    /// What Jarvis is doing right now, in the owner's words — nil when idle
-    /// (the strip only exists while something is actually happening).
-    private var presenceLine: String? {
-        switch companionPresence.state {
-        case .summoning: return "Jarvis is asking for you…"
-        case .thinking: return "Jarvis is thinking…"
-        case .idle: break
-        }
-        if memorySleep.isRunning { return "Jarvis is consolidating the day…" }
-        return nil
     }
 
     /// The full-inset tap catcher behind a transient surface (the slash popup
@@ -69,19 +55,6 @@ struct AgentContentView: View {
         )
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if isSpeechActive {
-                    AgentSpeechIndicatorBar(onStop: {
-                        session.stopSpeaking()
-                        speakingMessageID = nil
-                    })
-                }
-
-                // Jarvis's presence strip (#327 §3): what he is doing right
-                // now — a companion turn, a summons, or the sleep pass.
-                if let presenceLine {
-                    CompanionPresenceBar(text: presenceLine)
-                }
-
                 ZStack(alignment: .bottom) {
                     if commandPalette.showCommandPopup {
                         clickAwayCatcher { commandPalette.dismissCommandPopup() }
@@ -165,7 +138,7 @@ struct AgentContentView: View {
             // scene measures NavigationSplitView's detail minimum by probing
             // at near-zero width, where any wrapping `.fixedSize(vertical:)`
             // text in this inset reports a word-per-line height. When a
-            // banner (or popup, or the speech bar) appears, that inflated
+            // banner (or the slash popup) appears, that inflated
             // minimum makes the scene resize the window past the screen and
             // pin its min height there. Reporting a zero minimum here keeps
             // the window's frame the user's alone; real layout is unaffected.
@@ -345,63 +318,5 @@ enum ConversationOriginBadge {
         case "sleep": "sleep"
         default: nil
         }
-    }
-}
-
-// MARK: - Companion presence strip (#327 §3)
-
-/// Slim strip above the composer while Jarvis is doing something — the same
-/// shape as the speaking indicator, content-layer materials only.
-struct CompanionPresenceBar: View {
-    let text: String
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkle")
-                .foregroundStyle(.tint)
-                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.tint.opacity(0.08))
-    }
-}
-
-// MARK: - Speech Indicator
-
-/// Slim "Speaking…" strip above the composer while TTS plays, with a stop
-/// control. Content-layer chrome — system materials only.
-struct AgentSpeechIndicatorBar: View {
-    let onStop: () -> Void
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "speaker.wave.2.fill")
-                .foregroundStyle(.tint)
-                .symbolEffect(
-                    .variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-            Text("Speaking\u{2026}")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                onStop()
-            } label: {
-                Image(systemName: "stop.circle.fill")
-                    .foregroundStyle(.red)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.tint.opacity(0.08))
     }
 }

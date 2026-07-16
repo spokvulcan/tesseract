@@ -6,8 +6,8 @@
 //  slash-command popup, which shares its GlassEffectContainer, and the Skill
 //  Cluster, ADR-0030, which floats above in its own). Hosts the text field,
 //  the pending-image strip, the model button, and the single in-composer
-//  notice slot every hint/error feeds — there is no separate status strip or
-//  floating error banner.
+//  notice slot every hint, error, and ambient status feeds — there is no
+//  separate status strip or floating error banner.
 //
 
 import SwiftUI
@@ -29,6 +29,9 @@ struct AgentComposerView: View {
     @Environment(SkillClusterController.self) private var skillCluster
     @Environment(AgentVoiceInputController.self) private var voiceInput
     @Environment(CompanionVoiceSessionController.self) private var voiceSession
+    @Environment(SpeechCoordinator.self) private var speechCoordinator
+    @Environment(CompanionPresence.self) private var companionPresence
+    @Environment(MemorySleep.self) private var memorySleep
     @Environment(VisionAvailabilityController.self) private var visionAvailability
     @Environment(AppshotController.self) private var appshot
     @Environment(AgentEngine.self) private var agentEngine
@@ -272,8 +275,9 @@ struct AgentComposerView: View {
 
     /// Every notice the composer can carry, in priority order: generation
     /// errors, voice errors, the vision-switch hint, the Appshot permission
-    /// explainer, attachment feedback, then the selected model's download
-    /// state. One slot — never a stack of banners.
+    /// explainer, attachment feedback, the selected model's download state,
+    /// then the ambient statuses — TTS playback and the Companion's
+    /// background activity. One slot — never a stack of banners.
     private enum ComposerNotice: Equatable {
         case sessionError(String)
         case voiceError(String)
@@ -282,6 +286,8 @@ struct AgentComposerView: View {
         case attachment(String)
         case modelDownloading(displayName: String, progress: Double)
         case modelMissing
+        case speaking
+        case companionPresence(String)
     }
 
     private var activeNotice: ComposerNotice? {
@@ -301,6 +307,29 @@ struct AgentComposerView: View {
                 break  // On disk; auto-load owns the gap and the slot stays quiet.
             }
         }
+        if isSpeechActive { return .speaking }
+        if let line = companionPresenceLine { return .companionPresence(line) }
+        return nil
+    }
+
+    private var isSpeechActive: Bool {
+        if case .idle = speechCoordinator.state { return false }
+        if case .error = speechCoordinator.state { return false }
+        return true
+    }
+
+    /// What the Companion is doing *away from this window* — his turns run
+    /// headless in their own conversations (a wake, an ambient pass, sleep),
+    /// so nothing streams here while they happen. This line is the only
+    /// in-window sign of that background life; visible generation in the open
+    /// conversation never sets it.
+    private var companionPresenceLine: String? {
+        switch companionPresence.state {
+        case .summoning: return "Jarvis is asking for you…"
+        case .thinking: return "Jarvis is thinking in the background…"
+        case .idle: break
+        }
+        if memorySleep.isRunning { return "Jarvis is consolidating the day…" }
         return nil
     }
 
@@ -369,6 +398,46 @@ struct AgentComposerView: View {
                 action: { (NSApp.delegate as? AppDelegate)?.navigateToModels() },
                 onDismiss: nil
             )
+
+        case .speaking:
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.wave.2.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tint)
+                    .symbolEffect(
+                        .variableColor.iterative, options: .repeating, isActive: !reduceMotion)
+                Text("Speaking\u{2026}")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Button {
+                    session.stopSpeaking()
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+                .help("Stop speaking")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+
+        case .companionPresence(let line):
+            HStack(spacing: 8) {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.tint)
+                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+                Text(line)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
         }
     }
 

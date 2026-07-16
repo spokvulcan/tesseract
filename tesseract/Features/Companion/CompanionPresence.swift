@@ -3,7 +3,7 @@
 //  tesseract
 //
 //  Jarvis's ambient presence (#327 §3): one small observable state the quiet
-//  surfaces render — the menu-bar glyph and the chat window's presence strip.
+//  surfaces render — the menu-bar glyph and the composer's notice slot.
 //  Not a dashboard: it says what he is *doing right now*, never what he knows.
 //  Every transition is a recorded fact (#326).
 //
