@@ -206,11 +206,13 @@ struct AgentSettingsPane: View {
                         container.companionVoicePrototype.stopScene()
                     }
                 }
+                Toggle("Summon Overlay for Beats", isOn: $settings.companionBeatsUseOverlay)
+                    .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Companion Voice Overlay (Prototype)")
             } footer: {
                 Text(
-                    "Overlay concepts for talking with the Companion (ticket #328) — the conversation is scripted theatre, no models run. Pick a concept, then play a scene: click the summons to answer it, click while it speaks to interrupt, ✕ to dismiss. Compare the concepts on each scene."
+                    "Overlay concepts for talking with the Companion (ticket #328) — the conversation is scripted theatre, no models run. Pick a concept, then play a scene: click the summons to answer it, click while it speaks to interrupt, ✕ to dismiss. With Summon Overlay for Beats on, the daily heartbeat raises the picked concept instead of a notification — engage opens chat, ✕ is a recorded dismissal, and an unanswered summons falls back to the banner after ~90 seconds."
                 )
             }
         }

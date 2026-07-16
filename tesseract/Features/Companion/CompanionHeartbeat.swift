@@ -62,6 +62,12 @@ final class CompanionHeartbeat {
     private let speaks: () -> Bool
     private let speak: (String) -> Void
     private let onEngage: () -> Void
+    /// The #328 wearing instrument: when enabled, beats summon the voice
+    /// overlay instead of posting a banner; the banner remains the fallback
+    /// for an unanswered overlay, so no beat is ever silent.
+    private let overlaySummonsEnabled: () -> Bool
+    private let summonOverlay:
+        (@MainActor (_ title: String, _ body: String) async -> CompanionBeatSummonsOutcome)?
     private let notifier: CompanionNotifier
     private let log: CompanionHeartbeatLog
 
@@ -88,6 +94,10 @@ final class CompanionHeartbeat {
         speaks: @escaping () -> Bool,
         speak: @escaping (String) -> Void,
         onEngage: @escaping () -> Void,
+        overlaySummonsEnabled: @escaping () -> Bool = { false },
+        summonOverlay: (
+            @MainActor (_ title: String, _ body: String) async -> CompanionBeatSummonsOutcome
+        )? = nil,
         notifier: CompanionNotifier = CompanionNotifier(),
         log: CompanionHeartbeatLog = CompanionHeartbeatLog(),
         composeBody: @escaping @MainActor (Beat) async -> String = { $0.prompt }
@@ -96,6 +106,8 @@ final class CompanionHeartbeat {
         self.speaks = speaks
         self.speak = speak
         self.onEngage = onEngage
+        self.overlaySummonsEnabled = overlaySummonsEnabled
+        self.summonOverlay = summonOverlay
         self.notifier = notifier
         self.log = log
         self.composeBody = composeBody
@@ -172,12 +184,30 @@ final class CompanionHeartbeat {
             // that says one thing while the voice says another is two companions,
             // not one.
             let body = await self.composeBody(beat)
-            await self.notifier.post(
-                pingID: pingID, beatID: beat.id, title: beat.title, body: body)
             self.log.append(event: "composed", beat: beat.id, ping: pingID, note: body)
             if self.speaks() {
                 self.speak(body)
                 self.log.append(event: "spoken", beat: beat.id, ping: pingID)
+            }
+            if self.overlaySummonsEnabled(), let summonOverlay = self.summonOverlay {
+                self.log.append(event: "overlaySummoned", beat: beat.id, ping: pingID)
+                switch await summonOverlay(beat.title, body) {
+                case .engaged:
+                    self.recordOutcome(
+                        pingID: pingID, beatID: beat.id, outcome: .engaged, note: nil)
+                case .dismissed:
+                    self.recordOutcome(
+                        pingID: pingID, beatID: beat.id, outcome: .dismissed, note: nil)
+                case .unanswered:
+                    // Never a silent give-up: the unanswered overlay falls back
+                    // to the banner, which still lands in Notification Center.
+                    self.log.append(event: "overlayUnanswered", beat: beat.id, ping: pingID)
+                    await self.notifier.post(
+                        pingID: pingID, beatID: beat.id, title: beat.title, body: body)
+                }
+            } else {
+                await self.notifier.post(
+                    pingID: pingID, beatID: beat.id, title: beat.title, body: body)
             }
         }
     }

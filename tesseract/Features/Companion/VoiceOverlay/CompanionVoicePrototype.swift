@@ -92,6 +92,17 @@ nonisolated extension OverlayPlacement {
     )
 }
 
+// MARK: - Beat summons
+
+/// How a real heartbeat-beat summons on the overlay ended (#328 wearing
+/// instrument). `unanswered` sends the beat back to the notification path —
+/// the overlay may be ignored, the beat may not be (anchor #302).
+nonisolated enum CompanionBeatSummonsOutcome: Sendable {
+    case engaged
+    case dismissed
+    case unanswered
+}
+
 // MARK: - Controller
 
 /// PROTOTYPE (map #301, ticket #328) — owns the demo lifecycle: reads the
@@ -99,6 +110,10 @@ nonisolated extension OverlayPlacement {
 /// scene to the scripted driver, and tears the panel down when the scene
 /// dissolves. Unlike dictation's always-resident `OverlayPanel`, this panel
 /// exists only while a scene runs — a prototype leaves nothing behind.
+///
+/// Since reaction round 1 it is also the walking skeleton's alternative
+/// summons surface: `summonBeat` raises the picked concept for a *real*
+/// heartbeat beat and reports how the owner answered it.
 @MainActor
 final class CompanionVoicePrototype {
 
@@ -117,6 +132,15 @@ final class CompanionVoicePrototype {
     private var panel: NSPanel?
     private var teardownGeneration = 0
 
+    /// The pending real-beat summons, if one is on screen. Its presence is
+    /// what routes the overlay actions to the beat instead of the demo driver.
+    private var beatWait: CheckedContinuation<CompanionBeatSummonsOutcome, Never>?
+    private var beatEscalationTask: Task<Void, Never>?
+
+    /// Real-wear escalation: step up at these marks, give up at the last.
+    /// Deliberately slower than the demo's time-compressed ~4 s beats.
+    private static let beatEscalationDelays: [TimeInterval] = [20, 25, 45]
+
     init(settings: SettingsManager, openChat: @escaping @MainActor () -> Void) {
         self.settings = settings
         self.openChat = openChat
@@ -127,13 +151,63 @@ final class CompanionVoicePrototype {
     func play(_ scene: CompanionVoiceScene) {
         let concept = CompanionVoiceConcepts.concept(for: settings.companionVoiceConceptRaw)
         driver.stop()
+        resolveBeatWait(.unanswered)
         raisePanel(for: concept)
         driver.play(scene)
     }
 
     func stopScene() {
         driver.stop()
+        resolveBeatWait(.unanswered)
         tearDownPanel()
+    }
+
+    // MARK: - Real beats (#328 wearing instrument)
+
+    /// Raises the picked concept as the summons surface for one real
+    /// heartbeat beat and waits for the owner's answer: escalates through the
+    /// summons faces, resolves on engage/dismiss, gives up `unanswered` after
+    /// the last escalation delay so the caller can fall back to a banner.
+    func summonBeat(title: String, line: String) async -> CompanionBeatSummonsOutcome {
+        driver.stop()
+        resolveBeatWait(.unanswered)
+        let concept = CompanionVoiceConcepts.concept(for: settings.companionVoiceConceptRaw)
+        raisePanel(for: concept)
+        feed.reset()
+        feed.setScene(title: title)
+        feed.setSummons(line)
+        withAnimation(.spring(duration: 0.45)) {
+            feed.setState(.summoning(escalation: 0))
+        }
+
+        let outcome = await withCheckedContinuation { continuation in
+            beatWait = continuation
+            beatEscalationTask = Task { [weak self] in
+                for (step, delay) in Self.beatEscalationDelays.enumerated() {
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled, let self, self.beatWait != nil else { return }
+                    let escalation = step + 1
+                    if escalation < Self.beatEscalationDelays.count {
+                        withAnimation(.spring(duration: 0.45)) {
+                            self.feed.setState(.summoning(escalation: escalation))
+                        }
+                    } else {
+                        self.resolveBeatWait(.unanswered)
+                    }
+                }
+            }
+        }
+
+        withAnimation(.spring(duration: 0.45)) { feed.setState(.idle) }
+        scheduleTeardown()
+        return outcome
+    }
+
+    private func resolveBeatWait(_ outcome: CompanionBeatSummonsOutcome) {
+        beatEscalationTask?.cancel()
+        beatEscalationTask = nil
+        beatWait?.resume(returning: outcome)
+        beatWait = nil
     }
 
     // MARK: - Panel lifecycle
@@ -162,13 +236,35 @@ final class CompanionVoicePrototype {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
 
+        // A pending beat wait claims the actions; otherwise they drive the
+        // scripted demo. On a real beat both engage paths resolve `.engaged`
+        // and navigation happens exactly once, in the heartbeat's onEngage.
         let actions = CompanionVoiceActions(
-            engage: { [weak self] in self?.driver.engage() },
+            engage: { [weak self] in
+                guard let self else { return }
+                if beatWait != nil {
+                    resolveBeatWait(.engaged)
+                } else {
+                    driver.engage()
+                }
+            },
             bargeIn: { [weak self] in self?.driver.bargeIn() },
-            dismiss: { [weak self] in self?.driver.dismiss() },
+            dismiss: { [weak self] in
+                guard let self else { return }
+                if beatWait != nil {
+                    resolveBeatWait(.dismissed)
+                } else {
+                    driver.dismiss()
+                }
+            },
             openChat: { [weak self] in
-                self?.openChat()
-                self?.driver.dismiss()
+                guard let self else { return }
+                if beatWait != nil {
+                    resolveBeatWait(.engaged)
+                } else {
+                    openChat()
+                    driver.dismiss()
+                }
             }
         )
         let hosting = NSHostingView(rootView: concept.makeView(feed, actions))

@@ -407,6 +407,13 @@ final class DependencyContainer: ObservableObject {
         speaks: { [settingsManager] in settingsManager.companionHeartbeatSpeaks },
         speak: { [weak self] in self?.speechCoordinator.speakText($0) },
         onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() },
+        // #328 wearing instrument: beats summon the picked overlay concept
+        // when the toggle is on; unanswered falls back to the banner.
+        overlaySummonsEnabled: { [settingsManager] in settingsManager.companionBeatsUseOverlay },
+        summonOverlay: { [weak self] title, body in
+            await self?.companionVoicePrototype.summonBeat(title: title, line: body)
+                ?? .unanswered
+        },
         // The beat asks the question; memory supplies the *particular* one. A
         // nil here — memory empty, model unsure, output unusable — falls back to
         // the beat's own hardcoded line, which is the whole safety story: generic

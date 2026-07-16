@@ -98,6 +98,10 @@ enum SettingsCatalogue {
     /// scaffolding: deleted when the concepts prune to one winner.
     static let companionVoiceConcept = Setting.string(
         "companionVoiceConcept", default: "emissary")
+    /// #328 wearing instrument: heartbeat beats summon the picked overlay
+    /// concept instead of a banner (banner stays the unanswered fallback).
+    static let companionBeatsUseOverlay = Setting.bool(
+        "companionBeatsUseOverlay", default: false)
 
     // MARK: - Memory (ADR-0035, map #314)
 
