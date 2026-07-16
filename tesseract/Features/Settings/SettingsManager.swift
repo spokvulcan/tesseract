@@ -271,6 +271,13 @@ final class SettingsManager {
         }
     }
 
+    var companionLaunchAtLoginAsked: Bool {
+        didSet {
+            SettingsCatalogue.companionLaunchAtLoginAsked.write(
+                companionLaunchAtLoginAsked, to: store)
+        }
+    }
+
     var companionVoiceConceptRaw: String {
         didSet {
             SettingsCatalogue.companionVoiceConcept.write(companionVoiceConceptRaw, to: store)
@@ -576,6 +583,8 @@ final class SettingsManager {
             from: store)
         self.companionModelID = SettingsCatalogue.companionModelID.load(
             from: store)
+        self.companionLaunchAtLoginAsked = SettingsCatalogue.companionLaunchAtLoginAsked.load(
+            from: store)
         self.companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.load(from: store)
         self.companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.load(
             from: store)
@@ -711,6 +720,7 @@ final class SettingsManager {
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
         companionModelID = SettingsCatalogue.companionModelID.default
+        companionLaunchAtLoginAsked = SettingsCatalogue.companionLaunchAtLoginAsked.default
         companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.default
         companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.default
         companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.default

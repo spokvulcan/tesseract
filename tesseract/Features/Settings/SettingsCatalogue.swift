@@ -97,6 +97,11 @@ enum SettingsCatalogue {
     /// back to the selected agent model.
     static let companionModelID = Setting.string(
         "companionModelID", default: "qwen3.6-35b-a3b-paro")
+    /// The one-time launch-at-login ask (ADR-0040 §3): asked when the
+    /// Companion is first enabled; a silent login-item flip is a trust
+    /// violation, so the answer is always the owner's.
+    static let companionLaunchAtLoginAsked = Setting.bool(
+        "companionLaunchAtLoginAsked", default: false)
     /// Companion voice-overlay concept picker (ticket #328). Exploration
     /// scaffolding: deleted when the concepts prune to one winner.
     static let companionVoiceConcept = Setting.string(

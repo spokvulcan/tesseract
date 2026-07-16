@@ -3,6 +3,7 @@
 //  tesseract
 //
 
+import ServiceManagement
 import SwiftUI
 
 /// The Agent pane (#213): model choice (with the per-model Preserve-Thinking
@@ -14,6 +15,8 @@ struct AgentSettingsPane: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var container: DependencyContainer
     @State private var selectedAgentModelDeclaresPreserveThinking = false
+    /// The one-time launch-at-login ask (ADR-0040 §3), raised on first enable.
+    @State private var showingLaunchAtLoginAsk = false
 
     /// What sleep is doing right now, in the owner's words rather than the
     /// engine's.
@@ -179,6 +182,25 @@ struct AgentSettingsPane: View {
                     }
                 }
                 .disabled(!settings.companionHeartbeatEnabled)
+                // Never a silent login-item flip (ADR-0040 §3): the toggle
+                // reads and writes the real SMAppService state.
+                Toggle(
+                    "Launch at Login",
+                    isOn: Binding(
+                        get: { SMAppService.mainApp.status == .enabled },
+                        set: { wanted in
+                            do {
+                                if wanted {
+                                    try SMAppService.mainApp.register()
+                                } else {
+                                    try SMAppService.mainApp.unregister()
+                                }
+                            } catch {
+                                Log.companion.error(
+                                    "Launch-at-login change failed: \(error)")
+                            }
+                        }
+                    ))
                 HStack {
                     Button("Book Test Wake") {
                         container.companionLoop.bookTestWake()
@@ -253,7 +275,25 @@ struct AgentSettingsPane: View {
         }
         .formStyle(.grouped)
         .onChange(of: settings.companionHeartbeatEnabled) { _, enabled in
-            if enabled { container.companionLoop.activate() }
+            if enabled {
+                container.companionLoop.activate()
+                if !settings.companionLaunchAtLoginAsked {
+                    settings.companionLaunchAtLoginAsked = true
+                    showingLaunchAtLoginAsk = true
+                }
+            }
+        }
+        .alert("Keep Jarvis running?", isPresented: $showingLaunchAtLoginAsk) {
+            Button("Launch at Login") {
+                do { try SMAppService.mainApp.register() } catch {
+                    Log.companion.error("Launch-at-login register failed: \(error)")
+                }
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: {
+            Text(
+                "The Companion only runs while Tesseract is open. Start it at login so his day survives reboots — you can change this anytime with the Launch at Login toggle."
+            )
         }
         .onAppear {
             refreshSelectedAgentModelCapabilities()
