@@ -88,12 +88,15 @@ enum SettingsCatalogue {
     static let ttsLanguage = Setting.string("ttsLanguage", default: "English")
     static let ttsStreamingEnabled = Setting.bool("ttsStreamingEnabled", default: true)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
-    /// Walking-skeleton scaffolding (map #301, ticket #303): the lived-with
-    /// Companion heartbeat prototype. Absorbed or retired by the exit PRDs.
+    /// The Companion master switch (ADR-0040). The key keeps its skeleton-era
+    /// name so the owner's existing opt-in survives the cutover to the loop.
     static let companionHeartbeatEnabled = Setting.bool(
         "companionHeartbeatEnabled", default: false)
-    static let companionHeartbeatSpeaks = Setting.bool(
-        "companionHeartbeatSpeaks", default: false)
+    /// The Companion's own model (ADR-0040 §9): his turns run on the smartest
+    /// model on the machine regardless of the interactive picker. Empty falls
+    /// back to the selected agent model.
+    static let companionModelID = Setting.string(
+        "companionModelID", default: "qwen3.6-35b-a3b-paro")
     /// Companion voice-overlay concept picker (ticket #328). Exploration
     /// scaffolding: deleted when the concepts prune to one winner.
     static let companionVoiceConcept = Setting.string(

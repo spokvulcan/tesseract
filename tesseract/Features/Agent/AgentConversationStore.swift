@@ -11,6 +11,9 @@ private struct ConversationFile: Codable {
     let createdAt: Date
     let updatedAt: Date
     let messages: [TaggedMessage]
+    /// Turn-class tag (#327). Optional so pre-tag files decode without a
+    /// storage-version bump — a bump wipes the owner's history.
+    let origin: String?
 }
 
 /// Persists agent conversations as JSON files using ``MessageCodecRegistry`` for
@@ -272,7 +275,8 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
                 title: conversation.title,
                 createdAt: conversation.createdAt,
                 updatedAt: conversation.updatedAt,
-                messages: taggedMessages
+                messages: taggedMessages,
+                origin: conversation.origin
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -296,7 +300,8 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
                 id: file.id,
                 messages: messages,
                 createdAt: file.createdAt,
-                updatedAt: file.updatedAt
+                updatedAt: file.updatedAt,
+                origin: file.origin ?? "interactive"
             )
         } catch {
             Log.agent.error("Failed to load conversation \(id): \(error)")

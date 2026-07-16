@@ -244,6 +244,24 @@ final class DependencyContainer: ObservableObject {
                     self?.agentConversationStore.currentConversation?.id
                 }
             ))
+        // The entity's hands on his own future and the delivery rungs
+        // (ADR-0040). Registered in every conversation like memory's tools:
+        // "remind me tomorrow" said in chat books a wake through the same one
+        // door the Companion's own turns use.
+        registry.appendBuiltInTool(
+            createBookWakeTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createNotifyTool(deliver: { [weak self] title, body in
+                await self?.companionLoop.deliverNotification(title: title, body: body)
+            }))
+        registry.appendBuiltInTool(
+            createSpeakTool(deliver: { [weak self] text in
+                self?.companionLoop.deliverSpoken(text)
+            }))
         return registry
     }()
 
@@ -438,40 +456,72 @@ final class DependencyContainer: ObservableObject {
         composerDraft: composerDraft
     )
 
-    // The Companion walking skeleton (map #301, ticket #303): a deliberately
-    // crude lived-with heartbeat — an instrument the owner wears while the
-    // Companion grillings run. Absorbed or retired by the map's exit PRDs.
-    lazy var companionHeartbeat = CompanionHeartbeat(
+    // The Companion (ADR-0040): the entity's harness. The turn context is the
+    // correlation box the tools and the runner share; the runner is the
+    // headless turn envelope; the loop is the ticking evaluator that grants
+    // turns. Replaces the walking skeleton (#303).
+    lazy var companionTurnContext = CompanionTurnContext()
+    lazy var companionTurnRunner = CompanionTurnRunner(
+        // Deferred bootstrap (`unowned` is safe: the container outlives every
+        // consumer) — a second full agent whose context never collides with
+        // the chat session's, over the same shared tool registry.
+        makeAgent: { [unowned self] in
+            AgentFactory.makeAgent(
+                inferenceService: self.serverInferenceService,
+                packageRegistry: self.packageRegistry,
+                extensionHost: self.extensionHost,
+                toolRegistry: self.newToolRegistry,
+                contextManager: self.contextManager,
+                settingsManager: self.settingsManager,
+                mcpToolsExtension: self.mcpClientManager.toolsExtension
+            )
+        },
+        arbiter: inferenceArbiter,
+        conversationStore: agentConversationStore,
+        memory: memoryEngine,
+        recorder: companionFlightRecorder,
+        settings: settingsManager,
+        context: companionTurnContext
+    )
+    lazy var companionLoop = CompanionLoop(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        runner: companionTurnRunner,
+        notifier: CompanionNotifier(),
+        idleMonitor: idleMonitor,
+        sensed: sensedObservations,
+        isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
-        speaks: { [settingsManager] in settingsManager.companionHeartbeatSpeaks },
-        // Audio-only while the voice overlay is the summons surface — one
-        // beat must never raise two visual surfaces (TTS notch + overlay).
+        // The spoken rung. With the #328 overlay toggle on, the picked concept
+        // is the summons surface — audio-only TTS, one visual surface, and the
+        // owner's answer lands in the flight recorder. The entity's resummons
+        // wakes own persistence; an unanswered overlay is a recorded fact, not
+        // an automatic banner.
         speak: { [weak self] text in
             guard let self else { return }
-            self.speechCoordinator.speakText(
-                text, showsOverlay: !self.settingsManager.companionBeatsUseOverlay)
+            guard self.settingsManager.companionBeatsUseOverlay else {
+                self.speechCoordinator.speakText(text)
+                return
+            }
+            self.speechCoordinator.speakText(text, showsOverlay: false)
+            Task { @MainActor in
+                let outcome = await self.companionVoicePrototype.summonBeat(
+                    title: "Jarvis", line: text)
+                switch outcome {
+                case .engaged:
+                    self.companionFlightRecorder.record("reaction.engaged", note: "overlay")
+                    (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+                case .dismissed:
+                    self.companionFlightRecorder.record("reaction.dismissed", note: "overlay")
+                case .unanswered:
+                    self.companionFlightRecorder.record(
+                        "reaction.unheard", note: "overlay summons unanswered")
+                }
+            }
         },
-        onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() },
-        // #328 wearing instrument: beats summon the picked overlay concept
-        // when the toggle is on; unanswered falls back to the banner.
-        overlaySummonsEnabled: { [settingsManager] in settingsManager.companionBeatsUseOverlay },
-        summonOverlay: { [weak self] title, body in
-            await self?.companionVoicePrototype.summonBeat(title: title, line: body)
-                ?? .unanswered
-        },
-        // The beat asks the question; memory supplies the *particular* one. A
-        // nil here — memory empty, model unsure, output unusable — falls back to
-        // the beat's own hardcoded line, which is the whole safety story: generic
-        // is a disappointment, invented would be a betrayal.
-        composeBody: { [weak self] beat in
-            guard let self else { return beat.prompt }
-            let line = await MemoryCallback.compose(
-                cue: beat.prompt,
-                engine: self.memoryEngine,
-                arbiter: self.inferenceArbiter,
-                complete: self.internalCompletion
-            )
-            return line ?? beat.prompt
+        openConversation: { [weak self] id in
+            self?.chatSession.loadConversation(id)
+            (NSApp.delegate as? AppDelegate)?.navigateToAgent()
         }
     )
 
@@ -706,9 +756,9 @@ final class DependencyContainer: ObservableObject {
         // subscription with a rule live (and are tested) there.
         appBindings.start()
 
-        // Arm the Companion walking skeleton (#303) — a sleeping tick task and
-        // one date comparison per 30 s unless the experimental toggle is on.
-        companionHeartbeat.start()
+        // Arm the Companion loop (ADR-0040) — a sleeping tick task and one
+        // due-ness evaluation per 30 s unless the Companion toggle is on.
+        companionLoop.start()
 
         // Wire the MCP client (PRD #190). Materialize the agent first so its
         // MCP tools extension is registered with the ExtensionHost before the

@@ -265,9 +265,9 @@ final class SettingsManager {
         }
     }
 
-    var companionHeartbeatSpeaks: Bool {
+    var companionModelID: String {
         didSet {
-            SettingsCatalogue.companionHeartbeatSpeaks.write(companionHeartbeatSpeaks, to: store)
+            SettingsCatalogue.companionModelID.write(companionModelID, to: store)
         }
     }
 
@@ -547,7 +547,7 @@ final class SettingsManager {
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
         self.companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.load(
             from: store)
-        self.companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.load(
+        self.companionModelID = SettingsCatalogue.companionModelID.load(
             from: store)
         self.companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.load(from: store)
         self.companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.load(
@@ -676,7 +676,7 @@ final class SettingsManager {
         ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.default
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
-        companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.default
+        companionModelID = SettingsCatalogue.companionModelID.default
         companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.default
         companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.default
         memoryEnabled = SettingsCatalogue.memoryEnabled.default

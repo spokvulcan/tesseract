@@ -167,20 +167,27 @@ struct AgentSettingsPane: View {
                 )
             }
 
-            // PROTOTYPE — the Companion walking skeleton (map #301, #303).
+            // The Companion (ADR-0040): the entity's master switch, his model,
+            // and the one test lever that exercises the whole pipe.
             Section {
-                Toggle("Companion Heartbeat", isOn: $settings.companionHeartbeatEnabled)
-                Toggle("Speak Pings Aloud", isOn: $settings.companionHeartbeatSpeaks)
-                    .disabled(!settings.companionHeartbeatEnabled)
-                Button("Send Test Ping") {
-                    container.companionHeartbeat.sendTestPing()
+                Toggle("Companion", isOn: $settings.companionHeartbeatEnabled)
+                Picker("Companion Model", selection: $settings.companionModelID) {
+                    ForEach(
+                        container.modelDownloadManager.downloadedModels(in: .agent)
+                    ) { model in
+                        Text(model.displayName).tag(model.id)
+                    }
+                }
+                .disabled(!settings.companionHeartbeatEnabled)
+                Button("Book Test Wake") {
+                    container.companionLoop.bookTestWake()
                 }
                 .disabled(!settings.companionHeartbeatEnabled)
             } header: {
                 Text("Companion (Experimental)")
             } footer: {
                 Text(
-                    "Walking-skeleton prototype: three fixed daily pings (9:00, 13:30, 21:30) as notifications you can click through, reply to, or dismiss. Every ping and outcome is recorded to companion/heartbeat.jsonl in the agent's folder. If no ping appears, allow notifications in System Settings → Notifications → Tesseract."
+                    "A mind that happens to live in your Mac. The Companion books his own day — morning planning, a midday pulse, an evening journal — and wakes for what he booked; every turn is a real conversation you can open in the chat list, and every delivery is recorded to his flight log. His turns run on the Companion model (the largest downloaded model is the point); if it isn't downloaded he runs on the model selected above. If no notification appears, allow notifications in System Settings → Notifications → Tesseract."
                 )
             }
 
@@ -212,13 +219,13 @@ struct AgentSettingsPane: View {
                 Text("Companion Voice Overlay (Prototype)")
             } footer: {
                 Text(
-                    "Overlay concepts for talking with the Companion (ticket #328) — the conversation is scripted theatre, no models run. Pick a concept, then play a scene: click the summons to answer it, click while it speaks to interrupt, ✕ to dismiss. With Summon Overlay for Beats on, the daily heartbeat raises the picked concept instead of a notification — engage opens chat, ✕ is a recorded dismissal, and an unanswered summons falls back to the banner after ~90 seconds."
+                    "Overlay concepts for talking with the Companion (ticket #328) — the scenes are scripted theatre, no models run. Pick a concept, then play a scene: click the summons to answer it, click while it speaks to interrupt, ✕ to dismiss. With Summon Overlay for Beats on, the Companion's spoken lines raise the picked concept as the summons surface — engage opens chat, ✕ is a recorded dismissal, an unanswered summons is a recorded fact and his own re-summons persistence takes it from there."
                 )
             }
         }
         .formStyle(.grouped)
         .onChange(of: settings.companionHeartbeatEnabled) { _, enabled in
-            if enabled { container.companionHeartbeat.activate() }
+            if enabled { container.companionLoop.activate() }
         }
         .onAppear {
             refreshSelectedAgentModelCapabilities()

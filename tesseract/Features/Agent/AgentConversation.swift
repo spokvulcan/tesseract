@@ -5,6 +5,12 @@ struct AgentConversation: Identifiable, Sendable {
     var messages: [any AgentMessageProtocol & Sendable]
     let createdAt: Date
     var updatedAt: Date
+    /// Which turn class opened this conversation (#327's one-interface tag):
+    /// `interactive` (the owner), or the Companion's `wake | ambient | catchup
+    /// | sleep`. Optional-with-default so pre-tag files load unchanged — the
+    /// store wipes on version bumps, and the owner's history outranks a
+    /// required field.
+    var origin: String
 
     /// Derive title from first user message content.
     var title: String {
@@ -28,12 +34,14 @@ struct AgentConversation: Identifiable, Sendable {
         id: UUID = UUID(),
         messages: [any AgentMessageProtocol & Sendable] = [],
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        origin: String = "interactive"
     ) {
         self.id = id
         self.messages = messages
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.origin = origin
     }
 }
 
@@ -44,6 +52,8 @@ struct AgentConversationSummary: Identifiable, Codable, Sendable {
     let createdAt: Date
     var updatedAt: Date
     var messageCount: Int
+    /// Optional so a pre-tag index decodes unchanged; nil reads as interactive.
+    var origin: String?
 
     init(from conversation: AgentConversation) {
         self.id = conversation.id
@@ -51,13 +61,18 @@ struct AgentConversationSummary: Identifiable, Codable, Sendable {
         self.createdAt = conversation.createdAt
         self.updatedAt = conversation.updatedAt
         self.messageCount = conversation.messageCount
+        self.origin = conversation.origin
     }
 
-    init(id: UUID, title: String, createdAt: Date, updatedAt: Date, messageCount: Int) {
+    init(
+        id: UUID, title: String, createdAt: Date, updatedAt: Date, messageCount: Int,
+        origin: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.messageCount = messageCount
+        self.origin = origin
     }
 }
