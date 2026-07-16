@@ -16,12 +16,12 @@
 //      the case the idle timer cannot: a locked screen is *definitely* away,
 //      immediately, with no three-minute wait.
 //
-//  The return signal is the one that must never be slow. Unlock and wake fire
-//  `onReturn` synchronously; HID return has no event to subscribe to without
-//  Input Monitoring entitlements, so it is caught by the poll — which tightens
-//  to one second the moment the machine goes idle. Sleep's contract with the
-//  owner is that coming back to the machine costs him at most about a second
-//  of queueing, on top of the one in-flight generation `yield()` cancels.
+//  The return signal is the one that must never be slow. Unlock and wake enqueue
+//  `onReturn` directly onto MainActor; HID return has no event to subscribe to
+//  without Input Monitoring entitlements, so it is caught by the poll — which
+//  tightens to one second the moment the machine goes idle. Sleep's contract
+//  with the owner is that coming back to the machine costs him at most about a
+//  second of queueing, on top of the one in-flight generation `yield()` cancels.
 //
 
 import AppKit
@@ -58,16 +58,22 @@ final class IdleMonitor {
     /// is negligible.
     private let returnPollInterval: Duration
 
+    /// Injected so the AppKit wake bridge can be exercised without putting the
+    /// test machine to sleep.
+    private let workspaceNotificationCenter: NotificationCenter
+
     /// Injected for tests, which cannot move the real HID clock.
     private let secondsSinceLastEvent: @MainActor () -> TimeInterval
 
     init(
         pollInterval: Duration = .seconds(15),
         returnPollInterval: Duration = .seconds(1),
+        workspaceNotificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
         secondsSinceLastEvent: @escaping @MainActor () -> TimeInterval = IdleMonitor.hidIdleSeconds
     ) {
         self.pollInterval = pollInterval
         self.returnPollInterval = returnPollInterval
+        self.workspaceNotificationCenter = workspaceNotificationCenter
         self.secondsSinceLastEvent = secondsSinceLastEvent
     }
 
@@ -79,29 +85,41 @@ final class IdleMonitor {
             distributed.addObserver(
                 forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.screenLocked() }
+                Task { @MainActor [weak self] in
+                    guard let self, self.pollTask != nil else { return }
+                    self.screenLocked()
+                }
             })
         observers.append(
             distributed.addObserver(
                 forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.ownerReturned() }
+                Task { @MainActor [weak self] in
+                    guard let self, self.pollTask != nil else { return }
+                    self.ownerReturned()
+                }
             })
 
-        let workspace = NSWorkspace.shared.notificationCenter
+        let workspace = workspaceNotificationCenter
         observers.append(
             workspace.addObserver(
                 forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
             ) { [weak self] _ in
                 // The machine is going to sleep. Whatever we were doing, stop —
                 // the GPU is about to go away underneath us.
-                MainActor.assumeIsolated { self?.ownerReturned() }
+                Task { @MainActor [weak self] in
+                    guard let self, self.pollTask != nil else { return }
+                    self.ownerReturned()
+                }
             })
         observers.append(
             workspace.addObserver(
                 forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.ownerReturned() }
+                Task { @MainActor [weak self] in
+                    guard let self, self.pollTask != nil else { return }
+                    self.ownerReturned()
+                }
             })
 
         pollTask = Task { [weak self] in
@@ -125,7 +143,7 @@ final class IdleMonitor {
         pollTask = nil
         for observer in observers {
             DistributedNotificationCenter.default().removeObserver(observer)
-            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            workspaceNotificationCenter.removeObserver(observer)
         }
         observers = []
         isIdle = false
