@@ -220,11 +220,34 @@ struct AgentSettingsPane: View {
                 }
                 Toggle("Summon Overlay for Beats", isOn: $settings.companionBeatsUseOverlay)
                     .disabled(!settings.companionHeartbeatEnabled)
+                // The voice session's taste ledger (#310) — tuned in wear.
+                Toggle("Auto-Send Voice Turns", isOn: $settings.companionVoiceAutoSend)
+                HStack {
+                    Text("End-of-Speech Silence")
+                    Slider(value: $settings.companionVoiceTrailingSilence, in: 1.0...3.0)
+                    Text(String(format: "%.1fs", settings.companionVoiceTrailingSilence))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                HStack {
+                    Text("Session Silence Timeout")
+                    Slider(value: $settings.companionVoiceSessionTimeout, in: 10...90, step: 5)
+                    Text(String(format: "%.0fs", settings.companionVoiceSessionTimeout))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                HStack {
+                    Text("Barge-In Sensitivity")
+                    Slider(value: $settings.companionVoiceBargeInLevel, in: 0.1...0.5)
+                    Text(String(format: "%.2f", settings.companionVoiceBargeInLevel))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
             } header: {
-                Text("Companion Voice Overlay (Prototype)")
+                Text("Companion Voice")
             } footer: {
                 Text(
-                    "Overlay concepts for talking with the Companion (ticket #328) — the scenes are scripted theatre, no models run. Pick a concept, then play a scene: click the summons to answer it, click while it speaks to interrupt, ✕ to dismiss. With Summon Overlay for Beats on, the Companion's spoken lines raise the picked concept as the summons surface — engage opens chat, ✕ is a recorded dismissal, an unanswered summons is a recorded fact and his own re-summons persistence takes it from there."
+                    "Voice conversations ride the chat itself: the waveform button in the composer (or engaging a spoken summons) opens a session where the mic listens after each reply, silence sends your turn, and speaking over him stops him mid-word. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. With Summon Overlay for Beats on, his spoken lines raise the picked concept as the summons surface; every reaction is recorded. Auto-Send off stages your words in the composer instead of sending."
                 )
             }
         }

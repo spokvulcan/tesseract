@@ -28,6 +28,7 @@ struct AgentComposerView: View {
     @Environment(SlashCommandPaletteController.self) private var commandPalette
     @Environment(SkillClusterController.self) private var skillCluster
     @Environment(AgentVoiceInputController.self) private var voiceInput
+    @Environment(CompanionVoiceSessionController.self) private var voiceSession
     @Environment(VisionAvailabilityController.self) private var visionAvailability
     @Environment(AppshotController.self) private var appshot
     @Environment(AgentEngine.self) private var agentEngine
@@ -194,6 +195,10 @@ struct AgentComposerView: View {
                 Spacer()
 
                 ModelButtonView()
+
+                if settings.companionHeartbeatEnabled {
+                    voiceSessionButton
+                }
 
                 micButton
 
@@ -402,6 +407,36 @@ struct AgentComposerView: View {
         .padding(.horizontal, 16)
         .padding(.top, 10)
         .padding(.bottom, 2)
+    }
+
+    // MARK: - Voice Session Button (#310)
+
+    /// Enter/exit a live voice conversation on the current chat — the mode
+    /// where the mic auto-opens after each reply. Distinct from the
+    /// hold-to-talk mic, which stages one utterance to the composer.
+    private var voiceSessionButton: some View {
+        Button {
+            voiceSession.toggle()
+        } label: {
+            Image(
+                systemName: voiceSession.isActive
+                    ? "waveform.circle.fill" : "waveform.circle"
+            )
+            .font(actionIconFont)
+            .foregroundStyle(
+                voiceSession.isActive ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
+            )
+            .symbolEffect(
+                .variableColor.iterative, options: .repeating,
+                isActive: voiceSession.isActive && !reduceMotion
+            )
+            .frame(width: actionIconFrame, height: actionIconFrame)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(
+            voiceSession.isActive
+                ? "End the voice conversation" : "Start a voice conversation")
     }
 
     // MARK: - Mic Button

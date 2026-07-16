@@ -269,7 +269,11 @@ final class ChatSession {
             pendingToolCalls.removeAll()
             toolStartInstants.removeAll()
             thinkingStartInstants.removeAll()
-            autoSpeakIfEnabled()
+            // A live voice session owns the reply (#310) — it speaks it and
+            // runs the auto-listen loop; autoSpeak stays the chat-only path.
+            if voiceReplyHandler?(lastAssistantText()) != true {
+                autoSpeakIfEnabled()
+            }
 
         case .generationError(let message):
             // Sticky until the user acts: `sendMessage` clears it on the next
@@ -974,16 +978,25 @@ final class ChatSession {
         speechCoordinator?.stop()
     }
 
-    private func autoSpeakIfEnabled() {
-        guard let settings, settings.agentAutoSpeak else { return }
+    /// The voice session's reply hook (#310): called on `agentEnd` with the
+    /// last assistant text. Returning true consumes the reply — the session
+    /// speaks it and runs auto-listen — and suppresses `autoSpeakIfEnabled`.
+    @ObservationIgnored var voiceReplyHandler: ((String?) -> Bool)?
+
+    private func lastAssistantText() -> String? {
         for item in items.reversed() {
             if case .assistant(let assistant) = item {
                 let text = assistant.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return }
-                Log.agent.info("Auto-speaking response (\(text.count) chars)")
-                speechCoordinator?.speakText(text)
-                return
+                return text.isEmpty ? nil : text
             }
         }
+        return nil
+    }
+
+    private func autoSpeakIfEnabled() {
+        guard let settings, settings.agentAutoSpeak else { return }
+        guard let text = lastAssistantText() else { return }
+        Log.agent.info("Auto-speaking response (\(text.count) chars)")
+        speechCoordinator?.speakText(text)
     }
 }

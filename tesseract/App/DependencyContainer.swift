@@ -502,26 +502,35 @@ final class DependencyContainer: ObservableObject {
         // is the summons surface — audio-only TTS, one visual surface, and the
         // owner's answer lands in the flight recorder. The entity's resummons
         // wakes own persistence; an unanswered overlay is a recorded fact, not
-        // an automatic banner.
+        // an automatic banner. Engaging a spoken summons opens the turn's own
+        // conversation and enters a live voice session (#310 §1).
         speak: { [weak self] text in
             guard let self else { return }
             guard self.settingsManager.companionBeatsUseOverlay else {
                 self.speechCoordinator.speakText(text)
                 return
             }
+            let conversationID = self.companionTurnContext.conversationID
             self.speechCoordinator.speakText(text, showsOverlay: false)
             Task { @MainActor in
                 let outcome = await self.companionVoicePrototype.summonBeat(
                     title: "Jarvis", line: text)
                 switch outcome {
                 case .engaged:
-                    self.companionFlightRecorder.record("reaction.engaged", note: "overlay")
+                    self.companionFlightRecorder.record(
+                        "reaction.engaged", conversationID: conversationID, note: "overlay")
                     (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+                    if let conversationID {
+                        self.chatSession.loadConversation(conversationID)
+                    }
+                    self.companionVoiceSession.enter(via: "summons-engage")
                 case .dismissed:
-                    self.companionFlightRecorder.record("reaction.dismissed", note: "overlay")
+                    self.companionFlightRecorder.record(
+                        "reaction.dismissed", conversationID: conversationID, note: "overlay")
                 case .unanswered:
                     self.companionFlightRecorder.record(
-                        "reaction.unheard", note: "overlay summons unanswered")
+                        "reaction.unheard", conversationID: conversationID,
+                        note: "overlay summons unanswered")
                 }
             }
         },
@@ -533,11 +542,55 @@ final class DependencyContainer: ObservableObject {
 
     // PROTOTYPE — the Companion voice-overlay concepts (map #301, ticket
     // #328): scripted demo scenes on throwaway overlay surfaces, driven from
-    // Settings. Deleted when the concepts prune to a winner.
+    // Settings. Since #310 also the live voice session's surface.
     lazy var companionVoicePrototype = CompanionVoicePrototype(
         settings: settingsManager,
         openChat: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() }
     )
+
+    // The voice session (#310): voice as a mode of the one conversation —
+    // binds the #328 overlay, the speech engine, and the auto-listen loop to
+    // the interactive chat. Spoken and typed turns are the same persisted
+    // message stream; barge-in is app-observed at the engine seam (#326).
+    lazy var companionVoiceSession: CompanionVoiceSessionController = {
+        let controller = CompanionVoiceSessionController(
+            capture: VoiceCaptureSession(
+                audioCapture: audioCaptureEngine,
+                transcriptionEngine: transcriptionEngine,
+                captureDump: captureDumpStore,
+                isCaptureDumpEnabled: { [settingsManager] in
+                    settingsManager.captureDumpEnabled
+                }
+            ),
+            meterLevel: { [dictationFeed] in dictationFeed.level },
+            meterSpectrum: { [dictationFeed] in dictationFeed.spectrum },
+            sendMessage: { [weak self] text in
+                self?.chatSession.sendMessage(text, bypassCommandParsing: true)
+            },
+            stageToComposer: { [composerDraft] text in
+                composerDraft.restore(text: text, images: [])
+            },
+            speak: { [weak self] text, onDone in
+                self?.speechCoordinator.speakText(
+                    text, showsOverlay: false, onSuccess: onDone)
+            },
+            stopSpeaking: { [weak self] in self?.speechCoordinator.stop() },
+            speechState: { [weak self] in self?.speechCoordinator.state ?? .idle },
+            currentConversationID: { [weak self] in
+                self?.agentConversationStore.currentConversation?.id
+            },
+            overlay: companionVoicePrototype,
+            recorder: companionFlightRecorder,
+            settings: settingsManager,
+            proofreadPass: proofreadPass
+        )
+        // The reply hook: while a session is live it owns the spoken reply
+        // and the auto-listen loop; autoSpeak stays the chat-only path.
+        chatSession.voiceReplyHandler = { [weak controller] text in
+            controller?.replyCompleted(text) ?? false
+        }
+        return controller
+    }()
 
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors

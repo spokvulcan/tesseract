@@ -98,6 +98,12 @@ final class CompanionVoiceFeed {
         revealedWordCount = min(revealedWordCount + 1, spokenWords.count)
     }
 
+    /// Live sessions (#310) show the whole composed line at once — the real
+    /// TTS stream is the pacing; word-reveal theatre is the demo's.
+    func revealAll() {
+        revealedWordCount = spokenWords.count
+    }
+
     func setPartial(_ text: String?) {
         partial = text
     }

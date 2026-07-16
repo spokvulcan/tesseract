@@ -105,6 +105,16 @@ enum SettingsCatalogue {
     /// concept instead of a banner (banner stays the unanswered fallback).
     static let companionBeatsUseOverlay = Setting.bool(
         "companionBeatsUseOverlay", default: false)
+    /// The voice session's taste ledger (#310) — every disputed call ships as
+    /// a Setting the owner tunes on the wearing build.
+    static let companionVoiceAutoSend = Setting.bool(
+        "companionVoiceAutoSend", default: true)
+    static let companionVoiceTrailingSilence = Setting.double(
+        "companionVoiceTrailingSilence", default: 1.8)
+    static let companionVoiceSessionTimeout = Setting.double(
+        "companionVoiceSessionTimeout", default: 30)
+    static let companionVoiceBargeInLevel = Setting.double(
+        "companionVoiceBargeInLevel", default: 0.25)
 
     // MARK: - Memory (ADR-0035, map #314)
 

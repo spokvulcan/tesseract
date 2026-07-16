@@ -137,6 +137,10 @@ final class CompanionVoicePrototype {
     private var beatWait: CheckedContinuation<CompanionBeatSummonsOutcome, Never>?
     private var beatEscalationTask: Task<Void, Never>?
 
+    /// A live voice session's action routing (#310). While set, the overlay's
+    /// clicks belong to the session — not the demo driver, not a beat wait.
+    private var liveActions: CompanionVoiceActions?
+
     /// Real-wear escalation: step up at these marks, give up at the last.
     /// Deliberately slower than the demo's time-compressed ~4 s beats.
     private static let beatEscalationDelays: [TimeInterval] = [20, 25, 45]
@@ -160,6 +164,32 @@ final class CompanionVoicePrototype {
         driver.stop()
         resolveBeatWait(.unanswered)
         tearDownPanel()
+    }
+
+    // MARK: - Live voice sessions (#310)
+
+    /// Raise the picked concept as the live session's surface. The session
+    /// drives `feed` directly; the passed actions receive the overlay clicks.
+    func beginLiveSession(actions: CompanionVoiceActions) {
+        driver.stop()
+        resolveBeatWait(.unanswered)
+        liveActions = actions
+        feed.reset()
+        feed.setScene(title: "Voice")
+        let concept = CompanionVoiceConcepts.concept(for: settings.companionVoiceConceptRaw)
+        raisePanel(for: concept)
+    }
+
+    func endLiveSession() {
+        guard liveActions != nil else { return }
+        liveActions = nil
+        withAnimation(.spring(duration: 0.45)) { feed.setState(.idle) }
+        scheduleTeardown()
+    }
+
+    /// The live session's open-chat action: pull the talk into the window.
+    func openChatFromLiveSession() {
+        openChat()
     }
 
     // MARK: - Real beats (#328 wearing instrument)
@@ -236,22 +266,34 @@ final class CompanionVoicePrototype {
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
 
-        // A pending beat wait claims the actions; otherwise they drive the
-        // scripted demo. On a real beat both engage paths resolve `.engaged`
-        // and navigation happens exactly once, in the heartbeat's onEngage.
+        // A live voice session claims the actions first (#310); then a
+        // pending beat wait; otherwise they drive the scripted demo. On a
+        // real beat both engage paths resolve `.engaged` and navigation
+        // happens exactly once, in the loop's engage handling.
         let actions = CompanionVoiceActions(
             engage: { [weak self] in
                 guard let self else { return }
-                if beatWait != nil {
+                if let live = liveActions {
+                    live.engage()
+                } else if beatWait != nil {
                     resolveBeatWait(.engaged)
                 } else {
                     driver.engage()
                 }
             },
-            bargeIn: { [weak self] in self?.driver.bargeIn() },
+            bargeIn: { [weak self] in
+                guard let self else { return }
+                if let live = liveActions {
+                    live.bargeIn()
+                } else {
+                    driver.bargeIn()
+                }
+            },
             dismiss: { [weak self] in
                 guard let self else { return }
-                if beatWait != nil {
+                if let live = liveActions {
+                    live.dismiss()
+                } else if beatWait != nil {
                     resolveBeatWait(.dismissed)
                 } else {
                     driver.dismiss()
@@ -259,7 +301,9 @@ final class CompanionVoicePrototype {
             },
             openChat: { [weak self] in
                 guard let self else { return }
-                if beatWait != nil {
+                if let live = liveActions {
+                    live.openChat()
+                } else if beatWait != nil {
                     resolveBeatWait(.engaged)
                 } else {
                     openChat()

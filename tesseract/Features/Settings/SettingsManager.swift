@@ -283,6 +283,33 @@ final class SettingsManager {
         }
     }
 
+    var companionVoiceAutoSend: Bool {
+        didSet {
+            SettingsCatalogue.companionVoiceAutoSend.write(companionVoiceAutoSend, to: store)
+        }
+    }
+
+    var companionVoiceTrailingSilence: Double {
+        didSet {
+            SettingsCatalogue.companionVoiceTrailingSilence.write(
+                companionVoiceTrailingSilence, to: store)
+        }
+    }
+
+    var companionVoiceSessionTimeout: Double {
+        didSet {
+            SettingsCatalogue.companionVoiceSessionTimeout.write(
+                companionVoiceSessionTimeout, to: store)
+        }
+    }
+
+    var companionVoiceBargeInLevel: Double {
+        didSet {
+            SettingsCatalogue.companionVoiceBargeInLevel.write(
+                companionVoiceBargeInLevel, to: store)
+        }
+    }
+
     // MARK: - Memory (ADR-0035)
 
     var memoryEnabled: Bool {
@@ -552,6 +579,13 @@ final class SettingsManager {
         self.companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.load(from: store)
         self.companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.load(
             from: store)
+        self.companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.load(from: store)
+        self.companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence
+            .load(from: store)
+        self.companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout
+            .load(from: store)
+        self.companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.load(
+            from: store)
         self.memoryEnabled = SettingsCatalogue.memoryEnabled.load(from: store)
         self.memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.load(from: store)
         self.memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.load(from: store)
@@ -679,6 +713,10 @@ final class SettingsManager {
         companionModelID = SettingsCatalogue.companionModelID.default
         companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.default
         companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.default
+        companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.default
+        companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence.default
+        companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout.default
+        companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.default
         memoryEnabled = SettingsCatalogue.memoryEnabled.default
         memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.default
         memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.default

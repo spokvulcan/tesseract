@@ -114,6 +114,7 @@ extension View {
             .environment(container.commandPalette)
             .environment(container.skillPills)
             .environment(container.agentVoiceInput)
+            .environment(container.companionVoiceSession)
             .environment(container.agentSystemPromptInspector)
             .environment(container.agentEngine)
             .environment(container.appshotController)
