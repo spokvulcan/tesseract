@@ -1215,6 +1215,124 @@ _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
 
+### Tracking (Companion)
+
+The measurement grain beside memory's two (map #301, ticket #308): episodes are
+*testimony*, observations are *measurement*, beliefs are *conclusion*. Flow into
+memory is one-way, in sleep — pattern distillation reads the observation stream
+and mints pattern beliefs.
+
+**Observation**:
+One dated, typed fact about the owner's day — an elicited sample (sleep, mood,
+energy, movement), a step event, a habit check-off, or a sensed span (presence,
+app session, power). Append-only and kept forever: facts don't decay; a
+correction is a newer row (recency wins at read), never an edit. Elicited
+observations carry the episode that produced them, so the verbatim words stay
+recoverable behind the structured fact.
+_Avoid_: sample (one species — the elicited kind), metric/log line,
+observation-as-belief (facts are never superseded and have no lifecycle).
+
+**Observation Source**:
+Which of the three doors wrote an observation: *sensed* (sensor code, no LLM
+between sensor and disk), *elicited* (conversation, through a typed tool),
+*imported* (a bridge from an external store). One door per fact: each
+observation kind has exactly one writing door — the tracking-side analogue of
+**One Door Per Testimony**.
+_Avoid_: provenance (that's the episode link), mixed-source kinds.
+
+**Contract Chain**:
+The day contract's shape: an ordered chain of hard steps with at most one
+*active*; finishing a step arms the next immediately, the same day. Generalizes
+the anchor day's "ONE hard step" — the preserved invariant is one step *at a
+time*, not one per day; the push (the midday pulse) always aims at the single
+active step.
+_Avoid_: task list (the chain is chosen and pushed, never dumped), parallel
+steps, ONE hard step (the superseded per-day cap — see #302's amendment).
+
+**Keystone**:
+Step one of the **Contract Chain**: the single step that makes the day a win.
+Streaks count keystones alone; nothing past the keystone can fail a day.
+_Avoid_: hard step (any chain step is hard; only one is the keystone),
+most-important-task.
+
+**Chain Depth**:
+How far past the **Keystone** a day's chain actually went — surplus recorded,
+never failure ("kept, depth 2/3"). The signal that eventually tells the owner
+his realistic daily ambition.
+_Avoid_: completion rate (depth is not a percentage of plan), failure count.
+
+**Stream**:
+A named area of the owner's life that work flows in — Tesseract, the employer's
+work, health. Tags work items and observations so cross-stream balance becomes
+visible to pattern distillation; streams are conversational names, never a
+configuration surface.
+_Avoid_: project (a stream outlives any project), area/category (say stream),
+audio/transport streams (Generation Stream Loop and friends are unrelated).
+
+**Work Item**:
+One backlog entry the Companion may draw a chain step from: a title, its
+**Stream**, and a cadence — one-shot, or a recurring habit that re-arms daily.
+The evening close-out checks due habits; check-offs land as **Observation**s.
+The successor to the retired `tasks.md`.
+_Avoid_: task (the retired file's word; too broad here), reminder (EventKit's,
+not ours), habit tracker (a habit is a cadence value, not a product surface).
+
+**Read-Through Source**:
+An external store the Companion consults live at compose time and never
+mirrors — the calendar is queried when the evening's tomorrow-preview or the
+morning placement needs it. Observations record only what has no other home.
+_Avoid_: import (that's a copy, with `imported` as its **Observation Source**),
+sync (nothing is mirrored, so nothing can drift).
+
+### Proactive loop (Companion)
+
+The entity/harness split (map #301, ticket #307, ADR-0040): the model — Jarvis,
+the *entity* — decides everything with judgment in it; the *harness* (code)
+contributes turns, continuity, and the record, never judgment.
+
+**Wake**:
+One persisted row granting the entity a future turn — a promise, a rhythm beat,
+a follow-up, or a re-summons, all one table. Booked by the entity through a
+typed tool; state transitions written only by app code. The loop's one
+correctness invariant: a wake is consumed only by a completed turn.
+_Avoid_: trigger/timer (implementation words for what fires it), reminder (a
+wake wakes Jarvis, not the owner), notification (one possible *outcome* of the
+turn a wake grants).
+
+**Turn**:
+One full agent run granted to the entity by a **Wake**, a transition (day
+start, Mac-wake, launch catch-up), or ambient eligibility. Every turn persists
+as an origin-tagged conversation in the one chat list — full observability.
+Silence is a decision a turn records, never a branch code took.
+_Avoid_: check/tick (the evaluator's clock, which decides nothing), beat (the
+anchor rhythm's word for the *content* of some turns), heartbeat (the retired
+skeleton's fixed-time pings).
+
+**Ambient Turn**:
+An unoccasioned **Turn** — time to think, research, notice, book — granted when
+the eligibility gate passes (AC power, `.llm` slot free, owner not using the
+agent, spacing). The waking analogue of a sleep pass, and the seed of the North
+Star's continuous loop.
+_Avoid_: background job (it's cognition, not maintenance), idle task, cron.
+
+**Situation Briefing**:
+The code-gathered context handed to the entity at the start of every turn:
+time, presence span, frontmost app, calendar (read-through), contract state,
+its own due and upcoming **Wake**s, recency of last interaction. Gathering is
+mechanical; interpreting it is the turn's job.
+_Avoid_: prompt (it's one input to the turn, not the instructions), snapshot
+(the flight recorder's word for the verbatim copy a trace keeps).
+
+**Standing Instructions**:
+The entity's self-authored policy document — versioned, injected into the
+system prompt beside memory, edited by the entity through a typed tool,
+reviewed in sleep passes, always owner-readable and owner-editable. Escalation
+ladders, interruption ethics, quiet hours, and rhythm defaults live here, as
+seeds the entity rewrites with wear — never as code.
+_Avoid_: system prompt (the instructions ride inside it), settings/config (not
+a UI surface; a document the entity owns), rules (they're his practice, not his
+cage).
+
 ### Text injection
 
 **Clipboard Loan**:
