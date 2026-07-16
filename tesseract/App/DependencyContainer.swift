@@ -235,8 +235,22 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createLogSampleTool(store: memoryStore))
         registry.appendBuiltInTool(createLogTaskTool(store: memoryStore))
         registry.appendBuiltInTool(createCloseDayTool(store: memoryStore))
+        // The flight recorder's read path and its one write door (#326).
+        registry.appendBuiltInTool(createFlightLogTool(recorder: companionFlightRecorder))
+        registry.appendBuiltInTool(
+            createLogFeedbackTool(
+                recorder: companionFlightRecorder,
+                currentConversationID: { [weak self] in
+                    self?.agentConversationStore.currentConversation?.id
+                }
+            ))
         return registry
     }()
+
+    /// The Companion's interaction-fact log (#326): app-owned, App Support,
+    /// retention forever. Only app code writes; the model reads via
+    /// `flight_log` and testifies via `log_feedback`.
+    lazy var companionFlightRecorder = CompanionFlightRecorder()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {
         // TTS residency arrives as closures (evaluated lazily) because the
