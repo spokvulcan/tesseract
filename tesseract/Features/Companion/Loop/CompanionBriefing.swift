@@ -26,6 +26,8 @@ enum CompanionBriefing {
         let upcomingWakes: [CompanionWake]
         /// Sunday-evening turns carry the deterministic weekly numbers (#313).
         let weeklyNumbers: String?
+        /// Read-only calendar lines (stage G) — empty without access.
+        var calendarLines: [String] = []
     }
 
     static func gather(
@@ -34,6 +36,7 @@ enum CompanionBriefing {
         sensed: SensedObservationRecorder,
         dueWakes: [CompanionWake],
         recorder: CompanionFlightRecorder,
+        calendar: CompanionCalendarReader? = nil,
         now: Date = Date()
     ) async -> Inputs {
         let todayKey = TrackingDay.key(for: now)
@@ -65,7 +68,8 @@ enum CompanionBriefing {
             yesterday: yesterday ?? nil,
             dueWakes: dueWakes,
             upcomingWakes: upcoming,
-            weeklyNumbers: weekly
+            weeklyNumbers: weekly,
+            calendarLines: calendar?.briefingLines(now: now) ?? []
         )
     }
 
@@ -122,6 +126,9 @@ enum CompanionBriefing {
             }
         } else {
             lines.append("You have NOTHING booked ahead — establish your rhythm.")
+        }
+        if !inputs.calendarLines.isEmpty {
+            lines.append(contentsOf: inputs.calendarLines)
         }
         if let weekly = inputs.weeklyNumbers {
             lines.append("")

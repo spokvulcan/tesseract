@@ -37,6 +37,8 @@ final class CompanionLoop {
     private let notifier: CompanionNotifier
     private let idleMonitor: IdleMonitor
     private let sensed: SensedObservationRecorder
+    /// Read-only calendar for the briefing (stage G); access asked on enable.
+    private let calendar: CompanionCalendarReader
     /// Reads the concrete arbiter's lease state (the protocol seam carries only
     /// the lease itself) — ambient turns yield to any in-flight generation.
     private let isGPUBusy: () -> Bool
@@ -60,6 +62,7 @@ final class CompanionLoop {
         notifier: CompanionNotifier,
         idleMonitor: IdleMonitor,
         sensed: SensedObservationRecorder,
+        calendar: CompanionCalendarReader,
         isGPUBusy: @escaping () -> Bool,
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
@@ -71,6 +74,7 @@ final class CompanionLoop {
         self.notifier = notifier
         self.idleMonitor = idleMonitor
         self.sensed = sensed
+        self.calendar = calendar
         self.isGPUBusy = isGPUBusy
         self.isEnabled = isEnabled
         self.speak = speak
@@ -239,7 +243,7 @@ final class CompanionLoop {
                 note: nil, createdAt: now)
         let inputs = await CompanionBriefing.gather(
             store: store, idleMonitor: idleMonitor, sensed: sensed,
-            dueWakes: dueWakes, recorder: recorder, now: now)
+            dueWakes: dueWakes, recorder: recorder, calendar: calendar, now: now)
         return [
             CompanionInstructions.wrap(instructions),
             CompanionBriefing.render(inputs),
@@ -380,9 +384,13 @@ final class CompanionLoop {
     private func requestAuthorizationOnce() {
         guard !didRequestAuthorization, isEnabled() else { return }
         didRequestAuthorization = true
-        Task { [notifier, recorder] in
+        Task { [notifier, recorder, calendar] in
             let granted = await notifier.activate()
             if !granted { recorder.record("loop.auth-denied") }
+            // Calendar is briefing material (stage G) — denial just means the
+            // situation block carries no schedule; nothing else changes.
+            let calendarGranted = await calendar.requestAccessIfNeeded()
+            if !calendarGranted { recorder.record("loop.calendar-denied") }
         }
     }
 

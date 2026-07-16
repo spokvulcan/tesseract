@@ -500,6 +500,7 @@ final class DependencyContainer: ObservableObject {
         notifier: CompanionNotifier(),
         idleMonitor: idleMonitor,
         sensed: sensedObservations,
+        calendar: CompanionCalendarReader(),
         isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
         // The spoken rung. With the #328 overlay toggle on, the picked concept

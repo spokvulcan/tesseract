@@ -413,6 +413,19 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         #expect(text.contains("evening journal"))
     }
 
+    @Test func calendarLinesRideTheSituationBlock() {
+        var inputs = CompanionBriefing.Inputs(
+            now: Date(), ownerPresent: true, screenLocked: false, frontmostApp: nil,
+            onACPower: true, today: nil, yesterday: nil, dueWakes: [],
+            upcomingWakes: [], weeklyNumbers: nil)
+        inputs.calendarLines = [
+            "Calendar — the rest of his day:", "- 15:00 Dentist",
+        ]
+        let text = CompanionBriefing.render(inputs)
+        #expect(text.contains("Calendar — the rest of his day:"))
+        #expect(text.contains("- 15:00 Dentist"))
+    }
+
     @Test func emptyFutureDemandsARhythm() {
         let text = CompanionBriefing.render(
             CompanionBriefing.Inputs(
