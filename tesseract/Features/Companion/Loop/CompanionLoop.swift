@@ -36,6 +36,9 @@ final class CompanionLoop {
     private let runner: CompanionTurnRunner
     private let notifier: CompanionNotifier
     private let idleMonitor: IdleMonitor
+    /// The owner's attention wins outright: no turn class starts while he is
+    /// using the app, nor until it has been quiet for the gate's window.
+    private let attention: CompanionAttentionGate
     private let sensed: SensedObservationRecorder
     /// Read-only calendar for the briefing (stage G); access asked on enable.
     private let calendar: CompanionCalendarReader
@@ -48,6 +51,9 @@ final class CompanionLoop {
 
     private var tickTask: Task<Void, Never>?
     private var evaluating = false
+    /// One deferral record per closed-gate episode — a tick every 30 s while
+    /// he works must not spam the flight log.
+    private var deferralLogged = false
     private var didRequestAuthorization = false
     private var didRunLaunchRecovery = false
     /// Failed attempts per wake batch, keyed by the earliest wake id.
@@ -61,6 +67,7 @@ final class CompanionLoop {
         runner: CompanionTurnRunner,
         notifier: CompanionNotifier,
         idleMonitor: IdleMonitor,
+        attention: CompanionAttentionGate,
         sensed: SensedObservationRecorder,
         calendar: CompanionCalendarReader,
         isGPUBusy: @escaping () -> Bool,
@@ -73,6 +80,7 @@ final class CompanionLoop {
         self.runner = runner
         self.notifier = notifier
         self.idleMonitor = idleMonitor
+        self.attention = attention
         self.sensed = sensed
         self.calendar = calendar
         self.isGPUBusy = isGPUBusy
@@ -118,8 +126,10 @@ final class CompanionLoop {
     }
 
     /// The Settings test lever: a wake due now exercises the entire pipe —
-    /// evaluator, turn, delivery, recorder.
+    /// evaluator, turn, delivery, recorder. Clicking it is owner engagement
+    /// by definition, so the attention gate is lifted for it.
     func bookTestWake() {
+        attention.lift()
         Task {
             let wake = CompanionWake(
                 content:
@@ -145,6 +155,21 @@ final class CompanionLoop {
 
         let now = Date()
         let todayKey = TrackingDay.key(for: now)
+
+        // The attention gate outranks due-ness: while the owner is using the
+        // app (and for the quiet window after), nothing fires. Deferred wakes
+        // stay booked and batch into one turn when the gate opens — the
+        // evening journal must never run beside his live voice session again.
+        guard attention.mayRunTurn(now: now) else {
+            if !deferralLogged, let due = try? await store.dueWakes(asOf: now), !due.isEmpty {
+                deferralLogged = true
+                recorder.record(
+                    "wake.deferred", wakeID: due.first?.id,
+                    snapshot: ["count": String(due.count), "reason": "owner-engaged"])
+            }
+            return
+        }
+        deferralLogged = false
 
         // 1. Due wakes — the entity's booked present.
         if let due = try? await store.dueWakes(asOf: now), !due.isEmpty {
@@ -243,7 +268,8 @@ final class CompanionLoop {
                 note: nil, createdAt: now)
         let inputs = await CompanionBriefing.gather(
             store: store, idleMonitor: idleMonitor, sensed: sensed,
-            dueWakes: dueWakes, recorder: recorder, calendar: calendar, now: now)
+            dueWakes: dueWakes, recorder: recorder, calendar: calendar,
+            lastAppUse: attention.lastOwnerEngagedAt, now: now)
         return [
             CompanionInstructions.wrap(instructions),
             CompanionBriefing.render(inputs),
@@ -374,6 +400,9 @@ final class CompanionLoop {
                     due: Date(), wakeClass: .followup,
                     conversationID: correlation?.conversationID)
                 try? await self.store.upsertWake(wake)
+                // His reply IS the summons — answering it must not wait out
+                // the quiet window his own typing just armed.
+                self.attention.lift()
                 self.evaluateSoon()
             case .dismissed:
                 break  // The dismissal record above is the whole point.
@@ -404,17 +433,28 @@ final class CompanionLoop {
         judgment. Anything you choose not to act on, say so in one line here (the \
         transcript is your record). Book whatever future wakes this implies before \
         you finish.
+
+        A beat that needs his participation — the evening journal, morning \
+        planning, any review — is a conversation, not a monologue. Summon him \
+        (notify; speak too only if he is demonstrably present), say what it is \
+        time for, then END the turn and wait: his reply reaches you as your next \
+        wake. Never write his side of a ritual, and never close his day without \
+        him. If a summons lapses unanswered, re-book the beat once, 30-45 minutes \
+        out; if it lapses again, note it and fold the ritual into the next \
+        natural beat.
         </turn>
         """
 
     private static let catchUpTemplate = """
         <turn>
-        These wakes are OVERDUE — the Mac was asleep or the app was closed. \
-        Triage, don't pretend it is earlier than it is: a late morning summons is \
-        better than none if his day is young; a stale pulse is better folded into \
-        the next beat; a promise still fires quietly. For anything you skip, one \
-        recorded line of reasoning here. Re-book the rest of today's rhythm if the \
-        gap swallowed it.
+        These wakes are OVERDUE — the Mac was asleep, the app was closed, or you \
+        were waiting out a long session of his. Triage, don't pretend it is \
+        earlier than it is: a late morning summons is better than none if his day \
+        is young; a stale pulse is better folded into the next beat; a promise \
+        still fires quietly. For anything you skip, one recorded line of \
+        reasoning here. Re-book the rest of today's rhythm if the gap swallowed \
+        it. A participatory beat still runs WITH him: summon, end the turn, and \
+        wait — never run it solo because it is late.
         </turn>
         """
 

@@ -28,6 +28,10 @@ enum CompanionBriefing {
         let weeklyNumbers: String?
         /// Read-only calendar lines (stage G) — empty without access.
         var calendarLines: [String] = []
+        /// When the owner last used *this app* (the attention gate's evidence)
+        /// — the entity's ground truth for "is he actually with me right now",
+        /// nil when he hasn't touched it since launch.
+        var lastAppUse: Date? = nil
     }
 
     static func gather(
@@ -37,6 +41,7 @@ enum CompanionBriefing {
         dueWakes: [CompanionWake],
         recorder: CompanionFlightRecorder,
         calendar: CompanionCalendarReader? = nil,
+        lastAppUse: Date? = nil,
         now: Date = Date()
     ) async -> Inputs {
         let todayKey = TrackingDay.key(for: now)
@@ -69,7 +74,8 @@ enum CompanionBriefing {
             dueWakes: dueWakes,
             upcomingWakes: upcoming,
             weeklyNumbers: weekly,
-            calendarLines: calendar?.briefingLines(now: now) ?? []
+            calendarLines: calendar?.briefingLines(now: now) ?? [],
+            lastAppUse: lastAppUse
         )
     }
 
@@ -87,6 +93,15 @@ enum CompanionBriefing {
             lines.append(presence + ".")
         } else {
             lines.append("He is idle — no input for a while.")
+        }
+        if let lastUse = inputs.lastAppUse {
+            let minutes = Int(inputs.now.timeIntervalSince(lastUse) / 60)
+            lines.append(
+                minutes < 1
+                    ? "He was using this app moments ago."
+                    : "He last used this app \(minutes) min ago.")
+        } else {
+            lines.append("He has not used this app since it launched.")
         }
         lines.append("Power: \(inputs.onACPower ? "AC" : "battery").")
 

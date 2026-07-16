@@ -493,12 +493,36 @@ final class DependencyContainer: ObservableObject {
         context: companionTurnContext,
         presence: companionPresence
     )
+    /// The owner's attention outranks the entity's schedule: background turns
+    /// hold while he is using the app (voice session, generation, TTS he is
+    /// listening to, dictation into the composer, or the app frontmost with
+    /// recent input) and for the gate's quiet window after — the one queue,
+    /// strictly after him, never beside him.
+    lazy var companionAttentionGate = CompanionAttentionGate(
+        isOwnerEngaged: { [unowned self] in
+            if self.companionVoiceSession.isActive { return true }
+            if self.chatSession.isGenerating { return true }
+            if self.agentVoiceInput.voiceState == .recording
+                || self.agentVoiceInput.voiceState == .transcribing
+            {
+                return true
+            }
+            switch self.speechCoordinator.state {
+            case .idle, .error: break
+            default: return true
+            }
+            return NSApp.isActive
+                && IdleMonitor.hidIdleSeconds() < CompanionAttentionGate.quietWindow
+        },
+        isMachineBusy: { [unowned self] in self.inferenceArbiter.isGPULeaseHeld }
+    )
     lazy var companionLoop = CompanionLoop(
         store: memoryStore,
         recorder: companionFlightRecorder,
         runner: companionTurnRunner,
         notifier: CompanionNotifier(),
         idleMonitor: idleMonitor,
+        attention: companionAttentionGate,
         sensed: sensedObservations,
         calendar: CompanionCalendarReader(),
         isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },

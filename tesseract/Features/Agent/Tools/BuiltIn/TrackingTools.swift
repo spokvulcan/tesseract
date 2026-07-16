@@ -393,7 +393,9 @@ nonisolated func createCloseDayTool(store: MemoryStore) -> AgentToolDefinition {
             Close today at the end of the evening journal: stamps the close-out (an \
             unclosed day is what tomorrow's morning opens with a catch-up about) and \
             records tomorrow's seed — what tomorrow's planning should open with. \
-            Call it after the journal talk, once the contract is accounted for.
+            Call it after the journal talk, once the contract is accounted for. The \
+            journal is HIS ritual as much as yours: never call this in a turn he has \
+            not participated in — summon him and wait instead.
             """,
         parameterSchema: JSONSchema(
             type: "object",

@@ -413,6 +413,25 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         #expect(text.contains("evening journal"))
     }
 
+    @Test func appUseEvidenceRendersRecencyOrItsAbsence() {
+        let now = Date()
+        var inputs = CompanionBriefing.Inputs(
+            now: now, ownerPresent: true, screenLocked: false, frontmostApp: nil,
+            onACPower: true, today: nil, yesterday: nil, dueWakes: [],
+            upcomingWakes: [], weeklyNumbers: nil)
+        #expect(
+            CompanionBriefing.render(inputs)
+                .contains("He has not used this app since it launched."))
+
+        inputs.lastAppUse = now.addingTimeInterval(-3 * 60)
+        #expect(
+            CompanionBriefing.render(inputs).contains("He last used this app 3 min ago."))
+
+        inputs.lastAppUse = now.addingTimeInterval(-10)
+        #expect(
+            CompanionBriefing.render(inputs).contains("He was using this app moments ago."))
+    }
+
     @Test func calendarLinesRideTheSituationBlock() {
         var inputs = CompanionBriefing.Inputs(
             now: Date(), ownerPresent: true, screenLocked: false, frontmostApp: nil,
