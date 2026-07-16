@@ -167,13 +167,30 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
+    /// The Companion's zero-dialog sensing tier (#308): presence spans, app
+    /// sessions, power transitions → the observation stream. Writes are gated
+    /// on the Companion toggle inside the recorder.
+    lazy var sensedObservations = SensedObservationRecorder(
+        store: memoryStore,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
+
     /// Wire idleness to consolidation (ADR-0035 §7). The owner walking away is
     /// the *only* thing that starts a sleep, and him coming back is the only
     /// thing that stops one — instantly, by cancelling it mid-generation.
+    /// The sensed-observation recorder shares the same two transitions: idle
+    /// closes a presence span, return opens one.
     func startMemoryConsolidationLoop() {
-        idleMonitor.onIdle = { [memorySleep] in memorySleep.start() }
-        idleMonitor.onReturn = { [memorySleep] in memorySleep.yield() }
+        idleMonitor.onIdle = { [memorySleep, sensedObservations] in
+            memorySleep.start()
+            sensedObservations.ownerWentIdle()
+        }
+        idleMonitor.onReturn = { [memorySleep, sensedObservations] in
+            memorySleep.yield()
+            sensedObservations.ownerReturned()
+        }
         idleMonitor.start()
+        sensedObservations.start()
     }
 
     // Text Injection
@@ -210,6 +227,14 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createRememberTool(memory: memoryEngine))
         registry.appendBuiltInTool(createRecallTool(memory: memoryEngine))
         registry.appendBuiltInTool(createContestTool(memory: memoryEngine))
+        // The tracking model's five typed talk-time tools (#308) — registered
+        // in every conversation, same as memory's: the check-in IS the
+        // measuring instrument, whichever conversation it happens in.
+        registry.appendBuiltInTool(createPlanDayTool(store: memoryStore))
+        registry.appendBuiltInTool(createLogStepTool(store: memoryStore))
+        registry.appendBuiltInTool(createLogSampleTool(store: memoryStore))
+        registry.appendBuiltInTool(createLogTaskTool(store: memoryStore))
+        registry.appendBuiltInTool(createCloseDayTool(store: memoryStore))
         return registry
     }()
     lazy var agentConversationStore = AgentConversationStore()

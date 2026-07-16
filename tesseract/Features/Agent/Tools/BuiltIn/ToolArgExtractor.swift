@@ -25,6 +25,20 @@ nonisolated enum ToolArgExtractor: Sendable {
         }
     }
 
+    static func stringArray(_ args: [String: JSONValue], key: String) -> [String]? {
+        guard let value = args[key] else { return nil }
+        guard case .array(let items) = ToolArgumentNormalizer.normalize(value) else { return nil }
+        let strings = items.compactMap { item -> String? in
+            switch ToolArgumentNormalizer.normalize(item) {
+            case .string(let s): return s
+            case .int(let i): return String(i)
+            case .double(let d): return String(d)
+            default: return nil
+            }
+        }
+        return strings
+    }
+
     static func bool(_ args: [String: JSONValue], key: String) -> Bool? {
         guard let value = args[key] else { return nil }
         switch ToolArgumentNormalizer.normalize(value) {
