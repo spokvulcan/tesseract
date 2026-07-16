@@ -1,6 +1,22 @@
 # Voice-session TTS renders through the VPIO capture engine (Dual-Path Playback)
 
-Status: accepted
+Status: accepted — first implementation REVERTED 2026-07-17 (crash); redo pending
+
+**Status note (2026-07-17):** the first implementation (d30412c7) shipped a
+*voice hold* that kept the engine running between captures and installed the
+capture tap on the running engine. On macOS 26.5.2 that raises an uncatchable
+NSException (`installTapOnBus` → `CreateRecordingTap` → `SetOutputFormat` →
+`SetFormat`) — an IO node's format cannot change on a running VP engine — and
+it took down live dictation (owner crash report, SIGABRT on the main thread).
+The retry loop around the failing capture also froze the UI (20 Hz re-attempts,
+each costing up to rebuild+re-arm on the main thread; a backoff now guards
+that). The acoustic layer is reverted to the dedicated-engine playback path;
+every other layer of the self-echo fix (synchronous speak state, hardened
+watchdog, pause-on-barge, Substance Gate, Session Directives) stands. A redo
+must: install the tap once per hold (capture start/stop = buffer discipline,
+never tap install/remove on a running engine), wire the render side only on a
+stopped engine, verify format compatibility before connecting, and be
+exercised by a runtime harness (not just unit tests) before landing.
 
 The Voice Session keeps the microphone open while the assistant speaks (full
 duplex — voice barge-in is a hard requirement, #310 §4), which makes Self-Echo

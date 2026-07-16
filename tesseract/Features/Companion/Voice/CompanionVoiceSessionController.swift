@@ -9,8 +9,9 @@
 //
 //  The loop: listen (mic open, endpointer armed) → owner speaks → trailing
 //  silence auto-sends the transcription → reply arrives → Jarvis speaks it
-//  through the VPIO engine (Dual-Path Playback, ADR-0041 — the mic stays open
-//  underneath with the reply as the echo canceller's own far-end reference).
+//  (mic open underneath; VPIO's loopback echo cancellation keeps his voice
+//  out of the input — the ADR-0041 dual-path reference routing is deferred
+//  until the voice hold can be implemented without taps on a running engine).
 //  Sustained speech energy is a barge-in that *pauses* him: a take with
 //  substance commits and stops the reply for good, a Session Directive stops
 //  it without reaching the agent, and a false barge resumes him where he
@@ -92,8 +93,6 @@ final class CompanionVoiceSessionController {
     private let pauseSpeaking: @MainActor () -> Void
     private let resumeSpeaking: @MainActor () -> Void
     private let speechState: @MainActor () -> SpeechState
-    private let beginAudioHold: @MainActor () -> Void
-    private let endAudioHold: @MainActor () -> Void
     private let currentConversationID: @MainActor () -> UUID?
     private let overlay: CompanionVoicePrototype
     private let recorder: CompanionFlightRecorder
@@ -144,8 +143,6 @@ final class CompanionVoiceSessionController {
         pauseSpeaking: @escaping @MainActor () -> Void,
         resumeSpeaking: @escaping @MainActor () -> Void,
         speechState: @escaping @MainActor () -> SpeechState,
-        beginAudioHold: @escaping @MainActor () -> Void,
-        endAudioHold: @escaping @MainActor () -> Void,
         currentConversationID: @escaping @MainActor () -> UUID?,
         overlay: CompanionVoicePrototype,
         recorder: CompanionFlightRecorder,
@@ -162,8 +159,6 @@ final class CompanionVoiceSessionController {
         self.pauseSpeaking = pauseSpeaking
         self.resumeSpeaking = resumeSpeaking
         self.speechState = speechState
-        self.beginAudioHold = beginAudioHold
-        self.endAudioHold = endAudioHold
         self.currentConversationID = currentConversationID
         self.overlay = overlay
         self.recorder = recorder
@@ -191,9 +186,6 @@ final class CompanionVoiceSessionController {
                 dismiss: { [weak self] in self?.exit(reason: "dismissed") },
                 openChat: { [weak self] in self?.overlay.openChatFromLiveSession() }
             ))
-        // The voice hold keeps the engine running for the whole session — it
-        // hosts the replies' playback nodes (Dual-Path Playback, ADR-0041).
-        beginAudioHold()
         startTicker()
         beginListening()
     }
@@ -213,7 +205,6 @@ final class CompanionVoiceSessionController {
             conversationID: currentConversationID(),
             snapshot: ["reason": reason, "exchanges": String(exchanges)])
         overlay.endLiveSession()
-        endAudioHold()
     }
 
     // MARK: - The reply hook (ChatSession's agentEnd calls this)
@@ -240,9 +231,8 @@ final class CompanionVoiceSessionController {
         deafUntil = nil
         settledTicks = 0
         endpointer.reset(config: .bargeIn(speechLevel: bargeInLevel))
-        // The mic opens *under* the utterance: the reply plays through the
-        // VPIO engine as the AEC's own far-end reference (ADR-0041), so
-        // speech energy here is the owner (#310 §4).
+        // The mic opens *under* the utterance: VPIO's AEC keeps his voice out
+        // of the input, so speech energy here is the owner (#310 §4).
         openCapture()
         speak(text) { [weak self] in
             self?.speechDoneCallbackSeen = true
@@ -529,11 +519,30 @@ final class CompanionVoiceSessionController {
 
     // MARK: - Capture plumbing
 
+    /// A failed start (mic busy, engine refusing) retries no sooner than
+    /// this. Without the backoff the 20 Hz ticker retried every 50 ms, and a
+    /// failing `startCapture` can cost hundreds of ms of CoreAudio work per
+    /// attempt on the main thread — the app-wide freeze in the 2026-07-17
+    /// crash report.
+    private static let captureRetryBackoff: TimeInterval = 1.0
+    private var lastCaptureAttemptFailedAt: Date?
+
     private func openCapture() {
         guard !captureOpen else { return }
-        if case .started = capture.start() { captureOpen = true }
-        // micBusy (dictation mid-take) resolves on a later tick — the session
-        // just keeps listening state without a live mic until it frees.
+        if let failedAt = lastCaptureAttemptFailedAt,
+            Date().timeIntervalSince(failedAt) < Self.captureRetryBackoff
+        {
+            return
+        }
+        if case .started = capture.start() {
+            captureOpen = true
+            lastCaptureAttemptFailedAt = nil
+        } else {
+            // micBusy (dictation mid-take) or a start failure resolves on a
+            // later tick — the session keeps listening state without a live
+            // mic, retrying at backoff cadence, never at tick cadence.
+            lastCaptureAttemptFailedAt = Date()
+        }
     }
 
     private func reopenCapture() {

@@ -175,22 +175,6 @@ final class AudioCaptureEngine: AudioCapturing {
     /// a minutes-long meter session costs no memory and its stop is instant.
     private var meteringOnly = false
 
-    // MARK: Voice hold (Dual-Path Playback, ADR-0041)
-
-    /// While a voice session runs the engine is *held*: it keeps running
-    /// between captures (start/stop degrade to tap install/remove) and hosts
-    /// the session's TTS player nodes, so VPIO's echo canceller hears the
-    /// reply as its own far-end reference instead of "other audio".
-    private(set) var voiceHoldActive = false
-    /// Whether the held engine's render side is wired and playback nodes can
-    /// attach. False when the render wiring failed or the hold began while a
-    /// capture was mid-take — callers fall back to their dedicated engine.
-    private(set) var voicePlaybackHosted = false
-    /// Fired when the engine is torn down or rebuilt underneath attached
-    /// playback nodes — the playback adapter treats it as end-of-utterance.
-    var onVoicePlaybackInvalidated: (@MainActor () -> Void)?
-    private var attachedPlaybackNodes: [AVAudioPlayerNode] = []
-
     private var inputSampleRate: Double = Defaults.defaultInputSampleRate
     private let bufferSize: AVAudioFrameCount = Defaults.bufferSize
 
@@ -227,113 +211,6 @@ final class AudioCaptureEngine: AudioCapturing {
         if audioEngine == nil || engineNeedsRebuild {
             rebuildEngine(voiceProcessing: lifecycle.prewarmBuildsArmed)
         }
-    }
-
-    // MARK: - Voice hold (Dual-Path Playback, ADR-0041)
-
-    /// Begins the voice-session hold: the engine starts now and keeps running
-    /// until `endVoiceHold()`, with its render side wired so the session's
-    /// TTS plays through the VPIO unit. A no-op without microphone permission
-    /// (the session's own capture start surfaces that error).
-    func beginVoiceHold() {
-        guard !voiceHoldActive else { return }
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
-        voiceHoldActive = true
-        if audioEngine == nil || engineNeedsRebuild {
-            // rebuildEngine restarts the held engine on its way out.
-            rebuildEngine(voiceProcessing: lifecycle.prewarmBuildsArmed)
-        } else {
-            startHeldEngine()
-        }
-        Log.audio.info("Voice hold began (playback hosted: \(self.voicePlaybackHosted))")
-    }
-
-    func endVoiceHold() {
-        guard voiceHoldActive else { return }
-        voiceHoldActive = false
-        for node in attachedPlaybackNodes {
-            node.stop()
-            if let audioEngine, audioEngine.attachedNodes.contains(node) {
-                audioEngine.detach(node)
-            }
-        }
-        attachedPlaybackNodes.removeAll()
-        voicePlaybackHosted = false
-        if let audioEngine {
-            lastIntentionalReconfigure = Date()
-            if !isCapturing, audioEngine.isRunning {
-                audioEngine.stop()
-            }
-            // Back to the input-only graph — the render side is the hold's.
-            audioEngine.disconnectNodeOutput(audioEngine.mainMixerNode)
-        }
-        Log.audio.info("Voice hold ended")
-    }
-
-    /// Attaches a voice-session player node to the held engine's mixer.
-    /// Returns false when the engine cannot host playback right now — the
-    /// caller falls back to its dedicated engine (weaker echo cancellation,
-    /// but the reply still plays).
-    func attachVoicePlayback(node: AVAudioPlayerNode, format: AVAudioFormat) -> Bool {
-        guard voiceHoldActive, voicePlaybackHosted,
-            let audioEngine, audioEngine.isRunning
-        else { return false }
-        audioEngine.attach(node)
-        audioEngine.connect(node, to: audioEngine.mainMixerNode, format: format)
-        attachedPlaybackNodes.append(node)
-        return true
-    }
-
-    func detachVoicePlayback(node: AVAudioPlayerNode) {
-        attachedPlaybackNodes.removeAll { $0 === node }
-        guard let audioEngine, audioEngine.attachedNodes.contains(node) else { return }
-        node.stop()
-        audioEngine.detach(node)
-    }
-
-    /// Starts (or restarts) the held engine with its render side wired. The
-    /// mixer→output connection is made while stopped — under Voice
-    /// Processing the IO formats are pinned to each other and only mutable
-    /// on a stopped engine (`AVAudioIONode.h`).
-    private func startHeldEngine() {
-        guard voiceHoldActive, let audioEngine, !audioEngine.isRunning else { return }
-        let ioFormat = audioEngine.inputNode.outputFormat(forBus: 0)
-        if ioFormat.sampleRate > 0, ioFormat.channelCount > 0 {
-            audioEngine.connect(
-                audioEngine.mainMixerNode, to: audioEngine.outputNode, format: ioFormat)
-            voicePlaybackHosted = true
-        } else {
-            voicePlaybackHosted = false
-        }
-        lastIntentionalReconfigure = Date()
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-        } catch {
-            // A render side the device refuses must not cost the session its
-            // microphone: retry input-only and let playback fall back.
-            Log.audio.error(
-                """
-                Voice hold start failed with render side, retrying input-only: \
-                \(error.localizedDescription)
-                """)
-            audioEngine.disconnectNodeOutput(audioEngine.mainMixerNode)
-            voicePlaybackHosted = false
-            lastIntentionalReconfigure = Date()
-            do { try audioEngine.start() } catch {
-                Log.audio.error("Voice hold start failed: \(error.localizedDescription)")
-            }
-        }
-    }
-
-    /// The engine underneath attached playback nodes is going away — tell
-    /// the adapter so it can end its utterance instead of waiting on buffer
-    /// callbacks that will never fire.
-    private func invalidateVoicePlayback() {
-        guard !attachedPlaybackNodes.isEmpty || voicePlaybackHosted else { return }
-        attachedPlaybackNodes.removeAll()
-        voicePlaybackHosted = false
-        onVoicePlaybackInvalidated?()
     }
 
     func startCapture() throws {
@@ -465,18 +342,12 @@ final class AudioCaptureEngine: AudioCapturing {
                 // at engine-start cost instead of paying the rebuild + arm.
                 self.scheduleIdleRebuild()
             }
-
-        // A rebuild under a voice hold restarts the held engine (render side
-        // wired) so the session's next reply can attach — the reply that was
-        // playing was invalidated by the teardown above.
-        if voiceHoldActive { startHeldEngine() }
     }
 
     private func tearDownEngine() {
         disarmTask?.cancel()
         disarmTask = nil
         configChangeCancellable = nil
-        invalidateVoicePlayback()
         tearDownAudioEngine(audioEngine)
         audioEngine = nil
         voiceProcessingArmed = false
@@ -544,12 +415,8 @@ final class AudioCaptureEngine: AudioCapturing {
         let startClock = Date()
         lastIntentionalReconfigure = startClock
         do {
-            // Under a voice hold the engine is already running (it hosts the
-            // session's TTS playback) — the capture is just the tap.
-            if !audioEngine.isRunning {
-                audioEngine.prepare()
-                try audioEngine.start()
-            }
+            audioEngine.prepare()
+            try audioEngine.start()
             isCapturing = true
             Log.audio.info(
                 """
@@ -578,11 +445,7 @@ final class AudioCaptureEngine: AudioCapturing {
         let stopClock = Date()
         lastIntentionalReconfigure = stopClock
         if let audioEngine {
-            // Under a voice hold the engine keeps running between captures —
-            // stopping it would cut the session's TTS mid-word (ADR-0041).
-            if !voiceHoldActive {
-                audioEngine.stop()
-            }
+            audioEngine.stop()
             if inputTapInstalled {
                 audioEngine.inputNode.removeTap(onBus: 0)
                 inputTapInstalled = false

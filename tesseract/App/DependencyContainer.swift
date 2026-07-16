@@ -639,8 +639,6 @@ final class DependencyContainer: ObservableObject {
             pauseSpeaking: { [weak self] in self?.speechCoordinator.pause() },
             resumeSpeaking: { [weak self] in self?.speechCoordinator.resume() },
             speechState: { [weak self] in self?.speechCoordinator.state ?? .idle },
-            beginAudioHold: { [audioCaptureEngine] in audioCaptureEngine.beginVoiceHold() },
-            endAudioHold: { [audioCaptureEngine] in audioCaptureEngine.endVoiceHold() },
             currentConversationID: { [weak self] in
                 self?.agentConversationStore.currentConversation?.id
             },
@@ -678,17 +676,17 @@ final class DependencyContainer: ObservableObject {
         // nothing else in the graph, so there is no shared handle to wire here.
         // Mirrors `SettingsManager()` above, which relies on its
         // `UserDefaultsSettingsStore()` default. Tests inject `InMemoryAudioPlayback`.
-        let coordinator = SpeechCoordinator(
+        // Dual-Path Playback (ADR-0041) is decided but its first
+        // implementation is reverted (see the ADR's status note): no
+        // `voiceSessionPlayback` sink is installed, so the `.voiceSession`
+        // route falls back to the default sink until the voice hold can be
+        // rebuilt without taps on a running engine.
+        SpeechCoordinator(
             textExtractor: textExtractor,
             engine: speechEnginePresenter,
             settings: settingsManager,
             notchOverlay: ttsNotchPanelController
         )
-        // Dual-Path Playback (ADR-0041): voice-session replies render
-        // through the VPIO capture engine so echo cancellation hears them as
-        // its own far-end reference; everything else keeps the default sink.
-        coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
-        return coordinator
     }()
 
     // Overlay — the Overlay Feed every variant renders from, and the dumb
