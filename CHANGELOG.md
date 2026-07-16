@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.9.0](https://github.com/spokvulcan/tesseract/compare/v1.8.1...v1.9.0) (2026-07-16)
+
+
+### Features
+
+* **speech:** voice engine v2 — package engine, PinnedVoice, q6 default ([#334](https://github.com/spokvulcan/tesseract/issues/334)) ([#348](https://github.com/spokvulcan/tesseract/issues/348)) ([22f5898](https://github.com/spokvulcan/tesseract/commit/22f5898cb6d2071a1d3bee586b6004101c0d4cb9))
+
+
+### Bug Fixes
+
+* **dictation:** return the Clipboard Loan — screenshot-sized restores, clear when nothing saved ([#351](https://github.com/spokvulcan/tesseract/issues/351)) ([21cfa25](https://github.com/spokvulcan/tesseract/commit/21cfa259d4f673a289f3fd36e59a1f687f9edb8b))
+* **memory:** avoid wake notification actor crash ([4b84a62](https://github.com/spokvulcan/tesseract/commit/4b84a623e5095e20e644ab1917ce5bd12a94aae7))
+
+
+### Documentation
+
+* mlx-swift-lm fork ledger + ADR-0014 amendment (1,280 vision-token budget) ([d31c38d](https://github.com/spokvulcan/tesseract/commit/d31c38d8bd932b984b8c9778625dd91df9576b9f))
+
+
+### Miscellaneous Chores
+
+* **vendor:** re-pin mlx-swift-lm on upstream f1573a9 — [#399](https://github.com/spokvulcan/tesseract/issues/399)/[#411](https://github.com/spokvulcan/tesseract/issues/411)/[#418](https://github.com/spokvulcan/tesseract/issues/418) merged ([7c07942](https://github.com/spokvulcan/tesseract/commit/7c07942c659f9c8f07763958d5123acec26f9a84))
+
 ## [1.8.1](https://github.com/spokvulcan/tesseract/compare/v1.8.0...v1.8.1) (2026-07-12)
 
 
