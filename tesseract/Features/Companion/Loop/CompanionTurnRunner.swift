@@ -37,6 +37,7 @@ final class CompanionTurnRunner {
     private let memory: MemoryEngine
     private let recorder: CompanionFlightRecorder
     private let settings: SettingsManager
+    private let presence: CompanionPresence
 
     /// Built on first use — the second `AgentFactory.makeAgent` bootstrap is
     /// not free, and the Companion may be disabled for this whole launch.
@@ -49,7 +50,8 @@ final class CompanionTurnRunner {
         memory: MemoryEngine,
         recorder: CompanionFlightRecorder,
         settings: SettingsManager,
-        context: CompanionTurnContext
+        context: CompanionTurnContext,
+        presence: CompanionPresence
     ) {
         self.makeAgent = makeAgent
         self.arbiter = arbiter
@@ -58,6 +60,7 @@ final class CompanionTurnRunner {
         self.recorder = recorder
         self.settings = settings
         self.context = context
+        self.presence = presence
     }
 
     /// Run one turn. Returns nil on failure — the caller (the loop) owns
@@ -66,9 +69,11 @@ final class CompanionTurnRunner {
     func run(origin: String, opening: String, wakeIDs: [UUID] = []) async -> Outcome? {
         guard !isRunning else { return nil }
         isRunning = true
+        presence.beginThinking()
         defer {
             isRunning = false
             context.end()
+            presence.endThinking()
         }
 
         let turnID = UUID()

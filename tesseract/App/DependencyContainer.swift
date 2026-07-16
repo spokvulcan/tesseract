@@ -467,6 +467,9 @@ final class DependencyContainer: ObservableObject {
     // headless turn envelope; the loop is the ticking evaluator that grants
     // turns. Replaces the walking skeleton (#303).
     lazy var companionTurnContext = CompanionTurnContext()
+    /// Jarvis's ambient presence (#327 §3): the glyph and the chat strip
+    /// render it; the runner and the summons path drive it.
+    lazy var companionPresence = CompanionPresence(recorder: companionFlightRecorder)
     lazy var companionTurnRunner = CompanionTurnRunner(
         // Deferred bootstrap (`unowned` is safe: the container outlives every
         // consumer) — a second full agent whose context never collides with
@@ -487,7 +490,8 @@ final class DependencyContainer: ObservableObject {
         memory: memoryEngine,
         recorder: companionFlightRecorder,
         settings: settingsManager,
-        context: companionTurnContext
+        context: companionTurnContext,
+        presence: companionPresence
     )
     lazy var companionLoop = CompanionLoop(
         store: memoryStore,
@@ -513,6 +517,8 @@ final class DependencyContainer: ObservableObject {
             let conversationID = self.companionTurnContext.conversationID
             self.speechCoordinator.speakText(text, showsOverlay: false)
             Task { @MainActor in
+                self.companionPresence.beginSummons()
+                defer { self.companionPresence.endSummons() }
                 let outcome = await self.companionVoicePrototype.summonBeat(
                     title: "Jarvis", line: text)
                 switch outcome {
@@ -638,6 +644,10 @@ final class DependencyContainer: ObservableObject {
         manager.coordinator = dictationCoordinator
         manager.history = transcriptionHistory
         manager.speechCoordinator = speechCoordinator
+        // Jarvis's presence on the quietest rung (#327 §3).
+        companionPresence.onChange = { [weak manager] state in
+            manager?.updateState(fromCompanion: state)
+        }
         manager.onTakeAppshot = { [appshotController] in
             Task { await appshotController.takeAppshot() }
         }

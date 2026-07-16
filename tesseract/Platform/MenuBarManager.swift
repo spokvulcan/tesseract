@@ -32,6 +32,10 @@ final class MenuBarManager: NSObject {
         case listening
         case processing
         case speaking
+        /// A Companion turn in flight (#327 §3) — the quietest presence rung.
+        case thinking
+        /// A Companion summons awaiting the owner's answer.
+        case summoning
     }
 
     // MARK: - Dependencies
@@ -67,10 +71,15 @@ final class MenuBarManager: NSObject {
 
     private var dictationActivity: Activity = .idle
     private var speechActivity: Activity = .idle
+    private var companionActivity: Activity = .idle
     private var appliedActivity: Activity = .idle
 
+    /// Companion presence is the lowest rung: anything the owner is actively
+    /// doing (dictating, listening to TTS) outranks it.
     private var activity: Activity {
-        dictationActivity != .idle ? dictationActivity : speechActivity
+        if dictationActivity != .idle { return dictationActivity }
+        if speechActivity != .idle { return speechActivity }
+        return companionActivity
     }
 
     init(settings: SettingsManager) {
@@ -114,6 +123,15 @@ final class MenuBarManager: NSObject {
             speechActivity = .idle
         case .generating, .streaming, .streamingLongForm, .playing:
             speechActivity = .speaking
+        }
+        applyActivityToIcon()
+    }
+
+    func updateState(fromCompanion presence: CompanionPresence.State) {
+        switch presence {
+        case .idle: companionActivity = .idle
+        case .thinking: companionActivity = .thinking
+        case .summoning: companionActivity = .summoning
         }
         applyActivityToIcon()
     }
@@ -192,6 +210,12 @@ final class MenuBarManager: NSObject {
         case .speaking:
             symbolName = "speaker.wave.3"
             description = "Tesseract Agent — speaking"
+        case .thinking:
+            symbolName = "sparkle"
+            description = "Tesseract Agent — Jarvis is thinking"
+        case .summoning:
+            symbolName = "bell.badge"
+            description = "Tesseract Agent — Jarvis is asking for you"
         }
 
         iconView.removeAllSymbolEffects()
@@ -211,7 +235,7 @@ final class MenuBarManager: NSObject {
             break
         case .listening, .speaking:
             iconView.addSymbolEffect(.variableColor.iterative, options: .repeating)
-        case .processing:
+        case .processing, .thinking, .summoning:
             iconView.addSymbolEffect(.pulse, options: .repeating)
         }
     }
