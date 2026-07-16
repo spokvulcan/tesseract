@@ -423,6 +423,14 @@ final class DependencyContainer: ObservableObject {
         }
     )
 
+    // PROTOTYPE — the Companion voice-overlay concepts (map #301, ticket
+    // #328): scripted demo scenes on throwaway overlay surfaces, driven from
+    // Settings. Deleted when the concepts prune to a winner.
+    lazy var companionVoicePrototype = CompanionVoicePrototype(
+        settings: settingsManager,
+        openChat: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() }
+    )
+
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors
     // residency for views and the arbiter; the coordinator drives sessions.

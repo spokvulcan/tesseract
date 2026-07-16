@@ -94,6 +94,10 @@ enum SettingsCatalogue {
         "companionHeartbeatEnabled", default: false)
     static let companionHeartbeatSpeaks = Setting.bool(
         "companionHeartbeatSpeaks", default: false)
+    /// Companion voice-overlay concept picker (ticket #328). Exploration
+    /// scaffolding: deleted when the concepts prune to one winner.
+    static let companionVoiceConcept = Setting.string(
+        "companionVoiceConcept", default: "emissary")
 
     // MARK: - Memory (ADR-0035, map #314)
 

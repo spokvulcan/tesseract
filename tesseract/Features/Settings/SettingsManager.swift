@@ -271,6 +271,12 @@ final class SettingsManager {
         }
     }
 
+    var companionVoiceConceptRaw: String {
+        didSet {
+            SettingsCatalogue.companionVoiceConcept.write(companionVoiceConceptRaw, to: store)
+        }
+    }
+
     // MARK: - Memory (ADR-0035)
 
     var memoryEnabled: Bool {
@@ -537,6 +543,7 @@ final class SettingsManager {
             from: store)
         self.companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.load(
             from: store)
+        self.companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.load(from: store)
         self.memoryEnabled = SettingsCatalogue.memoryEnabled.load(from: store)
         self.memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.load(from: store)
         self.memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.load(from: store)
@@ -662,6 +669,7 @@ final class SettingsManager {
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
         companionHeartbeatSpeaks = SettingsCatalogue.companionHeartbeatSpeaks.default
+        companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.default
         memoryEnabled = SettingsCatalogue.memoryEnabled.default
         memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.default
         memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.default

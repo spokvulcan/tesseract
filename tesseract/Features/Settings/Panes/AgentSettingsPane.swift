@@ -183,6 +183,36 @@ struct AgentSettingsPane: View {
                     "Walking-skeleton prototype: three fixed daily pings (9:00, 13:30, 21:30) as notifications you can click through, reply to, or dismiss. Every ping and outcome is recorded to companion/heartbeat.jsonl in the agent's folder. If no ping appears, allow notifications in System Settings → Notifications → Tesseract."
                 )
             }
+
+            // PROTOTYPE — the Companion voice-overlay concepts (map #301, #328).
+            Section {
+                Picker("Voice Overlay Concept", selection: $settings.companionVoiceConceptRaw) {
+                    ForEach(CompanionVoiceConcepts.all) { concept in
+                        Text(concept.displayName).tag(concept.id)
+                    }
+                }
+                Text(
+                    CompanionVoiceConcepts.concept(for: settings.companionVoiceConceptRaw).thesis
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                HStack {
+                    ForEach(CompanionVoiceScene.all) { scene in
+                        Button(scene.title) {
+                            container.companionVoicePrototype.play(scene)
+                        }
+                    }
+                    Button("Stop") {
+                        container.companionVoicePrototype.stopScene()
+                    }
+                }
+            } header: {
+                Text("Companion Voice Overlay (Prototype)")
+            } footer: {
+                Text(
+                    "Overlay concepts for talking with the Companion (ticket #328) — the conversation is scripted theatre, no models run. Pick a concept, then play a scene: click the summons to answer it, click while it speaks to interrupt, ✕ to dismiss. Compare the concepts on each scene."
+                )
+            }
         }
         .formStyle(.grouped)
         .onChange(of: settings.companionHeartbeatEnabled) { _, enabled in
