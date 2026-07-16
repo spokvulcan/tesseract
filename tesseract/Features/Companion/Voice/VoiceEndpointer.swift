@@ -50,8 +50,19 @@ nonisolated struct VoiceEndpointer {
     private(set) var config: Config
     private(set) var isInSpeech = false
 
+    /// Total time the level sat at or above `speechLevel` since the last
+    /// `reset` — the **Substance Gate**'s voiced-energy input. Accumulated
+    /// from ingest-to-ingest deltas (clamped so a stalled ticker can't bank
+    /// phantom speech).
+    private(set) var voicedSeconds: TimeInterval = 0
+
     private var candidateSince: TimeInterval?
     private var lastLoudAt: TimeInterval?
+    private var lastIngestAt: TimeInterval?
+
+    /// The widest ingest-to-ingest gap credited to `voicedSeconds` — anything
+    /// longer means the ticker stalled, not that speech continued.
+    private static let maxCreditedGap: TimeInterval = 0.25
 
     init(config: Config) {
         self.config = config
@@ -61,14 +72,19 @@ nonisolated struct VoiceEndpointer {
     mutating func reset(config: Config? = nil) {
         if let config { self.config = config }
         isInSpeech = false
+        voicedSeconds = 0
         candidateSince = nil
         lastLoudAt = nil
+        lastIngestAt = nil
     }
 
     /// Feed one level sample; returns an event on a state edge.
     mutating func ingest(level: Float, at time: TimeInterval) -> Event? {
         let loud = level >= config.speechLevel
+        let gap = lastIngestAt.map { max(0, min(time - $0, Self.maxCreditedGap)) } ?? 0
+        lastIngestAt = time
         if loud {
+            voicedSeconds += gap
             lastLoudAt = time
             if !isInSpeech {
                 if let since = candidateSince {

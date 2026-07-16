@@ -9,9 +9,12 @@
 //
 //  The loop: listen (mic open, endpointer armed) → owner speaks → trailing
 //  silence auto-sends the transcription → reply arrives → Jarvis speaks it
-//  (mic stays open under VPIO echo-cancellation; sustained speech energy is a
-//  barge-in that stops him mid-word, app-observed in the flight recorder) →
-//  auto-listen reopens. Exit: overlay ✕, the chat toggle, or mutual silence.
+//  through the VPIO engine (Dual-Path Playback, ADR-0041 — the mic stays open
+//  underneath with the reply as the echo canceller's own far-end reference).
+//  Sustained speech energy is a barge-in that *pauses* him: a take with
+//  substance commits and stops the reply for good, a Session Directive stops
+//  it without reaching the agent, and a false barge resumes him where he
+//  paused. Exit: overlay ✕, the chat toggle, or mutual silence.
 //
 //  Every tunable the taste ledger named is a Setting: trailing silence,
 //  session timeout, barge-in sensitivity, auto-send (the escape hatch stages
@@ -41,6 +44,42 @@ final class CompanionVoiceSessionController {
     private(set) var phase: Phase = .idle
     var isActive: Bool { phase != .idle }
 
+    // MARK: - Barge resolution (Substance Gate + Session Directives)
+
+    nonisolated enum BargeResolution: Equatable {
+        /// An allowlisted control word — acts on the session, never sent.
+        case directive(String)
+        /// A real turn: stop the reply for good and commit.
+        case turn
+        /// Not enough substance to be a turn — resume the paused reply.
+        case falseBarge
+    }
+
+    /// English playback-control words. Content-ambiguous words ("no", "yes",
+    /// "okay") are deliberately absent — those are answers, not directives.
+    nonisolated static let sessionDirectives: Set<String> = ["stop", "wait", "pause", "quiet"]
+
+    /// The **Substance Gate**: what a take captured under a barged reply must
+    /// show to count as a real turn rather than echo residual or a thump.
+    nonisolated static let substanceMinVoicedSeconds: TimeInterval = 0.6
+    nonisolated static let substanceMinWords = 2
+
+    /// Pure resolution of a barge take — pinned by tests.
+    nonisolated static func resolveBargeTake(
+        text: String, voicedSeconds: TimeInterval
+    ) -> BargeResolution {
+        let words = text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        if words.count == 1, let word = words.first, sessionDirectives.contains(word) {
+            return .directive(word)
+        }
+        if voicedSeconds >= substanceMinVoicedSeconds, words.count >= substanceMinWords {
+            return .turn
+        }
+        return .falseBarge
+    }
+
     // MARK: - Dependencies
 
     private let capture: VoiceCaptureSession
@@ -50,7 +89,11 @@ final class CompanionVoiceSessionController {
     private let stageToComposer: @MainActor (String) -> Void
     private let speak: @MainActor (String, @escaping @MainActor @Sendable () -> Void) -> Void
     private let stopSpeaking: @MainActor () -> Void
+    private let pauseSpeaking: @MainActor () -> Void
+    private let resumeSpeaking: @MainActor () -> Void
     private let speechState: @MainActor () -> SpeechState
+    private let beginAudioHold: @MainActor () -> Void
+    private let endAudioHold: @MainActor () -> Void
     private let currentConversationID: @MainActor () -> UUID?
     private let overlay: CompanionVoicePrototype
     private let recorder: CompanionFlightRecorder
@@ -66,10 +109,29 @@ final class CompanionVoiceSessionController {
     private var speakingSince: Date?
     private var speechDoneCallbackSeen = false
     private var exchanges = 0
+    /// A barged (paused) reply awaits resolution: resume, directive, or turn.
+    private var bargedUtterance = false
+    private var bargeVerifyStartedAt: Date?
+    /// The endpointer's voiced-time reading at turn close — the Substance
+    /// Gate's energy input, snapshotted before the endpointer resets.
+    private var lastTakeVoicedSeconds: TimeInterval = 0
+    /// Post-utterance grace: endpointer events are ignored until this
+    /// deadline so the reply's room tail can't seed a turn.
+    private var deafUntil: Date?
+    /// Consecutive ticks the speech engine read as settled — the watchdog
+    /// only exits `.speaking` on a sustained reading, never a single sample.
+    private var settledTicks = 0
 
     /// Ticker cadence — 20 Hz gives the endpointer 50 ms resolution, an order
     /// under the shortest debounce.
     private static let tickInterval: Duration = .milliseconds(50)
+    /// Ignore endpointer events for this long after an utterance ends —
+    /// output-device latency plus room tail.
+    private static let postUtteranceGrace: TimeInterval = 0.3
+    /// A barge with no speech onset within this window is false — resume.
+    private static let bargeVerifyWindow: TimeInterval = 2.0
+    /// Settled ticks (× 50 ms) required before the watchdog exits `.speaking`.
+    private static let watchdogSettledTicks = 6
 
     init(
         capture: VoiceCaptureSession,
@@ -79,7 +141,11 @@ final class CompanionVoiceSessionController {
         stageToComposer: @escaping @MainActor (String) -> Void,
         speak: @escaping @MainActor (String, @escaping @MainActor @Sendable () -> Void) -> Void,
         stopSpeaking: @escaping @MainActor () -> Void,
+        pauseSpeaking: @escaping @MainActor () -> Void,
+        resumeSpeaking: @escaping @MainActor () -> Void,
         speechState: @escaping @MainActor () -> SpeechState,
+        beginAudioHold: @escaping @MainActor () -> Void,
+        endAudioHold: @escaping @MainActor () -> Void,
         currentConversationID: @escaping @MainActor () -> UUID?,
         overlay: CompanionVoicePrototype,
         recorder: CompanionFlightRecorder,
@@ -93,7 +159,11 @@ final class CompanionVoiceSessionController {
         self.stageToComposer = stageToComposer
         self.speak = speak
         self.stopSpeaking = stopSpeaking
+        self.pauseSpeaking = pauseSpeaking
+        self.resumeSpeaking = resumeSpeaking
         self.speechState = speechState
+        self.beginAudioHold = beginAudioHold
+        self.endAudioHold = endAudioHold
         self.currentConversationID = currentConversationID
         self.overlay = overlay
         self.recorder = recorder
@@ -121,13 +191,19 @@ final class CompanionVoiceSessionController {
                 dismiss: { [weak self] in self?.exit(reason: "dismissed") },
                 openChat: { [weak self] in self?.overlay.openChatFromLiveSession() }
             ))
+        // The voice hold keeps the engine running for the whole session — it
+        // hosts the replies' playback nodes (Dual-Path Playback, ADR-0041).
+        beginAudioHold()
         startTicker()
         beginListening()
     }
 
     func exit(reason: String) {
         guard isActive else { return }
-        if phase == .speaking { stopSpeaking() }
+        if phase == .speaking || bargedUtterance { stopSpeaking() }
+        bargedUtterance = false
+        bargeVerifyStartedAt = nil
+        deafUntil = nil
         closeCapture()
         ticker?.cancel()
         ticker = nil
@@ -137,6 +213,7 @@ final class CompanionVoiceSessionController {
             conversationID: currentConversationID(),
             snapshot: ["reason": reason, "exchanges": String(exchanges)])
         overlay.endLiveSession()
+        endAudioHold()
     }
 
     // MARK: - The reply hook (ChatSession's agentEnd calls this)
@@ -158,9 +235,14 @@ final class CompanionVoiceSessionController {
         phase = .speaking
         speakingSince = Date()
         speechDoneCallbackSeen = false
+        bargedUtterance = false
+        bargeVerifyStartedAt = nil
+        deafUntil = nil
+        settledTicks = 0
         endpointer.reset(config: .bargeIn(speechLevel: bargeInLevel))
-        // The mic opens *under* the utterance: VPIO's AEC keeps his voice out
-        // of the input, so speech energy here is the owner (#310 §4).
+        // The mic opens *under* the utterance: the reply plays through the
+        // VPIO engine as the AEC's own far-end reference (ADR-0041), so
+        // speech energy here is the owner (#310 §4).
         openCapture()
         speak(text) { [weak self] in
             self?.speechDoneCallbackSeen = true
@@ -178,7 +260,13 @@ final class CompanionVoiceSessionController {
     func bargeIn(source: String) {
         guard phase == .speaking else { return }
         let offset = speakingSince.map { Date().timeIntervalSince($0) } ?? 0
-        stopSpeaking()
+        // Pause, don't stop (pause-on-barge): a false barge resumes the
+        // reply where it left off; only a committed turn or a Session
+        // Directive makes the interruption permanent.
+        pauseSpeaking()
+        bargedUtterance = true
+        bargeVerifyStartedAt = Date()
+        settledTicks = 0
         recorder.record(
             "reaction.barge-in",
             source: .appObserved,
@@ -192,10 +280,38 @@ final class CompanionVoiceSessionController {
         endpointer.reset(
             config: .listening(
                 speechLevel: speechLevel, trailingSilence: trailingSilence))
-        // He is already mid-sentence: the endpointer starts in-speech.
-        _ = endpointer.ingest(level: 1.0, at: Date().timeIntervalSinceReferenceDate)
+        if source != "click" {
+            // Energy barge: he is already mid-word — seed the candidate so
+            // the start debounce measures from the interruption itself.
+            _ = endpointer.ingest(level: 1.0, at: Date().timeIntervalSinceReferenceDate)
+        }
         phase = .capturing
         overlay.feed.setState(.listening)
+    }
+
+    /// The barge produced nothing that counts as a turn — resume the paused
+    /// reply and rearm barge-in detection.
+    private func resumeAfterFalseBarge(reason: String) {
+        guard bargedUtterance else { return }
+        bargedUtterance = false
+        bargeVerifyStartedAt = nil
+        if captureOpen { closeCapture() }
+        recorder.record(
+            "voice.barge-false-resume",
+            conversationID: currentConversationID(),
+            snapshot: ["reason": reason])
+        if speechDoneCallbackSeen || !isActive {
+            // The utterance drained while paused (or the session died) —
+            // nothing to resume.
+            if isActive { beginListening() }
+            return
+        }
+        endpointer.reset(config: .bargeIn(speechLevel: bargeInLevel))
+        settledTicks = 0
+        openCapture()
+        phase = .speaking
+        overlay.feed.setState(.speaking)
+        resumeSpeaking()
     }
 
     // MARK: - The ticker
@@ -215,8 +331,9 @@ final class CompanionVoiceSessionController {
         let now = Date()
         let level = meterLevel()
         overlay.feed.setMeter(level: level, spectrum: meterSpectrum())
+        let deaf = deafUntil.map { now < $0 } ?? false
         let event =
-            captureOpen
+            captureOpen && !deaf
             ? endpointer.ingest(level: level, at: now.timeIntervalSinceReferenceDate)
             : nil
 
@@ -232,15 +349,32 @@ final class CompanionVoiceSessionController {
             }
 
         case .capturing:
-            if event == .endOfSpeech { finishOwnerTurn() }
+            if event == .endOfSpeech {
+                finishOwnerTurn()
+            } else if bargedUtterance, !endpointer.isInSpeech,
+                let since = bargeVerifyStartedAt,
+                now.timeIntervalSince(since) > Self.bargeVerifyWindow
+            {
+                resumeAfterFalseBarge(reason: "no-speech")
+            }
 
         case .speaking:
             if event == .speechStarted {
                 bargeIn(source: "energy")
-            } else if !speechDoneCallbackSeen, isSpeechEngineSettled {
+            } else if !speechDoneCallbackSeen {
                 // The engine stopped without the success callback (error, or
-                // an external stop) — treat it as the utterance ending.
-                utteranceFinished(interrupted: true)
+                // an external stop). Exit only on a *sustained* settled
+                // reading — a single transient sample reopened the mic under
+                // live TTS (the 2026-07-16 self-echo trace, ADR-0041).
+                if isSpeechEngineSettled { settledTicks += 1 } else { settledTicks = 0 }
+                if settledTicks >= Self.watchdogSettledTicks {
+                    settledTicks = 0
+                    recorder.record(
+                        "voice.watchdog-exit",
+                        conversationID: currentConversationID(),
+                        snapshot: ["speechState": String(describing: speechState())])
+                    utteranceFinished(interrupted: true)
+                }
             }
 
         case .idle, .transcribing, .awaitingReply:
@@ -262,32 +396,48 @@ final class CompanionVoiceSessionController {
     private func utteranceFinished(interrupted: Bool) {
         guard phase == .speaking else { return }
         _ = interrupted
-        beginListening()
+        // Force-stop: however the utterance ended, TTS must be provably
+        // silent before the mic reopens in listening config. On the normal
+        // path this is a no-op sweep; on a watchdog exit it is the fix.
+        stopSpeaking()
+        bargedUtterance = false
+        beginListening(gracePeriod: Self.postUtteranceGrace)
     }
 
     // MARK: - Turn plumbing
 
-    private func beginListening() {
+    private func beginListening(gracePeriod: TimeInterval = 0) {
         reopenCapture()
         endpointer.reset(
             config: .listening(
                 speechLevel: speechLevel, trailingSilence: trailingSilence))
+        deafUntil = gracePeriod > 0 ? Date().addingTimeInterval(gracePeriod) : nil
         phase = .listening
         listeningSince = Date()
         overlay.feed.setState(.listening)
     }
 
     private func finishOwnerTurn() {
+        // Snapshot before the endpointer resets — the Substance Gate's input.
+        lastTakeVoicedSeconds = endpointer.voicedSeconds
         phase = .transcribing
         overlay.feed.setState(.thinking)
         guard captureOpen else {
-            beginListening()
+            if bargedUtterance {
+                resumeAfterFalseBarge(reason: "no-capture")
+            } else {
+                beginListening()
+            }
             return
         }
         captureOpen = false
         switch capture.stop() {
         case .noAudio, .tooShort:
-            beginListening()
+            if bargedUtterance {
+                resumeAfterFalseBarge(reason: "no-audio")
+            } else {
+                beginListening()
+            }
         case .audio(let audio, _):
             let language = settings.language
             var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
@@ -308,9 +458,18 @@ final class CompanionVoiceSessionController {
                     // A rejected proofread is still his words — voice flows on.
                     self.ownerTurnTranscribed(raw)
                 case .empty:
-                    self.beginListening()
+                    if self.bargedUtterance {
+                        self.resumeAfterFalseBarge(reason: "empty")
+                    } else {
+                        self.beginListening()
+                    }
                 case .failed, .cancelled:
-                    if self.isActive { self.beginListening() }
+                    guard self.isActive else { return }
+                    if self.bargedUtterance {
+                        self.resumeAfterFalseBarge(reason: "failed")
+                    } else {
+                        self.beginListening()
+                    }
                 }
             }
         }
@@ -320,8 +479,36 @@ final class CompanionVoiceSessionController {
         guard isActive else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            beginListening()
+            if bargedUtterance {
+                resumeAfterFalseBarge(reason: "empty")
+            } else {
+                beginListening()
+            }
             return
+        }
+        if bargedUtterance {
+            switch Self.resolveBargeTake(
+                text: trimmed, voicedSeconds: lastTakeVoicedSeconds)
+            {
+            case .directive(let word):
+                bargedUtterance = false
+                bargeVerifyStartedAt = nil
+                stopSpeaking()
+                recorder.record(
+                    "voice.session-directive",
+                    conversationID: currentConversationID(),
+                    snapshot: ["word": word])
+                beginListening()
+                return
+            case .falseBarge:
+                resumeAfterFalseBarge(reason: "below-gate")
+                return
+            case .turn:
+                // A real interruption — the pause becomes a stop for good.
+                bargedUtterance = false
+                bargeVerifyStartedAt = nil
+                stopSpeaking()
+            }
         }
         exchanges += 1
         recorder.record(

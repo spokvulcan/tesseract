@@ -174,6 +174,45 @@ struct SpeechCoordinatorTests {
     }
 
     @Test
+    func speakTextClaimsStateBeforeFirstAwait() async throws {
+        let harness = await Harness()
+
+        harness.coordinator.speakText("Hello world.")
+        // Synchronous read, no waiting: the voice session's settled-engine
+        // watchdog polls this state — a transient `.idle` during the
+        // session-open await reopened the mic under live TTS (ADR-0041).
+        #expect(harness.coordinator.state != .idle)
+
+        harness.coordinator.stop()
+    }
+
+    @Test
+    func voiceSessionRouteStreamsThroughTheVoiceSink() async throws {
+        let harness = await Harness()
+        let voiceSink = InMemoryAudioPlayback()
+        harness.coordinator.voiceSessionPlayback = voiceSink
+
+        harness.coordinator.speakText(
+            "Hello world.", showsOverlay: false, route: .voiceSession)
+        #expect(await waitUntil { voiceSink.finishStreamingCount == 1 })
+
+        // Dual-Path Playback (ADR-0041): the voice sink got the utterance,
+        // the standard sink stayed silent.
+        #expect(voiceSink.startedSampleRates == [24_000])
+        #expect(voiceSink.appendedChunks.count == 3)
+        #expect(harness.playback.startedSampleRates.isEmpty)
+
+        voiceSink.firePlaybackFinished()
+        #expect(harness.coordinator.state == .idle)
+
+        // The next standard utterance returns to the default sink.
+        harness.coordinator.speakText("Hello again.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        #expect(voiceSink.finishStreamingCount == 1)
+        harness.playback.firePlaybackFinished()
+    }
+
+    @Test
     func generationFailureSurfacesTransientError() async throws {
         let harness = await Harness(script: .init(failOnSegmentIndex: 0))
 

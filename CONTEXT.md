@@ -1333,6 +1333,55 @@ _Avoid_: system prompt (the instructions ride inside it), settings/config (not
 a UI surface; a document the entity owns), rules (they're his practice, not his
 cage).
 
+### Voice session (Companion)
+
+**Voice Session**:
+Voice as a mode of the one conversation, never a separate surface: an
+auto-listen loop — listen, capture, transcribe, send; the reply spoken with the
+microphone open underneath — whose spoken and typed turns share one persisted
+message stream. Entered from the overlay or the chat toggle; left by dismissal,
+staging to the composer, or mutual silence.
+_Avoid_: voice mode (UI shorthand), speech session (the TTS reading concept),
+voice chat.
+
+**Barge-In**:
+The owner interrupting a speaking reply — by sustained voice energy or a click.
+A barge-in *pauses* playback while the take resolves: a committed turn or a
+**Session Directive** stops the reply for good; a false barge — a take without
+substance — resumes it where it paused.
+_Avoid_: interruption (unqualified), stop-on-barge (the discarded kill-first
+semantics).
+
+**Self-Echo**:
+The voice session's signature failure: the assistant's own TTS re-captured by
+the microphone and treated as the owner's speech — a false barge-in, or worse,
+a committed turn feeding the conversation its own words back. The session's
+acoustic and gating defenses exist to make this unreachable.
+_Avoid_: feedback loop (the mechanism, not the name), echo (the raw acoustic
+signal cancellation removes).
+
+**Substance Gate**:
+What an energy barge-in's take must show to count as a real turn: sustained
+voiced energy and a multi-word transcription — or an allowlisted **Session
+Directive**. Below the gate the barge is false and the reply resumes. Distinct
+from the **Voice Capture Session**'s minimum-duration guard (a mechanical
+too-short reject).
+_Avoid_: minimum duration (the mechanical guard), plausibility/sanity check.
+
+**Session Directive**:
+A terse allowlisted control word ("stop", "wait", "pause", "quiet") spoken
+mid-reply: it acts on the voice session itself — reply stopped, back to
+listening — and is never sent to the agent. Content-ambiguous words ("no",
+"yes", "okay") are turns, not directives.
+_Avoid_: voice command (the macOS accessibility concept), wake word.
+
+**Dual-Path Playback**:
+Where TTS renders: a **Voice Session**'s replies play through the capture
+engine, so **Voice Processing**'s echo cancellation hears exactly what the
+speakers play (and the reply escapes the recording duck); every other TTS
+surface keeps its dedicated playback path and unprocessed fidelity.
+_Avoid_: single playback engine, VPIO routing (the implementation).
+
 ### Text injection
 
 **Clipboard Loan**:

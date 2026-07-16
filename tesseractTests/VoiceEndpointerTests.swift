@@ -83,6 +83,33 @@ import Testing
         #expect(events == [.speechStarted])
     }
 
+    @Test func voicedSecondsAccumulateOnlyLoudTime() {
+        var endpointer = VoiceEndpointer(config: .listening())
+        var (_, time) = feed(&endpointer, level: 0.5, from: 0, for: 1.0)
+        (_, time) = feed(&endpointer, level: 0.02, from: time, for: 1.0)
+        _ = feed(&endpointer, level: 0.5, from: time, for: 0.5)
+        // ~1.5 s of loud samples; the silent second contributes nothing.
+        #expect(endpointer.voicedSeconds > 1.2)
+        #expect(endpointer.voicedSeconds < 1.8)
+    }
+
+    @Test func voicedSecondsResetWithTheWatch() {
+        var endpointer = VoiceEndpointer(config: .listening())
+        _ = feed(&endpointer, level: 0.5, from: 0, for: 1.0)
+        #expect(endpointer.voicedSeconds > 0)
+        endpointer.reset()
+        #expect(endpointer.voicedSeconds == 0)
+    }
+
+    @Test func aStalledTickerCreditsNoPhantomSpeech() {
+        var endpointer = VoiceEndpointer(config: .listening())
+        _ = endpointer.ingest(level: 0.5, at: 0)
+        // The ticker stalled for 5 s between loud samples — credit at most
+        // the clamp, never the whole gap.
+        _ = endpointer.ingest(level: 0.5, at: 5.0)
+        #expect(endpointer.voicedSeconds <= 0.25)
+    }
+
     @Test func resetClearsMidSpeechState() {
         var endpointer = VoiceEndpointer(config: .listening())
         _ = feed(&endpointer, level: 0.5, from: 0, for: 1.0)
