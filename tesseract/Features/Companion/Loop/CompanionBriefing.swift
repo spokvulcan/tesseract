@@ -26,6 +26,9 @@ enum CompanionBriefing {
         let upcomingWakes: [CompanionWake]
         /// Sunday-evening turns carry the deterministic weekly numbers (#313).
         let weeklyNumbers: String?
+        /// Ignored promises this beat must carry as agenda lines — their one
+        /// resurfacing before delivered-unheard (#309).
+        var resurfacedWakes: [CompanionWake] = []
         /// Read-only calendar lines (stage G) — empty without access.
         var calendarLines: [String] = []
         /// When the owner last used *this app* (the attention gate's evidence)
@@ -39,6 +42,7 @@ enum CompanionBriefing {
         idleMonitor: IdleMonitor,
         sensed: SensedObservationRecorder,
         dueWakes: [CompanionWake],
+        resurfacedWakes: [CompanionWake] = [],
         recorder: CompanionFlightRecorder,
         calendar: CompanionCalendarReader? = nil,
         lastAppUse: Date? = nil,
@@ -74,6 +78,7 @@ enum CompanionBriefing {
             dueWakes: dueWakes,
             upcomingWakes: upcoming,
             weeklyNumbers: weekly,
+            resurfacedWakes: resurfacedWakes,
             calendarLines: calendar?.briefingLines(now: now) ?? [],
             lastAppUse: lastAppUse
         )
@@ -130,6 +135,15 @@ enum CompanionBriefing {
                 let lateness = overdue > 5 ? " (overdue by \(overdue) min)" : ""
                 lines.append(
                     "- [\(wake.wakeClass.rawValue)] \(wake.content)\(lateness)")
+            }
+        }
+        if !inputs.resurfacedWakes.isEmpty {
+            lines.append(
+                "STILL OWED — promises he never heard. Resurface each as one line in "
+                    + "this beat; this is their last chance (after this beat they are "
+                    + "recorded delivered-unheard and die):")
+            for wake in inputs.resurfacedWakes {
+                lines.append("- \(wake.content)")
             }
         }
         if !inputs.upcomingWakes.isEmpty {

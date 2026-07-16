@@ -90,6 +90,12 @@ nonisolated func createFlightLogTool(recorder: CompanionFlightRecorder) -> Agent
 
 // MARK: - log_feedback (the one write door)
 
+/// One list feeds both the schema's `enumValues` and the execute guard, so
+/// the two can't drift.
+private nonisolated let feedbackKinds = [
+    "solicited", "spontaneous", "fabrication-flag", "annoyance", "dial-change",
+]
+
 nonisolated func createLogFeedbackTool(
     recorder: CompanionFlightRecorder,
     currentConversationID: @escaping @MainActor () -> UUID?
@@ -114,10 +120,7 @@ nonisolated func createLogFeedbackTool(
                 "kind": PropertySchema(
                     type: "string",
                     description: "What kind of feedback this is.",
-                    enumValues: [
-                        "solicited", "spontaneous", "fabrication-flag", "annoyance",
-                        "dial-change",
-                    ]
+                    enumValues: feedbackKinds
                 ),
                 "verbatim": PropertySchema(
                     type: "string",
@@ -133,12 +136,10 @@ nonisolated func createLogFeedbackTool(
         ),
         execute: { _, argsJSON, _, _ in
             guard let kind = ToolArgExtractor.string(argsJSON, key: "kind"),
-                ["solicited", "spontaneous", "fabrication-flag", "annoyance", "dial-change"]
-                    .contains(kind)
+                feedbackKinds.contains(kind)
             else {
                 throw FlightRecorderToolError(
-                    message:
-                        "log_feedback requires kind: solicited|spontaneous|fabrication-flag|annoyance|dial-change"
+                    message: "log_feedback requires kind: \(feedbackKinds.joined(separator: "|"))"
                 )
             }
             guard let verbatim = ToolArgExtractor.string(argsJSON, key: "verbatim"),

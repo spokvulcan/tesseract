@@ -36,6 +36,8 @@ final class MenuBarManager: NSObject {
         case thinking
         /// A Companion summons awaiting the owner's answer.
         case summoning
+        /// A sleep pass consolidating the day (#327 §3).
+        case asleep
     }
 
     // MARK: - Dependencies
@@ -132,6 +134,7 @@ final class MenuBarManager: NSObject {
         case .idle: companionActivity = .idle
         case .thinking: companionActivity = .thinking
         case .summoning: companionActivity = .summoning
+        case .asleep: companionActivity = .asleep
         }
         applyActivityToIcon()
     }
@@ -216,6 +219,9 @@ final class MenuBarManager: NSObject {
         case .summoning:
             symbolName = "bell.badge"
             description = "Tesseract Agent — Jarvis is asking for you"
+        case .asleep:
+            symbolName = "moon.zzz"
+            description = "Tesseract Agent — Jarvis is consolidating the day"
         }
 
         iconView.removeAllSymbolEffects()
@@ -228,10 +234,11 @@ final class MenuBarManager: NSObject {
             iconView.image = image
         }
 
-        // Animate transient activity only; idle stays static (HIG). Symbol
+        // Animate transient activity only; idle stays static (HIG), and so
+        // does asleep — a sleeping glyph must not pulse for attention. Symbol
         // effects honor Reduce Motion on their own.
         switch activity {
-        case .idle:
+        case .idle, .asleep:
             break
         case .listening, .speaking:
             iconView.addSymbolEffect(.variableColor.iterative, options: .repeating)

@@ -276,7 +276,7 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
                 createdAt: conversation.createdAt,
                 updatedAt: conversation.updatedAt,
                 messages: taggedMessages,
-                origin: conversation.origin
+                origin: conversation.origin.rawValue
             )
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
@@ -301,7 +301,7 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
                 messages: messages,
                 createdAt: file.createdAt,
                 updatedAt: file.updatedAt,
-                origin: file.origin ?? "interactive"
+                origin: file.origin.flatMap(TurnOrigin.init(rawValue:)) ?? .interactive
             )
         } catch {
             Log.agent.error("Failed to load conversation \(id): \(error)")

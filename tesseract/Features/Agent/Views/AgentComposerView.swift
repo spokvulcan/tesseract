@@ -31,7 +31,6 @@ struct AgentComposerView: View {
     @Environment(CompanionVoiceSessionController.self) private var voiceSession
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(CompanionPresence.self) private var companionPresence
-    @Environment(MemorySleep.self) private var memorySleep
     @Environment(VisionAvailabilityController.self) private var visionAvailability
     @Environment(AppshotController.self) private var appshot
     @Environment(AgentEngine.self) private var agentEngine
@@ -325,12 +324,11 @@ struct AgentComposerView: View {
     /// conversation never sets it.
     private var companionPresenceLine: String? {
         switch companionPresence.state {
-        case .summoning: return "Jarvis is asking for you…"
-        case .thinking: return "Jarvis is thinking in the background…"
-        case .idle: break
+        case .summoning: "Jarvis is asking for you…"
+        case .thinking: "Jarvis is thinking in the background…"
+        case .asleep: "Jarvis is consolidating the day…"
+        case .idle: nil
         }
-        if memorySleep.isRunning { return "Jarvis is consolidating the day…" }
-        return nil
     }
 
     @ViewBuilder

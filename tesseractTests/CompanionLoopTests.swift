@@ -115,6 +115,101 @@ private func scratchRecorder() -> CompanionFlightRecorder {
     }
 }
 
+// MARK: - Resurfacing (#309)
+
+@Suite struct CompanionResurfacingTests {
+
+    /// The full ladder: ignored → resurfaced at the next beat → dead
+    /// (delivered-unheard, recorded) at the beat after that.
+    @Test func ignoredPromiseResurfacesOnceThenDies() async throws {
+        let store = try scratchStore()
+        let recorder = scratchRecorder()
+        var promise = CompanionWake(
+            content: "ask about the dentist", due: Date().addingTimeInterval(-3600),
+            wakeClass: .promise, state: .delivered)
+        promise.consumedAt = Date().addingTimeInterval(-3600)
+        try await store.upsertWake(promise)
+
+        // First beat: the ignored promise joins the agenda as resurfaced.
+        let agenda = await CompanionResurfacing.pass(store: store, recorder: recorder)
+        #expect(agenda.map(\.id) == [promise.id])
+        var loaded = try #require(try await store.wake(id: promise.id))
+        #expect(loaded.state == .resurfaced)
+
+        // Second beat, still no reaction: dead, no third attempt, recorded.
+        let secondAgenda = await CompanionResurfacing.pass(store: store, recorder: recorder)
+        #expect(secondAgenda.isEmpty)
+        loaded = try #require(try await store.wake(id: promise.id))
+        #expect(loaded.state == .deliveredUnheard)
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(events.contains { $0.event == "wake.resurfaced" })
+        #expect(events.contains { $0.event == "wake.delivered-unheard" })
+    }
+
+    @Test func heardPromisesNeverResurface() async throws {
+        let store = try scratchStore()
+        let recorder = scratchRecorder()
+        var dismissed = CompanionWake(
+            content: "he waved this off", due: Date().addingTimeInterval(-3600),
+            wakeClass: .promise, state: .delivered)
+        dismissed.consumedAt = Date().addingTimeInterval(-3600)
+        try await store.upsertWake(dismissed)
+        // Any reaction stamps heard — an explicit wave-off is not "ignored".
+        try await store.stampWakeHeard(id: dismissed.id, at: Date())
+
+        let agenda = await CompanionResurfacing.pass(store: store, recorder: recorder)
+        #expect(agenda.isEmpty)
+        let loaded = try #require(try await store.wake(id: dismissed.id))
+        #expect(loaded.state == .delivered)
+    }
+
+    @Test func resurfacedPromiseHeardViaBeatEngagementIsSpared() async throws {
+        let store = try scratchStore()
+        let recorder = scratchRecorder()
+        var promise = CompanionWake(
+            content: "still owed", due: Date().addingTimeInterval(-3600),
+            wakeClass: .promise, state: .delivered)
+        promise.consumedAt = Date().addingTimeInterval(-3600)
+        try await store.upsertWake(promise)
+
+        _ = await CompanionResurfacing.pass(store: store, recorder: recorder)
+        // The owner engages the beat that carried the resurfacing.
+        try await store.stampResurfacedHeard(at: Date())
+
+        _ = await CompanionResurfacing.pass(store: store, recorder: recorder)
+        let loaded = try #require(try await store.wake(id: promise.id))
+        #expect(loaded.state == .delivered)
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(!events.contains { $0.event == "wake.delivered-unheard" })
+    }
+
+    @Test func rhythmAndFollowupWakesAreNotPromiseLadderMaterial() async throws {
+        let store = try scratchStore()
+        var rhythm = CompanionWake(
+            content: "evening journal", due: Date().addingTimeInterval(-3600),
+            wakeClass: .rhythm, state: .delivered)
+        rhythm.consumedAt = Date().addingTimeInterval(-3600)
+        try await store.upsertWake(rhythm)
+        #expect(try await store.unheardDeliveredPromises().isEmpty)
+    }
+
+    @Test func heardStampIsFirstReactionWins() async throws {
+        let store = try scratchStore()
+        var promise = CompanionWake(
+            content: "x", due: Date(), wakeClass: .promise, state: .delivered)
+        promise.consumedAt = Date()
+        try await store.upsertWake(promise)
+
+        let first = Date().addingTimeInterval(-100)
+        try await store.stampWakeHeard(id: promise.id, at: first)
+        try await store.stampWakeHeard(id: promise.id, at: Date())
+
+        let loaded = try #require(try await store.wake(id: promise.id))
+        let heardAt = try #require(loaded.heardAt)
+        #expect(abs(heardAt.timeIntervalSince(first)) < 1)
+    }
+}
+
 // MARK: - book_wake
 
 @Suite struct CompanionBookWakeToolTests {
@@ -140,7 +235,7 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         let context = CompanionTurnContext()
         let conversationID = UUID()
         context.begin(
-            turnID: UUID(), wakeIDs: [], conversationID: conversationID, origin: "wake")
+            turnID: UUID(), wakeIDs: [], conversationID: conversationID, origin: .wake)
         let tool = createBookWakeTool(
             store: store, recorder: scratchRecorder(), context: context)
 
@@ -309,7 +404,7 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         let store = try scratchStore()
         try await store.seedInstructionsIfNeeded("the seed")
         let context = CompanionTurnContext()
-        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: "ambient")
+        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: .ambient)
         let recorder = scratchRecorder()
         let tool = createReviseInstructionsTool(
             store: store, recorder: recorder, context: context)
@@ -443,6 +538,21 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         let text = CompanionBriefing.render(inputs)
         #expect(text.contains("Calendar — the rest of his day:"))
         #expect(text.contains("- 15:00 Dentist"))
+    }
+
+    @Test func resurfacedPromisesRideAsAgendaLines() {
+        var inputs = CompanionBriefing.Inputs(
+            now: Date(), ownerPresent: true, screenLocked: false, frontmostApp: nil,
+            onACPower: true, today: nil, yesterday: nil, dueWakes: [],
+            upcomingWakes: [], weeklyNumbers: nil)
+        inputs.resurfacedWakes = [
+            CompanionWake(
+                content: "ask about the dentist", due: Date(), wakeClass: .promise,
+                state: .resurfaced)
+        ]
+        let text = CompanionBriefing.render(inputs)
+        #expect(text.contains("STILL OWED"))
+        #expect(text.contains("- ask about the dentist"))
     }
 
     @Test func emptyFutureDemandsARhythm() {

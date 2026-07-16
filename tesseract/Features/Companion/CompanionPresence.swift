@@ -8,19 +8,27 @@
 //  Every transition is a recorded fact (#326).
 //
 
+import AppKit
 import Foundation
 import Observation
 
 @Observable @MainActor
 final class CompanionPresence {
 
+    /// The glyph vocabulary (#327 §3): idle / thinking / summoning / asleep.
+    /// The fifth spec'd state, `speaking`, is carried by the app-wide speech
+    /// activity rung (`MenuBarManager.updateState(fromSpeech:)`, the
+    /// composer's Speaking notice) — TTS is TTS whoever asked for it.
     enum State: String, Sendable {
         /// Nothing in flight — the glyph rests.
         case idle
         /// A companion turn is running (wake, catch-up, ambient).
         case thinking
-        /// A summons is on screen awaiting his answer.
+        /// A summons awaits his answer — on screen, or raised on the glyph
+        /// itself by the entity's `set_glyph` rung.
         case summoning
+        /// A sleep pass is consolidating the day (ADR-0035 §7).
+        case asleep
     }
 
     private(set) var state: State = .idle
@@ -34,9 +42,20 @@ final class CompanionPresence {
     /// summons still on screen.
     private var thinkingDepth = 0
     private var summonsDepth = 0
+    private var isSleeping = false
+    /// The entity's own hand on the glyph (ADR-0040 §10's quietest rung):
+    /// a raised notice renders as summoning until he looks or it is cleared.
+    private var entityNoticeRaised = false
 
     init(recorder: CompanionFlightRecorder) {
         self.recorder = recorder
+        // Him bringing the app forward is the glyph notice answered — the
+        // quietest rung's engage, observed by the app, never self-reported.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.clearEntityNotice(reason: "app-active") }
+        }
     }
 
     func beginThinking() {
@@ -59,9 +78,40 @@ final class CompanionPresence {
         recompute()
     }
 
+    /// The sleep pass's presence (#327 §3's `asleep`) — pushed by the one
+    /// binding that watches `MemorySleep`.
+    func setAsleep(_ sleeping: Bool) {
+        guard sleeping != isSleeping else { return }
+        isSleeping = sleeping
+        recompute()
+    }
+
+    /// The `set_glyph` rung raising its notice.
+    func raiseEntityNotice() {
+        entityNoticeRaised = true
+        recompute()
+    }
+
+    /// Cleared by the entity's own tool call, or by him bringing the app
+    /// forward — either way a recorded transition.
+    func clearEntityNotice(reason: String = "tool") {
+        guard entityNoticeRaised else { return }
+        entityNoticeRaised = false
+        recorder.record("glyph.notice-cleared", snapshot: ["reason": reason])
+        recompute()
+    }
+
     private func recompute() {
         let new: State =
-            summonsDepth > 0 ? .summoning : (thinkingDepth > 0 ? .thinking : .idle)
+            if summonsDepth > 0 || entityNoticeRaised {
+                .summoning
+            } else if thinkingDepth > 0 {
+                .thinking
+            } else if isSleeping {
+                .asleep
+            } else {
+                .idle
+            }
         guard new != state else { return }
         state = new
         recorder.record("glyph.changed", snapshot: ["state": new.rawValue])

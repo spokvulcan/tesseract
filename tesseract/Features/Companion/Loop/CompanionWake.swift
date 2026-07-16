@@ -59,6 +59,10 @@ nonisolated struct CompanionWake: Sendable, Identifiable {
     var updatedAt: Date
     var firedAt: Date?
     var consumedAt: Date?
+    /// The owner's first reaction of any kind (engage, reply, dismiss) — the
+    /// resurfacing ladder's heard-vs-ignored evidence (#309). Nil means no
+    /// reaction ever reached this wake.
+    var heardAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -71,7 +75,8 @@ nonisolated struct CompanionWake: Sendable, Identifiable {
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         firedAt: Date? = nil,
-        consumedAt: Date? = nil
+        consumedAt: Date? = nil,
+        heardAt: Date? = nil
     ) {
         self.id = id
         self.content = content
@@ -84,6 +89,48 @@ nonisolated struct CompanionWake: Sendable, Identifiable {
         self.updatedAt = updatedAt
         self.firedAt = firedAt
         self.consumedAt = consumedAt
+        self.heardAt = heardAt
+    }
+}
+
+/// #309's ignored-promise ladder, app-written (state transitions are never the
+/// entity's): a delivered promise he never reacted to rides the next beat's
+/// agenda once (`resurfaced`); if it is still unheard when the following beat
+/// fires, it dies `delivered_unheard` — no third attempt, and the death is a
+/// recorded fact the weekly review counts (#313's promise-integrity measure).
+nonisolated enum CompanionResurfacing {
+
+    /// Runs when a rhythm beat fires. Kill pass first (what the previous beat
+    /// resurfaced and he still never heard is dead); then the resurface pass
+    /// (newly ignored promises join this beat's agenda). Returns the promises
+    /// the current beat should carry as agenda lines.
+    static func pass(
+        store: MemoryStore, recorder: CompanionFlightRecorder, now: Date = Date()
+    ) async -> [CompanionWake] {
+        if let stale = try? await store.resurfacedWakes() {
+            for var wake in stale {
+                if wake.heardAt == nil {
+                    wake.state = .deliveredUnheard
+                    recorder.record(
+                        "wake.delivered-unheard", wakeID: wake.id, note: wake.content)
+                } else {
+                    // Resurfaced and heard — it did its job; terminal delivered.
+                    wake.state = .delivered
+                }
+                try? await store.upsertWake(wake)
+            }
+        }
+
+        guard let candidates = try? await store.unheardDeliveredPromises(), !candidates.isEmpty
+        else { return [] }
+        var resurfaced: [CompanionWake] = []
+        for var wake in candidates {
+            wake.state = .resurfaced
+            try? await store.upsertWake(wake)
+            recorder.record("wake.resurfaced", wakeID: wake.id, note: wake.content)
+            resurfaced.append(wake)
+        }
+        return resurfaced
     }
 }
 

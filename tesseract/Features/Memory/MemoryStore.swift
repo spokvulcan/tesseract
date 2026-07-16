@@ -50,7 +50,9 @@ actor MemoryStore {
     /// ADR-0040) — same database on purpose: FK-able provenance, one backup
     /// and inspection story. Their methods live in `MemoryStore+Tracking.swift`.
     /// v4: the entity's standing-instructions versions (ADR-0040 §12).
-    static let schemaVersion = 4
+    /// v5: `heardAt` on wakes — the resurfacing ladder (#309) must tell an
+    /// ignored promise from a heard one; any owner reaction stamps it.
+    static let schemaVersion = 5
 
     /// Internal, not private: the tracking extension (a separate file by
     /// design — Companion domain, memory's connection) prepares against it.
@@ -74,6 +76,12 @@ actor MemoryStore {
     /// else can reach the connection, so there is nothing to protect it from.
     private nonisolated static func migrate(_ db: SQLiteDatabase) throws {
         guard db.userVersion < Self.schemaVersion else { return }
+
+        // v5: stores that already carry the wakes table (v3/v4) gain `heardAt`
+        // in place; fresh stores get it from the CREATE below.
+        if db.userVersion >= 3 {
+            try db.execute("ALTER TABLE wakes ADD COLUMN heardAt REAL")
+        }
 
         try db.execute(
             """
@@ -229,7 +237,8 @@ actor MemoryStore {
                 createdAt      REAL NOT NULL,
                 updatedAt      REAL NOT NULL,
                 firedAt        REAL,
-                consumedAt     REAL                    -- set only by a completed turn
+                consumedAt     REAL,                   -- set only by a completed turn
+                heardAt        REAL                    -- his first reaction, any kind (#309)
             );
             CREATE INDEX IF NOT EXISTS wakes_state_due ON wakes(state, due);
 

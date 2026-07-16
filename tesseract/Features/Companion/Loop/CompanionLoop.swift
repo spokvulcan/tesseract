@@ -171,11 +171,13 @@ final class CompanionLoop {
         }
         deferralLogged = false
 
-        // 1. Due wakes — the entity's booked present.
+        // 1. Due wakes — the entity's booked present. A batch carrying a
+        // rhythm wake is a beat (#327 §2's origin vocabulary).
         if let due = try? await store.dueWakes(asOf: now), !due.isEmpty {
             let overdue = due.filter { now.timeIntervalSince($0.due) > Self.catchUpGrace }
             let batch = overdue.isEmpty ? due : overdue
-            let origin = overdue.isEmpty ? "wake" : "catchup"
+            let isBeat = batch.contains { $0.wakeClass == .rhythm }
+            let origin: TurnOrigin = !overdue.isEmpty ? .catchup : (isBeat ? .beat : .wake)
             await runWakeTurn(batch, origin: origin, now: now)
             return
         }
@@ -190,7 +192,7 @@ final class CompanionLoop {
             dayState.dayStartedAt = now
             try? await store.setLoopDayState(todayKey, dayState)
             recorder.record("loop.day-start", snapshot: ["at": CompanionWakeTime.format(now)])
-            await runTransitionTurn(origin: "wake", template: Self.dayStartTemplate, now: now)
+            await runTransitionTurn(origin: .wake, template: Self.dayStartTemplate, now: now)
             return
         }
 
@@ -202,13 +204,13 @@ final class CompanionLoop {
         {
             dayState.lastAmbientAt = now
             try? await store.setLoopDayState(todayKey, dayState)
-            await runTransitionTurn(origin: "ambient", template: Self.ambientTemplate, now: now)
+            await runTransitionTurn(origin: .ambient, template: Self.ambientTemplate, now: now)
         }
     }
 
     // MARK: - Turns
 
-    private func runWakeTurn(_ wakes: [CompanionWake], origin: String, now: Date) async {
+    private func runWakeTurn(_ wakes: [CompanionWake], origin: TurnOrigin, now: Date) async {
         // Fired = presented to the entity. Recorded before the turn so a crash
         // between here and completion is visible as fired-but-unconsumed.
         for var wake in wakes {
@@ -225,8 +227,18 @@ final class CompanionLoop {
                 note: wake.content)
         }
 
-        let template = origin == "catchup" ? Self.catchUpTemplate : Self.wakeTemplate
-        let opening = await composeOpening(template: template, dueWakes: wakes, now: now)
+        // A firing beat advances the ignored-promise ladder (#309): what the
+        // last beat resurfaced and he never heard dies delivered-unheard, and
+        // newly ignored promises join this beat's agenda.
+        var resurfaced: [CompanionWake] = []
+        if wakes.contains(where: { $0.wakeClass == .rhythm }) {
+            resurfaced = await CompanionResurfacing.pass(
+                store: store, recorder: recorder, now: now)
+        }
+
+        let template = origin == .catchup ? Self.catchUpTemplate : Self.wakeTemplate
+        let opening = await composeOpening(
+            template: template, dueWakes: wakes, resurfaced: resurfaced, now: now)
         let outcome = await runner.run(
             origin: origin, opening: opening, wakeIDs: wakes.map(\.id))
 
@@ -250,14 +262,15 @@ final class CompanionLoop {
         }
     }
 
-    private func runTransitionTurn(origin: String, template: String, now: Date) async {
+    private func runTransitionTurn(origin: TurnOrigin, template: String, now: Date) async {
         _ = await runner.run(
             origin: origin,
             opening: await composeOpening(template: template, dueWakes: [], now: now))
     }
 
     private func composeOpening(
-        template: String, dueWakes: [CompanionWake], now: Date
+        template: String, dueWakes: [CompanionWake],
+        resurfaced: [CompanionWake] = [], now: Date
     ) async -> String {
         // The entity's own standing document rides first (ADR-0040 §12); the
         // unseeded fallback only exists for a turn racing first-run recovery.
@@ -268,8 +281,8 @@ final class CompanionLoop {
                 note: nil, createdAt: now)
         let inputs = await CompanionBriefing.gather(
             store: store, idleMonitor: idleMonitor, sensed: sensed,
-            dueWakes: dueWakes, recorder: recorder, calendar: calendar,
-            lastAppUse: attention.lastOwnerEngagedAt, now: now)
+            dueWakes: dueWakes, resurfacedWakes: resurfaced, recorder: recorder,
+            calendar: calendar, lastAppUse: attention.lastOwnerEngagedAt, now: now)
         return [
             CompanionInstructions.wrap(instructions),
             CompanionBriefing.render(inputs),
@@ -345,7 +358,8 @@ final class CompanionLoop {
         let context = runner.context
         postedPings[pingID] = (context.wakeIDs.first, context.conversationID)
         await notifier.post(
-            pingID: pingID, beatID: context.origin ?? "companion", title: title, body: body)
+            pingID: pingID, beatID: context.origin?.rawValue ?? "companion",
+            title: title, body: body)
         recorder.record(
             "delivery.notification",
             wakeID: context.wakeIDs.first,
@@ -353,6 +367,23 @@ final class CompanionLoop {
             conversationID: context.conversationID,
             snapshot: ["title": title],
             note: body)
+    }
+
+    /// A summons that lapsed unanswered leaves its line as a banner — §11
+    /// guarantee 1: no delivery evaporates silently. Correlation is passed in
+    /// (not read from the runner) because the overlay's give-up can outlive
+    /// the turn that raised it.
+    func deliverUnansweredFallback(line: String, wakeID: UUID?, conversationID: UUID?) async {
+        let pingID = UUID()
+        postedPings[pingID] = (wakeID, conversationID)
+        await notifier.post(
+            pingID: pingID, beatID: "summons-fallback", title: "Jarvis", body: line)
+        recorder.record(
+            "delivery.notification",
+            wakeID: wakeID,
+            conversationID: conversationID,
+            snapshot: ["reason": "summons-unanswered"],
+            note: line)
     }
 
     /// The `speak` tool's door — the words are the verbatim snapshot (#326).
@@ -379,6 +410,12 @@ final class CompanionLoop {
 
         Task { [weak self] in
             guard let self else { return }
+            // Any reaction is proof the delivery reached him (#309): stamp
+            // heard first so the resurfacing ladder never nags about a wake
+            // he engaged, answered, or explicitly waved off.
+            if let wakeID = correlation?.wakeID {
+                try? await self.store.stampWakeHeard(id: wakeID, at: Date())
+            }
             switch outcome {
             case .engaged:
                 if let wakeID = correlation?.wakeID,
@@ -387,10 +424,14 @@ final class CompanionLoop {
                     wake.state = .engaged
                     try? await self.store.upsertWake(wake)
                 }
+                // Him engaging any companion banner means the beat that
+                // carried the resurfacing reached him — spare its agenda.
+                try? await self.store.stampResurfacedHeard(at: Date())
                 if let conversationID = correlation?.conversationID {
                     self.openConversation(conversationID)
                 }
             case .replied:
+                try? await self.store.stampResurfacedHeard(at: Date())
                 // His words become a followup wake due now: the next turn sees
                 // them with full situation context — one machinery, no side
                 // channel.

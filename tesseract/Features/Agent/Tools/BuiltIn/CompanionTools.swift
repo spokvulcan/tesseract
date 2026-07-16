@@ -5,12 +5,14 @@
 //  The entity's hands on its own future and its delivery rungs (ADR-0040).
 //  `book_wake` is how Jarvis grants himself a future turn — code enforces the
 //  visible budget and the persistence, never the judgment. The delivery tools
-//  (notify, speak) are rungs of the escalation palette; choosing one is his
-//  call under his standing instructions, and every use lands in the flight
+//  (§10's palette, one per rung: set_glyph, notify, speak, summon_overlay,
+//  open_conversation) are the escalation ladder; choosing a rung is his call
+//  under his standing instructions, and every use lands in the flight
 //  recorder with the turn that made it.
 //
-//  These register on the Companion's headless agent only — the interactive
-//  chat needs no delivery rungs; the owner is already looking at it.
+//  The delivery rungs reach the Companion's headless agent only — the shared
+//  registry carries them, and the interactive chat filters them out by name
+//  (`CompanionToolNames.deliveryRungs`): the owner is already looking at it.
 //
 
 import Foundation
@@ -24,6 +26,16 @@ nonisolated struct CompanionToolError: LocalizedError {
 /// tool layer, revisable with wear.
 nonisolated enum CompanionWakeBudget {
     static let promisesPerDay = 2
+}
+
+/// The delivery palette's tool names (ADR-0040 §10). The interactive chat's
+/// run controller filters exactly this set out of its tool sync, so the rungs
+/// exist only where the entity acts at a distance — never in the chat the
+/// owner is already looking at.
+nonisolated enum CompanionToolNames {
+    static let deliveryRungs: Set<String> = [
+        "set_glyph", "notify", "speak", "summon_overlay", "open_conversation",
+    ]
 }
 
 // MARK: - book_wake
@@ -290,11 +302,11 @@ nonisolated func createSpeakTool(
         name: "speak",
         label: "speak",
         description: """
-            Say a line out loud — the summons rung. Reserved for contract beats \
+            Say a line out loud — the spoken rung. Reserved for contract beats \
             and wakes with summons rights; promises deliver quietly unless he \
             granted "wake me for this". English, your register, one or two \
             sentences. Never greet an empty room: check the situation block for \
-            presence first.
+            presence first. For a standing visible summons use summon_overlay.
             """,
         parameterSchema: JSONSchema(
             type: "object",
@@ -310,6 +322,147 @@ nonisolated func createSpeakTool(
             }
             await deliver(text)
             return .text("Spoken.")
+        }
+    )
+}
+
+/// The quietest rung (ADR-0040 §10, #327 §3): the entity's own hand on the
+/// menu-bar glyph. Raised, it renders as a summons until the owner brings the
+/// app forward (app-observed) or the entity clears it.
+nonisolated func createSetGlyphTool(
+    presence: CompanionPresence,
+    recorder: CompanionFlightRecorder,
+    context: CompanionTurnContext
+) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: "set_glyph",
+        label: "set glyph",
+        description: """
+            The quietest rung: raise a notice on the menu-bar glyph. No sound, \
+            no banner — for things worth his eye that don't merit an \
+            interruption. It stays raised until he brings the app forward or \
+            you clear it. State: 'raised' or 'clear'.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "state": PropertySchema(
+                    type: "string",
+                    description: "Raise the notice, or clear one you raised.",
+                    enumValues: ["raised", "clear"]
+                )
+            ],
+            required: ["state"]
+        ),
+        execute: { _, argsJSON, _, _ in
+            guard let state = ToolArgExtractor.string(argsJSON, key: "state"),
+                state == "raised" || state == "clear"
+            else {
+                throw CompanionToolError(message: "set_glyph requires state: raised|clear")
+            }
+            if state == "raised" {
+                await presence.raiseEntityNotice()
+            } else {
+                await presence.clearEntityNotice()
+            }
+            await recorder.record(
+                "delivery.glyph",
+                turnID: context.turnID,
+                conversationID: context.conversationID,
+                snapshot: ["state": state]
+            )
+            return .text(
+                state == "raised"
+                    ? "Glyph raised — it clears when he looks, or when you clear it."
+                    : "Glyph cleared.")
+        }
+    )
+}
+
+/// The loudest rung (ADR-0040 §10, #328): raise the voice overlay summons.
+nonisolated func createSummonOverlayTool(
+    summon: @escaping @MainActor (_ line: String) -> Void,
+    recorder: CompanionFlightRecorder,
+    context: CompanionTurnContext
+) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: "summon_overlay",
+        label: "summon overlay",
+        description: """
+            Raise the voice overlay — the loudest rung. Speaks the line and \
+            stands a visible summons on screen until he engages (a live voice \
+            conversation opens) or dismisses; unanswered, it falls back to a \
+            notification banner. Reserved for wakes with summons rights and \
+            contract beats per your instructions — never for a quiet promise.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "line": PropertySchema(
+                    type: "string",
+                    description: "The spoken summons line — your register, brief.")
+            ],
+            required: ["line"]
+        ),
+        execute: { _, argsJSON, _, _ in
+            guard let line = ToolArgExtractor.string(argsJSON, key: "line"), !line.isEmpty
+            else {
+                throw CompanionToolError(message: "summon_overlay requires 'line'")
+            }
+            await summon(line)
+            await recorder.record(
+                "delivery.summons",
+                wakeID: context.wakeIDs.first,
+                turnID: context.turnID,
+                conversationID: context.conversationID,
+                note: line
+            )
+            return .text("Summons raised — his answer lands in your flight log.")
+        }
+    )
+}
+
+/// The hand-off rung (ADR-0040 §10): put a conversation on his screen.
+nonisolated func createOpenConversationTool(
+    open: @escaping @MainActor (UUID) -> Void,
+    recorder: CompanionFlightRecorder,
+    context: CompanionTurnContext
+) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: "open_conversation",
+        label: "open conversation",
+        description: """
+            Open a conversation in the app — the hand-off rung, for when \
+            something is easier read than spoken. Defaults to this turn's own \
+            conversation; pass 'id' to open another. Use only when he is at \
+            the Mac (check the situation block) — an opened window in an empty \
+            room is noise.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "id": PropertySchema(
+                    type: "string",
+                    description: "Optional conversation id; defaults to this turn's."
+                )
+            ],
+            required: []
+        ),
+        execute: { _, argsJSON, _, _ in
+            let explicit = ToolArgExtractor.string(argsJSON, key: "id")
+                .flatMap(UUID.init(uuidString:))
+            let current = await context.conversationID
+            guard let target = explicit ?? current else {
+                throw CompanionToolError(
+                    message: "No conversation to open — pass 'id' or call from a turn.")
+            }
+            await open(target)
+            await recorder.record(
+                "delivery.opened",
+                turnID: context.turnID,
+                conversationID: target
+            )
+            return .text("Opened.")
         }
     )
 }

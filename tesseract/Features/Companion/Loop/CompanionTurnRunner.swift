@@ -38,6 +38,10 @@ final class CompanionTurnRunner {
     private let recorder: CompanionFlightRecorder
     private let settings: SettingsManager
     private let presence: CompanionPresence
+    /// The download check behind `effectiveModelID` — an undownloaded
+    /// Companion model must degrade to the owner's model, never to a turn
+    /// that cannot run.
+    private let isModelDownloaded: (String) -> Bool
 
     /// Built on first use — the second `AgentFactory.makeAgent` bootstrap is
     /// not free, and the Companion may be disabled for this whole launch.
@@ -51,7 +55,8 @@ final class CompanionTurnRunner {
         recorder: CompanionFlightRecorder,
         settings: SettingsManager,
         context: CompanionTurnContext,
-        presence: CompanionPresence
+        presence: CompanionPresence,
+        isModelDownloaded: @escaping (String) -> Bool
     ) {
         self.makeAgent = makeAgent
         self.arbiter = arbiter
@@ -61,12 +66,13 @@ final class CompanionTurnRunner {
         self.settings = settings
         self.context = context
         self.presence = presence
+        self.isModelDownloaded = isModelDownloaded
     }
 
     /// Run one turn. Returns nil on failure — the caller (the loop) owns
     /// retries and the generic fallback; the wake stays unconsumed either way
     /// until the caller says otherwise.
-    func run(origin: String, opening: String, wakeIDs: [UUID] = []) async -> Outcome? {
+    func run(origin: TurnOrigin, opening: String, wakeIDs: [UUID] = []) async -> Outcome? {
         guard !isRunning else { return nil }
         isRunning = true
         presence.beginThinking()
@@ -87,7 +93,7 @@ final class CompanionTurnRunner {
             turnID: turnID,
             conversationID: conversationID,
             modelID: modelID,
-            snapshot: ["origin": origin]
+            snapshot: ["origin": origin.rawValue]
         )
 
         let agent = ensureAgent()
@@ -142,7 +148,7 @@ final class CompanionTurnRunner {
             turnID: turnID,
             conversationID: conversationID,
             modelID: modelID,
-            snapshot: ["origin": origin, "messages": String(messages.count)],
+            snapshot: ["origin": origin.rawValue, "messages": String(messages.count)],
             note: String(summary.prefix(300))
         )
         return Outcome(
@@ -163,7 +169,9 @@ final class CompanionTurnRunner {
     /// whatever the owner runs", never to a turn that cannot run.
     private func effectiveModelID() -> String? {
         let companion = settings.companionModelID
-        guard !companion.isEmpty, companion != settings.selectedAgentModelID else { return nil }
+        guard !companion.isEmpty, companion != settings.selectedAgentModelID,
+            isModelDownloaded(companion)
+        else { return nil }
         return companion
     }
 

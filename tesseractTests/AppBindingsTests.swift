@@ -217,6 +217,45 @@ struct AppBindingsTests {
     }
 
     @Test
+    func companionEnabledMakesItsModelTheAgentDefault() async {
+        let h = makeHarness {
+            $0.companionModelID = "big-model"
+            $0.companionHeartbeatEnabled = false
+        }
+        defer { h.bindings.stop() }
+        h.driver.isAgentModelDownloaded = true
+        let originalDefault = h.settings.selectedAgentModelID
+
+        h.bindings.start()
+        // Disabled: the interactive default is untouched.
+        _ = await waitUntil { false }
+        #expect(h.settings.selectedAgentModelID == originalDefault)
+
+        // Enabling flips the default to the Companion model (ADR-0040 §9).
+        h.settings.companionHeartbeatEnabled = true
+        #expect(await waitUntil { h.settings.selectedAgentModelID == "big-model" })
+
+        // Picking a different Companion model while enabled follows it too.
+        h.settings.companionModelID = "bigger-model"
+        #expect(await waitUntil { h.settings.selectedAgentModelID == "bigger-model" })
+    }
+
+    @Test
+    func undownloadedCompanionModelNeverBecomesTheDefault() async {
+        let h = makeHarness {
+            $0.companionModelID = "big-model"
+            $0.companionHeartbeatEnabled = true
+        }
+        defer { h.bindings.stop() }
+        h.driver.isAgentModelDownloaded = false
+        let originalDefault = h.settings.selectedAgentModelID
+
+        h.bindings.start()
+        _ = await waitUntil { false }
+        #expect(h.settings.selectedAgentModelID == originalDefault)
+    }
+
+    @Test
     func serverEnabledAtLaunchStartsItExactlyOnceAndTogglingOffStopsIt() async {
         let h = makeHarness { $0.isServerEnabled = true }
         defer { h.bindings.stop() }
@@ -516,6 +555,7 @@ private final class InputDriver {
     var isLLMSlotLoaded = false
     var whisperModelPath: URL?
     var isTranscriptionModelLoaded = false
+    var isAgentModelDownloaded = false
 }
 
 @MainActor
@@ -565,7 +605,8 @@ private func makeHarness(
             isLLMSlotLoaded: { driver.isLLMSlotLoaded },
             whisperModelPath: { driver.whisperModelPath },
             isTranscriptionModelLoaded: { driver.isTranscriptionModelLoaded },
-            modelDownloadStatuses: statuses.eraseToAnyPublisher()
+            modelDownloadStatuses: statuses.eraseToAnyPublisher(),
+            isAgentModelDownloaded: { _ in driver.isAgentModelDownloaded }
         ),
         effects: .init(
             setUpOverlayPanel: { recorder("setUpOverlayPanel") },

@@ -16,11 +16,11 @@ final class CompanionTurnContext {
     private(set) var turnID: UUID?
     private(set) var wakeIDs: [UUID] = []
     private(set) var conversationID: UUID?
-    private(set) var origin: String?
+    private(set) var origin: TurnOrigin?
 
     var isActive: Bool { turnID != nil }
 
-    func begin(turnID: UUID, wakeIDs: [UUID], conversationID: UUID, origin: String) {
+    func begin(turnID: UUID, wakeIDs: [UUID], conversationID: UUID, origin: TurnOrigin) {
         self.turnID = turnID
         self.wakeIDs = wakeIDs
         self.conversationID = conversationID

@@ -225,6 +225,10 @@ nonisolated func createLogStepTool(store: MemoryStore) -> AgentToolDefinition {
 
 // MARK: - log_sample
 
+/// One list feeds both the schema's `enumValues` and the execute guard, so
+/// the two can't drift.
+private nonisolated let sampleKinds = ["sleep", "mood", "energy", "movement"]
+
 nonisolated func createLogSampleTool(store: MemoryStore) -> AgentToolDefinition {
     AgentToolDefinition(
         name: "log_sample",
@@ -242,7 +246,7 @@ nonisolated func createLogSampleTool(store: MemoryStore) -> AgentToolDefinition 
                 "kind": PropertySchema(
                     type: "string",
                     description: "Which sample.",
-                    enumValues: ["sleep", "mood", "energy", "movement"]
+                    enumValues: sampleKinds
                 ),
                 "value": PropertySchema(
                     type: "string",
@@ -253,10 +257,10 @@ nonisolated func createLogSampleTool(store: MemoryStore) -> AgentToolDefinition 
         ),
         execute: { _, argsJSON, _, _ in
             guard let kind = ToolArgExtractor.string(argsJSON, key: "kind"),
-                ["sleep", "mood", "energy", "movement"].contains(kind)
+                sampleKinds.contains(kind)
             else {
                 throw TrackingToolError(
-                    message: "log_sample requires kind: sleep|mood|energy|movement")
+                    message: "log_sample requires kind: \(sampleKinds.joined(separator: "|"))")
             }
             guard let value = ToolArgExtractor.string(argsJSON, key: "value"),
                 !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

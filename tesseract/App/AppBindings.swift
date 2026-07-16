@@ -43,6 +43,12 @@ final class AppBindings {
         /// The model download manager's status stream, watched for the Whisper
         /// model's download completing.
         let modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
+        /// Gate read for the Companion-model default rule (ADR-0040 §9) — an
+        /// undownloaded model must never become the interactive default.
+        let isAgentModelDownloaded: @MainActor (String) -> Bool
+        /// Tracked read of the sleep pass's run state — feeds the Companion's
+        /// `asleep` presence (#327 §3).
+        let isMemorySleepRunning: @MainActor () -> Bool
 
         init(
             dictationState: @escaping @MainActor () -> DictationFeed.Phase,
@@ -52,7 +58,9 @@ final class AppBindings {
             isLLMSlotLoaded: @escaping @MainActor () -> Bool,
             whisperModelPath: @escaping @MainActor () -> URL?,
             isTranscriptionModelLoaded: @escaping @MainActor () -> Bool,
-            modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
+            modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>,
+            isAgentModelDownloaded: @escaping @MainActor (String) -> Bool = { _ in false },
+            isMemorySleepRunning: @escaping @MainActor () -> Bool = { false }
         ) {
             self.dictationState = dictationState
             self.dictationBeat = dictationBeat
@@ -62,6 +70,8 @@ final class AppBindings {
             self.whisperModelPath = whisperModelPath
             self.isTranscriptionModelLoaded = isTranscriptionModelLoaded
             self.modelDownloadStatuses = modelDownloadStatuses
+            self.isAgentModelDownloaded = isAgentModelDownloaded
+            self.isMemorySleepRunning = isMemorySleepRunning
         }
     }
 
@@ -103,6 +113,8 @@ final class AppBindings {
         /// Loads the Whisper model from its on-disk path into the
         /// transcription engine.
         let loadWhisperModel: @MainActor (URL) async -> Void
+        /// Mirrors the sleep pass into the Companion's presence (#327 §3).
+        let pushCompanionAsleep: @MainActor (Bool) -> Void
 
         init(
             setUpOverlayPanel: @escaping @MainActor () -> Void,
@@ -122,7 +134,8 @@ final class AppBindings {
             stopHTTPServer: @escaping @MainActor () -> Void,
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
             reloadLLMIfNeeded: @escaping @MainActor () async throws -> Void,
-            loadWhisperModel: @escaping @MainActor (URL) async -> Void
+            loadWhisperModel: @escaping @MainActor (URL) async -> Void,
+            pushCompanionAsleep: @escaping @MainActor (Bool) -> Void = { _ in }
         ) {
             self.setUpOverlayPanel = setUpOverlayPanel
             self.setOverlayVariant = setOverlayVariant
@@ -142,6 +155,7 @@ final class AppBindings {
             self.updateHTTPServerPort = updateHTTPServerPort
             self.reloadLLMIfNeeded = reloadLLMIfNeeded
             self.loadWhisperModel = loadWhisperModel
+            self.pushCompanionAsleep = pushCompanionAsleep
         }
     }
 
@@ -302,6 +316,40 @@ final class AppBindings {
                     } catch {
                         Log.agent.error("Agent model reload failed: \(error.localizedDescription)")
                     }
+                }
+            })
+
+        // While the Companion is enabled his model IS the app's default agent
+        // model (ADR-0040 §9) — one model, one mind: interactive chats and his
+        // turns share loaded weights instead of thrashing a swap per turn. The
+        // initial emission re-asserts it at launch; a deliberate owner switch
+        // afterwards is respected until the entity's next turn swaps the
+        // weights back (§9's owner-right-of-way semantics). Undownloaded
+        // models never become the default.
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await (enabled, companionModel) in Observations({
+                    (self.settings.companionHeartbeatEnabled, self.settings.companionModelID)
+                }) {
+                    guard enabled, !companionModel.isEmpty,
+                        companionModel != self.settings.selectedAgentModelID,
+                        self.inputs.isAgentModelDownloaded(companionModel)
+                    else { continue }
+                    Log.companion.info(
+                        "Companion enabled — \(companionModel) becomes the agent default (ADR-0040 §9)"
+                    )
+                    self.settings.selectedAgentModelID = companionModel
+                }
+            })
+
+        // The sleep pass's run state mirrors into the Companion's presence —
+        // the `asleep` glyph rung (#327 §3).
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await sleeping in Observations({ self.inputs.isMemorySleepRunning() }) {
+                    self.effects.pushCompanionAsleep(sleeping)
                 }
             })
 

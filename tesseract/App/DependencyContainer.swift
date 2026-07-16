@@ -244,13 +244,29 @@ final class DependencyContainer: ObservableObject {
                     self?.agentConversationStore.currentConversation?.id
                 }
             ))
-        // The entity's hands on his own future and the delivery rungs
-        // (ADR-0040). Registered in every conversation like memory's tools:
-        // "remind me tomorrow" said in chat books a wake through the same one
-        // door the Companion's own turns use.
+        // The entity's hands on his own future (ADR-0040). Registered in
+        // every conversation like memory's tools: "remind me tomorrow" said
+        // in chat books a wake through the same one door the Companion's own
+        // turns use.
         registry.appendBuiltInTool(
             createBookWakeTool(
                 store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createReviseInstructionsTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        // The delivery palette (ADR-0040 §10) — one typed tool per rung. The
+        // shared registry carries them for the Companion's headless agent;
+        // the interactive chat filters them out by name
+        // (`CompanionToolNames.deliveryRungs` in `AgentRunController`).
+        registry.appendBuiltInTool(
+            createSetGlyphTool(
+                presence: companionPresence,
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
@@ -263,8 +279,19 @@ final class DependencyContainer: ObservableObject {
                 self?.companionLoop.deliverSpoken(text)
             }))
         registry.appendBuiltInTool(
-            createReviseInstructionsTool(
-                store: memoryStore,
+            createSummonOverlayTool(
+                summon: { [weak self] line in
+                    self?.companionSummons.summon(line: line)
+                },
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createOpenConversationTool(
+                open: { [weak self] id in
+                    self?.chatSession.loadConversation(id)
+                    (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+                },
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
@@ -491,7 +518,10 @@ final class DependencyContainer: ObservableObject {
         recorder: companionFlightRecorder,
         settings: settingsManager,
         context: companionTurnContext,
-        presence: companionPresence
+        presence: companionPresence,
+        isModelDownloaded: { [modelDownloadManager] in
+            modelDownloadManager.isDownloaded($0)
+        }
     )
     /// The owner's attention outranks the entity's schedule: background turns
     /// hold while he is using the app (voice session, generation, TTS he is
@@ -516,7 +546,10 @@ final class DependencyContainer: ObservableObject {
         },
         isMachineBusy: { [unowned self] in self.inferenceArbiter.isGPULeaseHeld }
     )
-    lazy var companionLoop = CompanionLoop(
+    // Explicitly typed: the loop's `speak` closure reaches the summons, and
+    // the summons's banner fallback reaches the loop — inference across the
+    // two lazy initializers would be circular.
+    lazy var companionLoop: CompanionLoop = CompanionLoop(
         store: memoryStore,
         recorder: companionFlightRecorder,
         runner: companionTurnRunner,
@@ -527,47 +560,44 @@ final class DependencyContainer: ObservableObject {
         calendar: CompanionCalendarReader(),
         isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
-        // The spoken rung. With the #328 overlay toggle on, the picked concept
-        // is the summons surface — audio-only TTS, one visual surface, and the
-        // owner's answer lands in the flight recorder. The entity's resummons
-        // wakes own persistence; an unanswered overlay is a recorded fact, not
-        // an automatic banner. Engaging a spoken summons opens the turn's own
-        // conversation and enters a live voice session (#310 §1).
+        // The spoken rung — choreography lives in `CompanionSummons`.
         speak: { [weak self] text in
-            guard let self else { return }
-            guard self.settingsManager.companionBeatsUseOverlay else {
-                self.speechCoordinator.speakText(text)
-                return
-            }
-            let conversationID = self.companionTurnContext.conversationID
-            self.speechCoordinator.speakText(text, showsOverlay: false)
-            Task { @MainActor in
-                self.companionPresence.beginSummons()
-                defer { self.companionPresence.endSummons() }
-                let outcome = await self.companionVoicePrototype.summonBeat(
-                    title: "Jarvis", line: text)
-                switch outcome {
-                case .engaged:
-                    self.companionFlightRecorder.record(
-                        "reaction.engaged", conversationID: conversationID, note: "overlay")
-                    (NSApp.delegate as? AppDelegate)?.navigateToAgent()
-                    if let conversationID {
-                        self.chatSession.loadConversation(conversationID)
-                    }
-                    self.companionVoiceSession.enter(via: "summons-engage")
-                case .dismissed:
-                    self.companionFlightRecorder.record(
-                        "reaction.dismissed", conversationID: conversationID, note: "overlay")
-                case .unanswered:
-                    self.companionFlightRecorder.record(
-                        "reaction.unheard", conversationID: conversationID,
-                        note: "overlay summons unanswered")
-                }
-            }
+            self?.companionSummons.deliver(line: text)
         },
         openConversation: { [weak self] id in
             self?.chatSession.loadConversation(id)
             (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+        }
+    )
+
+    // The summons conductor (ADR-0040 §10/§11, #328): speak → overlay →
+    // reaction routing → banner fallback for the unanswered. Conduct lives in
+    // the type; this container hands it doors.
+    lazy var companionSummons: CompanionSummons = CompanionSummons(
+        settings: settingsManager,
+        presence: companionPresence,
+        recorder: companionFlightRecorder,
+        context: companionTurnContext,
+        speakPlain: { [weak self] text in
+            self?.speechCoordinator.speakText(text)
+        },
+        speakUnderOverlay: { [weak self] text in
+            self?.speechCoordinator.speakText(text, showsOverlay: false)
+        },
+        summonOverlay: { [weak self] title, line in
+            await self?.companionVoicePrototype.summonBeat(title: title, line: line)
+                ?? .unanswered
+        },
+        openConversation: { [weak self] id in
+            self?.chatSession.loadConversation(id)
+            (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+        },
+        enterVoiceSession: { [weak self] via in
+            self?.companionVoiceSession.enter(via: via)
+        },
+        postFallbackBanner: { [weak self] line, wakeID, conversationID in
+            await self?.companionLoop.deliverUnansweredFallback(
+                line: line, wakeID: wakeID, conversationID: conversationID)
         }
     )
 
@@ -893,7 +923,11 @@ final class DependencyContainer: ObservableObject {
                 isTranscriptionModelLoaded: { [transcriptionEngine] in
                     transcriptionEngine.isModelLoaded
                 },
-                modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher()
+                modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher(),
+                isAgentModelDownloaded: { [modelDownloadManager] in
+                    modelDownloadManager.isDownloaded($0)
+                },
+                isMemorySleepRunning: { [memorySleep] in memorySleep.isRunning }
             ),
             effects: .init(
                 setUpOverlayPanel: { [pillOverlay] in
@@ -959,6 +993,9 @@ final class DependencyContainer: ObservableObject {
                     } catch {
                         Log.general.error("Failed to load Whisper model: \(error)")
                     }
+                },
+                pushCompanionAsleep: { [companionPresence] in
+                    companionPresence.setAsleep($0)
                 }
             )
         )

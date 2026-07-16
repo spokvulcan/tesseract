@@ -16,12 +16,13 @@ extension MemoryStore {
             """
             INSERT INTO wakes
                 (id, content, due, class, state, summonsGrant, conversationID,
-                 createdAt, updatedAt, firedAt, consumedAt)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 createdAt, updatedAt, firedAt, consumedAt, heardAt)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
             ON CONFLICT(id) DO UPDATE SET
                 content=excluded.content, due=excluded.due, state=excluded.state,
                 summonsGrant=excluded.summonsGrant, updatedAt=excluded.updatedAt,
-                firedAt=excluded.firedAt, consumedAt=excluded.consumedAt
+                firedAt=excluded.firedAt, consumedAt=excluded.consumedAt,
+                heardAt=excluded.heardAt
             """)
         stmt.bind(1, wake.id.uuidString)
             .bind(2, wake.content)
@@ -34,6 +35,7 @@ extension MemoryStore {
             .bind(9, Date().timeIntervalSince1970)
             .bind(10, wake.firedAt?.timeIntervalSince1970)
             .bind(11, wake.consumedAt?.timeIntervalSince1970)
+            .bind(12, wake.heardAt?.timeIntervalSince1970)
         try stmt.run()
     }
 
@@ -91,6 +93,42 @@ extension MemoryStore {
         return try Self.decodeWakes(stmt)
     }
 
+    // MARK: - Resurfacing (#309)
+
+    /// Delivered promise-class wakes he never reacted to — the resurfacing
+    /// candidates a firing beat reads.
+    func unheardDeliveredPromises() throws -> [CompanionWake] {
+        let stmt = try db.prepare(
+            "\(Self.wakeSelect) WHERE state = 'delivered' AND class = 'promise' "
+                + "AND heardAt IS NULL ORDER BY due")
+        return try Self.decodeWakes(stmt)
+    }
+
+    /// What the previous beat resurfaced — the next beat's kill-pass set.
+    func resurfacedWakes() throws -> [CompanionWake] {
+        let stmt = try db.prepare(
+            "\(Self.wakeSelect) WHERE state = 'resurfaced' ORDER BY due")
+        return try Self.decodeWakes(stmt)
+    }
+
+    /// First reaction wins; later reactions never move the stamp.
+    func stampWakeHeard(id: UUID, at: Date) throws {
+        let stmt = try db.prepare(
+            "UPDATE wakes SET heardAt = ?2, updatedAt = ?2 WHERE id = ?1 AND heardAt IS NULL")
+        stmt.bind(1, id.uuidString).bind(2, at.timeIntervalSince1970)
+        try stmt.run()
+    }
+
+    /// The owner engaging any companion banner is proof the beat that carried
+    /// the resurfacing reached him — spare everything it resurfaced.
+    func stampResurfacedHeard(at: Date) throws {
+        let stmt = try db.prepare(
+            "UPDATE wakes SET heardAt = ?1, updatedAt = ?1 "
+                + "WHERE state = 'resurfaced' AND heardAt IS NULL")
+        stmt.bind(1, at.timeIntervalSince1970)
+        try stmt.run()
+    }
+
     // MARK: - Loop day state
 
     func loopDayState(_ date: String) throws -> CompanionLoopDayState {
@@ -119,7 +157,7 @@ extension MemoryStore {
 
     private static let wakeSelect = """
         SELECT id, content, due, class, state, summonsGrant, conversationID,
-               createdAt, updatedAt, firedAt, consumedAt
+               createdAt, updatedAt, firedAt, consumedAt, heardAt
         FROM wakes
         """
 
@@ -143,7 +181,8 @@ extension MemoryStore {
             createdAt: Date(timeIntervalSince1970: stmt.double(7)),
             updatedAt: Date(timeIntervalSince1970: stmt.double(8)),
             firedAt: stmt.isNull(9) ? nil : Date(timeIntervalSince1970: stmt.double(9)),
-            consumedAt: stmt.isNull(10) ? nil : Date(timeIntervalSince1970: stmt.double(10))
+            consumedAt: stmt.isNull(10) ? nil : Date(timeIntervalSince1970: stmt.double(10)),
+            heardAt: stmt.isNull(11) ? nil : Date(timeIntervalSince1970: stmt.double(11))
         )
     }
 }

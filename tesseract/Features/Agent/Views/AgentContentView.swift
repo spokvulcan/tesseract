@@ -271,7 +271,7 @@ struct AgentContentView: View {
                         // The origin badge (#327 §3): the Companion's own
                         // turns are findable at a glance; typed chats stay
                         // unbadged.
-                        if let badge = ConversationOriginBadge.label(for: summary.origin) {
+                        if let badge = ConversationOriginBadge.label(for: summary.turnOrigin) {
                             Text(badge)
                                 .font(.caption2)
                                 .padding(.horizontal, 5)
@@ -306,17 +306,19 @@ struct AgentContentView: View {
 
 // MARK: - Origin badges (#327 §3)
 
-/// The conversation-list origin vocabulary: `interactive` (and legacy
-/// untagged) rows stay clean; the Companion's turn classes get a small badge.
+/// The conversation-list origin vocabulary (#327 §2): `interactive` (and
+/// legacy untagged) rows stay clean; the Companion's turn classes get a small
+/// badge. Exhaustive over `TurnOrigin` so the vocabulary can't drift from
+/// what the loop actually emits.
 enum ConversationOriginBadge {
-    static func label(for origin: String?) -> String? {
+    static func label(for origin: TurnOrigin) -> String? {
         switch origin {
-        case "wake": "wake"
-        case "ambient": "ambient"
-        case "catchup": "catch-up"
-        case "beat": "beat"
-        case "sleep": "sleep"
-        default: nil
+        case .interactive: nil
+        case .beat: "beat"
+        case .wake: "wake"
+        case .ambient: "ambient"
+        case .catchup: "catch-up"
+        case .sleep: "sleep"
         }
     }
 }

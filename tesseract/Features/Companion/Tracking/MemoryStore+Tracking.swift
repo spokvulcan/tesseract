@@ -44,9 +44,7 @@ extension MemoryStore {
     }
 
     func day(_ date: String) throws -> DayRecord? {
-        let stmt = try db.prepare(
-            "SELECT date, seed, chain, support, closedAt, createdAt, updatedAt FROM days WHERE date = ?1"
-        )
+        let stmt = try db.prepare("\(Self.daySelect) WHERE date = ?1")
         stmt.bind(1, date)
         guard try stmt.step() else { return nil }
         return Self.decodeDay(stmt)
@@ -55,16 +53,17 @@ extension MemoryStore {
     /// Most-recent-first. The morning turn's "yesterday" read and the weekly
     /// review's streak walk both come through here.
     func recentDays(limit: Int) throws -> [DayRecord] {
-        let stmt = try db.prepare(
-            """
-            SELECT date, seed, chain, support, closedAt, createdAt, updatedAt
-            FROM days ORDER BY date DESC LIMIT ?1
-            """)
+        let stmt = try db.prepare("\(Self.daySelect) ORDER BY date DESC LIMIT ?1")
         stmt.bind(1, limit)
         var out: [DayRecord] = []
         while try stmt.step() { out.append(Self.decodeDay(stmt)) }
         return out
     }
+
+    /// Decode positions are fixed by this list — every day read shares it.
+    private static let daySelect = """
+        SELECT date, seed, chain, support, closedAt, createdAt, updatedAt FROM days
+        """
 
     private nonisolated static func decodeDay(_ stmt: SQLiteDatabase.Statement) -> DayRecord {
         let chain =
@@ -168,10 +167,7 @@ extension MemoryStore {
 
     func workItems(status: WorkItemStatus? = nil) throws -> [WorkItemRecord] {
         let stmt = try db.prepare(
-            """
-            SELECT id, title, stream, domain, cadence, status, due, episodeRef, createdAt, updatedAt
-            FROM work_items WHERE (?1 IS NULL OR status = ?1) ORDER BY createdAt
-            """)
+            "\(Self.workItemSelect) WHERE (?1 IS NULL OR status = ?1) ORDER BY createdAt")
         stmt.bind(1, status?.rawValue)
         var out: [WorkItemRecord] = []
         while try stmt.step() { out.append(Self.decodeWorkItem(stmt)) }
@@ -182,11 +178,7 @@ extension MemoryStore {
     /// case-insensitive title substring among open items.
     func findWorkItem(idOrTitle: String) throws -> WorkItemRecord? {
         if let id = UUID(uuidString: idOrTitle) {
-            let stmt = try db.prepare(
-                """
-                SELECT id, title, stream, domain, cadence, status, due, episodeRef, createdAt, updatedAt
-                FROM work_items WHERE id = ?1
-                """)
+            let stmt = try db.prepare("\(Self.workItemSelect) WHERE id = ?1")
             stmt.bind(1, id.uuidString)
             guard try stmt.step() else { return nil }
             return Self.decodeWorkItem(stmt)
@@ -196,6 +188,12 @@ extension MemoryStore {
         let matches = open.filter { $0.title.lowercased().contains(needle) }
         return matches.count == 1 ? matches[0] : nil
     }
+
+    /// Decode positions are fixed by this list — every work-item read shares it.
+    private static let workItemSelect = """
+        SELECT id, title, stream, domain, cadence, status, due, episodeRef, createdAt, updatedAt
+        FROM work_items
+        """
 
     private nonisolated static func decodeWorkItem(_ stmt: SQLiteDatabase.Statement)
         -> WorkItemRecord
