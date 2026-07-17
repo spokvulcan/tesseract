@@ -15,11 +15,11 @@
 //  Sustained speech energy is a **Soft Barge**: the reply ducks instantly
 //  and keeps murmuring while a short window confirms real voicing — only a
 //  confirmed interruption *pauses* him (a false fire costs a dip, never a
-//  pause). From the pause, a take with substance commits and stops the reply
-//  for good, a Session Directive stops it without reaching the agent, and a
-//  false barge resumes him where he paused. The overlay's click barge pauses
-//  immediately — a click is deliberate. Exit: overlay ✕, the chat toggle, or
-//  mutual silence.
+//  pause). From the pause, whatever transcribes is the owner's turn and
+//  stops the reply for good; a take with nothing in it resumes him where he
+//  paused. The barge decision is purely acoustic — no word gates (owner
+//  decision, 2026-07-18). The overlay's click barge pauses immediately — a
+//  click is deliberate. Exit: overlay ✕, the chat toggle, or mutual silence.
 //
 //  Every tunable the taste ledger named is a Setting: trailing silence,
 //  session timeout, barge-in sensitivity, auto-send (the escape hatch stages
@@ -48,42 +48,6 @@ final class CompanionVoiceSessionController {
 
     private(set) var phase: Phase = .idle
     var isActive: Bool { phase != .idle }
-
-    // MARK: - Barge resolution (Substance Gate + Session Directives)
-
-    nonisolated enum BargeResolution: Equatable {
-        /// An allowlisted control word — acts on the session, never sent.
-        case directive(String)
-        /// A real turn: stop the reply for good and commit.
-        case turn
-        /// Not enough substance to be a turn — resume the paused reply.
-        case falseBarge
-    }
-
-    /// English playback-control words. Content-ambiguous words ("no", "yes",
-    /// "okay") are deliberately absent — those are answers, not directives.
-    nonisolated static let sessionDirectives: Set<String> = ["stop", "wait", "pause", "quiet"]
-
-    /// The **Substance Gate**: what a take captured under a barged reply must
-    /// show to count as a real turn rather than echo residual or a thump.
-    nonisolated static let substanceMinVoicedSeconds: TimeInterval = 0.6
-    nonisolated static let substanceMinWords = 2
-
-    /// Pure resolution of a barge take — pinned by tests.
-    nonisolated static func resolveBargeTake(
-        text: String, voicedSeconds: TimeInterval
-    ) -> BargeResolution {
-        let words = text.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-        if words.count == 1, let word = words.first, sessionDirectives.contains(word) {
-            return .directive(word)
-        }
-        if voicedSeconds >= substanceMinVoicedSeconds, words.count >= substanceMinWords {
-            return .turn
-        }
-        return .falseBarge
-    }
 
     // MARK: - Soft Barge (two-stage barge-in, ADR-0041)
 
@@ -133,6 +97,11 @@ final class CompanionVoiceSessionController {
     private let recorder: CompanionFlightRecorder
     private let settings: SettingsManager
     private let proofreadPass: ProofreadPass?
+    /// The ADR-0041 voice hold: the capture engine is held (and hosts the
+    /// reply's playback) for the session's lifetime. Injected so tests keep
+    /// their fakes; the composition root binds `AudioCaptureEngine`.
+    private let beginVoiceHold: @MainActor () -> Void
+    private let endVoiceHold: @MainActor () -> Void
 
     // MARK: - Session state
 
@@ -156,24 +125,20 @@ final class CompanionVoiceSessionController {
 
         var isHard: Bool { if case .hard = self { true } else { false } }
     }
-    /// A barged (ducked or paused) reply awaits resolution: resume,
-    /// directive, or turn.
+    /// A barged (ducked or paused) reply awaits resolution: resume or turn.
     private var bargedUtterance: Bool { bargeMode != .none }
     /// The Echo Floor (ADR-0041): tracked self-echo residual while the reply
     /// plays; the energy barge threshold always sits `margin` above it.
     private var echoFloor = EchoResidualFloor()
     /// False energy barges on the *current* utterance — the escalation
     /// ladder's input (#354): ≥2 widens the floor margin, ≥4 mutes the
-    /// energy detector for the rest of the utterance (click and directives
-    /// keep working).
+    /// energy detector for the rest of the utterance (the click keeps
+    /// working).
     private var falseBargeCount = 0
     /// Stable ID stamped on every voice.* record of one session (#354).
     private var sessionID = UUID()
     /// Tick counter for the 1 Hz energy-sample cadence while speaking.
     private var tickCount = 0
-    /// The endpointer's voiced-time reading at turn close — the Substance
-    /// Gate's energy input, snapshotted before the endpointer resets.
-    private var lastTakeVoicedSeconds: TimeInterval = 0
     /// Post-utterance grace: endpointer events are ignored until this
     /// deadline so the reply's room tail can't seed a turn.
     private var deafUntil: Date?
@@ -230,7 +195,9 @@ final class CompanionVoiceSessionController {
         settings: SettingsManager,
         proofreadPass: ProofreadPass?,
         playbackLevel: @escaping @MainActor () -> Float = { 0 },
-        fadeSpeech: @escaping @MainActor (Float, TimeInterval) -> Void = { _, _ in }
+        fadeSpeech: @escaping @MainActor (Float, TimeInterval) -> Void = { _, _ in },
+        beginVoiceHold: @escaping @MainActor () -> Void = {},
+        endVoiceHold: @escaping @MainActor () -> Void = {}
     ) {
         self.capture = capture
         self.meterLevel = meterLevel
@@ -249,6 +216,8 @@ final class CompanionVoiceSessionController {
         self.recorder = recorder
         self.settings = settings
         self.proofreadPass = proofreadPass
+        self.beginVoiceHold = beginVoiceHold
+        self.endVoiceHold = endVoiceHold
     }
 
     // MARK: - Entry / exit
@@ -262,6 +231,10 @@ final class CompanionVoiceSessionController {
         exchanges = 0
         sessionID = UUID()
         tickCount = 0
+        // The hold's detached wiring starts now — it has ~2.3 s on this
+        // hardware (lab E6) to land while the overlay appears; captures
+        // fast-fail into the 1 s backoff until the mic is live.
+        beginVoiceHold()
         recordVoice("voice.session-entered", snapshot: ["via": via])
         overlay.beginLiveSession(
             actions: CompanionVoiceActions(
@@ -280,6 +253,8 @@ final class CompanionVoiceSessionController {
         bargeMode = .none
         deafUntil = nil
         closeCapture()
+        // The capture is closed first, so the hold ends on a free engine.
+        endVoiceHold()
         ticker?.cancel()
         ticker = nil
         phase = .idle
@@ -338,8 +313,8 @@ final class CompanionVoiceSessionController {
         }
         guard phase == .speaking else { return }
         // Pause, don't stop (pause-on-barge): a false barge resumes the
-        // reply where it left off; only a committed turn or a Session
-        // Directive makes the interruption permanent.
+        // reply where it left off; only a committed turn makes the
+        // interruption permanent.
         pauseSpeaking()
         bargeMode = .hard(verifyStartedAt: Date())
         settledTicks = 0
@@ -607,8 +582,6 @@ final class CompanionVoiceSessionController {
     }
 
     private func finishOwnerTurn() {
-        // Snapshot before the endpointer resets — the Substance Gate's input.
-        lastTakeVoicedSeconds = endpointer.voicedSeconds
         phase = .transcribing
         overlay.feed.setState(.thinking)
         guard captureOpen else {
@@ -656,23 +629,12 @@ final class CompanionVoiceSessionController {
             return
         }
         if bargedUtterance {
-            switch Self.resolveBargeTake(
-                text: trimmed, voicedSeconds: lastTakeVoicedSeconds)
-            {
-            case .directive(let word):
-                bargeMode = .none
-                stopSpeaking()
-                recordVoice("voice.session-directive", snapshot: ["word": word])
-                beginListening()
-                return
-            case .falseBarge:
-                resumeAfterFalseBarge(reason: "below-gate")
-                return
-            case .turn:
-                // A real interruption — the pause becomes a stop for good.
-                bargeMode = .none
-                stopSpeaking()
-            }
+            // A confirmed barge that transcribed to anything is a real
+            // interruption — the pause becomes a stop for good. No word
+            // gate: the barge decision is purely acoustic; the empty take
+            // already resumed above.
+            bargeMode = .none
+            stopSpeaking()
         }
         exchanges += 1
         recordVoice("voice.owner-turn", snapshot: ["chars": String(trimmed.count)])

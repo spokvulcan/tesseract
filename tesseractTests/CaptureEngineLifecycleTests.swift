@@ -90,4 +90,81 @@ struct CaptureEngineLifecycleTests {
         #expect(!alwaysArmed.idleRebuildNeedsArmRetry(engineExists: true, armed: true))
         #expect(!alwaysArmed.idleRebuildNeedsArmRetry(engineExists: false, armed: false))
     }
+
+    // MARK: - Voice hold (ADR-0041)
+
+    @Test
+    func holdBeginDefersToTheCaptureStopWhenACaptureIsMidTake() {
+        for policy in [alwaysArmed, fallback] {
+            #expect(
+                policy.holdBeginAction(
+                    engineExists: true, needsRebuild: false, isCapturing: true,
+                    engineArmed: true)
+                    == .deferToCaptureStop)
+            #expect(
+                policy.holdBeginAction(
+                    engineExists: false, needsRebuild: true, isCapturing: true,
+                    engineArmed: false)
+                    == .deferToCaptureStop)
+        }
+    }
+
+    @Test
+    func holdBeginWiresNowOnlyOnAHealthyArmedStoppedEngine() {
+        #expect(
+            alwaysArmed.holdBeginAction(
+                engineExists: true, needsRebuild: false, isCapturing: false,
+                engineArmed: true)
+                == .wireNow)
+        // The fallback lifecycle's plain idle engine is rebuilt armed, not
+        // wired plain — the hold wants the AEC.
+        #expect(
+            fallback.holdBeginAction(
+                engineExists: true, needsRebuild: false, isCapturing: false,
+                engineArmed: false)
+                == .rebuildThenWire)
+        #expect(
+            alwaysArmed.holdBeginAction(
+                engineExists: false, needsRebuild: false, isCapturing: false,
+                engineArmed: false)
+                == .rebuildThenWire)
+        #expect(
+            alwaysArmed.holdBeginAction(
+                engineExists: true, needsRebuild: true, isCapturing: false,
+                engineArmed: true)
+                == .rebuildThenWire)
+    }
+
+    @Test
+    func onlyAWiredHoldKeepsTheEngineRunningAtCaptureStop() {
+        #expect(alwaysArmed.captureStopKeepsEngineRunning(holdWired: true))
+        #expect(!alwaysArmed.captureStopKeepsEngineRunning(holdWired: false))
+    }
+
+    @Test
+    func pendingHoldWiresAfterTheInProgressCaptureStops() {
+        #expect(alwaysArmed.shouldWireHoldAfterCaptureStop(holdActive: true, holdWired: false))
+        #expect(!alwaysArmed.shouldWireHoldAfterCaptureStop(holdActive: true, holdWired: true))
+        #expect(!alwaysArmed.shouldWireHoldAfterCaptureStop(holdActive: false, holdWired: false))
+    }
+
+    @Test
+    func rebuildUnderAnActiveHoldRewires() {
+        #expect(alwaysArmed.shouldRewireAfterRebuild(holdActive: true))
+        #expect(!alwaysArmed.shouldRewireAfterRebuild(holdActive: false))
+    }
+
+    @Test
+    func hostingRequiresArmedAndVerifiedRender() {
+        #expect(alwaysArmed.hostsPlayback(armed: true, renderVerified: true))
+        #expect(!alwaysArmed.hostsPlayback(armed: false, renderVerified: true))
+        #expect(!alwaysArmed.hostsPlayback(armed: true, renderVerified: false))
+    }
+
+    @Test
+    func theFallbackNeverDisarmsUnderAHold() {
+        #expect(!fallback.shouldDisarmAfterCapture(holdActive: true))
+        #expect(fallback.shouldDisarmAfterCapture(holdActive: false))
+        #expect(!alwaysArmed.shouldDisarmAfterCapture(holdActive: false))
+    }
 }

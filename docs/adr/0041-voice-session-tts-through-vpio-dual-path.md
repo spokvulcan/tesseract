@@ -1,7 +1,9 @@
 # Voice-session self-echo: Echo Floor + Soft Barge over Dual-Path Playback
 
-Status: accepted — detector + Soft Barge landed (PR A); acoustic voice hold v2
-redo pending (PR B, continues PR #355)
+Status: accepted — detector + Soft Barge landed (PR A, #356); acoustic
+substrate (voice hold v2 + persistent player node at a fixed hosted gain)
+plus the acoustic-only barge (word gates removed, owner decision 2026-07-18)
+in PR #355 continued
 
 The Voice Session keeps the microphone open while the assistant speaks (full
 duplex — voice barge-in is a hard requirement, #310 §4), which makes Self-Echo
@@ -29,6 +31,18 @@ reference. Research against primary sources corrected the model:
   running across the session) keeps AEC/AGC converged between turns with ~0 ms
   turn transitions (an engine start costs ~50 ms and AGC re-ramps from
   near-zero).
+- **What same-unit rendering costs: double-talk headroom.** The VP unit is a
+  call pipeline; its residual-echo suppressor clamps the near end (the
+  owner's mic) while its own voice stream plays, and the harder the louder
+  that stream is. Field 2026-07-18, hosted at full volume: the mic metered
+  ~0 at median through whole replies and barging required shouting — a
+  canceller can only subtract the known reply, so zeroed owner speech is
+  provably the *suppressor*. No public API tunes it (the knobs are bypass,
+  AGC, input mute, other-audio ducking — none touch near-end suppression).
+  The mitigation is a fixed **hosted master gain** (`hostedGain`, 0.5) on
+  the reply: loudness traded for the owner's voice competing with the echo
+  again. Raise it only against mic-liveness telemetry
+  (`voice.energy-sample` level p50 while speaking).
 - **Residual leaks in every path.** Lab E2, real hardware: residual peaks
   0.6–0.7 normalized against a static barge gate of 0.25, in hosted and
   dedicated paths alike — onset transients, not steady state. No static
@@ -60,8 +74,10 @@ fire-≤600 ms on owner-level speech.
 ducks the reply to 25 % within ~100 ms (instant acoustic acknowledgment,
 capture opens immediately — no owner words lost) and opens a 0.8 s confirm
 window. Sustained voicing (≥ 0.3 s accumulated — never `isInSpeech`, which
-holds through trailing silence) commits the hard pause and the take proceeds
-exactly as before (Substance Gate, Session Directives, resume-on-false).
+holds through trailing silence) commits the hard pause; whatever the take
+transcribes to is the owner's turn, and an empty take resumes the reply
+(the former word gates — Substance Gate, Session Directives — were removed
+2026-07-18 by owner decision: the barge decision is purely acoustic).
 Without voicing the volume fades back: a residual false fire costs a ~1 s
 murmur instead of a 2–3 s dead pause. The overlay click stays an immediate
 hard pause — a click is deliberate, and had zero false positives in the field
@@ -71,8 +87,8 @@ energy.
 **3. Anti-flap guards.** A 1.0 s post-resume deafness absorbs the fade-up and
 re-settling transient (the field flap cycle re-barged ~0.85 s after each
 resume); an escalation ladder per utterance (#354 item 2) widens the floor
-margin ×1.5 after 2 false barges and mutes the energy detector after 4 (click
-and directives keep working); and every barge event now records
+margin ×1.5 after 2 false barges and mutes the energy detector after 4 (the
+click keeps working); and every barge event now records
 level/threshold/floor/playbackLevel plus a 1 Hz `voice.energy-sample` — the
 07-17 storms shipped no numbers at all, so tuning was blind.
 
@@ -99,6 +115,13 @@ mandatory: the reply always plays.
   — speak-to-interrupt is the product.
 - **ASR-confirmed barge** (pause only after words transcribe): violates #310
   §4's mechanical mandate and adds ~1 s to every real interruption.
+- **Post-take word gates** (Substance Gate: ≥ 0.6 s voiced + ≥ 2 words;
+  Session Directives: allowlisted control words) — shipped with PR A,
+  removed 2026-07-18 by owner decision: the barge decision is purely
+  acoustic, and a real interruption must never be eaten by a thin
+  transcription (the 2026-07-18 field session's below-gate resume ate one).
+  Cost accepted: a confirmed false barge that transcribes to anything (a
+  cough ASR hears as a word) commits as a turn.
 - **Device-level VAD** (`kAudioDevicePropertyVoiceActivityDetectionEnable`,
   "with echo cancellation"): designed for process-muted mic scenarios;
   unproven for an open capture. Future work, not adopted.
@@ -109,7 +132,7 @@ mandatory: the reply always plays.
 ## Consequences
 
 - Missing a real barge is now the cheaper failure (the reply keeps playing;
-  the owner repeats louder, clicks, or says a directive once capture opens) —
+  the owner repeats louder or clicks) —
   the zero-false-positive goal deliberately biases the gate. Field telemetry
   (energy samples on every barge event) is the tuning loop for sensitivity.
 - The confirm window means a real interruption hears the reply murmur under
