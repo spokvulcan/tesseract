@@ -262,8 +262,8 @@ final class DependencyContainer: ObservableObject {
             ))
         // The delivery palette (ADR-0040 §10) — one typed tool per rung. The
         // shared registry carries them for the Companion's headless agent;
-        // the interactive chat filters them out by name
-        // (`CompanionToolNames.deliveryRungs` in `AgentRunController`).
+        // each is declared `audience: .companionOnly`, so the interactive
+        // chat's tool sync (`AgentRunController`) drops them.
         registry.appendBuiltInTool(
             createSetGlyphTool(
                 presence: companionPresence,
@@ -288,15 +288,19 @@ final class DependencyContainer: ObservableObject {
             ))
         registry.appendBuiltInTool(
             createOpenConversationTool(
-                open: { [weak self] id in
-                    self?.chatSession.loadConversation(id)
-                    (NSApp.delegate as? AppDelegate)?.navigateToAgent()
-                },
+                open: { [weak self] id in self?.presentConversation(id) },
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
         return registry
     }()
+
+    /// The one "put a conversation on his screen" action — the loop, the
+    /// summons, and the `open_conversation` rung all reach the UI through it.
+    private func presentConversation(_ id: UUID) {
+        chatSession.loadConversation(id)
+        (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+    }
 
     /// The Companion's interaction-fact log (#326): app-owned, App Support,
     /// retention forever. Only app code writes; the model reads via
@@ -537,10 +541,7 @@ final class DependencyContainer: ObservableObject {
             {
                 return true
             }
-            switch self.speechCoordinator.state {
-            case .idle, .error: break
-            default: return true
-            }
+            if self.speechCoordinator.state.isActive { return true }
             return NSApp.isActive
                 && IdleMonitor.hidIdleSeconds() < CompanionAttentionGate.quietWindow
         },
@@ -564,10 +565,7 @@ final class DependencyContainer: ObservableObject {
         speak: { [weak self] text in
             self?.companionSummons.deliver(line: text)
         },
-        openConversation: { [weak self] id in
-            self?.chatSession.loadConversation(id)
-            (NSApp.delegate as? AppDelegate)?.navigateToAgent()
-        }
+        openConversation: { [weak self] id in self?.presentConversation(id) }
     )
 
     // The summons conductor (ADR-0040 §10/§11, #328): speak → overlay →
@@ -588,10 +586,7 @@ final class DependencyContainer: ObservableObject {
             await self?.companionVoicePrototype.summonBeat(title: title, line: line)
                 ?? .unanswered
         },
-        openConversation: { [weak self] id in
-            self?.chatSession.loadConversation(id)
-            (NSApp.delegate as? AppDelegate)?.navigateToAgent()
-        },
+        openConversation: { [weak self] id in self?.presentConversation(id) },
         enterVoiceSession: { [weak self] via in
             self?.companionVoiceSession.enter(via: via)
         },

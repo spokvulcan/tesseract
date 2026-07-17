@@ -86,8 +86,7 @@ nonisolated enum CompanionTraceLine: Sendable {
     case header(CompanionTraceHeader)
     case record(CompanionTraceRecord)
 
-    static func decode(_ data: Data) -> CompanionTraceLine? {
-        let decoder = JSONDecoder()
+    static func decode(_ data: Data, decoder: JSONDecoder = JSONDecoder()) -> CompanionTraceLine? {
         if let record = try? decoder.decode(CompanionTraceRecord.self, from: data) {
             return .record(record)
         }

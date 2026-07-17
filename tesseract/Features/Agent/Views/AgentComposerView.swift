@@ -311,11 +311,7 @@ struct AgentComposerView: View {
         return nil
     }
 
-    private var isSpeechActive: Bool {
-        if case .idle = speechCoordinator.state { return false }
-        if case .error = speechCoordinator.state { return false }
-        return true
-    }
+    private var isSpeechActive: Bool { speechCoordinator.state.isActive }
 
     /// What the Companion is doing *away from this window* — his turns run
     /// headless in their own conversations (a wake, an ambient pass, sleep),

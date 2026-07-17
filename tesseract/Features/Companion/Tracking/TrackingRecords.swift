@@ -81,7 +81,6 @@ nonisolated enum ContractStepStatus: String, Codable, Sendable {
 nonisolated struct ContractStep: Codable, Sendable, Equatable {
     var title: String
     var status: ContractStepStatus
-    var workItemID: UUID?
     var startedAt: Date?
     var closedAt: Date?
     var note: String?
@@ -89,14 +88,12 @@ nonisolated struct ContractStep: Codable, Sendable, Equatable {
     init(
         title: String,
         status: ContractStepStatus = .pending,
-        workItemID: UUID? = nil,
         startedAt: Date? = nil,
         closedAt: Date? = nil,
         note: String? = nil
     ) {
         self.title = title
         self.status = status
-        self.workItemID = workItemID
         self.startedAt = startedAt
         self.closedAt = closedAt
         self.note = note
@@ -226,5 +223,16 @@ nonisolated enum TrackingDay {
 
     static func yesterdayKey(from date: Date = Date(), calendar: Calendar = .current) -> String {
         key(for: calendar.date(byAdding: .day, value: -1, to: date) ?? date, calendar: calendar)
+    }
+
+    /// Inverse of `key(for:)` — the local start of the keyed day.
+    static func startOfDay(forKey key: String, calendar: Calendar = .current) -> Date? {
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        var components = DateComponents()
+        components.year = parts[0]
+        components.month = parts[1]
+        components.day = parts[2]
+        return calendar.date(from: components)
     }
 }

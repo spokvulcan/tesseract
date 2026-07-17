@@ -31,11 +31,7 @@ struct AgentContentView: View {
     /// it has no dependencies and no life outside this page.
     @State private var skillCluster = SkillClusterController()
 
-    private var isSpeechActive: Bool {
-        if case .idle = speechCoordinator.state { return false }
-        if case .error = speechCoordinator.state { return false }
-        return true
-    }
+    private var isSpeechActive: Bool { speechCoordinator.state.isActive }
 
     /// The full-inset tap catcher behind a transient surface (the slash popup
     /// or a pinned Skill Cluster): any click outside the surface dismisses it.

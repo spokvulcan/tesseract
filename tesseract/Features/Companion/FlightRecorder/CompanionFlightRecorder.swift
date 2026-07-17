@@ -78,19 +78,33 @@ nonisolated final class CompanionFlightRecorder: Sendable {
     // MARK: - Reading (the typed tool and the aggregator come through here)
 
     /// All records within the window, oldest first. File-per-day makes the
-    /// scan cheap; the schema guard skips files a future version can't read.
+    /// scan cheap — the filename's `yyyy-MM-dd` bounds its records, so with
+    /// retention forever a days-sized window still opens only its own files.
+    /// The schema guard skips files a future version can't read.
     func records(since: Date, until: Date = Date()) -> [CompanionTraceRecord] {
         flushForTesting()
         guard
             let files = try? FileManager.default.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: nil)
         else { return [] }
+        let dayFormatter = DateFormatter()
+        dayFormatter.dateFormat = "yyyy-MM-dd"
+        let sinceDay = dayFormatter.string(from: since)
+        let untilDay = dayFormatter.string(from: until)
+        let decoder = JSONDecoder()
         var out: [CompanionTraceRecord] = []
         for url in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
         where url.pathExtension == "jsonl" || url.lastPathComponent.hasSuffix(".jsonl.old") {
+            // Day keys compare lexicographically as dates.
+            if let day = Self.day(ofFileNamed: url.lastPathComponent),
+                day < sinceDay || day > untilDay
+            {
+                continue
+            }
             guard let data = try? Data(contentsOf: url) else { continue }
             for chunk in data.split(separator: 0x0A) {
-                guard let line = CompanionTraceLine.decode(Data(chunk)) else { continue }
+                guard let line = CompanionTraceLine.decode(Data(chunk), decoder: decoder)
+                else { continue }
                 if case .record(let record) = line,
                     record.ts >= since.timeIntervalSince1970,
                     record.ts <= until.timeIntervalSince1970
@@ -100,6 +114,15 @@ nonisolated final class CompanionFlightRecorder: Sendable {
             }
         }
         return out.sorted { $0.ts < $1.ts }
+    }
+
+    /// `flight-<yyyy-MM-dd>.jsonl(.old)` → the day key; nil (read the file
+    /// anyway) for any name this writer didn't produce.
+    private static func day(ofFileNamed name: String) -> String? {
+        var stem = name
+        if stem.hasSuffix(".old") { stem = String(stem.dropLast(4)) }
+        guard stem.hasPrefix("flight-"), stem.hasSuffix(".jsonl") else { return nil }
+        return String(stem.dropFirst("flight-".count).dropLast(".jsonl".count))
     }
 
     // MARK: - v0 import (#326 cutover)

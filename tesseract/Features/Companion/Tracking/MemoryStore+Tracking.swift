@@ -50,8 +50,8 @@ extension MemoryStore {
         return Self.decodeDay(stmt)
     }
 
-    /// Most-recent-first. The morning turn's "yesterday" read and the weekly
-    /// review's streak walk both come through here.
+    /// Most-recent-first. Staged for the weekly review's streak walk (#313);
+    /// no production reader yet — the briefing reads `day(_:)` directly.
     func recentDays(limit: Int) throws -> [DayRecord] {
         let stmt = try db.prepare("\(Self.daySelect) ORDER BY date DESC LIMIT ?1")
         stmt.bind(1, limit)

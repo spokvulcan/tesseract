@@ -21,7 +21,6 @@ final class CompanionTurnRunner {
     struct Outcome {
         let turnID: UUID
         let conversationID: UUID
-        let transcriptSummary: String
     }
 
     /// The delivery tools and `book_wake` read the in-flight correlation ids.
@@ -151,8 +150,7 @@ final class CompanionTurnRunner {
             snapshot: ["origin": origin.rawValue, "messages": String(messages.count)],
             note: String(summary.prefix(300))
         )
-        return Outcome(
-            turnID: turnID, conversationID: conversationID, transcriptSummary: summary)
+        return Outcome(turnID: turnID, conversationID: conversationID)
     }
 
     // MARK: - Private
@@ -175,27 +173,12 @@ final class CompanionTurnRunner {
         return companion
     }
 
+    /// Last displayable assistant text — used only for recorder notes.
     private static func lastAssistantText(in messages: [any AgentMessageProtocol & Sendable])
         -> String?
     {
         for message in messages.reversed() {
-            if let text = MessageTextExtractor.assistantText(message) { return text }
-        }
-        return nil
-    }
-}
-
-/// Pulls displayable assistant text out of a persisted message — tolerant of
-/// the CoreMessage/AssistantMessage wrapping, used only for recorder notes.
-nonisolated enum MessageTextExtractor {
-    static func assistantText(_ message: any AgentMessageProtocol & Sendable) -> String? {
-        if let core = message as? CoreMessage, case .assistant(let assistant) = core {
-            let text = assistant.text
-            return text.isEmpty ? nil : text
-        }
-        if let assistant = message as? AssistantMessage {
-            let text = assistant.text
-            return text.isEmpty ? nil : text
+            if let text = message.asAssistant?.text, !text.isEmpty { return text }
         }
         return nil
     }

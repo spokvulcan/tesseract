@@ -11,8 +11,8 @@
 //  recorder with the turn that made it.
 //
 //  The delivery rungs reach the Companion's headless agent only — the shared
-//  registry carries them, and the interactive chat filters them out by name
-//  (`CompanionToolNames.deliveryRungs`): the owner is already looking at it.
+//  registry carries them, declared `audience: .companionOnly`, and the
+//  interactive chat's tool sync drops them: the owner is already looking at it.
 //
 
 import Foundation
@@ -26,16 +26,6 @@ nonisolated struct CompanionToolError: LocalizedError {
 /// tool layer, revisable with wear.
 nonisolated enum CompanionWakeBudget {
     static let promisesPerDay = 2
-}
-
-/// The delivery palette's tool names (ADR-0040 §10). The interactive chat's
-/// run controller filters exactly this set out of its tool sync, so the rungs
-/// exist only where the entity acts at a distance — never in the chat the
-/// owner is already looking at.
-nonisolated enum CompanionToolNames {
-    static let deliveryRungs: Set<String> = [
-        "set_glyph", "notify", "speak", "summon_overlay", "open_conversation",
-    ]
 }
 
 // MARK: - book_wake
@@ -284,6 +274,7 @@ nonisolated func createNotifyTool(
             ],
             required: ["body"]
         ),
+        audience: .companionOnly,
         execute: { _, argsJSON, _, _ in
             guard let body = ToolArgExtractor.string(argsJSON, key: "body"), !body.isEmpty else {
                 throw CompanionToolError(message: "notify requires 'body'")
@@ -316,6 +307,7 @@ nonisolated func createSpeakTool(
             ],
             required: ["text"]
         ),
+        audience: .companionOnly,
         execute: { _, argsJSON, _, _ in
             guard let text = ToolArgExtractor.string(argsJSON, key: "text"), !text.isEmpty else {
                 throw CompanionToolError(message: "speak requires 'text'")
@@ -354,6 +346,7 @@ nonisolated func createSetGlyphTool(
             ],
             required: ["state"]
         ),
+        audience: .companionOnly,
         execute: { _, argsJSON, _, _ in
             guard let state = ToolArgExtractor.string(argsJSON, key: "state"),
                 state == "raised" || state == "clear"
@@ -404,6 +397,7 @@ nonisolated func createSummonOverlayTool(
             ],
             required: ["line"]
         ),
+        audience: .companionOnly,
         execute: { _, argsJSON, _, _ in
             guard let line = ToolArgExtractor.string(argsJSON, key: "line"), !line.isEmpty
             else {
@@ -448,6 +442,7 @@ nonisolated func createOpenConversationTool(
             ],
             required: []
         ),
+        audience: .companionOnly,
         execute: { _, argsJSON, _, _ in
             let explicit = ToolArgExtractor.string(argsJSON, key: "id")
                 .flatMap(UUID.init(uuidString:))

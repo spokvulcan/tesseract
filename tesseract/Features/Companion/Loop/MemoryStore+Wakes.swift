@@ -79,18 +79,15 @@ extension MemoryStore {
     /// — the budget is what the day carries, not what remains booked. Only
     /// `dropped` (the defect state) is excluded.
     func promisesBooked(onDay dayKey: String, calendar: Calendar = .current) throws -> Int {
-        let all = try recentWakes(limit: 400)
-        return all.filter {
-            $0.wakeClass == .promise && $0.state != .dropped
-                && TrackingDay.key(for: $0.due, calendar: calendar) == dayKey
-        }.count
-    }
-
-    private func recentWakes(limit: Int) throws -> [CompanionWake] {
+        guard let dayStart = TrackingDay.startOfDay(forKey: dayKey, calendar: calendar),
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
+        else { return 0 }
         let stmt = try db.prepare(
-            "\(Self.wakeSelect) ORDER BY createdAt DESC LIMIT ?1")
-        stmt.bind(1, limit)
-        return try Self.decodeWakes(stmt)
+            "SELECT COUNT(*) FROM wakes WHERE class = 'promise' AND state != 'dropped' "
+                + "AND due >= ?1 AND due < ?2")
+        stmt.bind(1, dayStart.timeIntervalSince1970).bind(2, dayEnd.timeIntervalSince1970)
+        guard try stmt.step() else { return 0 }
+        return stmt.int(0)
     }
 
     // MARK: - Resurfacing (#309)

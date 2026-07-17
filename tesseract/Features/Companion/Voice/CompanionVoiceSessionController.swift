@@ -236,7 +236,7 @@ final class CompanionVoiceSessionController {
         openCapture()
         speak(text) { [weak self] in
             self?.speechDoneCallbackSeen = true
-            self?.utteranceFinished(interrupted: false)
+            self?.utteranceFinished()
         }
         recorder.record(
             "voice.reply-spoken",
@@ -304,6 +304,16 @@ final class CompanionVoiceSessionController {
         resumeSpeaking()
     }
 
+    /// The take produced nothing usable — resume a paused reply if one is
+    /// waiting, otherwise reopen the mic and listen.
+    private func abandonTake(reason: String) {
+        if bargedUtterance {
+            resumeAfterFalseBarge(reason: reason)
+        } else {
+            beginListening()
+        }
+    }
+
     // MARK: - The ticker
 
     private func startTicker() {
@@ -363,7 +373,7 @@ final class CompanionVoiceSessionController {
                         "voice.watchdog-exit",
                         conversationID: currentConversationID(),
                         snapshot: ["speechState": String(describing: speechState())])
-                    utteranceFinished(interrupted: true)
+                    utteranceFinished()
                 }
             }
 
@@ -377,15 +387,11 @@ final class CompanionVoiceSessionController {
         guard let since = speakingSince, Date().timeIntervalSince(since) > 1.0 else {
             return false
         }
-        switch speechState() {
-        case .idle, .error: return true
-        default: return false
-        }
+        return !speechState().isActive
     }
 
-    private func utteranceFinished(interrupted: Bool) {
+    private func utteranceFinished() {
         guard phase == .speaking else { return }
-        _ = interrupted
         // Force-stop: however the utterance ended, TTS must be provably
         // silent before the mic reopens in listening config. On the normal
         // path this is a no-op sweep; on a watchdog exit it is the fix.
@@ -413,21 +419,13 @@ final class CompanionVoiceSessionController {
         phase = .transcribing
         overlay.feed.setState(.thinking)
         guard captureOpen else {
-            if bargedUtterance {
-                resumeAfterFalseBarge(reason: "no-capture")
-            } else {
-                beginListening()
-            }
+            abandonTake(reason: "no-capture")
             return
         }
         captureOpen = false
         switch capture.stop() {
         case .noAudio, .tooShort:
-            if bargedUtterance {
-                resumeAfterFalseBarge(reason: "no-audio")
-            } else {
-                beginListening()
-            }
+            abandonTake(reason: "no-audio")
         case .audio(let audio, _):
             let language = settings.language
             var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
@@ -448,18 +446,10 @@ final class CompanionVoiceSessionController {
                     // A rejected proofread is still his words — voice flows on.
                     self.ownerTurnTranscribed(raw)
                 case .empty:
-                    if self.bargedUtterance {
-                        self.resumeAfterFalseBarge(reason: "empty")
-                    } else {
-                        self.beginListening()
-                    }
+                    self.abandonTake(reason: "empty")
                 case .failed, .cancelled:
                     guard self.isActive else { return }
-                    if self.bargedUtterance {
-                        self.resumeAfterFalseBarge(reason: "failed")
-                    } else {
-                        self.beginListening()
-                    }
+                    self.abandonTake(reason: "failed")
                 }
             }
         }
@@ -469,11 +459,7 @@ final class CompanionVoiceSessionController {
         guard isActive else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            if bargedUtterance {
-                resumeAfterFalseBarge(reason: "empty")
-            } else {
-                beginListening()
-            }
+            abandonTake(reason: "empty")
             return
         }
         if bargedUtterance {

@@ -187,15 +187,13 @@ final class AgentRunController {
     // MARK: - Private
 
     /// Filter active tools before each prompt so the LLM sees the current
-    /// set: the Companion's delivery rungs never reach the interactive chat
+    /// set: tools declared `.companionOnly` never reach the interactive chat
     /// (the owner is already looking at it — ADR-0040 §10; the shared
     /// registry carries them for the headless agent), and the browser tools
     /// obey the `webAccessEnabled` setting.
     private func syncActiveTools() {
         guard let toolRegistry else { return }
-        var tools = toolRegistry.allTools.filter {
-            !CompanionToolNames.deliveryRungs.contains($0.name)
-        }
+        var tools = toolRegistry.allTools.filter { $0.audience != .companionOnly }
         if settings?.webAccessEnabled != true {
             tools = tools.filter { !Self.webGatedToolNames.contains($0.name) }
         }

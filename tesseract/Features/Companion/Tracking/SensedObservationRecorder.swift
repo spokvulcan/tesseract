@@ -133,21 +133,24 @@ final class SensedObservationRecorder {
 
     // MARK: - Writing
 
+    private struct SpanValue: Codable {
+        let start: Int
+        let end: Int
+        let minutes: Int
+        let app: String?
+    }
+
     private func writeSpan(kind: String, start: Date, end: Date, detail: String?) {
-        let minutes = Int(end.timeIntervalSince(start) / 60)
-        var parts = [
-            "\"start\":\(Int(start.timeIntervalSince1970))",
-            "\"end\":\(Int(end.timeIntervalSince1970))",
-            "\"minutes\":\(minutes)",
-        ]
-        if let detail {
-            let escaped = detail.replacingOccurrences(of: "\"", with: "'")
-            parts.append("\"app\":\"\(escaped)\"")
-        }
+        let span = SpanValue(
+            start: Int(start.timeIntervalSince1970),
+            end: Int(end.timeIntervalSince1970),
+            minutes: Int(end.timeIntervalSince(start) / 60),
+            app: detail)
+        let value =
+            (try? JSONEncoder().encode(span)).flatMap { String(data: $0, encoding: .utf8) }
+            ?? "{}"
         append(
-            TrackingObservation(
-                domain: .work, kind: kind, value: "{\(parts.joined(separator: ","))}",
-                source: .sensed))
+            TrackingObservation(domain: .work, kind: kind, value: value, source: .sensed))
     }
 
     private func append(_ observation: TrackingObservation) {
