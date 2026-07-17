@@ -36,7 +36,9 @@ final class VoiceSessionPlayback: AudioPlayback {
     private var streamingSampleRate = 0
     /// True from a hosted `startStreaming` until the audio drains or stops —
     /// the `playbackLevel` gate, mirroring the manager's `isPlaying`.
-    private var hostedPlaying = false
+    private var hostedPlaying: Bool {
+        node != nil && !(streamFinished && pendingBufferCount <= 0)
+    }
     /// Guards stale buffer-completion callbacks (a stopped node flushes its
     /// handlers) against the counters of a newer streaming session.
     private var streamEpoch = 0
@@ -59,6 +61,15 @@ final class VoiceSessionPlayback: AudioPlayback {
     /// `volume` so fades compute in the domain the controller sets; the node
     /// renders it scaled by `hostedGain`.
     private var requestedVolume: Float = 1.0
+
+    /// The one writer of the node's rendered volume: every write goes
+    /// through the logical→physical mapping, so no site can forget the
+    /// `hostedGain` scale and play the reply at full loudness (the VP
+    /// suppressor bug the gain exists to kill).
+    private func applyVolume(_ logical: Float) {
+        requestedVolume = logical
+        node?.volume = logical * Self.hostedGain
+    }
 
     init(host: AudioCaptureEngine) {
         self.host = host
@@ -83,21 +94,14 @@ final class VoiceSessionPlayback: AudioPlayback {
     func startStreaming(sampleRate: Int) {
         stop()
 
-        guard
-            let format = AudioConverter.monoFloat32Format(sampleRate: Double(sampleRate))
-        else {
-            Log.speech.error("Voice playback: failed to create streaming format")
-            return
-        }
-
-        if let player = host.hostedVoicePlayer(sampleRate: sampleRate) {
-            requestedVolume = 1.0
-            player.volume = Self.hostedGain
-            node = player
-            streamingFormat = format
+        if let hosted = host.hostedVoicePlayer(sampleRate: sampleRate) {
+            node = hosted.node
+            applyVolume(1.0)
+            // Buffers schedule against the format the host connected the
+            // node at — the engine owns the connection, never re-derived.
+            streamingFormat = hosted.format
             streamingSampleRate = sampleRate
             usingFallback = false
-            hostedPlaying = true
             envelope.begin(sampleRate: sampleRate)
             Log.speech.info("Voice reply routed through the VPIO engine (hosted)")
         } else {
@@ -128,7 +132,6 @@ final class VoiceSessionPlayback: AudioPlayback {
                 guard let self, self.streamEpoch == epoch else { return }
                 self.pendingBufferCount -= 1
                 if self.streamFinished && self.pendingBufferCount <= 0 {
-                    self.hostedPlaying = false
                     self.onPlaybackFinished?()
                 }
             }
@@ -147,7 +150,6 @@ final class VoiceSessionPlayback: AudioPlayback {
         }
         streamFinished = true
         if pendingBufferCount <= 0 {
-            hostedPlaying = false
             onPlaybackFinished?()
         }
     }
@@ -197,8 +199,7 @@ final class VoiceSessionPlayback: AudioPlayback {
         if usingFallback {
             fallback.setVolume(volume)
         } else {
-            requestedVolume = volume
-            node?.volume = volume * Self.hostedGain
+            applyVolume(volume)
         }
     }
 
@@ -207,13 +208,19 @@ final class VoiceSessionPlayback: AudioPlayback {
     }
 
     func stop() {
+        // The node is the host's — stop flushes its scheduled buffers and
+        // resets the duck; the graph is never touched here.
+        node?.stop()
+        applyVolume(1.0)
+        resetStreamingState()
+        fallback.stop()
+    }
+
+    /// Zeroes every streaming field back to idle — the one reset both
+    /// teardown paths (`stop`, `hostEngineInvalidated`) share, so they
+    /// cannot drift as fields are added.
+    private func resetStreamingState() {
         streamEpoch += 1
-        if let node {
-            // The node is the host's — stop flushes its scheduled buffers
-            // and resets the duck; the graph is never touched here.
-            node.stop()
-            node.volume = Self.hostedGain
-        }
         requestedVolume = 1.0
         node = nil
         streamingFormat = nil
@@ -223,10 +230,8 @@ final class VoiceSessionPlayback: AudioPlayback {
         pausedTime = nil
         totalScheduledSamples = 0
         streamingSampleRate = 0
-        hostedPlaying = false
         envelope.reset()
         usingFallback = false
-        fallback.stop()
     }
 
     // MARK: - Host invalidation
@@ -237,17 +242,7 @@ final class VoiceSessionPlayback: AudioPlayback {
     /// buffer callbacks that will never fire.
     private func hostEngineInvalidated() {
         guard node != nil else { return }
-        streamEpoch += 1
-        requestedVolume = 1.0
-        node = nil
-        streamingFormat = nil
-        streamFinished = false
-        pendingBufferCount = 0
-        playerStarted = false
-        pausedTime = nil
-        hostedPlaying = false
-        envelope.reset()
-        usingFallback = false
+        resetStreamingState()
         Log.speech.error("Voice playback invalidated by engine rebuild — ending utterance")
         onPlaybackFinished?()
     }

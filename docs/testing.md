@@ -51,7 +51,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/VoiceEndpointerTests \
   -only-testing:tesseractTests/EchoResidualFloorTests \
   -only-testing:tesseractTests/VoiceBargeReplayTests \
-  -only-testing:tesseractTests/CompanionVoiceBargeGateTests \
+  -only-testing:tesseractTests/CompanionVoiceSoftBargeTests \
   -only-testing:tesseractTests/VoiceCaptureSessionTests \
   -only-testing:tesseractTests/VoiceProcessingDuckPolicyTests \
   -only-testing:tesseractTests/CaptureEngineLifecycleTests \
