@@ -1,7 +1,7 @@
 # Voice-session self-echo: Echo Floor + Soft Barge over Dual-Path Playback
 
-Status: accepted — detector + Soft Barge landed (PR A); acoustic voice hold v2
-redo pending (PR B, continues PR #355)
+Status: accepted — detector + Soft Barge landed (PR A, #356); acoustic
+substrate landed (PR B: voice hold v2 + persistent player node, PR #355)
 
 The Voice Session keeps the microphone open while the assistant speaks (full
 duplex — voice barge-in is a hard requirement, #310 §4), which makes Self-Echo

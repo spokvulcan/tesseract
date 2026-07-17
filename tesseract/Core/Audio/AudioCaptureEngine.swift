@@ -231,7 +231,18 @@ final class AudioCaptureEngine: AudioCapturing {
     /// Fired when the engine is torn down or rebuilt underneath attached
     /// playback nodes — the playback adapter treats it as end-of-utterance.
     var onVoicePlaybackInvalidated: (@MainActor () -> Void)?
-    private var attachedPlaybackNodes: [AVAudioPlayerNode] = []
+    /// The hold's persistent voice-playback node (Apple's own VP sample
+    /// wires all players before start): created and connected by the hold
+    /// wiring on the stopped engine, alive for the hold's lifetime.
+    /// Per-utterance work schedules buffers and sets volume on it — never
+    /// graph edits.
+    private var hostedPlayerNode: AVAudioPlayerNode?
+    /// The rate the persistent node is connected at; an utterance whose rate
+    /// drifts reconnects upstream of the mixer (documented-safe running).
+    private var hostedPlayerSampleRate: Double = 0
+    /// The persistent node's wired format — the v2 speech engine's output
+    /// rate, so the common case never reconnects.
+    nonisolated private static let voicePlaybackSampleRate: Double = 24_000
 
     /// The current capture records levels only (the settings meter): the tap
     /// appends no samples, and `stopCapture()` discards the empty recording —
@@ -831,13 +842,14 @@ final class AudioCaptureEngine: AudioCapturing {
     // MARK: - Voice hold (Dual-Path Playback, ADR-0041)
 
     /// Begins the voice-session hold: the engine will keep running until
-    /// `endVoiceHold`, hosting the session's TTS player nodes so VPIO's echo
-    /// canceller hears the reply as its own render-stream reference. The
-    /// wiring is detached (measured ~860–900 ms — `research/voice-hold-lab`
-    /// E6/E7) and commits asynchronously; captures fast-fail into the
-    /// session's backoff until it lands, and playback attaches only once
-    /// `voicePlaybackHosted` flips true. A no-op without microphone
-    /// permission (the session's own capture start surfaces that error).
+    /// `endVoiceHold`, hosting the session's persistent TTS player node so
+    /// the reply renders as the capture unit's own voice stream (undipped
+    /// under the open mic, ADR-0041). The wiring is detached (measured
+    /// ~2.3 s — `tools/voice-hold-lab` E6) and commits asynchronously;
+    /// captures fast-fail into the session's backoff until it lands, and
+    /// playback hosts only once `voicePlaybackHosted` flips true. A no-op
+    /// without microphone permission (the session's own capture start
+    /// surfaces that error).
     func beginVoiceHold() {
         guard !voiceHoldActive else { return }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
@@ -887,16 +899,19 @@ final class AudioCaptureEngine: AudioCapturing {
             // work — the crash class the redo exists to kill.
             voiceHoldWired = false
             voicePlaybackHosted = false
+            hostedPlayerNode = nil
+            hostedPlayerSampleRate = 0
             Log.audio.info("Voice hold ended (wiring in flight — discard left to its commit)")
             return
         }
-        for node in attachedPlaybackNodes {
-            node.stop()
-            if let audioEngine, audioEngine.attachedNodes.contains(node) {
-                audioEngine.detach(node)
+        if let player = hostedPlayerNode {
+            player.stop()
+            if let audioEngine, audioEngine.attachedNodes.contains(player) {
+                audioEngine.detach(player)
             }
         }
-        attachedPlaybackNodes.removeAll()
+        hostedPlayerNode = nil
+        hostedPlayerSampleRate = 0
         voicePlaybackHosted = false
         if isCapturing {
             // A capture the session doesn't own (a dictation take) is
@@ -930,35 +945,38 @@ final class AudioCaptureEngine: AudioCapturing {
         Log.audio.info("Voice hold ended")
     }
 
-    /// Attaches a voice-session player node to the held engine's mixer —
-    /// Apple-documented dynamic reconfiguration on a running engine (all
-    /// reconnections stay upstream of the mixer, AVAudioEngine.h). Returns
-    /// false when the engine cannot host playback right now — the caller
-    /// falls back to its dedicated engine (weaker cancellation, but the
-    /// reply still plays).
-    func attachVoicePlayback(node: AVAudioPlayerNode, format: AVAudioFormat) -> Bool {
+    /// The held engine's persistent player node, handed out per utterance
+    /// for buffer scheduling. Reconnects (player → mixer, Apple-documented
+    /// dynamic reconfiguration upstream of a mixer) only when the
+    /// utterance's rate drifts from the wired format, stamping the change
+    /// as intentional so the config-change sink never classifies it
+    /// external. Returns nil when the engine cannot host playback right now
+    /// — the caller falls back to its dedicated engine (the reply always
+    /// plays).
+    func hostedVoicePlayer(sampleRate: Int) -> AVAudioPlayerNode? {
         guard voiceHoldActive, voicePlaybackHosted, !holdWiringInProgress,
-            let audioEngine, audioEngine.isRunning
-        else { return false }
-        audioEngine.attach(node)
-        audioEngine.connect(node, to: audioEngine.mainMixerNode, format: format)
-        attachedPlaybackNodes.append(node)
-        return true
+            let audioEngine, audioEngine.isRunning,
+            let player = hostedPlayerNode
+        else { return nil }
+        if Double(sampleRate) != hostedPlayerSampleRate {
+            guard
+                let format = AudioConverter.monoFloat32Format(
+                    sampleRate: Double(sampleRate))
+            else { return nil }
+            lastIntentionalReconfigure = Date()
+            audioEngine.connect(player, to: audioEngine.mainMixerNode, format: format)
+            hostedPlayerSampleRate = Double(sampleRate)
+        }
+        return player
     }
 
-    func detachVoicePlayback(node: AVAudioPlayerNode) {
-        attachedPlaybackNodes.removeAll { $0 === node }
-        guard let audioEngine, audioEngine.attachedNodes.contains(node) else { return }
-        node.stop()
-        audioEngine.detach(node)
-    }
-
-    /// The engine underneath attached playback nodes is going away — tell
-    /// the adapter so it can end its utterance instead of waiting on buffer
-    /// callbacks that will never fire.
+    /// The engine underneath the persistent playback node is going away —
+    /// tell the adapter so it can end its utterance instead of waiting on
+    /// buffer callbacks that will never fire.
     private func invalidateVoicePlayback() {
-        guard !attachedPlaybackNodes.isEmpty || voicePlaybackHosted else { return }
-        attachedPlaybackNodes.removeAll()
+        guard hostedPlayerNode != nil || voicePlaybackHosted else { return }
+        hostedPlayerNode = nil
+        hostedPlayerSampleRate = 0
         voicePlaybackHosted = false
         onVoicePlaybackInvalidated?()
     }
@@ -1010,7 +1028,19 @@ final class AudioCaptureEngine: AudioCapturing {
         holdRebuildTask?.cancel()
         holdRebuildTask = nil
         holdWiringInProgress = true
-        if rebuildFirst { tearDownEngine() }
+        if rebuildFirst {
+            tearDownEngine()
+        } else if let player = hostedPlayerNode {
+            // A kept engine re-wires with a fresh persistent node — the old
+            // one comes off first (the engine is still ours until the
+            // detached handoff below), and any utterance riding it ends now
+            // rather than scheduling into a detached node.
+            player.stop()
+            if let audioEngine, audioEngine.attachedNodes.contains(player) {
+                audioEngine.detach(player)
+            }
+            invalidateVoicePlayback()
+        }
         let kept =
             rebuildFirst
             ? nil
@@ -1069,8 +1099,11 @@ final class AudioCaptureEngine: AudioCapturing {
         }
         holdRenderWired = outcome.renderVerified
         voiceHoldWired = outcome.tapInstalled && outcome.engineRunning
+        hostedPlayerNode = outcome.playerNode
+        hostedPlayerSampleRate = outcome.playerSampleRate
         voicePlaybackHosted =
             outcome.engineRunning
+            && outcome.playerNode != nil
             && lifecycle.hostsPlayback(
                 armed: outcome.armed, renderVerified: outcome.renderVerified)
         lastIntentionalReconfigure = outcome.completedAt
@@ -1082,7 +1115,7 @@ final class AudioCaptureEngine: AudioCapturing {
     }
 
     /// A stale wiring's outcome, undone in the only legal order: stop first,
-    /// then remove the tap, then unwire the render side.
+    /// then remove the tap, then unwire the render side and the node.
     private func discardHoldWiring(_ outcome: HoldWireOutcome) {
         if outcome.engineRunning {
             outcome.engine.stop()
@@ -1092,6 +1125,10 @@ final class AudioCaptureEngine: AudioCapturing {
         }
         if outcome.renderVerified {
             outcome.engine.disconnectNodeOutput(outcome.engine.mainMixerNode)
+        }
+        if let player = outcome.playerNode {
+            player.stop()
+            outcome.engine.detach(player)
         }
         Log.audio.info("Discarded stale voice hold wiring")
     }
@@ -1108,6 +1145,8 @@ final class AudioCaptureEngine: AudioCapturing {
         var tapInstalled = false
         var renderVerified = false
         var engineRunning = false
+        var playerNode: AVAudioPlayerNode?
+        var playerSampleRate: Double = 0
         var completedAt = Date.distantPast
     }
 
@@ -1172,6 +1211,22 @@ final class AudioCaptureEngine: AudioCapturing {
             }
         }
 
+        // The persistent voice-playback node (Apple's own VP sample wires
+        // all players before start): attached and connected on the stopped
+        // engine, it lives for the hold's lifetime — per-utterance work
+        // schedules buffers on it, never touching the graph. Only a render
+        // path that verified can host playback.
+        if outcome.renderVerified,
+            let playerFormat = AudioConverter.monoFloat32Format(
+                sampleRate: voicePlaybackSampleRate)
+        {
+            let player = AVAudioPlayerNode()
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: playerFormat)
+            outcome.playerNode = player
+            outcome.playerSampleRate = voicePlaybackSampleRate
+        }
+
         engine.prepare()
         do {
             try engine.start()
@@ -1187,6 +1242,12 @@ final class AudioCaptureEngine: AudioCapturing {
                     """)
                 engine.disconnectNodeOutput(engine.mainMixerNode)
                 outcome.renderVerified = false
+                if let player = outcome.playerNode {
+                    // Input-only can't host playback — the node goes too.
+                    engine.detach(player)
+                    outcome.playerNode = nil
+                    outcome.playerSampleRate = 0
+                }
                 engine.prepare()
                 do {
                     try engine.start()
