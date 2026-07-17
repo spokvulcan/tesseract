@@ -71,6 +71,10 @@ protocol AudioPlayback: AnyObject {
     /// Implementations reset to 1.0 at `startStreaming`/`stop` so a duck
     /// can never leak into the next utterance.
     func setVolume(_ volume: Float)
+
+    /// The volume as currently applied (1.0 when no node is live) — the
+    /// fade ramp's starting point.
+    var volume: Float { get }
 }
 
 /// The scheduled-audio loudness timeline behind `playbackLevel()` — shared by
@@ -89,8 +93,7 @@ nonisolated struct PlaybackEnvelope {
     private var pendingSamples: [Float] = []
 
     mutating func begin(sampleRate: Int) {
-        bins = []
-        pendingSamples = []
+        reset()
         self.sampleRate = Double(sampleRate)
     }
 
@@ -113,7 +116,7 @@ nonisolated struct PlaybackEnvelope {
             pendingSamples.withUnsafeBufferPointer { pointer in
                 vDSP_rmsqv(pointer.baseAddress! + start, 1, &rms, vDSP_Length(binSize))
             }
-            bins.append(Self.normalized(rms: rms))
+            bins.append(AudioConverter.meterLevel(rms: rms))
             start += binSize
         }
         pendingSamples.removeFirst(start)
@@ -125,13 +128,5 @@ nonisolated struct PlaybackEnvelope {
         let index = Int(time / Self.binDuration)
         guard index < bins.count else { return 0 }
         return bins[index]
-    }
-
-    /// The mic meter's normalization (mirrors
-    /// `AudioCaptureEngine.makeAudioTapHandler`): RMS → dBFS → 0–1 over a
-    /// −60 dB floor.
-    static func normalized(rms: Float) -> Float {
-        let db = 20 * log10(max(rms, 0.001))
-        return max(0, min(1, (db + 60) / 60))
     }
 }

@@ -39,6 +39,7 @@ final class InMemoryAudioPlayback: AudioPlayback {
     private(set) var stopCount = 0
     private(set) var isPaused = false
     private(set) var setVolumeCalls: [Float] = []
+    private(set) var volume: Float = 1.0
 
     /// Scripted envelope reading — tests set this to simulate the reply's
     /// loudness at the playback head.
@@ -64,6 +65,7 @@ final class InMemoryAudioPlayback: AudioPlayback {
         startedSampleRates.append(sampleRate)
         totalScheduledSamples = 0
         streamingSampleRate = sampleRate
+        volume = 1.0
     }
 
     func appendChunk(samples: [Float]) {
@@ -89,11 +91,15 @@ final class InMemoryAudioPlayback: AudioPlayback {
         stopCount += 1
         totalScheduledSamples = 0
         streamingSampleRate = 0
+        volume = 1.0
     }
 
     func playbackLevel() -> Float { scriptedPlaybackLevel }
 
-    func setVolume(_ volume: Float) { setVolumeCalls.append(volume) }
+    func setVolume(_ volume: Float) {
+        setVolumeCalls.append(volume)
+        self.volume = volume
+    }
 
     /// Stands in for the audio layer reporting that scheduled audio has drained —
     /// fires the callback the coordinator installed on `onPlaybackFinished`.

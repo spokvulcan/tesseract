@@ -143,18 +143,22 @@ final class CompanionVoiceSessionController {
     private var speakingSince: Date?
     private var speechDoneCallbackSeen = false
     private var exchanges = 0
-    /// A barged (ducked or paused) reply awaits resolution: resume,
-    /// directive, or turn.
-    private var bargedUtterance = false
-    private var bargeVerifyStartedAt: Date?
-    /// Where the current barge stands: `.soft` = reply ducked, confirm
-    /// window open; `.hard` = reply paused (confirmed voicing or a click).
+    /// Where the current barge stands — the single source of truth for a
+    /// barged reply awaiting resolution: `.soft` = reply ducked, the confirm
+    /// window open since `startedAt`; `.hard` = reply paused (confirmed
+    /// voicing or a click), false unless a speech onset lands within the
+    /// verify window of `verifyStartedAt`.
     private var bargeMode: BargeMode = .none
     private enum BargeMode: Equatable {
         case none
         case soft(startedAt: Date)
-        case hard
+        case hard(verifyStartedAt: Date)
+
+        var isHard: Bool { if case .hard = self { true } else { false } }
     }
+    /// A barged (ducked or paused) reply awaits resolution: resume,
+    /// directive, or turn.
+    private var bargedUtterance: Bool { bargeMode != .none }
     /// The Echo Floor (ADR-0041): tracked self-echo residual while the reply
     /// plays; the energy barge threshold always sits `margin` above it.
     private var echoFloor = EchoResidualFloor()
@@ -163,7 +167,6 @@ final class CompanionVoiceSessionController {
     /// energy detector for the rest of the utterance (click and directives
     /// keep working).
     private var falseBargeCount = 0
-    private var energyBargeMuted = false
     /// Stable ID stamped on every voice.* record of one session (#354).
     private var sessionID = UUID()
     /// Tick counter for the 1 Hz energy-sample cadence while speaking.
@@ -274,8 +277,6 @@ final class CompanionVoiceSessionController {
     func exit(reason: String) {
         guard isActive else { return }
         if phase == .speaking || bargedUtterance { stopSpeaking() }
-        bargedUtterance = false
-        bargeVerifyStartedAt = nil
         bargeMode = .none
         deafUntil = nil
         closeCapture()
@@ -307,14 +308,11 @@ final class CompanionVoiceSessionController {
         phase = .speaking
         speakingSince = Date()
         speechDoneCallbackSeen = false
-        bargedUtterance = false
-        bargeVerifyStartedAt = nil
         bargeMode = .none
         deafUntil = nil
         settledTicks = 0
         echoFloor.reset()
         falseBargeCount = 0
-        energyBargeMuted = false
         endpointer.reset(config: .bargeIn(speechLevel: bargeInLevel))
         // The mic opens *under* the utterance: VPIO's AEC keeps his voice out
         // of the input, and the Echo Floor rides whatever residual remains,
@@ -344,9 +342,7 @@ final class CompanionVoiceSessionController {
         // reply where it left off; only a committed turn or a Session
         // Directive makes the interruption permanent.
         pauseSpeaking()
-        bargedUtterance = true
-        bargeMode = .hard
-        bargeVerifyStartedAt = Date()
+        bargeMode = .hard(verifyStartedAt: Date())
         settledTicks = 0
         recordVoice(
             "reaction.barge-in",
@@ -375,7 +371,6 @@ final class CompanionVoiceSessionController {
         guard phase == .speaking else { return }
         let offset = speakingSince.map { Date().timeIntervalSince($0) } ?? 0
         bargeMode = .soft(startedAt: Date())
-        bargedUtterance = true
         settledTicks = 0
         recordVoice(
             "voice.barge-soft-onset",
@@ -399,9 +394,8 @@ final class CompanionVoiceSessionController {
     /// the duck becomes the real pause and the take proceeds as a hard barge.
     private func hardenSoftBarge(detector: String) {
         guard case .soft = bargeMode else { return }
-        bargeMode = .hard
+        bargeMode = .hard(verifyStartedAt: Date())
         pauseSpeaking()
-        bargeVerifyStartedAt = Date()
         let offset = speakingSince.map { Date().timeIntervalSince($0) } ?? 0
         recordVoice(
             "reaction.barge-in",
@@ -410,44 +404,53 @@ final class CompanionVoiceSessionController {
             ]) { _, new in new })
     }
 
+    /// Drives an open confirm window each tick: accumulated voicing (or a
+    /// closed take) hardens the duck into the real pause; an expired window
+    /// fades the reply back.
+    private func tickSoftBarge(startedAt: Date, event: VoiceEndpointer.Event?, now: Date) {
+        if event == .endOfSpeech {
+            // A closed take must resolve through the hard path — reachable
+            // when the trailing-silence Setting undercuts the confirm window.
+            hardenSoftBarge(detector: "energy-soft")
+            finishOwnerTurn()
+            return
+        }
+        switch Self.resolveSoftBarge(
+            voicedSeconds: endpointer.voicedSeconds,
+            elapsed: now.timeIntervalSince(startedAt),
+            confirmWindow: Self.softBargeConfirmWindow,
+            confirmVoiced: Self.softBargeConfirmVoiced)
+        {
+        case .keepWaiting:
+            break
+        case .confirm:
+            hardenSoftBarge(detector: "energy-soft")
+        case .fadeBack:
+            softFadeBack()
+        }
+    }
+
     /// Stage two, unconfirmed: the window closed without voicing — restore
     /// the reply's volume and re-arm. The false fire cost a ~1 s murmur.
     private func softFadeBack() {
         guard case .soft = bargeMode else { return }
-        bargeMode = .none
-        bargedUtterance = false
-        registerFalseBarge()
-        if captureOpen { closeCapture() }
-        recordVoice(
-            "voice.barge-false-resume",
-            snapshot: energyFields(level: meterLevel()).merging([
-                "reason": "soft-fadeback"
-            ]) { _, new in new })
-        if speechDoneCallbackSeen || !isActive {
-            // The utterance drained while ducked (or the session died).
-            fadeSpeech(1.0, 0)
-            if isActive { beginListening() }
-            return
-        }
-        endpointer.reset(config: .bargeIn(speechLevel: bargeInLevel))
-        settledTicks = 0
-        openCapture()
-        // Deaf through the fade-up: the volume ramp and AEC re-settling
-        // must not re-trigger the detector (the 2026-07-17 flap cycle).
-        deafUntil = Date().addingTimeInterval(Self.postResumeGrace)
-        phase = .speaking
-        overlay.feed.setState(.speaking)
-        fadeSpeech(1.0, Self.softDuckRampUp)
+        restoreReplyAfterFalseBarge(reason: "soft-fadeback", resumePlayback: false)
     }
 
     /// The barge produced nothing that counts as a turn — resume the paused
     /// reply and rearm barge-in detection.
     private func resumeAfterFalseBarge(reason: String) {
         guard bargedUtterance else { return }
-        bargedUtterance = false
+        restoreReplyAfterFalseBarge(reason: reason, resumePlayback: bargeMode.isHard)
+    }
+
+    /// The false-barge restore both stages share: count the fire toward the
+    /// escalation ladder (#354), record it, and re-arm the barge watch deaf
+    /// through the restore transient. `resumePlayback` un-pauses a
+    /// hard-barged reply; a soft one only ducked and just fades back up.
+    private func restoreReplyAfterFalseBarge(reason: String, resumePlayback: Bool) {
         bargeMode = .none
-        bargeVerifyStartedAt = nil
-        registerFalseBarge()
+        falseBargeCount += 1
         if captureOpen { closeCapture() }
         recordVoice(
             "voice.barge-false-resume",
@@ -455,8 +458,8 @@ final class CompanionVoiceSessionController {
                 "reason": reason
             ]) { _, new in new })
         if speechDoneCallbackSeen || !isActive {
-            // The utterance drained while paused (or the session died) —
-            // nothing to resume.
+            // The utterance drained while barged (or the session died) —
+            // nothing to restore.
             fadeSpeech(1.0, 0)
             if isActive { beginListening() }
             return
@@ -464,26 +467,23 @@ final class CompanionVoiceSessionController {
         endpointer.reset(config: .bargeIn(speechLevel: bargeInLevel))
         settledTicks = 0
         openCapture()
-        // Deaf through the resume transient — see `softFadeBack`.
+        // Deaf through the restore: the volume ramp / resume and AEC
+        // re-settling must not re-trigger the detector (the 2026-07-17
+        // flap cycle).
         deafUntil = Date().addingTimeInterval(Self.postResumeGrace)
         phase = .speaking
         overlay.feed.setState(.speaking)
-        resumeSpeaking()
+        if resumePlayback { resumeSpeaking() }
         fadeSpeech(1.0, Self.softDuckRampUp)
     }
 
-    /// One more false energy barge on this utterance — climb the escalation
-    /// ladder (#354): a wider floor margin first, then a muted energy
-    /// detector for the utterance's remainder.
-    private func registerFalseBarge() {
-        falseBargeCount += 1
-        if falseBargeCount >= Self.energyBargeMuteAfter {
-            energyBargeMuted = true
-        }
-    }
-
+    // The escalation ladder (#354), both rungs derived from `falseBargeCount`.
     private var escalationMarginScale: Float {
         falseBargeCount >= Self.escalateMarginAfter ? Self.escalatedMarginScale : 1.0
+    }
+
+    private var energyBargeMuted: Bool {
+        falseBargeCount >= Self.energyBargeMuteAfter
     }
 
     /// The take produced nothing usable — resume a paused reply if one is
@@ -546,31 +546,10 @@ final class CompanionVoiceSessionController {
 
         case .capturing:
             if case .soft(let startedAt) = bargeMode {
-                if event == .endOfSpeech {
-                    // Defensive: trailing silence (1.8 s) cannot beat the
-                    // confirm window (0.8 s) with current constants, but a
-                    // closed take must resolve through the hard path.
-                    hardenSoftBarge(detector: "energy-soft")
-                    finishOwnerTurn()
-                } else {
-                    switch Self.resolveSoftBarge(
-                        voicedSeconds: endpointer.voicedSeconds,
-                        elapsed: now.timeIntervalSince(startedAt),
-                        confirmWindow: Self.softBargeConfirmWindow,
-                        confirmVoiced: Self.softBargeConfirmVoiced)
-                    {
-                    case .keepWaiting:
-                        break
-                    case .confirm:
-                        hardenSoftBarge(detector: "energy-soft")
-                    case .fadeBack:
-                        softFadeBack()
-                    }
-                }
+                tickSoftBarge(startedAt: startedAt, event: event, now: now)
             } else if event == .endOfSpeech {
                 finishOwnerTurn()
-            } else if bargedUtterance, !endpointer.isInSpeech,
-                let since = bargeVerifyStartedAt,
+            } else if case .hard(let since) = bargeMode, !endpointer.isInSpeech,
                 now.timeIntervalSince(since) > Self.bargeVerifyWindow
             {
                 resumeAfterFalseBarge(reason: "no-speech")
@@ -624,7 +603,6 @@ final class CompanionVoiceSessionController {
         // silent before the mic reopens in listening config. On the normal
         // path this is a no-op sweep; on a watchdog exit it is the fix.
         stopSpeaking()
-        bargedUtterance = false
         bargeMode = .none
         beginListening(gracePeriod: Self.postUtteranceGrace)
     }
@@ -696,8 +674,6 @@ final class CompanionVoiceSessionController {
                 text: trimmed, voicedSeconds: lastTakeVoicedSeconds)
             {
             case .directive(let word):
-                bargedUtterance = false
-                bargeVerifyStartedAt = nil
                 bargeMode = .none
                 stopSpeaking()
                 recordVoice("voice.session-directive", snapshot: ["word": word])
@@ -708,8 +684,6 @@ final class CompanionVoiceSessionController {
                 return
             case .turn:
                 // A real interruption — the pause becomes a stop for good.
-                bargedUtterance = false
-                bargeVerifyStartedAt = nil
                 bargeMode = .none
                 stopSpeaking()
             }

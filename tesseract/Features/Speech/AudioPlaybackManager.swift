@@ -63,6 +63,10 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         playerNode?.volume = volume
     }
 
+    var volume: Float {
+        playerNode?.volume ?? 1.0
+    }
+
     // MARK: - One-shot playback (existing API)
 
     func play(samples: [Float], sampleRate: Int) {

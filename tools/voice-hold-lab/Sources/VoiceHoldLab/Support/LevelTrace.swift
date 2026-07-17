@@ -2,8 +2,8 @@
 //  LevelTrace.swift — 20 Hz normalized mic-level recording off a capture tap.
 //
 //  The normalization mirrors the app's meter
-//  (`AudioCaptureEngine.makeAudioTapHandler`): RMS → dBFS → 0–1 over a
-//  −60 dB floor. Keep the three lines identical — the app-side replay tests
+//  (`AudioConverter.meterLevel(rms:)`): RMS → dBFS → 0–1 over a −60 dB
+//  floor. Keep the three lines identical — the app-side replay tests
 //  (`VoiceBargeReplayTests`) feed these traces to the real detector, and a
 //  domain mismatch would invalidate every calibrated constant.
 //
@@ -35,16 +35,23 @@ final class LevelTrace: @unchecked Sendable {
         lock.lock()
         let snapshot = samples
         lock.unlock()
+        return Self.bins(of: snapshot, sampleRate: sampleRate)
+    }
+
+    /// 50 ms-bin normalized levels of `samples` — the one binning walk the
+    /// mic traces and the synthesized playback envelopes share, so replay
+    /// fixtures align bin-for-bin.
+    static func bins(of samples: [Float], sampleRate: Double) -> [Float] {
         let window = Int(sampleRate * 0.05)
-        guard window > 0, !snapshot.isEmpty else { return [] }
+        guard window > 0, !samples.isEmpty else { return [] }
         var levels: [Float] = []
         var start = 0
-        while snapshot.count - start >= window {
+        while samples.count - start >= window {
             var rms: Float = 0
-            snapshot.withUnsafeBufferPointer { pointer in
+            samples.withUnsafeBufferPointer { pointer in
                 vDSP_rmsqv(pointer.baseAddress! + start, 1, &rms, vDSP_Length(window))
             }
-            levels.append(Self.normalized(rms: rms))
+            levels.append(normalized(rms: rms))
             start += window
         }
         return levels

@@ -29,19 +29,9 @@ enum Signals {
 
     /// The played signal's 50 ms-bin envelope in the app's PlaybackEnvelope
     /// domain — the replay tests' far-end input, aligned bin-for-bin with
-    /// the mic traces recorded while it played.
+    /// the mic traces recorded while it played (one shared binning walk).
     static func envelope(_ samples: [Float], sampleRate: Double) -> [Float] {
-        let window = Int(sampleRate * 0.05)
-        guard window > 0 else { return [] }
-        var out: [Float] = []
-        var start = 0
-        while samples.count - start >= window {
-            var sum: Float = 0
-            for i in start..<(start + window) { sum += samples[i] * samples[i] }
-            out.append(LevelTrace.normalized(rms: sqrt(sum / Float(window))))
-            start += window
-        }
-        return out
+        LevelTrace.bins(of: samples, sampleRate: sampleRate)
     }
 
     /// Harmonic bursts (~160 Hz fundamental + partials) in a speech-like

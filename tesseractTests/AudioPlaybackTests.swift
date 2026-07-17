@@ -133,7 +133,8 @@ struct PlaybackEnvelopeTests {
 
     @Test
     func fullScaleReadsOne() {
-        #expect(PlaybackEnvelope.normalized(rms: 1.0) == 1.0)
-        #expect(PlaybackEnvelope.normalized(rms: 0.001) == 0)
+        // The one shared normalization (mic meter + playback envelope).
+        #expect(AudioConverter.meterLevel(rms: 1.0) == 1.0)
+        #expect(AudioConverter.meterLevel(rms: 0.001) == 0)
     }
 }

@@ -67,10 +67,6 @@ final class SpeechCoordinator {
     private var isPaused = false
     private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
     private var fadeTask: Task<Void, Never>?
-    /// The coordinator's bookkeeping of the sink volume it last commanded —
-    /// the protocol deliberately has no getter (sinks reset themselves to
-    /// 1.0 at stream boundaries; this mirrors that contract).
-    private var sinkVolume: Float = 1.0
 
     init(
         textExtractor: any TextExtracting,
@@ -148,7 +144,6 @@ final class SpeechCoordinator {
         activeTask = nil
         fadeTask?.cancel()
         fadeTask = nil
-        sinkVolume = 1.0
         isPaused = false
         activeSink.stop()
         currentSegmentIndex = 0
@@ -198,9 +193,8 @@ final class SpeechCoordinator {
     /// in flight; `stop()` cancels outright (the sink resets itself to 1.0).
     func fadePlayback(to target: Float, over duration: TimeInterval) {
         fadeTask?.cancel()
-        let start = sinkVolume
+        let start = activeSink.volume
         guard duration > 0, abs(target - start) > 0.001 else {
-            sinkVolume = target
             activeSink.setVolume(target)
             return
         }
@@ -211,9 +205,7 @@ final class SpeechCoordinator {
                 try? await Task.sleep(for: stepInterval)
                 guard !Task.isCancelled, let self else { return }
                 let fraction = Float(step) / Float(steps)
-                let volume = start + (target - start) * fraction
-                self.sinkVolume = volume
-                self.activeSink.setVolume(volume)
+                self.activeSink.setVolume(start + (target - start) * fraction)
             }
         }
     }

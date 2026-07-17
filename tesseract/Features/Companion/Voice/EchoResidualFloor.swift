@@ -79,12 +79,8 @@ nonisolated struct EchoResidualFloor {
     /// The tracked residual level; 0 until playback has been heard.
     private(set) var floor: Float = 0
 
-    private var lastIngestAt: TimeInterval?
+    private var gapCredit = TickerGapCredit()
     private var lastLoudPlaybackAt: TimeInterval?
-
-    /// The widest ingest-to-ingest gap credited to the tracker — anything
-    /// longer means the ticker stalled, not that time passed at the mic.
-    private static let maxCreditedGap: TimeInterval = 0.25
 
     init(config: Config = .standard()) {
         self.config = config
@@ -93,15 +89,14 @@ nonisolated struct EchoResidualFloor {
     /// Start fresh for a new utterance (new reply, new session).
     mutating func reset() {
         floor = 0
-        lastIngestAt = nil
+        gapCredit.reset()
         lastLoudPlaybackAt = nil
     }
 
     /// Feed one 20 Hz sample: the mic meter level and the playback sink's
     /// envelope level at the playback head.
     mutating func ingest(micLevel: Float, playbackLevel: Float, at time: TimeInterval) {
-        let gap = lastIngestAt.map { max(0, min(time - $0, Self.maxCreditedGap)) } ?? 0
-        lastIngestAt = time
+        let gap = gapCredit.credit(at: time)
 
         if playbackLevel >= config.playbackLoudLevel {
             lastLoudPlaybackAt = time
