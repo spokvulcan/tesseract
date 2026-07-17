@@ -1347,11 +1347,11 @@ voice chat.
 **Barge-In**:
 The owner interrupting a speaking reply — by voice energy (a **Soft Barge**
 first) or a click (immediate pause; a click is deliberate). A hard barge
-*pauses* playback while the take resolves: a committed turn or a **Session
-Directive** stops the reply for good; a false barge — a take without
-substance — resumes it where it paused.
+*pauses* playback while the take resolves: a take that transcribed to
+anything stops the reply for good and becomes the turn; an empty take — a
+false barge — resumes it where it paused. Purely acoustic: no word gates.
 _Avoid_: interruption (unqualified), stop-on-barge (the discarded kill-first
-semantics).
+semantics), Substance Gate / Session Directive (the removed word gates).
 
 **Soft Barge**:
 The energy barge's first stage: an onset ducks the reply instantly and opens
@@ -1379,29 +1379,16 @@ acoustic and gating defenses exist to make this unreachable.
 _Avoid_: feedback loop (the mechanism, not the name), echo (the raw acoustic
 signal cancellation removes).
 
-**Substance Gate**:
-What an energy barge-in's take must show to count as a real turn: sustained
-voiced energy and a multi-word transcription — or an allowlisted **Session
-Directive**. Below the gate the barge is false and the reply resumes. Distinct
-from the **Voice Capture Session**'s minimum-duration guard (a mechanical
-too-short reject).
-_Avoid_: minimum duration (the mechanical guard), plausibility/sanity check.
-
-**Session Directive**:
-A terse allowlisted control word ("stop", "wait", "pause", "quiet") spoken
-mid-reply: it acts on the voice session itself — reply stopped, back to
-listening — and is never sent to the agent. Content-ambiguous words ("no",
-"yes", "okay") are turns, not directives.
-_Avoid_: voice command (the macOS accessibility concept), wake word.
-
 **Dual-Path Playback**:
 Where TTS renders: a **Voice Session**'s replies play through the capture
-engine under its voice hold — the reply escapes the recording duck (plays
-undipped) and the engine stays running between turns, so echo cancellation
-and gain control stay converged; every other TTS surface keeps its dedicated
-playback path and unprocessed fidelity. On macOS the canceller's reference is
-the output *device* signal, so both paths are echo-cancelled — the dual path
-buys the undipped reply and the converged hold, not raw cancellation.
+engine under its voice hold — the reply escapes the recording duck and the
+engine stays running between turns, so echo cancellation and gain control
+stay converged; every other TTS surface keeps its dedicated playback path and
+unprocessed fidelity. The hosted reply renders at a fixed master gain: the VP
+unit's residual-echo suppressor clamps the owner's microphone harder the
+louder its own voice stream plays (field 2026-07-18), so reply loudness is
+traded for double-talk headroom. On macOS the canceller's reference is the
+output *device* signal, so both paths are echo-cancelled.
 _Avoid_: single playback engine, VPIO routing (the implementation).
 
 **Voice Hold**:

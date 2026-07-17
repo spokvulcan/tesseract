@@ -51,9 +51,9 @@ nonisolated struct VoiceEndpointer {
     private(set) var isInSpeech = false
 
     /// Total time the level sat at or above `speechLevel` since the last
-    /// `reset` — the **Substance Gate**'s voiced-energy input. Accumulated
-    /// from ingest-to-ingest deltas (clamped so a stalled ticker can't bank
-    /// phantom speech).
+    /// `reset` — the **Soft Barge** confirm window's voiced-energy input.
+    /// Accumulated from ingest-to-ingest deltas (clamped so a stalled ticker
+    /// can't bank phantom speech).
     private(set) var voicedSeconds: TimeInterval = 0
 
     private var candidateSince: TimeInterval?

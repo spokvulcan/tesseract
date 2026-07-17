@@ -47,6 +47,19 @@ final class VoiceSessionPlayback: AudioPlayback {
 
     private var usingFallback = false
 
+    /// Master gain on the hosted reply. macOS VP's residual-echo suppressor
+    /// clamps the near end (the owner's mic) harder the louder the unit's own
+    /// voice stream plays — at full volume the mic metered ~0 for whole
+    /// replies (field 2026-07-18) and barging required shouting. The gain
+    /// buys double-talk headroom so normal speech competes with the echo
+    /// again; raise it only against mic-liveness telemetry
+    /// (`voice.energy-sample` level p50 while speaking).
+    private static let hostedGain: Float = 0.5
+    /// The logical volume the session asked for (ducks, fades) — reported by
+    /// `volume` so fades compute in the domain the controller sets; the node
+    /// renders it scaled by `hostedGain`.
+    private var requestedVolume: Float = 1.0
+
     init(host: AudioCaptureEngine) {
         self.host = host
         fallback.onPlaybackFinished = { [weak self] in self?.onPlaybackFinished?() }
@@ -78,7 +91,8 @@ final class VoiceSessionPlayback: AudioPlayback {
         }
 
         if let player = host.hostedVoicePlayer(sampleRate: sampleRate) {
-            player.volume = 1.0
+            requestedVolume = 1.0
+            player.volume = Self.hostedGain
             node = player
             streamingFormat = format
             streamingSampleRate = sampleRate
@@ -183,12 +197,13 @@ final class VoiceSessionPlayback: AudioPlayback {
         if usingFallback {
             fallback.setVolume(volume)
         } else {
-            node?.volume = volume
+            requestedVolume = volume
+            node?.volume = volume * Self.hostedGain
         }
     }
 
     var volume: Float {
-        usingFallback ? fallback.volume : (node?.volume ?? 1.0)
+        usingFallback ? fallback.volume : requestedVolume
     }
 
     func stop() {
@@ -197,8 +212,9 @@ final class VoiceSessionPlayback: AudioPlayback {
             // The node is the host's — stop flushes its scheduled buffers
             // and resets the duck; the graph is never touched here.
             node.stop()
-            node.volume = 1.0
+            node.volume = Self.hostedGain
         }
+        requestedVolume = 1.0
         node = nil
         streamingFormat = nil
         streamFinished = false
@@ -222,6 +238,7 @@ final class VoiceSessionPlayback: AudioPlayback {
     private func hostEngineInvalidated() {
         guard node != nil else { return }
         streamEpoch += 1
+        requestedVolume = 1.0
         node = nil
         streamingFormat = nil
         streamFinished = false
