@@ -58,11 +58,7 @@ nonisolated struct VoiceEndpointer {
 
     private var candidateSince: TimeInterval?
     private var lastLoudAt: TimeInterval?
-    private var lastIngestAt: TimeInterval?
-
-    /// The widest ingest-to-ingest gap credited to `voicedSeconds` — anything
-    /// longer means the ticker stalled, not that speech continued.
-    private static let maxCreditedGap: TimeInterval = 0.25
+    private var gapCredit = TickerGapCredit()
 
     init(config: Config) {
         self.config = config
@@ -75,14 +71,21 @@ nonisolated struct VoiceEndpointer {
         voicedSeconds = 0
         candidateSince = nil
         lastLoudAt = nil
-        lastIngestAt = nil
+        gapCredit.reset()
     }
 
     /// Feed one level sample; returns an event on a state edge.
-    mutating func ingest(level: Float, at time: TimeInterval) -> Event? {
-        let loud = level >= config.speechLevel
-        let gap = lastIngestAt.map { max(0, min(time - $0, Self.maxCreditedGap)) } ?? 0
-        lastIngestAt = time
+    ///
+    /// `speechFloor` is the Echo Floor's effective threshold during playback
+    /// (ADR-0041): when present, speech requires the level to clear it as
+    /// well as the configured static level — residual from the agent's own
+    /// reply must never read as the owner. `nil` (every non-speaking mode)
+    /// keeps the static threshold alone.
+    mutating func ingest(
+        level: Float, at time: TimeInterval, speechFloor: Float? = nil
+    ) -> Event? {
+        let loud = level >= max(config.speechLevel, speechFloor ?? 0)
+        let gap = gapCredit.credit(at: time)
         if loud {
             voicedSeconds += gap
             lastLoudAt = time

@@ -1345,12 +1345,31 @@ _Avoid_: voice mode (UI shorthand), speech session (the TTS reading concept),
 voice chat.
 
 **Barge-In**:
-The owner interrupting a speaking reply — by sustained voice energy or a click.
-A barge-in *pauses* playback while the take resolves: a committed turn or a
-**Session Directive** stops the reply for good; a false barge — a take without
+The owner interrupting a speaking reply — by voice energy (a **Soft Barge**
+first) or a click (immediate pause; a click is deliberate). A hard barge
+*pauses* playback while the take resolves: a committed turn or a **Session
+Directive** stops the reply for good; a false barge — a take without
 substance — resumes it where it paused.
 _Avoid_: interruption (unqualified), stop-on-barge (the discarded kill-first
 semantics).
+
+**Soft Barge**:
+The energy barge's first stage: an onset ducks the reply instantly and opens
+a short confirm window — only sustained voicing inside it commits the hard
+pause; without it the volume fades back. A false fire costs a ~1 s murmur,
+never a dead pause.
+_Avoid_: two-phase commit, barge preview, duck-on-barge (the duck is the
+acknowledgment, not the barge).
+
+**Echo Floor**:
+The tracked level of the reply's own residual at the open microphone: while
+playback is audibly emitting, the energy barge threshold rides floor + margin,
+never the static level alone. The floor chases the mic fast but may never
+believe more than the playback envelope minus the calibrated echo-path loss —
+residual can't out-shout the reply; the owner can. Calibrated by the
+voice-hold lab's traces; pinned by the replay tests' zero-false-onset lock.
+_Avoid_: noise gate (room noise is not the subject), VAD, adaptive threshold
+(unqualified).
 
 **Self-Echo**:
 The voice session's signature failure: the assistant's own TTS re-captured by
@@ -1377,22 +1396,13 @@ _Avoid_: voice command (the macOS accessibility concept), wake word.
 
 **Dual-Path Playback**:
 Where TTS renders: a **Voice Session**'s replies play through the capture
-engine (the **Voice Hold** keeps it running for the session), so the reply is
-the echo canceller's own render stream — it escapes the recording duck other
-audio suffers under the open mic, and its cancellation never depends on the
-duck/loopback policy; every other TTS surface keeps its dedicated playback
-path and unprocessed fidelity.
+engine under its voice hold — the reply escapes the recording duck (plays
+undipped) and the engine stays running between turns, so echo cancellation
+and gain control stay converged; every other TTS surface keeps its dedicated
+playback path and unprocessed fidelity. On macOS the canceller's reference is
+the output *device* signal, so both paths are echo-cancelled — the dual path
+buys the undipped reply and the converged hold, not raw cancellation.
 _Avoid_: single playback engine, VPIO routing (the implementation).
-
-**Voice Hold**:
-The capture engine's state for a **Voice Session**'s lifetime: the engine
-keeps running between captures — capture start/stop degrade to a capture-gate
-flip, never tap install/remove or render rewiring on a running engine (the
-2026-07-17 crash class) — and hosts the session's TTS player nodes upstream
-of its mixer. Wired asynchronously at session enter (~900 ms of
-stopped-engine work: tap once, render side verified, start); a reply that
-beats the wiring falls back to the dedicated playback path.
-_Avoid_: warm engine (the prewarm concept), engine reuse, always-on mic.
 
 ### Text injection
 

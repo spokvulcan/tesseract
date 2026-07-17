@@ -198,6 +198,14 @@ nonisolated enum AudioConverter: Sendable {
         return 20 * log10(rms)
     }
 
+    /// RMS → the app's 0–1 meter level over a −60 dBFS floor — the one
+    /// normalization the mic meter and the playback envelope share, so the
+    /// Echo Floor (ADR-0041) compares them on a single scale.
+    static func meterLevel(rms: Float) -> Float {
+        let db = 20 * log10(max(rms, 0.001))
+        return max(0, min(1, (db + 60) / 60))
+    }
+
     /// Check if audio contains clipping (samples at max value)
     static func hasClipping(_ samples: [Float], threshold: Float = 0.99) -> Bool {
         samples.contains { abs($0) >= threshold }

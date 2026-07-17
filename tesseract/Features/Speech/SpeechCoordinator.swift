@@ -66,6 +66,7 @@ final class SpeechCoordinator {
     private var sessionVoiceKey: String?
     private var isPaused = false
     private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
+    private var fadeTask: Task<Void, Never>?
 
     init(
         textExtractor: any TextExtracting,
@@ -141,6 +142,8 @@ final class SpeechCoordinator {
         speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
+        fadeTask?.cancel()
+        fadeTask = nil
         isPaused = false
         activeSink.stop()
         currentSegmentIndex = 0
@@ -175,6 +178,39 @@ final class SpeechCoordinator {
             totalSegments > 1
             ? .streamingLongForm(segment: currentSegmentIndex + 1, of: totalSegments)
             : .streaming
+    }
+
+    // MARK: - Soft Barge surface (ADR-0041)
+
+    /// The reply's loudness at the playback head — the Echo Floor's playback
+    /// envelope input.
+    func playbackLevelNow() -> Float {
+        activeSink.playbackLevel()
+    }
+
+    /// One volume step per ~16 ms (~60 Hz) — the fade ramp's granularity.
+    private static let fadeStep: TimeInterval = 0.016
+
+    /// Ramps the active sink's volume to `target` — the Soft Barge duck and
+    /// its fade-back. Linear steps at `fadeStep`; a new fade supersedes the
+    /// one in flight; `stop()` cancels outright (the sink resets itself to
+    /// 1.0).
+    func fadePlayback(to target: Float, over duration: TimeInterval) {
+        fadeTask?.cancel()
+        let start = activeSink.volume
+        guard duration > 0, abs(target - start) > 0.001 else {
+            activeSink.setVolume(target)
+            return
+        }
+        let steps = max(1, Int(duration / Self.fadeStep))
+        fadeTask = Task { [weak self] in
+            for step in 1...steps {
+                try? await Task.sleep(for: .seconds(Self.fadeStep))
+                guard !Task.isCancelled, let self else { return }
+                let fraction = Float(step) / Float(steps)
+                self.activeSink.setVolume(start + (target - start) * fraction)
+            }
+        }
     }
 
     // MARK: - Private

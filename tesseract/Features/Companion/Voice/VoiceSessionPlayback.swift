@@ -161,6 +161,22 @@ final class VoiceSessionPlayback: AudioPlayback {
         return Double(playerTime.sampleTime) / playerTime.sampleRate
     }
 
+    func playbackLevel() -> Float {
+        usingFallback ? fallback.playbackLevel() : 0
+    }
+
+    func setVolume(_ volume: Float) {
+        if usingFallback {
+            fallback.setVolume(volume)
+        } else {
+            node?.volume = volume
+        }
+    }
+
+    var volume: Float {
+        usingFallback ? fallback.volume : (node?.volume ?? 1.0)
+    }
+
     func stop() {
         streamEpoch += 1
         if let node {

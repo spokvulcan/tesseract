@@ -641,6 +641,14 @@ final class DependencyContainer: ObservableObject {
             recorder: companionFlightRecorder,
             settings: settingsManager,
             proofreadPass: proofreadPass,
+            // The Echo Floor's far-end signal and the Soft Barge duck
+            // (ADR-0041) — both live on the coordinator's active sink.
+            playbackLevel: { [weak self] in
+                self?.speechCoordinator.playbackLevelNow() ?? 0
+            },
+            fadeSpeech: { [weak self] target, duration in
+                self?.speechCoordinator.fadePlayback(to: target, over: duration)
+            },
             // ADR-0041: the capture engine is held (and hosts the reply's
             // playback) for the session's lifetime.
             beginVoiceHold: { [weak self] in self?.audioCaptureEngine.beginVoiceHold() },

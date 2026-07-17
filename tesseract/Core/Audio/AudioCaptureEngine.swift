@@ -814,10 +814,7 @@ final class AudioCaptureEngine: AudioCapturing {
             // Calculate RMS for level metering
             var rms: Float = 0
             vDSP_rmsqv(channelData, 1, &rms, vDSP_Length(frameCount))
-
-            // Convert to dB scale (with floor at -60dB)
-            let db = 20 * log10(max(rms, 0.001))
-            let normalizedLevel = max(0, min(1, (db + 60) / 60))
+            let normalizedLevel = AudioConverter.meterLevel(rms: rms)
 
             // Copy samples to the thread-safe buffer while the gate is open
             // (nil for a metering-only capture — the settings meter wants the
