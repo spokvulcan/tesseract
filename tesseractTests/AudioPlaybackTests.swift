@@ -74,4 +74,66 @@ struct AudioPlaybackTests {
 
         #expect(probe.fireCount == 2)
     }
+
+    @Test
+    func recordsVolumeAndScriptedPlaybackLevel() {
+        let playback = InMemoryAudioPlayback()
+        #expect(playback.playbackLevel() == 0)
+        playback.scriptedPlaybackLevel = 0.4
+        #expect(playback.playbackLevel() == 0.4)
+
+        playback.setVolume(0.25)
+        playback.setVolume(1.0)
+        #expect(playback.setVolumeCalls == [0.25, 1.0])
+    }
+}
+
+// MARK: - PlaybackEnvelope (the real sinks' loudness timeline, ADR-0041)
+
+struct PlaybackEnvelopeTests {
+
+    @Test
+    func binsAtFiftyMillisecondGrainAcrossChunkBoundaries() {
+        // One 50 ms bin at 24 kHz is 1200 samples; splitting it across two
+        // appends must land in the same bin — boundaries are the envelope's,
+        // never the chunks'.
+        var envelope = PlaybackEnvelope()
+        envelope.begin(sampleRate: 24_000)
+        envelope.append(samples: [Float](repeating: 0.5, count: 600))
+        #expect(envelope.level(at: 0.02) == 0)  // bin not complete yet
+        envelope.append(samples: [Float](repeating: 0.5, count: 600))
+
+        // RMS 0.5 → −6 dB → (−6+60)/60 ≈ 0.9 on the meter scale.
+        let level = envelope.level(at: 0.02)
+        #expect(level > 0.88)
+        #expect(level < 0.92)
+    }
+
+    @Test
+    func silenceReadsZeroAndPastTheEndReadsZero() {
+        var envelope = PlaybackEnvelope()
+        envelope.begin(sampleRate: 24_000)
+        envelope.append(samples: [Float](repeating: 0, count: 2400))
+        // Digital silence bottoms out the −60 dB floor.
+        #expect(envelope.level(at: 0.05) == 0)
+        // Beyond scheduled audio: nothing is playing there.
+        #expect(envelope.level(at: 5.0) == 0)
+        #expect(envelope.level(at: -1.0) == 0)
+    }
+
+    @Test
+    func resetForgetsTheTimeline() {
+        var envelope = PlaybackEnvelope()
+        envelope.begin(sampleRate: 24_000)
+        envelope.append(samples: [Float](repeating: 0.5, count: 2400))
+        #expect(envelope.level(at: 0.02) > 0)
+        envelope.reset()
+        #expect(envelope.level(at: 0.02) == 0)
+    }
+
+    @Test
+    func fullScaleReadsOne() {
+        #expect(PlaybackEnvelope.normalized(rms: 1.0) == 1.0)
+        #expect(PlaybackEnvelope.normalized(rms: 0.001) == 0)
+    }
 }

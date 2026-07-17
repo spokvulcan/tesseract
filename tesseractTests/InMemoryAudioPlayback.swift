@@ -38,6 +38,11 @@ final class InMemoryAudioPlayback: AudioPlayback {
     private(set) var resumeCount = 0
     private(set) var stopCount = 0
     private(set) var isPaused = false
+    private(set) var setVolumeCalls: [Float] = []
+
+    /// Scripted envelope reading — tests set this to simulate the reply's
+    /// loudness at the playback head.
+    var scriptedPlaybackLevel: Float = 0
 
     private var totalScheduledSamples = 0
     private var streamingSampleRate = 0
@@ -85,6 +90,10 @@ final class InMemoryAudioPlayback: AudioPlayback {
         totalScheduledSamples = 0
         streamingSampleRate = 0
     }
+
+    func playbackLevel() -> Float { scriptedPlaybackLevel }
+
+    func setVolume(_ volume: Float) { setVolumeCalls.append(volume) }
 
     /// Stands in for the audio layer reporting that scheduled audio has drained —
     /// fires the callback the coordinator installed on `onPlaybackFinished`.

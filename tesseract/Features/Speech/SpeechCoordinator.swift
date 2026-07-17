@@ -66,6 +66,11 @@ final class SpeechCoordinator {
     private var sessionVoiceKey: String?
     private var isPaused = false
     private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
+    private var fadeTask: Task<Void, Never>?
+    /// The coordinator's bookkeeping of the sink volume it last commanded —
+    /// the protocol deliberately has no getter (sinks reset themselves to
+    /// 1.0 at stream boundaries; this mirrors that contract).
+    private var sinkVolume: Float = 1.0
 
     init(
         textExtractor: any TextExtracting,
@@ -141,6 +146,9 @@ final class SpeechCoordinator {
         speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
+        fadeTask?.cancel()
+        fadeTask = nil
+        sinkVolume = 1.0
         isPaused = false
         activeSink.stop()
         currentSegmentIndex = 0
@@ -175,6 +183,39 @@ final class SpeechCoordinator {
             totalSegments > 1
             ? .streamingLongForm(segment: currentSegmentIndex + 1, of: totalSegments)
             : .streaming
+    }
+
+    // MARK: - Soft Barge surface (ADR-0041)
+
+    /// The reply's loudness at the playback head — the Echo Floor's playback
+    /// envelope input.
+    func playbackLevelNow() -> Float {
+        activeSink.playbackLevel()
+    }
+
+    /// Ramps the active sink's volume to `target` — the Soft Barge duck and
+    /// its fade-back. Linear steps at ~16 ms; a new fade supersedes the one
+    /// in flight; `stop()` cancels outright (the sink resets itself to 1.0).
+    func fadePlayback(to target: Float, over duration: TimeInterval) {
+        fadeTask?.cancel()
+        let start = sinkVolume
+        guard duration > 0, abs(target - start) > 0.001 else {
+            sinkVolume = target
+            activeSink.setVolume(target)
+            return
+        }
+        let stepInterval: Duration = .milliseconds(16)
+        let steps = max(1, Int(duration / 0.016))
+        fadeTask = Task { [weak self] in
+            for step in 1...steps {
+                try? await Task.sleep(for: stepInterval)
+                guard !Task.isCancelled, let self else { return }
+                let fraction = Float(step) / Float(steps)
+                let volume = start + (target - start) * fraction
+                self.sinkVolume = volume
+                self.activeSink.setVolume(volume)
+            }
+        }
     }
 
     // MARK: - Private

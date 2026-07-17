@@ -44,6 +44,21 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
   -only-testing:tesseractTests/JinjaNonDeterminismReproTests
 
+# Voice session + barge detector (quit the app first — its capture engine
+# starves test hosts; VoiceBargeReplayTests replays real-hardware traces from
+# tools/voice-hold-lab, see its RUNBOOK for regenerating fixtures):
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -only-testing:tesseractTests/VoiceEndpointerTests \
+  -only-testing:tesseractTests/EchoResidualFloorTests \
+  -only-testing:tesseractTests/VoiceBargeReplayTests \
+  -only-testing:tesseractTests/CompanionVoiceBargeGateTests \
+  -only-testing:tesseractTests/VoiceCaptureSessionTests \
+  -only-testing:tesseractTests/VoiceProcessingDuckPolicyTests \
+  -only-testing:tesseractTests/CaptureEngineLifecycleTests \
+  -only-testing:tesseractTests/SpeechCoordinatorTests \
+  -only-testing:tesseractTests/AudioPlaybackTests \
+  -only-testing:tesseractTests/PlaybackEnvelopeTests
+
 # App bindings, image input, integrations, and model-selection seams:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -only-testing:tesseractTests/AppBindingsTests \

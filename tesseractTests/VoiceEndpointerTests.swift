@@ -110,6 +110,51 @@ import Testing
         #expect(endpointer.voicedSeconds <= 0.25)
     }
 
+    // MARK: The Echo Floor input (ADR-0041)
+
+    @Test func speechFloorRaisesTheEffectiveThreshold() {
+        var endpointer = VoiceEndpointer(config: .bargeIn(speechLevel: 0.25))
+        // Residual reading 0.5 under a floor of 0.6: never speech.
+        var time: TimeInterval = 0
+        while time <= 3.0 {
+            let event = endpointer.ingest(level: 0.5, at: time, speechFloor: 0.6)
+            #expect(event == nil)
+            time += 0.05
+        }
+        #expect(!endpointer.isInSpeech)
+        // Same level, floor lifted (playback ended): the owner fires.
+        var events: [VoiceEndpointer.Event] = []
+        while time <= 4.0 {
+            if let event = endpointer.ingest(level: 0.5, at: time) { events.append(event) }
+            time += 0.05
+        }
+        #expect(events == [.speechStarted])
+    }
+
+    @Test func levelsUnderTheFloorBankNoVoicedTime() {
+        var endpointer = VoiceEndpointer(config: .bargeIn(speechLevel: 0.25))
+        var time: TimeInterval = 0
+        while time <= 2.0 {
+            _ = endpointer.ingest(level: 0.5, at: time, speechFloor: 0.6)
+            time += 0.05
+        }
+        #expect(endpointer.voicedSeconds == 0)
+    }
+
+    @Test func nilFloorKeepsTheStaticBehavior() {
+        var withNil = VoiceEndpointer(config: .listening())
+        var without = VoiceEndpointer(config: .listening())
+        var time: TimeInterval = 0
+        while time <= 1.0 {
+            let a = withNil.ingest(level: 0.5, at: time, speechFloor: nil)
+            let b = without.ingest(level: 0.5, at: time)
+            #expect(a == b)
+            time += 0.05
+        }
+        #expect(withNil.isInSpeech == without.isInSpeech)
+        #expect(withNil.voicedSeconds == without.voicedSeconds)
+    }
+
     @Test func resetClearsMidSpeechState() {
         var endpointer = VoiceEndpointer(config: .listening())
         _ = feed(&endpointer, level: 0.5, from: 0, for: 1.0)

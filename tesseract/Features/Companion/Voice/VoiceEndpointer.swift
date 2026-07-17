@@ -79,8 +79,16 @@ nonisolated struct VoiceEndpointer {
     }
 
     /// Feed one level sample; returns an event on a state edge.
-    mutating func ingest(level: Float, at time: TimeInterval) -> Event? {
-        let loud = level >= config.speechLevel
+    ///
+    /// `speechFloor` is the Echo Floor's effective threshold during playback
+    /// (ADR-0041): when present, speech requires the level to clear it as
+    /// well as the configured static level — residual from the agent's own
+    /// reply must never read as the owner. `nil` (every non-speaking mode)
+    /// keeps the static threshold alone.
+    mutating func ingest(
+        level: Float, at time: TimeInterval, speechFloor: Float? = nil
+    ) -> Event? {
+        let loud = level >= max(config.speechLevel, speechFloor ?? 0)
         let gap = lastIngestAt.map { max(0, min(time - $0, Self.maxCreditedGap)) } ?? 0
         lastIngestAt = time
         if loud {

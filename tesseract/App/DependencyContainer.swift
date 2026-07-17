@@ -640,7 +640,15 @@ final class DependencyContainer: ObservableObject {
             overlay: companionVoicePrototype,
             recorder: companionFlightRecorder,
             settings: settingsManager,
-            proofreadPass: proofreadPass
+            proofreadPass: proofreadPass,
+            // The Echo Floor's far-end signal and the Soft Barge duck
+            // (ADR-0041) — both live on the coordinator's active sink.
+            playbackLevel: { [weak self] in
+                self?.speechCoordinator.playbackLevelNow() ?? 0
+            },
+            fadeSpeech: { [weak self] target, duration in
+                self?.speechCoordinator.fadePlayback(to: target, over: duration)
+            }
         )
         // The reply hook: while a session is live it owns the spoken reply
         // and the auto-listen loop; autoSpeak stays the chat-only path.
