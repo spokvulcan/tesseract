@@ -12,9 +12,9 @@
 //  Shape: while the reply is audibly emitting, the floor chases the observed
 //  mic level fast — but never above `playbackLevel − echoPathLoss`. That cap
 //  is the load-bearing discrimination: residual physically cannot read
-//  louder than the reply minus the echo path's loss (measured ≥ ~0.24
-//  normalized on this hardware, voice-hold-lab E2), while the owner talking
-//  over the reply can and does. An uncapped chase would drag the floor — and
+//  louder than the reply minus the echo path's loss (smallest observed gap
+//  ≈ 0.2 normalized on this hardware, voice-hold-lab E2), while the owner
+//  talking over the reply can and does. An uncapped chase would drag the floor — and
 //  with it the barge threshold — up under the owner's own onset and suppress
 //  every real interruption; a capped one converges on sustained residual
 //  within the endpointer's debounce yet leaves owner speech towering above
@@ -49,8 +49,8 @@ nonisolated struct EchoResidualFloor {
         var margin: Float
         /// The floor's ceiling below the playback envelope: residual can't
         /// read louder than `playbackLevel − echoPathLoss`, owner speech
-        /// can. Calibrated from the lab's E2 worst case (smallest observed
-        /// playback−mic gap) minus headroom.
+        /// can. Set to the lab's E2 worst case (smallest observed
+        /// playback−mic gap, ≈ 0.2); `margin` rides above the cap.
         var echoPathLoss: Float
         /// Playback level at or above this counts as "audibly emitting", in
         /// the sink's dB-normalized envelope domain.

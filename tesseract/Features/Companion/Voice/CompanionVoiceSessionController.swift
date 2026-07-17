@@ -337,18 +337,15 @@ final class CompanionVoiceSessionController {
             return
         }
         guard phase == .speaking else { return }
-        let offset = speakingSince.map { Date().timeIntervalSince($0) } ?? 0
         // Pause, don't stop (pause-on-barge): a false barge resumes the
         // reply where it left off; only a committed turn or a Session
         // Directive makes the interruption permanent.
         pauseSpeaking()
         bargeMode = .hard(verifyStartedAt: Date())
         settledTicks = 0
-        recordVoice(
-            "reaction.barge-in",
-            snapshot: energyFields(level: meterLevel()).merging([
-                "offsetSeconds": String(format: "%.1f", offset), "detector": source,
-            ]) { _, new in new })
+        recordEnergyEvent(
+            "reaction.barge-in", level: meterLevel(),
+            extra: ["offsetSeconds": speakingOffsetSeconds, "detector": source])
         // Fresh take from the interruption on — the playback-period audio
         // (echo-cancelled silence) is dropped, not transcribed.
         reopenCapture()
@@ -369,14 +366,11 @@ final class CompanionVoiceSessionController {
     /// lost, but the reply is not paused until voicing confirms.
     private func softBargeIn() {
         guard phase == .speaking else { return }
-        let offset = speakingSince.map { Date().timeIntervalSince($0) } ?? 0
         bargeMode = .soft(startedAt: Date())
         settledTicks = 0
-        recordVoice(
-            "voice.barge-soft-onset",
-            snapshot: energyFields(level: meterLevel()).merging([
-                "offsetSeconds": String(format: "%.1f", offset)
-            ]) { _, new in new })
+        recordEnergyEvent(
+            "voice.barge-soft-onset", level: meterLevel(),
+            extra: ["offsetSeconds": speakingOffsetSeconds])
         fadeSpeech(Self.softDuckLevel, Self.softDuckRampDown)
         // Fresh take from the onset — mirrors the hard barge; the ducked
         // reply (−12 dB) reads well under the listening threshold, so
@@ -396,12 +390,9 @@ final class CompanionVoiceSessionController {
         guard case .soft = bargeMode else { return }
         bargeMode = .hard(verifyStartedAt: Date())
         pauseSpeaking()
-        let offset = speakingSince.map { Date().timeIntervalSince($0) } ?? 0
-        recordVoice(
-            "reaction.barge-in",
-            snapshot: energyFields(level: meterLevel()).merging([
-                "offsetSeconds": String(format: "%.1f", offset), "detector": detector,
-            ]) { _, new in new })
+        recordEnergyEvent(
+            "reaction.barge-in", level: meterLevel(),
+            extra: ["offsetSeconds": speakingOffsetSeconds, "detector": detector])
     }
 
     /// Drives an open confirm window each tick: accumulated voicing (or a
@@ -452,11 +443,8 @@ final class CompanionVoiceSessionController {
         bargeMode = .none
         falseBargeCount += 1
         if captureOpen { closeCapture() }
-        recordVoice(
-            "voice.barge-false-resume",
-            snapshot: energyFields(level: meterLevel()).merging([
-                "reason": reason
-            ]) { _, new in new })
+        recordEnergyEvent(
+            "voice.barge-false-resume", level: meterLevel(), extra: ["reason": reason])
         if speechDoneCallbackSeen || !isActive {
             // The utterance drained while barged (or the session died) —
             // nothing to restore.
@@ -557,15 +545,13 @@ final class CompanionVoiceSessionController {
 
         case .speaking:
             if tickCount % Self.energySampleEveryTicks == 0 {
-                recordVoice("voice.energy-sample", snapshot: energyFields(level: level))
+                recordEnergyEvent("voice.energy-sample", level: level)
             }
             if event == .speechStarted {
                 if energyBargeMuted {
                     // The escalation ladder's top: the detector cried wolf
                     // ≥4 times this utterance — log, never react.
-                    recordVoice(
-                        "voice.barge-suppressed",
-                        snapshot: energyFields(level: level))
+                    recordEnergyEvent("voice.barge-suppressed", level: level)
                 } else {
                     softBargeIn()
                 }
@@ -713,11 +699,13 @@ final class CompanionVoiceSessionController {
             event, conversationID: currentConversationID(), snapshot: snapshot)
     }
 
-    /// The detector's inputs at this instant — stamped on every barge event
-    /// and the 1 Hz energy sample, so field tuning is never blind again
-    /// (the 2026-07-17 storms shipped no numbers at all).
-    private func energyFields(level: Float) -> [String: String] {
-        [
+    /// Records a barge-family event with the detector's inputs at this
+    /// instant stamped alongside the event's own fields, so field tuning is
+    /// never blind again (the 2026-07-17 storms shipped no numbers at all).
+    private func recordEnergyEvent(
+        _ event: String, level: Float, extra: [String: String] = [:]
+    ) {
+        let energy: [String: String] = [
             "level": String(format: "%.3f", level),
             "threshold": String(
                 format: "%.3f",
@@ -727,6 +715,12 @@ final class CompanionVoiceSessionController {
             "playbackLevel": String(format: "%.3f", playbackLevel()),
             "falseBargeCount": String(falseBargeCount),
         ]
+        recordVoice(event, snapshot: energy.merging(extra) { _, new in new })
+    }
+
+    /// How far into the spoken reply the event landed, for barge records.
+    private var speakingOffsetSeconds: String {
+        String(format: "%.1f", speakingSince.map { Date().timeIntervalSince($0) } ?? 0)
     }
 
     // MARK: - Capture plumbing
