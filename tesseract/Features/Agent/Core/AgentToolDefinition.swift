@@ -57,10 +57,20 @@ private nonisolated final class Box<T: Sendable>: @unchecked Sendable {
 /// Named `AgentToolDefinition` to avoid collision with the existing `AgentTool` protocol
 /// until Epic 6 removes it.
 nonisolated struct AgentToolDefinition: Sendable {
+    /// Which agents the tool surfaces in. `.companionOnly` tools reach the
+    /// Companion's headless agent only — they act at a distance and must
+    /// never appear in the chat the owner is already looking at
+    /// (ADR-0040 §10); the interactive run controller filters on this.
+    enum Audience: Sendable {
+        case all
+        case companionOnly
+    }
+
     let name: String
     let label: String
     let description: String
     let parameterSchema: JSONSchema
+    var audience: Audience = .all
 
     let execute:
         @Sendable (

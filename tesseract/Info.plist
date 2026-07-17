@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>The Companion reads your calendar to weave today's schedule into its plans and reminders — read-only, entirely on this Mac.</string>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.</string>
 </dict>

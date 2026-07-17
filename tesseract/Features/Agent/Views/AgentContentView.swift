@@ -31,11 +31,7 @@ struct AgentContentView: View {
     /// it has no dependencies and no life outside this page.
     @State private var skillCluster = SkillClusterController()
 
-    private var isSpeechActive: Bool {
-        if case .idle = speechCoordinator.state { return false }
-        if case .error = speechCoordinator.state { return false }
-        return true
-    }
+    private var isSpeechActive: Bool { speechCoordinator.state.isActive }
 
     /// The full-inset tap catcher behind a transient surface (the slash popup
     /// or a pinned Skill Cluster): any click outside the surface dismisses it.
@@ -55,13 +51,6 @@ struct AgentContentView: View {
         )
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if isSpeechActive {
-                    AgentSpeechIndicatorBar(onStop: {
-                        session.stopSpeaking()
-                        speakingMessageID = nil
-                    })
-                }
-
                 ZStack(alignment: .bottom) {
                     if commandPalette.showCommandPopup {
                         clickAwayCatcher { commandPalette.dismissCommandPopup() }
@@ -145,7 +134,7 @@ struct AgentContentView: View {
             // scene measures NavigationSplitView's detail minimum by probing
             // at near-zero width, where any wrapping `.fixedSize(vertical:)`
             // text in this inset reports a word-per-line height. When a
-            // banner (or popup, or the speech bar) appears, that inflated
+            // banner (or the slash popup) appears, that inflated
             // minimum makes the scene resize the window past the screen and
             // pin its min height there. Reporting a zero minimum here keeps
             // the window's frame the user's alone; real layout is unaffected.
@@ -269,10 +258,24 @@ struct AgentContentView: View {
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(summary.title)
-                        .font(.callout)
-                        .lineLimit(1)
-                        .foregroundStyle(isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                    HStack(spacing: 6) {
+                        Text(summary.title)
+                            .font(.callout)
+                            .lineLimit(1)
+                            .foregroundStyle(
+                                isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                        // The origin badge (#327 §3): the Companion's own
+                        // turns are findable at a glance; typed chats stay
+                        // unbadged.
+                        if let badge = ConversationOriginBadge.label(for: summary.turnOrigin) {
+                            Text(badge)
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.tint.opacity(0.14), in: Capsule())
+                                .foregroundStyle(.tint)
+                        }
+                    }
                     Text(summary.updatedAt.formatted(.relative(presentation: .named)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -297,35 +300,21 @@ struct AgentContentView: View {
     }
 }
 
-// MARK: - Speech Indicator
+// MARK: - Origin badges (#327 §3)
 
-/// Slim "Speaking…" strip above the composer while TTS plays, with a stop
-/// control. Content-layer chrome — system materials only.
-struct AgentSpeechIndicatorBar: View {
-    let onStop: () -> Void
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "speaker.wave.2.fill")
-                .foregroundStyle(.tint)
-                .symbolEffect(
-                    .variableColor.iterative, options: .repeating, isActive: !reduceMotion)
-            Text("Speaking\u{2026}")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                onStop()
-            } label: {
-                Image(systemName: "stop.circle.fill")
-                    .foregroundStyle(.red)
-            }
-            .buttonStyle(.plain)
+/// The conversation-list origin vocabulary (#327 §2): `interactive` (and
+/// legacy untagged) rows stay clean; the Companion's turn classes get a small
+/// badge. Exhaustive over `TurnOrigin` so the vocabulary can't drift from
+/// what the loop actually emits.
+enum ConversationOriginBadge {
+    static func label(for origin: TurnOrigin) -> String? {
+        switch origin {
+        case .interactive: nil
+        case .beat: "beat"
+        case .wake: "wake"
+        case .ambient: "ambient"
+        case .catchup: "catch-up"
+        case .sleep: "sleep"
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.tint.opacity(0.08))
     }
 }

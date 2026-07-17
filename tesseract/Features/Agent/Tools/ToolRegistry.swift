@@ -32,9 +32,16 @@ final class ToolRegistry {
     }
 
     /// Append a built-in tool after initialization (e.g., skill tool that
-    /// depends on discovered data not available at init time).
+    /// depends on discovered data not available at init time). Replaces an
+    /// existing tool of the same name — `AgentFactory.makeAgent` runs once per
+    /// agent over the shared registry, and the second bootstrap (the
+    /// Companion's headless agent) must not duplicate `use_skill`.
     func appendBuiltInTool(_ tool: AgentToolDefinition) {
-        builtInTools.append(tool)
+        if let index = builtInTools.firstIndex(where: { $0.name == tool.name }) {
+            builtInTools[index] = tool
+        } else {
+            builtInTools.append(tool)
+        }
     }
 
     /// Refresh extension tools (e.g., after extension registration changes).

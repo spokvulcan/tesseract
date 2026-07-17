@@ -100,7 +100,7 @@ final class AgentRunController {
                 & Sendable
         )? = nil
     ) {
-        syncToolsForWebAccess()
+        syncActiveTools()
         runUnderLease { [agent] in
             let outgoing = await prepare?(message) ?? message
             agent.prompt(outgoing)
@@ -186,16 +186,18 @@ final class AgentRunController {
 
     // MARK: - Private
 
-    /// Filter active tools based on the `webAccessEnabled` setting. Called before
-    /// each prompt so the LLM sees the current tool set.
-    private func syncToolsForWebAccess() {
+    /// Filter active tools before each prompt so the LLM sees the current
+    /// set: tools declared `.companionOnly` never reach the interactive chat
+    /// (the owner is already looking at it — ADR-0040 §10; the shared
+    /// registry carries them for the headless agent), and the browser tools
+    /// obey the `webAccessEnabled` setting.
+    private func syncActiveTools() {
         guard let toolRegistry else { return }
-        let allTools = toolRegistry.allTools
-        if settings?.webAccessEnabled == true {
-            agent.updateTools(allTools)
-        } else {
-            agent.updateTools(allTools.filter { !Self.webGatedToolNames.contains($0.name) })
+        var tools = toolRegistry.allTools.filter { $0.audience != .companionOnly }
+        if settings?.webAccessEnabled != true {
+            tools = tools.filter { !Self.webGatedToolNames.contains($0.name) }
         }
+        agent.updateTools(tools)
     }
 
     /// Tool names the **Web Access** switch governs: the built-in Browser

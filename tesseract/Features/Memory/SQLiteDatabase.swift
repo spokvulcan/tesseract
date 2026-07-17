@@ -157,6 +157,12 @@ nonisolated final class SQLiteDatabase {
             return Data(bytes: bytes, count: count)
         }
 
+        /// True when the column holds SQL NULL — the only honest read for a
+        /// nullable REAL, where `double(_:)` would coerce NULL to 0.0.
+        func isNull(_ column: Int32) -> Bool {
+            sqlite3_column_type(stmt, column) == SQLITE_NULL
+        }
+
         /// Advances one row. Returns false when the result set is exhausted.
         func step() throws -> Bool {
             let rc = sqlite3_step(stmt)

@@ -88,12 +88,38 @@ enum SettingsCatalogue {
     static let ttsLanguage = Setting.string("ttsLanguage", default: "English")
     static let ttsStreamingEnabled = Setting.bool("ttsStreamingEnabled", default: true)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
-    /// Walking-skeleton scaffolding (map #301, ticket #303): the lived-with
-    /// Companion heartbeat prototype. Absorbed or retired by the exit PRDs.
+    /// The Companion master switch (ADR-0040). The key keeps its skeleton-era
+    /// name so the owner's existing opt-in survives the cutover to the loop.
     static let companionHeartbeatEnabled = Setting.bool(
         "companionHeartbeatEnabled", default: false)
-    static let companionHeartbeatSpeaks = Setting.bool(
-        "companionHeartbeatSpeaks", default: false)
+    /// The Companion's own model (ADR-0040 §9): his turns run on the smartest
+    /// model on the machine regardless of the interactive picker. Empty falls
+    /// back to the selected agent model.
+    static let companionModelID = Setting.string(
+        "companionModelID", default: "qwen3.6-35b-a3b-paro")
+    /// The one-time launch-at-login ask (ADR-0040 §3): asked when the
+    /// Companion is first enabled; a silent login-item flip is a trust
+    /// violation, so the answer is always the owner's.
+    static let companionLaunchAtLoginAsked = Setting.bool(
+        "companionLaunchAtLoginAsked", default: false)
+    /// Companion voice-overlay concept picker (ticket #328). Exploration
+    /// scaffolding: deleted when the concepts prune to one winner.
+    static let companionVoiceConcept = Setting.string(
+        "companionVoiceConcept", default: "emissary")
+    /// #328 wearing instrument: heartbeat beats summon the picked overlay
+    /// concept instead of a banner (banner stays the unanswered fallback).
+    static let companionBeatsUseOverlay = Setting.bool(
+        "companionBeatsUseOverlay", default: false)
+    /// The voice session's taste ledger (#310) — every disputed call ships as
+    /// a Setting the owner tunes on the wearing build.
+    static let companionVoiceAutoSend = Setting.bool(
+        "companionVoiceAutoSend", default: true)
+    static let companionVoiceTrailingSilence = Setting.double(
+        "companionVoiceTrailingSilence", default: 1.8)
+    static let companionVoiceSessionTimeout = Setting.double(
+        "companionVoiceSessionTimeout", default: 30)
+    static let companionVoiceBargeInLevel = Setting.double(
+        "companionVoiceBargeInLevel", default: 0.25)
 
     // MARK: - Memory (ADR-0035, map #314)
 

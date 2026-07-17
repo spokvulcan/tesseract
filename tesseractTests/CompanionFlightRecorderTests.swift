@@ -1,0 +1,166 @@
+//
+//  CompanionFlightRecorderTests.swift
+//  tesseractTests
+//
+//  The flight recorder (#326): write/read round-trip, the v0 heartbeat
+//  import, the weekly aggregator's deterministic numbers, and the
+//  `log_feedback` stamping contract.
+//
+
+import Foundation
+import MLXLMCommon
+import Testing
+
+@testable import Tesseract_Agent
+
+private func scratchDirectory(_ label: String) -> URL {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("\(label)-\(UUID().uuidString)", isDirectory: true)
+}
+
+@Suite struct CompanionFlightRecorderTests {
+
+    @Test func recordsRoundTripWithWindowFilter() throws {
+        let recorder = CompanionFlightRecorder(directory: scratchDirectory("flight"))
+        let wakeID = UUID()
+        recorder.record(
+            "wake.booked", wakeID: wakeID, snapshot: ["class": "promise"],
+            note: "ask about the dentist")
+        recorder.record("wake.fired", wakeID: wakeID)
+        recorder.record(
+            "delivery.notification", source: .appObserved, wakeID: wakeID)
+
+        let records = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(records.count == 3)
+        #expect(records[0].event == "wake.booked")
+        #expect(records[0].snapshot?["class"] == "promise")
+        #expect(records[0].wakeID == wakeID.uuidString)
+        #expect(records.allSatisfy { $0.source == "app-observed" })
+
+        let none = recorder.records(
+            since: Date().addingTimeInterval(-7200),
+            until: Date().addingTimeInterval(-3600))
+        #expect(none.isEmpty)
+    }
+
+    @Test func v0ImportConvertsAndRetiresTheFile() throws {
+        let dir = scratchDirectory("v0")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let v0 = dir.appendingPathComponent("heartbeat.jsonl")
+        let ping = UUID().uuidString
+        let lines = [
+            #"{"ts":"2026-07-13T09:00:03+03:00","event":"fired","beat":"morning","ping":"\#(ping)","trigger":"fixed-time 09:00 daily (skeleton v0)"}"#,
+            #"{"ts":"2026-07-13T09:00:09+03:00","event":"spoken","beat":"morning","ping":"\#(ping)"}"#,
+            #"{"ts":"2026-07-13T13:35:00+03:00","event":"dismissed","beat":"midday","note":"busy"}"#,
+        ]
+        try lines.joined(separator: "\n").data(using: .utf8)!.write(to: v0)
+
+        let recorder = CompanionFlightRecorder(directory: scratchDirectory("flight-import"))
+        recorder.importV0IfNeeded(from: v0)
+
+        let records = recorder.records(since: Date(timeIntervalSince1970: 0))
+        #expect(records.count == 3)
+        #expect(records[0].event == "beat.fired")
+        #expect(records[0].wakeID == ping)
+        #expect(records[0].snapshot?["beat"] == "morning")
+        #expect(records[2].event == "beat.dismissed")
+        #expect(records[2].note == "busy")
+
+        // The source file retired; a second call is a no-op.
+        #expect(!FileManager.default.fileExists(atPath: v0.path))
+        #expect(
+            FileManager.default.fileExists(atPath: v0.appendingPathExtension("imported").path))
+        recorder.importV0IfNeeded(from: v0)
+        #expect(recorder.records(since: Date(timeIntervalSince1970: 0)).count == 3)
+    }
+
+    @Test func aggregatorComputesDeterministicNumbers() {
+        var records: [CompanionTraceRecord] = []
+        func add(_ event: String, snapshot: [String: String]? = nil, note: String? = nil) {
+            records.append(
+                CompanionTraceRecord(
+                    ts: Date().timeIntervalSince1970, event: event, source: .appObserved,
+                    snapshot: snapshot, note: note))
+        }
+        add("wake.booked", snapshot: ["class": "promise"])
+        add("wake.booked", snapshot: ["class": "rhythm"])
+        add("wake.fired")
+        add("wake.fired")
+        add("wake.consumed")
+        add("wake.dropped")
+        add("delivery.notification")
+        add("delivery.spoken")
+        add("delivery.spoken")
+        add("reaction.engaged")
+        add("reaction.dismissed")
+        add("callback.delivered", snapshot: ["verdict": "specific-true"])
+        add("turn.failed")
+        add("feedback.solicited", note: "less pinging before noon")
+
+        let report = CompanionWeeklyAggregator.aggregate(records)
+        #expect(report.wakesBooked == 2)
+        #expect(report.promisesBooked == 1)
+        #expect(report.wakesFired == 2)
+        #expect(report.wakesConsumed == 1)
+        #expect(report.promisesDropped == 1)
+        #expect(report.deliveriesByRung == ["notification": 1, "spoken": 2])
+        #expect(report.reactions == ["engaged": 1, "dismissed": 1])
+        #expect(report.callbackVerdicts == ["specific-true": 1])
+        #expect(report.turnFailures == 1)
+        #expect(report.feedbackLines.count == 1)
+
+        let text = CompanionWeeklyAggregator.formatted(report)
+        #expect(text.contains("1 dropped"))
+        #expect(text.contains("DEFECT"))
+        #expect(text.contains("less pinging before noon"))
+    }
+}
+
+@Suite struct CompanionFlightRecorderToolTests {
+
+    private func text(_ result: AgentToolResult) -> String {
+        result.content.compactMap { block -> String? in
+            if case .text(let string) = block { return string }
+            return nil
+        }.joined(separator: "\n")
+    }
+
+    @Test func logFeedbackStampsModelReportedAndConversation() async throws {
+        let recorder = CompanionFlightRecorder(directory: scratchDirectory("flight-tool"))
+        let conversationID = UUID()
+        let tool = createLogFeedbackTool(
+            recorder: recorder, currentConversationID: { conversationID })
+
+        let result = try await tool.execute(
+            "call",
+            [
+                "kind": .string("solicited"),
+                "verbatim": .string("the midday pulse was noise today"),
+            ], nil, nil)
+        #expect(text(result).contains("noise"))
+
+        let records = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(records.count == 1)
+        #expect(records[0].event == "feedback.solicited")
+        #expect(records[0].source == "model-reported")
+        #expect(records[0].conversationID == conversationID.uuidString)
+        #expect(records[0].note == "the midday pulse was noise today")
+    }
+
+    @Test func flightLogReadsBackFiltered() async throws {
+        let recorder = CompanionFlightRecorder(directory: scratchDirectory("flight-read"))
+        recorder.record("wake.booked", note: "morning rhythm")
+        recorder.record("delivery.notification")
+        recorder.record("reaction.dismissed")
+
+        let tool = createFlightLogTool(recorder: recorder)
+        let all = text(try await tool.execute("call", [:], nil, nil))
+        #expect(all.contains("wake.booked"))
+        #expect(all.contains("reaction.dismissed"))
+
+        let filtered = text(
+            try await tool.execute("call", ["filter": .string("delivery")], nil, nil))
+        #expect(filtered.contains("delivery.notification"))
+        #expect(!filtered.contains("wake.booked"))
+    }
+}

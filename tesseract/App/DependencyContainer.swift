@@ -167,13 +167,30 @@ final class DependencyContainer: ObservableObject {
         )
     }
 
+    /// The Companion's zero-dialog sensing tier (#308): presence spans, app
+    /// sessions, power transitions → the observation stream. Writes are gated
+    /// on the Companion toggle inside the recorder.
+    lazy var sensedObservations = SensedObservationRecorder(
+        store: memoryStore,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
+
     /// Wire idleness to consolidation (ADR-0035 §7). The owner walking away is
     /// the *only* thing that starts a sleep, and him coming back is the only
     /// thing that stops one — instantly, by cancelling it mid-generation.
+    /// The sensed-observation recorder shares the same two transitions: idle
+    /// closes a presence span, return opens one.
     func startMemoryConsolidationLoop() {
-        idleMonitor.onIdle = { [memorySleep] in memorySleep.start() }
-        idleMonitor.onReturn = { [memorySleep] in memorySleep.yield() }
+        idleMonitor.onIdle = { [memorySleep, sensedObservations] in
+            memorySleep.start()
+            sensedObservations.ownerWentIdle()
+        }
+        idleMonitor.onReturn = { [memorySleep, sensedObservations] in
+            memorySleep.yield()
+            sensedObservations.ownerReturned()
+        }
         idleMonitor.start()
+        sensedObservations.start()
     }
 
     // Text Injection
@@ -210,8 +227,85 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createRememberTool(memory: memoryEngine))
         registry.appendBuiltInTool(createRecallTool(memory: memoryEngine))
         registry.appendBuiltInTool(createContestTool(memory: memoryEngine))
+        // The tracking model's five typed talk-time tools (#308) — registered
+        // in every conversation, same as memory's: the check-in IS the
+        // measuring instrument, whichever conversation it happens in.
+        registry.appendBuiltInTool(createPlanDayTool(store: memoryStore))
+        registry.appendBuiltInTool(createLogStepTool(store: memoryStore))
+        registry.appendBuiltInTool(createLogSampleTool(store: memoryStore))
+        registry.appendBuiltInTool(createLogTaskTool(store: memoryStore))
+        registry.appendBuiltInTool(createCloseDayTool(store: memoryStore))
+        // The flight recorder's read path and its one write door (#326).
+        registry.appendBuiltInTool(createFlightLogTool(recorder: companionFlightRecorder))
+        registry.appendBuiltInTool(
+            createLogFeedbackTool(
+                recorder: companionFlightRecorder,
+                currentConversationID: { [weak self] in
+                    self?.agentConversationStore.currentConversation?.id
+                }
+            ))
+        // The entity's hands on his own future (ADR-0040). Registered in
+        // every conversation like memory's tools: "remind me tomorrow" said
+        // in chat books a wake through the same one door the Companion's own
+        // turns use.
+        registry.appendBuiltInTool(
+            createBookWakeTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createReviseInstructionsTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        // The delivery palette (ADR-0040 §10) — one typed tool per rung. The
+        // shared registry carries them for the Companion's headless agent;
+        // each is declared `audience: .companionOnly`, so the interactive
+        // chat's tool sync (`AgentRunController`) drops them.
+        registry.appendBuiltInTool(
+            createSetGlyphTool(
+                presence: companionPresence,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createNotifyTool(deliver: { [weak self] title, body in
+                await self?.companionLoop.deliverNotification(title: title, body: body)
+            }))
+        registry.appendBuiltInTool(
+            createSpeakTool(deliver: { [weak self] text in
+                self?.companionLoop.deliverSpoken(text)
+            }))
+        registry.appendBuiltInTool(
+            createSummonOverlayTool(
+                summon: { [weak self] line in
+                    self?.companionSummons.summon(line: line)
+                },
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createOpenConversationTool(
+                open: { [weak self] id in self?.presentConversation(id) },
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
         return registry
     }()
+
+    /// The one "put a conversation on his screen" action — the loop, the
+    /// summons, and the `open_conversation` rung all reach the UI through it.
+    private func presentConversation(_ id: UUID) {
+        chatSession.loadConversation(id)
+        (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+    }
+
+    /// The Companion's interaction-fact log (#326): app-owned, App Support,
+    /// retention forever. Only app code writes; the model reads via
+    /// `flight_log` and testifies via `log_feedback`.
+    lazy var companionFlightRecorder = CompanionFlightRecorder()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {
         // TTS residency arrives as closures (evaluated lazily) because the
@@ -399,29 +493,174 @@ final class DependencyContainer: ObservableObject {
         composerDraft: composerDraft
     )
 
-    // The Companion walking skeleton (map #301, ticket #303): a deliberately
-    // crude lived-with heartbeat — an instrument the owner wears while the
-    // Companion grillings run. Absorbed or retired by the map's exit PRDs.
-    lazy var companionHeartbeat = CompanionHeartbeat(
-        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
-        speaks: { [settingsManager] in settingsManager.companionHeartbeatSpeaks },
-        speak: { [weak self] in self?.speechCoordinator.speakText($0) },
-        onEngage: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() },
-        // The beat asks the question; memory supplies the *particular* one. A
-        // nil here — memory empty, model unsure, output unusable — falls back to
-        // the beat's own hardcoded line, which is the whole safety story: generic
-        // is a disappointment, invented would be a betrayal.
-        composeBody: { [weak self] beat in
-            guard let self else { return beat.prompt }
-            let line = await MemoryCallback.compose(
-                cue: beat.prompt,
-                engine: self.memoryEngine,
-                arbiter: self.inferenceArbiter,
-                complete: self.internalCompletion
+    // The Companion (ADR-0040): the entity's harness. The turn context is the
+    // correlation box the tools and the runner share; the runner is the
+    // headless turn envelope; the loop is the ticking evaluator that grants
+    // turns. Replaces the walking skeleton (#303).
+    lazy var companionTurnContext = CompanionTurnContext()
+    /// Jarvis's ambient presence (#327 §3): the glyph and the chat strip
+    /// render it; the runner and the summons path drive it.
+    lazy var companionPresence = CompanionPresence(recorder: companionFlightRecorder)
+    lazy var companionTurnRunner = CompanionTurnRunner(
+        // Deferred bootstrap (`unowned` is safe: the container outlives every
+        // consumer) — a second full agent whose context never collides with
+        // the chat session's, over the same shared tool registry.
+        makeAgent: { [unowned self] in
+            AgentFactory.makeAgent(
+                inferenceService: self.serverInferenceService,
+                packageRegistry: self.packageRegistry,
+                extensionHost: self.extensionHost,
+                toolRegistry: self.newToolRegistry,
+                contextManager: self.contextManager,
+                settingsManager: self.settingsManager,
+                mcpToolsExtension: self.mcpClientManager.toolsExtension
             )
-            return line ?? beat.prompt
+        },
+        arbiter: inferenceArbiter,
+        conversationStore: agentConversationStore,
+        memory: memoryEngine,
+        recorder: companionFlightRecorder,
+        settings: settingsManager,
+        context: companionTurnContext,
+        presence: companionPresence,
+        isModelDownloaded: { [modelDownloadManager] in
+            modelDownloadManager.isDownloaded($0)
         }
     )
+    /// The owner's attention outranks the entity's schedule: background turns
+    /// hold while he is using the app (voice session, generation, TTS he is
+    /// listening to, dictation into the composer, or the app frontmost with
+    /// recent input) and for the gate's quiet window after — the one queue,
+    /// strictly after him, never beside him.
+    lazy var companionAttentionGate = CompanionAttentionGate(
+        isOwnerEngaged: { [unowned self] in
+            if self.companionVoiceSession.isActive { return true }
+            if self.chatSession.isGenerating { return true }
+            if self.agentVoiceInput.voiceState == .recording
+                || self.agentVoiceInput.voiceState == .transcribing
+            {
+                return true
+            }
+            if self.speechCoordinator.state.isActive { return true }
+            return NSApp.isActive
+                && IdleMonitor.hidIdleSeconds() < CompanionAttentionGate.quietWindow
+        },
+        isMachineBusy: { [unowned self] in self.inferenceArbiter.isGPULeaseHeld }
+    )
+    // Explicitly typed: the loop's `speak` closure reaches the summons, and
+    // the summons's banner fallback reaches the loop — inference across the
+    // two lazy initializers would be circular.
+    lazy var companionLoop: CompanionLoop = CompanionLoop(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        runner: companionTurnRunner,
+        notifier: CompanionNotifier(),
+        idleMonitor: idleMonitor,
+        attention: companionAttentionGate,
+        sensed: sensedObservations,
+        calendar: CompanionCalendarReader(),
+        isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
+        // The spoken rung — choreography lives in `CompanionSummons`.
+        speak: { [weak self] text in
+            self?.companionSummons.deliver(line: text)
+        },
+        openConversation: { [weak self] id in self?.presentConversation(id) }
+    )
+
+    // The summons conductor (ADR-0040 §10/§11, #328): speak → overlay →
+    // reaction routing → banner fallback for the unanswered. Conduct lives in
+    // the type; this container hands it doors.
+    lazy var companionSummons: CompanionSummons = CompanionSummons(
+        settings: settingsManager,
+        presence: companionPresence,
+        recorder: companionFlightRecorder,
+        context: companionTurnContext,
+        speakPlain: { [weak self] text in
+            self?.speechCoordinator.speakText(text)
+        },
+        speakUnderOverlay: { [weak self] text in
+            self?.speechCoordinator.speakText(text, showsOverlay: false)
+        },
+        summonOverlay: { [weak self] title, line in
+            await self?.companionVoicePrototype.summonBeat(title: title, line: line)
+                ?? .unanswered
+        },
+        openConversation: { [weak self] id in self?.presentConversation(id) },
+        enterVoiceSession: { [weak self] via in
+            self?.companionVoiceSession.enter(via: via)
+        },
+        postFallbackBanner: { [weak self] line, wakeID, conversationID in
+            await self?.companionLoop.deliverUnansweredFallback(
+                line: line, wakeID: wakeID, conversationID: conversationID)
+        }
+    )
+
+    // PROTOTYPE — the Companion voice-overlay concepts (map #301, ticket
+    // #328): scripted demo scenes on throwaway overlay surfaces, driven from
+    // Settings. Since #310 also the live voice session's surface.
+    lazy var companionVoicePrototype = CompanionVoicePrototype(
+        settings: settingsManager,
+        openChat: { (NSApp.delegate as? AppDelegate)?.navigateToAgent() }
+    )
+
+    // The voice session (#310): voice as a mode of the one conversation —
+    // binds the #328 overlay, the speech engine, and the auto-listen loop to
+    // the interactive chat. Spoken and typed turns are the same persisted
+    // message stream; barge-in is app-observed at the engine seam (#326).
+    lazy var companionVoiceSession: CompanionVoiceSessionController = {
+        let controller = CompanionVoiceSessionController(
+            capture: VoiceCaptureSession(
+                audioCapture: audioCaptureEngine,
+                transcriptionEngine: transcriptionEngine,
+                captureDump: captureDumpStore,
+                isCaptureDumpEnabled: { [settingsManager] in
+                    settingsManager.captureDumpEnabled
+                }
+            ),
+            meterLevel: { [dictationFeed] in dictationFeed.level },
+            meterSpectrum: { [dictationFeed] in dictationFeed.spectrum },
+            sendMessage: { [weak self] text in
+                self?.chatSession.sendMessage(text, bypassCommandParsing: true)
+            },
+            stageToComposer: { [composerDraft] text in
+                composerDraft.restore(text: text, images: [])
+            },
+            speak: { [weak self] text, onDone in
+                self?.speechCoordinator.speakText(
+                    text, showsOverlay: false, route: .voiceSession, onSuccess: onDone)
+            },
+            stopSpeaking: { [weak self] in self?.speechCoordinator.stop() },
+            pauseSpeaking: { [weak self] in self?.speechCoordinator.pause() },
+            resumeSpeaking: { [weak self] in self?.speechCoordinator.resume() },
+            speechState: { [weak self] in self?.speechCoordinator.state ?? .idle },
+            currentConversationID: { [weak self] in
+                self?.agentConversationStore.currentConversation?.id
+            },
+            overlay: companionVoicePrototype,
+            recorder: companionFlightRecorder,
+            settings: settingsManager,
+            proofreadPass: proofreadPass,
+            // The Echo Floor's far-end signal and the Soft Barge duck
+            // (ADR-0041) — both live on the coordinator's active sink.
+            playbackLevel: { [weak self] in
+                self?.speechCoordinator.playbackLevelNow() ?? 0
+            },
+            fadeSpeech: { [weak self] target, duration in
+                self?.speechCoordinator.fadePlayback(to: target, over: duration)
+            },
+            // ADR-0041: the capture engine is held (and hosts the reply's
+            // playback) for the session's lifetime.
+            beginVoiceHold: { [weak self] in self?.audioCaptureEngine.beginVoiceHold() },
+            endVoiceHold: { [weak self] in self?.audioCaptureEngine.endVoiceHold() }
+        )
+        // The reply hook: while a session is live it owns the spoken reply
+        // and the auto-listen loop; autoSpeak stays the chat-only path.
+        chatSession.voiceReplyHandler = { [weak controller] text in
+            controller?.replyCompleted(text) ?? false
+        }
+        return controller
+    }()
 
     // Speech (TTS) — engine v2 (ADR-0038/0039): the engine actor lives in the
     // TesseractSpeech package behind its ports; the presenter mirrors
@@ -444,12 +683,17 @@ final class DependencyContainer: ObservableObject {
         // nothing else in the graph, so there is no shared handle to wire here.
         // Mirrors `SettingsManager()` above, which relies on its
         // `UserDefaultsSettingsStore()` default. Tests inject `InMemoryAudioPlayback`.
-        SpeechCoordinator(
+        // Dual-Path Playback (ADR-0041): the voice-session sink renders
+        // session replies through the VPIO capture engine under its voice
+        // hold; every other TTS surface keeps the dedicated engine.
+        let coordinator = SpeechCoordinator(
             textExtractor: textExtractor,
             engine: speechEnginePresenter,
             settings: settingsManager,
             notchOverlay: ttsNotchPanelController
         )
+        coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
+        return coordinator
     }()
 
     // Overlay — the Overlay Feed every variant renders from, and the dumb
@@ -469,6 +713,10 @@ final class DependencyContainer: ObservableObject {
         manager.coordinator = dictationCoordinator
         manager.history = transcriptionHistory
         manager.speechCoordinator = speechCoordinator
+        // Jarvis's presence on the quietest rung (#327 §3).
+        companionPresence.onChange = { [weak manager] state in
+            manager?.updateState(fromCompanion: state)
+        }
         manager.onTakeAppshot = { [appshotController] in
             Task { await appshotController.takeAppshot() }
         }
@@ -646,9 +894,9 @@ final class DependencyContainer: ObservableObject {
         // subscription with a rule live (and are tested) there.
         appBindings.start()
 
-        // Arm the Companion walking skeleton (#303) — a sleeping tick task and
-        // one date comparison per 30 s unless the experimental toggle is on.
-        companionHeartbeat.start()
+        // Arm the Companion loop (ADR-0040) — a sleeping tick task and one
+        // due-ness evaluation per 30 s unless the Companion toggle is on.
+        companionLoop.start()
 
         // Wire the MCP client (PRD #190). Materialize the agent first so its
         // MCP tools extension is registered with the ExtensionHost before the
@@ -689,7 +937,11 @@ final class DependencyContainer: ObservableObject {
                 isTranscriptionModelLoaded: { [transcriptionEngine] in
                     transcriptionEngine.isModelLoaded
                 },
-                modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher()
+                modelDownloadStatuses: modelDownloadManager.$statuses.eraseToAnyPublisher(),
+                isAgentModelDownloaded: { [modelDownloadManager] in
+                    modelDownloadManager.isDownloaded($0)
+                },
+                isMemorySleepRunning: { [memorySleep] in memorySleep.isRunning }
             ),
             effects: .init(
                 setUpOverlayPanel: { [pillOverlay] in
@@ -755,6 +1007,9 @@ final class DependencyContainer: ObservableObject {
                     } catch {
                         Log.general.error("Failed to load Whisper model: \(error)")
                     }
+                },
+                pushCompanionAsleep: { [companionPresence] in
+                    companionPresence.setAsleep($0)
                 }
             )
         )

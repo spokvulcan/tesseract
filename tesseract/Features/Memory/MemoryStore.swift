@@ -46,9 +46,17 @@ nonisolated enum MemoryOwner: String, Sendable {
 actor MemoryStore {
 
     /// v2: the `meta` table — the embedding-scheme stamp lives there (#332).
-    static let schemaVersion = 2
+    /// v3: the Companion's tracking + loop tables beside memory's (#308,
+    /// ADR-0040) — same database on purpose: FK-able provenance, one backup
+    /// and inspection story. Their methods live in `MemoryStore+Tracking.swift`.
+    /// v4: the entity's standing-instructions versions (ADR-0040 §12).
+    /// v5: `heardAt` on wakes — the resurfacing ladder (#309) must tell an
+    /// ignored promise from a heard one; any owner reaction stamps it.
+    static let schemaVersion = 5
 
-    private let db: SQLiteDatabase
+    /// Internal, not private: the tracking extension (a separate file by
+    /// design — Companion domain, memory's connection) prepares against it.
+    let db: SQLiteDatabase
     let directory: URL
 
     /// `directory` is injectable — it is simultaneously the test seam and the
@@ -68,6 +76,12 @@ actor MemoryStore {
     /// else can reach the connection, so there is nothing to protect it from.
     private nonisolated static func migrate(_ db: SQLiteDatabase) throws {
         guard db.userVersion < Self.schemaVersion else { return }
+
+        // v5: stores that already carry the wakes table (v3/v4) gain `heardAt`
+        // in place; fresh stores get it from the CREATE below.
+        if db.userVersion >= 3 {
+            try db.execute("ALTER TABLE wakes ADD COLUMN heardAt REAL")
+        }
 
         try db.execute(
             """
@@ -166,6 +180,85 @@ actor MemoryStore {
             CREATE TABLE IF NOT EXISTS meta (
                 key   TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL
+            );
+
+            -- Companion tracking (#308): testimony/measurement/conclusion —
+            -- these tables are the measurement grain. Dates: REAL Unix seconds
+            -- (the store-wide convention); day keys: local 'yyyy-MM-dd' TEXT.
+
+            CREATE TABLE IF NOT EXISTS days (
+                date      TEXT PRIMARY KEY NOT NULL,  -- local 'yyyy-MM-dd'
+                seed      TEXT,                       -- tomorrow's seed, written at close
+                chain     TEXT NOT NULL DEFAULT '[]', -- JSON [ContractStep]
+                support   TEXT NOT NULL DEFAULT '[]', -- JSON [String], <= 2 by convention
+                closedAt  REAL,                       -- NULL = "we didn't close" flag
+                createdAt REAL NOT NULL,
+                updatedAt REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS observations (
+                id         TEXT PRIMARY KEY NOT NULL,
+                ts         REAL NOT NULL,
+                domain     TEXT NOT NULL,             -- work | body | mind
+                kind       TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                source     TEXT NOT NULL,             -- sensed | elicited | imported
+                stream     TEXT,
+                episodeRef TEXT                       -- elicited: the utterance behind the fact
+            );
+            CREATE INDEX IF NOT EXISTS observations_ts ON observations(ts);
+            CREATE INDEX IF NOT EXISTS observations_kind_ts ON observations(kind, ts);
+
+            CREATE TABLE IF NOT EXISTS work_items (
+                id         TEXT PRIMARY KEY NOT NULL,
+                title      TEXT NOT NULL,
+                stream     TEXT,
+                domain     TEXT NOT NULL DEFAULT 'work',
+                cadence    TEXT NOT NULL,             -- once | daily
+                status     TEXT NOT NULL,             -- open | done | dropped
+                due        REAL,
+                episodeRef TEXT,
+                createdAt  REAL NOT NULL,
+                updatedAt  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS work_items_status ON work_items(status);
+
+            -- The Companion loop (ADR-0040): wakes are rows; a wake is consumed
+            -- only by a completed turn.
+
+            CREATE TABLE IF NOT EXISTS wakes (
+                id             TEXT PRIMARY KEY NOT NULL,
+                content        TEXT NOT NULL,          -- announceable in one line
+                due            REAL NOT NULL,
+                class          TEXT NOT NULL,          -- promise | rhythm | followup | resummons
+                state          TEXT NOT NULL,          -- booked | fired | engaged | delivered | resurfaced | delivered_unheard | dropped
+                summonsGrant   INTEGER NOT NULL DEFAULT 0,
+                conversationID TEXT,                   -- the conversation that booked it
+                createdAt      REAL NOT NULL,
+                updatedAt      REAL NOT NULL,
+                firedAt        REAL,
+                consumedAt     REAL,                   -- set only by a completed turn
+                heardAt        REAL                    -- his first reaction, any kind (#309)
+            );
+            CREATE INDEX IF NOT EXISTS wakes_state_due ON wakes(state, due);
+
+            CREATE TABLE IF NOT EXISTS loop_days (
+                date      TEXT PRIMARY KEY NOT NULL,   -- local 'yyyy-MM-dd'
+                state     TEXT NOT NULL DEFAULT '{}',  -- JSON CompanionLoopDayState
+                updatedAt REAL NOT NULL
+            );
+
+            -- The entity's standing instructions (ADR-0040 §12): append-only
+            -- versions; the highest version is what every turn injects. The
+            -- entity revises through its tool, the owner through the editor —
+            -- both append, nothing is ever silently rewritten.
+
+            CREATE TABLE IF NOT EXISTS companion_instructions (
+                version   INTEGER PRIMARY KEY AUTOINCREMENT,
+                text      TEXT NOT NULL,
+                author    TEXT NOT NULL,               -- seed | entity | owner
+                note      TEXT,                        -- why this revision
+                createdAt REAL NOT NULL
             );
             """
         )
