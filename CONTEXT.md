@@ -1377,10 +1377,22 @@ _Avoid_: voice command (the macOS accessibility concept), wake word.
 
 **Dual-Path Playback**:
 Where TTS renders: a **Voice Session**'s replies play through the capture
-engine, so **Voice Processing**'s echo cancellation hears exactly what the
-speakers play (and the reply escapes the recording duck); every other TTS
-surface keeps its dedicated playback path and unprocessed fidelity.
+engine (the **Voice Hold** keeps it running for the session), so the reply is
+the echo canceller's own render stream — it escapes the recording duck other
+audio suffers under the open mic, and its cancellation never depends on the
+duck/loopback policy; every other TTS surface keeps its dedicated playback
+path and unprocessed fidelity.
 _Avoid_: single playback engine, VPIO routing (the implementation).
+
+**Voice Hold**:
+The capture engine's state for a **Voice Session**'s lifetime: the engine
+keeps running between captures — capture start/stop degrade to a capture-gate
+flip, never tap install/remove or render rewiring on a running engine (the
+2026-07-17 crash class) — and hosts the session's TTS player nodes upstream
+of its mixer. Wired asynchronously at session enter (~900 ms of
+stopped-engine work: tap once, render side verified, start); a reply that
+beats the wiring falls back to the dedicated playback path.
+_Avoid_: warm engine (the prewarm concept), engine reuse, always-on mic.
 
 ### Text injection
 

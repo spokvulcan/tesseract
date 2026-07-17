@@ -1,6 +1,6 @@
 # Voice-session TTS renders through the VPIO capture engine (Dual-Path Playback)
 
-Status: accepted — first implementation REVERTED 2026-07-17 (crash); redo pending
+Status: accepted — first implementation REVERTED 2026-07-17 (crash); redo landed 2026-07-17 (voice hold v2)
 
 **Status note (2026-07-17):** the first implementation (d30412c7) shipped a
 *voice hold* that kept the engine running between captures and installed the
@@ -12,11 +12,46 @@ The retry loop around the failing capture also froze the UI (20 Hz re-attempts,
 each costing up to rebuild+re-arm on the main thread; a backoff now guards
 that). The acoustic layer is reverted to the dedicated-engine playback path;
 every other layer of the self-echo fix (synchronous speak state, hardened
-watchdog, pause-on-barge, Substance Gate, Session Directives) stands. A redo
-must: install the tap once per hold (capture start/stop = buffer discipline,
-never tap install/remove on a running engine), wire the render side only on a
-stopped engine, verify format compatibility before connecting, and be
-exercised by a runtime harness (not just unit tests) before landing.
+watchdog, pause-on-barge, Substance Gate, Session Directives) stands.
+
+**Redo (2026-07-17, same day):** researched against Apple's own docs and
+field evidence, then rebuilt the hold behind a runtime harness
+(`research/voice-hold-lab`, results in its RUNBOOK). The crash-safe
+discipline, all four invariants proven by the harness and pinned by
+`AVAudioIONode.h` ("the output format of the input node and the input format
+of the output node have to be the same and they can only be changed when the
+engine is in a stopped state"):
+
+1. The capture tap is installed **once per hold, on a stopped engine**;
+   capture start/stop is a *capture gate* flag the tap block reads (buffer
+   discipline) — never tap install/remove on a running engine.
+2. The render side (mainMixer→output) is connected only on a stopped engine,
+   with the format pin verified by read-back before start.
+3. While running, only Apple-documented dynamic reconfiguration: player
+   nodes attach/connect/schedule/detach upstream of the mixer
+   (`AVAudioEngine.h` class discussion) and gate flips.
+4. VP arm/disarm only while stopped (unchanged).
+
+The wiring (tap + render + start) measures ~860–900 ms on this machine, so it
+runs **detached** and commits onto the main actor by generation; captures
+fast-fail into the session's existing 1 s backoff until it lands, and a voice
+reply that beats the wiring falls back to the dedicated engine. Harness E7
+verified the background-thread wiring shape.
+
+**Measured expectation-setting (harness E2):** on the owner's hardware,
+macOS VPIO's *device-wide* loopback AEC already cancels other-process
+playback to the same steady-state residual as same-unit rendering (chirp
+correlation ≈ 0.0007 both ways; a common >2 kHz nonlinear tail remains). The
+dual path is therefore not a 20 dB AEC upgrade — its distinct wins are: the
+reply **plays undipped** under the open mic (it stops being "other audio" to
+the recording duck), cancellation that is the canceller's own render
+reference *by construction* (independent of duck/loopback policy), and the
+hold lifecycle itself (turn transitions ~0 ms vs ~48 ms engine starts;
+AEC/AGC stay converged between turns — AGC re-ramps from near-zero on every
+engine start). The state-machine layers shipped in d30412c7/29edc92f remain
+the primary self-echo fix; this is the acoustic belt-and-suspenders plus the
+UX upgrades. Render-path coloration is gated by the owner ear test
+(harness E5).
 
 The Voice Session keeps the microphone open while the assistant speaks (full
 duplex — voice barge-in is a hard requirement, #310 §4), which makes Self-Echo

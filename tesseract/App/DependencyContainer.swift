@@ -640,7 +640,11 @@ final class DependencyContainer: ObservableObject {
             overlay: companionVoicePrototype,
             recorder: companionFlightRecorder,
             settings: settingsManager,
-            proofreadPass: proofreadPass
+            proofreadPass: proofreadPass,
+            // ADR-0041: the capture engine is held (and hosts the reply's
+            // playback) for the session's lifetime.
+            beginVoiceHold: { [weak self] in self?.audioCaptureEngine.beginVoiceHold() },
+            endVoiceHold: { [weak self] in self?.audioCaptureEngine.endVoiceHold() }
         )
         // The reply hook: while a session is live it owns the spoken reply
         // and the auto-listen loop; autoSpeak stays the chat-only path.
@@ -671,17 +675,17 @@ final class DependencyContainer: ObservableObject {
         // nothing else in the graph, so there is no shared handle to wire here.
         // Mirrors `SettingsManager()` above, which relies on its
         // `UserDefaultsSettingsStore()` default. Tests inject `InMemoryAudioPlayback`.
-        // Dual-Path Playback (ADR-0041) is decided but its first
-        // implementation is reverted (see the ADR's status note): no
-        // `voiceSessionPlayback` sink is installed, so the `.voiceSession`
-        // route falls back to the default sink until the voice hold can be
-        // rebuilt without taps on a running engine.
-        SpeechCoordinator(
+        // Dual-Path Playback (ADR-0041): the voice-session sink renders
+        // session replies through the VPIO capture engine under its voice
+        // hold; every other TTS surface keeps the dedicated engine.
+        let coordinator = SpeechCoordinator(
             textExtractor: textExtractor,
             engine: speechEnginePresenter,
             settings: settingsManager,
             notchOverlay: ttsNotchPanelController
         )
+        coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
+        return coordinator
     }()
 
     // Overlay — the Overlay Feed every variant renders from, and the dumb

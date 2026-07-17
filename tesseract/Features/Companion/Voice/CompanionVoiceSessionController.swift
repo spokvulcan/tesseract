@@ -9,9 +9,10 @@
 //
 //  The loop: listen (mic open, endpointer armed) → owner speaks → trailing
 //  silence auto-sends the transcription → reply arrives → Jarvis speaks it
-//  (mic open underneath; VPIO's loopback echo cancellation keeps his voice
-//  out of the input — the ADR-0041 dual-path reference routing is deferred
-//  until the voice hold can be implemented without taps on a running engine).
+//  (mic open underneath; the ADR-0041 voice hold keeps the VPIO engine
+//  running for the whole session and renders the reply through it — the
+//  reply plays undipped under the open mic, and its echo cancellation is
+//  the canceller's own render reference by construction).
 //  Sustained speech energy is a barge-in that *pauses* him: a take with
 //  substance commits and stops the reply for good, a Session Directive stops
 //  it without reaching the agent, and a false barge resumes him where he
@@ -98,6 +99,11 @@ final class CompanionVoiceSessionController {
     private let recorder: CompanionFlightRecorder
     private let settings: SettingsManager
     private let proofreadPass: ProofreadPass?
+    /// The ADR-0041 voice hold: the capture engine is held (and hosts the
+    /// reply's playback) for the session's lifetime. Injected so tests keep
+    /// their fakes; the composition root binds `AudioCaptureEngine`.
+    private let beginVoiceHold: @MainActor () -> Void
+    private let endVoiceHold: @MainActor () -> Void
 
     // MARK: - Session state
 
@@ -147,7 +153,9 @@ final class CompanionVoiceSessionController {
         overlay: CompanionVoicePrototype,
         recorder: CompanionFlightRecorder,
         settings: SettingsManager,
-        proofreadPass: ProofreadPass?
+        proofreadPass: ProofreadPass?,
+        beginVoiceHold: @escaping @MainActor () -> Void = {},
+        endVoiceHold: @escaping @MainActor () -> Void = {}
     ) {
         self.capture = capture
         self.meterLevel = meterLevel
@@ -164,6 +172,8 @@ final class CompanionVoiceSessionController {
         self.recorder = recorder
         self.settings = settings
         self.proofreadPass = proofreadPass
+        self.beginVoiceHold = beginVoiceHold
+        self.endVoiceHold = endVoiceHold
     }
 
     // MARK: - Entry / exit
@@ -175,6 +185,9 @@ final class CompanionVoiceSessionController {
     func enter(via: String) {
         guard !isActive else { return }
         exchanges = 0
+        // The hold's detached wiring starts now — it has ~900 ms to land
+        // while the overlay appears and the session opens its first listen.
+        beginVoiceHold()
         recorder.record(
             "voice.session-entered",
             conversationID: currentConversationID(),
@@ -197,6 +210,8 @@ final class CompanionVoiceSessionController {
         bargeVerifyStartedAt = nil
         deafUntil = nil
         closeCapture()
+        // The capture is closed first, so the hold ends on a free engine.
+        endVoiceHold()
         ticker?.cancel()
         ticker = nil
         phase = .idle
