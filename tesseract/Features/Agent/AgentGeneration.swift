@@ -30,6 +30,11 @@ struct AgentGenerateParameters: Sendable, Codable {
     var frequencyPenalty: Float?
     var frequencyContextSize: Int = 20
 
+    /// Token ids masked to `-inf` at every decode step, mirroring the
+    /// checkpoint's `generation_config.json` `suppress_tokens`. Rides the
+    /// model-derived base (`forModel`) untouched by HTTP request overrides.
+    var suppressedTokens: [Int] = []
+
     /// Thinking-loop safeguard. See ``ThinkingRepetitionDetector/Config``.
     /// Applies only when the model uses a `<think>` chat template (Qwen3/3.5 thinking).
     var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
@@ -167,12 +172,31 @@ struct AgentGenerateParameters: Sendable, Codable {
         repetitionPenalty: 1.05
     )
 
+    /// Gemma 4 12B (`gemma4_unified`) — sampling and suppression taken from
+    /// the checkpoint's `generation_config.json`: temp 1.0, top_p 0.95,
+    /// top_k 64, `suppress_tokens` = the end-of-image (258882) and
+    /// end-of-audio (258883) delimiters. Those two are input-side markup the
+    /// processor inserts around media spans; the checkpoint marks them
+    /// generate-time-forbidden, and without the mask the model can emit them
+    /// spuriously mid-text. No `<think>` template, so the safeguard is off.
+    static let gemma4: AgentGenerateParameters = {
+        var p = AgentGenerateParameters(
+            temperature: 1.0,
+            topP: 0.95,
+            topK: 64
+        )
+        p.suppressedTokens = [258_882, 258_883]
+        p.thinkingSafeguard.enabled = false
+        return p
+    }()
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
         if modelID.hasPrefix("ornith-9b") { return .ornith9b }
         if modelID.hasPrefix("ornith-35b") { return .ornith35b }
+        if modelID.hasPrefix("gemma-4") { return .gemma4 }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
         if modelID.hasPrefix("qwen3.6") { return .qwen36Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }

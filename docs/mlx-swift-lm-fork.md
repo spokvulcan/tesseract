@@ -37,6 +37,7 @@ text + vision including the 12B `gemma4_unified`). Carried on top, in order:
 | `feat(paroquant): Prepared Checkpoint + O(1) AWQ conversion matching` | Prepared Checkpoint artifact + O(1) matcher (ADR-0032) | Not filed — candidate follow-up to #164 |
 | `Gemma 4: port the gemma4_audio USM-Conformer audio encoder` (+2 commits) | Gemma 4 native audio input: encoder port, log-mel extractor + processor wiring, mel parity test | **Upstream PR #392 open** (CI green, maintainer-anointed) |
 | `Gemma4Unified: audio and video input in the processor (encoder-free 12B)` | 12B `gemma4_unified` audio (+video) processor + model wiring — encoder-free raw-waveform frames. Carried with a one-line rebase fix (`state:` added to a test's `prepare` call, post-#399 API) | **Upstream PR #400 open** (unreviewed, no CI — the risk carry; fallback documented in tesseract #358) |
+| `GenerateParameters: suppress_tokens support (SuppressedTokensProcessor)` | `suppressedTokens` on GenerateParameters + `-inf` mask processor + `ChainedLogitProcessor`; implements `generation_config.json`'s `suppress_tokens` (Gemma 4 forbids emitting its eoi/eoa media delimiters) | Not filed — upstream candidate (generic HF-semantics gap) |
 
 ## Contributed back
 

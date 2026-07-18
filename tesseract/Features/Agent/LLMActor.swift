@@ -820,7 +820,8 @@ actor LLMActor {
             presenceContextSize: parameters.presenceContextSize,
             frequencyPenalty: parameters.frequencyPenalty,
             frequencyContextSize: parameters.frequencyContextSize,
-            prefillStepSize: parameters.prefillStepSize
+            prefillStepSize: parameters.prefillStepSize,
+            suppressedTokens: parameters.suppressedTokens
         )
     }
 
