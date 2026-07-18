@@ -85,6 +85,23 @@ final class ChatSession {
     /// event fold can't see. The composer's send/cancel switch keys off this.
     var isGenerating: Bool { agentRun.isGenerating }
 
+    /// Mission Control is open for reading (ADR-0046). The fold only ever
+    /// gains messages through the loop — the owner's words reach it as wakes
+    /// and (later) Report-Backs, never typed in — so the composer hides and
+    /// every chat-side write path guards on this. The guards are also what
+    /// keeps this session's snapshot from ever clobbering a loop turn that
+    /// landed on disk while the conversation was open here.
+    var isMissionControlOpen: Bool {
+        conversationStore.currentConversation?.isMissionControl ?? false
+    }
+
+    /// Whether the current chat is a summoned dialogue (ADR-0046 #372) — the
+    /// run controller keys the `.dialogueOnly` tool set (`report_back`) off
+    /// this, per prompt.
+    var isDialogueOpen: Bool {
+        conversationStore.currentConversation?.origin == .dialogue
+    }
+
     /// Whether the **Waiting Row** shows: the run is waiting on the model with
     /// nothing streaming — queued behind the lease (cold start) or in a turn
     /// prefill (first turn and after every tool batch). Deliberately *not*
@@ -171,6 +188,15 @@ final class ChatSession {
     /// because memory must be a thing the chat can run *without* — a memory
     /// failure may never take a turn down.
     private let conversationMemory: ConversationMemory?
+    /// One Jarvis everywhere (ADR-0046, #370): hangs the IDENTITY section on
+    /// the conversation's first outgoing message — voice turns ride the same
+    /// send path, so this seam covers both. Optional for the same reason
+    /// memory is: the chat must run without the Companion.
+    private let companionIdentity: CompanionIdentity?
+    /// Every send into a dialogue-origin conversation is reported through
+    /// this door (ADR-0046 #372) — the dialogue ledger's activity signal,
+    /// which arms the Report-Back nudge accounting.
+    private let onDialogueActivity: @MainActor (UUID) -> Void
     private let debugLogger = AgentDebugLogger()
 
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
@@ -198,9 +224,13 @@ final class ChatSession {
         },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
         conversationMemory: ConversationMemory? = nil,
+        companionIdentity: CompanionIdentity? = nil,
+        onDialogueActivity: @MainActor @escaping (UUID) -> Void = { _ in },
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
         self.conversationMemory = conversationMemory
+        self.companionIdentity = companionIdentity
+        self.onDialogueActivity = onDialogueActivity
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
@@ -220,6 +250,7 @@ final class ChatSession {
         )
 
         agentRun.setReportError { [weak self] message in self?.error = message }
+        agentRun.setIsDialogueOpen { [weak self] in self?.isDialogueOpen ?? false }
         // A settle with the Pending Row still up means the user message never
         // entered the agent context — hand it back to the composer.
         agentRun.setOnRunSettled { [weak self] in self?.settlePendingUserMessage() }
@@ -555,6 +586,12 @@ final class ChatSession {
     func sendMessage(
         _ text: String, images: [ImageAttachment] = [], bypassCommandParsing: Bool = false
     ) {
+        // Belt to the composer's braces: no path — typed, dictated, or
+        // programmatic — appends an interactive turn to the fold.
+        guard !isMissionControlOpen else {
+            Log.agent.warning("sendMessage into Mission Control refused (ADR-0046)")
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty else { return }
 
@@ -573,6 +610,12 @@ final class ChatSession {
         }
 
         Log.agent.info("User message (\(trimmed.count) chars, \(images.count) images): \(trimmed)")
+
+        // The dialogue ledger's activity signal (ADR-0046 #372): every send —
+        // typed, dictated, or the harness's own nudge — counts as exchange.
+        if isDialogueOpen, let id = conversationStore.currentConversation?.id {
+            onDialogueActivity(id)
+        }
 
         error = nil
 
@@ -594,18 +637,25 @@ final class ChatSession {
         agentRun.send(
             CoreMessage.user(user),
             prepare: { [weak self] outgoing in
-                guard let self, let conversationMemory = self.conversationMemory else {
-                    return outgoing
+                guard let self else { return outgoing }
+                var message = outgoing
+                if let conversationMemory = self.conversationMemory {
+                    message = await conversationMemory.enrich(message)
                 }
-                let enriched = await conversationMemory.enrich(outgoing)
+                // Identity decorates after memory so its block leads the
+                // injected context — who you are, then what you recall.
+                if let identity = self.companionIdentity {
+                    message = await identity.decorate(
+                        message, transcript: self.agent.state.messages)
+                }
                 // The Pending Row is keyed by id and is showing the same
-                // content, so swapping it for the enriched value is invisible —
+                // content, so swapping it for the decorated value is invisible —
                 // but it keeps the row and the message that reached the agent
                 // byte-identical, which the `turnEnd` resync then relies on.
-                if let user = enriched.asUser, self.pendingUserMessage?.id == user.id {
+                if let user = message.asUser, self.pendingUserMessage?.id == user.id {
                     self.pendingUserMessage = user
                 }
-                return enriched
+                return message
             })
     }
 
@@ -762,6 +812,22 @@ final class ChatSession {
         Log.agent.info("New conversation created")
     }
 
+    /// Mints the summoned dialogue chat (ADR-0046 #372) and makes it current:
+    /// a fresh conversation tagged `.dialogue`, seeded with the summons line
+    /// as the entity's own first words — the dialogue agent's context for why
+    /// it summoned. Returns the new conversation's id for the ledger.
+    @discardableResult
+    func beginDialogue(line: String?) -> UUID {
+        var conversation = AgentConversation(origin: .dialogue)
+        if let line, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            conversation.messages = [AssistantMessage(content: line)]
+        }
+        let id = conversation.id
+        switchConversation { conversationStore.adopt(conversation) }
+        Log.agent.info("Dialogue conversation \(id) opened")
+        return id
+    }
+
     func loadConversation(_ id: UUID) {
         switchConversation { conversationStore.load(id: id) }
         Log.agent.info("Loaded conversation \(id) with \(self.items.count) items")
@@ -808,12 +874,15 @@ final class ChatSession {
         toolStartInstants.removeAll()
         error = nil
         conversationMemory?.reset()
+        companionIdentity?.reset()
         debugLogger.reset()
         onConversationSwitch()
     }
 
     private func persistCurrentConversation() {
         guard !agent.state.messages.isEmpty else { return }
+        // The fold's read-only rule lives in the store: both funnel members
+        // below refuse Mission Control (`AgentConversationStoring`, ADR-0046).
         conversationStore.updateCurrentMessages(
             agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
         conversationStore.saveCurrent()
@@ -826,7 +895,7 @@ final class ChatSession {
     /// into the composer. Returns nil (no-op) while generating, or if the id is
     /// missing / not a user message.
     func beginEditingMessage(_ messageID: UUID) -> (text: String, images: [ImageAttachment])? {
-        guard !agentRun.isGenerating else { return nil }
+        guard !agentRun.isGenerating, !isMissionControlOpen else { return nil }
         let messages = agent.context.messages
         guard let index = messages.firstIndex(where: { $0.messageUUID == messageID }),
             let user = messages[index].asUser

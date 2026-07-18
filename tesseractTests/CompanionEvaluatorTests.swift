@@ -2,11 +2,14 @@
 //  CompanionEvaluatorTests.swift
 //  tesseractTests
 //
-//  The Wake Evaluator's decision tables (ADR-0040 §2, ADR-0043): one gathered
-//  `Signals` snapshot in, one `Decision` out — pure, so every gate, the origin
-//  pick, the batching rule, and the deferral dedup are pinned here with no
-//  store, no clock, and no loop. The braid these rules used to live in had
-//  zero tests; each table below is one rule the field depends on.
+//  The fold clock's decision tables (ADR-0043's pure shape, ADR-0046 #371):
+//  one gathered `Signals` snapshot in, one `Decision` out — no store, no real
+//  clock, no loop. The purist rule, the coalescing window, the deferral
+//  dedup, the origin pick, and the ceiling are each pinned here; the retired
+//  grants (ambient cadence, attention gate) are pinned absent by the
+//  `Signals` shape itself — presence, power, and the hour are no longer even
+//  gatherable. Day-start detection lives with the producers now
+//  (`CompanionPerceptionTests`).
 //
 
 import Foundation
@@ -29,35 +32,62 @@ import Testing
             wakeClass: wakeClass)
     }
 
-    private func signals(
-        hour: Int = 10,
-        due: [CompanionWake] = [],
-        day: CompanionLoopDayState = CompanionLoopDayState(),
-        gateOpen: Bool = true,
-        present: Bool = true,
-        ac: Bool = true,
-        gpuBusy: Bool = false
-    ) -> CompanionEvaluator.Signals {
-        CompanionEvaluator.Signals(
-            now: Self.now, localHour: hour, dueWakes: due, dayState: day,
-            gateOpen: gateOpen, ownerPresent: present, onACPower: ac,
-            gpuBusy: gpuBusy)
+    /// A pending Event as the store would hand it back — `admittedAt` drives
+    /// the coalescing table, so the full-row init is the right fixture.
+    private func event(
+        _ content: String = "he plugged in",
+        kind: CompanionEventKind = .powerChange,
+        admittedAgo: TimeInterval = 60
+    ) -> CompanionEvent {
+        CompanionEvent(
+            id: UUID(), kind: kind, content: content, payload: nil,
+            occurredAt: Self.now.addingTimeInterval(-admittedAgo), state: .pending,
+            seq: nil, admittedAt: Self.now.addingTimeInterval(-admittedAgo),
+            presentedAt: nil, consumedAt: nil, turnID: nil)
     }
 
-    /// A day state that keeps the transition and ambient gates quiet, so a
-    /// table about something else reads `.wait` as its baseline.
-    private func settledDay() -> CompanionLoopDayState {
-        CompanionLoopDayState(
-            dayStartedAt: Self.now.addingTimeInterval(-4 * 3600),
-            lastAmbientAt: Self.now.addingTimeInterval(-60))
+    private func signals(
+        pending: [CompanionEvent] = [],
+        due: [CompanionWake] = [],
+        gpuBusy: Bool = false,
+        foldTokens: Int = 0
+    ) -> CompanionEvaluator.Signals {
+        CompanionEvaluator.Signals(
+            now: Self.now, pendingEvents: pending, dueWakes: due, gpuBusy: gpuBusy,
+            foldTokens: foldTokens)
+    }
+
+    // MARK: - The purist rule
+
+    @Test func aQuietQueueGrantsNothingForever() {
+        var evaluator = CompanionEvaluator()
+        // GPU free, and still: no pending, no due, no turn. The old ambient
+        // eligibility legs (presence, power, the hour) are not even signals
+        // any more — nothing here can ever make a quiet queue fold.
+        for _ in 0..<50 {
+            #expect(evaluator.decide(signals()) == .wait)
+        }
+    }
+
+    @Test func pendingEventsAloneGrantTheFoldTurn() {
+        var evaluator = CompanionEvaluator()
+        let decision = evaluator.decide(signals(pending: [event()]))
+        #expect(decision == .foldTurn(dueWakes: [], origin: .event, carriesBeat: false))
+    }
+
+    @Test func aReportBackDepositGrantsTheFoldTurn() {
+        var evaluator = CompanionEvaluator()
+        // #372: a summoned dialogue's deposit rides the drain like any other
+        // perception — the next turn is how the one mind learns what its
+        // conversation concluded.
+        let deposit = event(
+            "He decided to move the dentist to Thursday.",
+            kind: .reportBack, admittedAgo: 60)
+        let decision = evaluator.decide(signals(pending: [deposit]))
+        #expect(decision == .foldTurn(dueWakes: [], origin: .event, carriesBeat: false))
     }
 
     // MARK: - Due wakes and the origin pick
-
-    @Test func quietTickDecidesWait() {
-        var evaluator = CompanionEvaluator()
-        #expect(evaluator.decide(signals(day: settledDay())) == .wait)
-    }
 
     @Test func dueWakesGrantOneTurnCarryingTheWholeBatch() {
         var evaluator = CompanionEvaluator()
@@ -66,7 +96,7 @@ import Testing
         let decision = evaluator.decide(signals(due: [first, second]))
         #expect(
             decision
-                == .wakeTurn(batch: [first, second], origin: .wake, carriesBeat: false))
+                == .foldTurn(dueWakes: [first, second], origin: .wake, carriesBeat: false))
     }
 
     @Test func aBatchCarryingARhythmWakeIsABeat() {
@@ -75,24 +105,27 @@ import Testing
         let promise = wake(dueAgo: 30)
         let decision = evaluator.decide(signals(due: [beat, promise]))
         #expect(
-            decision == .wakeTurn(batch: [beat, promise], origin: .beat, carriesBeat: true))
+            decision
+                == .foldTurn(dueWakes: [beat, promise], origin: .beat, carriesBeat: true))
     }
 
-    @Test func overduePastTheGracePreemptsTheMerelyDue() {
+    @Test func anOverdueWakeMakesTheWholeTurnATriage() {
         var evaluator = CompanionEvaluator()
         let stale = wake("missed while asleep", dueAgo: CompanionEvaluator.catchUpGrace + 60)
         let fresh = wake("on time", dueAgo: 60)
         let decision = evaluator.decide(signals(due: [stale, fresh]))
-        // The overdue wake goes to triage alone; the on-time wake stays booked
-        // and re-presents next tick.
-        #expect(decision == .wakeTurn(batch: [stale], origin: .catchup, carriesBeat: false))
+        // The fold reasons over the whole backlog at once — no preemption
+        // split (that was the pre-fold shape): one triage turn, both wakes.
+        #expect(
+            decision
+                == .foldTurn(dueWakes: [stale, fresh], origin: .catchup, carriesBeat: false))
     }
 
     @Test func overdueByExactlyTheGraceIsNotOverdue() {
         var evaluator = CompanionEvaluator()
         let edge = wake("on the line", dueAgo: CompanionEvaluator.catchUpGrace)
         let decision = evaluator.decide(signals(due: [edge]))
-        #expect(decision == .wakeTurn(batch: [edge], origin: .wake, carriesBeat: false))
+        #expect(decision == .foldTurn(dueWakes: [edge], origin: .wake, carriesBeat: false))
     }
 
     @Test func anOverdueRhythmWakeIsCatchupButStillCarriesTheBeat() {
@@ -104,123 +137,142 @@ import Testing
         // Origin says triage; carriesBeat still runs the resurfacing ladder —
         // the two facts are independent and the decision carries both.
         #expect(
-            decision == .wakeTurn(batch: [staleBeat], origin: .catchup, carriesBeat: true))
+            decision == .foldTurn(dueWakes: [staleBeat], origin: .catchup, carriesBeat: true))
     }
 
-    // MARK: - The attention gate and the deferral dedup
-
-    @Test func aClosedGateOutranksDueness() {
+    @Test func aDueWakeOutranksTheEventOriginEvenWithEventsPending() {
         var evaluator = CompanionEvaluator()
         let due = wake()
-        let decision = evaluator.decide(signals(due: [due], gateOpen: false))
-        #expect(decision == .recordDeferral(dueCount: 1, firstWakeID: due.id))
+        let decision = evaluator.decide(signals(pending: [event()], due: [due]))
+        // One fold turn drains both; the wake names the occasion.
+        #expect(decision == .foldTurn(dueWakes: [due], origin: .wake, carriesBeat: false))
     }
 
-    @Test func deferralRecordsOncePerClosedGateEpisode() {
+    // MARK: - Coalescing
+
+    @Test func aBurstStillLandingWaitsOneBeat() {
+        var evaluator = CompanionEvaluator()
+        let landing = event("app switch", admittedAgo: CompanionEvaluator.coalesceWindow - 5)
+        #expect(evaluator.decide(signals(pending: [landing])) == .wait)
+    }
+
+    @Test func aSettledBurstFolds() {
+        var evaluator = CompanionEvaluator()
+        let settled = event("app switch", admittedAgo: CompanionEvaluator.coalesceWindow + 5)
+        let decision = evaluator.decide(signals(pending: [settled]))
+        #expect(decision == .foldTurn(dueWakes: [], origin: .event, carriesBeat: false))
+    }
+
+    @Test func theNewestArrivalRestartsTheCoalesceClock() {
+        var evaluator = CompanionEvaluator()
+        let old = event("first", admittedAgo: 300)
+        let fresh = event("still landing", admittedAgo: 2)
+        #expect(evaluator.decide(signals(pending: [old, fresh])) == .wait)
+    }
+
+    @Test func aDueWakeOutranksTheCoalesceWait() {
+        var evaluator = CompanionEvaluator()
+        let landing = event("still landing", admittedAgo: 2)
+        let due = wake()
+        let decision = evaluator.decide(signals(pending: [landing], due: [due]))
+        // The wake fires now; the fresh event rides along in the same drain.
+        #expect(decision == .foldTurn(dueWakes: [due], origin: .wake, carriesBeat: false))
+    }
+
+    // MARK: - The model slot and the deferral dedup
+
+    @Test func aBusySlotOutranksDueness() {
         var evaluator = CompanionEvaluator()
         let due = wake()
-        _ = evaluator.decide(signals(due: [due], gateOpen: false))
-        // The gate stays closed, the wake stays due: no second record.
-        #expect(evaluator.decide(signals(due: [due], gateOpen: false)) == .wait)
-        #expect(evaluator.decide(signals(due: [due], gateOpen: false)) == .wait)
+        let decision = evaluator.decide(
+            signals(pending: [event()], due: [due], gpuBusy: true))
+        #expect(decision == .recordDeferral(pendingCount: 2, firstWakeID: due.id))
     }
 
-    @Test func theDedupResetsWhenTheGateReopens() {
+    @Test func deferralRecordsOncePerBusyEpisode() {
         var evaluator = CompanionEvaluator()
         let due = wake()
-        _ = evaluator.decide(signals(due: [due], gateOpen: false))
-        // Gate opens — the batch fires; a later closed-gate episode records
-        // its own deferral.
-        _ = evaluator.decide(signals(due: [due], gateOpen: true))
-        let decision = evaluator.decide(signals(due: [due], gateOpen: false))
-        #expect(decision == .recordDeferral(dueCount: 1, firstWakeID: due.id))
+        _ = evaluator.decide(signals(due: [due], gpuBusy: true))
+        // The slot stays taken, the wake stays due: no second record.
+        #expect(evaluator.decide(signals(due: [due], gpuBusy: true)) == .wait)
+        #expect(evaluator.decide(signals(due: [due], gpuBusy: true)) == .wait)
     }
 
-    @Test func aClosedGateOverNothingDueRecordsNothingAndBurnsNothing() {
+    @Test func theDedupResetsWhenTheSlotFrees() {
         var evaluator = CompanionEvaluator()
-        #expect(evaluator.decide(signals(gateOpen: false)) == .wait)
-        // A wake becomes due while the gate is still closed: the episode's one
-        // record fires now — the empty ticks did not consume it.
         let due = wake()
-        let decision = evaluator.decide(signals(due: [due], gateOpen: false))
-        #expect(decision == .recordDeferral(dueCount: 1, firstWakeID: due.id))
+        _ = evaluator.decide(signals(due: [due], gpuBusy: true))
+        // Slot frees — the batch folds; a later busy episode records its own
+        // deferral.
+        _ = evaluator.decide(signals(due: [due]))
+        let decision = evaluator.decide(signals(due: [due], gpuBusy: true))
+        #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: due.id))
     }
 
-    // MARK: - Day start
-
-    @Test func firstPresenceOfTheDayStartsIt() {
+    @Test func theDedupAlsoResetsWhenTheQueueDrainsQuiet() {
         var evaluator = CompanionEvaluator()
-        let decision = evaluator.decide(signals(hour: 9))
-        guard case .dayStart(let updated) = decision else {
-            Issue.record("expected dayStart, got \(decision)")
-            return
-        }
-        #expect(updated.dayStartedAt == Self.now)
+        _ = evaluator.decide(signals(due: [wake()], gpuBusy: true))
+        // Whatever was due got handled elsewhere; a quiet tick closes the
+        // episode, so the next busy-over-due tick records again.
+        _ = evaluator.decide(signals(gpuBusy: true))
+        let due = wake("new work")
+        let decision = evaluator.decide(signals(due: [due], gpuBusy: true))
+        #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: due.id))
     }
 
-    @Test func aOneAMTailCountsAsYesterday() {
+    @Test func eventOnlyDeferralCarriesNoWakeID() {
         var evaluator = CompanionEvaluator()
-        #expect(evaluator.decide(signals(hour: 3)) == .wait)
+        let decision = evaluator.decide(signals(pending: [event()], gpuBusy: true))
+        #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: nil))
+    }
+
+    // MARK: - The ceiling (#373)
+
+    @Test func theCeilingGrantsTheFoldDownEvenOnAQuietQueue() {
+        var evaluator = CompanionEvaluator()
+        let over = CompanionEvaluator.contextCeilingTokens
+        let decision = evaluator.decide(signals(foldTokens: over))
+        #expect(decision == .compactFold(estimatedTokens: over))
+    }
+
+    @Test func theCeilingOutranksPendingWork() {
+        var evaluator = CompanionEvaluator()
+        let over = CompanionEvaluator.contextCeilingTokens + 5_000
+        // A turn must never append past the budget: the fold-down runs first;
+        // the queue and the wake drain on the next tick, over the folded head.
+        let decision = evaluator.decide(
+            signals(pending: [event()], due: [wake()], foldTokens: over))
+        #expect(decision == .compactFold(estimatedTokens: over))
+    }
+
+    @Test func aBusySlotHoldsTheFoldDownQuietly() {
+        var evaluator = CompanionEvaluator()
+        let over = CompanionEvaluator.contextCeilingTokens
+        // Over the ceiling with the slot taken: no grant, and the normal
+        // deferral bookkeeping still speaks for the due work behind it.
+        #expect(evaluator.decide(signals(gpuBusy: true, foldTokens: over)) == .wait)
+        let due = wake()
+        let decision = evaluator.decide(signals(due: [due], gpuBusy: true, foldTokens: over))
+        #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: due.id))
+    }
+
+    @Test func theFoldDownFiresAtTheHeadroomLineNotTheCeiling() {
+        var evaluator = CompanionEvaluator()
+        // Pre-emptive: the fold runs one turn's growth BEFORE the ceiling, so
+        // a granted turn can never append past the ceiling itself.
+        let line =
+            CompanionEvaluator.contextCeilingTokens
+            - CompanionEvaluator.ceilingHeadroomTokens
         #expect(
-            evaluator.decide(signals(hour: CompanionEvaluator.dayStartEarliestHour))
-                != .wait)
+            evaluator.decide(signals(foldTokens: line))
+                == .compactFold(estimatedTokens: line))
     }
 
-    @Test func dayStartWaitsForHimToActuallyBeThere() {
+    @Test func underTheHeadroomLineNothingChanges() {
         var evaluator = CompanionEvaluator()
-        #expect(evaluator.decide(signals(hour: 9, present: false)) == .wait)
-    }
-
-    @Test func dayStartFiresOnlyOncePerDay() {
-        var evaluator = CompanionEvaluator()
-        let started = CompanionLoopDayState(
-            dayStartedAt: Self.now.addingTimeInterval(-3600),
-            lastAmbientAt: Self.now.addingTimeInterval(-60))
-        #expect(evaluator.decide(signals(hour: 9, day: started)) == .wait)
-    }
-
-    @Test func dueWakesOutrankTheDayStart() {
-        var evaluator = CompanionEvaluator()
-        let due = wake()
-        let decision = evaluator.decide(signals(hour: 9, due: [due]))
-        #expect(decision == .wakeTurn(batch: [due], origin: .wake, carriesBeat: false))
-    }
-
-    // MARK: - Ambient eligibility
-
-    @Test func ambientNeedsTheWholeEligibilityGate() {
-        let started = CompanionLoopDayState(
-            dayStartedAt: Self.now.addingTimeInterval(-3600))
-
-        var evaluator = CompanionEvaluator()
-        let eligible = evaluator.decide(signals(day: started))
-        guard case .ambient(let updated) = eligible else {
-            Issue.record("expected ambient, got \(eligible)")
-            return
-        }
-        #expect(updated.lastAmbientAt == Self.now)
-        #expect(updated.dayStartedAt == started.dayStartedAt)
-
-        // Each leg of the gate alone keeps it closed: battery, busy GPU, a
-        // day that never started.
-        #expect(evaluator.decide(signals(day: started, ac: false)) == .wait)
-        #expect(evaluator.decide(signals(day: started, gpuBusy: true)) == .wait)
-        #expect(evaluator.decide(signals(hour: 3)) == .wait)
-    }
-
-    @Test func ambientSpacingHoldsUntilTheIntervalPasses() {
-        var evaluator = CompanionEvaluator()
-        let recent = CompanionLoopDayState(
-            dayStartedAt: Self.now.addingTimeInterval(-4 * 3600),
-            lastAmbientAt: Self.now.addingTimeInterval(-CompanionEvaluator.ambientSpacing + 60))
-        #expect(evaluator.decide(signals(day: recent)) == .wait)
-
-        let spaced = CompanionLoopDayState(
-            dayStartedAt: Self.now.addingTimeInterval(-4 * 3600),
-            lastAmbientAt: Self.now.addingTimeInterval(-CompanionEvaluator.ambientSpacing - 60))
-        guard case .ambient = evaluator.decide(signals(day: spaced)) else {
-            Issue.record("expected ambient after the spacing interval")
-            return
-        }
+        let under =
+            CompanionEvaluator.contextCeilingTokens
+            - CompanionEvaluator.ceilingHeadroomTokens - 1
+        #expect(evaluator.decide(signals(foldTokens: under)) == .wait)
     }
 }

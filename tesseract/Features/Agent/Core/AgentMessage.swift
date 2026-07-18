@@ -88,15 +88,24 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     /// silently rewrite history and miss the cache on every turn of the thread.
     let injectedContext: String?
 
+    /// Which turn class this message opened (ADR-0046). Loop turns fold into
+    /// the one Mission Control conversation, so the per-turn origin the
+    /// conversation tag used to carry now rides the turn's opening message —
+    /// nil for everything the owner typed. Metadata only: never rendered into
+    /// the LLM context.
+    let turnOrigin: TurnOrigin?
+
     init(
         id: UUID = UUID(), content: String, images: [ImageAttachment] = [],
-        timestamp: Date = Date(), injectedContext: String? = nil
+        timestamp: Date = Date(), injectedContext: String? = nil,
+        turnOrigin: TurnOrigin? = nil
     ) {
         self.id = id
         self.content = content
         self.images = images
         self.timestamp = timestamp
         self.injectedContext = injectedContext
+        self.turnOrigin = turnOrigin
     }
 
     init(from decoder: Decoder) throws {
@@ -106,10 +115,21 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
         images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         injectedContext = try container.decodeIfPresent(String.self, forKey: .injectedContext)
+        turnOrigin = TurnOrigin(
+            persisted: try container.decodeIfPresent(String.self, forKey: .turnOrigin))
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, images, timestamp, injectedContext
+        case id, content, images, timestamp, injectedContext, turnOrigin
+    }
+
+    /// A copy with the memory block hung on it — the one place enrichment
+    /// rebuilds the message. Lives with the field list so a new stored field
+    /// can't be silently dropped in transit by a caller's hand-rolled copy.
+    func with(injectedContext: String?) -> UserMessage {
+        UserMessage(
+            id: id, content: content, images: images, timestamp: timestamp,
+            injectedContext: injectedContext, turnOrigin: turnOrigin)
     }
 
     /// The wrapper goes *before* the user's words, mirroring `<skill>`: what I

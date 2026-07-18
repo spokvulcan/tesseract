@@ -147,20 +147,4 @@ private func scratchDirectory(_ label: String) -> URL {
         #expect(records[0].note == "the midday pulse was noise today")
     }
 
-    @Test func flightLogReadsBackFiltered() async throws {
-        let recorder = CompanionFlightRecorder(directory: scratchDirectory("flight-read"))
-        recorder.record("wake.booked", note: "morning rhythm")
-        recorder.record("delivery.notification")
-        recorder.record("reaction.dismissed")
-
-        let tool = createFlightLogTool(recorder: recorder)
-        let all = text(try await tool.execute("call", [:], nil, nil))
-        #expect(all.contains("wake.booked"))
-        #expect(all.contains("reaction.dismissed"))
-
-        let filtered = text(
-            try await tool.execute("call", ["filter": .string("delivery")], nil, nil))
-        #expect(filtered.contains("delivery.notification"))
-        #expect(!filtered.contains("wake.booked"))
-    }
 }

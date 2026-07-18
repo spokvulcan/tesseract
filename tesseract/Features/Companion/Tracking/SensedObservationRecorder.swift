@@ -28,6 +28,13 @@ final class SensedObservationRecorder {
     private let store: MemoryStore
     private let isEnabled: () -> Bool
 
+    /// Perception doors (ADR-0046, #368): the Event producers ride the same
+    /// sensing pipeline instead of duplicating pollers and thresholds. Fired
+    /// beside the observation write, under the same sustained/transition
+    /// verdicts.
+    var onPowerTransition: (@MainActor (_ onACPower: Bool) -> Void)?
+    var onSustainedAppSession: (@MainActor (_ app: String, _ start: Date, _ end: Date) -> Void)?
+
     /// When the current presence span began; nil while idle/locked/asleep.
     private var presenceSpanStart: Date?
     /// The frontmost app and when it took the front.
@@ -55,7 +62,7 @@ final class SensedObservationRecorder {
             let name =
                 (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
                 .localizedName
-            MainActor.assumeIsolated { self?.frontmostChanged(to: name) }
+            MainActor.assumeIsolated { self?.appBecameFrontmost(name) }
         }
         powerPollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -97,9 +104,12 @@ final class SensedObservationRecorder {
 
     // MARK: - App sessions
 
-    private func frontmostChanged(to name: String?) {
-        closeAppSession(at: Date())
-        if let name { currentApp = (name, Date()) }
+    /// Internal, not private: the one deterministic seam through the app-
+    /// session pipeline — tests drive it with controlled dates to prove the
+    /// sustained-vs-brief verdict without NSWorkspace.
+    func appBecameFrontmost(_ name: String?, at now: Date = Date()) {
+        closeAppSession(at: now)
+        if let name { currentApp = (name, now) }
     }
 
     private func closeAppSession(at end: Date) {
@@ -107,6 +117,7 @@ final class SensedObservationRecorder {
         currentApp = nil
         guard end.timeIntervalSince(app.since) >= Self.minimumAppSessionSeconds else { return }
         writeSpan(kind: "app-session", start: app.since, end: end, detail: app.name)
+        onSustainedAppSession?(app.name, app.since, end)
     }
 
     // MARK: - Power
@@ -119,6 +130,7 @@ final class SensedObservationRecorder {
             TrackingObservation(
                 domain: .work, kind: "power-transition", value: ac ? "ac" : "battery",
                 source: .sensed))
+        onPowerTransition?(ac)
     }
 
     private static func readACPower() -> Bool {
@@ -133,19 +145,25 @@ final class SensedObservationRecorder {
 
     // MARK: - Writing
 
-    private struct SpanValue: Codable {
+    /// The one encoded shape of a sensed span. Internal, not private: the
+    /// Event producer's `app-switch` payload (ADR-0046, #368) rides the same
+    /// shape — one definition of the epoch/minutes math, two consumers.
+    struct SpanValue: Codable {
         let start: Int
         let end: Int
         let minutes: Int
         let app: String?
+
+        init(start: Date, end: Date, app: String?) {
+            self.start = Int(start.timeIntervalSince1970)
+            self.end = Int(end.timeIntervalSince1970)
+            self.minutes = Int(end.timeIntervalSince(start) / 60)
+            self.app = app
+        }
     }
 
     private func writeSpan(kind: String, start: Date, end: Date, detail: String?) {
-        let span = SpanValue(
-            start: Int(start.timeIntervalSince1970),
-            end: Int(end.timeIntervalSince1970),
-            minutes: Int(end.timeIntervalSince(start) / 60),
-            app: detail)
+        let span = SpanValue(start: start, end: end, app: detail)
         let value =
             (try? JSONEncoder().encode(span)).flatMap { String(data: $0, encoding: .utf8) }
             ?? "{}"

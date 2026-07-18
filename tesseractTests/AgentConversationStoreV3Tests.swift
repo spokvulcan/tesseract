@@ -20,13 +20,6 @@ import Testing
 @MainActor
 struct AgentConversationStoreV3Tests {
 
-    private func makeTempDir() -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("chat-store-tests-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
     // MARK: - Parts round-trip
 
     @Test func partsBasedConversationRoundTripsThroughDisk() throws {

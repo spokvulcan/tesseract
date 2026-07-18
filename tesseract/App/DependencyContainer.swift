@@ -163,9 +163,37 @@ final class DependencyContainer: ObservableObject {
             store: memoryStore,
             arbiter: inferenceArbiter,
             complete: internalCompletion,
-            isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled }
+            isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled },
+            // The entity's tail practices, in order (ADR-0046): consolidation
+            // has already run; then the instructions review (#370), then the
+            // Digest fold-down (#373).
+            companionNightly: { [weak self] in
+                await self?.companionSleep.nightly()
+                await self?.companionDigest.nightlyFold()
+            }
         )
     }
+
+    /// The entity's practice at the tail of the sleep pass (ADR-0046, #370):
+    /// the standing-instructions review; the Digest (#373) runs beside it.
+    lazy var companionSleep = CompanionSleep(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        arbiter: inferenceArbiter,
+        complete: internalCompletion,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
+
+    /// Mission Control's fold-down (ADR-0046, #373): the nightly Digest and
+    /// the intraday ceiling fold — one engine, two gates.
+    lazy var companionDigest = CompanionDigest(
+        conversationStore: agentConversationStore,
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        arbiter: inferenceArbiter,
+        complete: internalCompletion,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
 
     /// The Companion's zero-dialog sensing tier (#308): presence spans, app
     /// sessions, power transitions → the observation stream. Writes are gated
@@ -227,16 +255,12 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createRememberTool(memory: memoryEngine))
         registry.appendBuiltInTool(createRecallTool(memory: memoryEngine))
         registry.appendBuiltInTool(createContestTool(memory: memoryEngine))
-        // The tracking model's five typed talk-time tools (#308) — registered
-        // in every conversation, same as memory's: the check-in IS the
-        // measuring instrument, whichever conversation it happens in.
-        registry.appendBuiltInTool(createPlanDayTool(store: memoryStore))
-        registry.appendBuiltInTool(createLogStepTool(store: memoryStore))
-        registry.appendBuiltInTool(createLogSampleTool(store: memoryStore))
-        registry.appendBuiltInTool(createLogTaskTool(store: memoryStore))
-        registry.appendBuiltInTool(createCloseDayTool(store: memoryStore))
-        // The flight recorder's read path and its one write door (#326).
-        registry.appendBuiltInTool(createFlightLogTool(recorder: companionFlightRecorder))
+        // The one generic tracking door (ADR-0046, #369) — registered in
+        // every conversation, same as memory's: the check-in IS the measuring
+        // instrument, whichever conversation it happens in.
+        registry.appendBuiltInTool(createTrackTool(store: memoryStore))
+        // The flight recorder's one write door (#326; the read path died with
+        // ADR-0046 — the standing conversation is the record).
         registry.appendBuiltInTool(
             createLogFeedbackTool(
                 recorder: companionFlightRecorder,
@@ -244,12 +268,24 @@ final class DependencyContainer: ObservableObject {
                     self?.agentConversationStore.currentConversation?.id
                 }
             ))
-        // The entity's hands on his own future (ADR-0040). Registered in
-        // every conversation like memory's tools: "remind me tomorrow" said
+        // The wake palette — book, revise, cancel (ADR-0040, #369). Registered
+        // in every conversation like memory's tools: "remind me tomorrow" said
         // in chat books a wake through the same one door the Companion's own
         // turns use.
         registry.appendBuiltInTool(
             createBookWakeTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createReviseWakeTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createCancelWakeTool(
                 store: memoryStore,
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
@@ -286,17 +322,25 @@ final class DependencyContainer: ObservableObject {
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
+        // The deposit door (ADR-0046 #372) — `.dialogueOnly`: surfaces only
+        // while a summoned dialogue is the current chat, and the headless
+        // agent's tool set drops it.
         registry.appendBuiltInTool(
-            createOpenConversationTool(
-                open: { [weak self] id in self?.presentConversation(id) },
+            createReportBackTool(
+                store: memoryStore,
                 recorder: companionFlightRecorder,
-                context: companionTurnContext
+                currentConversationID: { [weak self] in
+                    self?.agentConversationStore.currentConversation?.id
+                },
+                depositLanded: { [weak self] id in
+                    self?.companionDialogue.depositLanded(in: id)
+                }
             ))
         return registry
     }()
 
-    /// The one "put a conversation on his screen" action — the loop, the
-    /// summons, and the `open_conversation` rung all reach the UI through it.
+    /// The one "put a conversation on his screen" action — the loop's
+    /// reaction routing and the summons engagement reach the UI through it.
     private func presentConversation(_ id: UUID) {
         chatSession.loadConversation(id)
         (NSApp.delegate as? AppDelegate)?.navigateToAgent()
@@ -304,7 +348,7 @@ final class DependencyContainer: ObservableObject {
 
     /// The Companion's interaction-fact log (#326): app-owned, App Support,
     /// retention forever. Only app code writes; the model reads via
-    /// `flight_log` and testifies via `log_feedback`.
+    /// its own standing conversation and testifies via `log_feedback`.
     lazy var companionFlightRecorder = CompanionFlightRecorder()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {
@@ -481,7 +525,18 @@ final class DependencyContainer: ObservableObject {
                 agentSystemPromptInspector.reset()
                 skillPills.refreshPills()
             },
-            conversationMemory: ConversationMemory(memory: memoryEngine)
+            conversationMemory: ConversationMemory(memory: memoryEngine),
+            // One Jarvis everywhere (#370): the IDENTITY section rides the
+            // interactive chat — and the voice session, which sends through it.
+            companionIdentity: CompanionIdentity(
+                store: memoryStore,
+                isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+            ),
+            // The dialogue ledger's activity signal (#372) — lazy through the
+            // container so the session and the ledger can reference each other.
+            onDialogueActivity: { [weak self] id in
+                self?.companionDialogue.activity(in: id)
+            }
         )
     }()
 
@@ -506,7 +561,7 @@ final class DependencyContainer: ObservableObject {
         // consumer) — a second full agent whose context never collides with
         // the chat session's, over the same shared tool registry.
         makeAgent: { [unowned self] in
-            AgentFactory.makeAgent(
+            let headless = AgentFactory.makeAgent(
                 inferenceService: self.serverInferenceService,
                 packageRegistry: self.packageRegistry,
                 extensionHost: self.extensionHost,
@@ -515,6 +570,11 @@ final class DependencyContainer: ObservableObject {
                 settingsManager: self.settingsManager,
                 mcpToolsExtension: self.mcpClientManager.toolsExtension
             )
+            // A Mission Control turn has no dialogue to report back from
+            // (#372): the headless agent drops the `.dialogueOnly` tools.
+            headless.updateTools(
+                self.newToolRegistry.allTools.filter { $0.audience != .dialogueOnly })
+            return headless
         },
         arbiter: inferenceArbiter,
         conversationStore: agentConversationStore,
@@ -527,26 +587,6 @@ final class DependencyContainer: ObservableObject {
             modelDownloadManager.isDownloaded($0)
         }
     )
-    /// The owner's attention outranks the entity's schedule: background turns
-    /// hold while he is using the app (voice session, generation, TTS he is
-    /// listening to, dictation into the composer, or the app frontmost with
-    /// recent input) and for the gate's quiet window after — the one queue,
-    /// strictly after him, never beside him.
-    lazy var companionAttentionGate = CompanionAttentionGate(
-        isOwnerEngaged: { [unowned self] in
-            if self.companionVoiceSession.isActive { return true }
-            if self.chatSession.isGenerating { return true }
-            if self.agentVoiceInput.voiceState == .recording
-                || self.agentVoiceInput.voiceState == .transcribing
-            {
-                return true
-            }
-            if self.speechCoordinator.state.isActive { return true }
-            return NSApp.isActive
-                && IdleMonitor.hidIdleSeconds() < CompanionAttentionGate.quietWindow
-        },
-        isMachineBusy: { [unowned self] in self.inferenceArbiter.isGPULeaseHeld }
-    )
     // Explicitly typed: the loop's `speak` closure reaches the summons, and
     // the summons's banner fallback reaches the loop — inference across the
     // two lazy initializers would be circular.
@@ -556,16 +596,69 @@ final class DependencyContainer: ObservableObject {
         runner: companionTurnRunner,
         notifier: CompanionNotifier(),
         idleMonitor: idleMonitor,
-        attention: companionAttentionGate,
         sensed: sensedObservations,
         calendar: CompanionCalendarReader(),
         isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },
+        // Briefing evidence, not a gate (#371): live owner activity — voice
+        // session, interactive generation, dictation capture, TTS he is
+        // listening to, or the app frontmost with input in the last two
+        // minutes. The loop samples this each tick for "he last used the
+        // app…"; owner-attention protection is the arbiter's FIFO now.
+        isOwnerEngaged: { [unowned self] in
+            if self.companionVoiceSession.isActive { return true }
+            if self.chatSession.isGenerating { return true }
+            if self.agentVoiceInput.voiceState == .recording
+                || self.agentVoiceInput.voiceState == .transcribing
+            {
+                return true
+            }
+            if self.speechCoordinator.state.isActive { return true }
+            return NSApp.isActive && IdleMonitor.hidIdleSeconds() < 120
+        },
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
         // The spoken rung — choreography lives in `CompanionSummons`.
         speak: { [weak self] text in
             self?.companionSummons.deliver(line: text)
         },
-        openConversation: { [weak self] id in self?.presentConversation(id) }
+        openConversation: { [weak self] id in self?.presentConversation(id) },
+        perceiveDayStart: { [weak self] now, present in
+            self?.companionPerception.dayStartIfDue(now: now, ownerPresent: present)
+        },
+        // The ceiling's signal and the fold-down behind it (#373).
+        foldTokens: { [agentConversationStore] in
+            CompanionDigestSplice.estimatedTokens(
+                agentConversationStore.missionControl().messages)
+        },
+        earlyFold: { [weak self] in await self?.companionDigest.earlyFold() }
+    )
+    /// The fold's perception substrate (ADR-0046, #368): the v1 Event
+    /// producers. Power and app-session verdicts arrive through the sensed-
+    /// observation pipeline's doors (wired in `bootstrap`, beside the loop's
+    /// arming); day-start detects here, fed the facts by the loop's tick.
+    lazy var companionPerception = CompanionPerception(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
+
+    /// The summoned dialogue's ledger (ADR-0046 #372): mints the dialogue
+    /// chat on engagement, tracks the Report-Back debt, and delivers the one
+    /// harness nudge when a dialogue ends or goes quiet without depositing.
+    lazy var companionDialogue: CompanionDialogue = CompanionDialogue(
+        recorder: companionFlightRecorder,
+        openDialogue: { [weak self] line in
+            guard let self else { return nil }
+            let id = self.chatSession.beginDialogue(line: line)
+            (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+            return id
+        },
+        isAgentBusy: { [weak self] in self?.chatSession.isGenerating ?? false },
+        currentConversationID: { [weak self] in
+            self?.agentConversationStore.currentConversation?.id
+        },
+        sendNudge: { [weak self] text in
+            self?.chatSession.sendMessage(text, images: [], bypassCommandParsing: true)
+        }
     )
 
     // The summons conductor (ADR-0040 §10/§11, #328): speak → overlay →
@@ -586,7 +679,9 @@ final class DependencyContainer: ObservableObject {
             await self?.companionVoicePrototype.summonBeat(title: title, line: line)
                 ?? .unanswered
         },
-        openConversation: { [weak self] id in self?.presentConversation(id) },
+        beginDialogue: { [weak self] line in
+            self?.companionDialogue.begin(line: line, via: "summons-engage")
+        },
         enterVoiceSession: { [weak self] via in
             self?.companionVoiceSession.enter(via: via)
         },
@@ -658,6 +753,11 @@ final class DependencyContainer: ObservableObject {
         // and the auto-listen loop; autoSpeak stays the chat-only path.
         chatSession.voiceReplyHandler = { [weak controller] text in
             controller?.replyCompleted(text) ?? false
+        }
+        // The dialogue ledger listens on the session's end (#372): a summoned
+        // dialogue that concluded without a deposit gets its one nudge here.
+        controller.onSessionEnded = { [weak self] in
+            self?.companionDialogue.voiceSessionEnded()
         }
         return controller
     }()
@@ -897,6 +997,16 @@ final class DependencyContainer: ObservableObject {
         // Arm the Companion loop (ADR-0040) — a sleeping tick task and one
         // due-ness evaluation per 30 s unless the Companion toggle is on.
         companionLoop.start()
+
+        // Arm the perception substrate (ADR-0046, #368): Events accumulate on
+        // the record; nothing consumes them until the purist clock (#371).
+        sensedObservations.onPowerTransition = { [weak self] onAC in
+            self?.companionPerception.powerChanged(onACPower: onAC)
+        }
+        sensedObservations.onSustainedAppSession = { [weak self] app, start, end in
+            self?.companionPerception.sustainedAppSession(app: app, start: start, end: end)
+        }
+        companionPerception.start()
 
         // Wire the MCP client (PRD #190). Materialize the agent first so its
         // MCP tools extension is registered with the ExtensionHost before the

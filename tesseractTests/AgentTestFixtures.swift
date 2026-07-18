@@ -9,6 +9,7 @@
 
 import Foundation
 import MLXLMCommon
+import Testing
 
 @testable import Tesseract_Agent
 
@@ -30,6 +31,67 @@ func makeNoOpAgent(modelID: String) -> Agent {
         tools: [],
         generate: { _, _, _, _ in AsyncThrowingStream { $0.finish() } }
     )
+}
+
+/// A `ChatSession` over the no-op agent and hermetic fixtures. Consolidates
+/// the construction the chat-session and Mission Control suites built
+/// identically, so a `ChatSession.init` change touches one place. The store
+/// is the widened protocol seam: suites pass the in-memory fixture or the
+/// real store over a temp directory as the test demands.
+@MainActor
+func makeChatSession(
+    agent: Agent? = nil,
+    store: any AgentConversationStoring = InMemoryAgentConversationStore(),
+    arbiter: InMemoryInferenceArbiter = InMemoryInferenceArbiter(),
+    restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in }
+) -> Tesseract_Agent.ChatSession {
+    Tesseract_Agent.ChatSession(
+        agent: agent ?? makeNoOpAgent(modelID: "test-model"),
+        conversationStore: store,
+        arbiter: arbiter,
+        restoreComposerDraft: restoreComposerDraft,
+        liveMarkdownThrottle: .zero
+    )
+}
+
+/// Runs a tool and returns its joined text result — the invocation shape
+/// every tool suite needs. Consolidates the helper three companion suites
+/// had each copied, so a `tool.execute` signature change touches one place.
+func toolText(
+    _ tool: AgentToolDefinition, _ args: [String: JSONValue]
+) async throws -> String {
+    let result = try await tool.execute("test-call", args, nil, nil)
+    let texts = result.content.compactMap { block -> String? in
+        if case .text(let text) = block { return text }
+        return nil
+    }
+    guard !texts.isEmpty else {
+        Issue.record("expected a text result")
+        return ""
+    }
+    return texts.joined(separator: "\n")
+}
+
+/// A unique scratch directory — the defence against the scheme's parallel
+/// twin runners colliding on shared paths. Callers own cleanup (or lean on
+/// the OS reaping the temp directory).
+func makeTempDir(_ label: String = "scratch") -> URL {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("\(label)-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+/// A hermetic `MemoryStore` over its own scratch directory. Consolidates the
+/// helper the companion suites each built identically, so a
+/// `MemoryStore(directory:)` change touches one place, not three.
+func scratchStore() throws -> MemoryStore {
+    try MemoryStore(directory: makeTempDir("scratch-memory"))
+}
+
+/// A hermetic flight recorder over its own scratch directory.
+func scratchRecorder() -> CompanionFlightRecorder {
+    CompanionFlightRecorder(directory: makeTempDir("scratch-flight"))
 }
 
 /// Shared generation-event fixtures: a terminal `AgentGeneration.Info` and a

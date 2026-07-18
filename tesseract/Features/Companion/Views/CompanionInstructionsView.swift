@@ -62,8 +62,9 @@ struct CompanionInstructionsView: View {
                             || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(
-                "Edits append a new owner-authored version — the Companion sees it on his "
-                    + "next turn, and his own revisions land here for you to read."
+                "Two sections: # IDENTITY rides every conversation, # LOOP POLICY only his "
+                    + "loop turns. Edits append a new owner-authored version — the Companion "
+                    + "sees it on his next turn, and his own revisions land here for you to read."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

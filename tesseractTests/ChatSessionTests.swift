@@ -23,21 +23,6 @@ struct ChatSessionTests {
 
     // MARK: - Fixtures
 
-    private func makeSession(
-        agent: Agent? = nil,
-        store: InMemoryAgentConversationStore = InMemoryAgentConversationStore(),
-        arbiter: InMemoryInferenceArbiter = InMemoryInferenceArbiter(),
-        restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in }
-    ) -> ChatSession {
-        ChatSession(
-            agent: agent ?? makeNoOpAgent(modelID: "test-model"),
-            conversationStore: store,
-            arbiter: arbiter,
-            restoreComposerDraft: restoreComposerDraft,
-            liveMarkdownThrottle: .zero
-        )
-    }
-
     // Generous budget: the full bundle runs many suites in parallel, and a
     // queued run can sit well past 3 s under that load. The loop exits the
     // moment the session settles, so a passing test never pays the ceiling.
@@ -69,7 +54,7 @@ struct ChatSessionTests {
     // MARK: - Live Part lifecycle
 
     @Test func textStreamCreatesLivePartAndCommitsOnEnd() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -113,7 +98,7 @@ struct ChatSessionTests {
     }
 
     @Test func thinkingThenTextThenToolCallFoldsIntoOrderedParts() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -172,7 +157,7 @@ struct ChatSessionTests {
     // MARK: - Tool execution and results
 
     @Test func toolExecutionDrivesRunPhaseAndResultLinksByCallID() {
-        let session = makeSession()
+        let session = makeChatSession()
         session.handle(.agentStart)
 
         let call = ToolCallInfo(id: "call-1", name: "read_file", argumentsJSON: "{}")
@@ -199,7 +184,7 @@ struct ChatSessionTests {
     // MARK: - Streaming tool calls (Open Tool Call + Tool Clock)
 
     @Test func writingToolPhaseAndToolClockSpanWritingToExecution() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -257,7 +242,7 @@ struct ChatSessionTests {
     }
 
     @Test func abandonedToolCallVanishesAndPhaseRecovers() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -281,7 +266,7 @@ struct ChatSessionTests {
     }
 
     @Test func malformedCloseLeavesTheWritingPhasePromptly() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -309,7 +294,7 @@ struct ChatSessionTests {
     }
 
     @Test func unclosedToolCallAtTerminalLeavesNoTraceInTheCommit() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -346,7 +331,7 @@ struct ChatSessionTests {
     // MARK: - Cancellation and errors
 
     @Test func cancellationPreservesPartialContent() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -372,7 +357,7 @@ struct ChatSessionTests {
     }
 
     @Test func emptyCancelledTurnIsDropped() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -386,7 +371,7 @@ struct ChatSessionTests {
     }
 
     @Test func generationErrorFeedsTheBannerSlot() {
-        let session = makeSession()
+        let session = makeChatSession()
         session.handle(.agentStart)
         session.handle(.generationError(message: "vision tower rejected the image"))
         #expect(session.error == "vision tower rejected the image")
@@ -395,7 +380,7 @@ struct ChatSessionTests {
     // MARK: - Authoritative resyncs
 
     @Test func turnEndResyncsItemsFromContextSnapshot() {
-        let session = makeSession()
+        let session = makeChatSession()
         session.handle(.agentStart)
 
         let user = UserMessage(content: "question")
@@ -419,7 +404,7 @@ struct ChatSessionTests {
     }
 
     @Test func compactionTransformResyncsAndRestoresPhase() {
-        let session = makeSession()
+        let session = makeChatSession()
         session.handle(.agentStart)
 
         session.handle(.contextTransformStart(reason: .compaction))
@@ -439,7 +424,7 @@ struct ChatSessionTests {
     // MARK: - Full-script phases
 
     @Test func agentEndReturnsToIdleAndClearsLiveState() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
@@ -458,7 +443,7 @@ struct ChatSessionTests {
     }
 
     @Test func userMessageCommitsOnMessageEnd() {
-        let session = makeSession()
+        let session = makeChatSession()
         let user = CoreMessage.user(UserMessage(content: "hello there"))
         session.handle(.agentStart)
         session.handle(.messageStart(message: user))
@@ -476,7 +461,7 @@ struct ChatSessionTests {
 
     @Test func beginEditingTruncatesAndReturnsDraft() {
         let agent = makeNoOpAgent(modelID: "test-model")
-        let session = makeSession(agent: agent)
+        let session = makeChatSession(agent: agent)
 
         let firstUser = UserMessage(content: "first question")
         let answer = AssistantMessage(content: "first answer")
@@ -506,7 +491,7 @@ struct ChatSessionTests {
     /// and the event-spine commit of the same message lowers it.
     @Test func sendMessageRaisesPendingRowUntilTheUserCommit() async throws {
         var restored: [(String, Int)] = []
-        let session = makeSession(restoreComposerDraft: { text, images in
+        let session = makeChatSession(restoreComposerDraft: { text, images in
             restored.append((text, images.count))
         })
 
@@ -534,7 +519,7 @@ struct ChatSessionTests {
         arbiter.ensureLoadedError = AgentEngineError.modelNotDownloaded(
             modelID: "chat-session-nonexistent-model")
         var restored: [(String, Int)] = []
-        let session = makeSession(
+        let session = makeChatSession(
             arbiter: arbiter,
             restoreComposerDraft: { text, images in restored.append((text, images.count)) })
 
@@ -555,7 +540,7 @@ struct ChatSessionTests {
         let arbiter = InMemoryInferenceArbiter()
         arbiter.leaseDelay = .seconds(10)
         var restored: [(String, [ImageAttachment])] = []
-        let session = makeSession(
+        let session = makeChatSession(
             arbiter: arbiter,
             restoreComposerDraft: { text, images in restored.append((text, images)) })
 
@@ -577,7 +562,7 @@ struct ChatSessionTests {
     @Test func userCommitLowersPendingRowThroughTheFold() {
         let arbiter = InMemoryInferenceArbiter()
         arbiter.leaseDelay = .seconds(10)
-        let session = makeSession(arbiter: arbiter)
+        let session = makeChatSession(arbiter: arbiter)
 
         session.sendMessage("hello")
         #expect(session.pendingUserMessage != nil)
@@ -591,7 +576,7 @@ struct ChatSessionTests {
     /// arguments, so the parser can't read it as partial typing) is an error,
     /// not a message.
     @Test func slashCommandDoesNotRaisePendingRow() {
-        let session = makeSession()
+        let session = makeChatSession()
         session.sendMessage("/definitely-not-a-command with args")
         #expect(session.pendingUserMessage == nil)
         #expect(session.error != nil)
@@ -602,7 +587,7 @@ struct ChatSessionTests {
     /// The Waiting Row shows from send (queued, cold start) through turn
     /// prefill, and hides the moment the first delta opens a Live Part.
     @Test func waitingRowSpansQueueAndPrefillUntilFirstDelta() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         #expect(session.showsWaitingRow == false)
@@ -631,7 +616,7 @@ struct ChatSessionTests {
     /// (the live message has content; tool rows own their spinners) — it
     /// returns only for the next turn's prefill, after the tool batch ends.
     @Test func waitingRowHiddenBetweenPartsAndDuringToolsShownForNextTurnPrefill() {
-        let session = makeSession()
+        let session = makeChatSession()
         var builder = AssistantPartsBuilder()
 
         session.agentRun.markStarted()
@@ -677,7 +662,7 @@ struct ChatSessionTests {
         let conversation = AgentConversation(messages: [CoreMessage.user(user), answer])
         let store = InMemoryAgentConversationStore(seed: [conversation])
         let agent = makeNoOpAgent(modelID: "test-model")
-        let session = makeSession(agent: agent, store: store)
+        let session = makeChatSession(agent: agent, store: store)
 
         session.loadConversation(conversation.id)
 
@@ -689,7 +674,7 @@ struct ChatSessionTests {
     @Test func newConversationPersistsTheOutgoingTranscript() throws {
         let store = InMemoryAgentConversationStore()
         let agent = makeNoOpAgent(modelID: "test-model")
-        let session = makeSession(agent: agent, store: store)
+        let session = makeChatSession(agent: agent, store: store)
         store.createNew()
         let outgoingID = try #require(store.currentConversation).id
         agent.loadMessages([CoreMessage.user(UserMessage(content: "keep me"))])
@@ -711,7 +696,7 @@ struct ChatSessionTests {
     @Test func deleteCurrentConversationSwitchesCleanAndDropsTheBanner() throws {
         let store = InMemoryAgentConversationStore()
         let agent = makeNoOpAgent(modelID: "test-model")
-        let session = makeSession(agent: agent, store: store)
+        let session = makeChatSession(agent: agent, store: store)
         store.createNew()
         let id = try #require(store.currentConversation).id
         let user = UserMessage(content: "doomed")
@@ -739,7 +724,7 @@ struct ChatSessionTests {
             messages: [CoreMessage.user(UserMessage(content: "other"))])
         let store = InMemoryAgentConversationStore(seed: [other])
         let agent = makeNoOpAgent(modelID: "test-model")
-        let session = makeSession(agent: agent, store: store)
+        let session = makeChatSession(agent: agent, store: store)
         store.createNew()
         agent.loadMessages([CoreMessage.user(UserMessage(content: "mine"))])
         session.error = "still mine"
@@ -757,7 +742,7 @@ struct ChatSessionTests {
         let arbiter = InMemoryInferenceArbiter()
         arbiter.leaseDelay = .seconds(10)
         var restored: [String] = []
-        let session = makeSession(
+        let session = makeChatSession(
             arbiter: arbiter,
             restoreComposerDraft: { text, _ in restored.append(text) })
         session.sendMessage("queued behind the lease")

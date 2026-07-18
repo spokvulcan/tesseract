@@ -2,11 +2,11 @@
 //  CompanionLoopTests.swift
 //  tesseractTests
 //
-//  The wake fabric (ADR-0040): the wakes table's state machine queries, the
-//  `book_wake` tool (booking, the visible promise budget, reschedule), the
-//  wake-time grammar, the loop's per-day state, and the situation briefing's
-//  rendered shape. Each test opens its own scratch store so the scheme's
-//  parallel twin runners can't collide.
+//  The wake fabric (ADR-0040, lean palette #369): the wakes table's state
+//  machine queries, the wake palette tools (book with its visible promise
+//  budget, revise, cancel), the wake-time grammar, the loop's per-day state,
+//  and the situation briefing's rendered shape. Each test opens its own
+//  scratch store so the scheme's parallel twin runners can't collide.
 //
 
 import Foundation
@@ -14,18 +14,6 @@ import MLXLMCommon
 import Testing
 
 @testable import Tesseract_Agent
-
-private func scratchStore() throws -> MemoryStore {
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("loop-tests-\(UUID().uuidString)", isDirectory: true)
-    return try MemoryStore(directory: dir)
-}
-
-private func scratchRecorder() -> CompanionFlightRecorder {
-    CompanionFlightRecorder(
-        directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("loop-flight-\(UUID().uuidString)", isDirectory: true))
-}
 
 // MARK: - Wake store
 
@@ -102,16 +90,16 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         let store = try scratchStore()
         let key = "2026-07-16"
         var state = try await store.loopDayState(key)
-        #expect(state.dayStartedAt == nil)
+        #expect(state.digestFoldAt == nil)
 
-        state.dayStartedAt = Date()
-        state.lastAmbientAt = Date()
+        state.digestFoldAt = Date()
+        state.instructionsReviewedAt = Date()
         try await store.setLoopDayState(key, state)
 
         let loaded = try await store.loopDayState(key)
-        #expect(loaded.dayStartedAt != nil)
-        #expect(loaded.lastAmbientAt != nil)
-        #expect(try await store.loopDayState("2026-07-17").dayStartedAt == nil)
+        #expect(loaded.digestFoldAt != nil)
+        #expect(loaded.instructionsReviewedAt != nil)
+        #expect(try await store.loopDayState("2026-07-17").digestFoldAt == nil)
     }
 }
 
@@ -214,21 +202,6 @@ private func scratchRecorder() -> CompanionFlightRecorder {
 
 @Suite struct CompanionBookWakeToolTests {
 
-    private func run(
-        _ tool: AgentToolDefinition, _ args: [String: JSONValue]
-    ) async throws -> String {
-        let result = try await tool.execute("test-call", args, nil, nil)
-        let texts = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text }
-            return nil
-        }
-        guard !texts.isEmpty else {
-            Issue.record("expected a text result")
-            return ""
-        }
-        return texts.joined(separator: "\n")
-    }
-
     @MainActor
     @Test func booksAWakeWithCorrelation() async throws {
         let store = try scratchStore()
@@ -239,7 +212,7 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         let tool = createBookWakeTool(
             store: store, recorder: scratchRecorder(), context: context)
 
-        let reply = try await run(
+        let reply = try await toolText(
             tool,
             [
                 "content": .string("check whether he started the workout"),
@@ -273,17 +246,17 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         }
 
         for minutes in [0, 30] {
-            let reply = try await run(
+            let reply = try await toolText(
                 tool, ["content": .string("promise \(minutes)"), "at": .string(stamp(minutes))])
             #expect(reply.contains("Booked [promise]"))
         }
-        let refused = try await run(
+        let refused = try await toolText(
             tool, ["content": .string("one too many"), "at": .string(stamp(60))])
         #expect(refused.contains("Promise budget spent"))
         #expect(try await store.promisesBooked(onDay: TrackingDay.key(for: tomorrowNoon)) == 2)
 
         // The budget is promises-only: rhythm beats always book.
-        let rhythm = try await run(
+        let rhythm = try await toolText(
             tool,
             [
                 "content": .string("evening journal"), "at": .string(stamp(90)),
@@ -292,29 +265,124 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         #expect(rhythm.contains("Booked [rhythm]"))
     }
 
-    @Test func rescheduleMovesInsteadOfDuplicating() async throws {
+    @Test func reviseMovesInsteadOfDuplicating() async throws {
         let store = try scratchStore()
-        let tool = createBookWakeTool(
-            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
-
-        _ = try await run(
-            tool, ["content": .string("midday pulse"), "in_minutes": .int(30)])
+        let recorder = scratchRecorder()
+        _ = try await toolText(
+            createBookWakeTool(
+                store: store, recorder: recorder, context: CompanionTurnContext()),
+            ["content": .string("midday pulse"), "in_minutes": .int(30)])
         let booked = try await store.upcomingWakes(after: Date())
         let id = try #require(booked.first?.id)
 
-        let moved = try await run(
-            tool,
+        let revise = createReviseWakeTool(
+            store: store, recorder: recorder, context: CompanionTurnContext())
+        let moved = try await toolText(
+            revise,
             [
+                "id": .string(id.uuidString),
                 "content": .string("midday pulse — he asked for an hour"),
                 "in_minutes": .int(90),
-                "reschedule": .string(id.uuidString),
             ])
-        #expect(moved.contains("Moved to"))
+        #expect(moved.contains("Revised"))
 
         let after = try await store.upcomingWakes(after: Date())
         #expect(after.count == 1)
         #expect(after[0].id == id)
         #expect(after[0].content.contains("he asked for an hour"))
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(events.contains { $0.event == "wake.revised" })
+    }
+
+    @Test func reviseNeedsAChangeAndAnOpenWake() async throws {
+        let store = try scratchStore()
+        let tool = createReviseWakeTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+
+        // Unknown id refuses; a consumed wake refuses; no-change refuses.
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["id": .string(UUID().uuidString), "in_minutes": .int(10)], nil, nil)
+        }
+        var consumed = CompanionWake(content: "x", due: Date(), state: .delivered)
+        consumed.consumedAt = Date()
+        try await store.upsertWake(consumed)
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["id": .string(consumed.id.uuidString), "in_minutes": .int(10)], nil, nil)
+        }
+        let open = CompanionWake(content: "y", due: Date().addingTimeInterval(600))
+        try await store.upsertWake(open)
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute("t", ["id": .string(open.id.uuidString)], nil, nil)
+        }
+    }
+
+    @Test func cancelIsADeliberateRecordedExit() async throws {
+        let store = try scratchStore()
+        let recorder = scratchRecorder()
+        let wake = CompanionWake(
+            content: "ask about the dentist", due: Date().addingTimeInterval(600),
+            wakeClass: .promise)
+        try await store.upsertWake(wake)
+
+        let tool = createCancelWakeTool(
+            store: store, recorder: recorder, context: CompanionTurnContext())
+        // No why → refused: the record must say.
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute("t", ["id": .string(wake.id.uuidString)], nil, nil)
+        }
+        let out = try await toolText(
+            tool,
+            [
+                "id": .string(wake.id.uuidString),
+                "why": .string("he brought it up himself this morning"),
+            ])
+        #expect(out.contains("Cancelled [promise]"))
+
+        let loaded = try #require(try await store.wake(id: wake.id))
+        #expect(loaded.state == .cancelled)
+        // Cancelled never fires and never resurfaces.
+        #expect(try await store.dueWakes(asOf: Date().addingTimeInterval(3600)).isEmpty)
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(events.contains { $0.event == "wake.cancelled" })
+    }
+
+    @Test func cancelledPromiseFreesItsDayBudget() async throws {
+        let store = try scratchStore()
+        let calendar = Calendar.current
+        let noon = try #require(
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date()))
+        let tomorrowNoon = noon.addingTimeInterval(24 * 3600)
+        let first = CompanionWake(content: "a", due: tomorrowNoon, wakeClass: .promise)
+        try await store.upsertWake(first)
+        try await store.upsertWake(
+            CompanionWake(
+                content: "b", due: tomorrowNoon.addingTimeInterval(300), wakeClass: .promise))
+        let day = TrackingDay.key(for: tomorrowNoon)
+        #expect(try await store.promisesBooked(onDay: day) == 2)
+
+        _ = try await toolText(
+            createCancelWakeTool(
+                store: store, recorder: scratchRecorder(), context: CompanionTurnContext()),
+            ["id": .string(first.id.uuidString), "why": .string("moot")])
+        #expect(try await store.promisesBooked(onDay: day) == 1)
+    }
+
+    @Test func summonsAsStringFailsLoudly() async throws {
+        let store = try scratchStore()
+        let tool = createBookWakeTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+        // The #354 class: a stringly boolean must refuse, never coerce.
+        await #expect(throws: ToolArgTypeError.self) {
+            _ = try await tool.execute(
+                "t",
+                [
+                    "content": .string("x"), "in_minutes": .int(10),
+                    "summons": .string("False"),
+                ], nil, nil)
+        }
+        #expect(try await store.upcomingWakes(after: Date()).isEmpty)
     }
 
     @Test func refusesThePastAndGarbageTimes() async throws {
@@ -400,11 +468,11 @@ private func scratchRecorder() -> CompanionFlightRecorder {
     }
 
     @MainActor
-    @Test func reviseToolAppendsEntityVersionWithWhy() async throws {
+    @Test func reviseToolReplacesOneSectionAndKeepsTheOther() async throws {
         let store = try scratchStore()
-        try await store.seedInstructionsIfNeeded("the seed")
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
         let context = CompanionTurnContext()
-        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: .ambient)
+        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: .wake)
         let recorder = scratchRecorder()
         let tool = createReviseInstructionsTool(
             store: store, recorder: recorder, context: context)
@@ -412,7 +480,8 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         let result = try await tool.execute(
             "t",
             [
-                "text": .string("the seed, plus: he prefers the pulse at 14:00"),
+                "section": .string("loop_policy"),
+                "text": .string("Pulse at 14:00, not noon. Everything else as before."),
                 "why": .string("he moved the pulse twice running"),
             ], nil, nil)
         let text = result.content.compactMap { block -> String? in
@@ -420,32 +489,71 @@ private func scratchRecorder() -> CompanionFlightRecorder {
             return nil
         }.joined()
         #expect(text.contains("now v2"))
+        #expect(text.contains("loop_policy replaced"))
 
         let current = try #require(try await store.currentInstructions())
         #expect(current.author == "entity")
         #expect(current.note == "he moved the pulse twice running")
+        let sections = CompanionInstructions.split(current.text)
+        // The identity section survived the loop-policy revision untouched.
+        #expect(
+            sections.identity == CompanionInstructions.split(CompanionInstructions.seed).identity)
+        #expect(sections.loopPolicy == "Pulse at 14:00, not noon. Everything else as before.")
 
         let events = recorder.records(since: Date().addingTimeInterval(-60))
         #expect(events.contains { $0.event == "instructions.revised" })
     }
 
     @MainActor
-    @Test func reviseToolGuardsEmptyAndOversize() async throws {
+    @Test func reviseToolTreatsALegacyDocumentAsIdentity() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded("the old marker-less document")
+        let tool = createReviseInstructionsTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+
+        _ = try await tool.execute(
+            "t",
+            [
+                "section": .string("loop_policy"),
+                "text": .string("the new loop conduct"),
+                "why": .string("splitting the document"),
+            ], nil, nil)
+        let sections = CompanionInstructions.split(
+            try #require(try await store.currentInstructions()).text)
+        #expect(sections.identity == "the old marker-less document")
+        #expect(sections.loopPolicy == "the new loop conduct")
+    }
+
+    @MainActor
+    @Test func reviseToolGuardsSectionEmptyAndOversize() async throws {
         let store = try scratchStore()
         let tool = createReviseInstructionsTool(
             store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
 
         await #expect(throws: CompanionToolError.self) {
             _ = try await tool.execute(
-                "t", ["text": .string("  "), "why": .string("x")], nil, nil)
+                "t",
+                [
+                    "section": .string("identity"), "text": .string("  "),
+                    "why": .string("x"),
+                ], nil, nil)
         }
         await #expect(throws: CompanionToolError.self) {
-            _ = try await tool.execute("t", ["text": .string("fine")], nil, nil)
+            _ = try await tool.execute(
+                "t", ["section": .string("identity"), "text": .string("fine")], nil, nil)
+        }
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["text": .string("no section named"), "why": .string("x")], nil, nil)
         }
 
         let huge = String(repeating: "a", count: CompanionInstructions.maxLength + 1)
         let result = try await tool.execute(
-            "t", ["text": .string(huge), "why": .string("growth")], nil, nil)
+            "t",
+            [
+                "section": .string("identity"), "text": .string(huge),
+                "why": .string("growth"),
+            ], nil, nil)
         let text = result.content.compactMap { block -> String? in
             if case .text(let value) = block { return value }
             return nil
@@ -461,6 +569,120 @@ private func scratchRecorder() -> CompanionFlightRecorder {
         #expect(wrapped.contains("<companion-instructions version=\"7\" author=\"entity\">"))
         #expect(wrapped.contains("be brief"))
         #expect(wrapped.hasSuffix("</companion-instructions>"))
+    }
+}
+
+// MARK: - The identity split (#370)
+
+@Suite struct CompanionInstructionsSectionTests {
+
+    @Test func aLegacyDocumentIsAllIdentity() {
+        let sections = CompanionInstructions.split("just the old text")
+        #expect(sections.identity == "just the old text")
+        #expect(sections.loopPolicy == nil)
+    }
+
+    @Test func splitAndComposeRoundTrip() {
+        let composed = CompanionInstructions.compose(
+            identity: "who I am", loopPolicy: "how I run the loop")
+        let sections = CompanionInstructions.split(composed)
+        #expect(sections.identity == "who I am")
+        #expect(sections.loopPolicy == "how I run the loop")
+    }
+
+    @Test func anEmptyLoopPolicyComposesAway() {
+        let composed = CompanionInstructions.compose(identity: "who I am", loopPolicy: "  ")
+        #expect(!composed.contains(CompanionInstructions.loopPolicyMarker))
+        #expect(CompanionInstructions.split(composed).loopPolicy == nil)
+    }
+
+    @Test func theSeedCarriesBothSections() {
+        let sections = CompanionInstructions.split(CompanionInstructions.seed)
+        #expect(sections.identity.contains("You are Jarvis"))
+        let policy = sections.loopPolicy ?? ""
+        #expect(policy.contains("track"))
+        #expect(policy.contains("Mission Control"))
+    }
+
+    @Test func wrapIdentityCarriesOnlyTheIdentitySection() {
+        let version = CompanionInstructionsVersion(
+            version: 3, text: CompanionInstructions.seed, author: "entity", note: nil,
+            createdAt: Date())
+        let wrapped = CompanionInstructions.wrapIdentity(version)
+        #expect(wrapped.contains("<jarvis-identity version=\"3\" author=\"entity\">"))
+        #expect(wrapped.contains("You are Jarvis"))
+        #expect(!wrapped.contains("summon_overlay"))
+        #expect(wrapped.hasSuffix("</jarvis-identity>"))
+    }
+}
+
+@MainActor
+@Suite struct CompanionIdentityTests {
+
+    private func makeIdentity(
+        _ store: MemoryStore, enabled: @escaping () -> Bool = { true }
+    ) -> CompanionIdentity {
+        CompanionIdentity(store: store, isEnabled: enabled)
+    }
+
+    @Test func injectsTheIdentityBlockOncePerConversation() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
+        let identity = makeIdentity(store)
+
+        let first = await identity.decorate(UserMessage(content: "hello"), transcript: [])
+        let block = try #require(first.injectedContext)
+        #expect(block.contains("<jarvis-identity"))
+        #expect(block.contains("You are Jarvis"))
+        #expect(!block.contains("summon_overlay"))
+
+        // The second turn of the same conversation carries nothing new.
+        let second = await identity.decorate(UserMessage(content: "again"), transcript: [])
+        #expect(second.injectedContext == nil)
+
+        // A conversation switch re-injects into the fresh transcript.
+        identity.reset()
+        let third = await identity.decorate(UserMessage(content: "new chat"), transcript: [])
+        #expect(third.injectedContext?.contains("<jarvis-identity") == true)
+    }
+
+    @Test func identityLeadsAnExistingMemoryInjection() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
+        let identity = makeIdentity(store)
+
+        let user = UserMessage(content: "hello")
+            .with(injectedContext: "<memory>he likes tea</memory>")
+        let decorated = await identity.decorate(user, transcript: [])
+        let injected = try #require(decorated.injectedContext)
+        let identityAt = try #require(injected.range(of: "<jarvis-identity"))
+        let memoryAt = try #require(injected.range(of: "<memory>"))
+        #expect(identityAt.lowerBound < memoryAt.lowerBound)
+    }
+
+    @Test func skipsWhenDisabledUnseededOrAlreadyCarried() async throws {
+        let store = try scratchStore()
+
+        // No instructions yet: nothing to inject, message untouched.
+        let unseeded = makeIdentity(store)
+        let bare = await unseeded.decorate(UserMessage(content: "x"), transcript: [])
+        #expect(bare.injectedContext == nil)
+
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
+
+        let disabled = makeIdentity(store, enabled: { false })
+        let off = await disabled.decorate(UserMessage(content: "x"), transcript: [])
+        #expect(off.injectedContext == nil)
+
+        // A reopened conversation already carrying the block gets no twin.
+        let reopened = makeIdentity(store)
+        let transcript: [any AgentMessageProtocol & Sendable] = [
+            UserMessage(content: "old turn")
+                .with(injectedContext: "<jarvis-identity version=\"1\">…</jarvis-identity>")
+        ]
+        let skipped = await reopened.decorate(
+            UserMessage(content: "back again"), transcript: transcript)
+        #expect(skipped.injectedContext == nil)
     }
 }
 

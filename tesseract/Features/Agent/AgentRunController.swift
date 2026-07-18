@@ -38,6 +38,11 @@ final class AgentRunController {
     private let arbiter: any InferenceArbitrating
     private let toolRegistry: ToolRegistry?
     private let settings: SettingsManager?
+    /// Whether the current chat is a summoned dialogue (ADR-0046 #372) —
+    /// gates the `.dialogueOnly` tools (`report_back`) per prompt. Settable
+    /// post-construction like `reportError`: the Chat Session builds this
+    /// controller before `self` exists to capture.
+    @ObservationIgnored private var isDialogueOpen: @MainActor () -> Bool = { false }
     /// Failures inside the lease task surface through the coordinator's shared
     /// `error` banner via this injected closure. Settable post-construction so the
     /// coordinator can wire it once `self` is fully initialized.
@@ -65,6 +70,12 @@ final class AgentRunController {
         self.toolRegistry = toolRegistry
         self.settings = settings
         self.reportError = reportError
+    }
+
+    /// Wire the dialogue probe (ADR-0046 #372) after construction, like
+    /// `setReportError`.
+    func setIsDialogueOpen(_ probe: @escaping @MainActor () -> Bool) {
+        isDialogueOpen = probe
     }
 
     /// Wire the report-error sink after construction (the coordinator injects its
@@ -189,11 +200,15 @@ final class AgentRunController {
     /// Filter active tools before each prompt so the LLM sees the current
     /// set: tools declared `.companionOnly` never reach the interactive chat
     /// (the owner is already looking at it — ADR-0040 §10; the shared
-    /// registry carries them for the headless agent), and the browser tools
-    /// obey the `webAccessEnabled` setting.
+    /// registry carries them for the headless agent), `.dialogueOnly` tools
+    /// surface only while a summoned dialogue is the current chat (ADR-0046
+    /// #372), and the browser tools obey the `webAccessEnabled` setting.
     private func syncActiveTools() {
         guard let toolRegistry else { return }
         var tools = toolRegistry.allTools.filter { $0.audience != .companionOnly }
+        if !isDialogueOpen() {
+            tools = tools.filter { $0.audience != .dialogueOnly }
+        }
         if settings?.webAccessEnabled != true {
             tools = tools.filter { !Self.webGatedToolNames.contains($0.name) }
         }

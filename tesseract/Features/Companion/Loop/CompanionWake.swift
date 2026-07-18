@@ -38,6 +38,9 @@ nonisolated enum CompanionWakeState: String, Codable, Sendable {
     case resurfaced
     /// Terminal: resurfaced and still unheard — dead, no third attempt.
     case deliveredUnheard = "delivered_unheard"
+    /// Terminal: the entity deliberately withdrew it through `cancel_wake`
+    /// (#369) — a recorded decision with a why, never the silent-loss defect.
+    case cancelled
     /// Terminal defect: silently lost. The aggregator counts these as defects;
     /// nothing in the app writes it on purpose.
     case dropped
@@ -137,14 +140,18 @@ nonisolated enum CompanionResurfacing {
 /// The loop's small per-day persisted state — what must survive a restart but
 /// is not derivable from the wakes table.
 nonisolated struct CompanionLoopDayState: Codable, Sendable, Equatable {
-    /// The day-start transition fired (first sustained presence after the
-    /// overnight gap). Nil until then.
-    var dayStartedAt: Date?
-    /// The last ambient turn's completion — the spacing gate reads it.
-    var lastAmbientAt: Date?
+    /// The day's standing-instructions review ran (#370) — sleep passes fire
+    /// on every idle, the review at most once per day. (`lastAmbientAt` and
+    /// `dayStartedAt` lived here until #371 retired the ambient cadence and
+    /// moved day-start detection to the producers; persisted keys decode
+    /// ignored.)
+    var instructionsReviewedAt: Date?
+    /// The nightly Digest fold ran (#373) — keyed to the night window via
+    /// `CompanionDigest.nightKey`, at most one planned fold per night.
+    var digestFoldAt: Date?
 
-    init(dayStartedAt: Date? = nil, lastAmbientAt: Date? = nil) {
-        self.dayStartedAt = dayStartedAt
-        self.lastAmbientAt = lastAmbientAt
+    init(instructionsReviewedAt: Date? = nil, digestFoldAt: Date? = nil) {
+        self.instructionsReviewedAt = instructionsReviewedAt
+        self.digestFoldAt = digestFoldAt
     }
 }

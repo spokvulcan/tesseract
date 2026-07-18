@@ -99,7 +99,14 @@ final class ConversationMemory {
         _ outgoing: any AgentMessageProtocol & Sendable
     ) async -> any AgentMessageProtocol & Sendable {
         guard let user = outgoing.asUser else { return outgoing }
+        let enriched = await enrich(user)
+        return outgoing is CoreMessage ? CoreMessage.user(enriched) : enriched
+    }
 
+    /// The typed door — callers that hold a bare `UserMessage` (the loop's
+    /// turn opening) get one back, no unwrap and no dead fallback at the
+    /// call site.
+    func enrich(_ user: UserMessage) async -> UserMessage {
         // `forEpisode: user.id` is what makes the lifecycle live. The episode
         // for this turn does not exist yet — `capture` writes it at turn end
         // *under the same id* — but the retrieval log can already point at it,
@@ -108,13 +115,9 @@ final class ConversationMemory {
         // whole usefulness signal the lifecycle runs on is silently never
         // produced.
         let injection = await recall(user.content, user.id, injectedMemoryIDs)
-        guard let text = injection.text else { return outgoing }
+        guard let text = injection.text else { return user }
         injectedMemoryIDs.formUnion(injection.memoryIDs)
-
-        let enriched = UserMessage(
-            id: user.id, content: user.content, images: user.images,
-            timestamp: user.timestamp, injectedContext: text)
-        return outgoing is CoreMessage ? CoreMessage.user(enriched) : enriched
+        return user.with(injectedContext: text)
     }
 
     // MARK: - Capture (ADR-0035 §6)

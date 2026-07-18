@@ -28,6 +28,7 @@ struct AgentSettingsPane: View {
         case .extracting: "Reading what you said…"
         case .reconciling: "Checking it against what I know…"
         case .sweeping: "Tidying…"
+        case .companion: "Jarvis is reviewing his own conduct…"
         }
     }
 

@@ -2,430 +2,376 @@
 //  TrackingTools.swift
 //  tesseract
 //
-//  The five typed talk-time tools of the tracking model (#308): the day
-//  contract, the step log, the samples, the backlog, and the close-out.
-//  Registered in every conversation (the `remember`/`recall`/`contest`
-//  precedent) — the check-in IS the measuring instrument, whichever
+//  `track(kind, payload)` — the one generic tracking door (ADR-0046, #369).
+//  Replaces the five ceremony tools of #308 (plan_day, log_step, log_sample,
+//  log_task, close_day): the Observation / Contract Chain / Work Item schema
+//  survives as data behind one typed door, and the workflow — when to plan,
+//  what to log, how a day closes — is the entity's practice, never the
+//  tool's. Registered in every conversation (the `remember`/`recall` \
+//  precedent): the check-in IS the measuring instrument, whichever
 //  conversation it happens in.
 //
-//  One door per fact (#333's rule): mood is `log_sample`'s, a step event is
-//  `log_step`'s — never `remember`'s. Memory may still *conclude* from what
-//  was said; the structured fact has a single origin. Args are schema-checked
-//  here so a garbled call can't write a garbage row.
+//  One door per fact (#333's rule) still holds: a structured tracking fact is
+//  written here, never through `remember`. Args are checked loudly — a
+//  non-conforming payload fails with the expected shape named, never a
+//  silently tolerated coercion (#354's summons-as-string class).
 //
 
 import Foundation
+import MLXLMCommon
 
 nonisolated struct TrackingToolError: LocalizedError {
     let message: String
     var errorDescription: String? { message }
 }
 
-// MARK: - plan_day
+/// The four sample kinds whose domain is fixed by the tracking model (#308);
+/// any other observation kind must name its domain explicitly.
+private nonisolated let sampleDomains: [String: TrackingDomain] = [
+    "sleep": .body, "movement": .body, "mood": .mind, "energy": .mind,
+]
 
-nonisolated func createPlanDayTool(store: MemoryStore) -> AgentToolDefinition {
+// MARK: - track
+
+nonisolated func createTrackTool(store: MemoryStore) -> AgentToolDefinition {
     AgentToolDefinition(
-        name: "plan_day",
-        label: "plan day",
+        name: "track",
+        label: "track",
         description: """
-            Record today's day contract after he has confirmed it: one keystone step \
-            (the day's win condition, ~20 minutes of hard focus), optionally a short \
-            chain of follow-on steps ("and if you finish, what's next?"), and at most \
-            two support items. One step is active at a time — finishing a step arms \
-            the next the same day. Steps past the keystone are ambition, never \
-            obligation: only the keystone decides whether the day is kept.
+            Your one door to the tracking record: dated observations, the day's \
+            contract chain, and the backlog. How you track — when to plan, what \
+            to elicit, when a day closes — is your practice; this tool only \
+            writes the data shapes.
 
-            Call this once the contract is agreed in conversation, not to propose it. \
-            If a contract already exists for today, pass replace=true to overwrite it \
-            (say so to him first).
-            """,
-        parameterSchema: JSONSchema(
-            type: "object",
-            properties: [
-                "keystone": PropertySchema(
-                    type: "string",
-                    description: "The ONE hard step that makes today a win."
-                ),
-                "then": PropertySchema(
-                    type: "array",
-                    description:
-                        "Follow-on hard steps, in order, armed one at a time after the "
-                        + "keystone. Usually 0-2.",
-                    items: PropertySchema(type: "string", description: "A follow-on step.")
-                ),
-                "support": PropertySchema(
-                    type: "array",
-                    description: "Light support items (max 2). Never pushed.",
-                    items: PropertySchema(type: "string", description: "A support item.")
-                ),
-                "replace": PropertySchema(
-                    type: "boolean",
-                    description: "Overwrite an existing contract for today."
-                ),
-            ],
-            required: ["keystone"]
-        ),
-        execute: { _, argsJSON, _, _ in
-            guard let keystone = ToolArgExtractor.string(argsJSON, key: "keystone"),
-                !keystone.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else {
-                throw TrackingToolError(message: "plan_day requires a non-empty 'keystone'")
-            }
-            let then = ToolArgExtractor.stringArray(argsJSON, key: "then") ?? []
-            let support = Array(
-                (ToolArgExtractor.stringArray(argsJSON, key: "support") ?? []).prefix(2))
-            let replace = ToolArgExtractor.bool(argsJSON, key: "replace") ?? false
+            kind 'observation' — one dated, typed fact from the conversation. \
+            payload: {kind, value, domain?, stream?}. The four samples map their \
+            own domain (sleep/movement → body, mood/energy → mind); any other \
+            kind (step events, habit check-offs, whatever your practice names) \
+            needs an explicit domain: work|body|mind. Log what he said, in his \
+            terms — never a number he didn't give.
 
-            let today = TrackingDay.key()
-            let existing = try await store.day(today)
-            if let existing, !existing.chain.isEmpty, !replace {
-                return .text(
-                    "A contract for today already exists:\n\(existing.chainSummary)\n"
-                        + "Pass replace=true to overwrite it.")
-            }
+            kind 'day' — the day contract as data. payload: {date?, chain?, \
+            support?, seed?, closed?}; only the fields you pass change. 'chain' \
+            replaces the whole step list: [{title, status?, note?}], statuses \
+            pending|active|done|blocked|switched|dropped, at most ONE active. \
+            Steps keep their timestamps across rewrites (matched by title). \
+            'support' is at most two light items. 'seed' is the thread the next \
+            morning picks up (empty string clears it). 'closed' true/false \
+            stamps or reopens the day. 'date' (yyyy-MM-dd) defaults to today — \
+            pass yesterday's to settle a day after midnight.
 
-            var chain = [ContractStep(title: keystone, status: .active)]
-            chain.append(contentsOf: then.map { ContractStep(title: $0) })
-            var day = existing ?? DayRecord(date: today)
-            day.chain = chain
-            day.support = support
-            try await store.upsertDay(day)
-            return .text(day.chainSummary)
-        }
-    )
-}
-
-// MARK: - log_step
-
-nonisolated func createLogStepTool(store: MemoryStore) -> AgentToolDefinition {
-    AgentToolDefinition(
-        name: "log_step",
-        label: "log step",
-        description: """
-            Record what happened to the active step of today's contract chain. \
-            Actions: 'started' (he began the step; also re-arms a blocked step), \
-            'done' (step finished — the next step in the chain arms immediately), \
-            'blocked' (stuck; say why in note), 'switched' (he consciously moved to \
-            something else — the drift is named once, recorded, and momentum wins; \
-            optionally pass reseed to push the step to tonight/tomorrow's seed), \
-            'dropped' (abandoned; the chain moves on). Always tell him what you \
-            recorded.
-            """,
-        parameterSchema: JSONSchema(
-            type: "object",
-            properties: [
-                "action": PropertySchema(
-                    type: "string",
-                    description: "What happened.",
-                    enumValues: ["started", "done", "blocked", "switched", "dropped"]
-                ),
-                "note": PropertySchema(
-                    type: "string",
-                    description: "Context worth keeping — why blocked, what he switched to."
-                ),
-                "reseed": PropertySchema(
-                    type: "string",
-                    description:
-                        "For 'switched': where the step goes — appended to the day's seed."
-                ),
-            ],
-            required: ["action"]
-        ),
-        execute: { _, argsJSON, _, _ in
-            guard let actionRaw = ToolArgExtractor.string(argsJSON, key: "action") else {
-                throw TrackingToolError(message: "log_step requires an 'action'")
-            }
-            let note = ToolArgExtractor.string(argsJSON, key: "note")
-            let today = TrackingDay.key()
-            guard var day = try await store.day(today), !day.chain.isEmpty else {
-                throw TrackingToolError(
-                    message: "No contract exists for today — plan_day first.")
-            }
-
-            let now = Date()
-            var observationKind: String?
-
-            switch actionRaw {
-            case "started":
-                guard
-                    let index = day.chain.firstIndex(where: {
-                        $0.status == .active || $0.status == .blocked
-                    }) ?? day.chain.firstIndex(where: { $0.status == .pending })
-                else {
-                    throw TrackingToolError(message: "No step left to start.")
-                }
-                day.chain[index].status = .active
-                day.chain[index].startedAt = day.chain[index].startedAt ?? now
-                if let note { day.chain[index].note = note }
-                observationKind = "step-started"
-            case "done":
-                guard let index = day.chain.firstIndex(where: { $0.status == .active }) else {
-                    throw TrackingToolError(message: "No active step to finish.")
-                }
-                day.chain[index].status = .done
-                day.chain[index].closedAt = now
-                if let next = day.chain.firstIndex(where: { $0.status == .pending }) {
-                    day.chain[next].status = .active
-                }
-                observationKind = "step-done"
-            case "blocked":
-                guard let index = day.chain.firstIndex(where: { $0.status == .active }) else {
-                    throw TrackingToolError(message: "No active step to mark blocked.")
-                }
-                day.chain[index].status = .blocked
-                if let note { day.chain[index].note = note }
-                observationKind = "step-blocked"
-            case "switched":
-                guard
-                    let index = day.chain.firstIndex(where: {
-                        $0.status == .active || $0.status == .blocked
-                    })
-                else {
-                    throw TrackingToolError(message: "No active step to switch away from.")
-                }
-                day.chain[index].status = .switched
-                if let note { day.chain[index].note = note }
-                if let reseed = ToolArgExtractor.string(argsJSON, key: "reseed") {
-                    day.seed = [day.seed, reseed].compactMap { $0 }.joined(separator: " · ")
-                }
-                observationKind = "conscious-switch"
-            case "dropped":
-                guard
-                    let index = day.chain.firstIndex(where: {
-                        $0.status == .active || $0.status == .blocked
-                    })
-                else {
-                    throw TrackingToolError(message: "No active step to drop.")
-                }
-                day.chain[index].status = .dropped
-                if let note { day.chain[index].note = note }
-                if let next = day.chain.firstIndex(where: { $0.status == .pending }) {
-                    day.chain[next].status = .active
-                }
-                observationKind = "step-dropped"
-            default:
-                throw TrackingToolError(
-                    message:
-                        "Unknown action '\(actionRaw)' — one of started/done/blocked/switched/dropped."
-                )
-            }
-
-            try await store.upsertDay(day)
-            if let observationKind {
-                try await store.appendObservation(
-                    TrackingObservation(
-                        domain: .work, kind: observationKind,
-                        value: note ?? day.activeStep?.title ?? day.chain[0].title,
-                        source: .elicited))
-            }
-            return .text(day.chainSummary)
-        }
-    )
-}
-
-// MARK: - log_sample
-
-/// One list feeds both the schema's `enumValues` and the execute guard, so
-/// the two can't drift.
-private nonisolated let sampleKinds = ["sleep", "mood", "energy", "movement"]
-
-nonisolated func createLogSampleTool(store: MemoryStore) -> AgentToolDefinition {
-    AgentToolDefinition(
-        name: "log_sample",
-        label: "log sample",
-        description: """
-            Record one elicited body/mind sample from the conversation: 'sleep' (the \
-            morning question), 'mood' or 'energy' (bookends), 'movement' (evening). \
-            Value is a short plain answer in his terms — "poor, ~5h", "good", "walk, \
-            30 min". The conversation is the measuring instrument: log what he said, \
-            in essence, not a number he didn't give.
+            kind 'item' — the backlog. payload: {action: add|done|drop|list, \
+            title?, stream?, cadence?, domain?}. 'add' takes the title with an \
+            optional stream (the life area), cadence once|daily (daily = a \
+            recurring habit), and domain. 'done' on a daily habit records \
+            today's check-off and keeps the item; on a one-shot it closes it. \
+            Refer to items by title fragment or id.
             """,
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
                 "kind": PropertySchema(
                     type: "string",
-                    description: "Which sample.",
-                    enumValues: sampleKinds
+                    description: "Which record family the payload writes.",
+                    enumValues: ["observation", "day", "item"]
                 ),
-                "value": PropertySchema(
-                    type: "string",
-                    description: "The sample, short, in his terms."
+                "payload": PropertySchema(
+                    type: "object",
+                    description: "The kind-shaped data — see the tool description."
                 ),
             ],
-            required: ["kind", "value"]
+            required: ["kind", "payload"]
         ),
         execute: { _, argsJSON, _, _ in
-            guard let kind = ToolArgExtractor.string(argsJSON, key: "kind"),
-                sampleKinds.contains(kind)
-            else {
+            guard let kind = ToolArgExtractor.string(argsJSON, key: "kind") else {
                 throw TrackingToolError(
-                    message: "log_sample requires kind: \(sampleKinds.joined(separator: "|"))")
+                    message: "track requires 'kind': observation|day|item")
             }
-            guard let value = ToolArgExtractor.string(argsJSON, key: "value"),
-                !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            else {
-                throw TrackingToolError(message: "log_sample requires a non-empty 'value'")
-            }
-            let domain: TrackingDomain = (kind == "sleep" || kind == "movement") ? .body : .mind
-            try await store.appendObservation(
-                TrackingObservation(domain: domain, kind: kind, value: value, source: .elicited))
-            return .text("Logged \(kind): \(value)")
-        }
-    )
-}
-
-// MARK: - log_task
-
-nonisolated func createLogTaskTool(store: MemoryStore) -> AgentToolDefinition {
-    AgentToolDefinition(
-        name: "log_task",
-        label: "log task",
-        description: """
-            The backlog — items a day contract can draw steps from. Actions: 'add' \
-            (title required; stream = the life area it belongs to, e.g. "tesseract", \
-            "health"; cadence 'daily' makes it a recurring habit that re-arms each \
-            day; domain work|body|mind, default work), 'done' (a one-shot closes; a \
-            daily habit records today's check-off and stays), 'drop', 'list' (the \
-            open backlog). Refer to items by title fragment or id.
-            """,
-        parameterSchema: JSONSchema(
-            type: "object",
-            properties: [
-                "action": PropertySchema(
-                    type: "string",
-                    description: "What to do.",
-                    enumValues: ["add", "done", "drop", "list"]
-                ),
-                "title": PropertySchema(
-                    type: "string",
-                    description: "For 'add': the item. For 'done'/'drop': title fragment or id."
-                ),
-                "stream": PropertySchema(
-                    type: "string",
-                    description: "Life area the item flows in (conversational name)."
-                ),
-                "cadence": PropertySchema(
-                    type: "string",
-                    description: "once (default) or daily (a recurring habit).",
-                    enumValues: ["once", "daily"]
-                ),
-                "domain": PropertySchema(
-                    type: "string",
-                    description: "work (default), body, or mind — habit check-offs land here.",
-                    enumValues: ["work", "body", "mind"]
-                ),
-            ],
-            required: ["action"]
-        ),
-        execute: { _, argsJSON, _, _ in
-            guard let action = ToolArgExtractor.string(argsJSON, key: "action") else {
-                throw TrackingToolError(message: "log_task requires an 'action'")
-            }
-            switch action {
-            case "add":
-                guard let title = ToolArgExtractor.string(argsJSON, key: "title"),
-                    !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                else {
-                    throw TrackingToolError(message: "log_task add requires a 'title'")
-                }
-                let item = WorkItemRecord(
-                    title: title,
-                    stream: ToolArgExtractor.string(argsJSON, key: "stream"),
-                    domain: TrackingDomain(
-                        rawValue: ToolArgExtractor.string(argsJSON, key: "domain") ?? "work")
-                        ?? .work,
-                    cadence: WorkItemCadence(
-                        rawValue: ToolArgExtractor.string(argsJSON, key: "cadence") ?? "once")
-                        ?? .once
-                )
-                try await store.upsertWorkItem(item)
-                let habit = item.cadence == .daily ? " (daily habit)" : ""
-                return .text("Added: \(item.title)\(habit)")
-            case "done", "drop":
-                guard let ref = ToolArgExtractor.string(argsJSON, key: "title") else {
-                    throw TrackingToolError(
-                        message: "log_task \(action) requires 'title' (fragment or id)")
-                }
-                guard var item = try await store.findWorkItem(idOrTitle: ref) else {
-                    throw TrackingToolError(
-                        message:
-                            "No single open item matches '\(ref)' — use log_task list and be more specific."
-                    )
-                }
-                if action == "drop" {
-                    item.status = .dropped
-                    try await store.upsertWorkItem(item)
-                    return .text("Dropped: \(item.title)")
-                }
-                if item.cadence == .daily {
-                    try await store.appendObservation(
-                        TrackingObservation(
-                            domain: item.domain, kind: "habit-checkoff", value: item.title,
-                            source: .elicited, stream: item.stream))
-                    return .text("Checked off today: \(item.title) (habit stays on the list)")
-                }
-                item.status = .done
-                try await store.upsertWorkItem(item)
-                return .text("Done: \(item.title)")
-            case "list":
-                let items = try await store.workItems(status: .open)
-                guard !items.isEmpty else { return .text("The backlog is empty.") }
-                let lines = items.map { item in
-                    var tags: [String] = []
-                    if let stream = item.stream { tags.append(stream) }
-                    if item.cadence == .daily { tags.append("daily") }
-                    let suffix = tags.isEmpty ? "" : " [\(tags.joined(separator: ", "))]"
-                    return "- \(item.title)\(suffix)"
-                }
-                return .text(lines.joined(separator: "\n"))
+            let payload = try ToolArgExtractor.object(argsJSON, key: "payload")
+            switch kind {
+            case "observation":
+                return .text(try await trackObservation(payload, store: store))
+            case "day":
+                return .text(try await trackDay(payload, store: store))
+            case "item":
+                return .text(try await trackItem(payload, store: store))
             default:
                 throw TrackingToolError(
-                    message: "Unknown action '\(action)' — one of add/done/drop/list.")
+                    message: "Unknown kind '\(kind)' — one of observation|day|item.")
             }
         }
     )
 }
 
-// MARK: - close_day
+// MARK: - observation
 
-nonisolated func createCloseDayTool(store: MemoryStore) -> AgentToolDefinition {
-    AgentToolDefinition(
-        name: "close_day",
-        label: "close day",
-        description: """
-            Close today at the end of the evening journal: stamps the close-out (an \
-            unclosed day is what tomorrow's morning opens with a catch-up about) and \
-            records tomorrow's seed — what tomorrow's planning should open with. \
-            Call it after the journal talk, once the contract is accounted for. The \
-            journal is HIS ritual as much as yours: never call this in a turn he has \
-            not participated in — summon him and wait instead.
-            """,
-        parameterSchema: JSONSchema(
-            type: "object",
-            properties: [
-                "seed": PropertySchema(
-                    type: "string",
-                    description: "Tomorrow's seed — the thread to pick up at morning planning."
-                )
-            ],
-            required: []
-        ),
-        execute: { _, argsJSON, _, _ in
-            let today = TrackingDay.key()
-            var day = try await store.day(today) ?? DayRecord(date: today)
-            day.closedAt = Date()
-            if let seed = ToolArgExtractor.string(argsJSON, key: "seed"), !seed.isEmpty {
-                day.seed = seed
-            }
-            try await store.upsertDay(day)
-            let depth = day.chainDepth
-            let kept = (day.keystone?.status == .done)
-            let verdict =
-                day.chain.isEmpty
-                ? "No contract today."
-                : (kept ? "Keystone kept, depth \(depth)/\(day.chain.count)." : "Keystone open.")
-            return .text("Day closed. \(verdict)\(day.seed.map { " Seed: \($0)" } ?? "")")
+private nonisolated func trackObservation(
+    _ payload: [String: JSONValue], store: MemoryStore
+) async throws -> String {
+    guard let kind = ToolArgExtractor.string(payload, key: "kind"),
+        !kind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+        throw TrackingToolError(message: "observation payload requires a 'kind'")
+    }
+    guard let value = ToolArgExtractor.string(payload, key: "value"),
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+        throw TrackingToolError(message: "observation payload requires a non-empty 'value'")
+    }
+    let domain: TrackingDomain
+    if let explicit = ToolArgExtractor.string(payload, key: "domain") {
+        domain = try parseDomain(explicit)
+    } else if let mapped = sampleDomains[kind] {
+        domain = mapped
+    } else {
+        throw TrackingToolError(
+            message: "Observation kind '\(kind)' needs an explicit 'domain' (work|body|mind).")
+    }
+    try await store.appendObservation(
+        TrackingObservation(
+            domain: domain, kind: kind, value: value, source: .elicited,
+            stream: ToolArgExtractor.string(payload, key: "stream")))
+    return "Recorded \(kind): \(value)"
+}
+
+// MARK: - day
+
+private nonisolated func trackDay(
+    _ payload: [String: JSONValue], store: MemoryStore
+) async throws -> String {
+    let dateKey = ToolArgExtractor.string(payload, key: "date") ?? TrackingDay.key()
+    guard TrackingDay.startOfDay(forKey: dateKey) != nil else {
+        throw TrackingToolError(message: "Bad 'date' — use yyyy-MM-dd.")
+    }
+
+    var day = try await store.day(dateKey) ?? DayRecord(date: dateKey)
+    var touched = false
+    let now = Date()
+    var stepObservations: [TrackingObservation] = []
+
+    if payload["chain"] != nil {
+        let previous = day.chain
+        day.chain = try parseChain(payload, previous: previous, now: now)
+        stepObservations = stepTransitionObservations(from: previous, to: day.chain)
+        touched = true
+    }
+    if payload["support"] != nil {
+        guard let support = ToolArgExtractor.stringArray(payload, key: "support") else {
+            throw TrackingToolError(message: "'support' must be an array of strings.")
         }
-    )
+        guard support.count <= 2 else {
+            throw TrackingToolError(
+                message: "'support' carries at most two items — the contract stays light.")
+        }
+        day.support = support
+        touched = true
+    }
+    if payload["seed"] != nil {
+        guard let seed = ToolArgExtractor.string(payload, key: "seed") else {
+            throw TrackingToolError(message: "'seed' must be a string.")
+        }
+        day.seed = seed.isEmpty ? nil : seed
+        touched = true
+    }
+    if let closed = try ToolArgExtractor.strictBool(payload, key: "closed") {
+        day.closedAt = closed ? (day.closedAt ?? now) : nil
+        touched = true
+    }
+
+    guard touched else {
+        throw TrackingToolError(
+            message: "day payload needs at least one of chain/support/seed/closed.")
+    }
+    try await store.upsertDay(day)
+    for observation in stepObservations {
+        try await store.appendObservation(observation)
+    }
+    return renderDay(day)
+}
+
+/// The work-domain Observation stream survives the ceremony's death (#369's
+/// data-shapes rule): every step status transition still lands as the same
+/// typed row `log_step` used to emit — mechanically, from the chain diff, so
+/// the weekly walk keeps its rows without the entity spending a second call.
+private nonisolated func stepTransitionObservations(
+    from previous: [ContractStep], to chain: [ContractStep]
+) -> [TrackingObservation] {
+    let previousByTitle = Dictionary(
+        previous.map { ($0.title.lowercased(), $0.status) },
+        uniquingKeysWith: { first, _ in first })
+    return chain.compactMap { step in
+        let before = previousByTitle[step.title.lowercased()] ?? .pending
+        guard step.status != before else { return nil }
+        let kind: String
+        switch step.status {
+        case .pending: return nil
+        case .active: kind = "step-started"
+        case .done: kind = "step-done"
+        case .blocked: kind = "step-blocked"
+        case .switched: kind = "conscious-switch"
+        case .dropped: kind = "step-dropped"
+        }
+        return TrackingObservation(
+            domain: .work, kind: kind, value: step.note ?? step.title, source: .elicited)
+    }
+}
+
+/// The chain arrives as data and leaves as data — the one shape rule enforced
+/// here is the Contract Chain's own: at most one active step. Timestamps are
+/// measurement, so a rewrite carries them forward (matched by title) and a
+/// step newly active/done gains its stamp now.
+private nonisolated func parseChain(
+    _ payload: [String: JSONValue], previous: [ContractStep], now: Date
+) throws -> [ContractStep] {
+    let items = try ToolArgExtractor.objectArray(payload, key: "chain")
+    let previousByTitle = Dictionary(
+        previous.map { ($0.title.lowercased(), $0) },
+        uniquingKeysWith: { first, _ in first })
+
+    var chain: [ContractStep] = []
+    for item in items {
+        guard let title = ToolArgExtractor.string(item, key: "title"),
+            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw TrackingToolError(message: "Every chain step requires a 'title'.")
+        }
+        let status: ContractStepStatus
+        if let raw = ToolArgExtractor.string(item, key: "status") {
+            guard let parsed = ContractStepStatus(rawValue: raw) else {
+                throw TrackingToolError(
+                    message: "Unknown step status '\(raw)' — one of "
+                        + "pending|active|done|blocked|switched|dropped.")
+            }
+            status = parsed
+        } else {
+            status = .pending
+        }
+        let old = previousByTitle[title.lowercased()]
+        var step = ContractStep(
+            title: title,
+            status: status,
+            startedAt: old?.startedAt,
+            closedAt: old?.closedAt,
+            note: ToolArgExtractor.string(item, key: "note") ?? old?.note)
+        if step.status == .active, step.startedAt == nil { step.startedAt = now }
+        if step.status == .done, step.closedAt == nil { step.closedAt = now }
+        chain.append(step)
+    }
+
+    guard chain.filter({ $0.status == .active }).count <= 1 else {
+        throw TrackingToolError(
+            message: "The chain carries at most ONE active step at a time.")
+    }
+    return chain
+}
+
+/// The one domain-vocabulary guard — observation and item share the raw
+/// string, the error phrasing, and any future domain rename.
+private nonisolated func parseDomain(_ raw: String) throws -> TrackingDomain {
+    guard let parsed = TrackingDomain(rawValue: raw) else {
+        throw TrackingToolError(message: "Unknown domain '\(raw)' — one of work|body|mind.")
+    }
+    return parsed
+}
+
+/// The day as data — no verdicts, no ceremony (#354's "Day closed" class):
+/// the close-out stamp renders only when it exists, as a fact with a time.
+private nonisolated func renderDay(_ day: DayRecord) -> String {
+    var lines = ["Contract for \(day.date):"]
+    if day.chain.isEmpty {
+        lines.append("(no steps)")
+    } else {
+        for (index, step) in day.chain.enumerated() {
+            let marker = index == 0 ? "keystone" : "step \(index + 1)"
+            lines.append("\(index + 1). [\(step.status.rawValue)] \(step.title) (\(marker))")
+        }
+    }
+    if !day.support.isEmpty {
+        lines.append("Support: \(day.support.joined(separator: "; "))")
+    }
+    if let seed = day.seed { lines.append("Seed: \(seed)") }
+    if let closedAt = day.closedAt {
+        lines.append(
+            "Close-out stamped \(closedAt.formatted(date: .omitted, time: .shortened)).")
+    }
+    return lines.joined(separator: "\n")
+}
+
+// MARK: - item
+
+private nonisolated func trackItem(
+    _ payload: [String: JSONValue], store: MemoryStore
+) async throws -> String {
+    guard let action = ToolArgExtractor.string(payload, key: "action") else {
+        throw TrackingToolError(message: "item payload requires 'action': add|done|drop|list")
+    }
+    switch action {
+    case "add":
+        guard let title = ToolArgExtractor.string(payload, key: "title"),
+            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw TrackingToolError(message: "item add requires a 'title'")
+        }
+        let domain =
+            try ToolArgExtractor.string(payload, key: "domain")
+            .map(parseDomain) ?? .work
+        let cadence: WorkItemCadence
+        if let raw = ToolArgExtractor.string(payload, key: "cadence") {
+            guard let parsed = WorkItemCadence(rawValue: raw) else {
+                throw TrackingToolError(
+                    message: "Unknown cadence '\(raw)' — one of once|daily.")
+            }
+            cadence = parsed
+        } else {
+            cadence = .once
+        }
+        let item = WorkItemRecord(
+            title: title,
+            stream: ToolArgExtractor.string(payload, key: "stream"),
+            domain: domain,
+            cadence: cadence)
+        try await store.upsertWorkItem(item)
+        return "Added: \(item.title)\(item.cadence == .daily ? " (daily habit)" : "")"
+
+    case "done", "drop":
+        guard let ref = ToolArgExtractor.string(payload, key: "title") else {
+            throw TrackingToolError(
+                message: "item \(action) requires 'title' (fragment or id)")
+        }
+        guard var item = try await store.findWorkItem(idOrTitle: ref) else {
+            throw TrackingToolError(
+                message: "No single open item matches '\(ref)' — list the backlog and be "
+                    + "more specific.")
+        }
+        if action == "drop" {
+            item.status = .dropped
+            try await store.upsertWorkItem(item)
+            return "Dropped: \(item.title)"
+        }
+        if item.cadence == .daily {
+            try await store.appendObservation(
+                TrackingObservation(
+                    domain: item.domain, kind: "habit-checkoff", value: item.title,
+                    source: .elicited, stream: item.stream))
+            return "Checked off today: \(item.title) (the habit stays on the list)"
+        }
+        item.status = .done
+        try await store.upsertWorkItem(item)
+        return "Done: \(item.title)"
+
+    case "list":
+        let items = try await store.workItems(status: .open)
+        guard !items.isEmpty else { return "The backlog is empty." }
+        return items.map { item in
+            var tags: [String] = []
+            if let stream = item.stream { tags.append(stream) }
+            if item.cadence == .daily { tags.append("daily") }
+            let suffix = tags.isEmpty ? "" : " [\(tags.joined(separator: ", "))]"
+            return "- \(item.title)\(suffix)"
+        }.joined(separator: "\n")
+
+    default:
+        throw TrackingToolError(
+            message: "Unknown action '\(action)' — one of add/done/drop/list.")
+    }
 }

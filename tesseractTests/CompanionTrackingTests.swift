@@ -2,10 +2,10 @@
 //  CompanionTrackingTests.swift
 //  tesseractTests
 //
-//  The tracking grain (#308): days, the contract chain, observations, and
-//  work items — the store methods and the five typed tools over them. Each
-//  test opens its own scratch store so the scheme's parallel twin runners
-//  can't collide.
+//  The tracking grain (#308) under the lean palette (ADR-0046, #369): days,
+//  the contract chain, observations, and work items — the store methods and
+//  the one generic `track(kind, payload)` door over them. Each test opens its
+//  own scratch store so the scheme's parallel twin runners can't collide.
 //
 
 import Foundation
@@ -13,12 +13,6 @@ import MLXLMCommon
 import Testing
 
 @testable import Tesseract_Agent
-
-private func scratchStore() throws -> MemoryStore {
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("tracking-tests-\(UUID().uuidString)", isDirectory: true)
-    return try MemoryStore(directory: dir)
-}
 
 @Suite struct CompanionTrackingStoreTests {
 
@@ -116,99 +110,200 @@ private func scratchStore() throws -> MemoryStore {
     }
 }
 
-@Suite struct CompanionTrackingToolTests {
+@Suite struct CompanionTrackToolTests {
 
-    private func run(
-        _ tool: AgentToolDefinition, _ args: [String: JSONValue]
+    private func track(
+        _ store: MemoryStore, kind: String, _ payload: [String: JSONValue]
     ) async throws -> String {
-        let result = try await tool.execute("test-call", args, nil, nil)
-        let texts = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text }
-            return nil
-        }
-        guard !texts.isEmpty else {
-            Issue.record("expected a text result")
-            return ""
-        }
-        return texts.joined(separator: "\n")
+        try await toolText(
+            createTrackTool(store: store),
+            ["kind": .string(kind), "payload": .object(payload)])
     }
 
-    @Test func planDayCreatesChainAndGuardsOverwrite() async throws {
+    // MARK: - Observations
+
+    @Test func sampleKindsMapTheirOwnDomain() async throws {
         let store = try scratchStore()
-        let tool = createPlanDayTool(store: store)
+        _ = try await track(
+            store, kind: "observation",
+            ["kind": .string("sleep"), "value": .string("solid 7h")])
+        _ = try await track(
+            store, kind: "observation",
+            ["kind": .string("energy"), "value": .string("flat")])
 
-        let first = try await run(
-            tool,
-            [
-                "keystone": .string("Ship the evaluator"),
-                "then": .array([.string("Write tests")]),
-                "support": .array([.string("PR replies")]),
-            ])
-        #expect(first.contains("[active] Ship the evaluator"))
-        #expect(first.contains("[pending] Write tests"))
-
-        let refused = try await run(tool, ["keystone": .string("Something else")])
-        #expect(refused.contains("already exists"))
-
-        let replaced = try await run(
-            tool, ["keystone": .string("Something else"), "replace": .bool(true)])
-        #expect(replaced.contains("[active] Something else"))
-    }
-
-    @Test func logStepDoneArmsNext() async throws {
-        let store = try scratchStore()
-        _ = try await run(
-            createPlanDayTool(store: store),
-            [
-                "keystone": .string("First"),
-                "then": .array([.string("Second")]),
-            ])
-        let tool = createLogStepTool(store: store)
-
-        let done = try await run(tool, ["action": .string("done")])
-        #expect(done.contains("[done] First"))
-        #expect(done.contains("[active] Second"))
-
-        // The step event landed as a work observation.
-        let events = try await store.observations(kind: "step-done")
-        #expect(events.count == 1)
-    }
-
-    @Test func logStepSwitchedRecordsConsciousSwitchAndReseeds() async throws {
-        let store = try scratchStore()
-        _ = try await run(createPlanDayTool(store: store), ["keystone": .string("First")])
-        let out = try await run(
-            createLogStepTool(store: store),
-            [
-                "action": .string("switched"),
-                "note": .string("deep in the profiler instead"),
-                "reseed": .string("First → tomorrow"),
-            ])
-        #expect(out.contains("[switched] First"))
-        #expect(out.contains("Seed: First → tomorrow"))
-        #expect(try await store.observations(kind: "conscious-switch").count == 1)
-    }
-
-    @Test func logSampleMapsDomains() async throws {
-        let store = try scratchStore()
-        let tool = createLogSampleTool(store: store)
-        _ = try await run(tool, ["kind": .string("sleep"), "value": .string("solid 7h")])
-        _ = try await run(tool, ["kind": .string("energy"), "value": .string("flat")])
-
-        #expect(try await store.observations(domain: .body).count == 1)
+        let body = try await store.observations(domain: .body)
+        #expect(body.count == 1)
+        #expect(body[0].kind == "sleep")
+        #expect(body[0].source == .elicited)
         #expect(try await store.observations(domain: .mind).count == 1)
     }
 
-    @Test func logTaskHabitCheckoffKeepsItemOpen() async throws {
+    @Test func customObservationKindNeedsAnExplicitDomain() async throws {
         let store = try scratchStore()
-        let tool = createLogTaskTool(store: store)
-        _ = try await run(
-            tool,
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await self.track(
+                store, kind: "observation",
+                ["kind": .string("focus-block"), "value": .string("90 min deep")])
+        }
+        _ = try await track(
+            store, kind: "observation",
+            [
+                "kind": .string("focus-block"), "value": .string("90 min deep"),
+                "domain": .string("work"), "stream": .string("tesseract"),
+            ])
+        let rows = try await store.observations(kind: "focus-block")
+        #expect(rows.count == 1)
+        #expect(rows[0].domain == .work)
+        #expect(rows[0].stream == "tesseract")
+    }
+
+    // MARK: - Days
+
+    @Test func chainTransitionsKeepTheObservationStreamFlowing() async throws {
+        let store = try scratchStore()
+        // The ceremony died; the data stream did not (#369): every step
+        // status transition still lands as the typed work-domain row
+        // `log_step` used to emit — derived from the chain diff.
+        _ = try await track(
+            store, kind: "day",
+            [
+                "chain": .array([
+                    .object(["title": .string("Write it"), "status": .string("active")])
+                ])
+            ])
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Write it"), "status": .string("done")])])])
+
+        #expect(try await store.observations(kind: "step-started").count == 1)
+        let done = try await store.observations(kind: "step-done")
+        #expect(done.count == 1)
+        #expect(done.first?.domain == .work)
+        #expect(done.first?.value == "Write it")
+        // Re-sending the same chain is not a transition — no duplicate rows.
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Write it"), "status": .string("done")])])])
+        #expect(try await store.observations(kind: "step-done").count == 1)
+    }
+
+    @Test func dayChainWritesWithOneActiveEnforced() async throws {
+        let store = try scratchStore()
+        let out = try await track(
+            store, kind: "day",
+            [
+                "chain": .array([
+                    .object(["title": .string("Ship the fold"), "status": .string("active")]),
+                    .object(["title": .string("Write tests")]),
+                ]),
+                "support": .array([.string("PR replies")]),
+                "seed": .string("start with the evaluator"),
+            ])
+        #expect(out.contains("[active] Ship the fold"))
+        #expect(out.contains("[pending] Write tests"))
+        #expect(out.contains("Seed: start with the evaluator"))
+
+        let day = try #require(try await store.day(TrackingDay.key()))
+        #expect(day.chain.count == 2)
+        #expect(day.chain[0].startedAt != nil)
+        #expect(day.support == ["PR replies"])
+
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await self.track(
+                store, kind: "day",
+                [
+                    "chain": .array([
+                        .object(["title": .string("A"), "status": .string("active")]),
+                        .object(["title": .string("B"), "status": .string("active")]),
+                    ])
+                ])
+        }
+    }
+
+    @Test func partialDayUpdateTouchesOnlyPassedFields() async throws {
+        let store = try scratchStore()
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Keystone")])])])
+        _ = try await track(store, kind: "day", ["seed": .string("tomorrow's thread")])
+
+        let day = try #require(try await store.day(TrackingDay.key()))
+        #expect(day.chain.count == 1)
+        #expect(day.seed == "tomorrow's thread")
+    }
+
+    @Test func chainRewriteCarriesTimestampsForwardByTitle() async throws {
+        let store = try scratchStore()
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Ship"), "status": .string("active")])])]
+        )
+        let started = try #require(try await store.day(TrackingDay.key())?.chain[0].startedAt)
+
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Ship"), "status": .string("done")])])]
+        )
+        let step = try #require(try await store.day(TrackingDay.key())?.chain[0])
+        #expect(step.status == .done)
+        #expect(step.closedAt != nil)
+        let carried = try #require(step.startedAt)
+        #expect(abs(carried.timeIntervalSince(started)) < 1)
+    }
+
+    @Test func closedStampsReopensAndCarriesNoCeremonyText() async throws {
+        let store = try scratchStore()
+        let closed = try await track(store, kind: "day", ["closed": .bool(true)])
+        #expect(!closed.contains("Day closed"))
+        #expect(try await store.day(TrackingDay.key())?.closedAt != nil)
+
+        _ = try await track(store, kind: "day", ["closed": .bool(false)])
+        #expect(try await store.day(TrackingDay.key())?.closedAt == nil)
+    }
+
+    @Test func closedAsStringFailsLoudly() async throws {
+        let store = try scratchStore()
+        await #expect(throws: ToolArgTypeError.self) {
+            _ = try await self.track(store, kind: "day", ["closed": .string("true")])
+        }
+    }
+
+    @Test func explicitDateSettlesAnotherDay() async throws {
+        let store = try scratchStore()
+        let yesterday = TrackingDay.yesterdayKey()
+        _ = try await track(
+            store, kind: "day",
+            ["date": .string(yesterday), "closed": .bool(true)])
+        #expect(try await store.day(yesterday)?.closedAt != nil)
+        #expect(try await store.day(TrackingDay.key()) == nil)
+
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await self.track(
+                store, kind: "day", ["date": .string("someday"), "closed": .bool(true)])
+        }
+    }
+
+    @Test func supportBeyondTwoFailsLoudly() async throws {
+        let store = try scratchStore()
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await self.track(
+                store, kind: "day",
+                ["support": .array([.string("a"), .string("b"), .string("c")])])
+        }
+    }
+
+    // MARK: - Items
+
+    @Test func habitCheckoffKeepsItemOpen() async throws {
+        let store = try scratchStore()
+        _ = try await track(
+            store, kind: "item",
             [
                 "action": .string("add"), "title": .string("100 sit-ups"),
                 "cadence": .string("daily"), "domain": .string("body"),
             ])
-        let done = try await run(tool, ["action": .string("done"), "title": .string("sit-ups")])
+        let done = try await track(
+            store, kind: "item", ["action": .string("done"), "title": .string("sit-ups")])
         #expect(done.contains("Checked off"))
 
         #expect(try await store.workItems(status: .open).count == 1)
@@ -217,17 +312,55 @@ private func scratchStore() throws -> MemoryStore {
         #expect(checkoffs[0].domain == .body)
     }
 
-    @Test func closeDayStampsAndSeeds() async throws {
+    @Test func oneShotDoneClosesAndListShowsOpen() async throws {
         let store = try scratchStore()
-        _ = try await run(createPlanDayTool(store: store), ["keystone": .string("First")])
-        _ = try await run(createLogStepTool(store: store), ["action": .string("done")])
-        let out = try await run(
-            createCloseDayTool(store: store), ["seed": .string("pick up the tests")])
-        #expect(out.contains("Keystone kept"))
-        #expect(out.contains("Seed: pick up the tests"))
+        _ = try await track(
+            store, kind: "item",
+            ["action": .string("add"), "title": .string("Renew the domain")])
+        let list = try await track(store, kind: "item", ["action": .string("list")])
+        #expect(list.contains("- Renew the domain"))
 
-        let day = try #require(try await store.day(TrackingDay.key()))
-        #expect(day.closedAt != nil)
-        #expect(day.seed == "pick up the tests")
+        let done = try await track(
+            store, kind: "item", ["action": .string("done"), "title": .string("Renew")])
+        #expect(done.contains("Done: Renew the domain"))
+        #expect(try await store.workItems(status: .open).isEmpty)
+    }
+
+    @Test func unknownEnumsFailLoudly() async throws {
+        let store = try scratchStore()
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await self.track(
+                store, kind: "item",
+                [
+                    "action": .string("add"), "title": .string("x"),
+                    "cadence": .string("weekly"),
+                ])
+        }
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await self.track(
+                store, kind: "day",
+                ["chain": .array([.object(["title": .string("x"), "status": .string("wip")])])])
+        }
+    }
+
+    // MARK: - Shape strictness
+
+    @Test func unknownKindAndMalformedPayloadFailLoudly() async throws {
+        let store = try scratchStore()
+        let tool = createTrackTool(store: store)
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await tool.execute(
+                "t", ["kind": .string("mood"), "payload": .object([:])], nil, nil)
+        }
+        await #expect(throws: ToolArgTypeError.self) {
+            _ = try await tool.execute(
+                "t",
+                ["kind": .string("observation"), "payload": .string("{\"kind\":\"sleep\"}")],
+                nil, nil)
+        }
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await tool.execute(
+                "t", ["kind": .string("day"), "payload": .object([:])], nil, nil)
+        }
     }
 }

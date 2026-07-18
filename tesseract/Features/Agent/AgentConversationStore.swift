@@ -67,24 +67,45 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
     /// Creates a fresh conversation, saves any existing current, and sets it as current.
     @discardableResult
     func createNew() -> AgentConversation {
-        if let current = currentConversation, !current.messages.isEmpty {
-            saveSync(current)
-        }
+        saveOutgoingCurrent()
         let conversation = AgentConversation()
         currentConversation = conversation
         return conversation
     }
 
-    /// Loads a conversation from disk by ID and sets it as current.
+    /// Installs a caller-built conversation as current — the summoned-dialogue
+    /// mint (ADR-0046 #372). Same switch discipline as `createNew`.
+    func adopt(_ conversation: AgentConversation) {
+        saveOutgoingCurrent()
+        currentConversation = conversation
+    }
+
+    /// Loads a conversation from disk by ID and sets it as current. Mission
+    /// Control is served from `missionControl()` — the warm cache the loop
+    /// refreshes on every fold save — instead of re-parsing the all-day file.
     func load(id: UUID) {
-        if let current = currentConversation, !current.messages.isEmpty {
-            saveSync(current)
+        saveOutgoingCurrent()
+        if id == AgentConversation.missionControlID {
+            currentConversation = missionControl()
+            return
         }
         guard let conversation = loadFromDiskSync(id: id) else {
             Log.agent.error("Failed to load conversation \(id)")
             return
         }
         currentConversation = conversation
+    }
+
+    /// The switch-away half of `createNew`/`load`. Mission Control never
+    /// persists through here: the chat side holds a read snapshot of the fold,
+    /// and writing it back would clobber any loop turn that appended to disk
+    /// since it was opened (ADR-0046) — `save(_:)` is the fold's one write
+    /// door, and it belongs to the loop.
+    private func saveOutgoingCurrent() {
+        guard let current = currentConversation, !current.messages.isEmpty,
+            !current.isMissionControl
+        else { return }
+        saveSync(current)
     }
 
     /// Saves a conversation to disk and updates the index.
@@ -100,25 +121,34 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         conversations.removeAll { $0.id == id }
         saveIndex()
 
+        if id == AgentConversation.missionControlID {
+            missionControlCache = nil
+        }
+
         if currentConversation?.id == id {
             currentConversation = AgentConversation()
         }
     }
 
-    /// Saves the current conversation (convenience for coordinator).
+    /// Saves the current conversation (convenience for coordinator). Refuses
+    /// the fold — the chat funnel never writes Mission Control (ADR-0046).
     func saveCurrent() {
-        guard let current = currentConversation else { return }
+        guard let current = currentConversation, !current.isMissionControl else { return }
         save(current)
     }
 
-    /// Updates the current conversation's messages in memory (caller is responsible for saving).
+    /// Updates the current conversation's messages in memory (caller is
+    /// responsible for saving). Refuses the fold, same rule as `saveCurrent`.
     func updateCurrentMessages(_ messages: [any AgentMessageProtocol & Sendable]) {
+        guard currentConversation?.isMissionControl != true else { return }
         currentConversation?.messages = messages
     }
 
     /// Loads the most recent conversation on startup (or creates a fresh one).
+    /// Filtered on `opensAtLaunch`: launch never lands inside the fold.
     func loadMostRecent() {
-        guard let mostRecent = conversations.first else {
+        guard let mostRecent = conversations.first(where: { $0.turnOrigin.opensAtLaunch })
+        else {
             currentConversation = AgentConversation()
             return
         }
@@ -128,6 +158,27 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
             currentConversation = AgentConversation()
         }
     }
+
+    /// Mission Control (ADR-0046): the fold's one standing conversation —
+    /// never through `currentConversation`, which belongs to the chat UI. A
+    /// miss (first run, owner deletion, storage wipe) re-seeds it empty under
+    /// the same well-known id.
+    ///
+    /// Cached: the loop reloads the fold at every turn and is its only writer
+    /// (the chat side is guarded), so only the first call pays the disk
+    /// round-trip of a file that grows all day. `saveSync` refreshes the
+    /// cache on every fold save; `delete` invalidates it.
+    func missionControl() -> AgentConversation {
+        if let missionControlCache { return missionControlCache }
+        let loaded =
+            loadFromDiskSync(id: AgentConversation.missionControlID)
+            ?? AgentConversation(
+                id: AgentConversation.missionControlID, origin: .missionControl)
+        missionControlCache = loaded
+        return loaded
+    }
+
+    private var missionControlCache: AgentConversation?
 
     // MARK: - Private
 
@@ -181,8 +232,11 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
             decoder.dateDecodingStrategy = .iso8601
             let summaries = try decoder.decode([AgentConversationSummary].self, from: data)
 
-            // Filter to only entries whose backing file exists and decodes.
-            let valid = summaries.filter { canLoadNewFormat(id: $0.id) }
+            // Filter to only entries whose backing file exists and decodes
+            // (kinds exempt from the parse skip it — `validatesAtLaunch`).
+            let valid = summaries.filter {
+                !$0.turnOrigin.validatesAtLaunch || canLoadNewFormat(id: $0.id)
+            }
             conversations = valid.sorted { $0.updatedAt > $1.updatedAt }
 
             // Rewrite index if we pruned any corrupt/missing entries.
@@ -265,6 +319,9 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         if currentConversation?.id == updated.id {
             currentConversation = updated
         }
+        if updated.id == AgentConversation.missionControlID {
+            missionControlCache = updated
+        }
     }
 
     private func saveToDiskSync(_ conversation: AgentConversation) {
@@ -301,7 +358,7 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
                 messages: messages,
                 createdAt: file.createdAt,
                 updatedAt: file.updatedAt,
-                origin: file.origin.flatMap(TurnOrigin.init(rawValue:)) ?? .interactive
+                origin: TurnOrigin(persisted: file.origin) ?? .interactive
             )
         } catch {
             Log.agent.error("Failed to load conversation \(id): \(error)")

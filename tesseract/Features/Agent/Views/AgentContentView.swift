@@ -79,8 +79,21 @@ struct AgentContentView: View {
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
 
-                            AgentComposerView()
+                            // Mission Control opens for reading (ADR-0046):
+                            // the fold only gains messages through the loop,
+                            // so the composer yields to a quiet notice.
+                            if session.isMissionControlOpen {
+                                Text(
+                                    "Mission Control is Jarvis's own record — start a chat to talk to him."
+                                )
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
                                 .padding(Theme.Spacing.md)
+                            } else {
+                                AgentComposerView()
+                                    .padding(Theme.Spacing.md)
+                            }
                         }
                     }
                     // The Skill Cluster floats above the composer's trailing
@@ -312,9 +325,15 @@ enum ConversationOriginBadge {
         case .interactive: nil
         case .beat: "beat"
         case .wake: "wake"
+        case .event: "events"
+        // Retired by #371 — renders only on pre-fold transcripts.
         case .ambient: "ambient"
         case .catchup: "catch-up"
         case .sleep: "sleep"
+        // The fixed title "Mission Control" already names the row (ADR-0046);
+        // a badge repeating it would be noise.
+        case .missionControl: nil
+        case .dialogue: "dialogue"
         }
     }
 }
