@@ -2,13 +2,18 @@
 //  CompanionTools.swift
 //  tesseract
 //
-//  The entity's hands on its own future and its delivery rungs (ADR-0040).
-//  `book_wake` is how Jarvis grants himself a future turn — code enforces the
-//  visible budget and the persistence, never the judgment. The delivery tools
-//  (§10's palette, one per rung: set_glyph, notify, speak, summon_overlay,
-//  open_conversation) are the escalation ladder; choosing a rung is his call
-//  under his standing instructions, and every use lands in the flight
-//  recorder with the turn that made it.
+//  The entity's hands on its own future and its delivery rungs (ADR-0040,
+//  lean palette ADR-0046 #369). The wake palette is book / revise / cancel —
+//  how Jarvis grants himself a future turn and keeps that future honest
+//  (#354's triple-booking class): code enforces the visible budget and the
+//  persistence, never the judgment. The delivery tools (§10's ladder:
+//  set_glyph, notify, speak, summon_overlay) are the escalation rungs;
+//  choosing one is his call under his standing instructions, and every use
+//  lands in the flight recorder with the turn that made it.
+//
+//  `open_conversation` died at the #369 build review: engaging a delivery
+//  already opens its conversation mechanically (the reaction path), and the
+//  standing conversation sits in the chat list — the rung had no job left.
 //
 //  The delivery rungs reach the Companion's headless agent only — the shared
 //  registry carries them, declared `audience: .companionOnly`, and the
@@ -48,9 +53,10 @@ nonisolated func createBookWakeTool(
             'followup' (a cheap self-check — "wake me in 40 minutes to see if he \
             started"), 'resummons' (an escalation repeat while a summons is \
             unanswered). Content must be stateable in one line — it is what the \
-            fallback notification says if you cannot run. To move an existing wake \
-            ("do it in an hour"), pass its id in 'reschedule'. A booked wake WILL \
-            fire — that is the harness's guarantee and your must-fire obligation.
+            fallback notification says if you cannot run. A booked wake WILL \
+            fire — that is the harness's guarantee and your must-fire obligation. \
+            Before booking a repeat of something, check the briefing's booked \
+            list: an existing wake is moved with revise_wake, never re-booked.
             """,
         parameterSchema: JSONSchema(
             type: "object",
@@ -80,10 +86,6 @@ nonisolated func createBookWakeTool(
                         "Spoken-summons rights. Only when the owner granted 'wake me for "
                         + "this', or for rhythm beats per your instructions."
                 ),
-                "reschedule": PropertySchema(
-                    type: "string",
-                    description: "Id of an existing booked wake to move instead of booking new."
-                ),
             ],
             required: ["content"]
         ),
@@ -109,35 +111,6 @@ nonisolated func createBookWakeTool(
                 throw CompanionToolError(message: "That time is in the past.")
             }
 
-            // Reschedule path: move, never lose.
-            if let rescheduleID = ToolArgExtractor.string(argsJSON, key: "reschedule")
-                .flatMap(UUID.init(uuidString:))
-            {
-                guard var wake = try await store.wake(id: rescheduleID),
-                    wake.state == .booked || wake.state == .fired
-                else {
-                    throw CompanionToolError(
-                        message: "No open wake with that id — check the briefing's list.")
-                }
-                let oldDue = wake.due
-                wake.due = due
-                wake.content = content
-                wake.state = .booked
-                try await store.upsertWake(wake)
-                await recorder.record(
-                    "wake.rescheduled",
-                    wakeID: wake.id,
-                    turnID: context.turnID,
-                    conversationID: context.conversationID,
-                    snapshot: [
-                        "from": CompanionWakeTime.format(oldDue),
-                        "to": CompanionWakeTime.format(due),
-                    ],
-                    note: content
-                )
-                return .text("Moved to \(CompanionWakeTime.format(due)): \(content)")
-            }
-
             let wakeClass =
                 CompanionWakeClass(
                     rawValue: ToolArgExtractor.string(argsJSON, key: "class") ?? "promise")
@@ -161,7 +134,8 @@ nonisolated func createBookWakeTool(
                 content: content,
                 due: due,
                 wakeClass: wakeClass,
-                summonsGrant: ToolArgExtractor.bool(argsJSON, key: "summons") ?? false,
+                summonsGrant: try ToolArgExtractor.strictBool(argsJSON, key: "summons")
+                    ?? false,
                 conversationID: context.conversationID
             )
             try await store.upsertWake(wake)
@@ -179,6 +153,158 @@ nonisolated func createBookWakeTool(
             return .text(
                 "Booked [\(wakeClass.rawValue)] \(CompanionWakeTime.format(due)): \(content) "
                     + "(id \(wake.id.uuidString.prefix(8)))")
+        }
+    )
+}
+
+// MARK: - revise_wake
+
+/// The move half of the palette (#354's triple-booking class): revision is
+/// possible, so a follow-up is never re-booked beside its stale twin.
+nonisolated func createReviseWakeTool(
+    store: MemoryStore,
+    recorder: CompanionFlightRecorder,
+    context: CompanionTurnContext
+) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: "revise_wake",
+        label: "revise wake",
+        description: """
+            Move or reword one of your booked wakes — "do it in an hour", a \
+            better line for future-you — without losing it or minting a twin. \
+            Pass its id (the briefing's booked list carries ids) and whatever \
+            changes: a new time ('at' or 'in_minutes'), new 'content', or both.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "id": PropertySchema(
+                    type: "string", description: "The wake's id, from the briefing's list."),
+                "content": PropertySchema(
+                    type: "string", description: "New one-line content, if it changes."),
+                "at": PropertySchema(
+                    type: "string",
+                    description: "New local time 'yyyy-MM-dd HH:mm'. Use this or in_minutes."
+                ),
+                "in_minutes": PropertySchema(
+                    type: "integer", description: "New due time, minutes from now."),
+            ],
+            required: ["id"]
+        ),
+        execute: { _, argsJSON, _, _ in
+            guard
+                let id = ToolArgExtractor.string(argsJSON, key: "id")
+                    .flatMap(UUID.init(uuidString:))
+            else {
+                throw CompanionToolError(message: "revise_wake requires the wake's 'id'.")
+            }
+            guard var wake = try await store.wake(id: id),
+                wake.state == .booked || wake.state == .fired
+            else {
+                throw CompanionToolError(
+                    message: "No open wake with that id — check the briefing's list.")
+            }
+
+            var newDue: Date?
+            if let atRaw = ToolArgExtractor.string(argsJSON, key: "at") {
+                guard let parsed = CompanionWakeTime.parse(atRaw) else {
+                    throw CompanionToolError(
+                        message: "Could not parse 'at' — use local 'yyyy-MM-dd HH:mm'.")
+                }
+                newDue = parsed
+            } else if let minutes = ToolArgExtractor.int(argsJSON, key: "in_minutes") {
+                newDue = Date().addingTimeInterval(TimeInterval(max(1, minutes)) * 60)
+            }
+            if let newDue, newDue <= Date() {
+                throw CompanionToolError(message: "That time is in the past.")
+            }
+            let newContent = ToolArgExtractor.string(argsJSON, key: "content")
+            guard newDue != nil || newContent != nil else {
+                throw CompanionToolError(
+                    message: "Nothing to revise — pass a new time, new content, or both.")
+            }
+
+            let oldDue = wake.due
+            if let newDue { wake.due = newDue }
+            if let newContent { wake.content = newContent }
+            // A fired wake being revised is the turn moving its own occasion:
+            // back to booked, so it fires at the new time instead of being
+            // consumed by this turn's completion.
+            wake.state = .booked
+            try await store.upsertWake(wake)
+            await recorder.record(
+                "wake.revised",
+                wakeID: wake.id,
+                turnID: context.turnID,
+                conversationID: context.conversationID,
+                snapshot: [
+                    "from": CompanionWakeTime.format(oldDue),
+                    "to": CompanionWakeTime.format(wake.due),
+                ],
+                note: wake.content
+            )
+            return .text(
+                "Revised [\(wake.wakeClass.rawValue)] → "
+                    + "\(CompanionWakeTime.format(wake.due)): \(wake.content)")
+        }
+    )
+}
+
+// MARK: - cancel_wake
+
+/// The deliberate exit: a cancelled wake is a recorded decision with a why —
+/// never `dropped`, the silent-loss defect state the weekly review counts.
+nonisolated func createCancelWakeTool(
+    store: MemoryStore,
+    recorder: CompanionFlightRecorder,
+    context: CompanionTurnContext
+) -> AgentToolDefinition {
+    AgentToolDefinition(
+        name: "cancel_wake",
+        label: "cancel wake",
+        description: """
+            Cancel a booked wake you no longer need — the moment passed, the \
+            owner answered early, the plan changed. Pass its id and one line of \
+            why: cancellation is a decision on your record, never a silent \
+            drop. A promise you cancel frees that day's promise budget.
+            """,
+        parameterSchema: JSONSchema(
+            type: "object",
+            properties: [
+                "id": PropertySchema(
+                    type: "string", description: "The wake's id, from the briefing's list."),
+                "why": PropertySchema(
+                    type: "string", description: "One line: why this wake is no longer needed."),
+            ],
+            required: ["id", "why"]
+        ),
+        execute: { _, argsJSON, _, _ in
+            guard
+                let id = ToolArgExtractor.string(argsJSON, key: "id")
+                    .flatMap(UUID.init(uuidString:))
+            else {
+                throw CompanionToolError(message: "cancel_wake requires the wake's 'id'.")
+            }
+            guard let why = ToolArgExtractor.string(argsJSON, key: "why"), !why.isEmpty else {
+                throw CompanionToolError(
+                    message: "cancel_wake requires 'why' — the record must say.")
+            }
+            guard var wake = try await store.wake(id: id), wake.state == .booked else {
+                throw CompanionToolError(
+                    message: "No booked wake with that id — only a booked wake can be "
+                        + "cancelled; check the briefing's list.")
+            }
+            wake.state = .cancelled
+            try await store.upsertWake(wake)
+            await recorder.record(
+                "wake.cancelled",
+                wakeID: wake.id,
+                turnID: context.turnID,
+                conversationID: context.conversationID,
+                snapshot: ["class": wake.wakeClass.rawValue],
+                note: why
+            )
+            return .text("Cancelled [\(wake.wakeClass.rawValue)]: \(wake.content)")
         }
     )
 }
@@ -412,52 +538,6 @@ nonisolated func createSummonOverlayTool(
                 note: line
             )
             return .text("Summons raised — his answer lands in your flight log.")
-        }
-    )
-}
-
-/// The hand-off rung (ADR-0040 §10): put a conversation on his screen.
-nonisolated func createOpenConversationTool(
-    open: @escaping @MainActor (UUID) -> Void,
-    recorder: CompanionFlightRecorder,
-    context: CompanionTurnContext
-) -> AgentToolDefinition {
-    AgentToolDefinition(
-        name: "open_conversation",
-        label: "open conversation",
-        description: """
-            Open a conversation in the app — the hand-off rung, for when \
-            something is easier read than spoken. Defaults to this turn's own \
-            conversation; pass 'id' to open another. Use only when he is at \
-            the Mac (check the situation block) — an opened window in an empty \
-            room is noise.
-            """,
-        parameterSchema: JSONSchema(
-            type: "object",
-            properties: [
-                "id": PropertySchema(
-                    type: "string",
-                    description: "Optional conversation id; defaults to this turn's."
-                )
-            ],
-            required: []
-        ),
-        audience: .companionOnly,
-        execute: { _, argsJSON, _, _ in
-            let explicit = ToolArgExtractor.string(argsJSON, key: "id")
-                .flatMap(UUID.init(uuidString:))
-            let current = await context.conversationID
-            guard let target = explicit ?? current else {
-                throw CompanionToolError(
-                    message: "No conversation to open — pass 'id' or call from a turn.")
-            }
-            await open(target)
-            await recorder.record(
-                "delivery.opened",
-                turnID: context.turnID,
-                conversationID: target
-            )
-            return .text("Opened.")
         }
     )
 }

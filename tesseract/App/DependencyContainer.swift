@@ -227,16 +227,12 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createRememberTool(memory: memoryEngine))
         registry.appendBuiltInTool(createRecallTool(memory: memoryEngine))
         registry.appendBuiltInTool(createContestTool(memory: memoryEngine))
-        // The tracking model's five typed talk-time tools (#308) — registered
-        // in every conversation, same as memory's: the check-in IS the
-        // measuring instrument, whichever conversation it happens in.
-        registry.appendBuiltInTool(createPlanDayTool(store: memoryStore))
-        registry.appendBuiltInTool(createLogStepTool(store: memoryStore))
-        registry.appendBuiltInTool(createLogSampleTool(store: memoryStore))
-        registry.appendBuiltInTool(createLogTaskTool(store: memoryStore))
-        registry.appendBuiltInTool(createCloseDayTool(store: memoryStore))
-        // The flight recorder's read path and its one write door (#326).
-        registry.appendBuiltInTool(createFlightLogTool(recorder: companionFlightRecorder))
+        // The one generic tracking door (ADR-0046, #369) — registered in
+        // every conversation, same as memory's: the check-in IS the measuring
+        // instrument, whichever conversation it happens in.
+        registry.appendBuiltInTool(createTrackTool(store: memoryStore))
+        // The flight recorder's one write door (#326; the read path died with
+        // ADR-0046 — the standing conversation is the record).
         registry.appendBuiltInTool(
             createLogFeedbackTool(
                 recorder: companionFlightRecorder,
@@ -244,12 +240,24 @@ final class DependencyContainer: ObservableObject {
                     self?.agentConversationStore.currentConversation?.id
                 }
             ))
-        // The entity's hands on his own future (ADR-0040). Registered in
-        // every conversation like memory's tools: "remind me tomorrow" said
+        // The wake palette — book, revise, cancel (ADR-0040, #369). Registered
+        // in every conversation like memory's tools: "remind me tomorrow" said
         // in chat books a wake through the same one door the Companion's own
         // turns use.
         registry.appendBuiltInTool(
             createBookWakeTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createReviseWakeTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
+        registry.appendBuiltInTool(
+            createCancelWakeTool(
                 store: memoryStore,
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
@@ -286,17 +294,11 @@ final class DependencyContainer: ObservableObject {
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
-        registry.appendBuiltInTool(
-            createOpenConversationTool(
-                open: { [weak self] id in self?.presentConversation(id) },
-                recorder: companionFlightRecorder,
-                context: companionTurnContext
-            ))
         return registry
     }()
 
-    /// The one "put a conversation on his screen" action — the loop, the
-    /// summons, and the `open_conversation` rung all reach the UI through it.
+    /// The one "put a conversation on his screen" action — the loop's
+    /// reaction routing and the summons engagement reach the UI through it.
     private func presentConversation(_ id: UUID) {
         chatSession.loadConversation(id)
         (NSApp.delegate as? AppDelegate)?.navigateToAgent()
@@ -304,7 +306,7 @@ final class DependencyContainer: ObservableObject {
 
     /// The Companion's interaction-fact log (#326): app-owned, App Support,
     /// retention forever. Only app code writes; the model reads via
-    /// `flight_log` and testifies via `log_feedback`.
+    /// its own standing conversation and testifies via `log_feedback`.
     lazy var companionFlightRecorder = CompanionFlightRecorder()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {

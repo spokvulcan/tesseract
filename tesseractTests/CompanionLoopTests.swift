@@ -2,11 +2,11 @@
 //  CompanionLoopTests.swift
 //  tesseractTests
 //
-//  The wake fabric (ADR-0040): the wakes table's state machine queries, the
-//  `book_wake` tool (booking, the visible promise budget, reschedule), the
-//  wake-time grammar, the loop's per-day state, and the situation briefing's
-//  rendered shape. Each test opens its own scratch store so the scheme's
-//  parallel twin runners can't collide.
+//  The wake fabric (ADR-0040, lean palette #369): the wakes table's state
+//  machine queries, the wake palette tools (book with its visible promise
+//  budget, revise, cancel), the wake-time grammar, the loop's per-day state,
+//  and the situation briefing's rendered shape. Each test opens its own
+//  scratch store so the scheme's parallel twin runners can't collide.
 //
 
 import Foundation
@@ -280,29 +280,124 @@ import Testing
         #expect(rhythm.contains("Booked [rhythm]"))
     }
 
-    @Test func rescheduleMovesInsteadOfDuplicating() async throws {
+    @Test func reviseMovesInsteadOfDuplicating() async throws {
         let store = try scratchStore()
-        let tool = createBookWakeTool(
-            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
-
+        let recorder = scratchRecorder()
         _ = try await run(
-            tool, ["content": .string("midday pulse"), "in_minutes": .int(30)])
+            createBookWakeTool(
+                store: store, recorder: recorder, context: CompanionTurnContext()),
+            ["content": .string("midday pulse"), "in_minutes": .int(30)])
         let booked = try await store.upcomingWakes(after: Date())
         let id = try #require(booked.first?.id)
 
+        let revise = createReviseWakeTool(
+            store: store, recorder: recorder, context: CompanionTurnContext())
         let moved = try await run(
-            tool,
+            revise,
             [
+                "id": .string(id.uuidString),
                 "content": .string("midday pulse — he asked for an hour"),
                 "in_minutes": .int(90),
-                "reschedule": .string(id.uuidString),
             ])
-        #expect(moved.contains("Moved to"))
+        #expect(moved.contains("Revised"))
 
         let after = try await store.upcomingWakes(after: Date())
         #expect(after.count == 1)
         #expect(after[0].id == id)
         #expect(after[0].content.contains("he asked for an hour"))
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(events.contains { $0.event == "wake.revised" })
+    }
+
+    @Test func reviseNeedsAChangeAndAnOpenWake() async throws {
+        let store = try scratchStore()
+        let tool = createReviseWakeTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+
+        // Unknown id refuses; a consumed wake refuses; no-change refuses.
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["id": .string(UUID().uuidString), "in_minutes": .int(10)], nil, nil)
+        }
+        var consumed = CompanionWake(content: "x", due: Date(), state: .delivered)
+        consumed.consumedAt = Date()
+        try await store.upsertWake(consumed)
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["id": .string(consumed.id.uuidString), "in_minutes": .int(10)], nil, nil)
+        }
+        let open = CompanionWake(content: "y", due: Date().addingTimeInterval(600))
+        try await store.upsertWake(open)
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute("t", ["id": .string(open.id.uuidString)], nil, nil)
+        }
+    }
+
+    @Test func cancelIsADeliberateRecordedExit() async throws {
+        let store = try scratchStore()
+        let recorder = scratchRecorder()
+        let wake = CompanionWake(
+            content: "ask about the dentist", due: Date().addingTimeInterval(600),
+            wakeClass: .promise)
+        try await store.upsertWake(wake)
+
+        let tool = createCancelWakeTool(
+            store: store, recorder: recorder, context: CompanionTurnContext())
+        // No why → refused: the record must say.
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute("t", ["id": .string(wake.id.uuidString)], nil, nil)
+        }
+        let out = try await run(
+            tool,
+            [
+                "id": .string(wake.id.uuidString),
+                "why": .string("he brought it up himself this morning"),
+            ])
+        #expect(out.contains("Cancelled [promise]"))
+
+        let loaded = try #require(try await store.wake(id: wake.id))
+        #expect(loaded.state == .cancelled)
+        // Cancelled never fires and never resurfaces.
+        #expect(try await store.dueWakes(asOf: Date().addingTimeInterval(3600)).isEmpty)
+        let events = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(events.contains { $0.event == "wake.cancelled" })
+    }
+
+    @Test func cancelledPromiseFreesItsDayBudget() async throws {
+        let store = try scratchStore()
+        let calendar = Calendar.current
+        let noon = try #require(
+            calendar.date(bySettingHour: 12, minute: 0, second: 0, of: Date()))
+        let tomorrowNoon = noon.addingTimeInterval(24 * 3600)
+        let first = CompanionWake(content: "a", due: tomorrowNoon, wakeClass: .promise)
+        try await store.upsertWake(first)
+        try await store.upsertWake(
+            CompanionWake(
+                content: "b", due: tomorrowNoon.addingTimeInterval(300), wakeClass: .promise))
+        let day = TrackingDay.key(for: tomorrowNoon)
+        #expect(try await store.promisesBooked(onDay: day) == 2)
+
+        _ = try await run(
+            createCancelWakeTool(
+                store: store, recorder: scratchRecorder(), context: CompanionTurnContext()),
+            ["id": .string(first.id.uuidString), "why": .string("moot")])
+        #expect(try await store.promisesBooked(onDay: day) == 1)
+    }
+
+    @Test func summonsAsStringFailsLoudly() async throws {
+        let store = try scratchStore()
+        let tool = createBookWakeTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+        // The #354 class: a stringly boolean must refuse, never coerce.
+        await #expect(throws: ToolArgTypeError.self) {
+            _ = try await tool.execute(
+                "t",
+                [
+                    "content": .string("x"), "in_minutes": .int(10),
+                    "summons": .string("False"),
+                ], nil, nil)
+        }
+        #expect(try await store.upcomingWakes(after: Date()).isEmpty)
     }
 
     @Test func refusesThePastAndGarbageTimes() async throws {

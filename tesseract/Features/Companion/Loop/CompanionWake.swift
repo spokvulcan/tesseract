@@ -38,6 +38,9 @@ nonisolated enum CompanionWakeState: String, Codable, Sendable {
     case resurfaced
     /// Terminal: resurfaced and still unheard — dead, no third attempt.
     case deliveredUnheard = "delivered_unheard"
+    /// Terminal: the entity deliberately withdrew it through `cancel_wake`
+    /// (#369) — a recorded decision with a why, never the silent-loss defect.
+    case cancelled
     /// Terminal defect: silently lost. The aggregator counts these as defects;
     /// nothing in the app writes it on purpose.
     case dropped

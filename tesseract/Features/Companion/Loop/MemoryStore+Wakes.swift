@@ -76,14 +76,16 @@ extension MemoryStore {
     /// check reads this count. Keyed on `due` (the day the touchpoint reaches
     /// the owner), not the booking day: a promise booked today for Thursday
     /// draws on Thursday's budget. Delivered and engaged promises still count
-    /// — the budget is what the day carries, not what remains booked. Only
-    /// `dropped` (the defect state) is excluded.
+    /// — the budget is what the day carries, not what remains booked. Excluded:
+    /// `dropped` (the defect state) and `cancelled` (a deliberate withdrawal
+    /// frees the day it would have landed on, #369).
     func promisesBooked(onDay dayKey: String, calendar: Calendar = .current) throws -> Int {
         guard let dayStart = TrackingDay.startOfDay(forKey: dayKey, calendar: calendar),
             let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)
         else { return 0 }
         let stmt = try db.prepare(
-            "SELECT COUNT(*) FROM wakes WHERE class = 'promise' AND state != 'dropped' "
+            "SELECT COUNT(*) FROM wakes WHERE class = 'promise' "
+                + "AND state NOT IN ('dropped', 'cancelled') "
                 + "AND due >= ?1 AND due < ?2")
         stmt.bind(1, dayStart.timeIntervalSince1970).bind(2, dayEnd.timeIntervalSince1970)
         guard try stmt.step() else { return 0 }

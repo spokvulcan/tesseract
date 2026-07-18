@@ -231,7 +231,7 @@ final class CompanionLoop {
         turnAttempts.removeAll()
 
         // Consumed only by this completed turn — unless the turn itself moved
-        // the wake (a reschedule flips it back to booked; respect that).
+        // the wake (revise_wake flips it back to booked; respect that).
         for wake in wakes {
             guard var current = try? await store.wake(id: wake.id), current.state == .fired
             else { continue }
