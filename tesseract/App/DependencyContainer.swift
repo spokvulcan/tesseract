@@ -386,6 +386,10 @@ final class DependencyContainer: ObservableObject {
         toolRegistry: newToolRegistry,
         contextManager: contextManager,
         settingsManager: settingsManager,
+        gating: ToolGating(
+            consumer: .interactiveChat,
+            webAccessEnabled: settingsManager.webAccessEnabled
+        ),
         mcpToolsExtension: mcpClientManager.toolsExtension
     )
     // HTTP Server
@@ -561,20 +565,20 @@ final class DependencyContainer: ObservableObject {
         // consumer) — a second full agent whose context never collides with
         // the chat session's, over the same shared tool registry.
         makeAgent: { [unowned self] in
-            let headless = AgentFactory.makeAgent(
+            // `.companionHeadless` keeps the `.companionOnly` tools and drops
+            // `.dialogueOnly` — a Mission Control turn has no dialogue to
+            // report back from (#372). Web access stays ungated for the
+            // Companion's turns (current behavior, preserved — ADR-0048).
+            AgentFactory.makeAgent(
                 inferenceService: self.serverInferenceService,
                 packageRegistry: self.packageRegistry,
                 extensionHost: self.extensionHost,
                 toolRegistry: self.newToolRegistry,
                 contextManager: self.contextManager,
                 settingsManager: self.settingsManager,
+                gating: ToolGating(consumer: .companionHeadless, webAccessEnabled: true),
                 mcpToolsExtension: self.mcpClientManager.toolsExtension
             )
-            // A Mission Control turn has no dialogue to report back from
-            // (#372): the headless agent drops the `.dialogueOnly` tools.
-            headless.updateTools(
-                self.newToolRegistry.allTools.filter { $0.audience != .dialogueOnly })
-            return headless
         },
         arbiter: inferenceArbiter,
         conversationStore: agentConversationStore,

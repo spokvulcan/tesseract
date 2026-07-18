@@ -979,6 +979,40 @@ cancelled or done. Distinct from the Generation* family, which is the token stre
 _Avoid_: generation lifecycle (collides with the Generation* family), send
 coordinator, busy flag as standalone spine state.
 
+### Active tool resolution
+
+**Active Tool Set**:
+The one resolve answering "which tools does the agent see right now": the
+registry-ordered tools plus a **Tool Gating** in, the live set and its
+**Prompt Tool Facts** out (ADR-0048). Pure and stateless; both the callable
+set and the prompt's orientation sections derive from one resolve, so they
+cannot diverge. Distinct from `ToolRegistry`, which answers what tools
+*exist* (identity + precedence order) and stays beneath it.
+_Avoid_: tool filter (three of the old eight homes), tool registry (the
+identity layer below), per-consumer filter chains (the retired shape),
+toolset (unqualified).
+
+**Tool Gating**:
+The context one Active Tool Set resolve runs under: the consumer
+(interactive chat, dialogue chat, or the Companion's headless agent) and the
+Web Access switch. Audience rules (ADR-0040 §10, ADR-0046 #372) are consumer
+facts inside the resolve, never per-call-site filters. The headless
+companion pins Web Access on — shipped behavior preserved, revisiting it is
+a product call (ADR-0048).
+_Avoid_: audience filter (one input, not the concept), web gate
+(unqualified — the switch is one field), consumer flag.
+
+**Prompt Tool Facts**:
+The prompt-facing facts of a *resolved* Active Tool Set — has the skill
+tool, carries browser tools — the only input the system-prompt assembler's
+orientation sections may condition on. A facts change (Web Access flip,
+browser tools landing after a late MCP connect) re-derives the prompt
+through the factory-wired reassembler; unchanged facts never touch it, so
+the prompt head's prefix-cache entry dies only for a real orientation
+change.
+_Avoid_: prompt flags, membership predicates (the retired inline checks),
+deriving facts from the raw registry (the drift that shipped).
+
 ### Agent state reduction
 
 **Agent State Reducer**:

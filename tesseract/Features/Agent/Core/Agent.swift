@@ -69,6 +69,14 @@ final class Agent {
     private let baseConfig: AgentLoopConfig
     private let generate: LLMGenerateFunction
 
+    /// The prompt facts the current system prompt was assembled from, and the
+    /// factory-captured reassembly closure `syncSystemPrompt` runs when they
+    /// change (ADR-0048). Ignored by Observation: views observe
+    /// `state.systemPrompt`, not the bookkeeping.
+    @ObservationIgnored private var promptFacts: PromptToolFacts?
+    @ObservationIgnored private var reassembleSystemPrompt:
+        (@MainActor (PromptToolFacts) -> String)?
+
     // MARK: - Init
 
     init(
@@ -95,6 +103,35 @@ final class Agent {
         guard !state.isBusy else { return }
         context.tools = tools
         state.tools = tools
+    }
+
+    // MARK: - System Prompt Management
+
+    /// Wire the system-prompt reassembler (ADR-0048). `AgentFactory` captures
+    /// the assembly inputs (loaded context, skills, agent root) in `reassemble`
+    /// and records the facts the launch prompt was built from, so a later
+    /// facts change can rebuild the prompt without the factory's collaborators.
+    func setSystemPromptReassembler(
+        initialFacts: PromptToolFacts,
+        _ reassemble: @escaping @MainActor (PromptToolFacts) -> String
+    ) {
+        promptFacts = initialFacts
+        reassembleSystemPrompt = reassemble
+    }
+
+    /// Re-derive the system prompt when the resolved tool set's prompt facts
+    /// change — a Web Access flip, or browser tools materializing after a late
+    /// MCP connect. Guarded like `updateTools`; a no-op when the facts are
+    /// unchanged, so the prompt (and the prefix cache riding it) is only ever
+    /// invalidated by a real orientation change.
+    func syncSystemPrompt(facts: PromptToolFacts) {
+        guard !state.isBusy, facts != promptFacts,
+            let reassemble = reassembleSystemPrompt
+        else { return }
+        promptFacts = facts
+        let prompt = reassemble(facts)
+        context.systemPrompt = prompt
+        state.systemPrompt = prompt
     }
 
     // MARK: - Message State Management

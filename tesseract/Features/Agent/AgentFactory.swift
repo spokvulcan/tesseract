@@ -11,6 +11,12 @@ enum AgentFactory {
 
     /// Bootstrap packages, discover tools/skills/context, assemble the system
     /// prompt, wire compaction, and return a fully configured `Agent`.
+    ///
+    /// `gating` names the consumer this agent serves (ADR-0048): the tool set
+    /// is resolved through `ActiveToolSet` once here, and the system prompt is
+    /// assembled from that *resolved* set's facts — never from the raw
+    /// registry — so the prompt cannot orient the model toward tools the
+    /// consumer will not carry.
     @MainActor
     static func makeAgent(
         inferenceService: ServerInferenceService,
@@ -19,6 +25,7 @@ enum AgentFactory {
         toolRegistry: ToolRegistry,
         contextManager: ContextManager,
         settingsManager: SettingsManager,
+        gating: ToolGating,
         mcpToolsExtension: MCPToolsExtension? = nil
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
@@ -44,8 +51,11 @@ enum AgentFactory {
         let skillTool = createSkillTool(skills: skills)
         toolRegistry.appendBuiltInTool(skillTool)
 
-        // 4. Get all tools (now includes use_skill)
-        let tools = toolRegistry.allTools
+        // 4. Resolve the live tool set for this consumer (now includes
+        // use_skill). One resolve feeds both the agent's callable set and the
+        // prompt facts below — the ADR-0048 invariant.
+        let tools = ActiveToolSet.resolve(from: toolRegistry.allTools, gating: gating)
+        let facts = ActiveToolSet.promptFacts(for: tools)
 
         // 5. Load context files (AGENTS.md, CLAUDE.md, APPEND_SYSTEM.md, etc.)
         let contextLoader = ContextLoader(agentRoot: agentRoot)
@@ -55,12 +65,12 @@ enum AgentFactory {
             packageSystemOverrides: []
         )
 
-        // 6. Assemble system prompt with full context
+        // 6. Assemble system prompt with full context, from the resolved facts
         let systemPrompt = SystemPromptAssembler.assemble(
             defaultPrompt: SystemPromptAssembler.defaultCorePrompt,
             loadedContext: loadedContext,
             skills: skills,
-            tools: tools,
+            facts: facts,
             dateTime: Date(),
             agentRoot: agentRoot.path
         )
@@ -91,8 +101,11 @@ enum AgentFactory {
             getFollowUpMessages: nil
         )
 
-        // 9. Create Agent
-        return Agent(
+        // 9. Create Agent, seeded with the resolved set, and wire the prompt
+        // reassembler: when a later resolve changes the prompt facts (Web
+        // Access flip, browser tools landing after a late MCP connect), the
+        // agent rebuilds its prompt from the same captured assembly inputs.
+        let agent = Agent(
             config: config,
             systemPrompt: systemPrompt,
             tools: tools,
@@ -101,5 +114,16 @@ enum AgentFactory {
                 parametersProvider: parametersProvider
             )
         )
+        agent.setSystemPromptReassembler(initialFacts: facts) { facts in
+            SystemPromptAssembler.assemble(
+                defaultPrompt: SystemPromptAssembler.defaultCorePrompt,
+                loadedContext: loadedContext,
+                skills: skills,
+                facts: facts,
+                dateTime: Date(),
+                agentRoot: agentRoot.path
+            )
+        }
+        return agent
     }
 }
