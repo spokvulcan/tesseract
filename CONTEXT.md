@@ -1344,6 +1344,19 @@ staging to the composer, or mutual silence.
 _Avoid_: voice mode (UI shorthand), speech session (the TTS reading concept),
 voice chat.
 
+**Voice Session Machine**:
+The pure reducer owning every judgment of the **Voice Session**'s auto-listen
+loop — phases, **Barge-In** staging, the **Echo Floor** consultation, the
+false-barge escalation ladder, deaf windows, the speaking watchdog, and the
+capture retry backoff. It folds events (ticks, the click, the reply,
+transcription outcomes) into ordered effect values the controller performs;
+time and meter levels are inputs, and capture start results return as events,
+so even the retry backoff is machine judgment. The endpointer and Echo Floor
+are its sub-state, which is what lets the calibration lock replay hardware
+traces through the exact shipped path (ADR-0042).
+_Avoid_: controller (the performer above it), state machine (unqualified),
+tick handler, **Voice Session** (the product concept, not this module).
+
 **Barge-In**:
 The owner interrupting a speaking reply — by voice energy (a **Soft Barge**
 first) or a click (immediate pause; a click is deliberate). A hard barge
