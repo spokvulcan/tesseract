@@ -17,14 +17,6 @@ import Testing
 
 // MARK: - Fixtures
 
-@MainActor
-private func makeTempDir() -> URL {
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("mission-control-tests-\(UUID().uuidString)", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir
-}
-
 /// One simulated loop turn: the origin-tagged opening plus the entity's reply
 /// — the exact message shapes the runner appends.
 @MainActor
@@ -209,16 +201,6 @@ struct UserMessageTurnOriginTests {
 @MainActor
 struct MissionControlChatGuardTests {
 
-    private func makeSession(store: any AgentConversationStoring) -> ChatSession {
-        ChatSession(
-            agent: makeNoOpAgent(modelID: "test-model"),
-            conversationStore: store,
-            arbiter: InMemoryInferenceArbiter(),
-            restoreComposerDraft: { _, _ in },
-            liveMarkdownThrottle: .zero
-        )
-    }
-
     @Test func sendMessageIntoMissionControlIsRefused() {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -229,7 +211,7 @@ struct MissionControlChatGuardTests {
             opening: "opening", reply: "reply", origin: .wake)
         store.save(missionControl)
 
-        let session = makeSession(store: store)
+        let session = makeChatSession(store: store)
         session.loadConversation(AgentConversation.missionControlID)
         #expect(session.isMissionControlOpen)
         let itemsBefore = session.items.count
@@ -251,7 +233,7 @@ struct MissionControlChatGuardTests {
         store.save(missionControl)
 
         // The owner opens the fold to read — the session now holds a snapshot.
-        let session = makeSession(store: store)
+        let session = makeChatSession(store: store)
         session.loadConversation(AgentConversation.missionControlID)
         #expect(session.isMissionControlOpen)
 
@@ -284,7 +266,7 @@ struct MissionControlChatGuardTests {
         ]
         store.save(missionControl)
 
-        let session = makeSession(store: store)
+        let session = makeChatSession(store: store)
         session.loadConversation(AgentConversation.missionControlID)
 
         #expect(session.beginEditingMessage(opening.id) == nil)
@@ -297,7 +279,7 @@ struct MissionControlChatGuardTests {
             opening: "opening", reply: "reply", origin: .wake)
         let store = InMemoryAgentConversationStore(seed: [missionControl])
 
-        let session = makeSession(store: store)
+        let session = makeChatSession(store: store)
 
         #expect(!session.isMissionControlOpen)
     }

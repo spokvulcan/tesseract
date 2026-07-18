@@ -100,6 +100,10 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         conversations.removeAll { $0.id == id }
         saveIndex()
 
+        if id == AgentConversation.missionControlID {
+            missionControlCache = nil
+        }
+
         if currentConversation?.id == id {
             currentConversation = AgentConversation()
         }
@@ -117,11 +121,9 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
     }
 
     /// Loads the most recent conversation on startup (or creates a fresh one).
-    /// Skips Mission Control: the loop appends to it around the clock, so it
-    /// would win recency nearly always — launch must land on the owner's own
-    /// last chat, never inside the fold (ADR-0046).
+    /// Filtered on `opensAtLaunch`: launch never lands inside the fold.
     func loadMostRecent() {
-        guard let mostRecent = conversations.first(where: { $0.turnOrigin != .missionControl })
+        guard let mostRecent = conversations.first(where: { $0.turnOrigin.opensAtLaunch })
         else {
             currentConversation = AgentConversation()
             return
@@ -133,15 +135,26 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         }
     }
 
-    /// Mission Control (ADR-0046): the fold's one standing conversation,
-    /// loaded fresh from disk — never through `currentConversation`, which
-    /// belongs to the chat UI. A miss (first run, owner deletion, storage
-    /// wipe) re-seeds it empty under the same well-known id.
+    /// Mission Control (ADR-0046): the fold's one standing conversation —
+    /// never through `currentConversation`, which belongs to the chat UI. A
+    /// miss (first run, owner deletion, storage wipe) re-seeds it empty under
+    /// the same well-known id.
+    ///
+    /// Cached: the loop reloads the fold at every turn and is its only writer
+    /// (the chat side is guarded), so only the first call pays the disk
+    /// round-trip of a file that grows all day. `saveSync` refreshes the
+    /// cache on every fold save; `delete` invalidates it.
     func missionControl() -> AgentConversation {
-        loadFromDiskSync(id: AgentConversation.missionControlID)
+        if let missionControlCache { return missionControlCache }
+        let loaded =
+            loadFromDiskSync(id: AgentConversation.missionControlID)
             ?? AgentConversation(
                 id: AgentConversation.missionControlID, origin: .missionControl)
+        missionControlCache = loaded
+        return loaded
     }
+
+    private var missionControlCache: AgentConversation?
 
     // MARK: - Private
 
@@ -196,7 +209,12 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
             let summaries = try decoder.decode([AgentConversationSummary].self, from: data)
 
             // Filter to only entries whose backing file exists and decodes.
-            let valid = summaries.filter { canLoadNewFormat(id: $0.id) }
+            // Mission Control is exempt: validating means fully parsing a file
+            // that grows all day, on every launch — and a corrupt fold already
+            // degrades gracefully (`missionControl()` re-seeds it empty).
+            let valid = summaries.filter {
+                $0.id == AgentConversation.missionControlID || canLoadNewFormat(id: $0.id)
+            }
             conversations = valid.sorted { $0.updatedAt > $1.updatedAt }
 
             // Rewrite index if we pruned any corrupt/missing entries.
@@ -278,6 +296,9 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
 
         if currentConversation?.id == updated.id {
             currentConversation = updated
+        }
+        if updated.id == AgentConversation.missionControlID {
+            missionControlCache = updated
         }
     }
 

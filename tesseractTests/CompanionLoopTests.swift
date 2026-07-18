@@ -15,18 +15,6 @@ import Testing
 
 @testable import Tesseract_Agent
 
-private func scratchStore() throws -> MemoryStore {
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("loop-tests-\(UUID().uuidString)", isDirectory: true)
-    return try MemoryStore(directory: dir)
-}
-
-private func scratchRecorder() -> CompanionFlightRecorder {
-    CompanionFlightRecorder(
-        directory: FileManager.default.temporaryDirectory
-            .appendingPathComponent("loop-flight-\(UUID().uuidString)", isDirectory: true))
-}
-
 // MARK: - Wake store
 
 @Suite struct CompanionWakeStoreTests {

@@ -29,13 +29,9 @@ struct ChatSessionTests {
         arbiter: InMemoryInferenceArbiter = InMemoryInferenceArbiter(),
         restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in }
     ) -> ChatSession {
-        ChatSession(
-            agent: agent ?? makeNoOpAgent(modelID: "test-model"),
-            conversationStore: store,
-            arbiter: arbiter,
-            restoreComposerDraft: restoreComposerDraft,
-            liveMarkdownThrottle: .zero
-        )
+        makeChatSession(
+            agent: agent, store: store, arbiter: arbiter,
+            restoreComposerDraft: restoreComposerDraft)
     }
 
     // Generous budget: the full bundle runs many suites in parallel, and a

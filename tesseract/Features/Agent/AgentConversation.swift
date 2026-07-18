@@ -26,6 +26,13 @@ nonisolated enum TurnOrigin: String, Codable, Sendable {
     /// conversation, never a turn — turns inside it carry their own class on
     /// their opening message (`UserMessage.turnOrigin`).
     case missionControl = "mission-control"
+
+    /// Whether launch recency may land on this conversation kind. The fold is
+    /// excluded: the loop appends to it around the clock, so it would win
+    /// recency nearly always, and launch must open on the owner's own last
+    /// chat (ADR-0046). The one home of the rule — the real store and the
+    /// in-memory test fixture both filter on it.
+    var opensAtLaunch: Bool { self != .missionControl }
 }
 
 struct AgentConversation: Identifiable, Sendable {

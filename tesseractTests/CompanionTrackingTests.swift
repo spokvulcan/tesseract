@@ -14,12 +14,6 @@ import Testing
 
 @testable import Tesseract_Agent
 
-private func scratchStore() throws -> MemoryStore {
-    let dir = FileManager.default.temporaryDirectory
-        .appendingPathComponent("tracking-tests-\(UUID().uuidString)", isDirectory: true)
-    return try MemoryStore(directory: dir)
-}
-
 @Suite struct CompanionTrackingStoreTests {
 
     @Test func dayRoundTripsWithChainAndSeed() async throws {

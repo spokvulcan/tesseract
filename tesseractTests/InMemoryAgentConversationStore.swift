@@ -27,11 +27,10 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     }
 
     func loadMostRecent() {
-        // Mirrors the real store (ADR-0046): launch never lands inside the
-        // fold — Mission Control is skipped no matter how recent.
+        // Same rule as the real store, from the rule's one home (ADR-0046).
         currentConversation =
             stored.values
-            .filter { !$0.isMissionControl }
+            .filter { $0.origin.opensAtLaunch }
             .min { $0.updatedAt > $1.updatedAt } ?? AgentConversation()
     }
 
