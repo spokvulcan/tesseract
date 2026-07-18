@@ -1374,6 +1374,19 @@ and performs the decision.
 _Avoid_: scheduler (implies code owns the rhythm — the entity books its own),
 dispatcher, trigger engine, evaluate() (the loop's method that calls it).
 
+**Companion Fold Reducer**:
+The **Wake Evaluator**'s write-side sibling (ADR-0051): the fold's sequencing —
+fire the due **Wake**s, run the beat's resurfacing, consume only on a completed
+**Turn**, re-present on failure, the retry ladder's banner fallback, and every
+reaction write — as one pure decider returning ordered effect values the loop
+performs. The one home of wake-state transitions; its single piece of state is
+the failed-attempt ledger. The correctness invariant (consumed only by a
+completed turn; anything less re-presents) is decided here, enforced at the
+store, and performed by the loop.
+_Avoid_: turn runner (the performer of the agent run, not a decider),
+handleTurnFailure (the retired inline home), fold reducer (unqualified — the
+**Event Fold** names the algorithm; this is its write-side decider).
+
 **Turn**:
 One full agent run granted to the entity by pending **Event**s or a due
 **Wake**. Every turn appends, origin-tagged, to **Mission Control** — full
