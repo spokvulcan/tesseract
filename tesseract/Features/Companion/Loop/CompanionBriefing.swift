@@ -69,7 +69,7 @@ enum CompanionBriefing {
 
         return Inputs(
             now: now,
-            ownerPresent: !idleMonitor.isIdle && !idleMonitor.isScreenLocked,
+            ownerPresent: idleMonitor.isOwnerPresent,
             screenLocked: idleMonitor.isScreenLocked,
             frontmostApp: NSWorkspace.shared.frontmostApplication?.localizedName,
             onACPower: sensed.isOnACPower,

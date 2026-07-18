@@ -3,9 +3,9 @@
 //  tesseract
 //
 //  The harness's spine (ADR-0040): a ticking evaluator with event
-//  accelerants. It computes due-ness and eligibility — never judgment — and
-//  grants the entity turns: due wakes, transition wakes (day start, launch
-//  catch-up), and ambient cognition when the eligibility gate passes. The
+//  accelerants. Each tick gathers one `Signals` snapshot, asks the Wake
+//  Evaluator (`CompanionEvaluator`, the pure decider) for at most one
+//  `Decision`, and performs it — turns, store writes, recorder events. The
 //  single correctness invariant lives here: a wake is consumed only by a
 //  completed turn; anything less re-presents it.
 //
@@ -23,11 +23,6 @@ final class CompanionLoop {
     /// Wall-clock ticking keeps the schedule honest across system sleep — the
     /// skeleton proved a timer armed for 09:00 dies with a closed lid.
     static let tickInterval: Duration = .seconds(30)
-    /// Overdue past this: the wake goes to a catch-up triage turn instead of
-    /// firing as if the moment were now.
-    static let catchUpGrace: TimeInterval = 30 * 60
-    /// Ambient turns: at most one per this interval (ADR-0040 §7, revisable).
-    static let ambientSpacing: TimeInterval = 30 * 60
     /// A failing turn retries this many times before the generic fallback.
     static let maxTurnAttempts = 2
 
@@ -51,9 +46,9 @@ final class CompanionLoop {
 
     private var tickTask: Task<Void, Never>?
     private var evaluating = false
-    /// One deferral record per closed-gate episode — a tick every 30 s while
-    /// he works must not spam the flight log.
-    private var deferralLogged = false
+    /// The Wake Evaluator — all of the loop's due-ness and eligibility
+    /// judgment, as one pure decider.
+    private var evaluator = CompanionEvaluator()
     private var didRequestAuthorization = false
     private var didRunLaunchRecovery = false
     /// Failed attempts per wake batch, keyed by the earliest wake id.
@@ -143,8 +138,9 @@ final class CompanionLoop {
 
     // MARK: - The evaluator
 
-    /// Pure due-ness and eligibility — every judgment belongs to the turn this
-    /// grants. Serialized: one evaluation, and at most one turn, at a time.
+    /// Gather → decide → execute. The gathered `Signals` snapshot goes to the
+    /// Wake Evaluator; whatever single `Decision` comes back is performed
+    /// here. Serialized: one evaluation, and at most one turn, at a time.
     private func evaluate() async {
         guard isEnabled(), !evaluating, !runner.isRunning else { return }
         evaluating = true
@@ -155,62 +151,40 @@ final class CompanionLoop {
 
         let now = Date()
         let todayKey = TrackingDay.key(for: now)
+        let signals = CompanionEvaluator.Signals(
+            now: now,
+            localHour: Calendar.current.component(.hour, from: now),
+            dueWakes: (try? await store.dueWakes(asOf: now)) ?? [],
+            dayState: (try? await store.loopDayState(todayKey)) ?? CompanionLoopDayState(),
+            gateOpen: attention.mayRunTurn(now: now),
+            ownerPresent: idleMonitor.isOwnerPresent,
+            onACPower: sensed.isOnACPower,
+            gpuBusy: isGPUBusy())
 
-        // The attention gate outranks due-ness: while the owner is using the
-        // app (and for the quiet window after), nothing fires. Deferred wakes
-        // stay booked and batch into one turn when the gate opens — the
-        // evening journal must never run beside his live voice session again.
-        guard attention.mayRunTurn(now: now) else {
-            if !deferralLogged, let due = try? await store.dueWakes(asOf: now), !due.isEmpty {
-                deferralLogged = true
-                recorder.record(
-                    "wake.deferred", wakeID: due.first?.id,
-                    snapshot: ["count": String(due.count), "reason": "owner-engaged"])
-            }
+        switch evaluator.decide(signals) {
+        case .wait:
             return
-        }
-        deferralLogged = false
-
-        // 1. Due wakes — the entity's booked present. A batch carrying a
-        // rhythm wake is a beat (#327 §2's origin vocabulary).
-        if let due = try? await store.dueWakes(asOf: now), !due.isEmpty {
-            let overdue = due.filter { now.timeIntervalSince($0.due) > Self.catchUpGrace }
-            let batch = overdue.isEmpty ? due : overdue
-            let isBeat = batch.contains { $0.wakeClass == .rhythm }
-            let origin: TurnOrigin = !overdue.isEmpty ? .catchup : (isBeat ? .beat : .wake)
-            await runWakeTurn(batch, origin: origin, now: now)
-            return
-        }
-
-        // 2. Day start — first presence of the calendar day (after 04:00, so a
-        // 1 a.m. tail counts as yesterday).
-        var dayState = (try? await store.loopDayState(todayKey)) ?? CompanionLoopDayState()
-        let hour = Calendar.current.component(.hour, from: now)
-        if dayState.dayStartedAt == nil, hour >= 4,
-            !idleMonitor.isIdle, !idleMonitor.isScreenLocked
-        {
-            dayState.dayStartedAt = now
-            try? await store.setLoopDayState(todayKey, dayState)
+        case .recordDeferral(let dueCount, let firstWakeID):
+            recorder.record(
+                "wake.deferred", wakeID: firstWakeID,
+                snapshot: ["count": String(dueCount), "reason": "owner-engaged"])
+        case .wakeTurn(let batch, let origin, let carriesBeat):
+            await runWakeTurn(batch, origin: origin, carriesBeat: carriesBeat, now: now)
+        case .dayStart(let updated):
+            try? await store.setLoopDayState(todayKey, updated)
             recorder.record("loop.day-start", snapshot: ["at": CompanionWakeTime.format(now)])
             await runTransitionTurn(origin: .wake, template: Self.dayStartTemplate, now: now)
-            return
-        }
-
-        // 3. Ambient cognition — eligibility, not judgment (ADR-0040 §7).
-        if dayState.dayStartedAt != nil,
-            sensed.isOnACPower,
-            !isGPUBusy(),
-            now.timeIntervalSince(dayState.lastAmbientAt ?? .distantPast) > Self.ambientSpacing
-        {
-            dayState.lastAmbientAt = now
-            try? await store.setLoopDayState(todayKey, dayState)
+        case .ambient(let updated):
+            try? await store.setLoopDayState(todayKey, updated)
             await runTransitionTurn(origin: .ambient, template: Self.ambientTemplate, now: now)
         }
     }
 
     // MARK: - Turns
 
-    private func runWakeTurn(_ wakes: [CompanionWake], origin: TurnOrigin, now: Date) async {
+    private func runWakeTurn(
+        _ wakes: [CompanionWake], origin: TurnOrigin, carriesBeat: Bool, now: Date
+    ) async {
         // Fired = presented to the entity. Recorded before the turn so a crash
         // between here and completion is visible as fired-but-unconsumed.
         for var wake in wakes {
@@ -229,9 +203,10 @@ final class CompanionLoop {
 
         // A firing beat advances the ignored-promise ladder (#309): what the
         // last beat resurfaced and he never heard dies delivered-unheard, and
-        // newly ignored promises join this beat's agenda.
+        // newly ignored promises join this beat's agenda. `carriesBeat` is the
+        // evaluator's call — true even for a rhythm wake firing as catch-up.
         var resurfaced: [CompanionWake] = []
-        if wakes.contains(where: { $0.wakeClass == .rhythm }) {
+        if carriesBeat {
             resurfaced = await CompanionResurfacing.pass(
                 store: store, recorder: recorder, now: now)
         }
