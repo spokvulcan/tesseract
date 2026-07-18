@@ -30,6 +30,11 @@ struct AgentGenerateParameters: Sendable, Codable {
     var frequencyPenalty: Float?
     var frequencyContextSize: Int = 20
 
+    /// Token ids masked to `-inf` at every decode step, mirroring the
+    /// checkpoint's `generation_config.json` `suppress_tokens`. Rides the
+    /// model-derived base (`forModel`) untouched by HTTP request overrides.
+    var suppressedTokens: [Int] = []
+
     /// Thinking-loop safeguard. See ``ThinkingRepetitionDetector/Config``.
     /// Applies only when the model uses a `<think>` chat template (Qwen3/3.5 thinking).
     var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
@@ -88,6 +93,9 @@ struct AgentGenerateParameters: Sendable, Codable {
     ///
     /// Do not raise this before #258 lands, and never without re-measuring peak
     /// memory at 128K–200K.
+    ///
+    /// This default is PARO evidence; per-model presets may override with
+    /// their own measured optimum (gemma-4 runs 512 — see ``gemma4``).
     var prefillStepSize: Int = 1024
 
     static let `default` = AgentGenerateParameters()
@@ -167,12 +175,42 @@ struct AgentGenerateParameters: Sendable, Codable {
         repetitionPenalty: 1.05
     )
 
+    /// Gemma 4 12B (`gemma4_unified`) — sampling and suppression taken from
+    /// the checkpoint's `generation_config.json`: temp 1.0, top_p 0.95,
+    /// top_k 64, `suppress_tokens` = the end-of-image (258882) and
+    /// end-of-audio (258883) delimiters. Those two are input-side markup the
+    /// processor inserts around media spans; the checkpoint marks them
+    /// generate-time-forbidden, and without the mask the model can emit them
+    /// spuriously mid-text. No `<think>` template, so the safeguard is off.
+    ///
+    /// `prefillStepSize` 512 is gemma's own measured optimum, not the PARO
+    /// default: at a 5.5K-token prompt the curve peaks at 512 in every
+    /// interleaved round (435 tok/s vs 416 at 1024, 406 at 2048, 396 at
+    /// 4096; 256 and 128 fall off the other side), and at 17K it ties 1024
+    /// within noise. Mechanism: 40 of 48 layers are sliding-window 1024, so
+    /// per-token attention span grows with the chunk; the dense GEMM is
+    /// already saturated at M=512 (no MoE small-M penalty here). Media
+    /// spans are unaffected — gemma's `prepare` runs media-bearing spans in
+    /// a single forward regardless of window size.
+    static let gemma4: AgentGenerateParameters = {
+        var p = AgentGenerateParameters(
+            temperature: 1.0,
+            topP: 0.95,
+            topK: 64
+        )
+        p.suppressedTokens = [258_882, 258_883]
+        p.thinkingSafeguard.enabled = false
+        p.prefillStepSize = 512
+        return p
+    }()
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
         if modelID.hasPrefix("ornith-9b") { return .ornith9b }
         if modelID.hasPrefix("ornith-35b") { return .ornith35b }
+        if modelID.hasPrefix("gemma-4") { return .gemma4 }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
         if modelID.hasPrefix("qwen3.6") { return .qwen36Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }

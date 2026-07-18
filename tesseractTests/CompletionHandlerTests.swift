@@ -156,6 +156,49 @@ struct CompletionHandlerTests {
     }
 
     @MainActor
+    @Test func makeGenerateParametersAppliesPrefillStepSizeOverride() {
+        let request = OpenAI.ChatCompletionRequest(
+            model: "qwen3.5-4b-paro",
+            messages: [.init(role: .user, content: .text("hi"))],
+            prefill_step_size: 2048
+        )
+        let modelState = ServerInferenceModelState(
+            modelID: "qwen3.5-4b-paro",
+            visionMode: false
+        )
+
+        let params = CompletionHandler.makeGenerateParameters(from: request, modelState: modelState)
+
+        #expect(params.prefillStepSize == 2048)
+    }
+
+    @MainActor
+    @Test func makeGenerateParametersClampsPrefillStepSize() {
+        let modelState = ServerInferenceModelState(
+            modelID: "qwen3.5-4b-paro",
+            visionMode: false
+        )
+
+        let tiny = OpenAI.ChatCompletionRequest(
+            model: "qwen3.5-4b-paro",
+            messages: [.init(role: .user, content: .text("hi"))],
+            prefill_step_size: 1
+        )
+        #expect(
+            CompletionHandler.makeGenerateParameters(from: tiny, modelState: modelState)
+                .prefillStepSize == 64)
+
+        let huge = OpenAI.ChatCompletionRequest(
+            model: "qwen3.5-4b-paro",
+            messages: [.init(role: .user, content: .text("hi"))],
+            prefill_step_size: 1_000_000
+        )
+        #expect(
+            CompletionHandler.makeGenerateParameters(from: huge, modelState: modelState)
+                .prefillStepSize == 8192)
+    }
+
+    @MainActor
     @Test func makeGenerateParametersTreatsNeutralRepetitionPenaltyAsDisabled() {
         let request = OpenAI.ChatCompletionRequest(
             model: "qwen3.5-4b-paro",

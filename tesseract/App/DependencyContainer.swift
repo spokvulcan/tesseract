@@ -652,7 +652,18 @@ final class DependencyContainer: ObservableObject {
             // ADR-0041: the capture engine is held (and hosts the reply's
             // playback) for the session's lifetime.
             beginVoiceHold: { [weak self] in self?.audioCaptureEngine.beginVoiceHold() },
-            endVoiceHold: { [weak self] in self?.audioCaptureEngine.endVoiceHold() }
+            endVoiceHold: { [weak self] in self?.audioCaptureEngine.endVoiceHold() },
+            // The Native Audio Turn (ADR-0042): the take goes to the model as
+            // audio; availability reads the selected model's on-disk config so
+            // the first turn can go native while the model is still loading.
+            sendVoiceTake: { [weak self] audio in
+                self?.chatSession.sendVoiceTake(audio)
+            },
+            nativeAudioModelAvailable: { [weak self] in
+                guard let self else { return false }
+                return self.modelDownloadManager.isAudioCapable(
+                    self.settingsManager.selectedAgentModelID)
+            }
         )
         // The reply hook: while a session is live it owns the spoken reply
         // and the auto-listen loop; autoSpeak stays the chat-only path.

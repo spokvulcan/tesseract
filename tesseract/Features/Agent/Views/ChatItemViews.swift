@@ -405,6 +405,18 @@ struct UserMessageRow: View {
                     }
                 }
             }
+            if !message.audios.isEmpty {
+                // A Native Audio Turn (ADR-0042): the model heard the take
+                // itself; the bubble marks the spoken turn.
+                ForEach(message.audios) { attachment in
+                    Label(
+                        String(format: "Spoken turn · %.0f s", attachment.duration),
+                        systemImage: "waveform"
+                    )
+                    .font(.system(size: chatBodyFontSize))
+                    .foregroundStyle(.secondary)
+                }
+            }
             if !message.content.isEmpty {
                 Text(message.content)
                     .font(.system(size: chatBodyFontSize))

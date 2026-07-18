@@ -318,7 +318,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -338,7 +338,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -357,7 +357,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -376,7 +376,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: false,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: false),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -397,7 +397,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: false,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: false),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -417,7 +417,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -442,7 +442,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: .identity(keyPath: tokens)
         )
@@ -467,7 +467,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: keySpace
         )
@@ -525,7 +525,7 @@ import MLXLMCommon
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
             toolSpecs: nil,
-            promptStartsThinking: true,
+            generationPromptSuffix: FakeChatMLTokenizer.generationPrompt(thinking: true),
             tokenizer: tokenizer,
             keySpace: keySpace
         )

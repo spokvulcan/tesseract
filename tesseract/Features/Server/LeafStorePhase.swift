@@ -51,6 +51,7 @@ nonisolated enum LeafStorePhase {
         prefixCache: PrefixCacheManager,
         renderContext: TemplateRenderContext,
         promptStartsThinking: Bool,
+        promptEndsWithClosedChannel: Bool,
         intervened: Bool,
         assistantText: String,
         assistantReasoning: String?,
@@ -134,6 +135,7 @@ nonisolated enum LeafStorePhase {
 
         let leafStoreMode = Self.selectHTTPLeafStoreMode(
             promptStartsThinking: promptStartsThinking,
+            promptEndsWithClosedChannel: promptEndsWithClosedChannel,
             emittedToolCalls: !toolCalls.isEmpty
         )
         diagnosticsContext.log(
@@ -421,12 +423,17 @@ nonisolated enum LeafStorePhase {
 
     static func selectHTTPLeafStoreMode(
         promptStartsThinking: Bool,
+        promptEndsWithClosedChannel: Bool,
         emittedToolCalls: Bool
     ) -> HTTPLeafStoreMode {
         if emittedToolCalls {
             return .directToolLeaf
         }
-        if promptStartsThinking {
+        // Both flags mean the same thing to the leaf store: the live KV holds
+        // generation-prompt markup (`<think>` / Gemma 4's empty thought
+        // channel) that the canonical finished-turn re-render strips, so a
+        // direct capture would always die at the normalization-trim guard.
+        if promptStartsThinking || promptEndsWithClosedChannel {
             return .canonicalUserLeaf
         }
         return .directLeaf

@@ -130,6 +130,19 @@ extension GenerationStreamLoop.RawGenerationHandle {
     }
 }
 
+/// One step of a media-bearing prefill prefix (`[restore, minimumWarmOffset)`)
+/// for the sequential-rule family (Gemma 4 unified): text between runs chunks
+/// through the app prefill executor; each media run is one windowed-media
+/// `prepare` carrying exactly that item's features, so a forward is bounded
+/// by the largest single item (≤ ~750 audio / ~280 image soft tokens) and no
+/// run is ever split — intra-block bidirectional attention stays whole. The
+/// M-RoPE family (Qwen) keeps its single vendor-continued span as one
+/// `.media` segment.
+nonisolated enum MediaPrefixSegment {
+    case text(LMInput.Text)
+    case media(LMInput)
+}
+
 nonisolated enum HTTPLeafContinuationKind: String, Sendable {
     case toolResult
     case userTurn
@@ -657,6 +670,7 @@ nonisolated final class ServerCompletion {
         // Every captured value is an immutable copy or a Sendable handle, so
         // boxing the whole drive closure is safe for the same reason
         // `mlxStartBox` is.
+        let promptEndsWithClosedChannel = modelIdentity?.promptEndsWithClosedChannel ?? false
         let mlxStartBox = UnsafeSendableBox(mlxStart)
         let traceLog = completionTraceLog
         let driveBox = UnsafeSendableBox<() async -> Void>({
@@ -671,6 +685,7 @@ nonisolated final class ServerCompletion {
                 renderContext: renderContext,
                 traceLog: traceLog,
                 driver: driver,
+                promptEndsWithClosedChannel: promptEndsWithClosedChannel,
                 loopCancel: loopCancel,
                 continuationStarter: continuationStarter,
                 continuation: continuation,
@@ -718,6 +733,7 @@ nonisolated final class ServerCompletion {
         renderContext: TemplateRenderContext,
         traceLog: CompletionTraceLog,
         driver: ManagedGenerationDriver,
+        promptEndsWithClosedChannel: Bool,
         loopCancel: LateBoundCancel,
         continuationStarter:
             @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
@@ -870,6 +886,7 @@ nonisolated final class ServerCompletion {
                 prefixCache: prefixCache,
                 renderContext: renderContext,
                 promptStartsThinking: driver.startsInsideThinkBlock,
+                promptEndsWithClosedChannel: promptEndsWithClosedChannel,
                 intervened: outcome.intervened,
                 assistantText: accumulator.text,
                 assistantReasoning: accumulator.thinking,
@@ -1056,8 +1073,14 @@ nonisolated final class ServerCompletion {
         // the closure runs on the **Model Session**'s isolation and cannot
         // sync-read the actor-confined module.
         let promptStartsThinking = self.promptStartsThinking
+        // Identity-derived; the fallback covers only the pre-install test
+        // window and mirrors the historical Qwen literals.
+        let generationPromptSuffix =
+            self.modelIdentity?.generationPromptSuffix
+            ?? ModelIdentity.chatMLGenerationPromptSuffix(startsThinking: promptStartsThinking)
         let modelFingerprint = self.modelFingerprint
         let imageKeying = self.modelIdentity?.imageKeying
+        let audioKeying = self.modelIdentity?.audioKeying
         let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
         let fullAttentionScratchProfile = self.modelIdentity?.fullAttentionScratchProfile
         let visionAttentionScratchProfile = self.modelIdentity?.visionAttentionScratchProfile
@@ -1089,7 +1112,8 @@ nonisolated final class ServerCompletion {
                 parameters: parameters,
                 modelID: modelID,
                 modelFingerprint: modelFingerprint,
-                imageKeying: imageKeying
+                imageKeying: imageKeying,
+                audioKeying: audioKeying
             ) {
             case .keyed(let identities):
                 keyed = identities
@@ -1126,7 +1150,7 @@ nonisolated final class ServerCompletion {
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
                 toolSpecs: canonicalTools,
-                promptStartsThinking: promptStartsThinking,
+                generationPromptSuffix: generationPromptSuffix,
                 tokenizer: session.tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext
@@ -1227,20 +1251,28 @@ nonisolated final class ServerCompletion {
             let cacheToUse: [any KVCache]?
             let restoreMs: TimeInterval
             /// Offset already covered when the (text-tail) executor starts: the
-            /// restore offset on an image-free warm restore, the end of the
-            /// vendor-continued image span (`minimumWarmOffset`) on an
-            /// image-bearing plan, or 0 on a text-only cold run.
+            /// restore offset on a media-free warm restore, the end of the
+            /// vendor-continued media span (`minimumWarmOffset`) on a
+            /// media-bearing plan, or 0 on a text-only cold run.
             let executionBaseOffset: Int
-            /// The image-bearing span `[restore, minimumWarmOffset)` the vendor
-            /// continuation forwards (chunked) before the text tail; nil unless
-            /// the plan carries an image in the remainder.
+            /// The image-bearing span `[restore, minimumWarmOffset)` the M-RoPE
+            /// vendor continuation forwards (chunked) before the text tail; nil
+            /// unless the plan carries an image in the remainder. Also the
+            /// priced input for the ADR-0014 vision guard.
             var imagePrefixInput: LMInput?
+            /// The media prefix as ordered segments — the execution plan for
+            /// `[restore, minimumWarmOffset)`. For the M-RoPE family this is
+            /// exactly `[.media(imagePrefixInput)]`; for the sequential family
+            /// it interleaves chunked text with one bounded forward per media
+            /// run. nil for a media-free remainder.
+            var mediaPrefixSegments: [MediaPrefixSegment]?
             /// Position Anchor seeded into the *text* executor on an image-free
             /// warm restore (the continuation path seeds its own anchor, below).
             var executorInitialState: LMOutput.State?
             /// Position Anchor seeded into the vendor continuation — the rope
             /// delta of the images cached before the restore offset (nil ⇒ 0,
-            /// the crash-safe cold-from-zero image prefill).
+            /// the crash-safe cold-from-zero image prefill). Always nil for the
+            /// sequential family, which takes positions from the cache offset.
             var imageContinuationAnchor: LMOutput.State?
 
             // Build the image-bearing span `[restoreOffset, minimumWarmOffset)`
@@ -1249,6 +1281,8 @@ nonisolated final class ServerCompletion {
             // pixels must not be re-fed (the **Cache Key Space** selects them by
             // index, and the pre-merge `THW.product` rows are skipped from the
             // concatenated pixel tensor). nil for an image-free remainder.
+            // M-RoPE (Qwen) layout only: pixels are patch rows concatenated
+            // across images.
             func imageSpan(from restoreOffset: Int) -> LMInput? {
                 let prefixEnd = keySpace.minimumWarmOffset
                 guard restoreOffset < prefixEnd,
@@ -1269,6 +1303,91 @@ nonisolated final class ServerCompletion {
                 )
             }
 
+            // Build the sequential family's media prefix segments over
+            // `[restoreOffset, minimumWarmOffset)`: text between runs, one
+            // `.media` segment per image/audio run carrying only that item's
+            // feature rows (Gemma layout: one stacked row per item, so
+            // selection is a row slice by table index).
+            func sequentialMediaSegments(from restoreOffset: Int) -> [MediaPrefixSegment]? {
+                let prefixEnd = keySpace.minimumWarmOffset
+                guard restoreOffset < prefixEnd,
+                    let imageRange = keySpace.remainderImageIndices(from: restoreOffset),
+                    let audioRange = keySpace.remainderAudioIndices(from: restoreOffset),
+                    !imageRange.isEmpty || !audioRange.isEmpty
+                else { return nil }
+
+                enum MediaItem {
+                    case image(Int)
+                    case audio(Int)
+                }
+                var items: [(start: Int, item: MediaItem)] = []
+                for index in imageRange {
+                    items.append(
+                        (keySpace.imageTable[index].runRange.lowerBound, .image(index)))
+                }
+                for index in audioRange {
+                    items.append(
+                        (keySpace.audioTable[index].runRange.lowerBound, .audio(index)))
+                }
+                items.sort { $0.start < $1.start }
+
+                func textTokens(_ range: Range<Int>) -> LMInput.Text {
+                    LMInput.Text(
+                        tokens: fullInput.text.tokens[0..., range.lowerBound..<range.upperBound],
+                        mask: nil
+                    )
+                }
+
+                var segments: [MediaPrefixSegment] = []
+                var cursor = restoreOffset
+                for (start, item) in items {
+                    if cursor < start {
+                        segments.append(.text(textTokens(cursor..<start)))
+                    }
+                    switch item {
+                    case .image(let index):
+                        guard let image = fullInput.image else { return nil }
+                        let run = keySpace.imageTable[index].runRange
+                        segments.append(
+                            .media(
+                                LMInput(
+                                    text: textTokens(run),
+                                    image: LMInput.ProcessedImage(
+                                        pixels: image.pixels[index..<index + 1],
+                                        positionIds: image.positionIds.map {
+                                            $0[index..<index + 1]
+                                        },
+                                        frames: image.frames.map { [$0[index]] }
+                                    ))))
+                        cursor = run.upperBound
+                    case .audio(let index):
+                        guard let audio = fullInput.audio else { return nil }
+                        let run = keySpace.audioTable[index].runRange
+                        segments.append(
+                            .media(
+                                LMInput(
+                                    text: textTokens(run),
+                                    audio: LMInput.ProcessedAudio(
+                                        features: audio.features[index..<index + 1],
+                                        mask: audio.mask.map { $0[index..<index + 1] }
+                                    ))))
+                        cursor = run.upperBound
+                    }
+                }
+                return segments
+            }
+
+            // One media-prefix builder for both families: the M-RoPE span as a
+            // single vendor-continued segment, or the sequential interleave.
+            func mediaSegments(from restoreOffset: Int) -> [MediaPrefixSegment]? {
+                if seedsPositionAnchor {
+                    guard let span = imageSpan(from: restoreOffset) else { return nil }
+                    imagePrefixInput = span
+                    return [.media(span)]
+                }
+                return sequentialMediaSegments(from: restoreOffset)
+            }
+
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
                 let (restoredCache, measuredRestoreMs) = measure {
@@ -1278,13 +1397,15 @@ nonisolated final class ServerCompletion {
                 restoreMs = measuredRestoreMs
                 if !keySpace.isIdentity,
                     cacheOffset < keySpace.minimumWarmOffset,
-                    let span = imageSpan(from: cacheOffset)
+                    let segments = mediaSegments(from: cacheOffset)
                 {
-                    // Warm restore *below* a new image (ADR-0007 phase 2):
-                    // continue through the image span chunked, anchored at the
-                    // restored prefix's Position Anchor, then the text tail.
+                    // Warm restore *below* new media (ADR-0007 phase 2):
+                    // continue through the media span — the M-RoPE family's
+                    // single vendor continuation anchored at the restored
+                    // prefix's Position Anchor, or the sequential family's
+                    // per-run segments — then the text tail.
                     let prefixEnd = keySpace.minimumWarmOffset
-                    imagePrefixInput = span
+                    mediaPrefixSegments = segments
                     inputForGeneration = LMInput(
                         text: LMInput.Text(
                             tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
@@ -1293,7 +1414,7 @@ nonisolated final class ServerCompletion {
                         imageContinuationAnchor = PositionAnchor.seededState(ropeDelta: anchorDelta)
                     }
                 } else {
-                    // Image-free remainder: suffix-only prefill. Layers restore
+                    // Media-free remainder: suffix-only prefill. Layers restore
                     // with their absolute logical offset intact, and each
                     // layer's `makeMask` recreates the suffix's causal mask.
                     let slicedTokens: MLXArray =
@@ -1308,16 +1429,24 @@ nonisolated final class ServerCompletion {
                     }
                 }
             case .cold where !keySpace.isIdentity:
-                // No valid restore: cold image prefill, but driven through the
-                // same windowed continuation (anchored at zero) so even the
-                // fallback is crash-safe.
+                // No valid restore: cold media prefill, but driven through the
+                // same continuation plan (anchored at zero / positions from
+                // offset zero) so even the fallback is crash-safe.
                 let prefixEnd = keySpace.minimumWarmOffset
-                imagePrefixInput =
-                    imageSpan(from: 0)
-                    ?? LMInput(
+                if let segments = mediaSegments(from: 0) {
+                    mediaPrefixSegments = segments
+                } else {
+                    // Defensive fallback (a non-identity key space implies
+                    // media, so the builders should always produce a plan):
+                    // one whole-prefix forward with every feature attached.
+                    let fallback = LMInput(
                         text: LMInput.Text(
                             tokens: fullInput.text.tokens[0..., ..<prefixEnd], mask: nil),
-                        image: fullInput.image)
+                        image: fullInput.image,
+                        audio: fullInput.audio)
+                    imagePrefixInput = fallback
+                    mediaPrefixSegments = [.media(fallback)]
+                }
                 inputForGeneration = LMInput(
                     text: LMInput.Text(
                         tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
@@ -1410,12 +1539,13 @@ nonisolated final class ServerCompletion {
                     try MLXCheckedEvaluation.withErrors { error in
                         var initialState = executorInitialState
                         var prefixSnapshots: [HybridCacheSnapshot] = []
-                        if let imagePrefixInput {
+                        if let mediaPrefixSegments {
 
                             // Crash-safe by construction: the continuation chunks
                             // the forward, so the peak full-attention scratch is
                             // bounded to `[heads, window, executionBaseOffset]`,
-                            // not the single-shot `[heads, L, L]`.
+                            // not the single-shot `[heads, L, L]`. Inert off the
+                            // profiled (M-RoPE) family.
                             try Self.checkChunkedVisionBackstop(
                                 windowSize: genParams.prefillStepSize ?? 512,
                                 contextTokens: executionBaseOffset,
@@ -1423,42 +1553,60 @@ nonisolated final class ServerCompletion {
                                 diagnosticsContext: diagnosticsContext
                             )
 
-                            // Warm/cold image span (ADR-0007 phase 2): the anchored
-                            // `prepare` runs the vision tower once, positions the
-                            // new image from the restored Position Anchor
-                            // (`imageContinuationAnchor`; nil ⇒ anchored at zero, a
-                            // crash-safe cold prefill), and windows the forward so
-                            // the scratch is bounded. Its returned state anchors the
-                            // chunked text tail. A non-identity key space implies the
-                            // recognized vision container, whose session exposes
-                            // the anchored `prepare`.
-                            guard let anchoredPrepare = session.anchoredVisionPrepare
+                            // Warm/cold media span (ADR-0007 phase 2): each
+                            // `.media` segment runs the windowed media `prepare`
+                            // — the M-RoPE family's single anchored span
+                            // (`imageContinuationAnchor`; nil ⇒ anchored at
+                            // zero), or one bounded per-run forward for the
+                            // sequential family — and `.text` segments chunk
+                            // through the app executor. A non-identity key
+                            // space implies a recognized media container, whose
+                            // session exposes the windowed `prepare`.
+                            guard let mediaPrepare = session.windowedMediaPrepare
                             else {
                                 throw AgentEngineError.generationFailed(
-                                    "loaded model does not support anchored vision continuation"
+                                    "loaded model does not support windowed media continuation"
                                 )
                             }
-                            guard
-                                case .logits(let prepared) = try anchoredPrepare(
-                                    imagePrefixInput,
-                                    liveCache,
-                                    imageContinuationAnchor,
-                                    genParams.prefillStepSize
-                                )
-                            else {
-                                throw AgentEngineError.generationFailed(
-                                    "vision container returned .tokens from anchored prepare"
-                                )
+                            var mediaState = imageContinuationAnchor
+                            for segment in mediaPrefixSegments {
+                                switch segment {
+                                case .text(let text):
+                                    _ = try session.prefill(
+                                        text: text,
+                                        cache: liveCache,
+                                        checkpoints: [:],
+                                        checkpointBaseOffset: 0,
+                                        prefillStepSize: genParams.prefillStepSize ?? 512,
+                                        consumeAll: true,
+                                        initialState: nil,
+                                        evalPolicy: .checkedSynchronous
+                                    )
+                                case .media(let input):
+                                    guard
+                                        case .logits(let prepared) = try mediaPrepare(
+                                            input,
+                                            liveCache,
+                                            mediaState,
+                                            genParams.prefillStepSize
+                                        )
+                                    else {
+                                        throw AgentEngineError.generationFailed(
+                                            "media container returned .tokens from windowed prepare"
+                                        )
+                                    }
+                                    mediaState = prepared.state
+                                }
                             }
                             try error.check()
-                            initialState = prepared.state
+                            initialState = mediaState
                             // A checkpoint at exactly the prefix end is capturable here
                             // (the executor's relative-checkpoint loop only captures
                             // strictly past its base) — capture needs materialized
                             // arrays, so only that branch pays the capture cost.
                             // The previous async scheduling path let MLX errors
                             // escape Swift's scoped handler and terminate the app.
-                            // Keep this crash-sensitive image prefix on checked
+                            // Keep this crash-sensitive media prefix on checked
                             // synchronous evaluation so failures become throws.
                             if let type = allCheckpoints[executionBaseOffset] {
                                 try MLXCheckedEvaluation.eval(liveCache)
@@ -1823,19 +1971,21 @@ nonisolated final class ServerCompletion {
         let cache = begin.cache
 
         let iterator: StateThreadedTokenIterator
-        if fullInput.image != nil,
-            let anchoredPrepare = session.anchoredVisionPrepare
+        if fullInput.image != nil || fullInput.audio != nil,
+            let mediaPrepare = session.windowedMediaPrepare
         {
-            // Image-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
+            // Media-bearing **Unkeyed Completion** (ADR-0007 phase 2): cache
             // keying failed (e.g. a placeholder/grid mismatch), but the prompt
-            // still carries pixels — a single-shot `prepare` would
-            // allocate the crash-prone `[heads, L, L]` full-attention scratch.
-            // Drive the anchored vision `prepare` from zero instead (state
-            // nil ⇒ anchored at offset 0), so even this fallback prefills in
-            // bounded `[heads, chunk, L]` windows. The backstop guard fires only
-            // if a single window cannot fit (effectively unreachable). The whole
-            // continuation runs under a scoped MLX error handler so a runtime
-            // failure surfaces as a throw, not a process-fatal dispatch.
+            // still carries pixels/samples — a single-shot `prepare` would
+            // allocate the crash-prone `[heads, L, L]` full-attention scratch
+            // on the M-RoPE family. Drive the windowed media `prepare` from
+            // zero instead (state nil ⇒ anchored at offset 0), so even this
+            // fallback prefills in bounded `[heads, chunk, L]` windows there.
+            // The backstop guard fires only if a single window cannot fit
+            // (effectively unreachable; inert off the profiled family). The
+            // whole continuation runs under a scoped MLX error handler so a
+            // runtime failure surfaces as a throw, not a process-fatal
+            // dispatch.
             try checkChunkedVisionBackstop(
                 windowSize: parameters.prefillStepSize ?? 512,
                 contextTokens: fullTokenCount,
@@ -1848,7 +1998,7 @@ nonisolated final class ServerCompletion {
                     cache: cache,
                     parameters: iteratorParams,
                     prepare: { input, cache, windowSize in
-                        try anchoredPrepare(input, cache, nil, windowSize)
+                        try mediaPrepare(input, cache, nil, windowSize)
                     }
                 )
                 try error.check()

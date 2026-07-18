@@ -30,16 +30,25 @@ nonisolated enum AgentConversationBuilder {
             case .system(let content):
                 converted.append(HTTPPrefixCacheMessage(role: .system, content: content))
 
-            case .user(let content, let images):
+            case .user(let content, let images, let audios):
                 var cacheImages: [HTTPPrefixCacheImage] = []
                 cacheImages.reserveCapacity(images.count)
                 for attachment in images {
                     guard let digest = cachedDigest(for: attachment) else { return nil }
                     cacheImages.append(HTTPPrefixCacheImage(data: attachment.data, digest: digest))
                 }
+                var cacheAudios: [HTTPPrefixCacheAudio] = []
+                cacheAudios.reserveCapacity(audios.count)
+                for attachment in audios {
+                    guard let digest = cachedAudioDigest(for: attachment) else { return nil }
+                    cacheAudios.append(
+                        HTTPPrefixCacheAudio(
+                            data: attachment.data, format: "wav", digest: digest))
+                }
                 converted.append(
                     HTTPPrefixCacheMessage(
-                        role: .user, content: content, images: cacheImages
+                        role: .user, content: content, images: cacheImages,
+                        audios: cacheAudios
                     ))
 
             case .assistant(let content, let reasoning, let toolCalls):
@@ -92,6 +101,28 @@ nonisolated enum AgentConversationBuilder {
             ? ImageDigest(imageBytes: attachment.data)
             : nil
         digestCache.withLock { cache in
+            if cache.count >= 512 { cache.removeAll(keepingCapacity: true) }
+            cache[attachment.id] = verdict
+        }
+        return verdict
+    }
+
+    /// The audio sibling of `cachedDigest(for:)`: per-take digest +
+    /// decodability verdict, memoized by the attachment's stable identity
+    /// (`nil` = a blob `VoiceTakeWAV` can't decode). Same rationale — spoken
+    /// takes re-hash on every generate call otherwise.
+    private static let audioDigestCache = OSAllocatedUnfairLock<[UUID: AudioDigest?]>(
+        initialState: [:])
+
+    private static func cachedAudioDigest(for attachment: AudioAttachment) -> AudioDigest? {
+        if let cached = audioDigestCache.withLock({ $0[attachment.id] }) {
+            return cached
+        }
+        let verdict: AudioDigest? =
+            VoiceTakeWAV.decode(attachment.data) != nil
+            ? AudioDigest(audioBytes: attachment.data)
+            : nil
+        audioDigestCache.withLock { cache in
             if cache.count >= 512 { cache.removeAll(keepingCapacity: true) }
             cache[attachment.id] = verdict
         }

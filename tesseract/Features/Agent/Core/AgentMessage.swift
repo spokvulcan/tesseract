@@ -28,6 +28,35 @@ nonisolated struct ImageAttachment: Sendable, Codable, Equatable, Hashable, Iden
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+// MARK: - AudioAttachment
+
+/// A spoken take attached to a user message — the **Native Audio Turn**'s
+/// payload. `data` is the canonical `VoiceTakeWAV` blob (16 kHz mono 16-bit
+/// PCM): deterministic bytes, so the prefix cache digests the same take to
+/// the same identity on every re-render of the conversation.
+///
+/// Equatable/Hashable compare by `id` only, mirroring `ImageAttachment`.
+nonisolated struct AudioAttachment: Sendable, Codable, Equatable, Hashable, Identifiable {
+    let id: UUID
+    let data: Data
+    let duration: TimeInterval
+
+    init(id: UUID = UUID(), data: Data, duration: TimeInterval) {
+        self.id = id
+        self.data = data
+        self.duration = duration
+    }
+
+    /// The model-input samples (16 kHz mono), or `nil` for a blob this build
+    /// can't decode — degraded like an undecodable image.
+    var samples: [Float]? {
+        VoiceTakeWAV.decode(data)?.samples
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 // MARK: - ToolCallInfo
 
 /// Parsed tool call extracted from an assistant response.
@@ -43,7 +72,7 @@ nonisolated struct ToolCallInfo: Sendable, Codable, Hashable, Identifiable {
 /// Transient — not persisted. Built from higher-level message types via `toLLMMessage()`.
 nonisolated enum LLMMessage: Sendable, Equatable {
     case system(content: String)
-    case user(content: String, images: [ImageAttachment] = [])
+    case user(content: String, images: [ImageAttachment] = [], audios: [AudioAttachment] = [])
     case assistant(content: String, reasoning: String? = nil, toolCalls: [ToolCallInfo]?)
     /// `images` carries tool-returned images (browser screenshots) into the
     /// context window — see `toLLMCommonMessages` for how they reach the
@@ -75,6 +104,8 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     let id: UUID
     let content: String
     let images: [ImageAttachment]
+    /// Spoken takes riding this turn as model input (**Native Audio Turn**).
+    let audios: [AudioAttachment]
     let timestamp: Date
 
     /// Context the app rides along with this message into the model, but which
@@ -90,11 +121,13 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
 
     init(
         id: UUID = UUID(), content: String, images: [ImageAttachment] = [],
+        audios: [AudioAttachment] = [],
         timestamp: Date = Date(), injectedContext: String? = nil
     ) {
         self.id = id
         self.content = content
         self.images = images
+        self.audios = audios
         self.timestamp = timestamp
         self.injectedContext = injectedContext
     }
@@ -104,21 +137,23 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
         id = try container.decode(UUID.self, forKey: .id)
         content = try container.decode(String.self, forKey: .content)
         images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
+        audios = try container.decodeIfPresent([AudioAttachment].self, forKey: .audios) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         injectedContext = try container.decodeIfPresent(String.self, forKey: .injectedContext)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, images, timestamp, injectedContext
+        case id, content, images, audios, timestamp, injectedContext
     }
 
     /// The wrapper goes *before* the user's words, mirroring `<skill>`: what I
     /// know, then what I was asked.
     func toLLMMessage() -> LLMMessage? {
         guard let injectedContext, !injectedContext.isEmpty else {
-            return .user(content: content, images: images)
+            return .user(content: content, images: images, audios: audios)
         }
-        return .user(content: "\(injectedContext)\n\n\(content)", images: images)
+        return .user(
+            content: "\(injectedContext)\n\n\(content)", images: images, audios: audios)
     }
 }
 

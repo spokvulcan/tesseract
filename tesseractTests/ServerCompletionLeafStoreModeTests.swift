@@ -8,6 +8,7 @@ struct ServerCompletionLeafStoreModeTests {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: true,
+                promptEndsWithClosedChannel: false,
                 emittedToolCalls: true
             ) == .directToolLeaf
         )
@@ -17,6 +18,7 @@ struct ServerCompletionLeafStoreModeTests {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: true,
+                promptEndsWithClosedChannel: false,
                 emittedToolCalls: false
             ) == .canonicalUserLeaf
         )
@@ -26,6 +28,7 @@ struct ServerCompletionLeafStoreModeTests {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: false,
+                promptEndsWithClosedChannel: false,
                 emittedToolCalls: false
             ) == .directLeaf
         )
@@ -35,6 +38,27 @@ struct ServerCompletionLeafStoreModeTests {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
                 promptStartsThinking: false,
+                promptEndsWithClosedChannel: false,
+                emittedToolCalls: true
+            ) == .directToolLeaf
+        )
+    }
+
+    @Test func closedChannelPrologueRoutesStopTurnsToCanonicalUserLeaf() {
+        #expect(
+            LeafStorePhase.selectHTTPLeafStoreMode(
+                promptStartsThinking: false,
+                promptEndsWithClosedChannel: true,
+                emittedToolCalls: false
+            ) == .canonicalUserLeaf
+        )
+    }
+
+    @Test func closedChannelPrologueStillYieldsToolLeafForToolTurns() {
+        #expect(
+            LeafStorePhase.selectHTTPLeafStoreMode(
+                promptStartsThinking: false,
+                promptEndsWithClosedChannel: true,
                 emittedToolCalls: true
             ) == .directToolLeaf
         )

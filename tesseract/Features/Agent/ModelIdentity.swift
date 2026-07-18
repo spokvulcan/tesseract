@@ -20,14 +20,81 @@ import MLXLMCommon
 nonisolated struct ModelIdentity: Sendable, Equatable {
 
     /// The image-keying facts of a recognized vision family (PRD #72): the
-    /// placeholder pad token whose prepared runs are one image each, and the
-    /// spatial merge size the **Position Anchor** reconstruction needs to turn
-    /// an image grid into its M-RoPE position span. `nil` means the loaded
-    /// family is not recognized for image keying — an image-bearing request
-    /// then degrades to an **Unkeyed Completion**.
+    /// placeholder pad token whose prepared runs are one image each, plus the
+    /// family's position-span rule. `nil` means the loaded family is not
+    /// recognized for image keying — an image-bearing request then degrades
+    /// to an **Unkeyed Completion**.
+    /// Framing tokens the *processor* wraps around a media placeholder run
+    /// (Gemma 4's `boi…eoi` / `boa…eoa`). They exist in the prepared/live
+    /// sequence but not in a chat-template render, which emits only the bare
+    /// placeholder — so render→key translation must splice them back in.
+    /// `nil` when the family's framing (if any) is already part of the
+    /// template render (Qwen-VL's `vision_start`/`vision_end`).
+    struct MediaFraming: Sendable, Equatable, Hashable {
+        let startTokenId: Int
+        let endTokenId: Int
+    }
+
     struct ImageKeying: Sendable, Equatable {
+        /// How an image's placeholder run maps onto model positions.
+        enum PositionSpanRule: Sendable, Equatable {
+            /// Qwen-VL M-RoPE: span = max(t, h/m, w/m) from the processed
+            /// grid — the **Position Anchor** reconstruction's geometry.
+            case mropeGrid(spatialMergeSize: Int)
+            /// Standard-RoPE families (Gemma 4 unified): every soft token
+            /// occupies one sequential position, so span == run length and
+            /// warm restores need no anchor.
+            case sequential
+        }
+
         let imagePadTokenId: Int
-        let spatialMergeSize: Int
+        let spanRule: PositionSpanRule
+        /// Processor-added framing around the run; see ``MediaFraming``.
+        var framing: MediaFraming? = nil
+
+        /// Compatibility surface for the M-RoPE consumers (grid logging, the
+        /// Position Anchor geometry). `nil` under the sequential rule.
+        var spatialMergeSize: Int? {
+            if case .mropeGrid(let merge) = spanRule { return merge }
+            return nil
+        }
+
+        /// Whether warm continuations must seed the **Position Anchor** —
+        /// true only for the M-RoPE family; sequential families restore with
+        /// nil-state semantics like text models.
+        var anchorsWarmContinuations: Bool {
+            if case .mropeGrid = spanRule { return true }
+            return false
+        }
+
+        /// The Qwen-VL shape, preserved for its existing construction sites.
+        init(imagePadTokenId: Int, spatialMergeSize: Int) {
+            self.imagePadTokenId = imagePadTokenId
+            self.spanRule = .mropeGrid(spatialMergeSize: spatialMergeSize)
+        }
+
+        init(imagePadTokenId: Int, spanRule: PositionSpanRule, framing: MediaFraming? = nil) {
+            self.imagePadTokenId = imagePadTokenId
+            self.spanRule = spanRule
+            self.framing = framing
+        }
+    }
+
+    /// The audio-keying facts of a recognized audio family: the placeholder
+    /// pad token whose prepared runs are one clip each. Audio soft tokens are
+    /// always sequential positions (no grid geometry exists), so the pad
+    /// token is the whole identity. `nil` means the loaded family is not
+    /// recognized for audio keying — an audio-bearing request then degrades
+    /// to an **Unkeyed Completion**.
+    struct AudioKeying: Sendable, Equatable {
+        let audioPadTokenId: Int
+        /// Processor-added framing around the run; see ``MediaFraming``.
+        var framing: MediaFraming? = nil
+
+        init(audioPadTokenId: Int, framing: MediaFraming? = nil) {
+            self.audioPadTokenId = audioPadTokenId
+            self.framing = framing
+        }
     }
 
     /// Scratch-buffer geometry for Qwen3.5/Qwen3.6 full-attention layers.
@@ -81,9 +148,46 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// A discriminator for MoE-specific specialization downstream.
     let isMoE: Bool
 
+    /// `true` for the Gemma 4 unified family (`model_type == gemma4_unified`)
+    /// — the encoder-free multimodal 12B. Discriminates the generation-prompt
+    /// literal, which is family-shaped (`<|turn>model`, not `<|im_start|>`).
+    let isGemma4Unified: Bool
+
     /// `true` when the chat template opens a `<think>` block in its
     /// generation-prompt section.
     let promptStartsThinking: Bool
+
+    /// `true` when the template's generation-prompt section emits channel
+    /// markup (`<|channel>`) after the assistant header — Gemma 4's empty
+    /// pre-closed thought channel (`<|channel>thought\n<channel|>` under
+    /// `enable_thinking=false`). Those tokens sit in the live KV of every
+    /// request but vanish when the finished assistant turn is re-rendered, so
+    /// the canonical sequence diverges from the live cache exactly like a
+    /// `<think>` strip does. Leaf-store mode selection treats it as such.
+    let promptEndsWithClosedChannel: Bool
+
+    /// The literal string the chat template appends to open the model's turn
+    /// (assistant header plus any pre-filled think/channel markup). The
+    /// Prefill Planner subtracts this suffix from the full token path to find
+    /// the last-message boundary; a family-wrong literal silently costs the
+    /// boundary (no misbehavior, just a lost checkpoint site).
+    var generationPromptSuffix: String {
+        if isGemma4Unified {
+            return promptEndsWithClosedChannel
+                ? "<|turn>model\n<|channel>thought\n<channel|>"
+                : "<|turn>model\n"
+        }
+        return Self.chatMLGenerationPromptSuffix(startsThinking: promptStartsThinking)
+    }
+
+    /// The historical ChatML literals, exposed for the one pre-install
+    /// fallback (`ServerCompletion` before load-time state exists) so the
+    /// strings live in exactly one file.
+    static func chatMLGenerationPromptSuffix(startsThinking: Bool) -> String {
+        startsThinking
+            ? "<|im_start|>assistant\n<think>\n"
+            : "<|im_start|>assistant\n"
+    }
 
     /// The opt-in render flags the chat template natively declares — the
     /// subset of `TemplateRenderContext`'s known flags the template text
@@ -113,9 +217,15 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// families (ADR-0014).
     let visionAttentionScratchProfile: FullAttentionScratchProfile?
 
-    /// Image-keying facts for the Qwen3.5 vision variant; `nil` for text-only
-    /// models and unrecognized families.
+    /// Image-keying facts for the recognized vision families (Qwen3.5 VL,
+    /// Gemma 4 unified); `nil` for text-only models and unrecognized families.
     let imageKeying: ImageKeying?
+
+    /// Audio-keying facts for the recognized audio family (Gemma 4 unified —
+    /// the encoder-free 12B, whose `config.json` ships an `audio_config`);
+    /// `nil` for audio-less models and unrecognized families. **Audio-capable**
+    /// at the catalog level is exactly `audioKeying != nil`.
+    let audioKeying: AudioKeying?
 
     /// Build the identity from a model directory, reading `config.json` and
     /// `chat_template.jinja` **exactly once each**. The directory-based
@@ -138,8 +248,12 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         let modelType = configJSON?["model_type"] as? String
         self.isQwen35 = modelType?.hasPrefix("qwen3_5") ?? false
         self.isMoE = modelType == "qwen3_5_moe"
+        self.isGemma4Unified = modelType == "gemma4_unified"
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
+        self.promptEndsWithClosedChannel = Self.interpretPromptEndsWithClosedChannel(
+            chatTemplate: chatTemplate
+        )
         self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
@@ -149,6 +263,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             configJSON: configJSON
         )
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
+        self.audioKeying = Self.interpretAudioKeying(configJSON: configJSON)
     }
 
     // MARK: - Interpretation (pure)
@@ -179,6 +294,19 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
         else { return false }
         return chatTemplate[genPromptRange.upperBound...].contains("<think>")
+    }
+
+    /// Gemma 4's template ends its generation prompt with channel markup —
+    /// the empty pre-closed thought channel under `enable_thinking=false`.
+    /// Probed the same way as `<think>`: channel markup appearing after the
+    /// (final) `add_generation_prompt` reference is generation-prompt markup,
+    /// not turn-body rendering.
+    private static func interpretPromptEndsWithClosedChannel(chatTemplate: String?) -> Bool {
+        guard let chatTemplate,
+            let genPromptRange = chatTemplate.range(
+                of: "add_generation_prompt", options: .backwards)
+        else { return false }
+        return chatTemplate[genPromptRange.upperBound...].contains("<|channel>")
     }
 
     /// A flag is "declared" when the template text references it — Jinja
@@ -316,21 +444,62 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         }
     }
 
-    /// Image keying exists only for the Qwen3.5 vision variant — the family the
-    /// pseudo-token keying and Position Anchor seeding are spike-verified
-    /// against (ADR-0007). Recognized by the `qwen3_5` prefix plus a
-    /// `vision_config` block; the defaults mirror the vendor's `Qwen35`
-    /// config decode (`image_token_id` 248056, `spatial_merge_size` 2).
+    /// Image keying exists for the two recognized vision families. Qwen3.5:
+    /// the `qwen3_5` prefix plus a `vision_config` block, with the M-RoPE
+    /// grid rule the pseudo-token keying and Position Anchor seeding are
+    /// spike-verified against (ADR-0007); defaults mirror the vendor's
+    /// `Qwen35` config decode (`image_token_id` 248056, `spatial_merge_size`
+    /// 2). Gemma 4 unified (`gemma4_unified` + `vision_config`): the
+    /// sequential rule — soft tokens occupy one position each; default
+    /// `image_token_id` 258880 mirrors the published config.
     private static func interpretImageKeying(configJSON: [String: Any]?) -> ImageKeying? {
         guard let root = configJSON,
-            let modelType = root["model_type"] as? String,
-            modelType.hasPrefix("qwen3_5"),
-            let visionConfig = root["vision_config"] as? [String: Any]
+            let modelType = root["model_type"] as? String
         else { return nil }
 
-        return ImageKeying(
-            imagePadTokenId: root["image_token_id"] as? Int ?? 248_056,
-            spatialMergeSize: visionConfig["spatial_merge_size"] as? Int ?? 2
+        if modelType.hasPrefix("qwen3_5"),
+            let visionConfig = root["vision_config"] as? [String: Any]
+        {
+            return ImageKeying(
+                imagePadTokenId: root["image_token_id"] as? Int ?? 248_056,
+                spatialMergeSize: visionConfig["spatial_merge_size"] as? Int ?? 2
+            )
+        }
+
+        if modelType == "gemma4_unified", root["vision_config"] is [String: Any] {
+            return ImageKeying(
+                imagePadTokenId: root["image_token_id"] as? Int ?? 258_880,
+                spanRule: .sequential,
+                framing: MediaFraming(
+                    startTokenId: root["boi_token_id"] as? Int ?? 255_999,
+                    endTokenId: root["eoi_token_id"] as? Int ?? 258_882
+                )
+            )
+        }
+
+        return nil
+    }
+
+    /// Audio keying exists only for the encoder-free Gemma 4 unified family:
+    /// `gemma4_unified` plus an `audio_config` block — a config without one
+    /// is an audio-less export (upstream main strips the audio weights), so
+    /// the capability must never be inferred from the family alone. The
+    /// default `audio_token_id` 258881 mirrors the published config.
+    private static func interpretAudioKeying(configJSON: [String: Any]?) -> AudioKeying? {
+        guard let root = configJSON,
+            let modelType = root["model_type"] as? String,
+            modelType == "gemma4_unified",
+            root["audio_config"] is [String: Any]
+        else { return nil }
+
+        return AudioKeying(
+            audioPadTokenId: root["audio_token_id"] as? Int ?? 258_881,
+            framing: MediaFraming(
+                // `eoa_token_id` is absent from the shipped config root; the
+                // fallbacks are the family constants the vendor pipeline uses.
+                startTokenId: root["boa_token_id"] as? Int ?? 256_000,
+                endTokenId: root["eoa_token_id"] as? Int ?? 258_883
+            )
         )
     }
 }

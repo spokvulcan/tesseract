@@ -136,6 +136,62 @@ struct AgentConversationBuilderTests {
         #expect(conversation == nil)
     }
 
+    // MARK: - Audio turns (Native Audio Turn, ADR-0042)
+
+    private static func take(seconds: Double = 0.05, level: Float = 0.25) -> AudioAttachment {
+        AudioAttachment(
+            data: VoiceTakeWAV.encode(
+                samples: [Float](repeating: level, count: Int(16_000 * seconds)),
+                sampleRate: 16_000),
+            duration: seconds)
+    }
+
+    @Test func audioTakeCarriesItsByteDigest() throws {
+        let attachment = Self.take()
+        let conversation = try #require(
+            AgentConversationBuilder.conversation(
+                systemPrompt: "System",
+                messages: [.user(content: "", audios: [attachment])],
+                toolSpecs: nil
+            ))
+
+        let audio = try #require(conversation.messages.first?.audios.first)
+        #expect(audio.digest == AudioDigest(audioBytes: attachment.data))
+        #expect(audio.format == "wav")
+        #expect(!conversation.audios.isEmpty)
+    }
+
+    /// Fresh attachment ids over identical take bytes must not leak into the
+    /// conversation identity — same clip, same prefix.
+    @Test func identicalTakeBytesUnderFreshIdsProduceEqualConversations() {
+        func build() -> HTTPPrefixCacheConversation? {
+            AgentConversationBuilder.conversation(
+                systemPrompt: "System",
+                messages: [.user(content: "", audios: [Self.take()])],
+                toolSpecs: nil
+            )
+        }
+        let first = build()
+        let second = build()
+        #expect(first != nil)
+        #expect(first == second)
+    }
+
+    /// A take blob `VoiceTakeWAV` can't decode cannot be keyed — the builder
+    /// bails to the standard route, mirroring undecodable images.
+    @Test func undecodableTakeReturnsNil() {
+        let conversation = AgentConversationBuilder.conversation(
+            systemPrompt: "System",
+            messages: [
+                .user(
+                    content: "",
+                    audios: [AudioAttachment(data: Data("static".utf8), duration: 1)])
+            ],
+            toolSpecs: nil
+        )
+        #expect(conversation == nil)
+    }
+
     // MARK: - Tool turns
 
     @Test func toolCallTurnsMapWithCanonicalizedArgumentsAndDroppedIds() throws {

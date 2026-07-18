@@ -17,24 +17,48 @@ nonisolated enum ImagePseudoToken {
     /// `digest`. Seed = first 8 digest bytes (little-endian), mixed with the
     /// index by one splitmix64 round, folded into [-2^63, -1].
     static func value(digest: ImageDigest, index: Int) -> Int {
-        value(seed: seed(from: digest), index: index)
+        MediaPseudoTokenCore.value(
+            seed: MediaPseudoTokenCore.seed(fromRawDigestBytes: digest.rawBytes), index: index
+        )
     }
 
     /// The full length-`runLength` expansion for one image's placeholder run.
     static func expansion(digest: ImageDigest, runLength: Int) -> [Int] {
-        let seed = seed(from: digest)
+        MediaPseudoTokenCore.expansion(rawDigestBytes: digest.rawBytes, runLength: runLength)
+    }
+}
+
+/// The audio face of the same frozen expansion. Domain separation from images
+/// lives in `AudioDigest` (its hash is prefixed), so the shared core stays
+/// byte-identical to the pinned image scheme.
+///
+/// **FROZEN — do not change** (same contract as `ImagePseudoToken`).
+nonisolated enum AudioPseudoToken {
+
+    /// The full length-`runLength` expansion for one clip's placeholder run.
+    static func expansion(digest: AudioDigest, runLength: Int) -> [Int] {
+        MediaPseudoTokenCore.expansion(rawDigestBytes: digest.rawBytes, runLength: runLength)
+    }
+}
+
+/// The shared splitmix64 core both pseudo-token faces call. Extracted, not
+/// changed: `ImagePseudoToken`'s golden-value tests pin these exact numbers.
+private nonisolated enum MediaPseudoTokenCore {
+
+    static func expansion(rawDigestBytes: Data, runLength: Int) -> [Int] {
+        let seed = seed(fromRawDigestBytes: rawDigestBytes)
         return (0..<runLength).map { value(seed: seed, index: $0) }
     }
 
-    private static func seed(from digest: ImageDigest) -> UInt64 {
+    static func seed(fromRawDigestBytes rawBytes: Data) -> UInt64 {
         var seed: UInt64 = 0
-        for (offset, byte) in digest.rawBytes.prefix(8).enumerated() {
+        for (offset, byte) in rawBytes.prefix(8).enumerated() {
             seed |= UInt64(byte) << (8 * offset)
         }
         return seed
     }
 
-    private static func value(seed: UInt64, index: Int) -> Int {
+    static func value(seed: UInt64, index: Int) -> Int {
         var z = seed &+ (UInt64(bitPattern: Int64(index)) &* 0x9E37_79B9_7F4A_7C15)
         z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
         z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB

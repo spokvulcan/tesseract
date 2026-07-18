@@ -956,6 +956,8 @@ extension RequestTrace {
                     if let text = part.text, !text.isEmpty { parts.append(text) }
                 case .image_url:
                     parts.append("⟨image⟩")
+                case .input_audio:
+                    parts.append("⟨audio⟩")
                 }
             }
         case nil:

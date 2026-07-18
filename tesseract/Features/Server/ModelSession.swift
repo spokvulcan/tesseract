@@ -3,11 +3,13 @@ import MLX
 import MLXLMCommon
 import MLXVLM
 
-/// The anchored vision `prepare` verb: `(input, cache, state, windowSize)` →
-/// `PrepareResult`. Present on a session only when the loaded family anchors
-/// warm continuations — M-RoPE positions seeded from `state`, image-bearing
-/// forwards windowed to `[heads, window, L]`.
-typealias AnchoredVisionPrepare =
+/// The windowed media `prepare` verb: `(input, cache, state, windowSize)` →
+/// `PrepareResult`. Present on a session only when the loaded family can
+/// continue a media-bearing forward on top of an existing cache, windowed to
+/// `[heads, window, L]`. For the M-RoPE family (Qwen3.5/3.6 VL) the `state`
+/// seeds the **Position Anchor**; sequential families (Gemma 4 unified)
+/// take positions from the cache offset and ignore it.
+typealias WindowedMediaPrepare =
     (LMInput, [any KVCache], LMOutput.State?, Int?) throws -> PrepareResult
 
 /// **Model Session** (CONTEXT.md → Server completion; ADR-0016): the scoped,
@@ -33,10 +35,10 @@ nonisolated protocol ModelSession {
     /// (boundary detection, the generation loop's detokenizer).
     var tokenizer: any Tokenizer { get }
 
-    /// The loaded model's anchored vision `prepare`, when the family has
-    /// wired the state-threaded windowed path (`nil` otherwise). The
+    /// The loaded model's windowed media `prepare`, when the family has
+    /// wired the cache-continuing windowed path (`nil` otherwise). The
     /// feature-detect `as?` cast, as a queryable fact.
-    var anchoredVisionPrepare: AnchoredVisionPrepare? { get }
+    var windowedMediaPrepare: WindowedMediaPrepare? { get }
 
     /// Run the model's input processor: `UserInput` (messages, images,
     /// tools) → tokenized `LMInput`.
@@ -116,16 +118,27 @@ nonisolated struct ContextBackedModelSession: ModelSession {
 
     var configuration: ModelConfiguration { context.configuration }
     var tokenizer: any Tokenizer { context.tokenizer }
-    var anchoredVisionPrepare: AnchoredVisionPrepare? {
+    var windowedMediaPrepare: WindowedMediaPrepare? {
         // Concrete-class feature detect: since upstream #399 the anchored
         // windowed continuation is the Qwen3.5/3.6 container's own `prepare`
-        // (the old `WindowedVisionContinuation` protocol is gone). Other VLM
-        // families accept `state:` but ignore it (mlx-swift-lm issue #420),
-        // so only the class that anchors qualifies.
-        guard let model = context.model as? Qwen35 else { return nil }
-        return { input, cache, state, windowSize in
-            try model.prepare(input, cache: cache, state: state, windowSize: windowSize)
+        // (the old `WindowedVisionContinuation` protocol is gone). Gemma 4
+        // unified's `prepare` (fork carry of upstream #400) also continues
+        // on a non-empty cache with chunked windowing — it takes positions
+        // from the cache offset and ignores `state`, which is exactly the
+        // sequential-rule contract. Other VLM families accept `state:` but
+        // neither anchor nor continue (mlx-swift-lm issue #420), so only
+        // these two classes qualify.
+        if let model = context.model as? Qwen35 {
+            return { input, cache, state, windowSize in
+                try model.prepare(input, cache: cache, state: state, windowSize: windowSize)
+            }
         }
+        if let model = context.model as? Gemma4Unified {
+            return { input, cache, state, windowSize in
+                try model.prepare(input, cache: cache, state: state, windowSize: windowSize)
+            }
+        }
+        return nil
     }
 
     func prepare(_ input: UserInput) async throws -> LMInput {

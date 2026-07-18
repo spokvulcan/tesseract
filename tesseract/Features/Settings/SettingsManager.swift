@@ -317,6 +317,13 @@ final class SettingsManager {
         }
     }
 
+    var companionVoiceNativeAudio: Bool {
+        didSet {
+            SettingsCatalogue.companionVoiceNativeAudio.write(
+                companionVoiceNativeAudio, to: store)
+        }
+    }
+
     // MARK: - Memory (ADR-0035)
 
     var memoryEnabled: Bool {
@@ -595,6 +602,8 @@ final class SettingsManager {
             .load(from: store)
         self.companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.load(
             from: store)
+        self.companionVoiceNativeAudio = SettingsCatalogue.companionVoiceNativeAudio.load(
+            from: store)
         self.memoryEnabled = SettingsCatalogue.memoryEnabled.load(from: store)
         self.memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.load(from: store)
         self.memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.load(from: store)
@@ -727,6 +736,7 @@ final class SettingsManager {
         companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence.default
         companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout.default
         companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.default
+        companionVoiceNativeAudio = SettingsCatalogue.companionVoiceNativeAudio.default
         memoryEnabled = SettingsCatalogue.memoryEnabled.default
         memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.default
         memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.default

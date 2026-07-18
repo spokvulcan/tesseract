@@ -238,6 +238,20 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
+            id: "gemma-4-12b",
+            displayName: "Gemma 4 12B (QAT 4-bit)",
+            description:
+                "Google's encoder-free multimodal agent: text, images, and native audio input "
+                + "in one 12B model. Quantization-aware-trained 4-bit. Ships as gemma4_unified.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/gemma-4-12B-it-qat-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~11 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "ornith-9b",
             displayName: "Ornith 1.0 9B (MLX 6-bit)",
             description:

@@ -42,6 +42,11 @@ nonisolated enum OpenAI {
         /// template declares are honored — everything else is ignored
         /// without erroring the request (see `TemplateRenderContext`).
         var chat_template_kwargs: ChatTemplateKwargs?
+        /// Tesseract vendor extension: override the prompt-prefill chunk
+        /// size for this request. A perf-measurement knob (bench sweeps
+        /// need per-request control; the per-model preset stays the
+        /// shipped default). Clamped to 64...8192.
+        var prefill_step_size: Int?
 
         nonisolated var effectiveMaxTokens: Int? {
             max_completion_tokens ?? max_tokens
@@ -210,15 +215,24 @@ nonisolated enum OpenAI {
         var type: ContentPartType
         var text: String?
         var image_url: ImageURL?
+        var input_audio: InputAudio?
     }
 
     enum ContentPartType: String, Codable, Sendable {
         case text
         case image_url
+        case input_audio
     }
 
     struct ImageURL: Codable, Sendable {
         var url: String
+    }
+
+    /// OpenAI-standard audio content part payload: base64 audio bytes plus
+    /// the container format (`"wav"`, `"mp3"`).
+    struct InputAudio: Codable, Sendable {
+        var data: String
+        var format: String
     }
 
     // MARK: - Tool Definitions

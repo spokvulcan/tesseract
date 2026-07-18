@@ -32,10 +32,18 @@ nonisolated enum ModelCatalog {
     }
 
     /// The single vision-detection rule, applied to an on-disk model directory:
-    /// the Qwen3.5 family with a `vision_config` block (via `ModelIdentity`).
-    /// Pure given the directory; memoization is the caller's — the download
-    /// manager holds the per-id cache.
+    /// a recognized vision family with a `vision_config` block (via
+    /// `ModelIdentity`). Pure given the directory; memoization is the
+    /// caller's — the download manager holds the per-id cache.
     nonisolated static func isVisionCapable(directory: URL) -> Bool {
         ModelIdentity(directory: directory).imageKeying != nil
+    }
+
+    /// The single audio-detection rule (**Audio-capable**): a recognized
+    /// audio family with an `audio_config` block (via `ModelIdentity`) —
+    /// today exactly the encoder-free Gemma 4 unified export. Same purity and
+    /// memoization contract as `isVisionCapable`.
+    nonisolated static func isAudioCapable(directory: URL) -> Bool {
+        ModelIdentity(directory: directory).audioKeying != nil
     }
 }

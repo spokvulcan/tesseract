@@ -12,6 +12,7 @@ there are ~100 suites in total — discover the rest with
 ```bash
 # Server + agent suites (recommended for fast, focused runs):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
   -only-testing:tesseractTests/HTTPPrefixCacheSpikeTests \
   -only-testing:tesseractTests/HTTPPrefixCacheSessionReplayTests \
   -only-testing:tesseractTests/CompletionHandlerTests \
@@ -28,6 +29,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 
 # Prefix cache suites (radix tree + hybrid snapshot + stable prefix detector):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
   -only-testing:tesseractTests/HybridCacheSnapshotTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
@@ -48,6 +50,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # starves test hosts; VoiceBargeReplayTests replays real-hardware traces from
 # tools/voice-hold-lab, see its RUNBOOK for regenerating fixtures):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
   -only-testing:tesseractTests/VoiceEndpointerTests \
   -only-testing:tesseractTests/EchoResidualFloorTests \
   -only-testing:tesseractTests/VoiceBargeReplayTests \
@@ -61,6 +64,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 
 # App bindings, image input, integrations, and model-selection seams:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
   -only-testing:tesseractTests/AppBindingsTests \
   -only-testing:tesseractTests/SettingsManagerModelSelectionTests \
   -only-testing:tesseractTests/ImageInputAvailabilityTests \
@@ -78,6 +82,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 
 # Run all tests:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
   -only-testing:tesseractTests
 ```
 
@@ -96,6 +101,7 @@ lives outside the repo:
 TEST_RUNNER_TESSERACT_FIDELITY_CORPUS="$HOME/projects/tesseract-traces/<corpus>" \
 TEST_RUNNER_TESSERACT_FIDELITY_MODEL="$HOME/Library/Containers/app.tesseract.agent/Data/Library/Application Support/models/<model-dir>" \
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
   -only-testing:tesseractTests/CanonicalEchoFidelityCorpusTests \
   -parallel-testing-enabled NO
 ```

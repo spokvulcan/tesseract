@@ -22,20 +22,22 @@ Old pin branches (`feat/paro-moe-220`, …) are kept so historical tesseract
 commits' gitlinks stay reachable — never delete them, and never force-push a
 branch an old gitlink points into without checking reachability.
 
-## Current pin (2026-07-15)
+## Current pin (2026-07-18)
 
-Base: upstream `main` @ `f1573a9` via the PR #398 branch head (`ebd1291` =
-main + the 1,280 vision-token budget). Carried on top, in order:
+Base: upstream `main` @ `343cae3` (contains our #398 and #399, and Gemma 4
+text + vision including the 12B `gemma4_unified`). Carried on top, in order:
 
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
-| `feat(qwen3vl): default per-image vision-token budget` (via base) | Caps each image/video-frame to a 1,280 vision-token budget (ADR-0014) | **PR #398 open** |
-| `fix: pin upstream ml-explore/mlx-swift; drop retained-CB fork` | Exact-revision mlx-swift pin `dc43e62` (= v0.31.4), matching mlx-audio-swift — SwiftPM cannot mix revision and version requirements for one package | Permanent local; never upstream |
+| `fix: pin upstream ml-explore/mlx-swift at 0.31.6; drop retained-CB fork` | Exact-revision mlx-swift pin `0bb916c` (= 0.31.6 tag; upstream main needs `MLXArray.maskFill` 0.31.5 / `DType.greatestFiniteMagnitudeArray` 0.31.6). Must match the app's other vendored packages (mlx-audio-swift, tesseract-speech) — SwiftPM cannot mix two revision-based requirements for one package, so all three pins move in lockstep | Permanent local; never upstream |
 | `fix(paroquant): convert every AWQ prefix and cast scales to f16` | AWQ→PARO conversion correctness | Not filed — candidate follow-up to #164 |
 | `refactor(paroquant): extract PairwiseRotation from RotateQuantizedLinear` | Shared rotation core for the MoE path | Not filed — candidate (prerequisite of the MoE commit) |
 | `feat(paroquant): MoE PARO path — RotateSwitchGLU + loader passes` | PARO quantization for MoE models (Qwen3.6-35B-A3B) | Not filed — candidate follow-up to #164 |
 | `perf(prefill): balance the prompt chunks instead of leaving a remainder` | Equal prefill chunks; kills the degenerate remainder forward (~9% prefill, tesseract #258) | Not filed — candidate |
 | `feat(paroquant): Prepared Checkpoint + O(1) AWQ conversion matching` | Prepared Checkpoint artifact + O(1) matcher (ADR-0032) | Not filed — candidate follow-up to #164 |
+| `Gemma 4: port the gemma4_audio USM-Conformer audio encoder` (+2 commits) | Gemma 4 native audio input: encoder port, log-mel extractor + processor wiring, mel parity test | **Upstream PR #392 open** (CI green, maintainer-anointed) |
+| `Gemma4Unified: audio and video input in the processor (encoder-free 12B)` | 12B `gemma4_unified` audio (+video) processor + model wiring — encoder-free raw-waveform frames. Carried with a one-line rebase fix (`state:` added to a test's `prepare` call, post-#399 API) | **Upstream PR #400 open** (unreviewed, no CI — the risk carry; fallback documented in tesseract #358) |
+| `GenerateParameters: suppress_tokens support (SuppressedTokensProcessor)` | `suppressedTokens` on GenerateParameters + `-inf` mask processor + `ChainedLogitProcessor`; implements `generation_config.json`'s `suppress_tokens` (Gemma 4 forbids emitting its eoi/eoa media delimiters) | Not filed — upstream candidate (generic HF-semantics gap) |
 
 ## Contributed back
 
@@ -47,7 +49,7 @@ main + the 1,280 vision-token budget). Carried on top, in order:
 | [#411](https://github.com/ml-explore/mlx-swift-lm/pull/411) | Qwen3VL sRGB tone curve in image preprocess | Merged 2026-07-13 |
 | [#418](https://github.com/ml-explore/mlx-swift-lm/pull/418) | Qwen3 embedder: honor attentionMask | Merged 2026-07-13 |
 | [#399](https://github.com/ml-explore/mlx-swift-lm/pull/399) | Qwen3.5/3.6 windowed prefill + state-threaded warm continuation (multi-turn M-RoPE drift fix) | Merged 2026-07-14 |
-| [#398](https://github.com/ml-explore/mlx-swift-lm/pull/398) | Qwen3VL default per-image 1,280 vision-token budget | **Open** |
+| [#398](https://github.com/ml-explore/mlx-swift-lm/pull/398) | Qwen3VL default per-image 1,280 vision-token budget | Merged 2026-07-16 |
 | [issue #420](https://github.com/ml-explore/mlx-swift-lm/issues/420) | Qwen2/2.5/3-VL drop cross-turn state (same class as #399) | Filed; follow-up PR offered |
 
 Earlier fork-era contributions (#167 ToolCallProcessor schema plumbing, #168

@@ -175,6 +175,29 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        // Pre-lease audio-capability guard (#358 story 7): input_audio parts
+        // aimed at a model that cannot hear fail loudly with a 400 — never a
+        // silent drop into an unkeyed text completion.
+        let requestHasAudio = completionRequest.messages.contains { message in
+            if case .parts(let parts) = message.content {
+                return parts.contains { $0.type == .input_audio }
+            }
+            return false
+        }
+        if requestHasAudio {
+            let (targetModelID, audioCapable) = await MainActor.run {
+                let id = llmModelIDOverride ?? settings.selectedAgentModelID
+                return (id, downloads.isAudioCapable(id))
+            }
+            guard audioCapable else {
+                try await writer.send(
+                    .badRequest(
+                        "Model '\(targetModelID)' does not support audio input "
+                            + "(input_audio content parts)"))
+                return
+            }
+        }
+
         let sessionAffinity = request.header("x-session-affinity")
 
         // File-based request logging — writes the raw request body to
@@ -400,6 +423,9 @@ struct CompletionHandler: Sendable {
         if let frequencyPenalty = request.frequency_penalty {
             let penalty = Float(frequencyPenalty)
             params.frequencyPenalty = penalty == 0 ? nil : penalty
+        }
+        if let step = request.prefill_step_size {
+            params.prefillStepSize = min(max(step, 64), 8192)
         }
         if let sg = request.thinking_safeguard {
             if let enabled = sg.enabled { params.thinkingSafeguard.enabled = enabled }

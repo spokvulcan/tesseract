@@ -559,12 +559,13 @@ final class ChatSession {
     // MARK: - Send / cancel
 
     func sendMessage(
-        _ text: String, images: [ImageAttachment] = [], bypassCommandParsing: Bool = false
+        _ text: String, images: [ImageAttachment] = [], audios: [AudioAttachment] = [],
+        bypassCommandParsing: Bool = false
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty else { return }
+        guard !trimmed.isEmpty || !images.isEmpty || !audios.isEmpty else { return }
 
-        if !bypassCommandParsing && images.isEmpty {
+        if !bypassCommandParsing && images.isEmpty && audios.isEmpty {
             let parseResult = SlashCommandParser.parse(trimmed, registry: commandRegistry())
             switch parseResult {
             case .matched(let command, let arguments):
@@ -578,7 +579,9 @@ final class ChatSession {
             }
         }
 
-        Log.agent.info("User message (\(trimmed.count) chars, \(images.count) images): \(trimmed)")
+        Log.agent.info(
+            "User message (\(trimmed.count) chars, \(images.count) images, "
+                + "\(audios.count) audio clips): \(trimmed)")
 
         error = nil
 
@@ -587,7 +590,7 @@ final class ChatSession {
             debugLogger.logSystemPrompt(agent.state.systemPrompt, tools: agent.state.tools)
         }
 
-        let user = UserMessage(content: trimmed, images: images)
+        let user = UserMessage(content: trimmed, images: images, audios: audios)
         // Raise the Pending Row before the send: the run may sit queued behind
         // the lease (cold-start model load) for seconds, and the transcript
         // must show the message immediately. The event-spine commit of the
@@ -598,6 +601,21 @@ final class ChatSession {
             prepare: { [weak self] outgoing in
                 await self?.attachMemory(to: outgoing) ?? outgoing
             })
+    }
+
+    /// Send a spoken take as a **Native Audio Turn**: the model hears the
+    /// take itself — no transcript in the model input. Resampled to the
+    /// 16 kHz mono rate the audio tower expects and encoded to the canonical
+    /// `VoiceTakeWAV` blob, so the take's bytes — and its prefix-cache
+    /// identity — are stable across every re-render of the conversation.
+    func sendVoiceTake(_ audio: AudioData) {
+        let samples = AudioConverter.resample(
+            audio.samples, from: audio.sampleRate, to: 16_000)
+        guard !samples.isEmpty else { return }
+        let attachment = AudioAttachment(
+            data: VoiceTakeWAV.encode(samples: samples, sampleRate: 16_000),
+            duration: audio.duration)
+        sendMessage("", audios: [attachment], bypassCommandParsing: true)
     }
 
     /// Recall for this message and hang the `<memory>` block on it (ADR-0035 §5).
@@ -624,7 +642,7 @@ final class ChatSession {
         injectedMemoryIDs.formUnion(injection.memoryIDs)
 
         let enriched = UserMessage(
-            id: user.id, content: user.content, images: user.images,
+            id: user.id, content: user.content, images: user.images, audios: user.audios,
             timestamp: user.timestamp, injectedContext: text)
         // The Pending Row is keyed by id and is showing the same content, so
         // swapping it for the enriched value is invisible — but it keeps the row
