@@ -19,17 +19,6 @@ import Testing
 
 @Suite struct CompanionReportBackToolTests {
 
-    private func run(
-        _ tool: AgentToolDefinition, _ args: [String: JSONValue]
-    ) async throws -> String {
-        let result = try await tool.execute("test-call", args, nil, nil)
-        let texts = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text }
-            return nil
-        }
-        return texts.joined(separator: "\n")
-    }
-
     @MainActor
     @Test func aDepositLandsAsAPendingEvent() async throws {
         let store = try scratchStore()
@@ -44,7 +33,7 @@ import Testing
         // The tool exists only in dialogue chats — the audience IS the rule.
         #expect(tool.audience == .dialogueOnly)
 
-        let reply = try await run(
+        let reply = try await toolText(
             tool, ["report": .string("He decided to move the dentist to Thursday.")])
         #expect(reply.contains("Deposited"))
         #expect(landed == dialogueID)
@@ -67,8 +56,8 @@ import Testing
             store: store, recorder: scratchRecorder(),
             currentConversationID: { nil }, depositLanded: { _ in })
 
-        _ = try await run(tool, ["report": .string("First: the plan is set.")])
-        _ = try await run(tool, ["report": .string("Second: he promised a walk at 6.")])
+        _ = try await toolText(tool, ["report": .string("First: the plan is set.")])
+        _ = try await toolText(tool, ["report": .string("Second: he promised a walk at 6.")])
         #expect(try await store.pendingEvents().count == 2)
     }
 

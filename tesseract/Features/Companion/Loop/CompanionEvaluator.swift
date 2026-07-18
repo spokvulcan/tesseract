@@ -30,9 +30,15 @@ nonisolated struct CompanionEvaluator {
     /// Day start needs the calendar day to have begun in earnest — a 1 a.m.
     /// tail counts as yesterday.
     static let dayStartEarliestHour = 4
-    /// Mission Control's context ceiling (ADR-0046 #373): at or past it, the
-    /// fold-down outranks any new grant — the intraday early fold.
+    /// Mission Control's context ceiling (ADR-0046 #373): the fold-down
+    /// outranks any new grant once the conversation is within one turn's
+    /// growth of it — pre-emptive, so a granted turn never appends past the
+    /// ceiling itself.
     static let contextCeilingTokens = 80_000
+    /// One generous turn's growth (opening + reply + tools). The fold fires
+    /// at `ceiling - headroom`, keeping the ceiling a hard line, not a
+    /// high-water mark.
+    static let ceilingHeadroomTokens = 8_000
 
     /// One tick's gathered facts. Gathering is the loop's job and effectful;
     /// deciding over the gathered value is this module's, and is not.
@@ -91,10 +97,13 @@ nonisolated struct CompanionEvaluator {
         }
 
         // 1. The ceiling outranks every grant (#373): a turn must never
-        // append past the budget, so the fold-down runs first. Same one
-        // eligibility — the model slot; while it is taken, hold quietly (the
-        // turn behind it defers through the normal path when the slot frees).
-        if signals.foldTokens >= Self.contextCeilingTokens, !signals.gpuBusy {
+        // append past the budget, so within one turn's headroom of the
+        // ceiling the fold-down runs first. Same one eligibility — the model
+        // slot; while it is taken, hold quietly (the turn behind it defers
+        // through the normal path when the slot frees).
+        if signals.foldTokens >= Self.contextCeilingTokens - Self.ceilingHeadroomTokens,
+            !signals.gpuBusy
+        {
             return .compactFold(estimatedTokens: signals.foldTokens)
         }
 

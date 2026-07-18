@@ -9,6 +9,7 @@
 
 import Foundation
 import MLXLMCommon
+import Testing
 
 @testable import Tesseract_Agent
 
@@ -51,6 +52,24 @@ func makeChatSession(
         restoreComposerDraft: restoreComposerDraft,
         liveMarkdownThrottle: .zero
     )
+}
+
+/// Runs a tool and returns its joined text result — the invocation shape
+/// every tool suite needs. Consolidates the helper three companion suites
+/// had each copied, so a `tool.execute` signature change touches one place.
+func toolText(
+    _ tool: AgentToolDefinition, _ args: [String: JSONValue]
+) async throws -> String {
+    let result = try await tool.execute("test-call", args, nil, nil)
+    let texts = result.content.compactMap { block -> String? in
+        if case .text(let text) = block { return text }
+        return nil
+    }
+    guard !texts.isEmpty else {
+        Issue.record("expected a text result")
+        return ""
+    }
+    return texts.joined(separator: "\n")
 }
 
 /// A unique scratch directory — the defence against the scheme's parallel

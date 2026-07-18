@@ -112,25 +112,10 @@ import Testing
 
 @Suite struct CompanionTrackToolTests {
 
-    private func run(
-        _ tool: AgentToolDefinition, _ args: [String: JSONValue]
-    ) async throws -> String {
-        let result = try await tool.execute("test-call", args, nil, nil)
-        let texts = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text }
-            return nil
-        }
-        guard !texts.isEmpty else {
-            Issue.record("expected a text result")
-            return ""
-        }
-        return texts.joined(separator: "\n")
-    }
-
     private func track(
         _ store: MemoryStore, kind: String, _ payload: [String: JSONValue]
     ) async throws -> String {
-        try await run(
+        try await toolText(
             createTrackTool(store: store),
             ["kind": .string(kind), "payload": .object(payload)])
     }
@@ -173,6 +158,34 @@ import Testing
     }
 
     // MARK: - Days
+
+    @Test func chainTransitionsKeepTheObservationStreamFlowing() async throws {
+        let store = try scratchStore()
+        // The ceremony died; the data stream did not (#369): every step
+        // status transition still lands as the typed work-domain row
+        // `log_step` used to emit — derived from the chain diff.
+        _ = try await track(
+            store, kind: "day",
+            [
+                "chain": .array([
+                    .object(["title": .string("Write it"), "status": .string("active")])
+                ])
+            ])
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Write it"), "status": .string("done")])])])
+
+        #expect(try await store.observations(kind: "step-started").count == 1)
+        let done = try await store.observations(kind: "step-done")
+        #expect(done.count == 1)
+        #expect(done.first?.domain == .work)
+        #expect(done.first?.value == "Write it")
+        // Re-sending the same chain is not a transition — no duplicate rows.
+        _ = try await track(
+            store, kind: "day",
+            ["chain": .array([.object(["title": .string("Write it"), "status": .string("done")])])])
+        #expect(try await store.observations(kind: "step-done").count == 1)
+    }
 
     @Test func dayChainWritesWithOneActiveEnforced() async throws {
         let store = try scratchStore()

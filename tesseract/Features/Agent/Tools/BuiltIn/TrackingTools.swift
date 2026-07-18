@@ -151,9 +151,12 @@ private nonisolated func trackDay(
     var day = try await store.day(dateKey) ?? DayRecord(date: dateKey)
     var touched = false
     let now = Date()
+    var stepObservations: [TrackingObservation] = []
 
     if payload["chain"] != nil {
-        day.chain = try parseChain(payload, previous: day.chain, now: now)
+        let previous = day.chain
+        day.chain = try parseChain(payload, previous: previous, now: now)
+        stepObservations = stepTransitionObservations(from: previous, to: day.chain)
         touched = true
     }
     if payload["support"] != nil {
@@ -184,7 +187,37 @@ private nonisolated func trackDay(
             message: "day payload needs at least one of chain/support/seed/closed.")
     }
     try await store.upsertDay(day)
+    for observation in stepObservations {
+        try await store.appendObservation(observation)
+    }
     return renderDay(day)
+}
+
+/// The work-domain Observation stream survives the ceremony's death (#369's
+/// data-shapes rule): every step status transition still lands as the same
+/// typed row `log_step` used to emit — mechanically, from the chain diff, so
+/// the weekly walk keeps its rows without the entity spending a second call.
+private nonisolated func stepTransitionObservations(
+    from previous: [ContractStep], to chain: [ContractStep]
+) -> [TrackingObservation] {
+    let previousByTitle = Dictionary(
+        previous.map { ($0.title.lowercased(), $0.status) },
+        uniquingKeysWith: { first, _ in first })
+    return chain.compactMap { step in
+        let before = previousByTitle[step.title.lowercased()] ?? .pending
+        guard step.status != before else { return nil }
+        let kind: String
+        switch step.status {
+        case .pending: return nil
+        case .active: kind = "step-started"
+        case .done: kind = "step-done"
+        case .blocked: kind = "step-blocked"
+        case .switched: kind = "conscious-switch"
+        case .dropped: kind = "step-dropped"
+        }
+        return TrackingObservation(
+            domain: .work, kind: kind, value: step.note ?? step.title, source: .elicited)
+    }
 }
 
 /// The chain arrives as data and leaves as data — the one shape rule enforced

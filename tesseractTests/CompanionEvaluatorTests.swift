@@ -281,9 +281,23 @@ import Testing
         #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: due.id))
     }
 
-    @Test func underTheCeilingNothingChanges() {
+    @Test func theFoldDownFiresAtTheHeadroomLineNotTheCeiling() {
         var evaluator = CompanionEvaluator()
-        let under = CompanionEvaluator.contextCeilingTokens - 1
+        // Pre-emptive: the fold runs one turn's growth BEFORE the ceiling, so
+        // a granted turn can never append past the ceiling itself.
+        let line =
+            CompanionEvaluator.contextCeilingTokens
+            - CompanionEvaluator.ceilingHeadroomTokens
+        #expect(
+            evaluator.decide(signals(day: settledDay(), foldTokens: line))
+                == .compactFold(estimatedTokens: line))
+    }
+
+    @Test func underTheHeadroomLineNothingChanges() {
+        var evaluator = CompanionEvaluator()
+        let under =
+            CompanionEvaluator.contextCeilingTokens
+            - CompanionEvaluator.ceilingHeadroomTokens - 1
         #expect(evaluator.decide(signals(day: settledDay(), foldTokens: under)) == .wait)
     }
 

@@ -202,21 +202,6 @@ import Testing
 
 @Suite struct CompanionBookWakeToolTests {
 
-    private func run(
-        _ tool: AgentToolDefinition, _ args: [String: JSONValue]
-    ) async throws -> String {
-        let result = try await tool.execute("test-call", args, nil, nil)
-        let texts = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text }
-            return nil
-        }
-        guard !texts.isEmpty else {
-            Issue.record("expected a text result")
-            return ""
-        }
-        return texts.joined(separator: "\n")
-    }
-
     @MainActor
     @Test func booksAWakeWithCorrelation() async throws {
         let store = try scratchStore()
@@ -227,7 +212,7 @@ import Testing
         let tool = createBookWakeTool(
             store: store, recorder: scratchRecorder(), context: context)
 
-        let reply = try await run(
+        let reply = try await toolText(
             tool,
             [
                 "content": .string("check whether he started the workout"),
@@ -261,17 +246,17 @@ import Testing
         }
 
         for minutes in [0, 30] {
-            let reply = try await run(
+            let reply = try await toolText(
                 tool, ["content": .string("promise \(minutes)"), "at": .string(stamp(minutes))])
             #expect(reply.contains("Booked [promise]"))
         }
-        let refused = try await run(
+        let refused = try await toolText(
             tool, ["content": .string("one too many"), "at": .string(stamp(60))])
         #expect(refused.contains("Promise budget spent"))
         #expect(try await store.promisesBooked(onDay: TrackingDay.key(for: tomorrowNoon)) == 2)
 
         // The budget is promises-only: rhythm beats always book.
-        let rhythm = try await run(
+        let rhythm = try await toolText(
             tool,
             [
                 "content": .string("evening journal"), "at": .string(stamp(90)),
@@ -283,7 +268,7 @@ import Testing
     @Test func reviseMovesInsteadOfDuplicating() async throws {
         let store = try scratchStore()
         let recorder = scratchRecorder()
-        _ = try await run(
+        _ = try await toolText(
             createBookWakeTool(
                 store: store, recorder: recorder, context: CompanionTurnContext()),
             ["content": .string("midday pulse"), "in_minutes": .int(30)])
@@ -292,7 +277,7 @@ import Testing
 
         let revise = createReviseWakeTool(
             store: store, recorder: recorder, context: CompanionTurnContext())
-        let moved = try await run(
+        let moved = try await toolText(
             revise,
             [
                 "id": .string(id.uuidString),
@@ -347,7 +332,7 @@ import Testing
         await #expect(throws: CompanionToolError.self) {
             _ = try await tool.execute("t", ["id": .string(wake.id.uuidString)], nil, nil)
         }
-        let out = try await run(
+        let out = try await toolText(
             tool,
             [
                 "id": .string(wake.id.uuidString),
@@ -377,7 +362,7 @@ import Testing
         let day = TrackingDay.key(for: tomorrowNoon)
         #expect(try await store.promisesBooked(onDay: day) == 2)
 
-        _ = try await run(
+        _ = try await toolText(
             createCancelWakeTool(
                 store: store, recorder: scratchRecorder(), context: CompanionTurnContext()),
             ["id": .string(first.id.uuidString), "why": .string("moot")])
