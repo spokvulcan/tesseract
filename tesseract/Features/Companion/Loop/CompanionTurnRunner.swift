@@ -111,8 +111,8 @@ final class CompanionTurnRunner {
         // persisted conversation records exactly what the turn saw. The
         // opening carries the turn's origin — the per-turn tag the retired
         // per-turn conversations used to carry (ADR-0046).
-        let openingMessage = UserMessage(content: opening, turnOrigin: origin)
-        let user = (await conversationMemory.enrich(openingMessage)).asUser ?? openingMessage
+        let user = await conversationMemory.enrich(
+            UserMessage(content: opening, turnOrigin: origin))
 
         do {
             // The owner always wins the slot: this waits in the arbiter's FIFO

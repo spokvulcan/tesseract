@@ -115,14 +115,21 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
         images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         injectedContext = try container.decodeIfPresent(String.self, forKey: .injectedContext)
-        // Via the raw string: an unknown future tag reads as untagged instead
-        // of failing the whole conversation file's decode (the summary's rule).
-        turnOrigin = (try container.decodeIfPresent(String.self, forKey: .turnOrigin))
-            .flatMap(TurnOrigin.init(rawValue:))
+        turnOrigin = TurnOrigin(
+            persisted: try container.decodeIfPresent(String.self, forKey: .turnOrigin))
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, content, images, timestamp, injectedContext, turnOrigin
+    }
+
+    /// A copy with the memory block hung on it — the one place enrichment
+    /// rebuilds the message. Lives with the field list so a new stored field
+    /// can't be silently dropped in transit by a caller's hand-rolled copy.
+    func with(injectedContext: String?) -> UserMessage {
+        UserMessage(
+            id: id, content: content, images: images, timestamp: timestamp,
+            injectedContext: injectedContext, turnOrigin: turnOrigin)
     }
 
     /// The wrapper goes *before* the user's words, mirroring `<skill>`: what I

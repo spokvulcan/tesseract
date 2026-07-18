@@ -36,21 +36,26 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
 
     @discardableResult
     func createNew() -> AgentConversation {
-        if let current = currentConversation, !current.messages.isEmpty {
-            stored[current.id] = current
-        }
+        saveOutgoingCurrent()
         let conversation = AgentConversation()
         currentConversation = conversation
         return conversation
     }
 
     func load(id: UUID) {
-        if let current = currentConversation, !current.messages.isEmpty {
-            stored[current.id] = current
-        }
+        saveOutgoingCurrent()
         // A miss leaves the current conversation unchanged, like the real store.
         guard let conversation = stored[id] else { return }
         currentConversation = conversation
+    }
+
+    /// Same rule as the real store, from the seam's contract: the chat funnel
+    /// never writes the fold (ADR-0046).
+    private func saveOutgoingCurrent() {
+        guard let current = currentConversation, !current.messages.isEmpty,
+            !current.isMissionControl
+        else { return }
+        stored[current.id] = current
     }
 
     func delete(id: UUID) {
@@ -61,6 +66,7 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     }
 
     func updateCurrentMessages(_ messages: [any AgentMessageProtocol & Sendable]) {
+        guard currentConversation?.isMissionControl != true else { return }
         currentConversation?.messages = messages
     }
 
@@ -75,7 +81,7 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     /// A future multi-conversation, recency-ordered, or codec-sensitive test must
     /// not lean on these — extend the fixture to match the real store first.
     func saveCurrent() {
-        guard let current = currentConversation else { return }
+        guard let current = currentConversation, !current.isMissionControl else { return }
         stored[current.id] = current
     }
 }

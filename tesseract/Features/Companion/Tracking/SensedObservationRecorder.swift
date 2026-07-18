@@ -62,7 +62,7 @@ final class SensedObservationRecorder {
             let name =
                 (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
                 .localizedName
-            MainActor.assumeIsolated { self?.frontmostChanged(to: name) }
+            MainActor.assumeIsolated { self?.appBecameFrontmost(name) }
         }
         powerPollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -104,14 +104,10 @@ final class SensedObservationRecorder {
 
     // MARK: - App sessions
 
-    private func frontmostChanged(to name: String?) {
-        appBecameFrontmost(name, at: Date())
-    }
-
     /// Internal, not private: the one deterministic seam through the app-
     /// session pipeline — tests drive it with controlled dates to prove the
     /// sustained-vs-brief verdict without NSWorkspace.
-    func appBecameFrontmost(_ name: String?, at now: Date) {
+    func appBecameFrontmost(_ name: String?, at now: Date = Date()) {
         closeAppSession(at: now)
         if let name { currentApp = (name, now) }
     }

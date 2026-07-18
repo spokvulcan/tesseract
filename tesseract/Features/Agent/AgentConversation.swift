@@ -27,12 +27,27 @@ nonisolated enum TurnOrigin: String, Codable, Sendable {
     /// their opening message (`UserMessage.turnOrigin`).
     case missionControl = "mission-control"
 
+    /// The lenient read of a persisted tag: nil, or an unknown future tag,
+    /// reads as nil instead of failing the whole file's decode — pre-tag
+    /// histories load unchanged. The one home of the rule; message decode and
+    /// both conversation-level readers go through it.
+    init?(persisted raw: String?) {
+        guard let raw, let origin = TurnOrigin(rawValue: raw) else { return nil }
+        self = origin
+    }
+
     /// Whether launch recency may land on this conversation kind. The fold is
     /// excluded: the loop appends to it around the clock, so it would win
     /// recency nearly always, and launch must open on the owner's own last
     /// chat (ADR-0046). The one home of the rule — the real store and the
     /// in-memory test fixture both filter on it.
     var opensAtLaunch: Bool { self != .missionControl }
+
+    /// Whether launch-time index validation fully parses this kind's backing
+    /// file. The fold is exempt: validating means parsing a file that grows
+    /// all day, on every launch — and a corrupt fold already degrades
+    /// gracefully (`missionControl()` re-seeds it empty).
+    var validatesAtLaunch: Bool { self != .missionControl }
 }
 
 struct AgentConversation: Identifiable, Sendable {
@@ -95,7 +110,7 @@ struct AgentConversationSummary: Identifiable, Codable, Sendable {
     var origin: String?
 
     /// The typed view of the raw tag.
-    var turnOrigin: TurnOrigin { origin.flatMap(TurnOrigin.init(rawValue:)) ?? .interactive }
+    var turnOrigin: TurnOrigin { TurnOrigin(persisted: origin) ?? .interactive }
 
     init(from conversation: AgentConversation) {
         self.id = conversation.id

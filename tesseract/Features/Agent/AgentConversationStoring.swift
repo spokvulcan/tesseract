@@ -11,6 +11,12 @@ import Foundation
 ///
 /// Class-bound: both adapters are reference types, and the coordinator holds one
 /// by reference and mutates its current conversation through it.
+///
+/// Mission Control is read-only through this seam (ADR-0046): every write that
+/// funnels through `currentConversation` — the save-outgoing inside
+/// `createNew`/`load`, `updateCurrentMessages`, `saveCurrent` — refuses the
+/// fold, in both adapters. The loop writes it through the concrete store's
+/// `save(_:)`, deliberately not a member here.
 protocol AgentConversationStoring: AnyObject {
     /// The conversation currently displayed and edited.
     var currentConversation: AgentConversation? { get }

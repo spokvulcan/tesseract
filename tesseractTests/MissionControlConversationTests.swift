@@ -25,11 +25,19 @@ private func turnMessages(
 ) -> [any AgentMessageProtocol & Sendable] {
     [
         CoreMessage.user(UserMessage(content: opening, turnOrigin: origin)),
-        AssistantMessage(
-            content: [.text(TextPart(text: reply))],
-            model: "test-model",
-            stopReason: .stop),
+        AssistantMessage(content: reply),
     ]
+}
+
+/// One loop turn folded in through the runner's exact path: load the fold,
+/// append, save wholesale.
+@MainActor
+private func appendTurn(
+    to store: AgentConversationStore, opening: String, reply: String, origin: TurnOrigin
+) {
+    var missionControl = store.missionControl()
+    missionControl.messages += turnMessages(opening: opening, reply: reply, origin: origin)
+    store.save(missionControl)
 }
 
 // MARK: - The persistence seam
@@ -62,11 +70,8 @@ struct MissionControlStoreTests {
         store.save(missionControl)
 
         // Turn two builds on turn one within the same launch.
-        var second = store.missionControl()
-        #expect(second.messages.count == 2)
-        second.messages += turnMessages(
-            opening: "nothing due", reply: "(silent turn)", origin: .ambient)
-        store.save(second)
+        #expect(store.missionControl().messages.count == 2)
+        appendTurn(to: store, opening: "nothing due", reply: "(silent turn)", origin: .ambient)
 
         // Relaunch: a fresh store over the same directory finds and continues
         // the same conversation — the whole fold, in order, tags intact.
@@ -97,10 +102,7 @@ struct MissionControlStoreTests {
         store.saveCurrent()
         let ownChatID = store.currentConversation?.id
 
-        var missionControl = store.missionControl()
-        missionControl.messages = turnMessages(
-            opening: "opening", reply: "thinking", origin: .wake)
-        store.save(missionControl)
+        appendTurn(to: store, opening: "opening", reply: "thinking", origin: .wake)
 
         // Mission Control is the most recently updated — launch still lands
         // on the owner's own last chat.
@@ -112,9 +114,7 @@ struct MissionControlStoreTests {
         let foldOnly = makeTempDir()
         defer { try? FileManager.default.removeItem(at: foldOnly) }
         let foldStore = AgentConversationStore(directory: foldOnly)
-        var onlyFold = foldStore.missionControl()
-        onlyFold.messages = turnMessages(opening: "o", reply: "r", origin: .beat)
-        foldStore.save(onlyFold)
+        appendTurn(to: foldStore, opening: "o", reply: "r", origin: .beat)
         let foldRelaunch = AgentConversationStore(directory: foldOnly)
         foldRelaunch.loadMostRecent()
         #expect(foldRelaunch.currentConversation?.isMissionControl == false)
@@ -126,10 +126,7 @@ struct MissionControlStoreTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let store = AgentConversationStore(directory: dir)
-        var missionControl = store.missionControl()
-        missionControl.messages = turnMessages(
-            opening: "opening", reply: "reply", origin: .wake)
-        store.save(missionControl)
+        appendTurn(to: store, opening: "opening", reply: "reply", origin: .wake)
 
         store.delete(id: AgentConversation.missionControlID)
 
@@ -206,10 +203,7 @@ struct MissionControlChatGuardTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let store = AgentConversationStore(directory: dir)
-        var missionControl = store.missionControl()
-        missionControl.messages = turnMessages(
-            opening: "opening", reply: "reply", origin: .wake)
-        store.save(missionControl)
+        appendTurn(to: store, opening: "opening", reply: "reply", origin: .wake)
 
         let session = makeChatSession(store: store)
         session.loadConversation(AgentConversation.missionControlID)
@@ -227,22 +221,15 @@ struct MissionControlChatGuardTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let store = AgentConversationStore(directory: dir)
-        var missionControl = store.missionControl()
-        missionControl.messages = turnMessages(
-            opening: "turn one", reply: "reply one", origin: .wake)
-        store.save(missionControl)
+        appendTurn(to: store, opening: "turn one", reply: "reply one", origin: .wake)
 
         // The owner opens the fold to read — the session now holds a snapshot.
         let session = makeChatSession(store: store)
         session.loadConversation(AgentConversation.missionControlID)
         #expect(session.isMissionControlOpen)
 
-        // A loop turn lands on disk while the fold is open in the UI — the
-        // runner's exact path: load, append, save wholesale.
-        var appended = store.missionControl()
-        appended.messages += turnMessages(
-            opening: "turn two", reply: "reply two", origin: .ambient)
-        store.save(appended)
+        // A loop turn lands on disk while the fold is open in the UI.
+        appendTurn(to: store, opening: "turn two", reply: "reply two", origin: .ambient)
 
         // Switching away persists the outgoing conversation — for Mission
         // Control that write is skipped, so the meanwhile-turn survives.
@@ -259,10 +246,7 @@ struct MissionControlChatGuardTests {
         var missionControl = store.missionControl()
         missionControl.messages = [
             CoreMessage.user(opening),
-            AssistantMessage(
-                content: [.text(TextPart(text: "reply"))],
-                model: "test-model",
-                stopReason: .stop),
+            AssistantMessage(content: "reply"),
         ]
         store.save(missionControl)
 

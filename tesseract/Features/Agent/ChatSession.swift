@@ -830,10 +830,8 @@ final class ChatSession {
 
     private func persistCurrentConversation() {
         guard !agent.state.messages.isEmpty else { return }
-        // Never write the fold from the chat side: this session's copy of
-        // Mission Control is a read snapshot, and persisting it would clobber
-        // any loop turn that appended to disk since it was opened (ADR-0046).
-        guard !isMissionControlOpen else { return }
+        // The fold's read-only rule lives in the store: both funnel members
+        // below refuse Mission Control (`AgentConversationStoring`, ADR-0046).
         conversationStore.updateCurrentMessages(
             agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
         conversationStore.saveCurrent()
