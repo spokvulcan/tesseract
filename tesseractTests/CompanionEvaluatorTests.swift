@@ -81,6 +81,18 @@ import Testing
         #expect(decision == .foldTurn(dueWakes: [], origin: .event, carriesBeat: false))
     }
 
+    @Test func aReportBackDepositGrantsTheFoldTurn() {
+        var evaluator = CompanionEvaluator()
+        // #372: a summoned dialogue's deposit rides the drain like any other
+        // perception — the next turn is how the one mind learns what its
+        // conversation concluded.
+        let deposit = event(
+            "He decided to move the dentist to Thursday.",
+            kind: .reportBack, admittedAgo: 60)
+        let decision = evaluator.decide(signals(pending: [deposit], day: settledDay()))
+        #expect(decision == .foldTurn(dueWakes: [], origin: .event, carriesBeat: false))
+    }
+
     @Test func theEventGrantIgnoresPowerAndPresence() {
         var evaluator = CompanionEvaluator()
         // Battery, owner away: the fold still runs — eligibility is the model

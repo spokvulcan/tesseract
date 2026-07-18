@@ -26,7 +26,10 @@ final class CompanionSummons {
     /// Raises the picked overlay concept and waits out the owner's answer.
     private let summonOverlay:
         (_ title: String, _ line: String) async -> CompanionBeatSummonsOutcome
-    private let openConversation: (UUID) -> Void
+    /// Engaging opens a summoned dialogue chat (ADR-0046 #372) — its own
+    /// conversation, seeded with the summons line, owing a Report-Back —
+    /// never Mission Control, which is the loop's record, not a chat.
+    private let beginDialogue: (String) -> Void
     private let enterVoiceSession: (String) -> Void
     /// The loop's banner door for the §11 fallback, correlation passed in
     /// because the overlay's give-up can outlive the turn that raised it.
@@ -42,7 +45,7 @@ final class CompanionSummons {
         speakUnderOverlay: @escaping (String) -> Void,
         summonOverlay:
             @escaping (_ title: String, _ line: String) async -> CompanionBeatSummonsOutcome,
-        openConversation: @escaping (UUID) -> Void,
+        beginDialogue: @escaping (String) -> Void,
         enterVoiceSession: @escaping (String) -> Void,
         postFallbackBanner:
             @escaping (_ line: String, _ wakeID: UUID?, _ conversationID: UUID?) async -> Void
@@ -54,7 +57,7 @@ final class CompanionSummons {
         self.speakPlain = speakPlain
         self.speakUnderOverlay = speakUnderOverlay
         self.summonOverlay = summonOverlay
-        self.openConversation = openConversation
+        self.beginDialogue = beginDialogue
         self.enterVoiceSession = enterVoiceSession
         self.postFallbackBanner = postFallbackBanner
     }
@@ -73,8 +76,9 @@ final class CompanionSummons {
     /// §10), which raises it regardless of the wearing toggle. Speaks the line
     /// audio-only under the overlay, stands the summons until the owner
     /// engages or dismisses, and never lets an unanswered one vanish:
-    /// engaging opens the turn's own conversation and enters a live voice
-    /// session (#310 §1); unanswered falls back to the notification banner.
+    /// engaging opens a summoned dialogue chat and enters a live voice
+    /// session (#310 §1, ADR-0046 #372); unanswered falls back to the
+    /// notification banner.
     func summon(line: String) {
         // Snapshot the correlation now — the turn may end before the answer.
         let conversationID = context.conversationID
@@ -88,7 +92,10 @@ final class CompanionSummons {
             case .engaged:
                 recorder.record(
                     "reaction.engaged", conversationID: conversationID, note: "overlay")
-                if let conversationID { openConversation(conversationID) }
+                // Dialogue out (ADR-0046 #372): the engagement opens its own
+                // chat with the summons line as the entity's first words, and
+                // the voice session rides it.
+                beginDialogue(line)
                 enterVoiceSession("summons-engage")
             case .dismissed:
                 recorder.record(

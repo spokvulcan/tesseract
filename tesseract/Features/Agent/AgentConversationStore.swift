@@ -73,6 +73,13 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         return conversation
     }
 
+    /// Installs a caller-built conversation as current — the summoned-dialogue
+    /// mint (ADR-0046 #372). Same switch discipline as `createNew`.
+    func adopt(_ conversation: AgentConversation) {
+        saveOutgoingCurrent()
+        currentConversation = conversation
+    }
+
     /// Loads a conversation from disk by ID and sets it as current. Mission
     /// Control is served from `missionControl()` — the warm cache the loop
     /// refreshes on every fold save — instead of re-parsing the all-day file.

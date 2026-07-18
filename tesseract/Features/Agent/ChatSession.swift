@@ -95,6 +95,13 @@ final class ChatSession {
         conversationStore.currentConversation?.isMissionControl ?? false
     }
 
+    /// Whether the current chat is a summoned dialogue (ADR-0046 #372) — the
+    /// run controller keys the `.dialogueOnly` tool set (`report_back`) off
+    /// this, per prompt.
+    var isDialogueOpen: Bool {
+        conversationStore.currentConversation?.origin == .dialogue
+    }
+
     /// Whether the **Waiting Row** shows: the run is waiting on the model with
     /// nothing streaming — queued behind the lease (cold start) or in a turn
     /// prefill (first turn and after every tool batch). Deliberately *not*
@@ -186,6 +193,10 @@ final class ChatSession {
     /// send path, so this seam covers both. Optional for the same reason
     /// memory is: the chat must run without the Companion.
     private let companionIdentity: CompanionIdentity?
+    /// Every send into a dialogue-origin conversation is reported through
+    /// this door (ADR-0046 #372) — the dialogue ledger's activity signal,
+    /// which arms the Report-Back nudge accounting.
+    private let onDialogueActivity: @MainActor (UUID) -> Void
     private let debugLogger = AgentDebugLogger()
 
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
@@ -214,10 +225,12 @@ final class ChatSession {
         onConversationSwitch: @MainActor @escaping () -> Void = {},
         conversationMemory: ConversationMemory? = nil,
         companionIdentity: CompanionIdentity? = nil,
+        onDialogueActivity: @MainActor @escaping (UUID) -> Void = { _ in },
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
         self.conversationMemory = conversationMemory
         self.companionIdentity = companionIdentity
+        self.onDialogueActivity = onDialogueActivity
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
@@ -237,6 +250,7 @@ final class ChatSession {
         )
 
         agentRun.setReportError { [weak self] message in self?.error = message }
+        agentRun.setIsDialogueOpen { [weak self] in self?.isDialogueOpen ?? false }
         // A settle with the Pending Row still up means the user message never
         // entered the agent context — hand it back to the composer.
         agentRun.setOnRunSettled { [weak self] in self?.settlePendingUserMessage() }
@@ -597,6 +611,12 @@ final class ChatSession {
 
         Log.agent.info("User message (\(trimmed.count) chars, \(images.count) images): \(trimmed)")
 
+        // The dialogue ledger's activity signal (ADR-0046 #372): every send —
+        // typed, dictated, or the harness's own nudge — counts as exchange.
+        if let current = conversationStore.currentConversation, current.origin == .dialogue {
+            onDialogueActivity(current.id)
+        }
+
         error = nil
 
         if agent.state.messages.isEmpty {
@@ -791,6 +811,22 @@ final class ChatSession {
     func newConversation() {
         switchConversation { conversationStore.createNew() }
         Log.agent.info("New conversation created")
+    }
+
+    /// Mints the summoned dialogue chat (ADR-0046 #372) and makes it current:
+    /// a fresh conversation tagged `.dialogue`, seeded with the summons line
+    /// as the entity's own first words — the dialogue agent's context for why
+    /// it summoned. Returns the new conversation's id for the ledger.
+    @discardableResult
+    func beginDialogue(line: String?) -> UUID {
+        var conversation = AgentConversation(origin: .dialogue)
+        if let line, !line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            conversation.messages = [AssistantMessage(content: line)]
+        }
+        let id = conversation.id
+        switchConversation { conversationStore.adopt(conversation) }
+        Log.agent.info("Dialogue conversation \(id) opened")
+        return id
     }
 
     func loadConversation(_ id: UUID) {

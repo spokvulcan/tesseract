@@ -42,6 +42,11 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
         return conversation
     }
 
+    func adopt(_ conversation: AgentConversation) {
+        saveOutgoingCurrent()
+        currentConversation = conversation
+    }
+
     func load(id: UUID) {
         saveOutgoingCurrent()
         // A miss leaves the current conversation unchanged, like the real store.

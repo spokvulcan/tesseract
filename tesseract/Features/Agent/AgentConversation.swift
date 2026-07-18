@@ -30,6 +30,11 @@ nonisolated enum TurnOrigin: String, Codable, Sendable {
     /// conversation, never a turn — turns inside it carry their own class on
     /// their opening message (`UserMessage.turnOrigin`).
     case missionControl = "mission-control"
+    /// A summoned dialogue (ADR-0046 #372): the separate chat a summons
+    /// engagement opens, voice or typed — the loop's sub-agent conversation
+    /// that owes Mission Control a Report-Back. A conversation kind like
+    /// `missionControl`, never a turn class.
+    case dialogue
 
     /// The lenient read of a persisted tag: nil, or an unknown future tag,
     /// reads as nil instead of failing the whole file's decode — pre-tag

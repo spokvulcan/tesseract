@@ -305,6 +305,20 @@ final class DependencyContainer: ObservableObject {
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
+        // The deposit door (ADR-0046 #372) — `.dialogueOnly`: surfaces only
+        // while a summoned dialogue is the current chat, and the headless
+        // agent's tool set drops it.
+        registry.appendBuiltInTool(
+            createReportBackTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                currentConversationID: { [weak self] in
+                    self?.agentConversationStore.currentConversation?.id
+                },
+                depositLanded: { [weak self] id in
+                    self?.companionDialogue.depositLanded(in: id)
+                }
+            ))
         return registry
     }()
 
@@ -500,7 +514,12 @@ final class DependencyContainer: ObservableObject {
             companionIdentity: CompanionIdentity(
                 store: memoryStore,
                 isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
-            )
+            ),
+            // The dialogue ledger's activity signal (#372) — lazy through the
+            // container so the session and the ledger can reference each other.
+            onDialogueActivity: { [weak self] id in
+                self?.companionDialogue.activity(in: id)
+            }
         )
     }()
 
@@ -525,7 +544,7 @@ final class DependencyContainer: ObservableObject {
         // consumer) — a second full agent whose context never collides with
         // the chat session's, over the same shared tool registry.
         makeAgent: { [unowned self] in
-            AgentFactory.makeAgent(
+            let headless = AgentFactory.makeAgent(
                 inferenceService: self.serverInferenceService,
                 packageRegistry: self.packageRegistry,
                 extensionHost: self.extensionHost,
@@ -534,6 +553,11 @@ final class DependencyContainer: ObservableObject {
                 settingsManager: self.settingsManager,
                 mcpToolsExtension: self.mcpClientManager.toolsExtension
             )
+            // A Mission Control turn has no dialogue to report back from
+            // (#372): the headless agent drops the `.dialogueOnly` tools.
+            headless.updateTools(
+                self.newToolRegistry.allTools.filter { $0.audience != .dialogueOnly })
+            return headless
         },
         arbiter: inferenceArbiter,
         conversationStore: agentConversationStore,
@@ -592,6 +616,26 @@ final class DependencyContainer: ObservableObject {
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
     )
 
+    /// The summoned dialogue's ledger (ADR-0046 #372): mints the dialogue
+    /// chat on engagement, tracks the Report-Back debt, and delivers the one
+    /// harness nudge when a dialogue ends or goes quiet without depositing.
+    lazy var companionDialogue: CompanionDialogue = CompanionDialogue(
+        recorder: companionFlightRecorder,
+        openDialogue: { [weak self] line in
+            guard let self else { return nil }
+            let id = self.chatSession.beginDialogue(line: line)
+            (NSApp.delegate as? AppDelegate)?.navigateToAgent()
+            return id
+        },
+        isAgentBusy: { [weak self] in self?.chatSession.isGenerating ?? false },
+        currentConversationID: { [weak self] in
+            self?.agentConversationStore.currentConversation?.id
+        },
+        sendNudge: { [weak self] text in
+            self?.chatSession.sendMessage(text, images: [], bypassCommandParsing: true)
+        }
+    )
+
     // The summons conductor (ADR-0040 §10/§11, #328): speak → overlay →
     // reaction routing → banner fallback for the unanswered. Conduct lives in
     // the type; this container hands it doors.
@@ -610,7 +654,9 @@ final class DependencyContainer: ObservableObject {
             await self?.companionVoicePrototype.summonBeat(title: title, line: line)
                 ?? .unanswered
         },
-        openConversation: { [weak self] id in self?.presentConversation(id) },
+        beginDialogue: { [weak self] line in
+            self?.companionDialogue.begin(line: line, via: "summons-engage")
+        },
         enterVoiceSession: { [weak self] via in
             self?.companionVoiceSession.enter(via: via)
         },
@@ -682,6 +728,11 @@ final class DependencyContainer: ObservableObject {
         // and the auto-listen loop; autoSpeak stays the chat-only path.
         chatSession.voiceReplyHandler = { [weak controller] text in
             controller?.replyCompleted(text) ?? false
+        }
+        // The dialogue ledger listens on the session's end (#372): a summoned
+        // dialogue that concluded without a deposit gets its one nudge here.
+        controller.onSessionEnded = { [weak self] in
+            self?.companionDialogue.voiceSessionEnded()
         }
         return controller
     }()

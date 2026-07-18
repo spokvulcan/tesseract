@@ -29,6 +29,11 @@ protocol AgentConversationStoring: AnyObject {
     @discardableResult
     func createNew() -> AgentConversation
 
+    /// Installs a caller-built conversation as current — the summoned-dialogue
+    /// mint (ADR-0046 #372), which arrives with an origin and a seeded opening
+    /// line. Same switch discipline as `createNew`.
+    func adopt(_ conversation: AgentConversation)
+
     /// Loads a conversation by id and makes it current. A miss leaves the current
     /// conversation unchanged.
     func load(id: UUID)

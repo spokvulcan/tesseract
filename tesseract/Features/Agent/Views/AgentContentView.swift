@@ -333,6 +333,7 @@ enum ConversationOriginBadge {
         // The fixed title "Mission Control" already names the row (ADR-0046);
         // a badge repeating it would be noise.
         case .missionControl: nil
+        case .dialogue: "dialogue"
         }
     }
 }

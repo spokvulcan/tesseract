@@ -62,6 +62,11 @@ final class CompanionVoiceSessionController {
     private let beginVoiceHold: @MainActor () -> Void
     private let endVoiceHold: @MainActor () -> Void
 
+    /// Fired once on the session's active→idle edge — the dialogue ledger's
+    /// "the dialogue ended" trigger (ADR-0046 #372). Settable post-
+    /// construction: the container wires it beside the loop's doors.
+    @ObservationIgnored var onSessionEnded: @MainActor () -> Void = {}
+
     // MARK: - Adapter state
 
     @ObservationIgnored private var machine = VoiceSessionMachine()
@@ -199,11 +204,14 @@ final class CompanionVoiceSessionController {
     }
 
     /// The ticker runs exactly while a session is live — derived from the
-    /// machine's phase after every dispatch, not tracked separately.
+    /// machine's phase after every dispatch, not tracked separately. The
+    /// active→idle edge is also the session-end signal the dialogue ledger
+    /// listens on (ADR-0046 #372).
     private func syncTicker() {
         if machine.isActive {
             if ticker == nil { startTicker() }
         } else {
+            if ticker != nil { onSessionEnded() }
             ticker?.cancel()
             ticker = nil
         }
