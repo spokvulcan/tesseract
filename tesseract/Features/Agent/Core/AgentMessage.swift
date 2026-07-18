@@ -88,15 +88,24 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     /// silently rewrite history and miss the cache on every turn of the thread.
     let injectedContext: String?
 
+    /// Which turn class this message opened (ADR-0046). Loop turns fold into
+    /// the one Mission Control conversation, so the per-turn origin the
+    /// conversation tag used to carry now rides the turn's opening message —
+    /// nil for everything the owner typed. Metadata only: never rendered into
+    /// the LLM context.
+    let turnOrigin: TurnOrigin?
+
     init(
         id: UUID = UUID(), content: String, images: [ImageAttachment] = [],
-        timestamp: Date = Date(), injectedContext: String? = nil
+        timestamp: Date = Date(), injectedContext: String? = nil,
+        turnOrigin: TurnOrigin? = nil
     ) {
         self.id = id
         self.content = content
         self.images = images
         self.timestamp = timestamp
         self.injectedContext = injectedContext
+        self.turnOrigin = turnOrigin
     }
 
     init(from decoder: Decoder) throws {
@@ -106,10 +115,14 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
         images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
         injectedContext = try container.decodeIfPresent(String.self, forKey: .injectedContext)
+        // Via the raw string: an unknown future tag reads as untagged instead
+        // of failing the whole conversation file's decode (the summary's rule).
+        turnOrigin = (try container.decodeIfPresent(String.self, forKey: .turnOrigin))
+            .flatMap(TurnOrigin.init(rawValue:))
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, images, timestamp, injectedContext
+        case id, content, images, timestamp, injectedContext, turnOrigin
     }
 
     /// The wrapper goes *before* the user's words, mirroring `<skill>`: what I

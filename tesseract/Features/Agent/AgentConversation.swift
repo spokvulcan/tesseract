@@ -1,9 +1,13 @@
 import Foundation
 
-/// The turn-class vocabulary (#327 §2, ADR-0040 §8): which kind of turn opened
-/// a conversation. `interactive` is the owner typing; the rest are the
-/// Companion's own turns. Raw values are the persisted tag — the store and the
-/// index keep plain strings so pre-tag files load unchanged.
+/// The turn-class vocabulary (#327 §2, ADR-0040 §8) — and, since ADR-0046, the
+/// conversation-kind tag. `interactive` is the owner typing; `missionControl`
+/// is the one standing conversation the loop folds into (a conversation kind,
+/// never a turn class — no turn is "opened by" it); the rest are the
+/// Companion's turn classes, which since ADR-0046 tag the opening message of
+/// each turn inside Mission Control rather than a conversation of their own.
+/// Raw values are the persisted tag — the store and the index keep plain
+/// strings so pre-tag files load unchanged.
 nonisolated enum TurnOrigin: String, Codable, Sendable {
     /// The owner's own typed (or spoken) chat — never badged.
     case interactive
@@ -18,6 +22,10 @@ nonisolated enum TurnOrigin: String, Codable, Sendable {
     /// Reserved (#327 §2): sleep passes ride `internalCompletion`, not the
     /// turn machinery, so nothing emits this yet — the tag waits for them.
     case sleep
+    /// Mission Control (ADR-0046): the fold's standing conversation. Tags the
+    /// conversation, never a turn — turns inside it carry their own class on
+    /// their opening message (`UserMessage.turnOrigin`).
+    case missionControl = "mission-control"
 }
 
 struct AgentConversation: Identifiable, Sendable {
@@ -28,8 +36,20 @@ struct AgentConversation: Identifiable, Sendable {
     /// Which turn class opened this conversation (#327's one-interface tag).
     var origin: TurnOrigin
 
-    /// Derive title from first user message content.
+    /// Mission Control's identity is a constant of the domain (ADR-0046):
+    /// there is exactly one standing conversation, so the loop finds it by id
+    /// across relaunches, and deleting it just means the next turn re-seeds it
+    /// empty under the same id — no index scan, no second source of truth.
+    static let missionControlID = UUID(uuidString: "AD460046-0367-4366-B301-000000000001")!
+
+    /// Whether this is the fold's standing conversation (ADR-0046).
+    var isMissionControl: Bool { origin == .missionControl }
+
+    /// Derive title from first user message content. Mission Control's name is
+    /// fixed — its first message is a turn opening (instructions + briefing),
+    /// which would make a meaningless title.
     var title: String {
+        if isMissionControl { return "Mission Control" }
         for msg in messages {
             if let user = msg.asUser {
                 let text = user.content.prefix(80)

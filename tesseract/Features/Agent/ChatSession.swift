@@ -85,6 +85,16 @@ final class ChatSession {
     /// event fold can't see. The composer's send/cancel switch keys off this.
     var isGenerating: Bool { agentRun.isGenerating }
 
+    /// Mission Control is open for reading (ADR-0046). The fold only ever
+    /// gains messages through the loop — the owner's words reach it as wakes
+    /// and (later) Report-Backs, never typed in — so the composer hides and
+    /// every chat-side write path guards on this. The guards are also what
+    /// keeps this session's snapshot from ever clobbering a loop turn that
+    /// landed on disk while the conversation was open here.
+    var isMissionControlOpen: Bool {
+        conversationStore.currentConversation?.isMissionControl ?? false
+    }
+
     /// Whether the **Waiting Row** shows: the run is waiting on the model with
     /// nothing streaming — queued behind the lease (cold start) or in a turn
     /// prefill (first turn and after every tool batch). Deliberately *not*
@@ -555,6 +565,12 @@ final class ChatSession {
     func sendMessage(
         _ text: String, images: [ImageAttachment] = [], bypassCommandParsing: Bool = false
     ) {
+        // Belt to the composer's braces: no path — typed, dictated, or
+        // programmatic — appends an interactive turn to the fold.
+        guard !isMissionControlOpen else {
+            Log.agent.warning("sendMessage into Mission Control refused (ADR-0046)")
+            return
+        }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !images.isEmpty else { return }
 
@@ -814,6 +830,10 @@ final class ChatSession {
 
     private func persistCurrentConversation() {
         guard !agent.state.messages.isEmpty else { return }
+        // Never write the fold from the chat side: this session's copy of
+        // Mission Control is a read snapshot, and persisting it would clobber
+        // any loop turn that appended to disk since it was opened (ADR-0046).
+        guard !isMissionControlOpen else { return }
         conversationStore.updateCurrentMessages(
             agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
         conversationStore.saveCurrent()
@@ -826,7 +846,7 @@ final class ChatSession {
     /// into the composer. Returns nil (no-op) while generating, or if the id is
     /// missing / not a user message.
     func beginEditingMessage(_ messageID: UUID) -> (text: String, images: [ImageAttachment])? {
-        guard !agentRun.isGenerating else { return nil }
+        guard !agentRun.isGenerating, !isMissionControlOpen else { return nil }
         let messages = agent.context.messages
         guard let index = messages.firstIndex(where: { $0.messageUUID == messageID }),
             let user = messages[index].asUser

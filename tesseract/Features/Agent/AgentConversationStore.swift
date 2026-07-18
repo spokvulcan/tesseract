@@ -117,8 +117,12 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
     }
 
     /// Loads the most recent conversation on startup (or creates a fresh one).
+    /// Skips Mission Control: the loop appends to it around the clock, so it
+    /// would win recency nearly always — launch must land on the owner's own
+    /// last chat, never inside the fold (ADR-0046).
     func loadMostRecent() {
-        guard let mostRecent = conversations.first else {
+        guard let mostRecent = conversations.first(where: { $0.turnOrigin != .missionControl })
+        else {
             currentConversation = AgentConversation()
             return
         }
@@ -127,6 +131,16 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         } else {
             currentConversation = AgentConversation()
         }
+    }
+
+    /// Mission Control (ADR-0046): the fold's one standing conversation,
+    /// loaded fresh from disk — never through `currentConversation`, which
+    /// belongs to the chat UI. A miss (first run, owner deletion, storage
+    /// wipe) re-seeds it empty under the same well-known id.
+    func missionControl() -> AgentConversation {
+        loadFromDiskSync(id: AgentConversation.missionControlID)
+            ?? AgentConversation(
+                id: AgentConversation.missionControlID, origin: .missionControl)
     }
 
     // MARK: - Private

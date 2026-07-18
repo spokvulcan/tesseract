@@ -113,7 +113,8 @@ final class ConversationMemory {
 
         let enriched = UserMessage(
             id: user.id, content: user.content, images: user.images,
-            timestamp: user.timestamp, injectedContext: text)
+            timestamp: user.timestamp, injectedContext: text,
+            turnOrigin: user.turnOrigin)
         return outgoing is CoreMessage ? CoreMessage.user(enriched) : enriched
     }
 
