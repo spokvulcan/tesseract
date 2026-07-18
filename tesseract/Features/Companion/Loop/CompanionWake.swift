@@ -145,9 +145,16 @@ nonisolated struct CompanionLoopDayState: Codable, Sendable, Equatable {
     var dayStartedAt: Date?
     /// The last ambient turn's completion — the spacing gate reads it.
     var lastAmbientAt: Date?
+    /// The day's standing-instructions review ran (#370) — sleep passes fire
+    /// on every idle, the review at most once per day.
+    var instructionsReviewedAt: Date?
 
-    init(dayStartedAt: Date? = nil, lastAmbientAt: Date? = nil) {
+    init(
+        dayStartedAt: Date? = nil, lastAmbientAt: Date? = nil,
+        instructionsReviewedAt: Date? = nil
+    ) {
         self.dayStartedAt = dayStartedAt
         self.lastAmbientAt = lastAmbientAt
+        self.instructionsReviewedAt = instructionsReviewedAt
     }
 }

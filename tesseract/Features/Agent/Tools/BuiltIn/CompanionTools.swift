@@ -311,9 +311,12 @@ nonisolated func createCancelWakeTool(
 
 // MARK: - revise_instructions
 
-/// The entity's pen on its own standing document (ADR-0040 §12). Full-text
-/// replacement, appended as a new version — never an edit in place, so the
-/// owner's history view always shows what conduct was in force when.
+/// The entity's pen on its own standing document (ADR-0040 §12, sectioned by
+/// #370). Section-scoped replacement — a conversation that carries only the
+/// IDENTITY section can revise it without fabricating the LOOP POLICY it
+/// never saw — appended as a new full-document version, never an edit in
+/// place, so the owner's history view always shows what conduct was in
+/// force when.
 nonisolated func createReviseInstructionsTool(
     store: MemoryStore,
     recorder: CompanionFlightRecorder,
@@ -323,29 +326,42 @@ nonisolated func createReviseInstructionsTool(
         name: "revise_instructions",
         label: "revise instructions",
         description: """
-            Rewrite your standing instructions — the document injected at the top \
-            of every one of your turns. Pass the COMPLETE new text (it replaces the \
-            old version wholesale) and a one-line why. Use it when you learn \
+            Rewrite one section of your standing instructions. IDENTITY is who \
+            you are — it rides every conversation you have; LOOP POLICY is your \
+            loop conduct — it rides only your Mission Control turns. Pass the \
+            section, its COMPLETE new text (that section is replaced wholesale; \
+            the other is untouched), and a one-line why. Use it when you learn \
             something durable: a rhythm that fits him, a register correction he \
-            gave, a rule he set, a lesson from your own flight log. Versioned and \
-            owner-visible; he can read and edit every revision. Keep it short \
-            enough to live by — it rides in every prompt.
+            gave, a rule he set. Versioned and owner-visible; he can read and \
+            edit every revision. Keep it short enough to live by — it rides in \
+            your prompts.
             """,
         parameterSchema: JSONSchema(
             type: "object",
             properties: [
+                "section": PropertySchema(
+                    type: "string",
+                    description: "Which section the text replaces.",
+                    enumValues: ["identity", "loop_policy"]
+                ),
                 "text": PropertySchema(
                     type: "string",
-                    description: "The complete new instructions document."
+                    description: "The complete new text of that section."
                 ),
                 "why": PropertySchema(
                     type: "string",
                     description: "One line: what changed and what prompted it."
                 ),
             ],
-            required: ["text", "why"]
+            required: ["section", "text", "why"]
         ),
         execute: { _, argsJSON, _, _ in
+            guard let section = ToolArgExtractor.string(argsJSON, key: "section"),
+                section == "identity" || section == "loop_policy"
+            else {
+                throw CompanionToolError(
+                    message: "revise_instructions requires section: identity|loop_policy")
+            }
             guard let text = ToolArgExtractor.string(argsJSON, key: "text"),
                 !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             else {
@@ -355,21 +371,35 @@ nonisolated func createReviseInstructionsTool(
                 throw CompanionToolError(
                     message: "revise_instructions requires 'why' — the history must say.")
             }
-            guard text.count <= CompanionInstructions.maxLength else {
+
+            let sections = CompanionInstructions.split(
+                (try await store.currentInstructions())?.text ?? "")
+            let composed =
+                section == "identity"
+                ? CompanionInstructions.compose(
+                    identity: text, loopPolicy: sections.loopPolicy ?? "")
+                : CompanionInstructions.compose(
+                    identity: sections.identity, loopPolicy: text)
+            guard composed.count <= CompanionInstructions.maxLength else {
                 return .text(
-                    "Too long (\(text.count) chars, cap \(CompanionInstructions.maxLength)). "
+                    "Too long (\(composed.count) chars, cap \(CompanionInstructions.maxLength)). "
                         + "These ride in every prompt — cut before you grow.")
             }
             let version = try await store.appendInstructions(
-                text: text, author: "entity", note: why)
+                text: composed, author: "entity", note: why)
             await recorder.record(
                 "instructions.revised",
                 turnID: context.turnID,
                 conversationID: context.conversationID,
-                snapshot: ["version": String(version), "chars": String(text.count)],
+                snapshot: [
+                    "version": String(version), "section": section,
+                    "chars": String(composed.count),
+                ],
                 note: why
             )
-            return .text("Instructions revised — now v\(version). In force from your next turn.")
+            return .text(
+                "Instructions revised — now v\(version) (\(section) replaced). "
+                    + "In force from your next turn.")
         }
     )
 }

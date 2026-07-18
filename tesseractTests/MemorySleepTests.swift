@@ -783,4 +783,24 @@ struct MemorySleepTests {
         // And NOTHING still retires it cold, note or no note.
         #expect(try #require(try await store.memory(id: wrong.id)).tier == .cold)
     }
+
+    // MARK: - The companion tail (ADR-0046)
+
+    @Test("The companion's nightly practice runs after the memory items")
+    func companionNightlyRunsAtTheTail() async throws {
+        let store = try makeStore()
+        let engine = makeEngine(store)
+        let model = ScriptedModel()
+
+        final class Flag: @unchecked Sendable { var ran = false }
+        let flag = Flag()
+        let sleep = MemorySleep(
+            engine: engine, store: store, arbiter: InMemoryInferenceArbiter(),
+            complete: model.complete,
+            companionNightly: { flag.ran = true })
+
+        await sleep.run()
+        #expect(flag.ran)
+        #expect(sleep.phase == .idle)
+    }
 }

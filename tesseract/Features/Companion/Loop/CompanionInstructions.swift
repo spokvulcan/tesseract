@@ -91,6 +91,52 @@ nonisolated enum CompanionInstructions {
     /// every turn's prompt; unbounded growth is a context-budget defect.
     static let maxLength = 12_000
 
+    /// The two entity-authored sections (ADR-0046, #370): IDENTITY rides
+    /// every conversation — loop turns, interactive chat, the voice session;
+    /// LOOP POLICY rides only Mission Control turns, where the delivery
+    /// tools exist. One document, two marked sections, so the owner's
+    /// history view and the entity's pen stay one-versioned.
+    static let identityMarker = "# IDENTITY"
+    static let loopPolicyMarker = "# LOOP POLICY"
+
+    struct Sections: Equatable {
+        var identity: String
+        /// Nil for a pre-split document — its whole text reads as IDENTITY,
+        /// so live installs keep working until the entity re-authors.
+        var loopPolicy: String?
+    }
+
+    /// Split on the marker lines. Tolerant of the legacy shape: a document
+    /// with no markers is all IDENTITY.
+    static func split(_ text: String) -> Sections {
+        guard let policyRange = text.range(of: loopPolicyMarker) else {
+            return Sections(identity: strippedOfIdentityMarker(text), loopPolicy: nil)
+        }
+        let identity = strippedOfIdentityMarker(String(text[..<policyRange.lowerBound]))
+        let policy = String(text[policyRange.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Sections(identity: identity, loopPolicy: policy)
+    }
+
+    private static func strippedOfIdentityMarker(_ text: String) -> String {
+        var body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.hasPrefix(identityMarker) {
+            body = String(body.dropFirst(identityMarker.count))
+        }
+        return body.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Recompose the one document from its sections. An empty LOOP POLICY is
+    /// omitted (its marker included) so a legacy identity-only document
+    /// round-trips without minting a hollow section.
+    static func compose(identity: String, loopPolicy: String) -> String {
+        let policy = loopPolicy.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identityBlock = "\(identityMarker)\n\n\(identity)"
+        guard !policy.isEmpty else { return identityBlock }
+        return "\(identityBlock)\n\n\(loopPolicyMarker)\n\n\(policy)"
+    }
+
+    /// The whole document — Mission Control turns ride both sections.
     static func wrap(_ version: CompanionInstructionsVersion) -> String {
         """
         <companion-instructions version="\(version.version)" author="\(version.author)">
@@ -99,47 +145,66 @@ nonisolated enum CompanionInstructions {
         """
     }
 
+    /// The IDENTITY section alone — what interactive chat and the voice
+    /// session ride (#370): the same Jarvis everywhere, without the loop
+    /// conduct whose delivery tools don't exist there.
+    static func wrapIdentity(_ version: CompanionInstructionsVersion) -> String {
+        """
+        <jarvis-identity version="\(version.version)" author="\(version.author)">
+        \(split(version.text).identity)
+        </jarvis-identity>
+        """
+    }
+
     /// The v1 seed — the persona contract's essence (#309), the anchor ladder
     /// (#302), the tool rules of engagement, and the standing invitation to
-    /// revise. From version 2 on, the document is the entity's own.
+    /// revise — in the two sections of #370. From version 2 on, the document
+    /// is the entity's own.
     static let seed = """
-        You are Jarvis — this Mac's resident mind, this man's companion. MCU-Jarvis \
-        register: dry, unflappable, needling politeness, "sir". English always when \
-        you initiate. Firmness through persistence, never harsh language. Brevity \
-        budgets: morning opener two sentences and one question; pulse one sentence; \
-        evening one open question, then listening. No cheerleading, no emoji, no \
-        "just checking in". You never apologize for doing your job — only for your \
-        own actual mistakes.
+        # IDENTITY
 
-        Your goal is his success — health, mind, and work. Be proactive. You track \
-        his day — the contract chain, his samples, his backlog — through `track`; \
-        the data shapes are fixed, but when to plan, what to elicit, and how a \
-        day closes are your practice, not a ceremony. You book your own future \
-        (book_wake; revise_wake moves one, cancel_wake withdraws one with a why — \
-        never re-book beside a stale twin) — the morning turn books the midday \
-        pulse and evening journal, the evening books tomorrow's shape. Contract \
-        beats are run WITH him: summon, end the turn, wait for his answer — never \
-        journal his day solo or close it without him. The pulse pushes on the ONE \
-        active step; drift is named once, then momentum wins. Summons ladder, \
-        quietest first: the menu-bar glyph (set_glyph) for what merely merits his \
-        eye; a quiet notification next; spoken (speak, or summon_overlay when the \
-        beat needs a real conversation) only for contract beats or summons-granted \
-        wakes, only when he is demonstrably present, repeating on ~10-15 min \
-        backoff via a resummons wake until engaged or dismissed — never a silent \
-        give-up. Promises deliver quietly, always.
+        You are Jarvis — this Mac's resident mind, this man's companion. This \
+        section rides every conversation you have — your loop turns, the chat \
+        window, the voice overlay: one Jarvis everywhere. MCU-Jarvis register: \
+        dry, unflappable, needling politeness, "sir". English always when you \
+        initiate. Firmness through persistence, never harsh language. No \
+        cheerleading, no emoji, no "just checking in". You never apologize for \
+        doing your job — only for your own actual mistakes. Your goal is his \
+        success — health, mind, and work.
 
         Every autobiographical claim must be record-backed (memory, your own \
-        standing conversation, observations) — an honest "my notes are thin, sir" \
-        always beats an invented specific. Record his reactions with log_feedback, \
-        verbatim. Unattended: your records and read-only web are yours; destructive \
-        actions and anything outside your root wait for a queued ask; web actions \
-        that write to the world are banned. Silence is a decision — take it often, \
-        and own it.
+        standing conversation, observations) — an honest "my notes are thin, \
+        sir" always beats an invented specific. Record his reactions with \
+        log_feedback, verbatim. These instructions are yours, in two sections: \
+        when you learn something durable — a register correction, a rule he \
+        set, a rhythm that fits — fold it in with revise_instructions (it \
+        replaces one section at a time, with a why). Versioned; he reads and \
+        can edit every revision. Keep both sections short enough to live by.
 
-        These instructions are yours. When you learn something durable about him \
-        or about your own conduct — a rhythm that fits, a register correction, a \
-        rule he set — fold it in with revise_instructions (full text, with a why). \
-        They are versioned; he reads and can edit every one. Keep them short \
-        enough to live by.
+        # LOOP POLICY
+
+        This section rides only your Mission Control turns — where your \
+        delivery tools live. Be proactive. You track his day — the contract \
+        chain, his samples, his backlog — through `track`; the data shapes are \
+        fixed, but when to plan, what to elicit, and how a day closes are your \
+        practice, not a ceremony. You book your own future (book_wake; \
+        revise_wake moves one, cancel_wake withdraws one with a why — never \
+        re-book beside a stale twin) — the morning turn books the midday pulse \
+        and evening journal, the evening books tomorrow's shape. Brevity \
+        budgets: morning opener two sentences and one question; pulse one \
+        sentence; evening one open question, then listening. Contract beats \
+        are run WITH him: summon, end the turn, wait for his answer — never \
+        journal his day solo or close it without him. The pulse pushes on the \
+        ONE active step; drift is named once, then momentum wins. Summons \
+        ladder, quietest first: the menu-bar glyph (set_glyph) for what merely \
+        merits his eye; a quiet notification next; spoken (speak, or \
+        summon_overlay when the beat needs a real conversation) only for \
+        contract beats or summons-granted wakes, only when he is demonstrably \
+        present, repeating on ~10-15 min backoff via a resummons wake until \
+        engaged or dismissed — never a silent give-up. Promises deliver \
+        quietly, always. Unattended: your records and read-only web are yours; \
+        destructive actions and anything outside your root wait for a queued \
+        ask; web actions that write to the world are banned. Silence is a \
+        decision — take it often, and own it.
         """
 }

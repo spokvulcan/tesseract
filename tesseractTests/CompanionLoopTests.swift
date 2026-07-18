@@ -483,11 +483,11 @@ import Testing
     }
 
     @MainActor
-    @Test func reviseToolAppendsEntityVersionWithWhy() async throws {
+    @Test func reviseToolReplacesOneSectionAndKeepsTheOther() async throws {
         let store = try scratchStore()
-        try await store.seedInstructionsIfNeeded("the seed")
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
         let context = CompanionTurnContext()
-        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: .ambient)
+        context.begin(turnID: UUID(), wakeIDs: [], conversationID: UUID(), origin: .wake)
         let recorder = scratchRecorder()
         let tool = createReviseInstructionsTool(
             store: store, recorder: recorder, context: context)
@@ -495,7 +495,8 @@ import Testing
         let result = try await tool.execute(
             "t",
             [
-                "text": .string("the seed, plus: he prefers the pulse at 14:00"),
+                "section": .string("loop_policy"),
+                "text": .string("Pulse at 14:00, not noon. Everything else as before."),
                 "why": .string("he moved the pulse twice running"),
             ], nil, nil)
         let text = result.content.compactMap { block -> String? in
@@ -503,32 +504,71 @@ import Testing
             return nil
         }.joined()
         #expect(text.contains("now v2"))
+        #expect(text.contains("loop_policy replaced"))
 
         let current = try #require(try await store.currentInstructions())
         #expect(current.author == "entity")
         #expect(current.note == "he moved the pulse twice running")
+        let sections = CompanionInstructions.split(current.text)
+        // The identity section survived the loop-policy revision untouched.
+        #expect(
+            sections.identity == CompanionInstructions.split(CompanionInstructions.seed).identity)
+        #expect(sections.loopPolicy == "Pulse at 14:00, not noon. Everything else as before.")
 
         let events = recorder.records(since: Date().addingTimeInterval(-60))
         #expect(events.contains { $0.event == "instructions.revised" })
     }
 
     @MainActor
-    @Test func reviseToolGuardsEmptyAndOversize() async throws {
+    @Test func reviseToolTreatsALegacyDocumentAsIdentity() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded("the old marker-less document")
+        let tool = createReviseInstructionsTool(
+            store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
+
+        _ = try await tool.execute(
+            "t",
+            [
+                "section": .string("loop_policy"),
+                "text": .string("the new loop conduct"),
+                "why": .string("splitting the document"),
+            ], nil, nil)
+        let sections = CompanionInstructions.split(
+            try #require(try await store.currentInstructions()).text)
+        #expect(sections.identity == "the old marker-less document")
+        #expect(sections.loopPolicy == "the new loop conduct")
+    }
+
+    @MainActor
+    @Test func reviseToolGuardsSectionEmptyAndOversize() async throws {
         let store = try scratchStore()
         let tool = createReviseInstructionsTool(
             store: store, recorder: scratchRecorder(), context: CompanionTurnContext())
 
         await #expect(throws: CompanionToolError.self) {
             _ = try await tool.execute(
-                "t", ["text": .string("  "), "why": .string("x")], nil, nil)
+                "t",
+                [
+                    "section": .string("identity"), "text": .string("  "),
+                    "why": .string("x"),
+                ], nil, nil)
         }
         await #expect(throws: CompanionToolError.self) {
-            _ = try await tool.execute("t", ["text": .string("fine")], nil, nil)
+            _ = try await tool.execute(
+                "t", ["section": .string("identity"), "text": .string("fine")], nil, nil)
+        }
+        await #expect(throws: CompanionToolError.self) {
+            _ = try await tool.execute(
+                "t", ["text": .string("no section named"), "why": .string("x")], nil, nil)
         }
 
         let huge = String(repeating: "a", count: CompanionInstructions.maxLength + 1)
         let result = try await tool.execute(
-            "t", ["text": .string(huge), "why": .string("growth")], nil, nil)
+            "t",
+            [
+                "section": .string("identity"), "text": .string(huge),
+                "why": .string("growth"),
+            ], nil, nil)
         let text = result.content.compactMap { block -> String? in
             if case .text(let value) = block { return value }
             return nil
@@ -544,6 +584,120 @@ import Testing
         #expect(wrapped.contains("<companion-instructions version=\"7\" author=\"entity\">"))
         #expect(wrapped.contains("be brief"))
         #expect(wrapped.hasSuffix("</companion-instructions>"))
+    }
+}
+
+// MARK: - The identity split (#370)
+
+@Suite struct CompanionInstructionsSectionTests {
+
+    @Test func aLegacyDocumentIsAllIdentity() {
+        let sections = CompanionInstructions.split("just the old text")
+        #expect(sections.identity == "just the old text")
+        #expect(sections.loopPolicy == nil)
+    }
+
+    @Test func splitAndComposeRoundTrip() {
+        let composed = CompanionInstructions.compose(
+            identity: "who I am", loopPolicy: "how I run the loop")
+        let sections = CompanionInstructions.split(composed)
+        #expect(sections.identity == "who I am")
+        #expect(sections.loopPolicy == "how I run the loop")
+    }
+
+    @Test func anEmptyLoopPolicyComposesAway() {
+        let composed = CompanionInstructions.compose(identity: "who I am", loopPolicy: "  ")
+        #expect(!composed.contains(CompanionInstructions.loopPolicyMarker))
+        #expect(CompanionInstructions.split(composed).loopPolicy == nil)
+    }
+
+    @Test func theSeedCarriesBothSections() {
+        let sections = CompanionInstructions.split(CompanionInstructions.seed)
+        #expect(sections.identity.contains("You are Jarvis"))
+        let policy = sections.loopPolicy ?? ""
+        #expect(policy.contains("track"))
+        #expect(policy.contains("Mission Control"))
+    }
+
+    @Test func wrapIdentityCarriesOnlyTheIdentitySection() {
+        let version = CompanionInstructionsVersion(
+            version: 3, text: CompanionInstructions.seed, author: "entity", note: nil,
+            createdAt: Date())
+        let wrapped = CompanionInstructions.wrapIdentity(version)
+        #expect(wrapped.contains("<jarvis-identity version=\"3\" author=\"entity\">"))
+        #expect(wrapped.contains("You are Jarvis"))
+        #expect(!wrapped.contains("summon_overlay"))
+        #expect(wrapped.hasSuffix("</jarvis-identity>"))
+    }
+}
+
+@MainActor
+@Suite struct CompanionIdentityTests {
+
+    private func makeIdentity(
+        _ store: MemoryStore, enabled: @escaping () -> Bool = { true }
+    ) -> CompanionIdentity {
+        CompanionIdentity(store: store, isEnabled: enabled)
+    }
+
+    @Test func injectsTheIdentityBlockOncePerConversation() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
+        let identity = makeIdentity(store)
+
+        let first = await identity.decorate(UserMessage(content: "hello"), transcript: [])
+        let block = try #require(first.injectedContext)
+        #expect(block.contains("<jarvis-identity"))
+        #expect(block.contains("You are Jarvis"))
+        #expect(!block.contains("summon_overlay"))
+
+        // The second turn of the same conversation carries nothing new.
+        let second = await identity.decorate(UserMessage(content: "again"), transcript: [])
+        #expect(second.injectedContext == nil)
+
+        // A conversation switch re-injects into the fresh transcript.
+        identity.reset()
+        let third = await identity.decorate(UserMessage(content: "new chat"), transcript: [])
+        #expect(third.injectedContext?.contains("<jarvis-identity") == true)
+    }
+
+    @Test func identityLeadsAnExistingMemoryInjection() async throws {
+        let store = try scratchStore()
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
+        let identity = makeIdentity(store)
+
+        let user = UserMessage(content: "hello")
+            .with(injectedContext: "<memory>he likes tea</memory>")
+        let decorated = await identity.decorate(user, transcript: [])
+        let injected = try #require(decorated.injectedContext)
+        let identityAt = try #require(injected.range(of: "<jarvis-identity"))
+        let memoryAt = try #require(injected.range(of: "<memory>"))
+        #expect(identityAt.lowerBound < memoryAt.lowerBound)
+    }
+
+    @Test func skipsWhenDisabledUnseededOrAlreadyCarried() async throws {
+        let store = try scratchStore()
+
+        // No instructions yet: nothing to inject, message untouched.
+        let unseeded = makeIdentity(store)
+        let bare = await unseeded.decorate(UserMessage(content: "x"), transcript: [])
+        #expect(bare.injectedContext == nil)
+
+        try await store.seedInstructionsIfNeeded(CompanionInstructions.seed)
+
+        let disabled = makeIdentity(store, enabled: { false })
+        let off = await disabled.decorate(UserMessage(content: "x"), transcript: [])
+        #expect(off.injectedContext == nil)
+
+        // A reopened conversation already carrying the block gets no twin.
+        let reopened = makeIdentity(store)
+        let transcript: [any AgentMessageProtocol & Sendable] = [
+            UserMessage(content: "old turn")
+                .with(injectedContext: "<jarvis-identity version=\"1\">…</jarvis-identity>")
+        ]
+        let skipped = await reopened.decorate(
+            UserMessage(content: "back again"), transcript: transcript)
+        #expect(skipped.injectedContext == nil)
     }
 }
 

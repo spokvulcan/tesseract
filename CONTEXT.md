@@ -1390,14 +1390,20 @@ _Avoid_: prompt (it's one input to the turn, not the instructions), snapshot
 (the flight recorder's word for the verbatim copy a trace keeps).
 
 **Standing Instructions**:
-The entity's self-authored policy document — versioned, injected into the
-system prompt beside memory, edited by the entity through a typed tool,
-reviewed in sleep passes, always owner-readable and owner-editable. Escalation
-ladders, interruption ethics, quiet hours, and rhythm defaults live here, as
-seeds the entity rewrites with wear — never as code.
-_Avoid_: system prompt (the instructions ride inside it), settings/config (not
-a UI surface; a document the entity owns), rules (they're his practice, not his
-cage).
+The entity's self-authored policy document — one versioned text in two
+sections: IDENTITY, riding the opening message of every conversation (loop
+turns, interactive chat, the voice session — one Jarvis everywhere), and LOOP
+POLICY, riding only **Mission Control** turns, where the delivery tools exist.
+Never the system prompt: the loop injects the whole document on each turn's
+opening message, and the chat/voice path injects the IDENTITY section on a
+conversation's first message. Edited by the entity section-by-section through
+a typed tool, reviewed once a day at the tail of the sleep pass, always
+owner-readable and owner-editable. Escalation ladders, interruption ethics,
+quiet hours, and rhythm defaults live in LOOP POLICY, as seeds the entity
+rewrites with wear — never as code.
+_Avoid_: system prompt (a superseded claim — the instructions ride opening
+messages), settings/config (not a UI surface; a document the entity owns),
+rules (they're his practice, not his cage).
 
 ### Voice session (Companion)
 

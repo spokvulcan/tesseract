@@ -62,6 +62,9 @@ final class MemorySleep {
         case extracting
         case reconciling
         case sweeping
+        /// The Companion's practice riding the tail of the pass (ADR-0046):
+        /// instruction review (#370), the Digest (#373).
+        case companion
     }
 
     struct Summary: Sendable, Equatable {
@@ -84,6 +87,12 @@ final class MemorySleep {
     private(set) var lastRun: Date?
     private(set) var lastSummary = Summary()
     var isRunning: Bool { runTask != nil }
+
+    /// The Companion's nightly practice (ADR-0046): runs after the memory
+    /// items, inside the same cancellable pass — consolidation first is the
+    /// #373 ordering rule. Injected as a closure so memory's module never
+    /// learns companion vocabulary; nil when the Companion doesn't exist.
+    private let companionNightly: (@MainActor () async -> Void)?
 
     private let engine: MemoryEngine
     /// Injected alongside the engine: sleep is a *peer* of the read/write
@@ -122,13 +131,15 @@ final class MemorySleep {
         store: MemoryStore,
         arbiter: any InferenceArbitrating,
         complete: @escaping @Sendable (String) async throws -> String,
-        isEnabled: @escaping @MainActor () -> Bool = { true }
+        isEnabled: @escaping @MainActor () -> Bool = { true },
+        companionNightly: (@MainActor () async -> Void)? = nil
     ) {
         self.engine = engine
         self.store = store
         self.arbiter = arbiter
         self.complete = complete
         self.isEnabled = isEnabled
+        self.companionNightly = companionNightly
     }
 
     // MARK: - The run
@@ -206,6 +217,15 @@ final class MemorySleep {
 
             phase = .sweeping
             try await sweep(into: &summary)
+
+            // The entity's own practice rides the tail of the pass, after
+            // every memory item (the #373 ordering: consolidation first) and
+            // under the same cancellation — the owner's return aborts it too.
+            if let companionNightly {
+                try Task.checkCancellation()
+                phase = .companion
+                await companionNightly()
+            }
         } catch is CancellationError {
             summary.yielded = true
         } catch {

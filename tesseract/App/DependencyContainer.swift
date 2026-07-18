@@ -163,9 +163,20 @@ final class DependencyContainer: ObservableObject {
             store: memoryStore,
             arbiter: inferenceArbiter,
             complete: internalCompletion,
-            isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled }
+            isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled },
+            companionNightly: { [weak self] in await self?.companionSleep.nightly() }
         )
     }
+
+    /// The entity's practice at the tail of the sleep pass (ADR-0046, #370):
+    /// the standing-instructions review; #373 adds the Digest.
+    lazy var companionSleep = CompanionSleep(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        arbiter: inferenceArbiter,
+        complete: internalCompletion,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
 
     /// The Companion's zero-dialog sensing tier (#308): presence spans, app
     /// sessions, power transitions → the observation stream. Writes are gated
@@ -483,7 +494,13 @@ final class DependencyContainer: ObservableObject {
                 agentSystemPromptInspector.reset()
                 skillPills.refreshPills()
             },
-            conversationMemory: ConversationMemory(memory: memoryEngine)
+            conversationMemory: ConversationMemory(memory: memoryEngine),
+            // One Jarvis everywhere (#370): the IDENTITY section rides the
+            // interactive chat — and the voice session, which sends through it.
+            companionIdentity: CompanionIdentity(
+                store: memoryStore,
+                isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+            )
         )
     }()
 

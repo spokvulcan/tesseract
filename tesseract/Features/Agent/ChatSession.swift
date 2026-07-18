@@ -181,6 +181,11 @@ final class ChatSession {
     /// because memory must be a thing the chat can run *without* — a memory
     /// failure may never take a turn down.
     private let conversationMemory: ConversationMemory?
+    /// One Jarvis everywhere (ADR-0046, #370): hangs the IDENTITY section on
+    /// the conversation's first outgoing message — voice turns ride the same
+    /// send path, so this seam covers both. Optional for the same reason
+    /// memory is: the chat must run without the Companion.
+    private let companionIdentity: CompanionIdentity?
     private let debugLogger = AgentDebugLogger()
 
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
@@ -208,9 +213,11 @@ final class ChatSession {
         },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
         conversationMemory: ConversationMemory? = nil,
+        companionIdentity: CompanionIdentity? = nil,
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
         self.conversationMemory = conversationMemory
+        self.companionIdentity = companionIdentity
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
@@ -610,18 +617,26 @@ final class ChatSession {
         agentRun.send(
             CoreMessage.user(user),
             prepare: { [weak self] outgoing in
-                guard let self, let conversationMemory = self.conversationMemory else {
-                    return outgoing
+                guard let self else { return outgoing }
+                var message = outgoing
+                if let conversationMemory = self.conversationMemory {
+                    message = await conversationMemory.enrich(message)
                 }
-                let enriched = await conversationMemory.enrich(outgoing)
+                // Identity decorates after memory so its block leads the
+                // injected context — who you are, then what you recall.
+                if let identity = self.companionIdentity, let user = message.asUser {
+                    let decorated = await identity.decorate(
+                        user, transcript: self.agent.state.messages)
+                    message = message is CoreMessage ? CoreMessage.user(decorated) : decorated
+                }
                 // The Pending Row is keyed by id and is showing the same
-                // content, so swapping it for the enriched value is invisible —
+                // content, so swapping it for the decorated value is invisible —
                 // but it keeps the row and the message that reached the agent
                 // byte-identical, which the `turnEnd` resync then relies on.
-                if let user = enriched.asUser, self.pendingUserMessage?.id == user.id {
+                if let user = message.asUser, self.pendingUserMessage?.id == user.id {
                     self.pendingUserMessage = user
                 }
-                return enriched
+                return message
             })
     }
 
@@ -824,6 +839,7 @@ final class ChatSession {
         toolStartInstants.removeAll()
         error = nil
         conversationMemory?.reset()
+        companionIdentity?.reset()
         debugLogger.reset()
         onConversationSwitch()
     }
