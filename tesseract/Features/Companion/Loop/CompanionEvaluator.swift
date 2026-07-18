@@ -30,6 +30,9 @@ nonisolated struct CompanionEvaluator {
     /// Day start needs the calendar day to have begun in earnest — a 1 a.m.
     /// tail counts as yesterday.
     static let dayStartEarliestHour = 4
+    /// Mission Control's context ceiling (ADR-0046 #373): at or past it, the
+    /// fold-down outranks any new grant — the intraday early fold.
+    static let contextCeilingTokens = 80_000
 
     /// One tick's gathered facts. Gathering is the loop's job and effectful;
     /// deciding over the gathered value is this module's, and is not.
@@ -46,6 +49,8 @@ nonisolated struct CompanionEvaluator {
         var ownerPresent: Bool
         var onACPower: Bool
         var gpuBusy: Bool
+        /// Mission Control's estimated size (#373) — the ceiling's signal.
+        var foldTokens: Int = 0
     }
 
     enum Decision: Equatable, Sendable {
@@ -63,6 +68,10 @@ nonisolated struct CompanionEvaluator {
         /// the day-start Event — the turn then follows over the queue, like
         /// every other perception (the de facto morning liveness).
         case perceiveDayStart(updated: CompanionLoopDayState)
+        /// The ceiling is hit (#373): run the fold-down now — the entity
+        /// authors its Digest and the splice lands, on the record — before
+        /// any turn appends past the budget.
+        case compactFold(estimatedTokens: Int)
     }
 
     /// One deferral record per busy episode — a tick every 30 s behind a long
@@ -81,13 +90,21 @@ nonisolated struct CompanionEvaluator {
             return .perceiveDayStart(updated: updated)
         }
 
-        // 1. The purist clock: pending Events or a due Wake, or nothing.
+        // 1. The ceiling outranks every grant (#373): a turn must never
+        // append past the budget, so the fold-down runs first. Same one
+        // eligibility — the model slot; while it is taken, hold quietly (the
+        // turn behind it defers through the normal path when the slot frees).
+        if signals.foldTokens >= Self.contextCeilingTokens, !signals.gpuBusy {
+            return .compactFold(estimatedTokens: signals.foldTokens)
+        }
+
+        // 2. The purist clock: pending Events or a due Wake, or nothing.
         guard !signals.pendingEvents.isEmpty || !signals.dueWakes.isEmpty else {
             deferralLogged = false
             return .wait
         }
 
-        // 2. Mechanical eligibility — the model slot. Ineligibility over due
+        // 3. Mechanical eligibility — the model slot. Ineligibility over due
         // work is recorded once per episode, then held quietly.
         if signals.gpuBusy {
             if !deferralLogged {
@@ -100,7 +117,7 @@ nonisolated struct CompanionEvaluator {
         }
         deferralLogged = false
 
-        // 3. Coalescing: a burst still landing waits one beat so a single
+        // 4. Coalescing: a burst still landing waits one beat so a single
         // turn drains it whole. A due wake outranks the wait — it fires now.
         if signals.dueWakes.isEmpty,
             let newest = signals.pendingEvents.compactMap(\.admittedAt).max(),
@@ -109,7 +126,7 @@ nonisolated struct CompanionEvaluator {
             return .wait
         }
 
-        // 4. The fold turn. A batch carrying a rhythm wake is a beat; any
+        // 5. The fold turn. A batch carrying a rhythm wake is a beat; any
         // wake past the catch-up grace makes the whole turn a triage.
         let carriesBeat = signals.dueWakes.contains { $0.wakeClass == .rhythm }
         let overdue = signals.dueWakes.contains {

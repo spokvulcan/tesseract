@@ -50,11 +50,13 @@ import Testing
         day: CompanionLoopDayState = CompanionLoopDayState(),
         present: Bool = true,
         ac: Bool = true,
-        gpuBusy: Bool = false
+        gpuBusy: Bool = false,
+        foldTokens: Int = 0
     ) -> CompanionEvaluator.Signals {
         CompanionEvaluator.Signals(
             now: Self.now, localHour: hour, pendingEvents: pending, dueWakes: due,
-            dayState: day, ownerPresent: present, onACPower: ac, gpuBusy: gpuBusy)
+            dayState: day, ownerPresent: present, onACPower: ac, gpuBusy: gpuBusy,
+            foldTokens: foldTokens)
     }
 
     /// A day already started, so a table about something else reads its own
@@ -244,6 +246,45 @@ import Testing
         let decision = evaluator.decide(
             signals(pending: [event()], day: settledDay(), gpuBusy: true))
         #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: nil))
+    }
+
+    // MARK: - The ceiling (#373)
+
+    @Test func theCeilingGrantsTheFoldDownEvenOnAQuietQueue() {
+        var evaluator = CompanionEvaluator()
+        let over = CompanionEvaluator.contextCeilingTokens
+        let decision = evaluator.decide(signals(day: settledDay(), foldTokens: over))
+        #expect(decision == .compactFold(estimatedTokens: over))
+    }
+
+    @Test func theCeilingOutranksPendingWork() {
+        var evaluator = CompanionEvaluator()
+        let over = CompanionEvaluator.contextCeilingTokens + 5_000
+        // A turn must never append past the budget: the fold-down runs first;
+        // the queue and the wake drain on the next tick, over the folded head.
+        let decision = evaluator.decide(
+            signals(pending: [event()], due: [wake()], day: settledDay(), foldTokens: over))
+        #expect(decision == .compactFold(estimatedTokens: over))
+    }
+
+    @Test func aBusySlotHoldsTheFoldDownQuietly() {
+        var evaluator = CompanionEvaluator()
+        let over = CompanionEvaluator.contextCeilingTokens
+        // Over the ceiling with the slot taken: no grant, and the normal
+        // deferral bookkeeping still speaks for the due work behind it.
+        #expect(
+            evaluator.decide(signals(day: settledDay(), gpuBusy: true, foldTokens: over))
+                == .wait)
+        let due = wake()
+        let decision = evaluator.decide(
+            signals(due: [due], day: settledDay(), gpuBusy: true, foldTokens: over))
+        #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: due.id))
+    }
+
+    @Test func underTheCeilingNothingChanges() {
+        var evaluator = CompanionEvaluator()
+        let under = CompanionEvaluator.contextCeilingTokens - 1
+        #expect(evaluator.decide(signals(day: settledDay(), foldTokens: under)) == .wait)
     }
 
     // MARK: - Day start as perception

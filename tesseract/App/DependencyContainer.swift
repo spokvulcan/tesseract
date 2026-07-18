@@ -164,13 +164,30 @@ final class DependencyContainer: ObservableObject {
             arbiter: inferenceArbiter,
             complete: internalCompletion,
             isEnabled: { settings.memoryEnabled && settings.memorySleepEnabled },
-            companionNightly: { [weak self] in await self?.companionSleep.nightly() }
+            // The entity's tail practices, in order (ADR-0046): consolidation
+            // has already run; then the instructions review (#370), then the
+            // Digest fold-down (#373).
+            companionNightly: { [weak self] in
+                await self?.companionSleep.nightly()
+                await self?.companionDigest.nightlyFold()
+            }
         )
     }
 
     /// The entity's practice at the tail of the sleep pass (ADR-0046, #370):
-    /// the standing-instructions review; #373 adds the Digest.
+    /// the standing-instructions review; the Digest (#373) runs beside it.
     lazy var companionSleep = CompanionSleep(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        arbiter: inferenceArbiter,
+        complete: internalCompletion,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+    )
+
+    /// Mission Control's fold-down (ADR-0046, #373): the nightly Digest and
+    /// the intraday ceiling fold — one engine, two gates.
+    lazy var companionDigest = CompanionDigest(
+        conversationStore: agentConversationStore,
         store: memoryStore,
         recorder: companionFlightRecorder,
         arbiter: inferenceArbiter,
@@ -604,7 +621,13 @@ final class DependencyContainer: ObservableObject {
             self?.companionSummons.deliver(line: text)
         },
         openConversation: { [weak self] id in self?.presentConversation(id) },
-        perceiveDayStart: { [weak self] now in self?.companionPerception.dayStarted(at: now) }
+        perceiveDayStart: { [weak self] now in self?.companionPerception.dayStarted(at: now) },
+        // The ceiling's signal and the fold-down behind it (#373).
+        foldTokens: { [agentConversationStore] in
+            CompanionDigestSplice.estimatedTokens(
+                agentConversationStore.missionControl().messages)
+        },
+        earlyFold: { [weak self] in await self?.companionDigest.earlyFold() }
     )
     /// The fold's perception substrate (ADR-0046, #368): the v1 Event
     /// producers. Power and app-session verdicts arrive through the sensed-

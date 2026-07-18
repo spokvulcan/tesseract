@@ -49,6 +49,11 @@ final class CompanionLoop {
     /// The perception substrate's day-start door (ADR-0046, #368): the
     /// evaluator detects first presence; the producer admits the Event.
     private let perceiveDayStart: @MainActor (Date) -> Void
+    /// Mission Control's estimated size — the ceiling's signal (#373).
+    private let foldTokens: () -> Int
+    /// The intraday fold-down (#373): the digest engine, behind the
+    /// evaluator's `.compactFold` grant.
+    private let earlyFold: @MainActor () async -> Void
 
     private var tickTask: Task<Void, Never>?
     private var evaluating = false
@@ -77,7 +82,9 @@ final class CompanionLoop {
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
         openConversation: @escaping @MainActor (UUID) -> Void,
-        perceiveDayStart: @escaping @MainActor (Date) -> Void
+        perceiveDayStart: @escaping @MainActor (Date) -> Void,
+        foldTokens: @escaping () -> Int = { 0 },
+        earlyFold: @escaping @MainActor () async -> Void = {}
     ) {
         self.store = store
         self.recorder = recorder
@@ -92,6 +99,8 @@ final class CompanionLoop {
         self.speak = speak
         self.openConversation = openConversation
         self.perceiveDayStart = perceiveDayStart
+        self.foldTokens = foldTokens
+        self.earlyFold = earlyFold
     }
 
     // MARK: - Lifecycle
@@ -188,7 +197,8 @@ final class CompanionLoop {
             dayState: (try? await store.loopDayState(todayKey)) ?? CompanionLoopDayState(),
             ownerPresent: idleMonitor.isOwnerPresent,
             onACPower: sensed.isOnACPower,
-            gpuBusy: isGPUBusy())
+            gpuBusy: isGPUBusy(),
+            foldTokens: foldTokens())
 
         switch evaluator.decide(signals) {
         case .wait:
@@ -204,6 +214,10 @@ final class CompanionLoop {
             try? await store.setLoopDayState(todayKey, updated)
             recorder.record("loop.day-start", snapshot: ["at": CompanionWakeTime.format(now)])
             perceiveDayStart(now)
+        case .compactFold:
+            // The ceiling fold (#373): awaited here so no turn can interleave
+            // with it — the digest engine records the outcome.
+            await earlyFold()
         }
     }
 

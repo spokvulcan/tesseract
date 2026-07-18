@@ -88,10 +88,10 @@ final class CompanionTurnRunner {
         }
 
         let turnID = UUID()
-        // The fold's state so far (ADR-0046): the turn's context is Mission
-        // Control as it stands, and the turn appends to it — no minting.
-        let missionControl = conversationStore.missionControl()
-        let conversationID = missionControl.id
+        // The fold's identity is a constant (ADR-0046); its state is read
+        // inside the lease below, so a turn queued behind the digest's
+        // fold-down (#373) loads the spliced conversation, never a stale one.
+        let conversationID = AgentConversation.missionControlID
         context.begin(
             turnID: turnID, wakeIDs: wakeIDs, conversationID: conversationID, origin: origin)
 
@@ -114,6 +114,10 @@ final class CompanionTurnRunner {
         let user = await conversationMemory.enrich(
             UserMessage(content: opening, turnOrigin: origin))
 
+        // The fold's state so far (ADR-0046): the turn's context is Mission
+        // Control as it stands, and the turn appends to it — no minting.
+        var missionControl = AgentConversation(
+            id: conversationID, origin: .missionControl)
         do {
             // The owner always wins the slot: this waits in the arbiter's FIFO
             // behind any interactive generation, never cancels one. The model
@@ -122,6 +126,7 @@ final class CompanionTurnRunner {
             try await arbiter.withExclusiveGPU(
                 .llm, llmModelIDOverride: modelID, llmVision: .fromSettings
             ) {
+                missionControl = conversationStore.missionControl()
                 agent.loadMessages(missionControl.messages)
                 agent.prompt(CoreMessage.user(user))
                 await agent.waitForIdle()

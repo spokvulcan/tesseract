@@ -147,9 +147,16 @@ nonisolated struct CompanionLoopDayState: Codable, Sendable, Equatable {
     /// The day's standing-instructions review ran (#370) — sleep passes fire
     /// on every idle, the review at most once per day.
     var instructionsReviewedAt: Date?
+    /// The nightly Digest fold ran (#373) — keyed to the night window via
+    /// `CompanionDigest.nightKey`, at most one planned fold per night.
+    var digestFoldAt: Date?
 
-    init(dayStartedAt: Date? = nil, instructionsReviewedAt: Date? = nil) {
+    init(
+        dayStartedAt: Date? = nil, instructionsReviewedAt: Date? = nil,
+        digestFoldAt: Date? = nil
+    ) {
         self.dayStartedAt = dayStartedAt
         self.instructionsReviewedAt = instructionsReviewedAt
+        self.digestFoldAt = digestFoldAt
     }
 }
