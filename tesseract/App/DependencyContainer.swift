@@ -565,7 +565,17 @@ final class DependencyContainer: ObservableObject {
         speak: { [weak self] text in
             self?.companionSummons.deliver(line: text)
         },
-        openConversation: { [weak self] id in self?.presentConversation(id) }
+        openConversation: { [weak self] id in self?.presentConversation(id) },
+        perceiveDayStart: { [weak self] now in self?.companionPerception.dayStarted(at: now) }
+    )
+    /// The fold's perception substrate (ADR-0046, #368): the v1 Event
+    /// producers. Power and app-session verdicts arrive through the sensed-
+    /// observation pipeline's doors (wired in `bootstrap`, beside the loop's
+    /// arming); day-start rides the loop's own detection.
+    lazy var companionPerception = CompanionPerception(
+        store: memoryStore,
+        recorder: companionFlightRecorder,
+        isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
     )
 
     // The summons conductor (ADR-0040 §10/§11, #328): speak → overlay →
@@ -897,6 +907,16 @@ final class DependencyContainer: ObservableObject {
         // Arm the Companion loop (ADR-0040) — a sleeping tick task and one
         // due-ness evaluation per 30 s unless the Companion toggle is on.
         companionLoop.start()
+
+        // Arm the perception substrate (ADR-0046, #368): Events accumulate on
+        // the record; nothing consumes them until the purist clock (#371).
+        sensedObservations.onPowerTransition = { [weak self] onAC in
+            self?.companionPerception.powerChanged(onACPower: onAC)
+        }
+        sensedObservations.onSustainedAppSession = { [weak self] app, start, end in
+            self?.companionPerception.sustainedAppSession(app: app, start: start, end: end)
+        }
+        companionPerception.start()
 
         // Wire the MCP client (PRD #190). Materialize the agent first so its
         // MCP tools extension is registered with the ExtensionHost before the

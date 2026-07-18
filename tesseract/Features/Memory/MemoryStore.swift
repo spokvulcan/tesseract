@@ -52,7 +52,8 @@ actor MemoryStore {
     /// v4: the entity's standing-instructions versions (ADR-0040 §12).
     /// v5: `heardAt` on wakes — the resurfacing ladder (#309) must tell an
     /// ignored promise from a heard one; any owner reaction stamps it.
-    static let schemaVersion = 5
+    /// v6: the Event queue (ADR-0046, #368) — the fold's perception substrate.
+    static let schemaVersion = 6
 
     /// Internal, not private: the tracking extension (a separate file by
     /// design — Companion domain, memory's connection) prepares against it.
@@ -78,8 +79,11 @@ actor MemoryStore {
         guard db.userVersion < Self.schemaVersion else { return }
 
         // v5: stores that already carry the wakes table (v3/v4) gain `heardAt`
-        // in place; fresh stores get it from the CREATE below.
-        if db.userVersion >= 3 {
+        // in place; fresh stores get it from the CREATE below. Upper-bounded:
+        // a v5+ store already has the column, and re-running the ALTER on the
+        // way to a later version would throw duplicate-column and take the
+        // whole memory system down with it.
+        if db.userVersion >= 3 && db.userVersion < 5 {
             try db.execute("ALTER TABLE wakes ADD COLUMN heardAt REAL")
         }
 
@@ -260,6 +264,27 @@ actor MemoryStore {
                 note      TEXT,                        -- why this revision
                 createdAt REAL NOT NULL
             );
+
+            -- The Event queue (ADR-0046, #368): every digital input becomes
+            -- exactly one Event; `seq` is the total order; `id` is UNIQUE so
+            -- admission is exactly-once (INSERT OR IGNORE). The state machine
+            -- mirrors wakes: pending → presented → consumed; presented-but-
+            -- unconsumed is the crash-recovery set.
+
+            CREATE TABLE IF NOT EXISTS events (
+                seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          TEXT UNIQUE NOT NULL,
+                kind        TEXT NOT NULL,
+                content     TEXT NOT NULL,             -- announceable in one line
+                payload     TEXT,                      -- kind-shaped JSON detail
+                occurredAt  REAL NOT NULL,
+                admittedAt  REAL NOT NULL,
+                state       TEXT NOT NULL DEFAULT 'pending',
+                presentedAt REAL,
+                consumedAt  REAL,                      -- set only by a completed turn
+                turnID      TEXT
+            );
+            CREATE INDEX IF NOT EXISTS events_state_seq ON events(state, seq);
             """
         )
         try db.setUserVersion(Self.schemaVersion)

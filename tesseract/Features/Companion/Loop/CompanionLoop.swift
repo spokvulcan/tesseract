@@ -43,6 +43,10 @@ final class CompanionLoop {
     private let isEnabled: () -> Bool
     private let speak: @MainActor (String) -> Void
     private let openConversation: @MainActor (UUID) -> Void
+    /// The perception substrate's day-start door (ADR-0046, #368): the
+    /// evaluator stays the one day-start detector until #371 moves the clock,
+    /// so the Event producer rides its decision rather than re-detecting.
+    private let perceiveDayStart: @MainActor (Date) -> Void
 
     private var tickTask: Task<Void, Never>?
     private var evaluating = false
@@ -68,7 +72,8 @@ final class CompanionLoop {
         isGPUBusy: @escaping () -> Bool,
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
-        openConversation: @escaping @MainActor (UUID) -> Void
+        openConversation: @escaping @MainActor (UUID) -> Void,
+        perceiveDayStart: @escaping @MainActor (Date) -> Void
     ) {
         self.store = store
         self.recorder = recorder
@@ -82,6 +87,7 @@ final class CompanionLoop {
         self.isEnabled = isEnabled
         self.speak = speak
         self.openConversation = openConversation
+        self.perceiveDayStart = perceiveDayStart
     }
 
     // MARK: - Lifecycle
@@ -173,6 +179,7 @@ final class CompanionLoop {
         case .dayStart(let updated):
             try? await store.setLoopDayState(todayKey, updated)
             recorder.record("loop.day-start", snapshot: ["at": CompanionWakeTime.format(now)])
+            perceiveDayStart(now)
             await runTransitionTurn(origin: .wake, template: Self.dayStartTemplate, now: now)
         case .ambient(let updated):
             try? await store.setLoopDayState(todayKey, updated)
