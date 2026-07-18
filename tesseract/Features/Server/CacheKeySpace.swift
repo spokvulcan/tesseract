@@ -45,6 +45,16 @@ nonisolated struct CacheKeySpace: Sendable {
         var runLength: Int { runRange.count }
     }
 
+    /// One audio clip's run in prepared/key space. Audio positions are always
+    /// sequential (span == run length, anchor delta 0), so the run itself is
+    /// the whole geometry.
+    struct AudioTableEntry: Hashable, Sendable {
+        let digest: AudioDigest
+        let runRange: Range<Int>
+
+        var runLength: Int { runRange.count }
+    }
+
     /// Whole-request degradation: no valid Cache Key Path can be built — the
     /// completion is served **Unkeyed** (zero cache participation, never a
     /// route bounce). Raw values are the wire strings for logs.
@@ -58,6 +68,13 @@ nonisolated struct CacheKeySpace: Sendable {
         /// Processed image grids returned by prepare ≠ images in the
         /// conversation — the Position Anchor geometry cannot be attributed.
         case imageGridCountMismatch = "image-grid-count-mismatch"
+        /// The loaded family has no audio-placeholder identity (not
+        /// **Audio-capable**, or an audio family the app doesn't recognize)
+        /// but the request has audio clips.
+        case unrecognizedAudioPlaceholderFamily = "unrecognized-audio-placeholder-family"
+        /// Audio placeholder runs found in the prepared tokens ≠ clips in the
+        /// conversation — keying would mis-attribute content.
+        case audioPlaceholderRunCountMismatch = "audio-placeholder-run-count-mismatch"
     }
 
     /// Feature-level degradation: one render could not be translated; only
@@ -65,68 +82,131 @@ nonisolated struct CacheKeySpace: Sendable {
     /// its lookup keep working.
     enum TranslationFailure: Error, Equatable, Sendable {
         case placeholderOccurrencesExceedImages(occurrences: Int, images: Int)
+        case audioPlaceholderOccurrencesExceedClips(occurrences: Int, clips: Int)
     }
 
-    /// The Cache Key Path — prepared tokens with each image's placeholder run
-    /// replaced, length-preserving, by its digest's pseudo-token expansion.
+    /// The Cache Key Path — prepared tokens with each image's and clip's
+    /// placeholder run replaced, length-preserving, by its digest's
+    /// pseudo-token expansion.
     let keyPath: [Int]
     /// Per image, in prompt order.
     let imageTable: [ImageTableEntry]
+    /// Per audio clip, in prompt order.
+    let audioTable: [AudioTableEntry]
     private let placeholderIdentity: ImagePlaceholderIdentity?
+    private let audioPadTokenId: Int?
 
     /// True for text-only requests: every operation is the identity.
-    var isIdentity: Bool { imageTable.isEmpty }
+    var isIdentity: Bool { imageTable.isEmpty && audioTable.isEmpty }
 
     /// The identity space over a known key path — what `make` produces for a
     /// text-only request. Translation returns inputs unchanged, anchors are
     /// zero. Also the natural stand-in for call sites and tests that predate
     /// image keying.
     static func identity(keyPath: [Int] = []) -> CacheKeySpace {
-        CacheKeySpace(keyPath: keyPath, imageTable: [], placeholderIdentity: nil)
+        CacheKeySpace(
+            keyPath: keyPath, imageTable: [], audioTable: [],
+            placeholderIdentity: nil, audioPadTokenId: nil
+        )
     }
 
     // MARK: - Construction
 
     /// Build the request's key space from the loaded family's **Model
-    /// Identity** image keying and the vendor-prepared image grids — the
+    /// Identity** media keying and the vendor-prepared image grids — the
     /// production entry point. Owns the whole construction guard: family
-    /// recognition, grid attribution, and the M-RoPE span geometry, so the
-    /// invariant "a key space exists iff prepared tokens, images, grids, and
+    /// recognition, grid attribution, and the position-span geometry, so the
+    /// invariant "a key space exists iff prepared tokens, media, grids, and
     /// family identity all agree" lives in one place.
+    ///
+    /// Span geometry is the family's `PositionSpanRule`: the M-RoPE grid
+    /// formula for Qwen-VL (grids required), run length for sequential
+    /// families (Gemma 4 unified — grids ignored for spans, so a grid-less
+    /// prepare cannot degrade the request). Audio spans are always run
+    /// length.
     static func make(
         preparedTokens: [Int],
         imageDigests: [ImageDigest],
         imageGrids: [(t: Int, height: Int, width: Int)],
-        imageKeying: ModelIdentity.ImageKeying?
+        imageKeying: ModelIdentity.ImageKeying?,
+        audioDigests: [AudioDigest] = [],
+        audioKeying: ModelIdentity.AudioKeying? = nil
     ) -> Result<CacheKeySpace, UnkeyedReason> {
-        guard !imageDigests.isEmpty else {
+        guard !imageDigests.isEmpty || !audioDigests.isEmpty else {
             return .success(.identity(keyPath: preparedTokens))
         }
-        guard let imageKeying else {
-            return .failure(.unrecognizedPlaceholderFamily)
-        }
-        guard imageGrids.count == imageDigests.count else {
-            return .failure(.imageGridCountMismatch)
-        }
-        return make(
-            preparedTokens: preparedTokens,
-            images: zip(imageDigests, imageGrids).map { digest, grid in
-                RequestImage(
-                    digest: digest,
-                    positionSpan: positionSpan(
+
+        var keyPath = preparedTokens
+        var imageTable: [ImageTableEntry] = []
+        var audioTable: [AudioTableEntry] = []
+
+        if !imageDigests.isEmpty {
+            guard let imageKeying else {
+                return .failure(.unrecognizedPlaceholderFamily)
+            }
+            let runs = placeholderRuns(
+                in: preparedTokens, padTokenId: imageKeying.imagePadTokenId)
+            guard runs.count == imageDigests.count else {
+                return .failure(.placeholderRunCountMismatch)
+            }
+            let spans: [Int]
+            switch imageKeying.spanRule {
+            case .mropeGrid(let spatialMergeSize):
+                guard imageGrids.count == imageDigests.count else {
+                    return .failure(.imageGridCountMismatch)
+                }
+                spans = imageGrids.map { grid in
+                    positionSpan(
                         t: grid.t, height: grid.height, width: grid.width,
-                        spatialMergeSize: imageKeying.spatialMergeSize
+                        spatialMergeSize: spatialMergeSize
                     )
+                }
+            case .sequential:
+                spans = runs.map(\.count)
+            }
+            imageTable.reserveCapacity(imageDigests.count)
+            for ((run, digest), span) in zip(zip(runs, imageDigests), spans) {
+                keyPath.replaceSubrange(
+                    run, with: ImagePseudoToken.expansion(digest: digest, runLength: run.count)
                 )
-            },
-            placeholderIdentity: ImagePlaceholderIdentity(
-                imagePadTokenId: imageKeying.imagePadTokenId
-            )
-        )
+                imageTable.append(
+                    ImageTableEntry(digest: digest, runRange: run, positionSpan: span))
+            }
+        }
+
+        if !audioDigests.isEmpty {
+            guard let audioKeying else {
+                return .failure(.unrecognizedAudioPlaceholderFamily)
+            }
+            let runs = placeholderRuns(
+                in: preparedTokens, padTokenId: audioKeying.audioPadTokenId)
+            guard runs.count == audioDigests.count else {
+                return .failure(.audioPlaceholderRunCountMismatch)
+            }
+            audioTable.reserveCapacity(audioDigests.count)
+            for (run, digest) in zip(runs, audioDigests) {
+                keyPath.replaceSubrange(
+                    run, with: AudioPseudoToken.expansion(digest: digest, runLength: run.count)
+                )
+                audioTable.append(AudioTableEntry(digest: digest, runRange: run))
+            }
+        }
+
+        return .success(
+            CacheKeySpace(
+                keyPath: keyPath,
+                imageTable: imageTable,
+                audioTable: audioTable,
+                placeholderIdentity: imageKeying.map {
+                    ImagePlaceholderIdentity(imagePadTokenId: $0.imagePadTokenId)
+                },
+                audioPadTokenId: audioKeying?.audioPadTokenId
+            ))
     }
 
     /// Build the request's key space from the prepared prompt tokens, the
-    /// conversation's images, and the family's placeholder identity.
+    /// conversation's images, and the family's placeholder identity — the
+    /// image-only internal shape (pre-audio call sites and tests).
     ///
     /// Text-only requests (no images) construct an identity space regardless
     /// of `placeholderIdentity` — image keying never taxes the text path.
@@ -138,8 +218,8 @@ nonisolated struct CacheKeySpace: Sendable {
         guard !images.isEmpty else {
             return .success(
                 CacheKeySpace(
-                    keyPath: preparedTokens, imageTable: [],
-                    placeholderIdentity: placeholderIdentity
+                    keyPath: preparedTokens, imageTable: [], audioTable: [],
+                    placeholderIdentity: placeholderIdentity, audioPadTokenId: nil
                 ))
         }
         guard let identity = placeholderIdentity else {
@@ -165,42 +245,58 @@ nonisolated struct CacheKeySpace: Sendable {
         }
         return .success(
             CacheKeySpace(
-                keyPath: keyPath, imageTable: table, placeholderIdentity: placeholderIdentity
+                keyPath: keyPath, imageTable: table, audioTable: [],
+                placeholderIdentity: placeholderIdentity, audioPadTokenId: nil
             ))
     }
 
     // MARK: - Translation (render space → key space)
 
     /// Translate a chat-template render — *unexpanded* space, one pad token
-    /// per image — into key space. Positional arithmetic: the i-th pad
-    /// occurrence maps to image i. Prefix renders (fewer images than the
-    /// request) are valid; framing tokens are ordinary tokens in both spaces
-    /// and pass through unchanged. Identity for text-only requests.
+    /// per image and one per audio clip — into key space. Positional
+    /// arithmetic per modality: the i-th image-pad occurrence maps to image
+    /// i, the i-th audio-pad occurrence to clip i. Prefix renders (fewer
+    /// media than the request) are valid; framing tokens are ordinary tokens
+    /// in both spaces and pass through unchanged. Identity for text-only
+    /// requests.
     func translate(renderTokens: [Int]) -> Result<[Int], TranslationFailure> {
-        guard !imageTable.isEmpty, let identity = placeholderIdentity else {
+        guard !isIdentity else {
             return .success(renderTokens)
         }
+        let imagePadTokenId = placeholderIdentity?.imagePadTokenId
 
         var translated: [Int] = []
         translated.reserveCapacity(
-            renderTokens.count + imageTable.reduce(0) { $0 + $1.runLength - 1 }
+            renderTokens.count
+                + imageTable.reduce(0) { $0 + $1.runLength - 1 }
+                + audioTable.reduce(0) { $0 + $1.runLength - 1 }
         )
         var imageIndex = 0
+        var audioIndex = 0
         for token in renderTokens {
-            guard token == identity.imagePadTokenId else {
+            if token == imagePadTokenId {
+                guard imageIndex < imageTable.count else {
+                    return .failure(
+                        .placeholderOccurrencesExceedImages(
+                            occurrences: imageIndex + 1, images: imageTable.count
+                        ))
+                }
+                // The key path already holds this image's expansion — splice
+                // the run instead of re-deriving every pseudo-token.
+                translated.append(contentsOf: keyPath[imageTable[imageIndex].runRange])
+                imageIndex += 1
+            } else if token == audioPadTokenId {
+                guard audioIndex < audioTable.count else {
+                    return .failure(
+                        .audioPlaceholderOccurrencesExceedClips(
+                            occurrences: audioIndex + 1, clips: audioTable.count
+                        ))
+                }
+                translated.append(contentsOf: keyPath[audioTable[audioIndex].runRange])
+                audioIndex += 1
+            } else {
                 translated.append(token)
-                continue
             }
-            guard imageIndex < imageTable.count else {
-                return .failure(
-                    .placeholderOccurrencesExceedImages(
-                        occurrences: imageIndex + 1, images: imageTable.count
-                    ))
-            }
-            // The key path already holds this image's expansion — splice the
-            // run instead of re-deriving every pseudo-token.
-            translated.append(contentsOf: keyPath[imageTable[imageIndex].runRange])
-            imageIndex += 1
         }
         return .success(translated)
     }
@@ -208,25 +304,36 @@ nonisolated struct CacheKeySpace: Sendable {
     /// The key-space length of a render — `translate` for consumers that only
     /// need the boundary offset, without materializing the translated path.
     func translatedLength(renderTokens: [Int]) -> Result<Int, TranslationFailure> {
-        guard !imageTable.isEmpty, let identity = placeholderIdentity else {
+        guard !isIdentity else {
             return .success(renderTokens.count)
         }
+        let imagePadTokenId = placeholderIdentity?.imagePadTokenId
 
         var length = 0
         var imageIndex = 0
+        var audioIndex = 0
         for token in renderTokens {
-            guard token == identity.imagePadTokenId else {
+            if token == imagePadTokenId {
+                guard imageIndex < imageTable.count else {
+                    return .failure(
+                        .placeholderOccurrencesExceedImages(
+                            occurrences: imageIndex + 1, images: imageTable.count
+                        ))
+                }
+                length += imageTable[imageIndex].runLength
+                imageIndex += 1
+            } else if token == audioPadTokenId {
+                guard audioIndex < audioTable.count else {
+                    return .failure(
+                        .audioPlaceholderOccurrencesExceedClips(
+                            occurrences: audioIndex + 1, clips: audioTable.count
+                        ))
+                }
+                length += audioTable[audioIndex].runLength
+                audioIndex += 1
+            } else {
                 length += 1
-                continue
             }
-            guard imageIndex < imageTable.count else {
-                return .failure(
-                    .placeholderOccurrencesExceedImages(
-                        occurrences: imageIndex + 1, images: imageTable.count
-                    ))
-            }
-            length += imageTable[imageIndex].runLength
-            imageIndex += 1
         }
         return .success(length)
     }
@@ -235,10 +342,12 @@ nonisolated struct CacheKeySpace: Sendable {
 
     /// The rope-delta component of the **Position Anchor** for a cache warmed
     /// up to `offset`: Σ over images fully inside [0, offset) of
-    /// (positionSpan − runLength). Zero for image-free prefixes and on the
-    /// identity space. `nil` when `offset` splits a placeholder run — no
-    /// admitted snapshot can sit there, so a mid-run offset means the caller
-    /// is holding a corrupt boundary and must not restore.
+    /// (positionSpan − runLength). Zero for image-free prefixes, on the
+    /// identity space, and for sequential-rule media (span == run length by
+    /// construction — audio always, Gemma images always). `nil` when `offset`
+    /// splits any media run — no admitted snapshot can sit there, so a
+    /// mid-run offset means the caller is holding a corrupt boundary and
+    /// must not restore.
     func positionAnchorDelta(upTo offset: Int) -> Int? {
         var delta = 0
         for entry in imageTable {
@@ -248,16 +357,25 @@ nonisolated struct CacheKeySpace: Sendable {
                 return nil
             }
         }
+        for entry in audioTable where entry.runRange.lowerBound < offset {
+            // Sequential spans contribute 0 delta; only the split check bites.
+            if entry.runRange.upperBound > offset {
+                return nil
+            }
+        }
         return delta
     }
 
-    /// The smallest restore offset whose remainder is image-free. Below it the
-    /// remainder contains an image run; phase 1 forced such hits cold, phase 2
-    /// (ADR-0007) continues warm *through* the image instead. It remains the
-    /// boundary between the vendor-continued image span and the app-chunked
-    /// text tail, and the cold fallback's image-prefix end.
+    /// The smallest restore offset whose remainder is media-free. Below it
+    /// the remainder contains an image or audio run; phase 1 forced such hits
+    /// cold, phase 2 (ADR-0007) continues warm *through* the media instead.
+    /// It remains the boundary between the vendor-continued media span and
+    /// the app-chunked text tail, and the cold fallback's media-prefix end.
     var minimumWarmOffset: Int {
-        imageTable.last?.runRange.upperBound ?? 0
+        max(
+            imageTable.last?.runRange.upperBound ?? 0,
+            audioTable.last?.runRange.upperBound ?? 0
+        )
     }
 
     /// The indices (into the request's image list, prompt order) of the images
@@ -278,6 +396,23 @@ nonisolated struct CacheKeySpace: Sendable {
             return index..<imageTable.count  // first image at or beyond offset
         }
         return imageTable.count..<imageTable.count  // all images precede offset
+    }
+
+    /// The audio sibling of `remainderImageIndices`: the clips whose runs
+    /// fall at or beyond `offset` — exactly the clips a warm continuation
+    /// from `offset` must re-feed (those fully before it are already in the
+    /// restored cache). Same nil-on-split and empty-range semantics.
+    func remainderAudioIndices(from offset: Int) -> Range<Int>? {
+        for (index, entry) in audioTable.enumerated() {
+            if entry.runRange.upperBound <= offset {
+                continue  // fully cached before the restore offset
+            }
+            if entry.runRange.lowerBound < offset {
+                return nil  // offset splits this run
+            }
+            return index..<audioTable.count  // first clip at or beyond offset
+        }
+        return audioTable.count..<audioTable.count  // all clips precede offset
     }
 
     // MARK: - Geometry

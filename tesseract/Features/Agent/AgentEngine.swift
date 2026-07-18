@@ -51,6 +51,12 @@ final class AgentEngine {
     /// prompt or degraded to a text note (`toLLMCommonMessages`).
     private(set) var loadedVisionMode = false
 
+    /// Whether the loaded checkpoint is **Audio-capable** (native audio
+    /// input) — a fact of the weights on disk, not a load-time variant
+    /// choice. Decides whether spoken takes attach to the prompt or degrade
+    /// to a text note (`toLLMCommonMessages`).
+    private(set) var loadedAudioMode = false
+
     private(set) var agentTokenizer: AgentTokenizer?
 
     /// Whether the loaded model's template starts generation inside a `<think>` block.
@@ -171,6 +177,7 @@ final class AgentEngine {
             declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
             toolCallFormat = await llmActor.loadedToolCallFormat()
             loadedVisionMode = visionMode
+            loadedAudioMode = ModelCatalog.isAudioCapable(directory: directory)
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
@@ -256,10 +263,13 @@ final class AgentEngine {
         messages: [LLMMessage],
         toolSpecs: [ToolSpec]?,
         renderContext: TemplateRenderContext = .canonical,
-        visionActive: Bool = false
+        visionActive: Bool = false,
+        audioActive: Bool = false
     ) -> UserInput {
         var chatMessages = [Chat.Message.system(systemPrompt)]
-        chatMessages.append(contentsOf: toLLMCommonMessages(messages, visionActive: visionActive))
+        chatMessages.append(
+            contentsOf: toLLMCommonMessages(
+                messages, visionActive: visionActive, audioActive: audioActive))
         return UserInput(
             chat: chatMessages,
             tools: toolSpecs,
@@ -335,6 +345,7 @@ final class AgentEngine {
         declaredTemplateFlags = []
         toolCallFormat = nil
         loadedVisionMode = false
+        loadedAudioMode = false
         isModelLoaded = false
         loadingStatus = ""
         unloadTask = Task { [llmActor] in
@@ -530,7 +541,8 @@ extension AgentEngine: ManagedInferenceStarting {
             messages: messages,
             toolSpecs: toolSpecs,
             renderContext: renderContext,
-            visionActive: loadedVisionMode
+            visionActive: loadedVisionMode,
+            audioActive: loadedAudioMode
         )
         return try startManagedGeneration(
             input: input,

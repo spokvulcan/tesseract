@@ -23,7 +23,24 @@ nonisolated struct IntegrationSnapshot: Equatable, Sendable {
         let id: String
         let displayName: String
         let visionCapable: Bool
+        /// **Audio-capable** (CONTEXT.md): the model takes audio input —
+        /// `input_audio` content parts serve natively.
+        let audioCapable: Bool
         let contextLength: Int
+
+        init(
+            id: String,
+            displayName: String,
+            visionCapable: Bool,
+            audioCapable: Bool = false,
+            contextLength: Int
+        ) {
+            self.id = id
+            self.displayName = displayName
+            self.visionCapable = visionCapable
+            self.audioCapable = audioCapable
+            self.contextLength = contextLength
+        }
     }
 
     let port: Int
@@ -51,13 +68,16 @@ nonisolated enum IntegrationSnapshotBuilder {
         let models: [IntegrationSnapshot.Model] =
             ModelCatalog.downloaded(in: .agent, definitions: definitions, statuses: statuses)
             .map { definition in
+                let directory = modelDirectory(definition.id)
                 let visionCapable =
-                    modelDirectory(definition.id)
-                    .map(ModelCatalog.isVisionCapable(directory:)) ?? false
+                    directory.map(ModelCatalog.isVisionCapable(directory:)) ?? false
+                let audioCapable =
+                    directory.map(ModelCatalog.isAudioCapable(directory:)) ?? false
                 return IntegrationSnapshot.Model(
                     id: definition.id,
                     displayName: definition.displayName,
                     visionCapable: visionCapable,
+                    audioCapable: audioCapable,
                     contextLength: contextLength
                 )
             }

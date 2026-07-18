@@ -126,6 +126,35 @@ struct OpenAITypesTests {
         #expect(request.tools?[0].function.description == "Execute shell commands")
     }
 
+    /// The OpenAI-standard `input_audio` content part decodes from the wire —
+    /// base64 payload plus container format.
+    @Test func decodesInputAudioContentPart() throws {
+        let json = """
+            {
+              "model": "gemma-4-12b",
+              "messages": [
+                { "role": "user", "content": [
+                    { "type": "text", "text": "Transcribe this" },
+                    { "type": "input_audio", "input_audio": { "data": "UklGRg==", "format": "wav" } }
+                  ]
+                }
+              ]
+            }
+            """
+
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+
+        if case .parts(let parts) = request.messages[0].content {
+            #expect(parts.count == 2)
+            #expect(parts[1].type == .input_audio)
+            #expect(parts[1].input_audio?.data == "UklGRg==")
+            #expect(parts[1].input_audio?.format == "wav")
+        } else {
+            Issue.record("Expected multipart content")
+        }
+    }
+
     @Test func effectiveMaxTokensFallsBackToMaxTokens() throws {
         let json = """
             { "messages": [{ "role": "user", "content": "hi" }], "max_tokens": 512 }

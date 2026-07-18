@@ -240,9 +240,9 @@ nonisolated struct RecordingModelSession: ModelSession {
 
     var configuration: ModelConfiguration { base.configuration }
     var tokenizer: any Tokenizer { base.tokenizer }
-    var anchoredVisionPrepare: AnchoredVisionPrepare? {
+    var windowedMediaPrepare: WindowedMediaPrepare? {
         recorder.record(.visionContinuationQuery)
-        return base.anchoredVisionPrepare
+        return base.windowedMediaPrepare
     }
 
     func prepare(_ input: UserInput) async throws -> LMInput {

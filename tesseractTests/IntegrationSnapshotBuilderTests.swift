@@ -62,6 +62,41 @@ struct IntegrationSnapshotBuilderTests {
         #expect(snapshot.models.first { $0.id == "text-model" }?.visionCapable == false)
     }
 
+    @Test func audioCapabilityIsReadFromTheModelDirectory() throws {
+        let audioDir = try makeModelDir(
+            config: #"""
+                { "model_type": "gemma4_unified",
+                  "vision_config": { "model_type": "gemma4_unified_vision" },
+                  "audio_config": { "model_type": "gemma4_unified_audio" } }
+                """#
+        )
+        let textDir = try makeModelDir(config: #"{ "model_type": "qwen3_5" }"#)
+        defer {
+            try? FileManager.default.removeItem(at: audioDir)
+            try? FileManager.default.removeItem(at: textDir)
+        }
+        let directories = ["audio-model": audioDir, "text-model": textDir]
+
+        let snapshot = IntegrationSnapshotBuilder.build(
+            definitions: [
+                agentDefinition(id: "audio-model"),
+                agentDefinition(id: "text-model"),
+            ],
+            statuses: [
+                "audio-model": .downloaded(sizeOnDisk: 1),
+                "text-model": .downloaded(sizeOnDisk: 1),
+            ],
+            selectedAgentModelID: "audio-model",
+            port: 8321,
+            modelDirectory: { directories[$0] }
+        )
+
+        let audioModel = snapshot.models.first { $0.id == "audio-model" }
+        #expect(audioModel?.audioCapable == true)
+        #expect(audioModel?.visionCapable == true)
+        #expect(snapshot.models.first { $0.id == "text-model" }?.audioCapable == false)
+    }
+
     @Test func missingDirectoryMeansNoVision() throws {
         let snapshot = IntegrationSnapshotBuilder.build(
             definitions: [agentDefinition(id: "a")],

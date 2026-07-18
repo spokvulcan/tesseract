@@ -95,7 +95,13 @@ nonisolated enum OpenCodeSetupScript {
         let idWidth = snapshot.models.map(\.id.count).max() ?? 0
         var lines = snapshot.models.map { model in
             let paddedID = model.id.padding(toLength: idWidth, withPad: " ", startingAt: 0)
-            let modality = model.visionCapable ? "vision" : "text  "
+            let modality =
+                switch (model.visionCapable, model.audioCapable) {
+                case (true, true): "v+a   "
+                case (true, false): "vision"
+                case (false, true): "audio "
+                case (false, false): "text  "
+                }
             let context = "\(model.contextLength / 1000)k"
             return "echo \"    \(paddedID)  \(modality)  \(context)\""
         }

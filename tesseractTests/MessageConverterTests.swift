@@ -25,7 +25,7 @@ struct MessageConverterTests {
 
         #expect(systemPrompt == "You are a coding assistant.")
         #expect(converted.count == 1)
-        if case .user(let content, _) = converted[0] {
+        if case .user(let content, _, _) = converted[0] {
             #expect(content == "Hello")
         } else {
             Issue.record("Expected .user message")
@@ -58,7 +58,7 @@ struct MessageConverterTests {
         #expect(systemPrompt == "Initial instructions")
         #expect(converted.count == 3)
 
-        if case .user(let content, _) = converted[0] {
+        if case .user(let content, _, _) = converted[0] {
             #expect(content == "Hello")
         } else {
             Issue.record("Expected .user")
@@ -70,7 +70,7 @@ struct MessageConverterTests {
             Issue.record("Expected .system")
         }
 
-        if case .user(let content, _) = converted[2] {
+        if case .user(let content, _, _) = converted[2] {
             #expect(content == "Continue")
         } else {
             Issue.record("Expected .user")
@@ -103,7 +103,7 @@ struct MessageConverterTests {
         #expect(converted.count == 4)
 
         // User message
-        if case .user(let content, let images) = converted[0] {
+        if case .user(let content, let images, _) = converted[0] {
             #expect(content == "Read main.swift")
             #expect(images.isEmpty)
         } else {
@@ -131,7 +131,7 @@ struct MessageConverterTests {
         }
 
         // Follow-up user
-        if case .user(let content, _) = converted[3] {
+        if case .user(let content, _, _) = converted[3] {
             #expect(content == "Thanks")
         } else {
             Issue.record("Expected .user")
@@ -186,7 +186,7 @@ struct MessageConverterTests {
         let (_, converted) = MessageConverter.convertMessages(messages)
 
         #expect(converted.count == 3)
-        if case .user(let content, _) = converted[0] {
+        if case .user(let content, _, _) = converted[0] {
             #expect(content.isEmpty)
         }
         if case .assistant(let content, let reasoning, let toolCalls) = converted[1] {
@@ -239,7 +239,7 @@ struct MessageConverterTests {
 
         let (_, converted) = MessageConverter.convertMessages(messages)
 
-        if case .user(let content, let images) = converted[0] {
+        if case .user(let content, let images, _) = converted[0] {
             #expect(content == "What is this?\nDescribe it.")
             #expect(images.count == 1)
             #expect(images[0].mimeType == "image/png")
@@ -741,5 +741,122 @@ struct MessageConverterTests {
         } else {
             Issue.record("Expected .toolResult at index 3")
         }
+    }
+
+    // MARK: - Audio Content
+
+    private static let tinyWAVBytes = Data([0x52, 0x49, 0x46, 0x46, 0x08, 0x00, 0x00, 0x00])
+    private static var tinyWAVBase64: String { tinyWAVBytes.base64EncodedString() }
+
+    private static func audioPart(
+        data: String = tinyWAVBase64, format: String = "wav"
+    ) -> OpenAI.ContentPart {
+        OpenAI.ContentPart(
+            type: .input_audio, input_audio: OpenAI.InputAudio(data: data, format: format))
+    }
+
+    /// Audio user messages are cache-eligible: the conversation carries the
+    /// clip bytes and their digests, in content order.
+    @Test func audioUserMessageIsEligibleWithDigest() throws {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "What is said here?"),
+                    Self.audioPart(),
+                ]))
+        ]
+
+        let conversation = try #require(MessageConverter.normalizeConversation(messages))
+        #expect(conversation.audios.count == 1)
+        let audio = try #require(conversation.messages.first?.audios.first)
+        #expect(audio.digest == AudioDigest(audioBytes: Self.tinyWAVBytes))
+        #expect(audio.data == Self.tinyWAVBytes)
+        #expect(audio.format == "wav")
+        #expect(conversation.messages.first?.content == "What is said here?")
+    }
+
+    /// Resending identical clip bytes yields an equal conversation — exact-byte
+    /// identity drives prefix matching, like images.
+    @Test func identicalAudioBytesProduceEqualConversations() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .parts([.init(type: .text, text: "Hi"), Self.audioPart()]))
+        ]
+        let first = MessageConverter.normalizeConversation(messages)
+        let second = MessageConverter.normalizeConversation(messages)
+        #expect(first != nil)
+        #expect(first == second)
+    }
+
+    /// Undecodable audio payloads must not be keyed — the request falls back
+    /// to the standard path, where the clip drops leniently.
+    @Test func undecodableAudioDataBails() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(
+                role: .user,
+                content: .parts([Self.audioPart(data: "not-base64!!!")])
+            )
+        ]
+        #expect(MessageConverter.normalizeConversation(messages) == nil)
+    }
+
+    /// Audio outside user messages has no render form — ineligible, like
+    /// images on those roles.
+    @Test func audioOnAssistantMessageBails() {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(role: .user, content: .text("Hi")),
+            .init(role: .assistant, content: .parts([Self.audioPart()])),
+        ]
+        #expect(MessageConverter.normalizeConversation(messages) == nil)
+    }
+
+    /// The render form for mixed media is the content array — images, then
+    /// audio, then text, matching the vendored generators' order.
+    @Test func mixedMediaMessageRendersImagesThenAudioThenText() throws {
+        let messages: [OpenAI.ChatMessage] = [
+            .init(
+                role: .user,
+                content: .parts([
+                    .init(type: .text, text: "Compare"),
+                    Self.audioPart(),
+                    .init(
+                        type: .image_url,
+                        image_url: .init(
+                            url: "data:image/png;base64,\(ImageTestFixtures.tinyPNGBase64)")),
+                ]))
+        ]
+        let conversation = try #require(MessageConverter.normalizeConversation(messages))
+        let rendered = try #require(conversation.promptMessages.last)
+
+        let content = try #require(rendered["content"] as? [[String: any Sendable]])
+        #expect(content.count == 3)
+        #expect(content[0]["type"] as? String == "image")
+        #expect(content[1]["type"] as? String == "audio")
+        #expect(content[2]["type"] as? String == "text")
+        #expect(content[2]["text"] as? String == "Compare")
+    }
+
+    @Test func decodesInputAudioPart() {
+        let audio = MessageConverter.convertAudioContent(Self.audioPart(format: "WAV"))
+        #expect(audio?.data == Self.tinyWAVBytes)
+        #expect(audio?.format == "wav")  // lowercased at the wire boundary
+    }
+
+    /// The format later becomes a spool-file extension — path fragments,
+    /// over-long tokens, and empties must die at the wire boundary.
+    @Test func rejectsUnsafeAudioFormats() {
+        #expect(MessageConverter.convertAudioContent(Self.audioPart(format: "../x")) == nil)
+        #expect(MessageConverter.convertAudioContent(Self.audioPart(format: "")) == nil)
+        #expect(MessageConverter.convertAudioContent(Self.audioPart(format: "waveform9")) == nil)
+        #expect(MessageConverter.convertAudioContent(Self.audioPart(format: "wav v2")) == nil)
+    }
+
+    @Test func rejectsEmptyAudioPayload() {
+        #expect(MessageConverter.convertAudioContent(Self.audioPart(data: "")) == nil)
+    }
+
+    @Test func convertAudioContentIgnoresNonAudioParts() {
+        let part = OpenAI.ContentPart(type: .text, text: "hello")
+        #expect(MessageConverter.convertAudioContent(part) == nil)
     }
 }

@@ -76,10 +76,13 @@ nonisolated enum OpenCodeConfigMerge {
     private static func providerBlock(snapshot: IntegrationSnapshot) -> [String: Any] {
         var models: [String: Any] = [:]
         for model in snapshot.models {
+            var inputModalities = ["text"]
+            if model.visionCapable { inputModalities.append("image") }
+            if model.audioCapable { inputModalities.append("audio") }
             var entry: [String: Any] = [
                 "name": "\(model.displayName) (Tesseract)",
                 "modalities": [
-                    "input": model.visionCapable ? ["text", "image"] : ["text"],
+                    "input": inputModalities,
                     "output": ["text"],
                 ],
                 "limit": [

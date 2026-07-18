@@ -150,6 +150,42 @@ nonisolated struct HTTPPrefixCacheImage: Hashable, Sendable {
     }
 }
 
+/// One audio clip inside the prefix-cache conversation shape: the **Audio
+/// Digest** is the identity (drives message equality, `isPrefix`, and the
+/// radix key); the raw bytes are the payload prepare decodes samples from,
+/// and `format` is the container hint (`"wav"`, `"mp3"`) the decode spool
+/// needs. Sample decode is deferred to prepare — the conversation itself
+/// stays token/byte-only, mirroring `HTTPPrefixCacheImage`.
+nonisolated struct HTTPPrefixCacheAudio: Hashable, Sendable {
+    let digest: AudioDigest
+    let data: Data
+    let format: String
+
+    init(data: Data, format: String) {
+        self.digest = AudioDigest(audioBytes: data)
+        self.data = data
+        self.format = format
+    }
+
+    /// Digest-passing variant for callers that memoize the hash across
+    /// re-canonicalizations (`AgentConversationBuilder`), mirroring
+    /// `HTTPPrefixCacheImage.init(data:digest:)`.
+    init(data: Data, format: String, digest: AudioDigest) {
+        self.digest = digest
+        self.data = data
+        self.format = format
+    }
+
+    /// Identity is the digest, mirroring `HTTPPrefixCacheImage`.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.digest == rhs.digest
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(digest)
+    }
+}
+
 nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
     let role: Chat.Message.Role
     let content: String
@@ -158,13 +194,17 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
     /// Images attached to this message, in content order. User messages only —
     /// mirroring the OpenAI surface; other roles drop them like `toolCalls`.
     let images: [HTTPPrefixCacheImage]
+    /// Audio clips attached to this message, in content order. User messages
+    /// only, like `images`.
+    let audios: [HTTPPrefixCacheAudio]
 
     init(
         role: Chat.Message.Role,
         content: String,
         reasoning: String? = nil,
         toolCalls: [HTTPPrefixCacheToolCall] = [],
-        images: [HTTPPrefixCacheImage] = []
+        images: [HTTPPrefixCacheImage] = [],
+        audios: [HTTPPrefixCacheAudio] = []
     ) {
         self.role = role
         // Normalize assistant content by trimming surrounding whitespace.
@@ -185,6 +225,7 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
         self.reasoning = (trimmedReasoning?.isEmpty ?? true) ? nil : trimmedReasoning
         self.toolCalls = role == .assistant ? toolCalls : []
         self.images = role == .user ? images : []
+        self.audios = role == .user ? audios : []
     }
 
     static func assistant(
@@ -215,15 +256,17 @@ nonisolated struct HTTPPrefixCacheMessage: Hashable, Sendable {
     }
 
     var promptMessage: [String: any Sendable] {
-        // Image-bearing messages render the Qwen-VL content-array form — one
-        // `["type": "image"]` entry per image, images before text, exactly the
-        // shape the vendored message generators emit — so the chat template
-        // places each image inside its own turn. Text-only messages keep the
-        // string form: the text path's render stays byte-identical.
+        // Media-bearing messages render the content-array form — one
+        // `["type": "image"]` entry per image and one `["type": "audio"]` per
+        // clip, media before text in the vendored generators' order (images,
+        // then audio, then text) — so the chat template places each medium
+        // inside its own turn. Text-only messages keep the string form: the
+        // text path's render stays byte-identical.
         let promptContent: any Sendable =
-            images.isEmpty
+            images.isEmpty && audios.isEmpty
             ? content
             : images.map { _ in ["type": "image"] as [String: any Sendable] }
+                + audios.map { _ in ["type": "audio"] as [String: any Sendable] }
                 + [["type": "text", "text": content] as [String: any Sendable]]
         var message: [String: any Sendable] = [
             "role": role.rawValue,
@@ -275,6 +318,13 @@ nonisolated struct HTTPPrefixCacheConversation: Hashable, Sendable {
     /// the Cache Key Space image table in matching order.
     var images: [HTTPPrefixCacheImage] {
         messages.flatMap(\.images)
+    }
+
+    /// All audio clips of the conversation, flat, in prompt order — the audio
+    /// sibling of `images`, feeding prepare's clip list and the Cache Key
+    /// Space audio table in matching order.
+    var audios: [HTTPPrefixCacheAudio] {
+        messages.flatMap(\.audios)
     }
 
     var prefixWithoutLastMessage: HTTPPrefixCacheConversation {

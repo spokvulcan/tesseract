@@ -210,15 +210,24 @@ nonisolated enum OpenAI {
         var type: ContentPartType
         var text: String?
         var image_url: ImageURL?
+        var input_audio: InputAudio?
     }
 
     enum ContentPartType: String, Codable, Sendable {
         case text
         case image_url
+        case input_audio
     }
 
     struct ImageURL: Codable, Sendable {
         var url: String
+    }
+
+    /// OpenAI-standard audio content part payload: base64 audio bytes plus
+    /// the container format (`"wav"`, `"mp3"`).
+    struct InputAudio: Codable, Sendable {
+        var data: String
+        var format: String
     }
 
     // MARK: - Tool Definitions

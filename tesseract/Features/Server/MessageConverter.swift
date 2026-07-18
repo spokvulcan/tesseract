@@ -84,8 +84,8 @@ enum MessageConverter {
         for (index, message) in reorderedMessages.enumerated() {
             switch message.role {
             case .system:
-                let (text, imageParts) = splitContent(message.content)
-                if !imageParts.isEmpty {
+                let (text, imageParts, audioParts) = splitContent(message.content)
+                if !imageParts.isEmpty || !audioParts.isEmpty {
                     markIneligible(.nonTextSystemMessage(index: index))
                 }
                 if !hasNonSystemMessage {
@@ -97,9 +97,10 @@ enum MessageConverter {
 
             case .user:
                 hasNonSystemMessage = true
-                let (text, imageParts) = splitContent(message.content)
+                let (text, imageParts, audioParts) = splitContent(message.content)
                 var attachments: [ImageAttachment] = []
                 var cacheImages: [HTTPPrefixCacheImage] = []
+                var cacheAudios: [HTTPPrefixCacheAudio] = []
                 var cacheable = true
                 for part in imageParts {
                     guard let attachment = convertImageContent(part) else {
@@ -115,17 +116,32 @@ enum MessageConverter {
                         cacheable = false
                     }
                 }
+                for part in audioParts {
+                    guard let audio = convertAudioContent(part) else {
+                        cacheable = false
+                        continue
+                    }
+                    cacheAudios.append(audio)
+                }
+                // The engine (`LLMMessage`) path has no audio vocabulary —
+                // audio serves through the cache conversation's prepared
+                // input; on the engine fallback the clips drop leniently,
+                // like undecodable images.
                 llmMessages.append(.user(content: text, images: attachments))
                 if cacheable {
-                    cacheMessages.append(.init(role: .user, content: text, images: cacheImages))
+                    cacheMessages.append(
+                        .init(
+                            role: .user, content: text, images: cacheImages,
+                            audios: cacheAudios
+                        ))
                 } else {
                     markIneligible(.nonTextUserMessage(index: index))
                 }
 
             case .assistant:
                 hasNonSystemMessage = true
-                let (text, imageParts) = splitContent(message.content)
-                if !imageParts.isEmpty {
+                let (text, imageParts, audioParts) = splitContent(message.content)
+                if !imageParts.isEmpty || !audioParts.isEmpty {
                     markIneligible(.nonTextAssistantMessage(index: index))
                 }
                 let infos = convertAssistantToolCalls(message.tool_calls)
@@ -146,8 +162,8 @@ enum MessageConverter {
 
             case .tool:
                 hasNonSystemMessage = true
-                let (text, imageParts) = splitContent(message.content)
-                if !imageParts.isEmpty {
+                let (text, imageParts, audioParts) = splitContent(message.content)
+                if !imageParts.isEmpty || !audioParts.isEmpty {
                     markIneligible(.nonTextToolMessage(index: index))
                 }
                 llmMessages.append(
@@ -329,32 +345,60 @@ enum MessageConverter {
         return ImageAttachment(data: data, mimeType: mimeType)
     }
 
+    // MARK: - Audio Content
+
+    /// Decode an `input_audio` content part into the cache conversation's
+    /// audio shape. The format string is sanitized to a bare lowercase
+    /// alphanumeric token — it later becomes a spool-file extension, so a
+    /// value like `"../x"` must die here, not at the filesystem.
+    static func convertAudioContent(_ part: OpenAI.ContentPart) -> HTTPPrefixCacheAudio? {
+        guard part.type == .input_audio,
+            let payload = part.input_audio,
+            let data = Data(base64Encoded: payload.data),
+            !data.isEmpty
+        else {
+            return nil
+        }
+
+        let format = payload.format.lowercased()
+        guard !format.isEmpty, format.count <= 8,
+            format.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+        else {
+            return nil
+        }
+
+        return HTTPPrefixCacheAudio(data: data, format: format)
+    }
+
     // MARK: - Private
 
     /// Split message content into joined text (nil-text parts skipped — the
     /// `textValue` rule, shared by every consumer so the engine prompt and
     /// the cache conversation can never disagree on the same message) and the
-    /// raw image parts for the caller's per-policy image handling.
+    /// raw image/audio parts for the caller's per-policy media handling.
     private static func splitContent(
         _ content: OpenAI.MessageContent?
-    ) -> (text: String, imageParts: [OpenAI.ContentPart]) {
+    ) -> (text: String, imageParts: [OpenAI.ContentPart], audioParts: [OpenAI.ContentPart]) {
         switch content {
         case nil:
-            return ("", [])
+            return ("", [], [])
         case .text(let string):
-            return (string, [])
+            return (string, [], [])
         case .parts(let parts):
             var texts: [String] = []
             var imageParts: [OpenAI.ContentPart] = []
+            var audioParts: [OpenAI.ContentPart] = []
             for part in parts {
                 switch part.type {
                 case .text:
                     if let text = part.text { texts.append(text) }
                 case .image_url:
                     imageParts.append(part)
+                case .input_audio:
+                    audioParts.append(part)
                 }
             }
-            return (texts.joined(separator: "\n"), imageParts)
+            return (texts.joined(separator: "\n"), imageParts, audioParts)
         }
     }
 

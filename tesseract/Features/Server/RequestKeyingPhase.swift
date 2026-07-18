@@ -33,10 +33,12 @@ nonisolated enum RequestKeyingPhase {
         let tokenNDim: Int
         let partitionKey: CachePartitionKey
         let keySpace: CacheKeySpace
-        /// The recognized vision container mis-positions M-RoPE on any
-        /// nil-state warm forward — text-only restores included — so the
-        /// Position Anchor is seeded whenever the family is recognized,
-        /// not just when this request carries images.
+        /// The M-RoPE vision container mis-positions on any nil-state warm
+        /// forward — text-only restores included — so the Position Anchor is
+        /// seeded whenever *that* family is loaded, not just when this
+        /// request carries images. Sequential-rule families (Gemma 4
+        /// unified) restore with nil-state semantics like text models and
+        /// never seed.
         let seedsPositionAnchor: Bool
     }
 
@@ -61,7 +63,8 @@ nonisolated enum RequestKeyingPhase {
         parameters: GenerateParameters,
         modelID: String,
         modelFingerprint: String?,
-        imageKeying: ModelIdentity.ImageKeying?
+        imageKeying: ModelIdentity.ImageKeying?,
+        audioKeying: ModelIdentity.AudioKeying? = nil
     ) async throws -> Outcome {
         // 1. Tokenize the full conversation (BEFORE cache lookup). Images
         // ride along positionally: the renderer emits one `"image"` part
@@ -76,10 +79,19 @@ nonisolated enum RequestKeyingPhase {
             }
             return .ciImage(decoded)
         }
+        // Audio rides the same way — one `"audio"` part per clip, matched in
+        // order. The vendor decode path is AVFoundation-over-URL (container
+        // parsing + 16 kHz mono resample in one place), so each clip spools
+        // to a content-addressed temp file for exactly the duration of
+        // `prepare`.
+        let requestAudios = conversation.audios
+        let audioSpool = try AudioClipSpool(clips: requestAudios)
+        defer { audioSpool.cleanUp() }
         let fullInput = try await session.prepare(
             UserInput(
                 messages: conversation.promptMessages,
                 images: userInputImages,
+                audios: audioSpool.userInputAudios,
                 tools: canonicalTools,
                 additionalContext: renderContext.additionalContext()
             )
@@ -107,10 +119,10 @@ nonisolated enum RequestKeyingPhase {
         )
 
         // 3b. Build the request's **Cache Key Space** from the prepared
-        // tokens, the conversation's images, and the family's image
-        // keying. Identity (and free) for text-only requests. A
-        // construction failure degrades the whole request to an **Unkeyed
-        // Completion** — served normally, zero cache participation.
+        // tokens, the conversation's media, and the family's media keying.
+        // Identity (and free) for text-only requests. A construction
+        // failure degrades the whole request to an **Unkeyed Completion**
+        // — served normally, zero cache participation.
         let keySpace: CacheKeySpace
         switch CacheKeySpace.make(
             preparedTokens: fullTokens,
@@ -119,7 +131,9 @@ nonisolated enum RequestKeyingPhase {
                 let (t, h, w) = frame.values
                 return (t: t, height: h, width: w)
             },
-            imageKeying: imageKeying
+            imageKeying: imageKeying,
+            audioDigests: requestAudios.map(\.digest),
+            audioKeying: audioKeying
         ) {
         case .success(let space):
             keySpace = space
@@ -149,6 +163,15 @@ nonisolated enum RequestKeyingPhase {
                 )
             }
         }
+        // Audio run instrumentation: the run length is the clip's soft-token
+        // count (40 ms per token) — the ground truth the audio prefill cost
+        // scales with. Observe-only, like the grid log above.
+        for (index, entry) in keySpace.audioTable.enumerated() {
+            Log.server.debug(
+                "audio run #\(index): tokens=\(entry.runLength) "
+                    + "digest=\(entry.digest.hexString.prefix(8))"
+            )
+        }
 
         return .keyed(
             Keyed(
@@ -158,7 +181,7 @@ nonisolated enum RequestKeyingPhase {
                 tokenNDim: tokenNDim,
                 partitionKey: partitionKey,
                 keySpace: keySpace,
-                seedsPositionAnchor: imageKeying != nil
+                seedsPositionAnchor: imageKeying?.anchorsWarmContinuations ?? false
             ))
     }
 }

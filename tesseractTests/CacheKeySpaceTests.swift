@@ -424,6 +424,202 @@ struct CacheKeySpaceTests {
         #expect(span == 8)
         #expect(span - (1 * 16 * 16) / (2 * 2) == -56)
     }
+
+    // MARK: - Audio keying + the sequential span rule (Gemma 4 unified)
+
+    // Gemma 4 unified's real ids — nothing here loads a model.
+    private static let gemmaImagePad = 258_880
+    private static let gemmaAudioPad = 258_881
+    private static let gemmaImageKeying = ModelIdentity.ImageKeying(
+        imagePadTokenId: gemmaImagePad, spanRule: .sequential)
+    private static let gemmaAudioKeying = ModelIdentity.AudioKeying(
+        audioPadTokenId: gemmaAudioPad)
+
+    private static func audioDigest(_ seed: String) -> AudioDigest {
+        AudioDigest(audioBytes: Data(seed.utf8))
+    }
+
+    /// `[text…] boi image×n eoi boa audio×m eoa [text…]` — the unified
+    /// processor's prepared shape: media runs framed by ordinary tokens.
+    private static func gemmaPrompt(imageRuns: [Int], audioRuns: [Int]) -> [Int] {
+        var tokens: [Int] = [1, 2, 3, 4]
+        for run in imageRuns {
+            tokens.append(255_999)  // boi
+            tokens.append(contentsOf: Array(repeating: gemmaImagePad, count: run))
+            tokens.append(258_882)  // eoi
+            tokens.append(contentsOf: [10, 11])
+        }
+        for run in audioRuns {
+            tokens.append(256_000)  // boa
+            tokens.append(contentsOf: Array(repeating: gemmaAudioPad, count: run))
+            tokens.append(258_883)  // eoa
+            tokens.append(contentsOf: [20, 21])
+        }
+        return tokens
+    }
+
+    /// The audio digest space is domain-separated from images: identical
+    /// bytes as image vs audio must never share a pseudo-token expansion.
+    @Test func audioDigestIsDomainSeparatedFromImageDigest() {
+        let bytes = Data("same-bytes".utf8)
+        #expect(AudioDigest(audioBytes: bytes).rawBytes != ImageDigest(imageBytes: bytes).rawBytes)
+    }
+
+    /// An audio-bearing request keys: runs replace with negative pseudo-tokens
+    /// (length-preserving), the audio table records the runs in prompt order,
+    /// and framing tokens survive untouched.
+    @Test func audioRunsKeyLengthPreservingInPromptOrder() throws {
+        let prepared = Self.gemmaPrompt(imageRuns: [], audioRuns: [5, 3])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying,
+            audioDigests: [Self.audioDigest("clip-a"), Self.audioDigest("clip-b")],
+            audioKeying: Self.gemmaAudioKeying
+        ).get()
+
+        #expect(space.keyPath.count == prepared.count)
+        #expect(space.audioTable.count == 2)
+        #expect(space.audioTable[0].runLength == 5)
+        #expect(space.audioTable[1].runLength == 3)
+        #expect(space.isIdentity == false)
+        for entry in space.audioTable {
+            for index in entry.runRange {
+                #expect(space.keyPath[index] < 0)
+            }
+        }
+        // Framing and text tokens are identical in both spaces.
+        for (index, token) in prepared.enumerated()
+        where !space.audioTable.contains(where: { $0.runRange.contains(index) }) {
+            #expect(space.keyPath[index] == token)
+        }
+    }
+
+    /// The sequential rule needs no grids: a Gemma image request keys off run
+    /// lengths alone, and every image's span equals its run (anchor delta 0).
+    @Test func sequentialImagesKeyWithoutGridsAndZeroDelta() throws {
+        let prepared = Self.gemmaPrompt(imageRuns: [7, 4], audioRuns: [])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [Self.digest("img-a"), Self.digest("img-b")],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying
+        ).get()
+
+        #expect(space.imageTable.count == 2)
+        #expect(space.imageTable[0].positionSpan == 7)
+        #expect(space.imageTable[1].positionSpan == 4)
+        #expect(space.positionAnchorDelta(upTo: prepared.count) == 0)
+    }
+
+    /// Mixed media: images and audio key independently, the combined
+    /// minimumWarmOffset covers the last run of either kind, and the anchor
+    /// delta refuses offsets splitting an audio run.
+    @Test func mixedMediaKeysBothTablesAndGuardsAudioSplits() throws {
+        let prepared = Self.gemmaPrompt(imageRuns: [4], audioRuns: [6])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [Self.digest("img")],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: Self.gemmaAudioKeying
+        ).get()
+
+        #expect(space.imageTable.count == 1)
+        #expect(space.audioTable.count == 1)
+        let audioRun = space.audioTable[0].runRange
+        #expect(space.minimumWarmOffset == audioRun.upperBound)
+        #expect(space.positionAnchorDelta(upTo: audioRun.lowerBound + 1) == nil)
+        #expect(space.positionAnchorDelta(upTo: audioRun.upperBound) == 0)
+        #expect(space.remainderAudioIndices(from: 0) == 0..<1)
+        #expect(space.remainderAudioIndices(from: audioRun.upperBound) == 1..<1)
+        #expect(space.remainderAudioIndices(from: audioRun.lowerBound + 1) == nil)
+    }
+
+    /// Audio without a recognized audio family degrades typed, mirroring the
+    /// image guard.
+    @Test func audioWithoutAudioKeyingIsUnkeyed() {
+        let result = CacheKeySpace.make(
+            preparedTokens: Self.gemmaPrompt(imageRuns: [], audioRuns: [4]),
+            imageDigests: [],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: nil
+        )
+        #expect(result.failureReason == .unrecognizedAudioPlaceholderFamily)
+    }
+
+    /// Clip count ≠ run count degrades typed — keying would mis-attribute.
+    @Test func audioRunCountMismatchIsUnkeyed() {
+        let result = CacheKeySpace.make(
+            preparedTokens: Self.gemmaPrompt(imageRuns: [], audioRuns: [4]),
+            imageDigests: [],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying,
+            audioDigests: [Self.audioDigest("a"), Self.audioDigest("b")],
+            audioKeying: Self.gemmaAudioKeying
+        )
+        #expect(result.failureReason == .audioPlaceholderRunCountMismatch)
+    }
+
+    /// Render translation splices both modalities: the i-th image pad maps to
+    /// image i, the i-th audio pad to clip i, framing passes through.
+    @Test func translationExpandsBothMediaPads() throws {
+        let prepared = Self.gemmaPrompt(imageRuns: [4], audioRuns: [6])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [Self.digest("img")],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: Self.gemmaAudioKeying
+        ).get()
+
+        // Render space: one pad per medium inside its framing.
+        let render: [Int] =
+            [1, 2, 3, 4]
+            + [255_999, Self.gemmaImagePad, 258_882, 10, 11]
+            + [256_000, Self.gemmaAudioPad, 258_883, 20, 21]
+        let translated = try space.translate(renderTokens: render).get()
+        #expect(translated == space.keyPath)
+        #expect(space.translatedLength(renderTokens: render) == .success(space.keyPath.count))
+    }
+
+    /// A render with more audio pads than the request has clips fails typed.
+    @Test func translationFailsTypedWhenRenderHasMoreClipsThanRequest() throws {
+        let space = try CacheKeySpace.make(
+            preparedTokens: Self.gemmaPrompt(imageRuns: [], audioRuns: [4]),
+            imageDigests: [],
+            imageGrids: [],
+            imageKeying: Self.gemmaImageKeying,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: Self.gemmaAudioKeying
+        ).get()
+
+        let render = [1, Self.gemmaAudioPad, 2, Self.gemmaAudioPad]
+        #expect(
+            space.translate(renderTokens: render)
+                == .failure(.audioPlaceholderOccurrencesExceedClips(occurrences: 2, clips: 1)))
+    }
+
+    /// Same run length, different clip bytes → different key paths (the
+    /// digest drives the expansion).
+    @Test func differentClipsSameLengthDivergeInKeyPath() throws {
+        func space(_ seed: String) throws -> CacheKeySpace {
+            try CacheKeySpace.make(
+                preparedTokens: Self.gemmaPrompt(imageRuns: [], audioRuns: [4]),
+                imageDigests: [],
+                imageGrids: [],
+                imageKeying: nil,
+                audioDigests: [Self.audioDigest(seed)],
+                audioKeying: Self.gemmaAudioKeying
+            ).get()
+        }
+        #expect(try space("clip-a").keyPath != space("clip-b").keyPath)
+    }
 }
 
 extension Result where Success == CacheKeySpace, Failure == CacheKeySpace.UnkeyedReason {

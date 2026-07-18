@@ -1,4 +1,5 @@
 import Foundation
+import MLX
 import MLXLMCommon
 
 // MARK: - defaultConvertToLlm
@@ -23,18 +24,41 @@ func defaultConvertToLlm(_ messages: [any AgentMessageProtocol]) -> [LLMMessage]
 /// content, and `UserInput(chat:)` collects images from every role — and
 /// degrade to an explicit text note when it can't, so a text-only model is
 /// told the pixels are absent instead of being invited to hallucinate them.
-func toLLMCommonMessages(_ messages: [LLMMessage], visionActive: Bool = false) -> [Chat.Message] {
+///
+/// `audioActive` is the audio sibling (**Audio-capable** loaded container):
+/// user-message takes attach as 16 kHz sample arrays when it can hear, and
+/// degrade to a text note when it can't — a spoken turn replayed against a
+/// deaf model must say the audio is absent, not render an empty user turn.
+func toLLMCommonMessages(
+    _ messages: [LLMMessage], visionActive: Bool = false, audioActive: Bool = false
+) -> [Chat.Message] {
     messages.map { message in
         switch message {
         case .system(let content):
             .system(content)
-        case .user(let content, let images):
-            .user(
-                content,
-                images: images.compactMap { attachment in
-                    attachment.ciImage.map { .ciImage($0) }
-                }
-            )
+        case .user(let content, let images, let audios):
+            if audioActive || audios.isEmpty {
+                .user(
+                    content,
+                    images: images.compactMap { attachment in
+                        attachment.ciImage.map { .ciImage($0) }
+                    },
+                    audios: audioActive
+                        ? audios.compactMap { attachment in
+                            attachment.samples.map { .array(MLXArray($0)) }
+                        }
+                        : []
+                )
+            } else {
+                .user(
+                    content
+                        + "\n[This turn was spoken: \(audios.count) audio clip(s) attached, "
+                        + "but the current model session cannot hear them.]",
+                    images: images.compactMap { attachment in
+                        attachment.ciImage.map { .ciImage($0) }
+                    }
+                )
+            }
         case .assistant(let content, let reasoning, let toolCalls):
             .assistant(
                 reconstructAssistantPromptContent(

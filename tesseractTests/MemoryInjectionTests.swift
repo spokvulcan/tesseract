@@ -51,7 +51,7 @@ struct MemoryInjectionTests {
             injectedContext: "<memory>\n- He is vegetarian.\n</memory>"
         )
         let llm = try #require(message.toLLMMessage())
-        guard case .user(let content, _) = llm else {
+        guard case .user(let content, _, _) = llm else {
             Issue.record("expected a user message")
             return
         }
@@ -67,7 +67,7 @@ struct MemoryInjectionTests {
     func noInjectionIsNoChange() throws {
         let message = UserMessage(content: "hello")
         let llm = try #require(message.toLLMMessage())
-        guard case .user(let content, _) = llm else {
+        guard case .user(let content, _, _) = llm else {
             Issue.record("expected a user message")
             return
         }

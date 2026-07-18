@@ -247,11 +247,13 @@ actor LLMActor {
             // VLM-class models (2D token tensors) run upstream `prepare` as a
             // single forward pass over the whole prompt; chunk text-only
             // prompts through the app's prefill driver to keep peak memory
-            // bounded (ADR-0006). Image-bearing inputs stay single-shot.
+            // bounded (ADR-0006). Media-bearing inputs (image or audio) stay
+            // single-shot — the text-only chunker would forward placeholder
+            // tokens without their features.
             let iterator: TokenIterator
             let prefillStep = genParams.prefillStepSize ?? 512
             if prepared.text.tokens.ndim >= 2,
-                prepared.image == nil, prepared.video == nil,
+                prepared.image == nil, prepared.video == nil, prepared.audio == nil,
                 prepared.text.tokens.dim(-1) > prefillStep
             {
                 var cache = context.model.newCache(parameters: genParams)
