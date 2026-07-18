@@ -43,7 +43,7 @@ nonisolated enum CompanionWakeState: String, Codable, Sendable {
     case dropped
 }
 
-nonisolated struct CompanionWake: Sendable, Identifiable {
+nonisolated struct CompanionWake: Sendable, Identifiable, Equatable {
     let id: UUID
     var content: String
     var due: Date
@@ -136,7 +136,7 @@ nonisolated enum CompanionResurfacing {
 
 /// The loop's small per-day persisted state — what must survive a restart but
 /// is not derivable from the wakes table.
-nonisolated struct CompanionLoopDayState: Codable, Sendable {
+nonisolated struct CompanionLoopDayState: Codable, Sendable, Equatable {
     /// The day-start transition fired (first sustained presence after the
     /// overnight gap). Nil until then.
     var dayStartedAt: Date?

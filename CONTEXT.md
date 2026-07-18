@@ -1299,6 +1299,16 @@ _Avoid_: trigger/timer (implementation words for what fires it), reminder (a
 wake wakes Jarvis, not the owner), notification (one possible *outcome* of the
 turn a wake grants).
 
+**Wake Evaluator**:
+The pure decider at the loop's heart (ADR-0040 §2, ADR-0043): every tick, one
+gathered snapshot of signals — due **Wake**s, day state, the attention gate's
+verdict, presence, power, GPU — goes in, and at most one decision comes out:
+which **Turn** to grant, a deferral to record, or nothing. Due-ness and
+eligibility only, never judgment; the loop gathers the signals and performs
+the decision.
+_Avoid_: scheduler (implies code owns the rhythm — the entity books its own),
+dispatcher, trigger engine, evaluate() (the loop's method that calls it).
+
 **Turn**:
 One full agent run granted to the entity by a **Wake**, a transition (day
 start, Mac-wake, launch catch-up), or ambient eligibility. Every turn persists

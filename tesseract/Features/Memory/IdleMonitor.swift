@@ -42,6 +42,11 @@ final class IdleMonitor {
     private(set) var isIdle = false
     private(set) var isScreenLocked = false
 
+    /// The one home of "he is with the machine": recent input AND unlocked.
+    /// The Companion's evaluator and the Situation Briefing both read this —
+    /// the rule must never be derived twice.
+    var isOwnerPresent: Bool { !isIdle && !isScreenLocked }
+
     /// Fired when the machine becomes idle enough to work in.
     var onIdle: (@MainActor () -> Void)?
     /// Fired the instant the owner is back. **Nothing here may be slow.**
