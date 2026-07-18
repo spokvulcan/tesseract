@@ -31,12 +31,7 @@ struct AgentConversation: Identifiable, Sendable {
     /// Derive title from first user message content.
     var title: String {
         for msg in messages {
-            if let core = msg as? CoreMessage, case .user(let user) = core {
-                let text = user.content.prefix(80)
-                return text.isEmpty ? "New Conversation" : String(text)
-            }
-            // Also check bare UserMessage (not wrapped in CoreMessage)
-            if let user = msg as? UserMessage {
+            if let user = msg.asUser {
                 let text = user.content.prefix(80)
                 return text.isEmpty ? "New Conversation" : String(text)
             }

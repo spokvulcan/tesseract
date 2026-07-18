@@ -237,8 +237,8 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
     /// single source of truth for the predicate, so callers can't drift from it.
     static func persists(_ messages: [any AgentMessageProtocol & Sendable]) -> Bool {
         messages.contains { msg in
-            if let core = msg as? CoreMessage, case .user = core { return true }
-            if msg is UserMessage { return true }
+            if msg.asUser != nil { return true }
+            // Legacy display-shape conversations (`asUser` doesn't reach these).
             if let chat = msg as? AgentChatMessage, chat.role == .user { return true }
             return false
         }

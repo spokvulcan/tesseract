@@ -195,53 +195,11 @@ struct MemoryInjectionTests {
         #expect(occurrences == 1)
     }
 
-    // MARK: - The seam the block actually has to cross
+    // MARK: - The lifecycle's sensor
 
-    /// This is the test that was missing, and its absence cost a whole feature.
-    ///
-    /// Everything above passed while the running app injected *nothing*: the
-    /// pipeline hands `prepare` a `CoreMessage.user`, not a bare `UserMessage`,
-    /// so the unwrap in `attachMemory` matched nothing and every retrieved
-    /// memory was dropped between the store and the model. Nothing failed, no
-    /// error was logged, the store kept filling up — the model was simply never
-    /// told. Only asking the live app what it remembered found it.
-    @Test("The user message is found inside the wrapper the pipeline actually sends")
-    func theWrapperIsUnwrapped() throws {
-        let user = UserMessage(content: "where did I say I'm based?")
-
-        let fromWrapped = try #require(ChatSession.userMessage(in: CoreMessage.user(user)))
-        #expect(fromWrapped.id == user.id)
-
-        // And bare, which is what every test before this one assumed.
-        let fromBare = try #require(ChatSession.userMessage(in: user))
-        #expect(fromBare.id == user.id)
-
-        // Not a user message at all: left alone.
-        #expect(
-            ChatSession.userMessage(in: CoreMessage.assistant(AssistantMessage(content: "hi")))
-                == nil)
-    }
-
-    @Test("An enriched message goes back in the same wrapper it arrived in")
-    func theWrapperIsRestored() throws {
-        let user = UserMessage(content: "where did I say I'm based?")
-        let enriched = UserMessage(
-            id: user.id, content: user.content, injectedContext: "<memory>…</memory>")
-
-        // Wrapped in, wrapped out — hand the agent a bare `UserMessage` where it
-        // expects a `CoreMessage` and the injection is lost a second way.
-        let rewrapped = ChatSession.rewrap(enriched, like: CoreMessage.user(user))
-        let core = try #require(rewrapped as? CoreMessage)
-        guard case .user(let unwrapped) = core else {
-            Issue.record("rewrapped into the wrong case")
-            return
-        }
-        #expect(unwrapped.injectedContext == "<memory>…</memory>")
-        #expect(unwrapped.id == user.id)
-
-        // Bare in, bare out.
-        #expect((ChatSession.rewrap(enriched, like: user) as? UserMessage)?.id == user.id)
-    }
+    // The wrapper-shape seam — the unwrap that once silently dropped every
+    // retrieved memory — is pinned in `ConversationMemoryTests`, through the
+    // interface that owns it now (ADR-0045).
 
     /// The lifecycle's sensor. Without an episode id, `retrieve` logs nothing —
     /// and that is exactly what shipped: `attachMemory` called
