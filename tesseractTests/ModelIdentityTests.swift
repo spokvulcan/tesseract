@@ -369,6 +369,104 @@ struct ModelIdentityTests {
         #expect(ModelIdentity(configJSON: nil, chatTemplate: nil).imageKeying == nil)
     }
 
+    // MARK: - Gemma 4 unified (image + audio keying)
+
+    /// The encoder-free Gemma 4 unified family (`gemma4_unified` +
+    /// `vision_config`) yields image keying with the sequential span rule —
+    /// soft tokens occupy one position each, so there is no M-RoPE grid
+    /// geometry to carry.
+    @Test func gemma4UnifiedImageKeyingIsSequential() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "gemma4_unified",
+                "image_token_id": 258_880,
+                "vision_config": [String: Any](),
+            ],
+            chatTemplate: nil
+        )
+        #expect(
+            identity.imageKeying
+                == ModelIdentity.ImageKeying(
+                    imagePadTokenId: 258_880, spanRule: .sequential
+                ))
+        #expect(identity.imageKeying?.anchorsWarmContinuations == false)
+    }
+
+    /// Gemma 4 unified with an `audio_config` yields audio keying off the
+    /// explicit `audio_token_id`.
+    @Test func gemma4UnifiedAudioKeyingReadsAudioConfig() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "gemma4_unified",
+                "audio_token_id": 258_881,
+                "audio_config": [String: Any](),
+            ],
+            chatTemplate: nil
+        )
+        #expect(
+            identity.audioKeying
+                == ModelIdentity.AudioKeying(audioPadTokenId: 258_881))
+    }
+
+    /// Defaults mirror the published `gemma4_unified` config when the token
+    /// ids are absent but the capability blocks are present.
+    @Test func gemma4UnifiedKeyingDefaultsMirrorPublishedConfig() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "gemma4_unified",
+                "vision_config": [String: Any](),
+                "audio_config": [String: Any](),
+            ],
+            chatTemplate: nil
+        )
+        #expect(identity.imageKeying?.imagePadTokenId == 258_880)
+        #expect(identity.audioKeying?.audioPadTokenId == 258_881)
+    }
+
+    /// Audio keying stays nil off the recognized audio family: a Qwen3.5
+    /// vision model, a Gemma 4 config without `audio_config` (upstream main
+    /// strips audio weights), and an unrecognized family.
+    @Test func audioKeyingIsNilOffTheRecognizedAudioFamily() {
+        #expect(
+            ModelIdentity(
+                configJSON: [
+                    "model_type": "qwen3_5", "vision_config": [String: Any](),
+                ],
+                chatTemplate: nil
+            ).audioKeying == nil)
+        #expect(
+            ModelIdentity(
+                configJSON: [
+                    "model_type": "gemma4_unified", "vision_config": [String: Any](),
+                ],
+                chatTemplate: nil
+            ).audioKeying == nil)
+        #expect(ModelIdentity(configJSON: nil, chatTemplate: nil).audioKeying == nil)
+    }
+
+    /// The Qwen3.5 M-RoPE rule anchors warm continuations; the identity keeps
+    /// exposing the merge size for its grid consumers.
+    @Test func qwenImageKeyingAnchorsAndExposesMergeSize() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5",
+                "vision_config": ["spatial_merge_size": 2],
+            ],
+            chatTemplate: nil
+        )
+        #expect(identity.imageKeying?.anchorsWarmContinuations == true)
+        #expect(identity.imageKeying?.spatialMergeSize == 2)
+    }
+
+    /// `gemma4_unified` defers to the vendor's model-type inference for the
+    /// tool-call format (the Gemma 4 `<|tool_call>` syntax).
+    @Test func gemma4UnifiedInfersGemma4ToolCallFormat() {
+        let identity = ModelIdentity(
+            configJSON: ["model_type": "gemma4_unified"], chatTemplate: nil
+        )
+        #expect(identity.toolCallFormat == .gemma4)
+    }
+
     // MARK: - Fixtures
 
     /// Write `config.json` and/or `chat_template.jinja` (when non-nil) into a

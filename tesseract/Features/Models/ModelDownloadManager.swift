@@ -33,6 +33,10 @@ final class ModelDownloadManager: ObservableObject {
     /// shared by every caller. See `CONTEXT.md` → Model catalog.
     private var visionCache: [String: Bool] = [:]
 
+    /// The audio sibling of `visionCache` — same memoization contract, for
+    /// **Audio-capable** (`isAudioCapable`).
+    private var audioCache: [String: Bool] = [:]
+
     static let modelStorageURL: URL = {
         let url = URL.applicationSupportDirectory.appendingPathComponent(
             ModelUtils.storageDirectoryName)
@@ -84,6 +88,16 @@ final class ModelDownloadManager: ObservableObject {
         guard isDownloaded(id), let directory = modelPath(for: id) else { return false }
         let capable = ModelCatalog.isVisionCapable(directory: directory)
         visionCache[id] = capable
+        return capable
+    }
+
+    /// Whether a downloaded model can take audio input (**Audio-capable**) —
+    /// the audio sibling of `isVisionCapable`, same memoization contract.
+    func isAudioCapable(_ id: String) -> Bool {
+        if let cached = audioCache[id] { return cached }
+        guard isDownloaded(id), let directory = modelPath(for: id) else { return false }
+        let capable = ModelCatalog.isAudioCapable(directory: directory)
+        audioCache[id] = capable
         return capable
     }
 

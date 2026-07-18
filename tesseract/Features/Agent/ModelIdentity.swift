@@ -20,14 +20,60 @@ import MLXLMCommon
 nonisolated struct ModelIdentity: Sendable, Equatable {
 
     /// The image-keying facts of a recognized vision family (PRD #72): the
-    /// placeholder pad token whose prepared runs are one image each, and the
-    /// spatial merge size the **Position Anchor** reconstruction needs to turn
-    /// an image grid into its M-RoPE position span. `nil` means the loaded
-    /// family is not recognized for image keying — an image-bearing request
-    /// then degrades to an **Unkeyed Completion**.
+    /// placeholder pad token whose prepared runs are one image each, plus the
+    /// family's position-span rule. `nil` means the loaded family is not
+    /// recognized for image keying — an image-bearing request then degrades
+    /// to an **Unkeyed Completion**.
     struct ImageKeying: Sendable, Equatable {
+        /// How an image's placeholder run maps onto model positions.
+        enum PositionSpanRule: Sendable, Equatable {
+            /// Qwen-VL M-RoPE: span = max(t, h/m, w/m) from the processed
+            /// grid — the **Position Anchor** reconstruction's geometry.
+            case mropeGrid(spatialMergeSize: Int)
+            /// Standard-RoPE families (Gemma 4 unified): every soft token
+            /// occupies one sequential position, so span == run length and
+            /// warm restores need no anchor.
+            case sequential
+        }
+
         let imagePadTokenId: Int
-        let spatialMergeSize: Int
+        let spanRule: PositionSpanRule
+
+        /// Compatibility surface for the M-RoPE consumers (grid logging, the
+        /// Position Anchor geometry). `nil` under the sequential rule.
+        var spatialMergeSize: Int? {
+            if case .mropeGrid(let merge) = spanRule { return merge }
+            return nil
+        }
+
+        /// Whether warm continuations must seed the **Position Anchor** —
+        /// true only for the M-RoPE family; sequential families restore with
+        /// nil-state semantics like text models.
+        var anchorsWarmContinuations: Bool {
+            if case .mropeGrid = spanRule { return true }
+            return false
+        }
+
+        /// The Qwen-VL shape, preserved for its existing construction sites.
+        init(imagePadTokenId: Int, spatialMergeSize: Int) {
+            self.imagePadTokenId = imagePadTokenId
+            self.spanRule = .mropeGrid(spatialMergeSize: spatialMergeSize)
+        }
+
+        init(imagePadTokenId: Int, spanRule: PositionSpanRule) {
+            self.imagePadTokenId = imagePadTokenId
+            self.spanRule = spanRule
+        }
+    }
+
+    /// The audio-keying facts of a recognized audio family: the placeholder
+    /// pad token whose prepared runs are one clip each. Audio soft tokens are
+    /// always sequential positions (no grid geometry exists), so the pad
+    /// token is the whole identity. `nil` means the loaded family is not
+    /// recognized for audio keying — an audio-bearing request then degrades
+    /// to an **Unkeyed Completion**.
+    struct AudioKeying: Sendable, Equatable {
+        let audioPadTokenId: Int
     }
 
     /// Scratch-buffer geometry for Qwen3.5/Qwen3.6 full-attention layers.
@@ -113,9 +159,15 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// families (ADR-0014).
     let visionAttentionScratchProfile: FullAttentionScratchProfile?
 
-    /// Image-keying facts for the Qwen3.5 vision variant; `nil` for text-only
-    /// models and unrecognized families.
+    /// Image-keying facts for the recognized vision families (Qwen3.5 VL,
+    /// Gemma 4 unified); `nil` for text-only models and unrecognized families.
     let imageKeying: ImageKeying?
+
+    /// Audio-keying facts for the recognized audio family (Gemma 4 unified —
+    /// the encoder-free 12B, whose `config.json` ships an `audio_config`);
+    /// `nil` for audio-less models and unrecognized families. **Audio-capable**
+    /// at the catalog level is exactly `audioKeying != nil`.
+    let audioKeying: AudioKeying?
 
     /// Build the identity from a model directory, reading `config.json` and
     /// `chat_template.jinja` **exactly once each**. The directory-based
@@ -149,6 +201,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             configJSON: configJSON
         )
         self.imageKeying = Self.interpretImageKeying(configJSON: configJSON)
+        self.audioKeying = Self.interpretAudioKeying(configJSON: configJSON)
     }
 
     // MARK: - Interpretation (pure)
@@ -316,21 +369,52 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         }
     }
 
-    /// Image keying exists only for the Qwen3.5 vision variant — the family the
-    /// pseudo-token keying and Position Anchor seeding are spike-verified
-    /// against (ADR-0007). Recognized by the `qwen3_5` prefix plus a
-    /// `vision_config` block; the defaults mirror the vendor's `Qwen35`
-    /// config decode (`image_token_id` 248056, `spatial_merge_size` 2).
+    /// Image keying exists for the two recognized vision families. Qwen3.5:
+    /// the `qwen3_5` prefix plus a `vision_config` block, with the M-RoPE
+    /// grid rule the pseudo-token keying and Position Anchor seeding are
+    /// spike-verified against (ADR-0007); defaults mirror the vendor's
+    /// `Qwen35` config decode (`image_token_id` 248056, `spatial_merge_size`
+    /// 2). Gemma 4 unified (`gemma4_unified` + `vision_config`): the
+    /// sequential rule — soft tokens occupy one position each; default
+    /// `image_token_id` 258880 mirrors the published config.
     private static func interpretImageKeying(configJSON: [String: Any]?) -> ImageKeying? {
         guard let root = configJSON,
-            let modelType = root["model_type"] as? String,
-            modelType.hasPrefix("qwen3_5"),
-            let visionConfig = root["vision_config"] as? [String: Any]
+            let modelType = root["model_type"] as? String
         else { return nil }
 
-        return ImageKeying(
-            imagePadTokenId: root["image_token_id"] as? Int ?? 248_056,
-            spatialMergeSize: visionConfig["spatial_merge_size"] as? Int ?? 2
+        if modelType.hasPrefix("qwen3_5"),
+            let visionConfig = root["vision_config"] as? [String: Any]
+        {
+            return ImageKeying(
+                imagePadTokenId: root["image_token_id"] as? Int ?? 248_056,
+                spatialMergeSize: visionConfig["spatial_merge_size"] as? Int ?? 2
+            )
+        }
+
+        if modelType == "gemma4_unified", root["vision_config"] is [String: Any] {
+            return ImageKeying(
+                imagePadTokenId: root["image_token_id"] as? Int ?? 258_880,
+                spanRule: .sequential
+            )
+        }
+
+        return nil
+    }
+
+    /// Audio keying exists only for the encoder-free Gemma 4 unified family:
+    /// `gemma4_unified` plus an `audio_config` block — a config without one
+    /// is an audio-less export (upstream main strips the audio weights), so
+    /// the capability must never be inferred from the family alone. The
+    /// default `audio_token_id` 258881 mirrors the published config.
+    private static func interpretAudioKeying(configJSON: [String: Any]?) -> AudioKeying? {
+        guard let root = configJSON,
+            let modelType = root["model_type"] as? String,
+            modelType == "gemma4_unified",
+            root["audio_config"] is [String: Any]
+        else { return nil }
+
+        return AudioKeying(
+            audioPadTokenId: root["audio_token_id"] as? Int ?? 258_881
         )
     }
 }
