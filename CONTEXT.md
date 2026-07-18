@@ -348,6 +348,15 @@ never snapshots or the token array.
 _Avoid_: prefill config; generation params (a separate notion); checkpoint plan
 (one field inside the Prefill Plan, not the whole value).
 
+**Prefill Strategy**:
+The chunked-vs-single-shot route for one raw-generation prompt (the agent chat
+arm and the thinking-continuation arm), decided once from the prompt's shape —
+token dimensionality, sequence length, media presence, step size. 2D text-only
+prompts longer than one step chunk through the app driver; everything else goes
+single-shot to the token iterator (ADR-0044).
+_Avoid_: **Prefill Plan** (the server path's richer pre-prefill value); chunking
+flag; VLM path (the model class is one input, not the route).
+
 **Leaf Admission Builder**:
 The GPU-free routing decision for storing one leaf snapshot — given a boundary
 mode, it returns either a capture-from-boundary plan or a typed skip reason. It
