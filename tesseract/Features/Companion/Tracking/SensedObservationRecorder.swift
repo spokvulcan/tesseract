@@ -28,6 +28,13 @@ final class SensedObservationRecorder {
     private let store: MemoryStore
     private let isEnabled: () -> Bool
 
+    /// Perception doors (ADR-0046, #368): the Event producers ride the same
+    /// sensing pipeline instead of duplicating pollers and thresholds. Fired
+    /// beside the observation write, under the same sustained/transition
+    /// verdicts.
+    var onPowerTransition: (@MainActor (_ onACPower: Bool) -> Void)?
+    var onSustainedAppSession: (@MainActor (_ app: String, _ start: Date, _ end: Date) -> Void)?
+
     /// When the current presence span began; nil while idle/locked/asleep.
     private var presenceSpanStart: Date?
     /// The frontmost app and when it took the front.
@@ -98,8 +105,15 @@ final class SensedObservationRecorder {
     // MARK: - App sessions
 
     private func frontmostChanged(to name: String?) {
-        closeAppSession(at: Date())
-        if let name { currentApp = (name, Date()) }
+        appBecameFrontmost(name, at: Date())
+    }
+
+    /// Internal, not private: the one deterministic seam through the app-
+    /// session pipeline — tests drive it with controlled dates to prove the
+    /// sustained-vs-brief verdict without NSWorkspace.
+    func appBecameFrontmost(_ name: String?, at now: Date) {
+        closeAppSession(at: now)
+        if let name { currentApp = (name, now) }
     }
 
     private func closeAppSession(at end: Date) {
@@ -107,6 +121,7 @@ final class SensedObservationRecorder {
         currentApp = nil
         guard end.timeIntervalSince(app.since) >= Self.minimumAppSessionSeconds else { return }
         writeSpan(kind: "app-session", start: app.since, end: end, detail: app.name)
+        onSustainedAppSession?(app.name, app.since, end)
     }
 
     // MARK: - Power
@@ -119,6 +134,7 @@ final class SensedObservationRecorder {
             TrackingObservation(
                 domain: .work, kind: "power-transition", value: ac ? "ac" : "battery",
                 source: .sensed))
+        onPowerTransition?(ac)
     }
 
     private static func readACPower() -> Bool {
