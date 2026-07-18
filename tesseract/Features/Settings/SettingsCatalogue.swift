@@ -120,6 +120,11 @@ enum SettingsCatalogue {
         "companionVoiceSessionTimeout", default: 30)
     static let companionVoiceBargeInLevel = Setting.double(
         "companionVoiceBargeInLevel", default: 0.25)
+    /// The **Native Audio Turn** experiment (ADR-0042): spoken takes go to
+    /// the model as audio when the selected model can hear. Off by default —
+    /// the ASR path is the proven baseline.
+    static let companionVoiceNativeAudio = Setting.bool(
+        "companionVoiceNativeAudio", default: false)
 
     // MARK: - Memory (ADR-0035, map #314)
 

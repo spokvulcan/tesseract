@@ -175,6 +175,8 @@ struct AgentSettingsPane: View {
                 .disabled(!settings.companionHeartbeatEnabled)
             // The voice session's taste ledger (#310) — tuned in wear.
             Toggle("Auto-Send Voice Turns", isOn: $settings.companionVoiceAutoSend)
+            // The Native Audio Turn experiment (ADR-0042).
+            Toggle("Native Audio Turns (Experimental)", isOn: $settings.companionVoiceNativeAudio)
             HStack {
                 Text("End-of-Speech Silence")
                 Slider(value: $settings.companionVoiceTrailingSilence, in: 1.0...3.0)
@@ -200,7 +202,7 @@ struct AgentSettingsPane: View {
             Text("Companion Voice")
         } footer: {
             Text(
-                "Voice conversations ride the chat itself: the waveform button in the composer (or engaging a spoken summons) opens a session where the mic listens after each reply, silence sends your turn, and speaking over him stops him mid-word. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. With Summon Overlay for Beats on, his spoken lines raise the picked concept as the summons surface; every reaction is recorded. Auto-Send off stages your words in the composer instead of sending."
+                "Voice conversations ride the chat itself: the waveform button in the composer (or engaging a spoken summons) opens a session where the mic listens after each reply, silence sends your turn, and speaking over him stops him mid-word. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. With Summon Overlay for Beats on, his spoken lines raise the picked concept as the summons surface; every reaction is recorded. Auto-Send off stages your words in the composer instead of sending. Native Audio Turns sends your voice to the model as audio — he hears you, not a transcript — when the selected agent model supports audio input (takes over 30 s fall back to transcription)."
             )
         }
     }

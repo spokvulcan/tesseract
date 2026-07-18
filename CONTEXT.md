@@ -264,8 +264,18 @@ A model whose on-disk config declares image input (the Qwen3.5-family
 `vision_config`); text-only checkpoints do not. A fixed property of the model as
 downloaded — distinct from **Vision Mode**, which is whether that capability is
 currently loaded. The PARO family is vision-capable.
-_Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there
-is no audio/video input path), "supports images" as a per-request flag.
+_Avoid_: "vision model" (ambiguous with the loaded container), "multimodal"
+(name the capability: vision-capable, **Audio-Capable**), "supports images" as a
+per-request flag.
+
+**Audio-Capable Model**:
+A model whose on-disk config declares native audio input (the Gemma 4 unified
+`audio_config`); everything else is deaf. A fixed property of the model as
+downloaded, the audio sibling of **Vision-Capable Model** — with no mode split:
+the capability loads with the checkpoint, there is no audio-less container
+variant to choose.
+_Avoid_: "audio model" (collides with TTS/ASR models), speech-capable (speech
+output is TTS), transcribing model (ASR is WhisperKit, not the agent model).
 
 **Vision Mode**:
 Whether a **Vision-Capable Model** is currently loaded as its image-able VLM
@@ -448,8 +458,8 @@ derives, the diagnostics context logs).
 **Completion Route**:
 The dispatcher's pure decision for one server inference request — cache-aware versus
 standard-with-named-reason — computed from request shape alone, never from model
-state. Image-bearing requests route cache-aware; only video/audio (or undecodable
-images) yield a no-usable-conversation reason.
+state. Image- and audio-bearing requests route cache-aware; only video (or
+undecodable media) yields a no-usable-conversation reason.
 _Avoid_: prefix-cache bypass (the retired in-actor `nil` returns); fallback flag;
 image bypass (decodable images are keyed, not bypassed).
 
@@ -1214,6 +1224,18 @@ history window; the overlay stays keyboard-free.
 _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
+
+**Native Audio Turn**:
+A voice-session owner turn whose *model input is the spoken take itself* — the
+audio attaches to the user message and an **Audio-Capable Model** hears it; no
+transcript stands between the owner and the model (ADR-0042). Transcription
+still runs, in parallel and record-only, for the overlay feed and the flight
+recorder. Gated per take: the experiment toggle, an audio-capable selected
+model, auto-send on, the take within the model's clip window; an acoustically
+empty take (voicing under the floor) is no turn at all.
+_Avoid_: audio message (the wire `input_audio` part is the server concept),
+voice turn (every spoken turn is one — this names the audio-as-input kind),
+transcript-free turn (transcription still runs, record-only).
 
 ### Tracking (Companion)
 

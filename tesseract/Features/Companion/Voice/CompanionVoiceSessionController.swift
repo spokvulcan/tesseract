@@ -75,6 +75,37 @@ final class CompanionVoiceSessionController {
         return elapsed >= confirmWindow ? .fadeBack : .keepWaiting
     }
 
+    // MARK: - Native Audio Turn (the Gemma experiment, ADR-0042)
+
+    /// How a closed take resolves when the native-audio experiment is in
+    /// play: the model hears the take itself, the ASR path handles what the
+    /// audio tower can't, and an acoustically empty take is abandoned — the
+    /// no-transcript analog of the "" transcript gate, purely acoustic like
+    /// every barge decision (ADR-0041).
+    nonisolated enum NativeTurnDecision: Equatable {
+        /// Send the audio as the model input; transcribe record-only.
+        case sendNative
+        /// The classic path: transcribe, gate on the transcript, send text.
+        case transcribe
+        /// Not enough voicing to be a turn — resume/relisten, send nothing.
+        case abandon
+    }
+
+    /// Pure resolution, pinned by tests. Native requires the toggle, an
+    /// **Audio-capable** model, and auto-send (staging is inherently text);
+    /// takes past the model's 30 s clip window fall back to ASR (the
+    /// processor would truncate them silently); anything under the voicing
+    /// floor is no turn at all.
+    nonisolated static func resolveNativeTurn(
+        enabled: Bool, modelAvailable: Bool, autoSend: Bool,
+        duration: TimeInterval, voicedSeconds: TimeInterval,
+        maxDuration: TimeInterval, minVoiced: TimeInterval
+    ) -> NativeTurnDecision {
+        guard enabled, modelAvailable, autoSend else { return .transcribe }
+        guard duration <= maxDuration else { return .transcribe }
+        return voicedSeconds >= minVoiced ? .sendNative : .abandon
+    }
+
     // MARK: - Dependencies
 
     private let capture: VoiceCaptureSession
@@ -102,6 +133,13 @@ final class CompanionVoiceSessionController {
     /// their fakes; the composition root binds `AudioCaptureEngine`.
     private let beginVoiceHold: @MainActor () -> Void
     private let endVoiceHold: @MainActor () -> Void
+    /// The **Native Audio Turn** send (ADR-0042) — the composition root binds
+    /// `ChatSession.sendVoiceTake`; the default keeps tests inert.
+    private let sendVoiceTake: @MainActor (AudioData) -> Void
+    /// Whether the selected agent model is **Audio-capable** — read from the
+    /// on-disk catalog, not the loaded container, so the first turn of a
+    /// session can go native while the model is still cold-loading.
+    private let nativeAudioModelAvailable: @MainActor () -> Bool
 
     // MARK: - Session state
 
@@ -197,7 +235,9 @@ final class CompanionVoiceSessionController {
         playbackLevel: @escaping @MainActor () -> Float = { 0 },
         fadeSpeech: @escaping @MainActor (Float, TimeInterval) -> Void = { _, _ in },
         beginVoiceHold: @escaping @MainActor () -> Void = {},
-        endVoiceHold: @escaping @MainActor () -> Void = {}
+        endVoiceHold: @escaping @MainActor () -> Void = {},
+        sendVoiceTake: @escaping @MainActor (AudioData) -> Void = { _ in },
+        nativeAudioModelAvailable: @escaping @MainActor () -> Bool = { false }
     ) {
         self.capture = capture
         self.meterLevel = meterLevel
@@ -218,6 +258,8 @@ final class CompanionVoiceSessionController {
         self.proofreadPass = proofreadPass
         self.beginVoiceHold = beginVoiceHold
         self.endVoiceHold = endVoiceHold
+        self.sendVoiceTake = sendVoiceTake
+        self.nativeAudioModelAvailable = nativeAudioModelAvailable
     }
 
     // MARK: - Entry / exit
@@ -581,6 +623,17 @@ final class CompanionVoiceSessionController {
         overlay.feed.setState(.listening)
     }
 
+    // The Native Audio Turn's shape constraints (ADR-0042).
+    /// The model's audio window: 750 tokens × 40 ms = 30 s per clip. A
+    /// longer take falls back to the ASR path — the processor would truncate
+    /// it silently otherwise.
+    private static let nativeTakeMaxDuration: TimeInterval = 30
+    /// Voicing floor for a take to count as a turn — just above the
+    /// listening start-debounce (0.25 s), sitting with the Soft Barge's
+    /// confirm-voiced (0.3 s): a thump or cough dies here, one spoken word
+    /// clears it.
+    private static let nativeTakeMinVoiced: TimeInterval = 0.35
+
     private func finishOwnerTurn() {
         phase = .transcribing
         overlay.feed.setState(.thinking)
@@ -593,6 +646,24 @@ final class CompanionVoiceSessionController {
         case .noAudio, .tooShort:
             abandonTake(reason: "no-audio")
         case .audio(let audio, _):
+            switch Self.resolveNativeTurn(
+                enabled: settings.companionVoiceNativeAudio,
+                modelAvailable: nativeAudioModelAvailable(),
+                autoSend: settings.companionVoiceAutoSend,
+                duration: audio.duration,
+                voicedSeconds: endpointer.voicedSeconds,
+                maxDuration: Self.nativeTakeMaxDuration,
+                minVoiced: Self.nativeTakeMinVoiced)
+            {
+            case .abandon:
+                abandonTake(reason: "no-voicing")
+                return
+            case .sendNative:
+                commitNativeAudioTurn(audio)
+                return
+            case .transcribe:
+                break
+            }
             let language = settings.language
             var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
             if let pass = proofreadPass {
@@ -618,6 +689,53 @@ final class CompanionVoiceSessionController {
                     self.abandonTake(reason: "failed")
                 }
             }
+        }
+    }
+
+    /// Commit a **Native Audio Turn** (ADR-0042): the take itself is the
+    /// model input — sent now, no transcription in the send path. The barge
+    /// resolution mirrors `ownerTurnTranscribed`, with the voicing floor
+    /// standing in for the transcript gate.
+    private func commitNativeAudioTurn(_ audio: AudioData) {
+        guard isActive else { return }
+        if bargedUtterance {
+            bargeMode = .none
+            stopSpeaking()
+        }
+        exchanges += 1
+        recordVoice(
+            "voice.native-turn",
+            snapshot: [
+                "durationSeconds": String(format: "%.1f", audio.duration),
+                "voicedSeconds": String(format: "%.2f", endpointer.voicedSeconds),
+            ])
+        overlay.feed.setState(.thinking)
+        phase = .awaitingReply
+        sendVoiceTake(audio)
+        transcribeForRecord(audio)
+    }
+
+    /// The dual-path record: the take the model already heard natively is
+    /// transcribed in parallel (WhisperKit on the ANE, the audio tower on the
+    /// GPU) — the overlay feed and the flight recorder read text even though
+    /// the model never did. Best-effort by design: the mic reopening for the
+    /// next turn supersedes a slow transcription, costing only the record.
+    private func transcribeForRecord(_ audio: AudioData) {
+        let language = settings.language
+        Task { [weak self] in
+            guard let self else { return }
+            let outcome = await self.capture.transcribeAndCommit(
+                audio, language: language, proofread: nil
+            ) { [weak self] text, _ in
+                guard let self, self.isActive else { return }
+                self.overlay.feed.settle(role: .owner, text: text)
+                self.recordVoice(
+                    "voice.native-turn-transcript", snapshot: ["chars": String(text.count)])
+            }
+            if case .committed = outcome { return }
+            self.recordVoice(
+                "voice.native-turn-transcript-missed",
+                snapshot: ["outcome": String(describing: outcome)])
         }
     }
 
