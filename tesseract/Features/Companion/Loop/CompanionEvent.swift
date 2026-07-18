@@ -15,7 +15,7 @@ import Foundation
 /// The v1 Event kinds. `wakeDue` and `reportBack` are defined here but
 /// produced by their own tickets (#371's clock, #372's deposit door); the
 /// rest are the perception substrate's. Raw values are the persisted tag.
-nonisolated enum CompanionEventKind: String, Codable, Sendable, CaseIterable {
+nonisolated enum CompanionEventKind: String, Codable, Sendable {
     /// A booked wake came due (#371 — the clock admits these).
     case wakeDue = "wake-due"
     /// A summoned dialogue's deposit landed (#372).
@@ -62,18 +62,34 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
     /// The turn that consumed it (#371 wires this).
     var turnID: UUID?
 
+    /// A producer's perception: the five facts a producer owns. Everything
+    /// else — state, seq, the admission stamp — is the store's to assign, so
+    /// this init doesn't offer them.
     init(
         id: UUID = UUID(),
         kind: CompanionEventKind,
         content: String,
         payload: String? = nil,
-        occurredAt: Date = Date(),
-        state: CompanionEventState = .pending,
-        seq: Int64? = nil,
-        admittedAt: Date? = nil,
-        presentedAt: Date? = nil,
-        consumedAt: Date? = nil,
-        turnID: UUID? = nil
+        occurredAt: Date = Date()
+    ) {
+        self.id = id
+        self.kind = kind
+        self.content = content
+        self.payload = payload
+        self.occurredAt = occurredAt
+        self.state = .pending
+        self.seq = nil
+        self.admittedAt = nil
+        self.presentedAt = nil
+        self.consumedAt = nil
+        self.turnID = nil
+    }
+
+    /// The full row — only the store's decode constructs this shape.
+    init(
+        id: UUID, kind: CompanionEventKind, content: String, payload: String?,
+        occurredAt: Date, state: CompanionEventState, seq: Int64?, admittedAt: Date?,
+        presentedAt: Date?, consumedAt: Date?, turnID: UUID?
     ) {
         self.id = id
         self.kind = kind
@@ -93,14 +109,7 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
     /// firing twice — a repeated notification, a re-arm — collapses to one
     /// Event at admission instead of needing its own dedupe state.
     static func deterministicID(_ occasion: String) -> UUID {
-        let digest = SHA256.hash(data: Data(occasion.utf8))
-        let bytes = Array(digest.prefix(16))
-        return UUID(
-            uuid: (
-                bytes[0], bytes[1], bytes[2], bytes[3],
-                bytes[4], bytes[5], bytes[6], bytes[7],
-                bytes[8], bytes[9], bytes[10], bytes[11],
-                bytes[12], bytes[13], bytes[14], bytes[15]
-            ))
+        SHA256.hash(data: Data(occasion.utf8))
+            .withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
     }
 }

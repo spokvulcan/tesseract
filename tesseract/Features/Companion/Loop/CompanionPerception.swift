@@ -105,40 +105,32 @@ final class CompanionPerception {
     }
 
     /// The sensed-observation pipeline saw external power appear or vanish.
-    func powerChanged(onACPower: Bool, at now: Date = Date()) {
+    func powerChanged(onACPower: Bool) {
         admit(
             CompanionEvent(
                 kind: .powerChange,
                 content: onACPower
                     ? "Power changed: on AC power." : "Power changed: on battery.",
-                payload: Self.json(["power": onACPower ? "ac" : "battery"]),
-                occurredAt: now))
+                payload: Self.json(["power": onACPower ? "ac" : "battery"])))
     }
 
     /// The sensed-observation pipeline closed an app session that proved
     /// sustained (its threshold, its verdict) — brief flips never reach here.
+    /// The payload is the pipeline's own span shape, not a second encoding.
     func sustainedAppSession(app: String, start: Date, end: Date) {
-        let minutes = Int(end.timeIntervalSince(start) / 60)
+        let span = SensedObservationRecorder.SpanValue(start: start, end: end, app: app)
         admit(
             CompanionEvent(
                 kind: .appSwitch,
-                content: "Sustained app session: \(app), \(minutes) min.",
-                payload: Self.json(
-                    [
-                        "app": app,
-                        "start": String(Int(start.timeIntervalSince1970)),
-                        "end": String(Int(end.timeIntervalSince1970)),
-                        "minutes": String(minutes),
-                    ]),
+                content: "Sustained app session: \(app), \(span.minutes) min.",
+                payload: Self.json(span),
                 occurredAt: end))
     }
 
     /// Internal, not private: the calendar-day rollover handler — tests drive
     /// it with controlled dates.
     func dayRolled(now: Date) {
-        guard let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: now)
-        else { return }
-        let day = TrackingDay.key(for: yesterday)
+        let day = TrackingDay.yesterdayKey(from: now)
         admit(
             CompanionEvent(
                 id: CompanionEvent.deterministicID("day-end:\(day)"),
@@ -169,7 +161,7 @@ final class CompanionPerception {
         }
     }
 
-    private static func json(_ fields: [String: String]) -> String? {
-        (try? JSONEncoder().encode(fields)).flatMap { String(data: $0, encoding: .utf8) }
+    private static func json(_ value: some Encodable) -> String? {
+        (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) }
     }
 }

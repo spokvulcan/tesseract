@@ -74,37 +74,49 @@ extension MemoryStore {
     }
 
     /// A completed turn consumed its batch — the only way an Event leaves the
-    /// recovery set (the wake invariant, ADR-0040 §13).
+    /// recovery set (the wake invariant, ADR-0040 §13). One transaction, one
+    /// prepared statement (the `markSeen` batch idiom): all-or-nothing, so a
+    /// crash mid-batch cannot leave it half-consumed.
     func consumeEvents(ids: [UUID], turnID: UUID, at now: Date = Date()) throws {
-        for id in ids {
+        guard !ids.isEmpty else { return }
+        try db.transaction {
             let stmt = try db.prepare(
                 "UPDATE events SET state = 'consumed', consumedAt = ?2, turnID = ?3 "
                     + "WHERE id = ?1 AND state = 'presented'")
-            stmt.bind(1, id.uuidString)
-                .bind(2, now.timeIntervalSince1970)
-                .bind(3, turnID.uuidString)
-            try stmt.run()
+            for id in ids {
+                stmt.bind(1, id.uuidString)
+                    .bind(2, now.timeIntervalSince1970)
+                    .bind(3, turnID.uuidString)
+                try stmt.run()
+                stmt.reset()
+            }
         }
     }
 
     /// Presented-but-unconsumed — a crash between drain and turn completion
-    /// leaves these; launch recovery re-presents them.
+    /// leaves these; launch recovery re-presents them. (`state = 'presented'`
+    /// alone is the predicate: `consumeEvents` flips state and stamps
+    /// `consumedAt` in the same UPDATE, so a presented row is unconsumed by
+    /// construction.)
     func unconsumedPresentedEvents() throws -> [CompanionEvent] {
         let stmt = try db.prepare(
-            "\(Self.eventSelect) WHERE state = 'presented' AND consumedAt IS NULL "
-                + "ORDER BY seq")
+            "\(Self.eventSelect) WHERE state = 'presented' ORDER BY seq")
         return try Self.decodeEvents(stmt)
     }
 
     /// Put a crashed batch back in the queue: pending again, order untouched
     /// (`seq` never changes), the failed presentation erased.
     func representEvents(ids: [UUID]) throws {
-        for id in ids {
+        guard !ids.isEmpty else { return }
+        try db.transaction {
             let stmt = try db.prepare(
                 "UPDATE events SET state = 'pending', presentedAt = NULL "
                     + "WHERE id = ?1 AND state = 'presented'")
-            stmt.bind(1, id.uuidString)
-            try stmt.run()
+            for id in ids {
+                stmt.bind(1, id.uuidString)
+                try stmt.run()
+                stmt.reset()
+            }
         }
     }
 

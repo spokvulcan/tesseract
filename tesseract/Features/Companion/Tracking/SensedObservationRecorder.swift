@@ -149,19 +149,25 @@ final class SensedObservationRecorder {
 
     // MARK: - Writing
 
-    private struct SpanValue: Codable {
+    /// The one encoded shape of a sensed span. Internal, not private: the
+    /// Event producer's `app-switch` payload (ADR-0046, #368) rides the same
+    /// shape — one definition of the epoch/minutes math, two consumers.
+    struct SpanValue: Codable {
         let start: Int
         let end: Int
         let minutes: Int
         let app: String?
+
+        init(start: Date, end: Date, app: String?) {
+            self.start = Int(start.timeIntervalSince1970)
+            self.end = Int(end.timeIntervalSince1970)
+            self.minutes = Int(end.timeIntervalSince(start) / 60)
+            self.app = app
+        }
     }
 
     private func writeSpan(kind: String, start: Date, end: Date, detail: String?) {
-        let span = SpanValue(
-            start: Int(start.timeIntervalSince1970),
-            end: Int(end.timeIntervalSince1970),
-            minutes: Int(end.timeIntervalSince(start) / 60),
-            app: detail)
+        let span = SpanValue(start: start, end: end, app: detail)
         let value =
             (try? JSONEncoder().encode(span)).flatMap { String(data: $0, encoding: .utf8) }
             ?? "{}"

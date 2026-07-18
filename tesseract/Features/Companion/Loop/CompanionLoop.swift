@@ -73,7 +73,7 @@ final class CompanionLoop {
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
         openConversation: @escaping @MainActor (UUID) -> Void,
-        perceiveDayStart: @escaping @MainActor (Date) -> Void = { _ in }
+        perceiveDayStart: @escaping @MainActor (Date) -> Void
     ) {
         self.store = store
         self.recorder = recorder

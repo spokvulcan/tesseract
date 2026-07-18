@@ -15,15 +15,6 @@ import Testing
 
 @testable import Tesseract_Agent
 
-private func scratchDir(_ label: String) -> URL {
-    FileManager.default.temporaryDirectory
-        .appendingPathComponent("\(label)-\(UUID().uuidString)", isDirectory: true)
-}
-
-private func scratchStore() throws -> MemoryStore {
-    try MemoryStore(directory: scratchDir("event-tests"))
-}
-
 private func event(
     _ content: String, kind: CompanionEventKind = .macWake, id: UUID = UUID()
 ) -> CompanionEvent {
@@ -67,7 +58,7 @@ private func event(
     }
 
     @Test func queueSurvivesRelaunch() async throws {
-        let dir = scratchDir("event-relaunch")
+        let dir = makeTempDir("event-relaunch")
         let store = try MemoryStore(directory: dir)
         let one = event("before the crash")
         let two = event("also before")
@@ -135,15 +126,15 @@ private func event(
 
 @Suite @MainActor struct CompanionPerceptionTests {
 
+    /// `isTestHost` defaults false here: these tests exercise the very door
+    /// the test-host gate closes.
     private func makePerception(
-        enabled: Bool = true
+        enabled: Bool = true, isTestHost: Bool = false
     ) throws -> (CompanionPerception, MemoryStore) {
         let store = try scratchStore()
-        let recorder = CompanionFlightRecorder(directory: scratchDir("event-flight"))
-        // `isTestHost: false`: these tests exercise the very door the
-        // test-host gate closes.
         let perception = CompanionPerception(
-            store: store, recorder: recorder, isEnabled: { enabled }, isTestHost: false)
+            store: store, recorder: scratchRecorder(), isEnabled: { enabled },
+            isTestHost: isTestHost)
         return (perception, store)
     }
 
@@ -198,10 +189,7 @@ private func event(
     @Test func testHostsNeverAdmitIntoTheQueue() async throws {
         // The #360 class: a test host bootstraps the real container — its
         // perceptions must never land in the owner's queue.
-        let store = try scratchStore()
-        let recorder = CompanionFlightRecorder(directory: scratchDir("event-flight"))
-        let perception = CompanionPerception(
-            store: store, recorder: recorder, isEnabled: { true }, isTestHost: true)
+        let (perception, store) = try makePerception(isTestHost: true)
 
         perception.dayStarted(at: Date())
         perception.powerChanged(onACPower: true)
