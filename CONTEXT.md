@@ -1548,6 +1548,17 @@ _Avoid_: engine defaults (capture mechanics stay on the engine); VPIO lifecycle
 (the arm mode is an input, not the policy); duck policy (the sibling policy for
 system audio).
 
+**Hold Wiring Arbiter**:
+The voice hold's async arbitration as a pure value machine: is the hold active,
+does a detached wiring own the engine, which generation is current, what request
+folded in behind it — one transition per driver (begin, end, schedule, landing),
+each returning a verdict the capture engine performs. The discipline that kills
+the tap-rewire crash class: two wirings never touch one engine at once, and a
+stale wiring's work is discarded on the stopped engine, never raced.
+_Avoid_: `holdGeneration`/`holdWireQueued` (the retired inline fields), wiring
+lock (nothing blocks — requests fold), hold state machine (the **Voice Session
+Machine** decides *when* to hold; this arbitrates *who owns the engine*).
+
 **Capture Dump**:
 The on-disk ring buffer of recent dictation capture audio — what the microphone tap
 delivered (post–**Voice Processing** when enabled, pre-resample) — tagged with its
