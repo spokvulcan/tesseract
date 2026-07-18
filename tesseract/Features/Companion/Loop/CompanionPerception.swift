@@ -229,8 +229,9 @@ final class CompanionPerception {
                 // switch's *start* rides too (`at`), so the pairing keys off
                 // when the owner moved to the app, not when he later left it —
                 // the record's own stamp lands at the session's close.
-                if let app = event.appHint { snapshot["app"] = app }
-                if let at = event.spanStartHint { snapshot["at"] = String(at) }
+                let hints = event.recordHints
+                if let app = hints.app { snapshot["app"] = app }
+                if let at = hints.at { snapshot["at"] = String(at) }
                 recorder.record("event.admitted", snapshot: snapshot, note: event.content)
             } catch {
                 Log.companion.error("Event admission failed: \(error.localizedDescription)")

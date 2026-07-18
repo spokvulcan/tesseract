@@ -331,7 +331,7 @@ private func event(
         }
         #expect(event.kind == .notificationArrived)
         #expect(event.content == "GitHub: PR merged — spokvulcan/tesseract")
-        #expect(event.appHint == "GitHub")
+        #expect(event.recordHints.app == "GitHub")
         let payload = event.payload ?? ""
         #expect(payload.contains("\"app\":\"GitHub\""))
         #expect(payload.contains("PR merged"))

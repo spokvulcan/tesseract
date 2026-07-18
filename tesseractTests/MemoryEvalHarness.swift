@@ -159,13 +159,15 @@ nonisolated struct RetrievalMetrics: Sendable {
 nonisolated enum MemoryEvalCorpus: Sendable {
 
     /// Application Support, resolved the way the app itself resolves it
-    /// (`AgentConversationStore.swift:47`, `DependencyContainer.swift:25`).
+    /// (`AgentConversationStore.swift:47`, `DependencyContainer.swift:25`) —
+    /// always through `.applicationSupportDirectory`, never a literal `~`, so it
+    /// stays whatever the app would use.
     ///
-    /// The test host runs INSIDE the app's sandbox container, so this is already
-    /// `…/Containers/app.tesseract.agent/Data/Library/Application Support`.
-    /// Spelling that path out with a literal `~` instead would expand against
-    /// the container's own home and nest the container inside itself — which is
-    /// exactly how the first run of this harness managed to skip every test.
+    /// Post-#381 the agent is non-sandboxed, so this resolves to the real
+    /// `~/Library/Application Support`, not the retired per-app container. That
+    /// path starts near-empty on a fresh install, which is exactly why
+    /// `minimumEvalConversations` gates the suites below rather than an
+    /// existence check.
     static var applicationSupport: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory

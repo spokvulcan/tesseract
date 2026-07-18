@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import MLXAudioCore
 
 /// One-time, models-only migration for the un-sandbox cutover (#381, ADR-0047).
 ///
@@ -23,9 +24,9 @@ import Foundation
 /// re-downloads) rather than taking launch down.
 enum SandboxMigration {
 
-    /// `ModelUtils.storageDirectoryName` — the shared root every model family
-    /// (agent, TTS, ASR) stores under.
-    private static let modelsDirName = "models"
+    /// The shared root every model family (agent, TTS, ASR) stores under —
+    /// sourced from the vendored constant so it can't drift from the real path.
+    private static let modelsDirName = ModelUtils.storageDirectoryName
 
     /// The models directory inside the retired sandbox container, expressed
     /// relative to the real home. Non-sandboxed, `NSHomeDirectory()` is the

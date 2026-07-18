@@ -121,28 +121,30 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
         (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) }
     }
 
-    /// The source app when the payload names one — notification and app-switch
-    /// events carry it. Surfaced onto the flight-recorder admission so the Hub
-    /// aggregator can pair a held notification with a later switch to its app
-    /// (#380's inferred-miss tally) without re-parsing the content line.
-    var appHint: String? {
-        guard let payload, let data = payload.data(using: .utf8) else { return nil }
-        struct AppOnly: Decodable { let app: String? }
-        let app = (try? JSONDecoder().decode(AppOnly.self, from: data))?.app
-        let trimmed = app?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (trimmed?.isEmpty ?? true) ? nil : trimmed
+    /// The correlation hints projected off the payload for the flight-recorder
+    /// record — both decoded in one pass, because admission surfaces both and
+    /// decoding each on its own would parse the same payload string twice:
+    /// - `app`: the source app notification and app-switch events name.
+    /// - `at`: for a span-shaped payload, the session's *start* — when the owner
+    ///   switched *to* the app, not when he later left it. The app-switch admits
+    ///   at the session's close, so surfacing `start` lets the inferred-miss
+    ///   tally (#380) correlate against a real switch-to rather than the app he
+    ///   was already in. Nil for a notification payload (its epoch field is
+    ///   `occurredAt`, not `start`).
+    /// Either is nil when the payload lacks that field (or has no payload).
+    var recordHints: (app: String?, at: Int?) {
+        guard let payload, let data = payload.data(using: .utf8),
+            let hints = try? JSONDecoder().decode(PayloadHints.self, from: data)
+        else { return (nil, nil) }
+        let trimmed = hints.app?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ((trimmed?.isEmpty ?? true) ? nil : trimmed, hints.start)
     }
 
-    /// The start of a span-shaped payload — the app-switch session's *start*,
-    /// i.e. when the owner switched *to* the app, not when he later left it.
-    /// Surfaced onto the record so the inferred-miss tally (#380) correlates a
-    /// notification with a real switch-to, not a session close (which lands
-    /// after and would score the app he was already in as a miss). Nil for a
-    /// notification payload (its epoch field is `occurredAt`, not `start`).
-    var spanStartHint: Int? {
-        guard let payload, let data = payload.data(using: .utf8) else { return nil }
-        struct StartOnly: Decodable { let start: Int? }
-        return (try? JSONDecoder().decode(StartOnly.self, from: data))?.start
+    /// The minimal projection `recordHints` decodes — only the two correlation
+    /// keys, never the full body the payload also carries.
+    private struct PayloadHints: Decodable {
+        let app: String?
+        let start: Int?
     }
 }
 
@@ -184,7 +186,7 @@ extension CompanionEvent {
     nonisolated static let notificationBodyCap = 500
 
     /// The payload shape a notification Event persists — the full fields the
-    /// content line trims; `appHint` decodes `app` back off it at admission.
+    /// content line trims; `recordHints` decodes `app` back off it at admission.
     nonisolated struct NotificationPayload: Codable {
         let app: String
         let title: String

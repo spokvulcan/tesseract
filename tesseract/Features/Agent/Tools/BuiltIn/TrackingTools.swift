@@ -35,7 +35,7 @@ private nonisolated let sampleDomains: [String: TrackingDomain] = [
 
 nonisolated func createTrackTool(
     store: MemoryStore,
-    recorder: CompanionFlightRecorder? = nil,
+    recorder: CompanionFlightRecorder,
     context: CompanionTurnContext? = nil
 ) -> AgentToolDefinition {
     AgentToolDefinition(
@@ -117,6 +117,17 @@ nonisolated func createTrackTool(
     )
 }
 
+/// A required string field: present and non-blank once trimmed, else the given
+/// `TrackingToolError`. The one shape every `track` kind uses to demand a field.
+private nonisolated func requiredNonEmptyString(
+    _ payload: [String: JSONValue], key: String, or message: String
+) throws -> String {
+    guard let value = ToolArgExtractor.string(payload, key: key),
+        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else { throw TrackingToolError(message: message) }
+    return value
+}
+
 // MARK: - hold
 
 /// A held notification lands on the flight recorder, not the tracking DB: it is
@@ -125,24 +136,14 @@ nonisolated func createTrackTool(
 /// `hold.tracked` traces — counts only, the model narrates.
 private nonisolated func trackHold(
     _ payload: [String: JSONValue],
-    recorder: CompanionFlightRecorder?,
+    recorder: CompanionFlightRecorder,
     context: CompanionTurnContext?
 ) async throws -> String {
-    guard let recorder else {
-        throw TrackingToolError(
-            message: "Holds are a Mission Control practice — no record here to write.")
-    }
-    guard let app = ToolArgExtractor.string(payload, key: "app"),
-        !app.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-        throw TrackingToolError(message: "hold payload requires the 'app' you held.")
-    }
-    guard let why = ToolArgExtractor.string(payload, key: "why"),
-        !why.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-        throw TrackingToolError(
-            message: "hold payload requires 'why' — the verdict is the point of the record.")
-    }
+    let app = try requiredNonEmptyString(
+        payload, key: "app", or: "hold payload requires the 'app' you held.")
+    let why = try requiredNonEmptyString(
+        payload, key: "why",
+        or: "hold payload requires 'why' — the verdict is the point of the record.")
     let title = ToolArgExtractor.string(payload, key: "title")
     var snapshot = ["app": app]
     if let title, !title.isEmpty { snapshot["title"] = title }
@@ -160,16 +161,10 @@ private nonisolated func trackHold(
 private nonisolated func trackObservation(
     _ payload: [String: JSONValue], store: MemoryStore
 ) async throws -> String {
-    guard let kind = ToolArgExtractor.string(payload, key: "kind"),
-        !kind.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-        throw TrackingToolError(message: "observation payload requires a 'kind'")
-    }
-    guard let value = ToolArgExtractor.string(payload, key: "value"),
-        !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-        throw TrackingToolError(message: "observation payload requires a non-empty 'value'")
-    }
+    let kind = try requiredNonEmptyString(
+        payload, key: "kind", or: "observation payload requires a 'kind'")
+    let value = try requiredNonEmptyString(
+        payload, key: "value", or: "observation payload requires a non-empty 'value'")
     let domain: TrackingDomain
     if let explicit = ToolArgExtractor.string(payload, key: "domain") {
         domain = try parseDomain(explicit)
@@ -282,11 +277,8 @@ private nonisolated func parseChain(
 
     var chain: [ContractStep] = []
     for item in items {
-        guard let title = ToolArgExtractor.string(item, key: "title"),
-            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw TrackingToolError(message: "Every chain step requires a 'title'.")
-        }
+        let title = try requiredNonEmptyString(
+            item, key: "title", or: "Every chain step requires a 'title'.")
         let status: ContractStepStatus
         if let raw = ToolArgExtractor.string(item, key: "status") {
             guard let parsed = ContractStepStatus(rawValue: raw) else {
@@ -359,11 +351,8 @@ private nonisolated func trackItem(
     }
     switch action {
     case "add":
-        guard let title = ToolArgExtractor.string(payload, key: "title"),
-            !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else {
-            throw TrackingToolError(message: "item add requires a 'title'")
-        }
+        let title = try requiredNonEmptyString(
+            payload, key: "title", or: "item add requires a 'title'")
         let domain =
             try ToolArgExtractor.string(payload, key: "domain")
             .map(parseDomain) ?? .work

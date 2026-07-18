@@ -116,7 +116,7 @@ import Testing
         _ store: MemoryStore, kind: String, _ payload: [String: JSONValue]
     ) async throws -> String {
         try await toolText(
-            createTrackTool(store: store),
+            createTrackTool(store: store, recorder: scratchRecorder()),
             ["kind": .string(kind), "payload": .object(payload)])
     }
 
@@ -383,7 +383,7 @@ import Testing
 
     @Test func unknownKindAndMalformedPayloadFailLoudly() async throws {
         let store = try scratchStore()
-        let tool = createTrackTool(store: store)
+        let tool = createTrackTool(store: store, recorder: scratchRecorder())
         await #expect(throws: TrackingToolError.self) {
             _ = try await tool.execute(
                 "t", ["kind": .string("mood"), "payload": .object([:])], nil, nil)
