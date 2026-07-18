@@ -244,38 +244,14 @@ actor LLMActor {
                         prefillMs: nil
                     )))
             let prefillStarted = Date.timeIntervalSinceReferenceDate
-            // VLM-class models (2D token tensors) run upstream `prepare` as a
-            // single forward pass over the whole prompt; chunk text-only
-            // prompts through the app's prefill driver to keep peak memory
-            // bounded (ADR-0006). Image-bearing inputs stay single-shot.
-            let iterator: TokenIterator
-            let prefillStep = genParams.prefillStepSize ?? 512
-            if prepared.text.tokens.ndim >= 2,
-                prepared.image == nil, prepared.video == nil,
-                prepared.text.tokens.dim(-1) > prefillStep
-            {
-                var cache = context.model.newCache(parameters: genParams)
-                let warmed = try PrefillExecutor.run(
-                    model: context.model,
-                    text: prepared.text,
-                    cache: cache,
-                    prefillStepSize: prefillStep
-                )
-                iterator = try PrefillExecutor.makeIterator(
-                    model: context.model,
-                    fullText: prepared.text,
-                    remainder: warmed.remainder,
-                    cache: &cache,
-                    parameters: genParams
-                )
-            } else {
-                iterator = try TokenIterator(
-                    input: prepared,
-                    model: context.model,
-                    cache: nil,
-                    parameters: genParams
-                )
-            }
+            let strategy = PrefillStrategy.decide(
+                for: prepared, prefillStepSize: genParams.prefillStepSize
+            )
+            let iterator = try strategy.makeIterator(
+                input: prepared,
+                model: context.model,
+                parameters: genParams
+            )
             let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
             await progressHandler?(
                 .prefillFinished(
@@ -285,17 +261,11 @@ actor LLMActor {
                         newTokensToPrefill: promptTokenCount,
                         prefillMs: prefillMs
                     )))
-            let (stream, completion) = TokenGenerationLoop.start(
-                promptTokenCount: promptTokenCount,
-                modelConfiguration: context.configuration,
-                tokenizer: context.tokenizer,
+            return Self.makeRawGenerationStart(
                 iterator: iterator,
+                promptTokenCount: promptTokenCount,
+                context: context,
                 tools: canonicalTools
-            )
-            return HTTPServerRawGenerationStart(
-                stream: stream,
-                cancel: { completion.cancel() },
-                waitForCompletion: { await completion.value }
             )
         }
     }
@@ -400,38 +370,35 @@ actor LLMActor {
             tokenNDim >= 2
             ? flatArr.expandedDimensions(axis: 0)
             : flatArr
-        let continuedText = LMInput.Text(tokens: tokenArr, mask: nil)
+        let continuedInput = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
 
-        // Same VLM-class chunking as `startRawGeneration`: upstream's 2D
-        // `prepare` is single-shot, so pre-chunk long token-only prompts
-        // through the app driver (ADR-0006).
-        let iterator: TokenIterator
-        let prefillStep = parameters.prefillStepSize ?? 512
-        if tokenNDim >= 2, combined.count > prefillStep {
-            var cache = context.model.newCache(parameters: parameters)
-            let warmed = try PrefillExecutor.run(
-                model: context.model,
-                text: continuedText,
-                cache: cache,
-                prefillStepSize: prefillStep
-            )
-            iterator = try PrefillExecutor.makeIterator(
-                model: context.model,
-                fullText: continuedText,
-                remainder: warmed.remainder,
-                cache: &cache,
-                parameters: parameters
-            )
-        } else {
-            iterator = try TokenIterator(
-                input: LMInput(text: continuedText),
-                model: context.model,
-                cache: nil,
-                parameters: parameters
-            )
-        }
-        let (stream, completion) = TokenGenerationLoop.start(
+        let strategy = PrefillStrategy.decide(
+            for: continuedInput, prefillStepSize: parameters.prefillStepSize
+        )
+        let iterator = try strategy.makeIterator(
+            input: continuedInput,
+            model: context.model,
+            parameters: parameters
+        )
+        return makeRawGenerationStart(
+            iterator: iterator,
             promptTokenCount: combined.count,
+            context: context,
+            tools: tools
+        )
+    }
+
+    /// The raw arms' shared tail: start the token-event loop over a built
+    /// iterator and wrap it as the start value both arms return. Must run
+    /// inside a ``ModelContainer/perform(_:)`` closure on this actor.
+    private static func makeRawGenerationStart(
+        iterator: consuming TokenIterator,
+        promptTokenCount: Int,
+        context: ModelContext,
+        tools: [ToolSpec]?
+    ) -> HTTPServerRawGenerationStart {
+        let (stream, completion) = TokenGenerationLoop.start(
+            promptTokenCount: promptTokenCount,
             modelConfiguration: context.configuration,
             tokenizer: context.tokenizer,
             iterator: iterator,

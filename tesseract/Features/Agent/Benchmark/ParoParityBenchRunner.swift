@@ -271,11 +271,9 @@ final class ParoParityBenchRunner {
         // construction as well would double-count the whole prefill.
         var appDriverPrefillSeconds = 0.0
         let iterator: TokenIterator
-        let prefillStep = parameters.prefillStepSize ?? 512
-        if prepared.text.tokens.ndim >= 2,
-            prepared.image == nil, prepared.video == nil,
-            promptTokenCount > prefillStep
-        {
+        if case .chunked(let prefillStep) = PrefillStrategy.decide(
+            for: prepared, prefillStepSize: parameters.prefillStepSize
+        ) {
             var cache = context.model.newCache(parameters: parameters)
             let prefillStart = ContinuousClock.now
             let warmed = try PrefillExecutor.run(
