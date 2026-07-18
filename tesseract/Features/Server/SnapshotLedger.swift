@@ -772,65 +772,18 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     }
 
     /// Eligible residents in eviction order under terminal-loss
-    /// utility. Must be called with `lock` held.
+    /// utility — the **Eviction Candidate Policy**'s pure ordering
+    /// (ADR-0049) over the manifest's eligible descriptors. Must be
+    /// called with `lock` held.
     private func terminalLossOrderedResidentsLocked(
         matching predicate: (HybridCacheSnapshot.CheckpointType) -> Bool,
         config: EvictionConfiguration
     ) -> [PersistedSnapshotDescriptor] {
-        terminalLossOrder(
+        EvictionCandidatePolicy.terminalLossOrder(
             sortedEligibleResidentsLocked(matching: predicate),
-            config: config
+            config: config,
+            now: Date().timeIntervalSinceReferenceDate
         )
-    }
-
-    /// Order descriptors worst-victim-first under terminal-loss
-    /// utility: ascending `norm(1/age) + α · norm(re-prefill seconds /
-    /// chain bytes)`. Re-prefill spans the *whole* chain — an SSD loss
-    /// re-prefills `[0, tokenOffset]` from scratch — and bytes are the
-    /// chain total (`totalBytes`), never per-segment values; both
-    /// inputs are already persisted (schema v8 carries `tokenOffset`,
-    /// `bytes`, and the inherited segments), so the cut needs no
-    /// manifest schema bump. The `α = 0` fast path returns the plain
-    /// LRU order — byte-identical to the pre-ADR-0011 cut. Pure
-    /// derivation over its inputs; shared by the cut and the
-    /// **Survival Gate** simulation.
-    private func terminalLossOrder(
-        _ candidates: [PersistedSnapshotDescriptor],
-        config: EvictionConfiguration
-    ) -> [PersistedSnapshotDescriptor] {
-        let lru = candidates.sorted {
-            ($0.lastAccessAt, $0.snapshotID) < ($1.lastAccessAt, $1.snapshotID)
-        }
-        guard config.alpha != 0, lru.count > 1 else { return lru }
-
-        let now = Date().timeIntervalSinceReferenceDate
-        let rawRecencies = lru.map {
-            EvictionPolicy.recencyWeight(ageSeconds: now - $0.lastAccessAt)
-        }
-        let terms = EvictionPolicy.blendedTerms(
-            rawRecencies: rawRecencies, alpha: config.alpha
-        ) {
-            lru.map { resident -> Double in
-                guard resident.totalBytes > 0 else { return 0 }
-                let rePrefillSeconds =
-                    EvictionPolicy.parentRelativeFlops(
-                        nodeOffset: resident.tokenOffset,
-                        parentOffset: 0,
-                        profile: config.flopProfile
-                    ) / config.estimates.prefillFlopsPerSecond
-                return rePrefillSeconds / Double(resident.totalBytes)
-            }
-        }
-
-        return zip(lru, terms)
-            .map { resident, terms in
-                (resident: resident, utility: terms.utility)
-            }
-            .sorted {
-                ($0.utility, $0.resident.lastAccessAt, $0.resident.snapshotID)
-                    < ($1.utility, $1.resident.lastAccessAt, $1.resident.snapshotID)
-            }
-            .map(\.resident)
     }
 
     // MARK: - Survival Gate (PRD #82 slice #90)
@@ -882,9 +835,10 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
             schemaVersion: SnapshotManifestSchema.currentVersion
         )
 
-        let pool = terminalLossOrder(
+        let pool = EvictionCandidatePolicy.terminalLossOrder(
             sortedEligibleResidentsLocked(matching: { $0 != .system }) + [incoming],
-            config: config
+            config: config,
+            now: Date().timeIntervalSinceReferenceDate
         )
         var simulatedBytes = currentSSDBytes
         for victim in pool {
