@@ -1362,12 +1362,15 @@ wake wakes Jarvis, not the owner), notification (one possible *outcome* of the
 turn a wake grants).
 
 **Wake Evaluator**:
-The pure decider at the loop's heart (ADR-0040 §2, ADR-0043): every tick, one
-gathered snapshot of signals — due **Wake**s, day state, the attention gate's
-verdict, presence, power, GPU — goes in, and at most one decision comes out:
-which **Turn** to grant, a deferral to record, or nothing. Due-ness and
-eligibility only, never judgment; the loop gathers the signals and performs
-the decision.
+The pure decider holding the fold's whole clock (ADR-0040 §2, ADR-0043,
+ADR-0046 #371): every tick, one gathered snapshot of signals — pending
+**Event**s, due **Wake**s, day state, presence, power, GPU — goes in, and at
+most one decision comes out: grant the fold **Turn**, record a deferral,
+perceive day start, or wait. The purist rule lives here: a turn iff pending
+Events or a due Wake, and the model slot free — no cadence, no safety tick,
+no attention gate (the arbiter's FIFO protects the owner mechanically).
+Due-ness and eligibility only, never judgment; the loop gathers the signals
+and performs the decision.
 _Avoid_: scheduler (implies code owns the rhythm — the entity books its own),
 dispatcher, trigger engine, evaluate() (the loop's method that calls it).
 

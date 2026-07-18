@@ -93,12 +93,12 @@ import Testing
         #expect(state.dayStartedAt == nil)
 
         state.dayStartedAt = Date()
-        state.lastAmbientAt = Date()
+        state.instructionsReviewedAt = Date()
         try await store.setLoopDayState(key, state)
 
         let loaded = try await store.loopDayState(key)
         #expect(loaded.dayStartedAt != nil)
-        #expect(loaded.lastAmbientAt != nil)
+        #expect(loaded.instructionsReviewedAt != nil)
         #expect(try await store.loopDayState("2026-07-17").dayStartedAt == nil)
     }
 }

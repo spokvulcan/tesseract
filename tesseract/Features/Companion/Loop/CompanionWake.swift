@@ -140,21 +140,16 @@ nonisolated enum CompanionResurfacing {
 /// The loop's small per-day persisted state — what must survive a restart but
 /// is not derivable from the wakes table.
 nonisolated struct CompanionLoopDayState: Codable, Sendable, Equatable {
-    /// The day-start transition fired (first sustained presence after the
-    /// overnight gap). Nil until then.
+    /// The day-start perception fired (first sustained presence after the
+    /// overnight gap). Nil until then. (`lastAmbientAt` lived here until #371
+    /// retired the ambient cadence; a persisted key decodes ignored.)
     var dayStartedAt: Date?
-    /// The last ambient turn's completion — the spacing gate reads it.
-    var lastAmbientAt: Date?
     /// The day's standing-instructions review ran (#370) — sleep passes fire
     /// on every idle, the review at most once per day.
     var instructionsReviewedAt: Date?
 
-    init(
-        dayStartedAt: Date? = nil, lastAmbientAt: Date? = nil,
-        instructionsReviewedAt: Date? = nil
-    ) {
+    init(dayStartedAt: Date? = nil, instructionsReviewedAt: Date? = nil) {
         self.dayStartedAt = dayStartedAt
-        self.lastAmbientAt = lastAmbientAt
         self.instructionsReviewedAt = instructionsReviewedAt
     }
 }

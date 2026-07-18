@@ -325,6 +325,8 @@ enum ConversationOriginBadge {
         case .interactive: nil
         case .beat: "beat"
         case .wake: "wake"
+        case .event: "events"
+        // Retired by #371 — renders only on pre-fold transcripts.
         case .ambient: "ambient"
         case .catchup: "catch-up"
         case .sleep: "sleep"

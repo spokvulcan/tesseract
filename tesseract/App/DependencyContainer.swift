@@ -546,26 +546,6 @@ final class DependencyContainer: ObservableObject {
             modelDownloadManager.isDownloaded($0)
         }
     )
-    /// The owner's attention outranks the entity's schedule: background turns
-    /// hold while he is using the app (voice session, generation, TTS he is
-    /// listening to, dictation into the composer, or the app frontmost with
-    /// recent input) and for the gate's quiet window after — the one queue,
-    /// strictly after him, never beside him.
-    lazy var companionAttentionGate = CompanionAttentionGate(
-        isOwnerEngaged: { [unowned self] in
-            if self.companionVoiceSession.isActive { return true }
-            if self.chatSession.isGenerating { return true }
-            if self.agentVoiceInput.voiceState == .recording
-                || self.agentVoiceInput.voiceState == .transcribing
-            {
-                return true
-            }
-            if self.speechCoordinator.state.isActive { return true }
-            return NSApp.isActive
-                && IdleMonitor.hidIdleSeconds() < CompanionAttentionGate.quietWindow
-        },
-        isMachineBusy: { [unowned self] in self.inferenceArbiter.isGPULeaseHeld }
-    )
     // Explicitly typed: the loop's `speak` closure reaches the summons, and
     // the summons's banner fallback reaches the loop — inference across the
     // two lazy initializers would be circular.
@@ -575,10 +555,25 @@ final class DependencyContainer: ObservableObject {
         runner: companionTurnRunner,
         notifier: CompanionNotifier(),
         idleMonitor: idleMonitor,
-        attention: companionAttentionGate,
         sensed: sensedObservations,
         calendar: CompanionCalendarReader(),
         isGPUBusy: { [inferenceArbiter] in inferenceArbiter.isGPULeaseHeld },
+        // Briefing evidence, not a gate (#371): live owner activity — voice
+        // session, interactive generation, dictation capture, TTS he is
+        // listening to, or the app frontmost with input in the last two
+        // minutes. The loop samples this each tick for "he last used the
+        // app…"; owner-attention protection is the arbiter's FIFO now.
+        isOwnerEngaged: { [unowned self] in
+            if self.companionVoiceSession.isActive { return true }
+            if self.chatSession.isGenerating { return true }
+            if self.agentVoiceInput.voiceState == .recording
+                || self.agentVoiceInput.voiceState == .transcribing
+            {
+                return true
+            }
+            if self.speechCoordinator.state.isActive { return true }
+            return NSApp.isActive && IdleMonitor.hidIdleSeconds() < 120
+        },
         isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled },
         // The spoken rung — choreography lives in `CompanionSummons`.
         speak: { [weak self] text in

@@ -15,7 +15,11 @@ nonisolated enum TurnOrigin: String, Codable, Sendable {
     case beat
     /// A booked wake fired on time (promise, follow-up, re-summons).
     case wake
-    /// Unoccasioned cognition (ADR-0040 §7).
+    /// A fold turn granted by pending Events alone — no wake due (#371).
+    case event
+    /// RETIRED (ADR-0046 #371): the unoccasioned cadence-granted turn died
+    /// with the Event Fold. The case survives only so historical transcripts
+    /// keep their tag; nothing emits it.
     case ambient
     /// Overdue wakes triaged late (past the catch-up grace).
     case catchup

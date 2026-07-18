@@ -113,3 +113,23 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
             .withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
     }
 }
+
+/// The drained batch as the turn's opening sees it (#371): everything that
+/// reached the entity since its last turn, in total order — the fold's
+/// `events` argument, rendered.
+nonisolated enum CompanionEventBatch {
+
+    static func render(_ events: [CompanionEvent], now: Date = Date()) -> String {
+        guard !events.isEmpty else { return "" }
+        let lines = events.enumerated().map { index, event -> String in
+            let when = event.occurredAt.formatted(date: .omitted, time: .shortened)
+            return "\(index + 1). [\(event.kind.rawValue)] \(when) — \(event.content)"
+        }
+        return """
+            <events>
+            Everything that reached you since your last turn, in order:
+            \(lines.joined(separator: "\n"))
+            </events>
+            """
+    }
+}
