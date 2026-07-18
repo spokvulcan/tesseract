@@ -670,6 +670,7 @@ nonisolated final class ServerCompletion {
         // Every captured value is an immutable copy or a Sendable handle, so
         // boxing the whole drive closure is safe for the same reason
         // `mlxStartBox` is.
+        let promptEndsWithClosedChannel = modelIdentity?.promptEndsWithClosedChannel ?? false
         let mlxStartBox = UnsafeSendableBox(mlxStart)
         let traceLog = completionTraceLog
         let driveBox = UnsafeSendableBox<() async -> Void>({
@@ -684,6 +685,7 @@ nonisolated final class ServerCompletion {
                 renderContext: renderContext,
                 traceLog: traceLog,
                 driver: driver,
+                promptEndsWithClosedChannel: promptEndsWithClosedChannel,
                 loopCancel: loopCancel,
                 continuationStarter: continuationStarter,
                 continuation: continuation,
@@ -731,6 +733,7 @@ nonisolated final class ServerCompletion {
         renderContext: TemplateRenderContext,
         traceLog: CompletionTraceLog,
         driver: ManagedGenerationDriver,
+        promptEndsWithClosedChannel: Bool,
         loopCancel: LateBoundCancel,
         continuationStarter:
             @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
@@ -883,6 +886,7 @@ nonisolated final class ServerCompletion {
                 prefixCache: prefixCache,
                 renderContext: renderContext,
                 promptStartsThinking: driver.startsInsideThinkBlock,
+                promptEndsWithClosedChannel: promptEndsWithClosedChannel,
                 intervened: outcome.intervened,
                 assistantText: accumulator.text,
                 assistantReasoning: accumulator.thinking,
@@ -1069,6 +1073,13 @@ nonisolated final class ServerCompletion {
         // the closure runs on the **Model Session**'s isolation and cannot
         // sync-read the actor-confined module.
         let promptStartsThinking = self.promptStartsThinking
+        // Identity-derived; the fallback covers only the pre-install test
+        // window and mirrors the historical Qwen literals.
+        let generationPromptSuffix =
+            self.modelIdentity?.generationPromptSuffix
+            ?? (promptStartsThinking
+                ? "<|im_start|>assistant\n<think>\n"
+                : "<|im_start|>assistant\n")
         let modelFingerprint = self.modelFingerprint
         let imageKeying = self.modelIdentity?.imageKeying
         let audioKeying = self.modelIdentity?.audioKeying
@@ -1141,7 +1152,7 @@ nonisolated final class ServerCompletion {
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
                 toolSpecs: canonicalTools,
-                promptStartsThinking: promptStartsThinking,
+                generationPromptSuffix: generationPromptSuffix,
                 tokenizer: session.tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext

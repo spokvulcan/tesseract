@@ -620,6 +620,80 @@ struct CacheKeySpaceTests {
         }
         #expect(try space("clip-a").keyPath != space("clip-b").keyPath)
     }
+
+    // MARK: - Processor-added framing (the real Gemma 4 render shape)
+
+    // The template renders only the bare placeholder; the processor wraps the
+    // expansion in framing (`boi…eoi` / `boa…eoa`). With framing declared on
+    // the keying facts, translation must splice the framing back in — or the
+    // canonical path diverges from the live key path at every media span.
+    private static let framedImageKeying = ModelIdentity.ImageKeying(
+        imagePadTokenId: gemmaImagePad, spanRule: .sequential,
+        framing: ModelIdentity.MediaFraming(startTokenId: 255_999, endTokenId: 258_882))
+    private static let framedAudioKeying = ModelIdentity.AudioKeying(
+        audioPadTokenId: gemmaAudioPad,
+        framing: ModelIdentity.MediaFraming(startTokenId: 256_000, endTokenId: 258_883))
+
+    /// A bare-placeholder render translates to the exact live key-path
+    /// segment: framing + pseudo expansion + framing, for both modalities.
+    @Test func framedTranslationReproducesTheLiveKeyPath() throws {
+        let prepared = Self.gemmaPrompt(imageRuns: [4], audioRuns: [6])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [Self.digest("img")],
+            imageGrids: [],
+            imageKeying: Self.framedImageKeying,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: Self.framedAudioKeying
+        ).get()
+
+        // The real render shape: one bare pad per medium, no framing tokens.
+        let render: [Int] =
+            [1, 2, 3, 4]
+            + [Self.gemmaImagePad, 10, 11]
+            + [Self.gemmaAudioPad, 20, 21]
+        let translated = try space.translate(renderTokens: render).get()
+        #expect(translated == space.keyPath)
+        #expect(space.translatedLength(renderTokens: render) == .success(space.keyPath.count))
+    }
+
+    /// Framing is detected from the prepared evidence, not assumed: a run
+    /// whose neighbors are not the declared pair keeps its own bounds.
+    @Test func framingIsEvidenceBasedNotAssumed() throws {
+        // No framing tokens in the prepared sequence at all.
+        let prepared = [1, 2] + Array(repeating: Self.gemmaAudioPad, count: 4) + [3]
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [],
+            imageGrids: [],
+            imageKeying: nil,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: Self.framedAudioKeying
+        ).get()
+
+        let entry = space.audioTable[0]
+        #expect(entry.spliceRange == entry.runRange)
+        let translated = try space.translate(renderTokens: [1, 2, Self.gemmaAudioPad, 3]).get()
+        #expect(translated == space.keyPath)
+    }
+
+    /// Without declared framing (the pre-framing keyings), the splice stays
+    /// the bare run even when framing-shaped neighbors exist — Qwen-style
+    /// renders carry their framing in the render itself.
+    @Test func undeclaredFramingKeepsBareRunSplice() throws {
+        let prepared = Self.gemmaPrompt(imageRuns: [], audioRuns: [5])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            imageDigests: [],
+            imageGrids: [],
+            imageKeying: nil,
+            audioDigests: [Self.audioDigest("clip")],
+            audioKeying: Self.gemmaAudioKeying
+        ).get()
+
+        let entry = space.audioTable[0]
+        #expect(entry.spliceRange == entry.runRange)
+    }
 }
 
 extension Result where Success == CacheKeySpace, Failure == CacheKeySpace.UnkeyedReason {

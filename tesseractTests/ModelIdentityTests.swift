@@ -154,6 +154,48 @@ struct ModelIdentityTests {
         #expect(ModelIdentity(directory: dir).promptStartsThinking == false)
     }
 
+    // MARK: - promptEndsWithClosedChannel + generationPromptSuffix
+
+    /// The Gemma 4 template shape: the generation-prompt block appends the
+    /// empty pre-closed thought channel. The identity reads the channel fact
+    /// and derives the family-shaped generation-prompt literal.
+    @Test func gemma4TemplateReadsClosedChannelAndGemmaSuffix() {
+        let identity = ModelIdentity(
+            configJSON: ["model_type": "gemma4_unified"],
+            chatTemplate: "{%- if add_generation_prompt -%}{{- '<|turn>model\n' -}}"
+                + "{%- if not enable_thinking | default(false) -%}"
+                + "{{- '<|channel>thought\n<channel|>' -}}{%- endif -%}{%- endif -%}"
+        )
+        #expect(identity.isGemma4Unified == true)
+        #expect(identity.promptStartsThinking == false)
+        #expect(identity.promptEndsWithClosedChannel == true)
+        #expect(identity.generationPromptSuffix == "<|turn>model\n<|channel>thought\n<channel|>")
+    }
+
+    /// Channel markup that appears only in turn-body rendering (before the
+    /// generation-prompt block) is not a generation-prompt fact.
+    @Test func channelMarkupBeforeGenerationPromptDoesNotCount() {
+        let identity = ModelIdentity(
+            configJSON: ["model_type": "gemma4_unified"],
+            chatTemplate: "{{ '<|channel>thought\n' }} ... "
+                + "{%- if add_generation_prompt -%}{{- '<|turn>model\n' -}}{%- endif -%}"
+        )
+        #expect(identity.promptEndsWithClosedChannel == false)
+        #expect(identity.generationPromptSuffix == "<|turn>model\n")
+    }
+
+    /// Qwen identities keep the historical ChatML literals.
+    @Test func qwenSuffixFollowsThinkingFact() {
+        let thinking = ModelIdentity(
+            configJSON: ["model_type": "qwen3_5"],
+            chatTemplate: "add_generation_prompt ... <think>"
+        )
+        #expect(thinking.generationPromptSuffix == "<|im_start|>assistant\n<think>\n")
+
+        let plain = ModelIdentity(configJSON: ["model_type": "qwen3_5"], chatTemplate: nil)
+        #expect(plain.generationPromptSuffix == "<|im_start|>assistant\n")
+    }
+
     // MARK: - No-disk interpretation seam
 
     /// Non-Qwen `model_type` defers to the vendor's format inference.
@@ -387,7 +429,10 @@ struct ModelIdentityTests {
         #expect(
             identity.imageKeying
                 == ModelIdentity.ImageKeying(
-                    imagePadTokenId: 258_880, spanRule: .sequential
+                    imagePadTokenId: 258_880, spanRule: .sequential,
+                    framing: ModelIdentity.MediaFraming(
+                        startTokenId: 255_999, endTokenId: 258_882
+                    )
                 ))
         #expect(identity.imageKeying?.anchorsWarmContinuations == false)
     }
@@ -405,7 +450,12 @@ struct ModelIdentityTests {
         )
         #expect(
             identity.audioKeying
-                == ModelIdentity.AudioKeying(audioPadTokenId: 258_881))
+                == ModelIdentity.AudioKeying(
+                    audioPadTokenId: 258_881,
+                    framing: ModelIdentity.MediaFraming(
+                        startTokenId: 256_000, endTokenId: 258_883
+                    )
+                ))
     }
 
     /// Defaults mirror the published `gemma4_unified` config when the token
@@ -421,6 +471,10 @@ struct ModelIdentityTests {
         )
         #expect(identity.imageKeying?.imagePadTokenId == 258_880)
         #expect(identity.audioKeying?.audioPadTokenId == 258_881)
+        #expect(identity.imageKeying?.framing?.startTokenId == 255_999)
+        #expect(identity.imageKeying?.framing?.endTokenId == 258_882)
+        #expect(identity.audioKeying?.framing?.startTokenId == 256_000)
+        #expect(identity.audioKeying?.framing?.endTokenId == 258_883)
     }
 
     /// Audio keying stays nil off the recognized audio family: a Qwen3.5

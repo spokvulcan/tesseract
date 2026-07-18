@@ -127,7 +127,7 @@ nonisolated enum PrefillPlanner {
     static func detectBoundaries(
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        promptStartsThinking: Bool,
+        generationPromptSuffix: String,
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext = .canonical
@@ -141,11 +141,9 @@ nonisolated enum PrefillPlanner {
             tokenizer: tokenizer
         )
 
-        let genPromptStr =
-            promptStartsThinking
-            ? "<|im_start|>assistant\n<think>\n"
-            : "<|im_start|>assistant\n"
-        let genPromptTokens = tokenizer.encode(text: genPromptStr, addSpecialTokens: false)
+        let genPromptTokens = tokenizer.encode(
+            text: generationPromptSuffix, addSpecialTokens: false
+        )
         let lastMessageOffset: Int?
         if !genPromptTokens.isEmpty,
             fullTokens.count > genPromptTokens.count,

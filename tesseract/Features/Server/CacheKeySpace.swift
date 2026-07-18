@@ -41,8 +41,23 @@ nonisolated struct CacheKeySpace: Sendable {
         /// so this range is valid in both.
         let runRange: Range<Int>
         let positionSpan: Int
+        /// The key-path range a render placeholder expands to in translation:
+        /// `runRange` widened by processor-added framing (Gemma 4's
+        /// `boi…eoi`) when the family declares it. Equals `runRange` for
+        /// families whose render already carries the framing (Qwen-VL).
+        let spliceRange: Range<Int>
 
         var runLength: Int { runRange.count }
+
+        init(
+            digest: ImageDigest, runRange: Range<Int>, positionSpan: Int,
+            spliceRange: Range<Int>? = nil
+        ) {
+            self.digest = digest
+            self.runRange = runRange
+            self.positionSpan = positionSpan
+            self.spliceRange = spliceRange ?? runRange
+        }
     }
 
     /// One audio clip's run in prepared/key space. Audio positions are always
@@ -51,8 +66,16 @@ nonisolated struct CacheKeySpace: Sendable {
     struct AudioTableEntry: Hashable, Sendable {
         let digest: AudioDigest
         let runRange: Range<Int>
+        /// See ``ImageTableEntry/spliceRange`` — `boa…eoa` for Gemma 4.
+        let spliceRange: Range<Int>
 
         var runLength: Int { runRange.count }
+
+        init(digest: AudioDigest, runRange: Range<Int>, spliceRange: Range<Int>? = nil) {
+            self.digest = digest
+            self.runRange = runRange
+            self.spliceRange = spliceRange ?? runRange
+        }
     }
 
     /// Whole-request degradation: no valid Cache Key Path can be built — the
@@ -170,7 +193,12 @@ nonisolated struct CacheKeySpace: Sendable {
                     run, with: ImagePseudoToken.expansion(digest: digest, runLength: run.count)
                 )
                 imageTable.append(
-                    ImageTableEntry(digest: digest, runRange: run, positionSpan: span))
+                    ImageTableEntry(
+                        digest: digest, runRange: run, positionSpan: span,
+                        spliceRange: framedRange(
+                            run, in: preparedTokens, framing: imageKeying.framing
+                        )
+                    ))
             }
         }
 
@@ -188,7 +216,13 @@ nonisolated struct CacheKeySpace: Sendable {
                 keyPath.replaceSubrange(
                     run, with: AudioPseudoToken.expansion(digest: digest, runLength: run.count)
                 )
-                audioTable.append(AudioTableEntry(digest: digest, runRange: run))
+                audioTable.append(
+                    AudioTableEntry(
+                        digest: digest, runRange: run,
+                        spliceRange: framedRange(
+                            run, in: preparedTokens, framing: audioKeying.framing
+                        )
+                    ))
             }
         }
 
@@ -268,8 +302,8 @@ nonisolated struct CacheKeySpace: Sendable {
         var translated: [Int] = []
         translated.reserveCapacity(
             renderTokens.count
-                + imageTable.reduce(0) { $0 + $1.runLength - 1 }
-                + audioTable.reduce(0) { $0 + $1.runLength - 1 }
+                + imageTable.reduce(0) { $0 + $1.spliceRange.count - 1 }
+                + audioTable.reduce(0) { $0 + $1.spliceRange.count - 1 }
         )
         var imageIndex = 0
         var audioIndex = 0
@@ -282,8 +316,9 @@ nonisolated struct CacheKeySpace: Sendable {
                         ))
                 }
                 // The key path already holds this image's expansion — splice
-                // the run instead of re-deriving every pseudo-token.
-                translated.append(contentsOf: keyPath[imageTable[imageIndex].runRange])
+                // the run (framing-widened for processor-framed families)
+                // instead of re-deriving every pseudo-token.
+                translated.append(contentsOf: keyPath[imageTable[imageIndex].spliceRange])
                 imageIndex += 1
             } else if token == audioPadTokenId {
                 guard audioIndex < audioTable.count else {
@@ -292,7 +327,7 @@ nonisolated struct CacheKeySpace: Sendable {
                             occurrences: audioIndex + 1, clips: audioTable.count
                         ))
                 }
-                translated.append(contentsOf: keyPath[audioTable[audioIndex].runRange])
+                translated.append(contentsOf: keyPath[audioTable[audioIndex].spliceRange])
                 audioIndex += 1
             } else {
                 translated.append(token)
@@ -320,7 +355,7 @@ nonisolated struct CacheKeySpace: Sendable {
                             occurrences: imageIndex + 1, images: imageTable.count
                         ))
                 }
-                length += imageTable[imageIndex].runLength
+                length += imageTable[imageIndex].spliceRange.count
                 imageIndex += 1
             } else if token == audioPadTokenId {
                 guard audioIndex < audioTable.count else {
@@ -329,7 +364,7 @@ nonisolated struct CacheKeySpace: Sendable {
                             occurrences: audioIndex + 1, clips: audioTable.count
                         ))
                 }
-                length += audioTable[audioIndex].runLength
+                length += audioTable[audioIndex].spliceRange.count
                 audioIndex += 1
             } else {
                 length += 1
@@ -426,6 +461,25 @@ nonisolated struct CacheKeySpace: Sendable {
     }
 
     // MARK: - Internals
+
+    /// Widen a placeholder run to include the family's processor-added
+    /// framing tokens when they actually surround it in the prepared
+    /// sequence. A run at the sequence edge, or one whose neighbors are not
+    /// the declared framing pair, keeps its own bounds — detection is
+    /// evidence-based, never assumed from the family alone.
+    private static func framedRange(
+        _ run: Range<Int>,
+        in preparedTokens: [Int],
+        framing: ModelIdentity.MediaFraming?
+    ) -> Range<Int> {
+        guard let framing,
+            run.lowerBound > 0,
+            run.upperBound < preparedTokens.count,
+            preparedTokens[run.lowerBound - 1] == framing.startTokenId,
+            preparedTokens[run.upperBound] == framing.endTokenId
+        else { return run }
+        return (run.lowerBound - 1)..<(run.upperBound + 1)
+    }
 
     private static func placeholderRuns(in tokens: [Int], padTokenId: Int) -> [Range<Int>] {
         var runs: [Range<Int>] = []

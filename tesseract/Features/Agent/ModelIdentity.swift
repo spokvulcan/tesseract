@@ -24,6 +24,17 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// family's position-span rule. `nil` means the loaded family is not
     /// recognized for image keying — an image-bearing request then degrades
     /// to an **Unkeyed Completion**.
+    /// Framing tokens the *processor* wraps around a media placeholder run
+    /// (Gemma 4's `boi…eoi` / `boa…eoa`). They exist in the prepared/live
+    /// sequence but not in a chat-template render, which emits only the bare
+    /// placeholder — so render→key translation must splice them back in.
+    /// `nil` when the family's framing (if any) is already part of the
+    /// template render (Qwen-VL's `vision_start`/`vision_end`).
+    struct MediaFraming: Sendable, Equatable, Hashable {
+        let startTokenId: Int
+        let endTokenId: Int
+    }
+
     struct ImageKeying: Sendable, Equatable {
         /// How an image's placeholder run maps onto model positions.
         enum PositionSpanRule: Sendable, Equatable {
@@ -38,6 +49,8 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
 
         let imagePadTokenId: Int
         let spanRule: PositionSpanRule
+        /// Processor-added framing around the run; see ``MediaFraming``.
+        var framing: MediaFraming? = nil
 
         /// Compatibility surface for the M-RoPE consumers (grid logging, the
         /// Position Anchor geometry). `nil` under the sequential rule.
@@ -60,9 +73,10 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             self.spanRule = .mropeGrid(spatialMergeSize: spatialMergeSize)
         }
 
-        init(imagePadTokenId: Int, spanRule: PositionSpanRule) {
+        init(imagePadTokenId: Int, spanRule: PositionSpanRule, framing: MediaFraming? = nil) {
             self.imagePadTokenId = imagePadTokenId
             self.spanRule = spanRule
+            self.framing = framing
         }
     }
 
@@ -74,6 +88,13 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// to an **Unkeyed Completion**.
     struct AudioKeying: Sendable, Equatable {
         let audioPadTokenId: Int
+        /// Processor-added framing around the run; see ``MediaFraming``.
+        var framing: MediaFraming? = nil
+
+        init(audioPadTokenId: Int, framing: MediaFraming? = nil) {
+            self.audioPadTokenId = audioPadTokenId
+            self.framing = framing
+        }
     }
 
     /// Scratch-buffer geometry for Qwen3.5/Qwen3.6 full-attention layers.
@@ -127,9 +148,39 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// A discriminator for MoE-specific specialization downstream.
     let isMoE: Bool
 
+    /// `true` for the Gemma 4 unified family (`model_type == gemma4_unified`)
+    /// — the encoder-free multimodal 12B. Discriminates the generation-prompt
+    /// literal, which is family-shaped (`<|turn>model`, not `<|im_start|>`).
+    let isGemma4Unified: Bool
+
     /// `true` when the chat template opens a `<think>` block in its
     /// generation-prompt section.
     let promptStartsThinking: Bool
+
+    /// `true` when the template's generation-prompt section emits channel
+    /// markup (`<|channel>`) after the assistant header — Gemma 4's empty
+    /// pre-closed thought channel (`<|channel>thought\n<channel|>` under
+    /// `enable_thinking=false`). Those tokens sit in the live KV of every
+    /// request but vanish when the finished assistant turn is re-rendered, so
+    /// the canonical sequence diverges from the live cache exactly like a
+    /// `<think>` strip does. Leaf-store mode selection treats it as such.
+    let promptEndsWithClosedChannel: Bool
+
+    /// The literal string the chat template appends to open the model's turn
+    /// (assistant header plus any pre-filled think/channel markup). The
+    /// Prefill Planner subtracts this suffix from the full token path to find
+    /// the last-message boundary; a family-wrong literal silently costs the
+    /// boundary (no misbehavior, just a lost checkpoint site).
+    var generationPromptSuffix: String {
+        if isGemma4Unified {
+            return promptEndsWithClosedChannel
+                ? "<|turn>model\n<|channel>thought\n<channel|>"
+                : "<|turn>model\n"
+        }
+        return promptStartsThinking
+            ? "<|im_start|>assistant\n<think>\n"
+            : "<|im_start|>assistant\n"
+    }
 
     /// The opt-in render flags the chat template natively declares — the
     /// subset of `TemplateRenderContext`'s known flags the template text
@@ -190,8 +241,12 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         let modelType = configJSON?["model_type"] as? String
         self.isQwen35 = modelType?.hasPrefix("qwen3_5") ?? false
         self.isMoE = modelType == "qwen3_5_moe"
+        self.isGemma4Unified = modelType == "gemma4_unified"
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
+        self.promptEndsWithClosedChannel = Self.interpretPromptEndsWithClosedChannel(
+            chatTemplate: chatTemplate
+        )
         self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
@@ -232,6 +287,19 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
         else { return false }
         return chatTemplate[genPromptRange.upperBound...].contains("<think>")
+    }
+
+    /// Gemma 4's template ends its generation prompt with channel markup —
+    /// the empty pre-closed thought channel under `enable_thinking=false`.
+    /// Probed the same way as `<think>`: channel markup appearing after the
+    /// (final) `add_generation_prompt` reference is generation-prompt markup,
+    /// not turn-body rendering.
+    private static func interpretPromptEndsWithClosedChannel(chatTemplate: String?) -> Bool {
+        guard let chatTemplate,
+            let genPromptRange = chatTemplate.range(
+                of: "add_generation_prompt", options: .backwards)
+        else { return false }
+        return chatTemplate[genPromptRange.upperBound...].contains("<|channel>")
     }
 
     /// A flag is "declared" when the template text references it — Jinja
@@ -394,7 +462,11 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         if modelType == "gemma4_unified", root["vision_config"] is [String: Any] {
             return ImageKeying(
                 imagePadTokenId: root["image_token_id"] as? Int ?? 258_880,
-                spanRule: .sequential
+                spanRule: .sequential,
+                framing: MediaFraming(
+                    startTokenId: root["boi_token_id"] as? Int ?? 255_999,
+                    endTokenId: root["eoi_token_id"] as? Int ?? 258_882
+                )
             )
         }
 
@@ -414,7 +486,13 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         else { return nil }
 
         return AudioKeying(
-            audioPadTokenId: root["audio_token_id"] as? Int ?? 258_881
+            audioPadTokenId: root["audio_token_id"] as? Int ?? 258_881,
+            framing: MediaFraming(
+                // `eoa_token_id` is absent from the shipped config root; the
+                // fallbacks are the family constants the vendor pipeline uses.
+                startTokenId: root["boa_token_id"] as? Int ?? 256_000,
+                endTokenId: root["eoa_token_id"] as? Int ?? 258_883
+            )
         )
     }
 }
