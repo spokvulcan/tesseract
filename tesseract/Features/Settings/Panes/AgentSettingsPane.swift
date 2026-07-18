@@ -175,8 +175,15 @@ struct AgentSettingsPane: View {
                 .disabled(!settings.companionHeartbeatEnabled)
             // The voice session's taste ledger (#310) — tuned in wear.
             Toggle("Auto-Send Voice Turns", isOn: $settings.companionVoiceAutoSend)
-            // The Native Audio Turn experiment (ADR-0042).
-            Toggle("Native Audio Turns (Experimental)", isOn: $settings.companionVoiceNativeAudio)
+            // The Native Audio Turn experiment (ADR-0042). Visible only when
+            // the selected agent model is Audio-Capable (#358 story 9) —
+            // impossible to trip over on a text-only model.
+            if container.modelDownloadManager.isAudioCapable(settings.selectedAgentModelID) {
+                Toggle(
+                    "Native Audio Turns (Experimental)",
+                    isOn: $settings.companionVoiceNativeAudio
+                )
+            }
             HStack {
                 Text("End-of-Speech Silence")
                 Slider(value: $settings.companionVoiceTrailingSilence, in: 1.0...3.0)

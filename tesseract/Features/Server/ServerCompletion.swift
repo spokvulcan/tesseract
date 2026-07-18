@@ -1077,9 +1077,7 @@ nonisolated final class ServerCompletion {
         // window and mirrors the historical Qwen literals.
         let generationPromptSuffix =
             self.modelIdentity?.generationPromptSuffix
-            ?? (promptStartsThinking
-                ? "<|im_start|>assistant\n<think>\n"
-                : "<|im_start|>assistant\n")
+            ?? ModelIdentity.chatMLGenerationPromptSuffix(startsThinking: promptStartsThinking)
         let modelFingerprint = self.modelFingerprint
         let imageKeying = self.modelIdentity?.imageKeying
         let audioKeying = self.modelIdentity?.audioKeying

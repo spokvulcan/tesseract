@@ -177,7 +177,14 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
                 ? "<|turn>model\n<|channel>thought\n<channel|>"
                 : "<|turn>model\n"
         }
-        return promptStartsThinking
+        return Self.chatMLGenerationPromptSuffix(startsThinking: promptStartsThinking)
+    }
+
+    /// The historical ChatML literals, exposed for the one pre-install
+    /// fallback (`ServerCompletion` before load-time state exists) so the
+    /// strings live in exactly one file.
+    static func chatMLGenerationPromptSuffix(startsThinking: Bool) -> String {
+        startsThinking
             ? "<|im_start|>assistant\n<think>\n"
             : "<|im_start|>assistant\n"
     }

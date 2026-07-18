@@ -662,7 +662,20 @@ final class CompanionVoiceSessionController {
                 commitNativeAudioTurn(audio)
                 return
             case .transcribe:
-                break
+                // A take that would have gone native but exceeded the clip
+                // window is recorded as a distinct fallback (#358 story 16),
+                // so truncation-avoidance stays visible in the recorder.
+                if settings.companionVoiceNativeAudio, nativeAudioModelAvailable(),
+                    settings.companionVoiceAutoSend, audio.duration > Self.nativeTakeMaxDuration
+                {
+                    recordVoice(
+                        "voice.native-turn-fallback",
+                        snapshot: [
+                            "reason": "overlong-take",
+                            "durationSeconds": String(format: "%.1f", audio.duration),
+                            "maxSeconds": String(format: "%.0f", Self.nativeTakeMaxDuration),
+                        ])
+                }
             }
             let language = settings.language
             var proofread: (@MainActor (String) async -> ProofreadVerdict?)?
