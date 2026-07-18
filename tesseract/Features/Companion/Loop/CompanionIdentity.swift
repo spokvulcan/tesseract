@@ -20,10 +20,6 @@ import Foundation
 @MainActor
 final class CompanionIdentity {
 
-    /// The marker the dedupe scan looks for — one home, shared with
-    /// `CompanionInstructions.wrapIdentity`'s output.
-    static let blockMarker = "<jarvis-identity"
-
     private let store: MemoryStore
     private let isEnabled: () -> Bool
     private var injectedThisConversation = false
@@ -42,7 +38,8 @@ final class CompanionIdentity {
         guard isEnabled(), !injectedThisConversation else { return user }
         guard
             !transcript.contains(where: {
-                $0.asUser?.injectedContext?.contains(Self.blockMarker) == true
+                $0.asUser?.injectedContext?
+                    .contains(CompanionInstructions.identityBlockMarker) == true
             })
         else {
             injectedThisConversation = true
@@ -54,6 +51,18 @@ final class CompanionIdentity {
         let combined = [block, user.injectedContext].compactMap { $0 }
             .joined(separator: "\n\n")
         return user.with(injectedContext: combined)
+    }
+
+    /// The pipeline door — the same wrapper-restore contract as
+    /// `ConversationMemory.enrich(_:)`: whatever shape the send handed over
+    /// goes back in that shape.
+    func decorate(
+        _ outgoing: any AgentMessageProtocol & Sendable,
+        transcript: [any AgentMessageProtocol & Sendable]
+    ) async -> any AgentMessageProtocol & Sendable {
+        guard let user = outgoing.asUser else { return outgoing }
+        let decorated = await decorate(user, transcript: transcript)
+        return outgoing is CoreMessage ? CoreMessage.user(decorated) : decorated
     }
 
     /// A conversation switch — the next conversation carries its own block.

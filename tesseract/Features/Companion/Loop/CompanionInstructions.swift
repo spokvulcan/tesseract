@@ -145,12 +145,17 @@ nonisolated enum CompanionInstructions {
         """
     }
 
+    /// The identity block's opening tag — the one home: `wrapIdentity` emits
+    /// it and `CompanionIdentity`'s dedupe scan matches on it, so a renamed
+    /// tag can never silently strand the scan.
+    static let identityBlockMarker = "<jarvis-identity"
+
     /// The IDENTITY section alone — what interactive chat and the voice
     /// session ride (#370): the same Jarvis everywhere, without the loop
     /// conduct whose delivery tools don't exist there.
     static func wrapIdentity(_ version: CompanionInstructionsVersion) -> String {
         """
-        <jarvis-identity version="\(version.version)" author="\(version.author)">
+        \(identityBlockMarker) version="\(version.version)" author="\(version.author)">
         \(split(version.text).identity)
         </jarvis-identity>
         """

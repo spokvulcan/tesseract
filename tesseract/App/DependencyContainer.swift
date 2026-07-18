@@ -621,7 +621,9 @@ final class DependencyContainer: ObservableObject {
             self?.companionSummons.deliver(line: text)
         },
         openConversation: { [weak self] id in self?.presentConversation(id) },
-        perceiveDayStart: { [weak self] now in self?.companionPerception.dayStarted(at: now) },
+        perceiveDayStart: { [weak self] now, present in
+            self?.companionPerception.dayStartIfDue(now: now, ownerPresent: present)
+        },
         // The ceiling's signal and the fold-down behind it (#373).
         foldTokens: { [agentConversationStore] in
             CompanionDigestSplice.estimatedTokens(
@@ -632,7 +634,7 @@ final class DependencyContainer: ObservableObject {
     /// The fold's perception substrate (ADR-0046, #368): the v1 Event
     /// producers. Power and app-session verdicts arrive through the sensed-
     /// observation pipeline's doors (wired in `bootstrap`, beside the loop's
-    /// arming); day-start rides the loop's own detection.
+    /// arming); day-start detects here, fed the facts by the loop's tick.
     lazy var companionPerception = CompanionPerception(
         store: memoryStore,
         recorder: companionFlightRecorder,

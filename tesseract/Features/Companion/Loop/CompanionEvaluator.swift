@@ -27,9 +27,6 @@ nonisolated struct CompanionEvaluator {
     /// beat so one turn drains it whole — unless a wake is due, which fires
     /// now regardless.
     static let coalesceWindow: TimeInterval = 10
-    /// Day start needs the calendar day to have begun in earnest — a 1 a.m.
-    /// tail counts as yesterday.
-    static let dayStartEarliestHour = 4
     /// Mission Control's context ceiling (ADR-0046 #373): the fold-down
     /// outranks any new grant once the conversation is within one turn's
     /// growth of it — pre-emptive, so a granted turn never appends past the
@@ -42,18 +39,16 @@ nonisolated struct CompanionEvaluator {
 
     /// One tick's gathered facts. Gathering is the loop's job and effectful;
     /// deciding over the gathered value is this module's, and is not.
+    /// Exactly the facts the clock consults — presence, power, and the day
+    /// ledger all left with the retired grants (#371 killed the gate legs;
+    /// day-start detection lives with the producers now), so the shape
+    /// itself pins their absence.
     struct Signals: Equatable, Sendable {
         var now: Date
-        /// The local calendar hour of `now` — the day-start gate's clock.
-        var localHour: Int
         /// Everything pending in the Event queue, in total order.
         var pendingEvents: [CompanionEvent]
         /// Booked wakes whose due time has arrived, ordered by due.
         var dueWakes: [CompanionWake]
-        var dayState: CompanionLoopDayState
-        /// The one home of "he is with the machine": recent input, unlocked.
-        var ownerPresent: Bool
-        var onACPower: Bool
         var gpuBusy: Bool
         /// Mission Control's estimated size (#373) — the ceiling's signal.
         var foldTokens: Int = 0
@@ -70,10 +65,6 @@ nonisolated struct CompanionEvaluator {
         /// `carriesBeat` is the resurfacing trigger — a batch carrying a
         /// rhythm wake is a beat even when it fires overdue as `.catchup`.
         case foldTurn(dueWakes: [CompanionWake], origin: TurnOrigin, carriesBeat: Bool)
-        /// First presence of the calendar day: persist `updated` and admit
-        /// the day-start Event — the turn then follows over the queue, like
-        /// every other perception (the de facto morning liveness).
-        case perceiveDayStart(updated: CompanionLoopDayState)
         /// The ceiling is hit (#373): run the fold-down now — the entity
         /// authors its Digest and the splice lands, on the record — before
         /// any turn appends past the budget.
@@ -85,17 +76,6 @@ nonisolated struct CompanionEvaluator {
     private var deferralLogged = false
 
     mutating func decide(_ signals: Signals) -> Decision {
-        // 0. Day start is perception, not a grant: the first presence of the
-        // calendar day becomes an Event in the queue.
-        if signals.dayState.dayStartedAt == nil,
-            signals.localHour >= Self.dayStartEarliestHour,
-            signals.ownerPresent
-        {
-            var updated = signals.dayState
-            updated.dayStartedAt = signals.now
-            return .perceiveDayStart(updated: updated)
-        }
-
         // 1. The ceiling outranks every grant (#373): a turn must never
         // append past the budget, so within one turn's headroom of the
         // ceiling the fold-down runs first. Same one eligibility — the model

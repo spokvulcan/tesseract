@@ -46,9 +46,9 @@ final class CompanionLoop {
     private let isEnabled: () -> Bool
     private let speak: @MainActor (String) -> Void
     private let openConversation: @MainActor (UUID) -> Void
-    /// The perception substrate's day-start door (ADR-0046, #368): the
-    /// evaluator detects first presence; the producer admits the Event.
-    private let perceiveDayStart: @MainActor (Date) -> Void
+    /// The perception substrate's day-start door (ADR-0046, #368/#371): the
+    /// tick hands over the facts; the producer detects and admits.
+    private let perceiveDayStart: @MainActor (_ now: Date, _ ownerPresent: Bool) -> Void
     /// Mission Control's estimated size — the ceiling's signal (#373).
     private let foldTokens: () -> Int
     /// The intraday fold-down (#373): the digest engine, behind the
@@ -82,7 +82,7 @@ final class CompanionLoop {
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
         openConversation: @escaping @MainActor (UUID) -> Void,
-        perceiveDayStart: @escaping @MainActor (Date) -> Void,
+        perceiveDayStart: @escaping @MainActor (Date, Bool) -> Void,
         foldTokens: @escaping () -> Int = { 0 },
         earlyFold: @escaping @MainActor () async -> Void = {}
     ) {
@@ -167,7 +167,11 @@ final class CompanionLoop {
 
         let now = Date()
         if isOwnerEngaged() { lastOwnerEngagedAt = now }
-        let todayKey = TrackingDay.key(for: now)
+
+        // First presence of the calendar day is itself a perception (#371):
+        // the tick hands the producer the facts; the deterministic id makes
+        // the admission once-per-day, and the turn follows over the queue.
+        perceiveDayStart(now, idleMonitor.isOwnerPresent)
 
         // A booked wake coming due is itself a perception (ADR-0046): admit
         // it into the queue before reading, exactly once per wake by
@@ -191,12 +195,8 @@ final class CompanionLoop {
 
         let signals = CompanionEvaluator.Signals(
             now: now,
-            localHour: Calendar.current.component(.hour, from: now),
             pendingEvents: (try? await store.pendingEvents()) ?? [],
             dueWakes: dueWakes,
-            dayState: (try? await store.loopDayState(todayKey)) ?? CompanionLoopDayState(),
-            ownerPresent: idleMonitor.isOwnerPresent,
-            onACPower: sensed.isOnACPower,
             gpuBusy: isGPUBusy(),
             foldTokens: foldTokens())
 
@@ -210,10 +210,6 @@ final class CompanionLoop {
         case .foldTurn(let dueWakes, let origin, let carriesBeat):
             await runFoldTurn(
                 dueWakes: dueWakes, origin: origin, carriesBeat: carriesBeat, now: now)
-        case .perceiveDayStart(let updated):
-            try? await store.setLoopDayState(todayKey, updated)
-            recorder.record("loop.day-start", snapshot: ["at": CompanionWakeTime.format(now)])
-            perceiveDayStart(now)
         case .compactFold:
             // The ceiling fold (#373): awaited here so no turn can interleave
             // with it — the digest engine records the outcome.

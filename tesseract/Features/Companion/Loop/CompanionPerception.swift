@@ -6,10 +6,10 @@
 //  Every digital input this type sees becomes exactly one Event in the queue
 //  — day and system transitions observed directly (Mac-wake, calendar-day
 //  rollover, this launch), power and sustained-app-session verdicts arriving
-//  through the sensed-observation pipeline's doors, and day-start through the
-//  loop's existing detection. Producers perceive and admit; they never decide
-//  anything — the clock that grants turns over pending Events is #371's, and
-//  until it lands Events accumulate on the record unconsumed.
+//  through the sensed-observation pipeline's doors, and day-start detected
+//  here from the facts the loop's tick hands over (#371 moved the detector in
+//  with the producers). Producers perceive and admit; they never decide
+//  anything — the clock that grants turns over pending Events is #371's.
 //
 //  Once-per-occasion perceptions (a day's start, a day's end) mint
 //  deterministic ids, so a repeated signal collapses at admission instead of
@@ -21,6 +21,10 @@ import Foundation
 
 @MainActor
 final class CompanionPerception {
+
+    /// Day start needs the calendar day to have begun in earnest — a 1 a.m.
+    /// tail counts as yesterday.
+    static let dayStartEarliestHour = 4
 
     private let store: MemoryStore
     private let recorder: CompanionFlightRecorder
@@ -36,6 +40,11 @@ final class CompanionPerception {
     private var macWakeObserver: NSObjectProtocol?
     private var dayChangeObserver: NSObjectProtocol?
     private var started = false
+    /// The day key already admitted this process — a cheap edge on the tick's
+    /// level signal, so a quiet afternoon isn't a stream of collapsed
+    /// duplicates. The deterministic id below stays the once-only truth
+    /// (relaunches re-attempt once and collapse at the store).
+    private var admittedDayStartKey: String?
 
     init(
         store: MemoryStore,
@@ -91,16 +100,22 @@ final class CompanionPerception {
 
     // MARK: - Doors (the signals other machinery already detects)
 
-    /// The loop's day-start decision fired — first presence of the calendar
-    /// day (the detector stays with the evaluator until #371 moves the clock).
-    func dayStarted(at now: Date) {
+    /// First presence of the calendar day — the detector (#371): the loop's
+    /// tick hands over the facts every beat; once the day has begun in
+    /// earnest and he is actually there, the occasion becomes one Event.
+    func dayStartIfDue(now: Date, ownerPresent: Bool) {
         let day = TrackingDay.key(for: now)
+        guard admittedDayStartKey != day,
+            ownerPresent,
+            Calendar.current.component(.hour, from: now) >= Self.dayStartEarliestHour
+        else { return }
+        admittedDayStartKey = day
         admit(
             CompanionEvent(
                 id: CompanionEvent.deterministicID("day-start:\(day)"),
                 kind: .dayStart,
                 content: "His day started — first presence of \(day).",
-                payload: Self.json(["day": day]),
+                payload: CompanionEvent.payloadJSON(["day": day]),
                 occurredAt: now))
     }
 
@@ -111,7 +126,7 @@ final class CompanionPerception {
                 kind: .powerChange,
                 content: onACPower
                     ? "Power changed: on AC power." : "Power changed: on battery.",
-                payload: Self.json(["power": onACPower ? "ac" : "battery"])))
+                payload: CompanionEvent.payloadJSON(["power": onACPower ? "ac" : "battery"])))
     }
 
     /// The sensed-observation pipeline closed an app session that proved
@@ -123,7 +138,7 @@ final class CompanionPerception {
             CompanionEvent(
                 kind: .appSwitch,
                 content: "Sustained app session: \(app), \(span.minutes) min.",
-                payload: Self.json(span),
+                payload: CompanionEvent.payloadJSON(span),
                 occurredAt: end))
     }
 
@@ -136,7 +151,7 @@ final class CompanionPerception {
                 id: CompanionEvent.deterministicID("day-end:\(day)"),
                 kind: .dayEnd,
                 content: "The calendar day \(day) ended.",
-                payload: Self.json(["day": day]),
+                payload: CompanionEvent.payloadJSON(["day": day]),
                 occurredAt: now))
     }
 
@@ -159,9 +174,5 @@ final class CompanionPerception {
                 Log.companion.error("Event admission failed: \(error.localizedDescription)")
             }
         }
-    }
-
-    private static func json(_ value: some Encodable) -> String? {
-        (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) }
     }
 }

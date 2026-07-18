@@ -164,15 +164,46 @@ private func event(
 
     @Test func dayStartIsOncePerDayAndCarriesTheDay() async throws {
         let (perception, store) = try makePerception()
-        let now = Date()
+        let nineAM = try #require(
+            Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()))
 
-        perception.dayStarted(at: now)
-        perception.dayStarted(at: now)
+        perception.dayStartIfDue(now: nineAM, ownerPresent: true)
+        perception.dayStartIfDue(now: nineAM, ownerPresent: true)
+        // A relaunch re-attempts with a fresh in-process edge and collapses
+        // at the store — the deterministic id, not producer state, is the
+        // once-only truth.
+        let relaunched = CompanionPerception(
+            store: store, recorder: scratchRecorder(), isEnabled: { true },
+            isTestHost: false)
+        relaunched.dayStartIfDue(now: nineAM, ownerPresent: true)
 
         let pending = try await waitForPending(store, count: 1)
         #expect(pending.count == 1)
         #expect(pending.first?.kind == .dayStart)
-        #expect(pending.first?.payload?.contains(TrackingDay.key(for: now)) == true)
+        #expect(pending.first?.payload?.contains(TrackingDay.key(for: nineAM)) == true)
+    }
+
+    @Test func aOneAMTailCountsAsYesterday() async throws {
+        // #371: the detector needs the calendar day begun in earnest.
+        let (perception, store) = try makePerception()
+        let twoAM = try #require(
+            Calendar.current.date(bySettingHour: 2, minute: 0, second: 0, of: Date()))
+        perception.dayStartIfDue(now: twoAM, ownerPresent: true)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await store.pendingEvents().isEmpty)
+    }
+
+    @Test func dayStartWaitsForHimToActuallyBeThere() async throws {
+        let (perception, store) = try makePerception()
+        let nineAM = try #require(
+            Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()))
+        perception.dayStartIfDue(now: nineAM, ownerPresent: false)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await store.pendingEvents().isEmpty)
+        // Presence arriving later the same morning still admits — an absent
+        // tick must not burn the day's one edge.
+        perception.dayStartIfDue(now: nineAM, ownerPresent: true)
+        #expect(try await waitForPending(store, count: 1).count == 1)
     }
 
     @Test func disabledCompanionAdmitsNothing() async throws {
@@ -191,7 +222,9 @@ private func event(
         // perceptions must never land in the owner's queue.
         let (perception, store) = try makePerception(isTestHost: true)
 
-        perception.dayStarted(at: Date())
+        let nineAM = try #require(
+            Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()))
+        perception.dayStartIfDue(now: nineAM, ownerPresent: true)
         perception.powerChanged(onACPower: true)
 
         try await Task.sleep(for: .milliseconds(50))

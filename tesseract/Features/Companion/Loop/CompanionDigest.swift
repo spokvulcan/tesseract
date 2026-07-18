@@ -78,20 +78,22 @@ nonisolated enum CompanionDigestSplice {
     }
 
     /// The ceiling's measuring stick — chars/4 over everything a message
-    /// contributes to the prompt, plus a small per-message envelope.
+    /// contributes to the prompt, plus a small per-message envelope. UTF-8
+    /// counts, deliberately: O(1) per native string where grapheme counting
+    /// walks the text — this runs on every loop tick as the ceiling's signal.
     static func estimatedTokens(_ messages: [any AgentMessageProtocol & Sendable]) -> Int {
         var chars = 0
         for message in messages {
             if let user = message.asUser {
-                chars += user.content.count + (user.injectedContext?.count ?? 0)
+                chars += user.content.utf8.count + (user.injectedContext?.utf8.count ?? 0)
             } else if let assistant = message.asAssistant {
-                chars += assistant.text.count
-                chars += assistant.thinking?.count ?? 0
+                chars += assistant.text.utf8.count
+                chars += assistant.thinking?.utf8.count ?? 0
             } else if let compaction = message as? CompactionSummaryMessage {
-                chars += compaction.summary.count
+                chars += compaction.summary.utf8.count
             } else if let toolResult = message as? ToolResultMessage {
                 for block in toolResult.content {
-                    if case .text(let text) = block { chars += text.count }
+                    if case .text(let text) = block { chars += text.utf8.count }
                 }
             }
             chars += 64  // role/framing envelope

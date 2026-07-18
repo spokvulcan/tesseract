@@ -115,21 +115,23 @@ final class CompanionTurnRunner {
             UserMessage(content: opening, turnOrigin: origin))
 
         // The fold's state so far (ADR-0046): the turn's context is Mission
-        // Control as it stands, and the turn appends to it — no minting.
-        var missionControl = AgentConversation(
-            id: conversationID, origin: .missionControl)
+        // Control as it stands, and the turn appends to it — no minting. Read
+        // inside the lease so a queued fold-down lands first, never between
+        // this read and the turn.
+        let missionControl: AgentConversation
         do {
             // The owner always wins the slot: this waits in the arbiter's FIFO
             // behind any interactive generation, never cancels one. The model
             // override swaps to the Companion's model even if the owner
             // temp-switched the interactive default (ADR-0040 §9).
-            try await arbiter.withExclusiveGPU(
+            missionControl = try await arbiter.withExclusiveGPU(
                 .llm, llmModelIDOverride: modelID, llmVision: .fromSettings
             ) {
-                missionControl = conversationStore.missionControl()
-                agent.loadMessages(missionControl.messages)
+                let current = conversationStore.missionControl()
+                agent.loadMessages(current.messages)
                 agent.prompt(CoreMessage.user(user))
                 await agent.waitForIdle()
+                return current
             }
         } catch is CancellationError {
             recorder.record(

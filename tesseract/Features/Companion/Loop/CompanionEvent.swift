@@ -112,6 +112,12 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
         SHA256.hash(data: Data(occasion.utf8))
             .withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
     }
+
+    /// Kind-shaped payload JSON — the one encoder every producer shares, so
+    /// no door hand-rolls (and mis-escapes) its own literal.
+    static func payloadJSON(_ value: some Encodable) -> String? {
+        (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) }
+    }
 }
 
 /// The drained batch as the turn's opening sees it (#371): everything that

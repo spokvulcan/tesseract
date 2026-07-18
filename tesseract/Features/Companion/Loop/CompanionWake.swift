@@ -140,22 +140,17 @@ nonisolated enum CompanionResurfacing {
 /// The loop's small per-day persisted state — what must survive a restart but
 /// is not derivable from the wakes table.
 nonisolated struct CompanionLoopDayState: Codable, Sendable, Equatable {
-    /// The day-start perception fired (first sustained presence after the
-    /// overnight gap). Nil until then. (`lastAmbientAt` lived here until #371
-    /// retired the ambient cadence; a persisted key decodes ignored.)
-    var dayStartedAt: Date?
     /// The day's standing-instructions review ran (#370) — sleep passes fire
-    /// on every idle, the review at most once per day.
+    /// on every idle, the review at most once per day. (`lastAmbientAt` and
+    /// `dayStartedAt` lived here until #371 retired the ambient cadence and
+    /// moved day-start detection to the producers; persisted keys decode
+    /// ignored.)
     var instructionsReviewedAt: Date?
     /// The nightly Digest fold ran (#373) — keyed to the night window via
     /// `CompanionDigest.nightKey`, at most one planned fold per night.
     var digestFoldAt: Date?
 
-    init(
-        dayStartedAt: Date? = nil, instructionsReviewedAt: Date? = nil,
-        digestFoldAt: Date? = nil
-    ) {
-        self.dayStartedAt = dayStartedAt
+    init(instructionsReviewedAt: Date? = nil, digestFoldAt: Date? = nil) {
         self.instructionsReviewedAt = instructionsReviewedAt
         self.digestFoldAt = digestFoldAt
     }

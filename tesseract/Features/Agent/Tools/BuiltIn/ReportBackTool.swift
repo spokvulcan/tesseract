@@ -56,7 +56,9 @@ nonisolated func createReportBackTool(
             let event = CompanionEvent(
                 kind: .reportBack,
                 content: trimmed,
-                payload: conversationID.map { #"{"conversation":"\#($0.uuidString)"}"# }
+                payload: conversationID.flatMap {
+                    CompanionEvent.payloadJSON(["conversation": $0.uuidString])
+                }
             )
             guard try await store.admitEvent(event) else {
                 throw CompanionToolError(message: "The deposit could not be queued.")

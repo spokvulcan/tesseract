@@ -90,16 +90,16 @@ import Testing
         let store = try scratchStore()
         let key = "2026-07-16"
         var state = try await store.loopDayState(key)
-        #expect(state.dayStartedAt == nil)
+        #expect(state.digestFoldAt == nil)
 
-        state.dayStartedAt = Date()
+        state.digestFoldAt = Date()
         state.instructionsReviewedAt = Date()
         try await store.setLoopDayState(key, state)
 
         let loaded = try await store.loopDayState(key)
-        #expect(loaded.dayStartedAt != nil)
+        #expect(loaded.digestFoldAt != nil)
         #expect(loaded.instructionsReviewedAt != nil)
-        #expect(try await store.loopDayState("2026-07-17").dayStartedAt == nil)
+        #expect(try await store.loopDayState("2026-07-17").digestFoldAt == nil)
     }
 }
 

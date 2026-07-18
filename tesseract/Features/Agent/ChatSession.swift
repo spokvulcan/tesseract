@@ -613,8 +613,8 @@ final class ChatSession {
 
         // The dialogue ledger's activity signal (ADR-0046 #372): every send —
         // typed, dictated, or the harness's own nudge — counts as exchange.
-        if let current = conversationStore.currentConversation, current.origin == .dialogue {
-            onDialogueActivity(current.id)
+        if isDialogueOpen, let id = conversationStore.currentConversation?.id {
+            onDialogueActivity(id)
         }
 
         error = nil
@@ -644,10 +644,9 @@ final class ChatSession {
                 }
                 // Identity decorates after memory so its block leads the
                 // injected context — who you are, then what you recall.
-                if let identity = self.companionIdentity, let user = message.asUser {
-                    let decorated = await identity.decorate(
-                        user, transcript: self.agent.state.messages)
-                    message = message is CoreMessage ? CoreMessage.user(decorated) : decorated
+                if let identity = self.companionIdentity {
+                    message = await identity.decorate(
+                        message, transcript: self.agent.state.messages)
                 }
                 // The Pending Row is keyed by id and is showing the same
                 // content, so swapping it for the decorated value is invisible —

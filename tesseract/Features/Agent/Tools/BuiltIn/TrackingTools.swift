@@ -120,11 +120,7 @@ private nonisolated func trackObservation(
     }
     let domain: TrackingDomain
     if let explicit = ToolArgExtractor.string(payload, key: "domain") {
-        guard let parsed = TrackingDomain(rawValue: explicit) else {
-            throw TrackingToolError(
-                message: "Unknown domain '\(explicit)' — one of work|body|mind.")
-        }
-        domain = parsed
+        domain = try parseDomain(explicit)
     } else if let mapped = sampleDomains[kind] {
         domain = mapped
     } else {
@@ -269,6 +265,15 @@ private nonisolated func parseChain(
     return chain
 }
 
+/// The one domain-vocabulary guard — observation and item share the raw
+/// string, the error phrasing, and any future domain rename.
+private nonisolated func parseDomain(_ raw: String) throws -> TrackingDomain {
+    guard let parsed = TrackingDomain(rawValue: raw) else {
+        throw TrackingToolError(message: "Unknown domain '\(raw)' — one of work|body|mind.")
+    }
+    return parsed
+}
+
 /// The day as data — no verdicts, no ceremony (#354's "Day closed" class):
 /// the close-out stamp renders only when it exists, as a fact with a time.
 private nonisolated func renderDay(_ day: DayRecord) -> String {
@@ -307,16 +312,9 @@ private nonisolated func trackItem(
         else {
             throw TrackingToolError(message: "item add requires a 'title'")
         }
-        let domain: TrackingDomain
-        if let raw = ToolArgExtractor.string(payload, key: "domain") {
-            guard let parsed = TrackingDomain(rawValue: raw) else {
-                throw TrackingToolError(
-                    message: "Unknown domain '\(raw)' — one of work|body|mind.")
-            }
-            domain = parsed
-        } else {
-            domain = .work
-        }
+        let domain =
+            try ToolArgExtractor.string(payload, key: "domain")
+            .map(parseDomain) ?? .work
         let cadence: WorkItemCadence
         if let raw = ToolArgExtractor.string(payload, key: "cadence") {
             guard let parsed = WorkItemCadence(rawValue: raw) else {
