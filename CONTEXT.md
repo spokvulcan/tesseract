@@ -1120,6 +1120,17 @@ asked, riding a user message. Deliberately excludes the cold tier apart from the
 ε-exploration draw.
 _Avoid_: auto-recall, context stuffing; **Recall** (the deliberate tool, not this).
 
+**Conversation Memory**:
+The chat's collaborator over the living memory (ADR-0045) — the two verbs one
+conversation exercises: *enrich* (hang the **Memory Injection** block on an
+outgoing user message, deduped against what this window was already told) and
+*capture* (append the turn through the chat door of **One Door Per Testimony**,
+under the user message's own id). Held optionally by the **Chat Session** —
+chat must run without memory.
+_Avoid_: memory manager/service; attachMemory (the pre-extraction method name);
+folding it back into the **Chat Session** (whose glossary shape is the event
+fold alone).
+
 **Memory Search**:
 The deliberate relevance-only lookup over *every* belief — retired and superseded
 included, tiers and lifecycle ignored — that marks what it surfaces as seen.

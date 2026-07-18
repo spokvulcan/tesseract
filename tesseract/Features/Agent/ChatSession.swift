@@ -165,21 +165,13 @@ final class ChatSession {
     /// Skill Pill ranking recompute, ephemeral composer state reset. The
     /// Composer Draft's *content* deliberately rides across the switch.
     private let onConversationSwitch: @MainActor () -> Void
-    /// The living memory (ADR-0035). Optional because every existing test
-    /// constructs a session without one, and because memory must be a thing the
-    /// chat can run *without* — a memory failure may never take a turn down.
-    private let memory: MemoryEngine?
+    /// The living memory's chat-side collaborator (ADR-0035 §5–§6): enrich on
+    /// send, capture at turn end, reset at the conversation boundary. Optional
+    /// because every existing test constructs a session without one, and
+    /// because memory must be a thing the chat can run *without* — a memory
+    /// failure may never take a turn down.
+    private let conversationMemory: ConversationMemory?
     private let debugLogger = AgentDebugLogger()
-
-    /// What this conversation has already been told, so the next turn doesn't
-    /// tell it again — a memory injected on turn 1 is still sitting in the
-    /// context window on turn 7 (ADR-0035 §5).
-    ///
-    /// Session-scoped, and deliberately not persisted: reopening a conversation
-    /// may re-inject a handful of lines it already carries. That costs a few
-    /// dozen tokens once; threading the ids through the conversation file to
-    /// avoid it would not be worth the schema.
-    @ObservationIgnored private var injectedMemoryIDs: Set<UUID> = []
 
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
 
@@ -205,10 +197,10 @@ final class ChatSession {
         restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in
         },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
-        memory: MemoryEngine? = nil,
+        conversationMemory: ConversationMemory? = nil,
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
-        self.memory = memory
+        self.conversationMemory = conversationMemory
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
@@ -293,7 +285,9 @@ final class ChatSession {
             // results and commits the streaming path may have raced.
             resync(from: contextMessages)
             persistCurrentConversation()
-            captureEpisode(reply: message, context: contextMessages)
+            conversationMemory?.capture(
+                reply: message, context: contextMessages,
+                conversationID: conversationStore.currentConversation?.id.uuidString)
 
         case .contextTransformStart(let reason):
             runPhase = .transformingContext(reason)
@@ -593,70 +587,26 @@ final class ChatSession {
         // must show the message immediately. The event-spine commit of the
         // same message lowers it.
         pendingUserMessage = user
+        // Enrichment runs inside the run task — after the Pending Row is up and
+        // the busy flag is set, before the message reaches the agent — so
+        // retrieval latency hides behind the lease wait the send is already
+        // doing, and sends stay ordered (ADR-0035 §5, ADR-0045).
         agentRun.send(
             CoreMessage.user(user),
             prepare: { [weak self] outgoing in
-                await self?.attachMemory(to: outgoing) ?? outgoing
+                guard let self, let conversationMemory = self.conversationMemory else {
+                    return outgoing
+                }
+                let enriched = await conversationMemory.enrich(outgoing)
+                // The Pending Row is keyed by id and is showing the same
+                // content, so swapping it for the enriched value is invisible —
+                // but it keeps the row and the message that reached the agent
+                // byte-identical, which the `turnEnd` resync then relies on.
+                if let user = enriched.asUser, self.pendingUserMessage?.id == user.id {
+                    self.pendingUserMessage = user
+                }
+                return enriched
             })
-    }
-
-    /// Recall for this message and hang the `<memory>` block on it (ADR-0035 §5).
-    ///
-    /// Runs inside the run task — after the Pending Row is up and the busy flag
-    /// is set, before the message reaches the agent — so retrieval latency hides
-    /// behind the lease wait the send is already doing, and sends stay ordered.
-    /// The message's *displayed* content is untouched: what the user wrote is
-    /// what the user sees.
-    private func attachMemory(
-        to outgoing: any AgentMessageProtocol & Sendable
-    ) async -> any AgentMessageProtocol & Sendable {
-        guard let memory, let user = Self.userMessage(in: outgoing) else { return outgoing }
-
-        // `forEpisode: user.id` is what makes the lifecycle live. The episode
-        // for this turn does not exist yet — `captureEpisode` writes it at turn
-        // end *under the same id* — but the retrieval log can already point at
-        // it, and that log is the only input the sleep judge ever gets. Without
-        // this id nothing is ever logged, nothing is ever graded, and the whole
-        // usefulness signal the lifecycle runs on is silently never produced.
-        let injection = await memory.injection(
-            cue: user.content, forEpisode: user.id, excluding: injectedMemoryIDs)
-        guard let text = injection.text else { return outgoing }
-        injectedMemoryIDs.formUnion(injection.memoryIDs)
-
-        let enriched = UserMessage(
-            id: user.id, content: user.content, images: user.images,
-            timestamp: user.timestamp, injectedContext: text)
-        // The Pending Row is keyed by id and is showing the same content, so
-        // swapping it for the enriched value is invisible — but it keeps the row
-        // and the message that reached the agent byte-identical, which the
-        // `turnEnd` resync then relies on.
-        if pendingUserMessage?.id == user.id { pendingUserMessage = enriched }
-        return Self.rewrap(enriched, like: outgoing)
-    }
-
-    /// The user message inside whatever the pipeline is carrying.
-    ///
-    /// `sendMessage` hands `send` a **`CoreMessage.user`**, and `prepare` is
-    /// called on that wrapper — so the obvious `outgoing as? UserMessage` matches
-    /// nothing, and this is not hypothetical: it shipped, and memory was
-    /// retrieved and then silently dropped on the floor on every single turn. The
-    /// app looked healthy from the outside — episodes were captured, sleep ran,
-    /// the store filled up — and the model never saw a word of it. Not one unit
-    /// test caught it, because none of them went through `send`; only asking the
-    /// running app what it remembered did.
-    nonisolated static func userMessage(
-        in outgoing: any AgentMessageProtocol & Sendable
-    ) -> UserMessage? {
-        if case .user(let user)? = outgoing as? CoreMessage { return user }
-        return outgoing as? UserMessage
-    }
-
-    /// Put it back in the same wrapper it arrived in — the agent pipeline is
-    /// entitled to whatever shape it handed us.
-    nonisolated static func rewrap(
-        _ user: UserMessage, like outgoing: any AgentMessageProtocol & Sendable
-    ) -> any AgentMessageProtocol & Sendable {
-        outgoing is CoreMessage ? CoreMessage.user(user) : user
     }
 
     func cancelGeneration() {
@@ -857,7 +807,7 @@ final class ChatSession {
         pendingToolCalls.removeAll()
         toolStartInstants.removeAll()
         error = nil
-        injectedMemoryIDs.removeAll()
+        conversationMemory?.reset()
         debugLogger.reset()
         onConversationSwitch()
     }
@@ -867,56 +817,6 @@ final class ChatSession {
         conversationStore.updateCurrentMessages(
             agent.state.messages.map { $0 as any AgentMessageProtocol & Sendable })
         conversationStore.saveCurrent()
-    }
-
-    // MARK: - Memory capture (ADR-0035 §6)
-
-    /// The turn ended — append it to the episodic layer.
-    ///
-    /// **An episode is something the owner said**, so the body is his message;
-    /// the reply rides in `meta` as the context sleep needs to resolve "it",
-    /// "that", "the second one". Nothing is judged here and nothing is
-    /// extracted: the whole hot-path cost is one insert and one embedding
-    /// (~3 ms), because at this moment the information that decides what
-    /// *mattered* about this turn has not arrived yet.
-    ///
-    /// Detached and never awaited — a turn that cannot be remembered is still a
-    /// turn that was answered.
-    private func captureEpisode(
-        reply: AssistantMessage, context: [any AgentMessageProtocol & Sendable]
-    ) {
-        guard let memory else { return }
-        // Through the same tested unwrap as the injection, and for the same
-        // reason: the pipeline carries both shapes (`AgentConversation` already
-        // defends against both), and a bare cast here would silently stop
-        // capturing the moment a caller wrapped its message. That failure looks
-        // exactly like "he said nothing today".
-        guard
-            let user = context.reversed().lazy.compactMap({ Self.userMessage(in: $0) }).first,
-            !user.content.isEmpty
-        else { return }
-
-        let conversationID = conversationStore.currentConversation?.id.uuidString
-        let text = user.content
-        // Trimmed, because a turn that opens with a tool call has emitted only
-        // whitespace by its first `turnEnd` — and an episode whose stored reply
-        // is "\n\n" has lost the context this field exists to carry. The store
-        // lets a later re-capture of the same turn fill the reply in.
-        let replyText = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // The episode takes the user message's own id — the same id
-        // `attachMemory` logged this turn's retrievals against, and the same
-        // grain the backfill writes. One turn, one id, in both directions.
-        let episodeID = user.id
-        Task { [memory] in
-            await memory.record(
-                id: episodeID,
-                source: .chat,
-                text: text,
-                conversationID: conversationID,
-                occurredAt: user.timestamp,
-                meta: replyText.isEmpty ? [:] : ["reply": String(replyText.prefix(2_000))]
-            )
-        }
     }
 
     // MARK: - Edit & resend

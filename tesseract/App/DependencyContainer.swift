@@ -481,7 +481,7 @@ final class DependencyContainer: ObservableObject {
                 agentSystemPromptInspector.reset()
                 skillPills.refreshPills()
             },
-            memory: memoryEngine
+            conversationMemory: ConversationMemory(memory: memoryEngine)
         )
     }()
 
