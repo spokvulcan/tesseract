@@ -1324,10 +1324,11 @@ not the concept), ambient cadence (the retired 30-minute gate).
 **Event**:
 One perception queued for the entity: a due **Wake**, a **Report-Back**, a day
 or system transition (day start/end, Mac wake, launch catch-up, power change),
-or a sustained app switch — later a notification arrival or a screen glance,
-the same shape. Coalesced: one turn drains all pending events.
-_Avoid_: trigger/signal (implementation words), notification (one future event
-kind, not the concept), tick (the retired cadence's clock).
+a sustained app switch, or a notification arrival (the **Notification Hub**) —
+later a screen glance, the same shape. Coalesced: one turn drains all pending
+events.
+_Avoid_: trigger/signal (implementation words), notification (one event kind,
+not the concept), tick (the retired cadence's clock).
 
 **Mission Control**:
 The one standing conversation that is the fold's state — every loop turn
@@ -1407,6 +1408,17 @@ rewrites with wear — never as code.
 _Avoid_: system prompt (a superseded claim — the instructions ride opening
 messages), settings/config (not a UI surface; a document the entity owns),
 rules (they're his practice, not his cage).
+
+**Notification Hub**:
+The Companion's attention filter (PRD #376): every banner another app shows the
+owner becomes a notification **Event** Jarvis perceives, weighs against what he
+knows of the owner, and escalates only when it is important and likely unseen —
+silence is a legitimate verdict. v1 observes, triages, and escalates while the
+owner's notifications still pop; the end vision — the owner on Do Not Disturb,
+Jarvis the sole interface — is a flip his record must first earn and his eyes
+cannot yet see past.
+_Avoid_: notification center (the OS surface, not the filter), digest/inbox
+(batching words — the Hub interrupts on judgment, not a schedule), triage queue.
 
 ### Voice session (Companion)
 

@@ -257,8 +257,14 @@ final class DependencyContainer: ObservableObject {
         registry.appendBuiltInTool(createContestTool(memory: memoryEngine))
         // The one generic tracking door (ADR-0046, #369) — registered in
         // every conversation, same as memory's: the check-in IS the measuring
-        // instrument, whichever conversation it happens in.
-        registry.appendBuiltInTool(createTrackTool(store: memoryStore))
+        // instrument, whichever conversation it happens in. Recorder + context
+        // carry the `hold` verdict (#379) onto the flight recorder.
+        registry.appendBuiltInTool(
+            createTrackTool(
+                store: memoryStore,
+                recorder: companionFlightRecorder,
+                context: companionTurnContext
+            ))
         // The flight recorder's one write door (#326; the read path died with
         // ADR-0046 — the standing conversation is the record).
         registry.appendBuiltInTool(

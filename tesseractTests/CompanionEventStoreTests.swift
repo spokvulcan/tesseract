@@ -248,4 +248,123 @@ private func event(
         #expect(sessions.map(\.app) == ["Xcode"])
         #expect(sessions.first?.minutes == 2)
     }
+
+    // MARK: - Notification Hub producer (#378)
+
+    private func makeNotificationPerception() throws -> (CompanionPerception, MemoryStore) {
+        let store = try scratchStore()
+        let perception = CompanionPerception(
+            store: store, recorder: scratchRecorder(), isEnabled: { true },
+            selfDisplayNames: ["Tesseract Agent"], isTestHost: false)
+        return (perception, store)
+    }
+
+    @Test func notificationArrivedAdmitsOneEventAndCollapsesTheSameBanner() async throws {
+        let (perception, store) = try makeNotificationPerception()
+        let banner = CapturedNotification(
+            app: "Slack", title: "ping", body: "standup in 5", uuid: "banner-1")
+
+        perception.notificationArrived(banner)
+        // The same banner re-observed across a watcher re-attach carries the
+        // same UUID and collapses at admission.
+        perception.notificationArrived(banner)
+
+        let pending = try await waitForPending(store, count: 1)
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .notificationArrived)
+        #expect(pending.first?.content == "Slack: ping — standup in 5")
+    }
+
+    @Test func tesseractOwnBannersNeverBecomeEvents() async throws {
+        let (perception, store) = try makeNotificationPerception()
+        perception.notificationArrived(
+            CapturedNotification(
+                app: "Tesseract Agent", title: "Jarvis", body: "on the record",
+                uuid: "self-1"))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(try await store.pendingEvents().isEmpty)
+    }
+}
+
+// MARK: - The notification factory (#378)
+
+@Suite struct CompanionNotificationFactoryTests {
+
+    private func captured(
+        app: String, title: String = "Title", subtitle: String = "",
+        body: String = "Body", uuid: String? = "uuid-1"
+    ) -> CapturedNotification {
+        CapturedNotification(
+            app: app, title: title, subtitle: subtitle, body: body, uuid: uuid)
+    }
+
+    // The macros only ever see primitives here (Bool / enum / String): feeding
+    // a whole `CompanionEvent?` into `#expect`/`#require` crashes swift-testing's
+    // value reflection, so the struct is reduced to primitives before each check.
+
+    @Test func selfBannersReturnNilCaseInsensitively() {
+        let exactIsNil =
+            CompanionEvent.notification(
+                from: captured(app: "Tesseract Agent"),
+                selfDisplayNames: ["Tesseract Agent", "Tesseract"]) == nil
+        #expect(exactIsNil)
+        let foldedIsNil =
+            CompanionEvent.notification(
+                from: captured(app: "tesseract agent"),
+                selfDisplayNames: ["Tesseract Agent"]) == nil
+        #expect(foldedIsNil)
+    }
+
+    @Test func emptyAppDrops() {
+        let dropped =
+            CompanionEvent.notification(from: captured(app: "   "), selfDisplayNames: []) == nil
+        #expect(dropped)
+    }
+
+    @Test func otherAppsBecomeANotificationEventWithFullPayload() {
+        let event = CompanionEvent.notification(
+            from: captured(app: "GitHub", title: "PR merged", body: "spokvulcan/tesseract"),
+            selfDisplayNames: ["Tesseract Agent"])
+        guard let event else {
+            Issue.record("expected a notification event")
+            return
+        }
+        #expect(event.kind == .notificationArrived)
+        #expect(event.content == "GitHub: PR merged — spokvulcan/tesseract")
+        #expect(event.appHint == "GitHub")
+        let payload = event.payload ?? ""
+        #expect(payload.contains("\"app\":\"GitHub\""))
+        #expect(payload.contains("PR merged"))
+    }
+
+    @Test func idDerivesFromBannerUUIDNotContent() {
+        let a = CompanionEvent.notification(
+            from: captured(app: "Mail", title: "one", uuid: "abc"), selfDisplayNames: [])
+        let b = CompanionEvent.notification(
+            from: captured(app: "Mail", title: "two", uuid: "abc"), selfDisplayNames: [])
+        let c = CompanionEvent.notification(
+            from: captured(app: "Mail", title: "one", uuid: "xyz"), selfDisplayNames: [])
+        // Same banner UUID ⇒ same id even as the read text drifts; a new UUID
+        // is a new Event.
+        let sameUUIDSameID = a?.id == b?.id
+        let newUUIDNewID = a?.id != c?.id
+        #expect(sameUUIDSameID)
+        #expect(newUUIDNewID)
+    }
+
+    @Test func bodyCapsInTheContentLineButRidesFullInThePayload() {
+        let longBody = String(repeating: "x", count: 900)
+        let event = CompanionEvent.notification(
+            from: captured(app: "App", title: "", body: longBody), selfDisplayNames: [])
+        guard let event else {
+            Issue.record("expected a notification event")
+            return
+        }
+        let contentShort = event.content.count < 900
+        let endsWithEllipsis = event.content.hasSuffix("…")
+        let payloadHasFullBody = (event.payload ?? "").contains(longBody)
+        #expect(contentShort)
+        #expect(endsWithEllipsis)
+        #expect(payloadHasFullBody)
+    }
 }

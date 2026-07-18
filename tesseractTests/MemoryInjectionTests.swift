@@ -345,7 +345,7 @@ struct MemoryBackfillTests {
     /// fails open on CI.
     @Test(
         "The real corpus decodes — not a fixture of it",
-        .enabled(if: MemoryEvalCorpus.hasConversations(at: MemoryBackfillTests.realCorpus)))
+        .enabled(if: MemoryEvalCorpus.hasEvalCorpus(at: MemoryBackfillTests.realCorpus)))
     func theRealCorpusDecodes() throws {
         let episodes = ConversationCorpus.episodes(in: Self.realCorpus)
 

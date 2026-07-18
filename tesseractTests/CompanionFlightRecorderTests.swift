@@ -114,6 +114,88 @@ private func scratchDirectory(_ label: String) -> URL {
         #expect(text.contains("DEFECT"))
         #expect(text.contains("less pinging before noon"))
     }
+
+    @Test func aggregatorTalliesTheNotificationHub() {
+        let base = Date().timeIntervalSince1970
+        var records: [CompanionTraceRecord] = []
+        func add(_ event: String, at offset: TimeInterval, snapshot: [String: String]? = nil) {
+            records.append(
+                CompanionTraceRecord(
+                    ts: base + offset, event: event, source: .appObserved, snapshot: snapshot))
+        }
+        // Two notifications admitted.
+        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
+        add("event.admitted", at: 300, snapshot: ["kind": "notification-arrived", "app": "Slack"])
+        // Mail: he switched to Mail three minutes later, nothing escalated
+        // between — a plausible miss.
+        add("event.admitted", at: 180, snapshot: ["kind": "app-switch", "app": "Mail"])
+        // Slack: escalated before he switched to it — NOT a miss.
+        add("delivery.spoken", at: 320)
+        add("event.admitted", at: 380, snapshot: ["kind": "app-switch", "app": "Slack"])
+        // One held notification, and one escalation reaction.
+        add("hold.tracked", at: 60, snapshot: ["app": "Calendar"])
+        add("reaction.engaged", at: 130)
+
+        let report = CompanionWeeklyAggregator.aggregate(records)
+        #expect(report.notificationsAdmitted == 2)
+        #expect(report.trackedHolds == 1)
+        #expect(report.inferredMissCandidates == 1)  // Mail only
+        #expect(report.reactions == ["engaged": 1])
+
+        let text = CompanionWeeklyAggregator.formatted(report)
+        #expect(text.contains("Notification Hub: 2 admitted"))
+        #expect(text.contains("1 held (tracked)"))
+        #expect(text.contains("1 inferred-miss candidate "))
+    }
+
+    @Test func inferredMissCountsEachNotificationOnceAndSkipsLateSwitches() {
+        let base = Date().timeIntervalSince1970
+        var records: [CompanionTraceRecord] = []
+        func add(_ event: String, at offset: TimeInterval, snapshot: [String: String]? = nil) {
+            records.append(
+                CompanionTraceRecord(
+                    ts: base + offset, event: event, source: .appObserved, snapshot: snapshot))
+        }
+        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
+        // Two later switches to Mail — the notification is one candidate, not two.
+        add("event.admitted", at: 120, snapshot: ["kind": "app-switch", "app": "Mail"])
+        add("event.admitted", at: 200, snapshot: ["kind": "app-switch", "app": "Mail"])
+        // A switch past the window doesn't count.
+        add("event.admitted", at: 1000, snapshot: ["kind": "notification-arrived", "app": "News"])
+        add(
+            "event.admitted", at: 1000 + 900,
+            snapshot: ["kind": "app-switch", "app": "News"])
+
+        let report = CompanionWeeklyAggregator.aggregate(records)
+        #expect(report.notificationsAdmitted == 2)
+        #expect(report.inferredMissCandidates == 1)  // Mail once; News too late
+    }
+
+    @Test func inferredMissKeysOffTheSwitchStartNotTheSessionClose() {
+        let base = Date().timeIntervalSince1970
+        var records: [CompanionTraceRecord] = []
+        func add(_ event: String, at offset: TimeInterval, snapshot: [String: String]? = nil) {
+            records.append(
+                CompanionTraceRecord(
+                    ts: base + offset, event: event, source: .appObserved, snapshot: snapshot))
+        }
+        // He was already in Slack when the ping arrived: the session started
+        // before the notification (`at` = base − 200) and closed after it
+        // (record stamp = base + 300, inside the window). Keying off the close
+        // would wrongly score it a miss; keying off the start must not.
+        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Slack"])
+        add(
+            "event.admitted", at: 300,
+            snapshot: ["kind": "app-switch", "app": "Slack", "at": String(Int(base - 200))])
+        // Mail he genuinely switched *to* after its ping — start is after it.
+        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
+        add(
+            "event.admitted", at: 400,
+            snapshot: ["kind": "app-switch", "app": "Mail", "at": String(Int(base + 90))])
+
+        let report = CompanionWeeklyAggregator.aggregate(records)
+        #expect(report.inferredMissCandidates == 1)  // Mail (switched to), not Slack (already in)
+    }
 }
 
 @Suite struct CompanionFlightRecorderToolTests {

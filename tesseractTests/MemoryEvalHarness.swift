@@ -184,25 +184,39 @@ nonisolated enum MemoryEvalCorpus: Sendable {
         return defaultDirectory
     }
 
-    /// The gate. CI has no corpus, so every suite that needs one skips rather
-    /// than fails. Directory existence is NOT the test: the test host boots
-    /// the app, and `AgentConversationStore.init` creates the conversations
-    /// directory empty — an existence gate fails open on CI and the suites
-    /// run against nothing (four expectation failures and an
-    /// `Index out of range` crash, run 29198624167).
+    /// The floor for an eval-scale corpus. These suites measure retrieval
+    /// quality (recall@10, referenceBack probes, `episodes.count > 50`) and only
+    /// mean anything against a real personal corpus. Post-#381 the agent left
+    /// the sandbox, so this resolves to `~/Library/Application Support` — a
+    /// fresh install with a handful of conversations, not the old container's
+    /// full history. A ≥1 gate fails open on that fresh corpus and the evals run
+    /// against nothing (the exact failure this replaces); requiring an eval-
+    /// scale count skips cleanly until the corpus regrows, matching the `> 50`
+    /// episode assertion the suites already make.
+    static let minimumEvalConversations = 50
+
+    /// The gate. CI and a fresh (post-#381) install have no eval-scale corpus,
+    /// so every suite that needs one skips rather than fails. Existence is NOT
+    /// the test: the test host boots the app, and `AgentConversationStore.init`
+    /// creates the conversations directory (and, on a fresh install, one live
+    /// conversation) — so an existence gate fails open and the suites run
+    /// against nothing (four expectation failures and an `Index out of range`
+    /// crash, run 29198624167; then the three #381 fresh-start failures).
     static var isAvailable: Bool {
-        hasConversations(at: directory)
+        hasEvalCorpus(at: directory)
     }
 
-    /// At least one conversation file, by the same filter `load` applies —
-    /// `index.json` is the manifest, not a conversation.
-    static func hasConversations(at directory: URL) -> Bool {
+    /// An eval-scale corpus: at least `minimumEvalConversations` conversation
+    /// files, by the same filter `load` applies — `index.json` is the manifest,
+    /// not a conversation.
+    static func hasEvalCorpus(at directory: URL) -> Bool {
         let contents =
             (try? FileManager.default.contentsOfDirectory(
                 at: directory, includingPropertiesForKeys: nil)) ?? []
-        return contents.contains {
+        let conversations = contents.filter {
             $0.pathExtension == "json" && $0.lastPathComponent != "index.json"
         }
+        return conversations.count >= minimumEvalConversations
     }
 
     /// The embedder (`Qwen3-Embedding-0.6B-4bit-DWQ`, 1024-dim). Optional: with

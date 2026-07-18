@@ -33,15 +33,19 @@ private nonisolated let sampleDomains: [String: TrackingDomain] = [
 
 // MARK: - track
 
-nonisolated func createTrackTool(store: MemoryStore) -> AgentToolDefinition {
+nonisolated func createTrackTool(
+    store: MemoryStore,
+    recorder: CompanionFlightRecorder? = nil,
+    context: CompanionTurnContext? = nil
+) -> AgentToolDefinition {
     AgentToolDefinition(
         name: "track",
         label: "track",
         description: """
             Your one door to the tracking record: dated observations, the day's \
-            contract chain, and the backlog. How you track — when to plan, what \
-            to elicit, when a day closes — is your practice; this tool only \
-            writes the data shapes.
+            contract chain, the backlog, and the notifications you judged but \
+            held. How you track — when to plan, what to elicit, when a day \
+            closes — is your practice; this tool only writes the data shapes.
 
             kind 'observation' — one dated, typed fact from the conversation. \
             payload: {kind, value, domain?, stream?}. The four samples map their \
@@ -66,6 +70,14 @@ nonisolated func createTrackTool(store: MemoryStore) -> AgentToolDefinition {
             recurring habit), and domain. 'done' on a daily habit records \
             today's check-off and keeps the item; on a one-shot it closes it. \
             Refer to items by title fragment or id.
+
+            kind 'hold' — a notification you judged important but chose NOT to \
+            escalate. payload: {app, title?, why}. This is the one triage call \
+            your record cannot otherwise see: an escalation and his reaction are \
+            already logged, a silent pass leaves no trace. Log the hold so the \
+            weekly numbers can weigh what you kept from him against what you \
+            raised. Only for the important-but-held — routine noise you ignore \
+            needs no record.
             """,
         parameterSchema: JSONSchema(
             type: "object",
@@ -73,7 +85,7 @@ nonisolated func createTrackTool(store: MemoryStore) -> AgentToolDefinition {
                 "kind": PropertySchema(
                     type: "string",
                     description: "Which record family the payload writes.",
-                    enumValues: ["observation", "day", "item"]
+                    enumValues: ["observation", "day", "item", "hold"]
                 ),
                 "payload": PropertySchema(
                     type: "object",
@@ -85,7 +97,7 @@ nonisolated func createTrackTool(store: MemoryStore) -> AgentToolDefinition {
         execute: { _, argsJSON, _, _ in
             guard let kind = ToolArgExtractor.string(argsJSON, key: "kind") else {
                 throw TrackingToolError(
-                    message: "track requires 'kind': observation|day|item")
+                    message: "track requires 'kind': observation|day|item|hold")
             }
             let payload = try ToolArgExtractor.object(argsJSON, key: "payload")
             switch kind {
@@ -95,12 +107,52 @@ nonisolated func createTrackTool(store: MemoryStore) -> AgentToolDefinition {
                 return .text(try await trackDay(payload, store: store))
             case "item":
                 return .text(try await trackItem(payload, store: store))
+            case "hold":
+                return .text(try await trackHold(payload, recorder: recorder, context: context))
             default:
                 throw TrackingToolError(
-                    message: "Unknown kind '\(kind)' — one of observation|day|item.")
+                    message: "Unknown kind '\(kind)' — one of observation|day|item|hold.")
             }
         }
     )
+}
+
+// MARK: - hold
+
+/// A held notification lands on the flight recorder, not the tracking DB: it is
+/// evidence for the Hub's weekly numbers (#380), the "important but held" class
+/// the free record can't otherwise see (#376 decision 6). The aggregator counts
+/// `hold.tracked` traces — counts only, the model narrates.
+private nonisolated func trackHold(
+    _ payload: [String: JSONValue],
+    recorder: CompanionFlightRecorder?,
+    context: CompanionTurnContext?
+) async throws -> String {
+    guard let recorder else {
+        throw TrackingToolError(
+            message: "Holds are a Mission Control practice — no record here to write.")
+    }
+    guard let app = ToolArgExtractor.string(payload, key: "app"),
+        !app.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+        throw TrackingToolError(message: "hold payload requires the 'app' you held.")
+    }
+    guard let why = ToolArgExtractor.string(payload, key: "why"),
+        !why.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+        throw TrackingToolError(
+            message: "hold payload requires 'why' — the verdict is the point of the record.")
+    }
+    let title = ToolArgExtractor.string(payload, key: "title")
+    var snapshot = ["app": app]
+    if let title, !title.isEmpty { snapshot["title"] = title }
+    await recorder.record(
+        "hold.tracked",
+        turnID: context?.turnID,
+        conversationID: context?.conversationID,
+        snapshot: snapshot,
+        note: why)
+    return "Held \(app)\(title.map { " — \($0)" } ?? ""), on the record."
 }
 
 // MARK: - observation
