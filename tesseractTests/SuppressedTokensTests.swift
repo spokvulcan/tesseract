@@ -106,4 +106,10 @@ struct SuppressedTokensTests {
         #expect(AgentGenerateParameters.forModel("qwen3.6-35b-a3b-paro").suppressedTokens.isEmpty)
         #expect(AgentGenerateParameters.forModel("ornith-9b").suppressedTokens.isEmpty)
     }
+
+    @Test("gemma-4 preset runs its measured prefill step, others keep the default")
+    func gemma4PrefillStepIsMeasuredOptimum() {
+        #expect(AgentGenerateParameters.forModel("gemma-4-12b").prefillStepSize == 512)
+        #expect(AgentGenerateParameters.forModel("qwen3.6-35b-a3b-paro").prefillStepSize == 1024)
+    }
 }

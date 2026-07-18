@@ -93,6 +93,9 @@ struct AgentGenerateParameters: Sendable, Codable {
     ///
     /// Do not raise this before #258 lands, and never without re-measuring peak
     /// memory at 128K–200K.
+    ///
+    /// This default is PARO evidence; per-model presets may override with
+    /// their own measured optimum (gemma-4 runs 512 — see ``gemma4``).
     var prefillStepSize: Int = 1024
 
     static let `default` = AgentGenerateParameters()
@@ -179,6 +182,16 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// processor inserts around media spans; the checkpoint marks them
     /// generate-time-forbidden, and without the mask the model can emit them
     /// spuriously mid-text. No `<think>` template, so the safeguard is off.
+    ///
+    /// `prefillStepSize` 512 is gemma's own measured optimum, not the PARO
+    /// default: at a 5.5K-token prompt the curve peaks at 512 in every
+    /// interleaved round (435 tok/s vs 416 at 1024, 406 at 2048, 396 at
+    /// 4096; 256 and 128 fall off the other side), and at 17K it ties 1024
+    /// within noise. Mechanism: 40 of 48 layers are sliding-window 1024, so
+    /// per-token attention span grows with the chunk; the dense GEMM is
+    /// already saturated at M=512 (no MoE small-M penalty here). Media
+    /// spans are unaffected — gemma's `prepare` runs media-bearing spans in
+    /// a single forward regardless of window size.
     static let gemma4: AgentGenerateParameters = {
         var p = AgentGenerateParameters(
             temperature: 1.0,
@@ -187,6 +200,7 @@ struct AgentGenerateParameters: Sendable, Codable {
         )
         p.suppressedTokens = [258_882, 258_883]
         p.thinkingSafeguard.enabled = false
+        p.prefillStepSize = 512
         return p
     }()
 

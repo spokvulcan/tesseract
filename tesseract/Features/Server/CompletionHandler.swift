@@ -424,6 +424,9 @@ struct CompletionHandler: Sendable {
             let penalty = Float(frequencyPenalty)
             params.frequencyPenalty = penalty == 0 ? nil : penalty
         }
+        if let step = request.prefill_step_size {
+            params.prefillStepSize = min(max(step, 64), 8192)
+        }
         if let sg = request.thinking_safeguard {
             if let enabled = sg.enabled { params.thinkingSafeguard.enabled = enabled }
             if let m = sg.max_thinking_chars { params.thinkingSafeguard.maxThinkingChars = m }
