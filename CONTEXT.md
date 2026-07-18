@@ -1310,6 +1310,48 @@ The entity/harness split (map #301, ticket #307, ADR-0040): the model — Jarvis
 the *entity* — decides everything with judgment in it; the *harness* (code)
 contributes turns, continuity, and the record, never judgment.
 
+**Event Fold**:
+The loop's algorithm: every digital input becomes exactly one **Event**, events
+queue in order, and each granted **Turn** folds everything pending into
+**Mission Control** — state' = turn(state, events). The harness owns the math
+(nothing lost, nothing duplicated, order kept, one turn at a time); the entity
+owns every judgment inside the turn. A turn runs only for pending events or a
+due **Wake** — there is no harness cadence and no safety tick; the entity owns
+its clock entirely.
+_Avoid_: event loop (a runtime word), scheduler, inbox (the queue is plumbing,
+not the concept), ambient cadence (the retired 30-minute gate).
+
+**Event**:
+One perception queued for the entity: a due **Wake**, a **Report-Back**, a day
+or system transition (day start/end, Mac wake, launch catch-up, power change),
+or a sustained app switch — later a notification arrival or a screen glance,
+the same shape. Coalesced: one turn drains all pending events.
+_Avoid_: trigger/signal (implementation words), notification (one future event
+kind, not the concept), tick (the retired cadence's clock).
+
+**Mission Control**:
+The one standing conversation that is the fold's state — every loop turn
+appends to it, origin-tagged; per-turn conversation minting is retired. Rides
+a fixed context ceiling: the nightly sleep pass authors a **Digest** that
+becomes its head with the recent tail kept verbatim, and hitting the ceiling
+intraday runs the same fold early, on the record.
+_Avoid_: companion chat (the retired one-chat-per-turn shape), home surface
+(the chat-UI concept, #327), main thread.
+
+**Digest**:
+The entity-authored fold-down of **Mission Control**'s older history, written
+in the nightly sleep pass and spliced in as the conversation's new head.
+_Avoid_: summary (mechanical flavor — the digest is the entity's own memory
+practice), compaction (the operation, not the artifact).
+
+**Report-Back**:
+What a summoned dialogue owes **Mission Control**: a deposit — on end, at a
+milestone, or when nudged after going quiet — that lands as an **Event**, so
+the one mind knows what its conversations concluded. Dialogues stay their own
+chats; cognition stays in the fold.
+_Avoid_: summary (it carries decisions and debts, not prose recap), sync,
+hand-off.
+
 **Wake**:
 One persisted row granting the entity a future turn — a promise, a rhythm beat,
 a follow-up, or a re-summons, all one table. Booked by the entity through a
@@ -1330,20 +1372,14 @@ _Avoid_: scheduler (implies code owns the rhythm — the entity books its own),
 dispatcher, trigger engine, evaluate() (the loop's method that calls it).
 
 **Turn**:
-One full agent run granted to the entity by a **Wake**, a transition (day
-start, Mac-wake, launch catch-up), or ambient eligibility. Every turn persists
-as an origin-tagged conversation in the one chat list — full observability.
-Silence is a decision a turn records, never a branch code took.
+One full agent run granted to the entity by pending **Event**s or a due
+**Wake**. Every turn appends, origin-tagged, to **Mission Control** — full
+observability, one place. Silence is a decision a turn records, never a
+branch code took. Time to think is a wake the entity books itself.
 _Avoid_: check/tick (the evaluator's clock, which decides nothing), beat (the
 anchor rhythm's word for the *content* of some turns), heartbeat (the retired
-skeleton's fixed-time pings).
-
-**Ambient Turn**:
-An unoccasioned **Turn** — time to think, research, notice, book — granted when
-the eligibility gate passes (AC power, `.llm` slot free, owner not using the
-agent, spacing). The waking analogue of a sleep pass, and the seed of the North
-Star's continuous loop.
-_Avoid_: background job (it's cognition, not maintenance), idle task, cron.
+skeleton's fixed-time pings), ambient turn (retired — the unoccasioned
+cadence-granted turn died with the **Event Fold**).
 
 **Situation Briefing**:
 The code-gathered context handed to the entity at the start of every turn:
