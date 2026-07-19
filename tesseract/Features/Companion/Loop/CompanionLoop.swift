@@ -335,9 +335,7 @@ final class CompanionLoop {
             case .representEvents(let ids):
                 try? await store.representEvents(ids: ids)
             case .fallbackBanner(let wake):
-                await notifier.post(
-                    pingID: UUID(), beatID: wake.wakeClass.rawValue, title: "Jarvis",
-                    body: wake.content, wakeID: wake.id)
+                await notifier.post(title: "Jarvis", body: wake.content, wakeID: wake.id)
                 try? await store.upsertWake(wake)
                 recorder.record("delivery.fallback", wakeID: wake.id, note: wake.content)
             case .stampWakeHeard(let id):
@@ -408,7 +406,6 @@ final class CompanionLoop {
     func deliverNotification(title: String, body: String) async {
         let context = runner.context
         await notifier.post(
-            pingID: UUID(), beatID: context.origin?.rawValue ?? "companion",
             title: title, body: body,
             wakeID: context.wakeIDs.first, conversationID: context.conversationID)
         recorder.record(
@@ -426,7 +423,7 @@ final class CompanionLoop {
     /// the turn that raised it.
     func deliverUnansweredFallback(line: String, wakeID: UUID?, conversationID: UUID?) async {
         await notifier.post(
-            pingID: UUID(), beatID: "summons-fallback", title: "Jarvis", body: line,
+            title: "Jarvis", body: line,
             wakeID: wakeID, conversationID: conversationID)
         recorder.record(
             "delivery.notification",

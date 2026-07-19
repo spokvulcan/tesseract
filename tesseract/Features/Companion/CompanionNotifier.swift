@@ -26,8 +26,6 @@ nonisolated enum CompanionPingOutcome: String, Sendable {
 /// posted before the last relaunch still routes; the in-memory ping map it
 /// replaces died with its process.
 nonisolated struct CompanionPingReaction: Sendable {
-    let pingID: UUID
-    let beatID: String
     let outcome: CompanionPingOutcome
     /// Inline reply text, when the outcome is `.replied`.
     let note: String?
@@ -51,7 +49,6 @@ final class CompanionNotifier {
     nonisolated static let categoryID = "companion.ping"
     nonisolated static let replyActionID = "companion.reply"
     nonisolated static let laterActionID = "companion.later"
-    nonisolated static let beatUserInfoKey = "beat"
     nonisolated static let wakeUserInfoKey = "wake"
     nonisolated static let conversationUserInfoKey = "conversation"
 
@@ -91,13 +88,11 @@ final class CompanionNotifier {
         }
     }
 
-    /// Posts one ping immediately; the ping's UUID is the request identifier,
-    /// so outcomes route back to the exact `fired` line in the log. The
-    /// correlation rides `userInfo` (ADR-0052): Notification Center is the
-    /// durable carrier, so a reaction after any relaunch still knows its
-    /// wake and conversation.
+    /// Posts one ping immediately. The correlation rides `userInfo`
+    /// (ADR-0052): Notification Center is the durable carrier, so a reaction
+    /// after any relaunch still knows its wake, conversation, and line.
     func post(
-        pingID: UUID, beatID: String, title: String, body: String,
+        title: String, body: String,
         wakeID: UUID? = nil, conversationID: UUID? = nil
     ) async {
         let content = UNMutableNotificationContent()
@@ -105,18 +100,18 @@ final class CompanionNotifier {
         content.body = body
         content.sound = .default
         content.categoryIdentifier = Self.categoryID
-        var userInfo: [String: String] = [Self.beatUserInfoKey: beatID]
+        var userInfo: [String: String] = [:]
         if let wakeID { userInfo[Self.wakeUserInfoKey] = wakeID.uuidString }
         if let conversationID {
             userInfo[Self.conversationUserInfoKey] = conversationID.uuidString
         }
         content.userInfo = userInfo
         let request = UNNotificationRequest(
-            identifier: pingID.uuidString, content: content, trigger: nil)
+            identifier: UUID().uuidString, content: content, trigger: nil)
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            Log.companion.error("Posting ping \(pingID.uuidString) failed: \(error)")
+            Log.companion.error("Posting ping failed: \(error)")
         }
     }
 }
@@ -143,11 +138,9 @@ nonisolated final class CompanionNotificationDelegate: NSObject,
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
         let request = response.notification.request
-        guard request.content.categoryIdentifier == CompanionNotifier.categoryID,
-            let pingID = UUID(uuidString: request.identifier)
+        guard request.content.categoryIdentifier == CompanionNotifier.categoryID
         else { return }
         let userInfo = request.content.userInfo
-        let beatID = userInfo[CompanionNotifier.beatUserInfoKey] as? String ?? "unknown"
         let wakeID = (userInfo[CompanionNotifier.wakeUserInfoKey] as? String)
             .flatMap(UUID.init(uuidString:))
         let conversationID = (userInfo[CompanionNotifier.conversationUserInfoKey] as? String)
@@ -168,7 +161,7 @@ nonisolated final class CompanionNotificationDelegate: NSObject,
 
         await onOutcome?(
             CompanionPingReaction(
-                pingID: pingID, beatID: beatID, outcome: outcome, note: note,
+                outcome: outcome, note: note,
                 wakeID: wakeID, conversationID: conversationID,
                 line: request.content.body))
     }

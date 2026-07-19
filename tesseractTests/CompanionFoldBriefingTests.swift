@@ -61,6 +61,11 @@ import Testing
             wakeClass: .rhythm, state: .delivered)
         fired.firedAt = Date().addingTimeInterval(-1800)
         try await store.upsertWake(fired)
+        var open = CompanionWake(
+            content: "Midday pulse", due: Date().addingTimeInterval(-600),
+            wakeClass: .promise, state: .fired)
+        open.firedAt = Date().addingTimeInterval(-600)
+        try await store.upsertWake(open)
 
         let sut = briefing(store: store, fold: { self.foldFixture() })
         let decorated = await sut.decorate(UserMessage(content: "hey"), transcript: [])
@@ -71,6 +76,11 @@ import Testing
         #expect(injected.contains("[id \(booked.shortID)]"))
         #expect(injected.contains("Evening journal"))
         #expect(injected.contains(", unheard"))
+        // A still-open fired wake is nameable — `revise_wake` can act on it —
+        // so it carries its handle; the terminal one renders none (an id the
+        // tools would reject invites a failing call).
+        #expect(injected.contains("Midday pulse [id \(open.shortID)]"))
+        #expect(!injected.contains("[id \(fired.shortID)]"))
         #expect(injected.contains("notify: \"Evening journal is open, sir.\""))
         #expect(injected.contains("folding the journal into tomorrow"))
         #expect(!injected.contains("- Silence."))

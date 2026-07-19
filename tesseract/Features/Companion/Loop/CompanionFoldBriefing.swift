@@ -75,15 +75,13 @@ final class CompanionFoldBriefing {
         return user.with(injectedContext: combined)
     }
 
-    /// The pipeline door — the same wrapper-restore contract as
-    /// `CompanionIdentity.decorate(_:transcript:)`.
+    /// The pipeline door — `decoratingUser` is the shared wrapper-restore
+    /// contract.
     func decorate(
         _ outgoing: any AgentMessageProtocol & Sendable,
         transcript: [any AgentMessageProtocol & Sendable]
     ) async -> any AgentMessageProtocol & Sendable {
-        guard let user = outgoing.asUser else { return outgoing }
-        let decorated = await decorate(user, transcript: transcript)
-        return outgoing is CoreMessage ? CoreMessage.user(decorated) : decorated
+        await outgoing.decoratingUser { await decorate($0, transcript: transcript) }
     }
 
     /// A conversation switch — the next conversation re-derives its stamp
@@ -119,7 +117,7 @@ final class CompanionFoldBriefing {
         if !due.isEmpty {
             lines.append("Due now:")
             for wake in due {
-                lines.append("- [\(wake.wakeClass.rawValue)] \(wake.content) [id \(wake.shortID)]")
+                lines.append("- \(wake.briefingLine)")
             }
         }
         if !fired.isEmpty {
@@ -128,7 +126,7 @@ final class CompanionFoldBriefing {
                 let when =
                     wake.firedAt?.formatted(date: .omitted, time: .shortened) ?? "?"
                 lines.append(
-                    "- \(when) [\(wake.wakeClass.rawValue)] \(wake.content) "
+                    "- \(when) \(wake.briefingLine) "
                         + "(\(wake.state.rawValue)\(wake.heardAt == nil ? ", unheard" : ""))")
             }
         }
@@ -137,7 +135,7 @@ final class CompanionFoldBriefing {
             for wake in upcoming {
                 lines.append(
                     "- \(wake.due.formatted(date: .abbreviated, time: .shortened)) "
-                        + "[\(wake.wakeClass.rawValue)] \(wake.content) [id \(wake.shortID)]")
+                        + wake.briefingLine)
             }
         }
         if !activity.deliveries.isEmpty {
@@ -176,7 +174,7 @@ final class CompanionFoldBriefing {
             }
             guard assistant.timestamp >= deliveriesSince else { continue }
             for call in assistant.toolCalls {
-                guard let line = deliveryLine(call) else { continue }
+                guard let line = call.deliveryLine else { continue }
                 let when = assistant.timestamp.formatted(date: .omitted, time: .shortened)
                 deliveries.append("- \(when) \(line)")
             }
@@ -185,22 +183,6 @@ final class CompanionFoldBriefing {
             deliveries.suffix(maxDeliveries).map { $0 },
             conclusions.suffix(maxConclusions).map { $0 }
         )
-    }
-
-    private nonisolated static func deliveryLine(_ call: ToolCallInfo) -> String? {
-        let key: String
-        switch call.name {
-        case "notify": key = "body"
-        case "speak": key = "text"
-        case "summon_overlay": key = "line"
-        default: return nil
-        }
-        guard
-            let data = call.argumentsJSON.data(using: .utf8),
-            let args = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let line = args[key] as? String
-        else { return nil }
-        return "\(call.name): \"\(line)\""
     }
 
     // MARK: - Stamp round-trip
@@ -230,5 +212,25 @@ final class CompanionFoldBriefing {
             return Date(timeIntervalSince1970: value)
         }
         return nil
+    }
+}
+
+extension ToolCallInfo {
+    /// The owner-facing line inside a delivery-ladder call — `nil` for any
+    /// call that isn't a delivery.
+    fileprivate nonisolated var deliveryLine: String? {
+        let key: String
+        switch name {
+        case "notify": key = "body"
+        case "speak": key = "text"
+        case "summon_overlay": key = "line"
+        default: return nil
+        }
+        guard
+            let data = argumentsJSON.data(using: .utf8),
+            let args = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let line = args[key] as? String
+        else { return nil }
+        return "\(name): \"\(line)\""
     }
 }
