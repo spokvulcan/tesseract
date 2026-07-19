@@ -189,11 +189,17 @@ final class AudioCaptureEngine: AudioCapturing {
     /// between captures (capture start/stop degrade to gate flips) and hosts
     /// the session's TTS player nodes, so VPIO's echo canceller hears the
     /// reply as its own render-stream reference instead of reconstructed
-    /// device loopback. Set synchronously at `beginVoiceHold` — session
-    /// semantics; the wiring commits asynchronously (measured ~860–900 ms for
-    /// tap + render wire + start with the render side, `research/voice-hold-lab`
-    /// E6 — far too long for the main actor, so it runs detached, E7).
-    private(set) var voiceHoldActive = false
+    /// device loopback. The hold is set synchronously at `beginVoiceHold` —
+    /// session semantics; the wiring commits asynchronously (measured
+    /// ~860–900 ms for tap + render wire + start with the render side,
+    /// `research/voice-hold-lab` E6 — far too long for the main actor, so it
+    /// runs detached, E7). The **Hold Wiring Arbiter** (ADR-0050) decides
+    /// every race between that detached wiring and the MainActor paths —
+    /// schedule folding, staleness, commit vs discard — and this engine
+    /// performs its verdicts.
+    private var holdArbiter = HoldWiringArbiter()
+    var voiceHoldActive: Bool { holdArbiter.isHoldActive }
+    private var holdWiringInProgress: Bool { holdArbiter.isWiringInFlight }
     /// The hold's tap and render side are installed and the held engine is
     /// (or should be) running. False while the wiring is pending/queued/in
     /// flight, after a teardown, and after `endVoiceHold`.
@@ -203,21 +209,10 @@ final class AudioCaptureEngine: AudioCapturing {
     /// engine hosting playback buys nothing acoustically (the reply falls
     /// back to the dedicated engine).
     private(set) var voicePlaybackHosted = false
-    /// A detached wiring owns the engine right now. Every MainActor path that
-    /// would touch the engine (press, prewarm, hold end) defers to the
-    /// wiring's commit hop — racing it is the crash class the redo exists to
-    /// kill. Cleared only by the *current* generation's commit.
-    private var holdWiringInProgress = false
     /// The in-flight/last wiring task. Never cancelled mid-flight to
-    /// reschedule — a newer request folds into `holdWireQueued` instead, so
-    /// two wirings never touch one engine at once.
+    /// reschedule — a newer request folds into the arbiter's queue instead,
+    /// so two wirings never touch one engine at once.
     private var holdWireTask: Task<HoldWireOutcome, Never>?
-    /// A wiring request folded in while another wiring ran — the commit hop
-    /// discards its stale outcome and runs this next. Value = rebuildFirst.
-    private var holdWireQueued: Bool?
-    /// Staleness guard for wiring commits — bumped on every (re)schedule and
-    /// on `endVoiceHold`.
-    private var holdGeneration = 0
     /// Coalesced rebuild-under-hold (device change while held) — the
     /// config-change sink's hold-aware counterpart to `idleRebuildTask`.
     private var holdRebuildTask: Task<Void, Never>?
@@ -853,10 +848,9 @@ final class AudioCaptureEngine: AudioCapturing {
     /// without microphone permission (the session's own capture start
     /// surfaces that error).
     func beginVoiceHold() {
-        guard !voiceHoldActive else { return }
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
-        voiceHoldActive = true
-        holdGeneration += 1
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+            holdArbiter.beginHold()
+        else { return }
         // A pending disarm (fallback lifecycle) or idle rebuild must not fire
         // underneath the hold's wiring.
         disarmTask?.cancel()
@@ -883,22 +877,20 @@ final class AudioCaptureEngine: AudioCapturing {
     /// engine — the tap comes off and the render side unwires. The engine
     /// returns to the armed-stopped idle the dictation lifecycle expects.
     func endVoiceHold() {
-        guard voiceHoldActive else { return }
-        voiceHoldActive = false
-        holdGeneration += 1
+        let verdict = holdArbiter.endHold()
+        guard verdict != .alreadyIdle else { return }
         holdRebuildTask?.cancel()
         holdRebuildTask = nil
         holdWireTask?.cancel()
         holdWireTask = nil
-        holdWireQueued = nil
         if !isCapturing {
             captureGate.isActive = false
         }
-        if holdWiringInProgress {
-            // The detached wiring's commit hop sees the bumped generation and
+        if verdict == .leaveDiscardToCommit {
+            // The detached wiring's landing sees the bumped generation and
             // discards whatever it built (stop → remove tap → unwire, all on
             // the stopped engine). Touching the engine here would race that
-            // work — the crash class the redo exists to kill.
+            // work — the crash class the arbiter exists to kill.
             voiceHoldWired = false
             resetHostedPlayback()
             Log.audio.info("Voice hold ended (wiring in flight — discard left to its commit)")
@@ -1016,17 +1008,17 @@ final class AudioCaptureEngine: AudioCapturing {
         }
     }
 
-    /// Single entry for every hold (re)wiring. Serial by construction: while
-    /// a wiring is in flight a new request folds into `holdWireQueued` rather
-    /// than racing it — two wirings never touch one engine at once.
+    /// Single entry for every hold (re)wiring. Serial by construction: the
+    /// arbiter folds a request into its queue while a wiring is in flight
+    /// rather than racing it — two wirings never touch one engine at once.
     private func scheduleHoldWiring(rebuildFirst: Bool) {
-        holdGeneration += 1
         lastIntentionalReconfigure = Date()
-        if holdWiringInProgress {
-            holdWireQueued = (holdWireQueued ?? false) || rebuildFirst
+        switch holdArbiter.schedule(rebuildFirst: rebuildFirst) {
+        case .folded:
             return
+        case .start(let rebuildFirst, let generation):
+            startHoldWiring(rebuildFirst: rebuildFirst, generation: generation)
         }
-        startHoldWiring(rebuildFirst: rebuildFirst)
     }
 
     /// Serial-handoff box for the kept engine into the detached wiring.
@@ -1039,10 +1031,12 @@ final class AudioCaptureEngine: AudioCapturing {
         let armed: Bool
     }
 
-    private func startHoldWiring(rebuildFirst: Bool) {
+    /// Launch a wiring the arbiter already admitted (a `start` or
+    /// `discardAndStartNext` verdict) — the in-flight ownership is the
+    /// arbiter's fact; this only performs.
+    private func startHoldWiring(rebuildFirst: Bool, generation: Int) {
         holdRebuildTask?.cancel()
         holdRebuildTask = nil
-        holdWiringInProgress = true
         if rebuildFirst {
             tearDownEngine()
         } else if hostedPlayerNode != nil {
@@ -1057,7 +1051,6 @@ final class AudioCaptureEngine: AudioCapturing {
             rebuildFirst
             ? nil
             : audioEngine.map { HoldEngineBox(engine: $0, armed: voiceProcessingArmed) }
-        let generation = holdGeneration
         let gate = captureGate
         let buffer = sampleBuffer
         let bufferSize = self.bufferSize
@@ -1082,25 +1075,24 @@ final class AudioCaptureEngine: AudioCapturing {
         }
     }
 
-    /// The wiring's MainActor landing strip. The current generation commits;
-    /// a stale one discards its outcome on the stopped engine and runs
-    /// whatever queued behind it.
+    /// The wiring's MainActor landing strip: performs the arbiter's landing
+    /// verdict. The current generation commits; a stale one discards its
+    /// outcome on the stopped engine and runs whatever queued behind it.
     private func commitHoldWiring(
         _ outcome: HoldWireOutcome, generation: Int, freshEngine: Bool
     ) {
-        guard voiceHoldActive, holdGeneration == generation else {
+        switch holdArbiter.wiringLanded(generation: generation) {
+        case .discardAndStartNext(let rebuildFirst, let nextGeneration):
             discardHoldWiring(outcome)
-            let queued = holdWireQueued
-            holdWireQueued = nil
-            if let queued, voiceHoldActive {
-                startHoldWiring(rebuildFirst: queued)
-                return
-            }
-            holdWiringInProgress = false
+            startHoldWiring(rebuildFirst: rebuildFirst, generation: nextGeneration)
+            return
+        case .discardAndIdle:
+            discardHoldWiring(outcome)
             holdWireTask = nil
             return
+        case .commit:
+            break
         }
-        holdWiringInProgress = false
         holdWireTask = nil
         if freshEngine {
             adoptBuiltEngine((engine: outcome.engine, armed: outcome.armed))
