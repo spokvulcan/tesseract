@@ -8,8 +8,10 @@
 //  Wake Evaluator (the pure decider) for at most one `Decision`, and performs
 //  it. A granted turn drains everything pending into Mission Control; there
 //  is no cadence and no safety tick — a quiet queue grants no turns,
-//  indefinitely, by design. The correctness invariant lives here: a wake or
-//  an Event is consumed only by a completed turn; anything less re-presents.
+//  indefinitely, by design. The correctness invariant — a wake or an Event
+//  is consumed only by a completed turn; anything less re-presents — is
+//  decided by the **Companion Fold Reducer** (ADR-0051); this loop gathers
+//  its inputs and performs its effect values.
 //
 //  The tick is a coalescing clock, not a cadence: it never grants a turn by
 //  itself — it only notices what the queue and the wake table already hold.
@@ -25,8 +27,6 @@ final class CompanionLoop {
     /// skeleton proved a timer armed for 09:00 dies with a closed lid. The
     /// tick decides nothing: an empty queue ticks forever in silence.
     static let tickInterval: Duration = .seconds(30)
-    /// A failing turn retries this many times before the generic fallback.
-    static let maxTurnAttempts = 2
 
     private let store: MemoryStore
     private let recorder: CompanionFlightRecorder
@@ -59,13 +59,13 @@ final class CompanionLoop {
     private var evaluating = false
     /// The Wake Evaluator — the whole clock, as one pure decider.
     private var evaluator = CompanionEvaluator()
+    /// The fold's write side — presentation, settlement, and reaction
+    /// writes as ordered effect values this loop performs (ADR-0051).
+    private var reducer = CompanionFoldReducer()
     private var didRequestAuthorization = false
     private var didRunLaunchRecovery = false
     /// Briefing evidence: the last tick that saw the owner engaged.
     private var lastOwnerEngagedAt: Date?
-    /// Failed attempts per fold batch, keyed by the earliest wake id (or the
-    /// earliest event id for an event-only batch).
-    private var turnAttempts: [UUID: Int] = [:]
     /// Posted notification pings → their correlation, for reaction routing.
     private var postedPings: [UUID: (wakeID: UUID?, conversationID: UUID?)] = [:]
 
@@ -220,40 +220,32 @@ final class CompanionLoop {
     // MARK: - The fold turn
 
     /// One granted turn drains everything pending — Events in total order,
-    /// due wakes fired — into Mission Control.
+    /// due wakes fired — into Mission Control. Gather → decide (the
+    /// reducer) → perform: every write here is an effect value first.
     private func runFoldTurn(
-        dueWakes wakes: [CompanionWake], origin: TurnOrigin, carriesBeat: Bool, now: Date
+        dueWakes: [CompanionWake], origin: TurnOrigin, carriesBeat: Bool, now: Date
     ) async {
         // Drain: the whole pending queue becomes this turn's batch, marked
         // presented in one transaction. Anything admitted after this instant
         // waits for the next turn.
         let batch = (try? await store.drainPendingEvents(at: now)) ?? []
-        guard !batch.isEmpty || !wakes.isEmpty else { return }
 
-        // Fired = presented to the entity. Recorded before the turn so a crash
-        // between here and completion is visible as fired-but-unconsumed.
-        for var wake in wakes {
-            wake.state = .fired
-            wake.firedAt = wake.firedAt ?? now
-            try? await store.upsertWake(wake)
-            recorder.record(
-                "wake.fired", wakeID: wake.id,
-                snapshot: [
-                    "class": wake.wakeClass.rawValue,
-                    "due": CompanionWakeTime.format(wake.due),
-                    "present": idleMonitor.isIdle ? "idle" : "active",
-                ],
-                note: wake.content)
-        }
-
-        // A firing beat advances the ignored-promise ladder (#309): what the
-        // last beat resurfaced and he never heard dies delivered-unheard, and
-        // newly ignored promises join this beat's agenda. `carriesBeat` is the
-        // evaluator's call — true even for a rhythm wake firing as catch-up.
-        var resurfaced: [CompanionWake] = []
-        if carriesBeat {
-            resurfaced = await CompanionResurfacing.pass(
-                store: store, recorder: recorder, now: now)
+        // From presentation on, the plan's fired copies are the turn's wake
+        // values: settlement must see the stamped `firedAt`, or a retry's
+        // rebook (and the exhausted fallback) would clobber it back to nil.
+        let wakes: [CompanionWake]
+        let resurfaced: [CompanionWake]
+        switch reducer.begin(
+            batch: batch, dueWakes: dueWakes, carriesBeat: carriesBeat, now: now)
+        {
+        case .skip:
+            return
+        case .present(let effects):
+            wakes = effects.compactMap {
+                guard case .fireWake(let wake) = $0 else { return nil }
+                return wake
+            }
+            resurfaced = await perform(effects, now: now)
         }
 
         let template = origin == .catchup ? Self.catchUpTemplate : Self.foldTemplate
@@ -263,26 +255,12 @@ final class CompanionLoop {
         let outcome = await runner.run(
             origin: origin, opening: opening, wakeIDs: wakes.map(\.id))
 
-        guard let outcome else {
-            await handleTurnFailure(events: batch, wakes: wakes)
-            return
-        }
-        turnAttempts.removeAll()
-
-        // Consumed only by this completed turn — the invariant, for Events
-        // and wakes alike. A wake the turn itself moved (revise_wake flips it
-        // back to booked) is respected.
-        try? await store.consumeEvents(ids: batch.map(\.id), turnID: outcome.turnID)
-        for wake in wakes {
-            guard var current = try? await store.wake(id: wake.id), current.state == .fired
-            else { continue }
-            current.state = .delivered
-            current.consumedAt = Date()
-            try? await store.upsertWake(current)
-            recorder.record(
-                "wake.consumed", wakeID: wake.id, turnID: outcome.turnID,
-                conversationID: outcome.conversationID)
-        }
+        let settlement = reducer.settle(
+            batch: batch,
+            wakes: wakes,
+            outcome: outcome.map { ($0.turnID, $0.conversationID) },
+            now: Date())
+        await perform(settlement, now: now)
     }
 
     private func composeOpening(
@@ -308,41 +286,79 @@ final class CompanionLoop {
         ].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 
-    // MARK: - Failure semantics (ADR-0040 §13)
+    // MARK: - The performer
 
-    private func handleTurnFailure(events: [CompanionEvent], wakes: [CompanionWake]) async {
-        guard let key = wakes.first?.id ?? events.first?.id else { return }
-        let attempts = (turnAttempts[key] ?? 0) + 1
-        turnAttempts[key] = attempts
-
-        if attempts < Self.maxTurnAttempts {
-            // Everything re-presents: wakes back to booked, Events back to
-            // pending, order untouched — the next tick retries the fold.
-            for var wake in wakes {
-                wake.state = .booked
+    /// Execute the reducer's effect values, in order. The one home of the
+    /// fold's store/notifier writes — no decision is made here beyond the
+    /// re-reads an effect's own contract names. Returns the resurfacing
+    /// pass's wakes for the opening composition.
+    @discardableResult
+    private func perform(
+        _ effects: [CompanionFoldReducer.Effect], now: Date
+    ) async -> [CompanionWake] {
+        var resurfaced: [CompanionWake] = []
+        for effect in effects {
+            switch effect {
+            case .fireWake(let wake):
                 try? await store.upsertWake(wake)
+                recorder.record(
+                    "wake.fired", wakeID: wake.id,
+                    snapshot: [
+                        "class": wake.wakeClass.rawValue,
+                        "due": CompanionWakeTime.format(wake.due),
+                        "present": idleMonitor.isIdle ? "idle" : "active",
+                    ],
+                    note: wake.content)
+            case .runResurfacingPass:
+                // What the last beat resurfaced and he never heard dies
+                // delivered-unheard; newly ignored promises join this
+                // beat's agenda (#309).
+                resurfaced = await CompanionResurfacing.pass(
+                    store: store, recorder: recorder, now: now)
+            case .consumeEvents(let ids, let turnID):
+                try? await store.consumeEvents(ids: ids, turnID: turnID)
+            case .deliverFiredWake(let id, let turnID, let conversationID):
+                guard var current = try? await store.wake(id: id), current.state == .fired
+                else { continue }
+                current.state = .delivered
+                current.consumedAt = Date()
+                try? await store.upsertWake(current)
+                recorder.record(
+                    "wake.consumed", wakeID: id, turnID: turnID,
+                    conversationID: conversationID)
+            case .rebookWake(let wake):
+                try? await store.upsertWake(wake)
+            case .representEvents(let ids):
+                try? await store.representEvents(ids: ids)
+            case .fallbackBanner(let wake):
+                let pingID = UUID()
+                postedPings[pingID] = (wake.id, nil)
+                await notifier.post(
+                    pingID: pingID, beatID: wake.wakeClass.rawValue, title: "Jarvis",
+                    body: wake.content)
+                try? await store.upsertWake(wake)
+                recorder.record("delivery.fallback", wakeID: wake.id, note: wake.content)
+            case .stampWakeHeard(let id):
+                try? await store.stampWakeHeard(id: id, at: Date())
+            case .engageWake(let id):
+                if var wake = try? await store.wake(id: id) {
+                    wake.state = .engaged
+                    try? await store.upsertWake(wake)
+                }
+            case .stampResurfacedHeard:
+                try? await store.stampResurfacedHeard(at: Date())
+            case .openConversation(let id):
+                openConversation(id)
+            case .bookReplyFollowup(let content, let conversationID):
+                let wake = CompanionWake(
+                    content: content, due: Date(), wakeClass: .followup,
+                    conversationID: conversationID)
+                try? await store.upsertWake(wake)
+            case .accelerateEvaluation:
+                evaluateSoon()
             }
-            try? await store.representEvents(ids: events.map(\.id))
-            return
         }
-
-        // Last resort: the brain is offline. Each wake's own stateable line
-        // delivers as a plain banner so never-silent-give-up holds. The
-        // Events stay presented — out of the retry path, recovered into the
-        // queue at next launch (the recorded-failed half of the invariant:
-        // `turn.failed` is already on the record for every attempt).
-        turnAttempts[key] = nil
-        for var wake in wakes {
-            let pingID = UUID()
-            postedPings[pingID] = (wake.id, nil)
-            await notifier.post(
-                pingID: pingID, beatID: wake.wakeClass.rawValue, title: "Jarvis",
-                body: wake.content)
-            wake.state = .delivered
-            wake.consumedAt = Date()
-            try? await store.upsertWake(wake)
-            recorder.record("delivery.fallback", wakeID: wake.id, note: wake.content)
-        }
+        return resurfaced
     }
 
     private func runLaunchRecoveryOnce() {
@@ -438,43 +454,13 @@ final class CompanionLoop {
             conversationID: correlation?.conversationID,
             note: note)
 
+        let effects = reducer.reaction(
+            outcome: outcome,
+            wakeID: correlation?.wakeID,
+            conversationID: correlation?.conversationID,
+            note: note)
         Task { [weak self] in
-            guard let self else { return }
-            // Any reaction is proof the delivery reached him (#309): stamp
-            // heard first so the resurfacing ladder never nags about a wake
-            // he engaged, answered, or explicitly waved off.
-            if let wakeID = correlation?.wakeID {
-                try? await self.store.stampWakeHeard(id: wakeID, at: Date())
-            }
-            switch outcome {
-            case .engaged:
-                if let wakeID = correlation?.wakeID,
-                    var wake = try? await self.store.wake(id: wakeID)
-                {
-                    wake.state = .engaged
-                    try? await self.store.upsertWake(wake)
-                }
-                // Him engaging any companion banner means the beat that
-                // carried the resurfacing reached him — spare its agenda.
-                try? await self.store.stampResurfacedHeard(at: Date())
-                if let conversationID = correlation?.conversationID {
-                    self.openConversation(conversationID)
-                }
-            case .replied:
-                try? await self.store.stampResurfacedHeard(at: Date())
-                // His words become a followup wake due now: the next turn sees
-                // them with full situation context — one machinery, no side
-                // channel.
-                guard let text = note, !text.isEmpty else { return }
-                let wake = CompanionWake(
-                    content: "He replied to your notification: \"\(text)\" — respond.",
-                    due: Date(), wakeClass: .followup,
-                    conversationID: correlation?.conversationID)
-                try? await self.store.upsertWake(wake)
-                self.evaluateSoon()
-            case .dismissed:
-                break  // The dismissal record above is the whole point.
-            }
+            await self?.perform(effects, now: Date())
         }
     }
 
