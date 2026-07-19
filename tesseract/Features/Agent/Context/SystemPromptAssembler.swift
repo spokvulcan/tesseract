@@ -46,6 +46,11 @@ nonisolated enum SystemPromptAssembler: Sendable {
 
     /// Assemble the complete system prompt from all sources.
     ///
+    /// `facts` must be derived from the *resolved* tool set (the one the agent
+    /// can actually call) via `ActiveToolSet.promptFacts(for:)` — never from
+    /// the raw registry — so the orientation sections and the callable set
+    /// cannot diverge (ADR-0048).
+    ///
     /// Assembly order (spec J.3):
     /// 1. Base prompt (SYSTEM.md override or default)
     /// 2. APPEND_SYSTEM.md content
@@ -57,7 +62,7 @@ nonisolated enum SystemPromptAssembler: Sendable {
         defaultPrompt: String = defaultCorePrompt,
         loadedContext: ContextLoader.LoadedContext,
         skills: [SkillMetadata],
-        tools: [AgentToolDefinition],
+        facts: PromptToolFacts,
         dateTime: Date = Date(),
         agentRoot: String
     ) -> String {
@@ -72,21 +77,19 @@ nonisolated enum SystemPromptAssembler: Sendable {
         }
 
         // 3. Skills listing (only if the model has the use_skill tool)
-        let hasSkillTool = tools.contains { $0.name == skillToolName }
-        if hasSkillTool {
+        if facts.hasSkillTool {
             let skillsListing = SkillRegistry.formatForPrompt(skills)
             if !skillsListing.isEmpty {
                 sections.append(skillsListing)
             }
         }
 
-        // 3.5 Web orientation — only when the turn carries browser tools (ADR-0028).
-        // Membership uses the Web Access gate's own source of truth
-        // (`browserToolNames`), so "is a browser tool" means exactly one thing:
-        // a user MCP server that happens to sanitize into the `browser` namespace
+        // 3.5 Web orientation — only when the turn carries browser tools
+        // (ADR-0028). The fact rides `browserToolNames` membership over the
+        // resolved set, so "is a browser tool" means exactly one thing: a user
+        // MCP server that happens to sanitize into the `browser` namespace
         // can't trip the block the way a bare `browser.` prefix check would.
-        let browserTools = MCPServerConfig.browserToolNames
-        if tools.contains(where: { browserTools.contains($0.name) }) {
+        if facts.carriesBrowserTools {
             sections.append(webOrientation)
         }
 
@@ -103,5 +106,26 @@ nonisolated enum SystemPromptAssembler: Sendable {
         sections.append("Current working directory: \(agentRoot)")
 
         return sections.joined(separator: "\n\n")
+    }
+
+    /// Convenience over a concrete tool array — derives the facts from the
+    /// given tools. Callers on the agent path must pass the *resolved* set;
+    /// `BenchmarkRunner` and tests pass the exact set their run carries.
+    static func assemble(
+        defaultPrompt: String = defaultCorePrompt,
+        loadedContext: ContextLoader.LoadedContext,
+        skills: [SkillMetadata],
+        tools: [AgentToolDefinition],
+        dateTime: Date = Date(),
+        agentRoot: String
+    ) -> String {
+        assemble(
+            defaultPrompt: defaultPrompt,
+            loadedContext: loadedContext,
+            skills: skills,
+            facts: ActiveToolSet.promptFacts(for: tools),
+            dateTime: dateTime,
+            agentRoot: agentRoot
+        )
     }
 }

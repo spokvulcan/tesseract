@@ -324,6 +324,33 @@ struct AgentRunControllerTests {
 
         await run.cancelAndWait()
     }
+
+    /// The send path keeps the system prompt's orientation in step with the
+    /// callable set (ADR-0048): flipping Web Access off re-derives the prompt
+    /// through the wired reassembler on the next send, so the model is never
+    /// instructed to use browser tools the turn has stripped — the drift that
+    /// shipped before the Active Tool Set existed.
+    @Test func sendKeepsSystemPromptFactsInStepWithCallableSet() async throws {
+        let agent = makeAgent()
+        agent.setSystemPromptReassembler(
+            initialFacts: PromptToolFacts(hasSkillTool: false, carriesBrowserTools: true)
+        ) { facts in
+            facts.carriesBrowserTools ? "prompt+web" : "prompt"
+        }
+        let settings = SettingsManager(store: InMemorySettingsStore())
+        settings.webAccessEnabled = false
+        let run = AgentRunController(
+            agent: agent, arbiter: InMemoryInferenceArbiter(),
+            toolRegistry: makeRegistry(extraToolNames: ["browser.navigate"]),
+            settings: settings, reportError: { _ in })
+
+        run.send(CoreMessage.user(UserMessage(content: "hi")))
+
+        #expect(!agent.state.tools.map(\.name).contains("browser.navigate"))
+        #expect(agent.state.systemPrompt == "prompt")
+
+        await run.cancelAndWait()
+    }
 }
 
 /// A minimal extension that exposes tools with the given names — enough to test

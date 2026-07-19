@@ -197,29 +197,21 @@ final class AgentRunController {
 
     // MARK: - Private
 
-    /// Filter active tools before each prompt so the LLM sees the current
-    /// set: tools declared `.companionOnly` never reach the interactive chat
-    /// (the owner is already looking at it — ADR-0040 §10; the shared
-    /// registry carries them for the headless agent), `.dialogueOnly` tools
-    /// surface only while a summoned dialogue is the current chat (ADR-0046
-    /// #372), and the browser tools obey the `webAccessEnabled` setting.
+    /// Resolve the live tool set before each prompt so the LLM sees the
+    /// current set — audience and Web Access rules live in `ActiveToolSet`
+    /// (ADR-0048), this method only names the gating context: the interactive
+    /// chat, or a summoned dialogue when one is the current conversation
+    /// (ADR-0046 #372). The same resolve's prompt facts drive
+    /// `syncSystemPrompt`, so the system prompt's orientation sections track
+    /// the callable set instead of the raw registry.
     private func syncActiveTools() {
         guard let toolRegistry else { return }
-        var tools = toolRegistry.allTools.filter { $0.audience != .companionOnly }
-        if !isDialogueOpen() {
-            tools = tools.filter { $0.audience != .dialogueOnly }
-        }
-        if settings?.webAccessEnabled != true {
-            tools = tools.filter { !Self.webGatedToolNames.contains($0.name) }
-        }
+        let gating = ToolGating(
+            consumer: isDialogueOpen() ? .dialogueChat : .interactiveChat,
+            webAccessEnabled: settings?.webAccessEnabled == true
+        )
+        let tools = ActiveToolSet.resolve(from: toolRegistry.allTools, gating: gating)
         agent.updateTools(tools)
+        agent.syncSystemPrompt(facts: ActiveToolSet.promptFacts(for: tools))
     }
-
-    /// Tool names the **Web Access** switch governs: the built-in Browser
-    /// server's MCP tools — the sole web surface now that search and fetch live
-    /// under `browser.*` (ADR-0028). The names come from
-    /// ``MCPServerConfig/browserToolNames`` — the same namespace the live tools
-    /// are built with — so the gated set and the materialized tools can't drift
-    /// (a test pins the equality).
-    private static let webGatedToolNames: Set<String> = MCPServerConfig.browserToolNames
 }
