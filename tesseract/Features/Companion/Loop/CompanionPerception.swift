@@ -112,8 +112,9 @@ final class CompanionPerception {
         // The Notification Hub's watcher (#378): AX observation of the live
         // NotificationCenter process. Never in a test host — there is no live
         // banner renderer to read, and the #360 container-sharing rule that
-        // gates admission applies to perception too. Admission still rides the
-        // Companion toggle through `admit`.
+        // gates admission applies to perception too. The watcher rides the
+        // Companion toggle itself (attach on enable, detach on disable), and
+        // admission is gated again at `admit`.
         if !isTestHost {
             let watcher = NotificationCenterWatcher(
                 isEnabled: isEnabled,

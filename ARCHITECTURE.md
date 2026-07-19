@@ -14,7 +14,7 @@ Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation 
 **Key Principles:**
 - Privacy-first: No audio or text data leaves the device
 - Offline: All models run locally on Apple Silicon
-- Sandboxed: App Sandbox with clipboard-based text injection
+- Non-sandboxed: the agent left the App Sandbox for cross-process Accessibility perception (ADR-0047); Hardened Runtime and Developer-ID notarization unchanged
 - Responsive: Real-time audio feedback, streaming inference
 
 ---

@@ -19,10 +19,15 @@
 //  `CompanionEvent.notification`; this file is only the live AX plumbing, which
 //  no test host runs (no live NC, and the #360 container-sharing rule).
 //
+//  Attachment self-heals: it rides the Companion toggle (off is detached), it
+//  polls while blind (the Accessibility grant lands with no callback), and a
+//  NotificationCenter restart re-attaches pid-matched in either event order.
+//
 
 import AppKit
 import ApplicationServices
 import Foundation
+import Observation
 
 @MainActor
 final class NotificationCenterWatcher {
@@ -42,9 +47,15 @@ final class NotificationCenterWatcher {
     /// this only guards against a pathological tree, never a real one.
     private nonisolated static let maxWalkDepth = 8
 
+    /// The blind-side poll cadence: TCC grants land with no callback (the
+    /// `PermissionsManager` polls for the same reason), so while unattached the
+    /// watcher re-tries until the grant — or NotificationCenter — appears.
+    private nonisolated static let retrySeconds = 5
+
     private let onNotification: (CapturedNotification) -> Void
-    /// The Companion toggle. Gates the *read*, not just admission: while the
-    /// Companion is off, a delivered banner's content is never even inspected.
+    /// The Companion toggle. The watcher rides it (#378): off detaches the AX
+    /// observer entirely — and it still gates any read racing the detach, so a
+    /// delivered banner's content is never inspected while the Companion is off.
     private let isEnabled: () -> Bool
 
     private var observer: AXObserver?
@@ -52,6 +63,11 @@ final class NotificationCenterWatcher {
     private var watchedPID: pid_t?
     private var launchObserver: NSObjectProtocol?
     private var terminateObserver: NSObjectProtocol?
+    private var toggleTask: Task<Void, Never>?
+    private var retryTask: Task<Void, Never>?
+    /// The last attach failure already logged — blindness is a poll, and the
+    /// log should carry one line per cause, not one per attempt.
+    private var lastAttachFailure: String?
 
     init(
         isEnabled: @escaping () -> Bool,
@@ -63,21 +79,38 @@ final class NotificationCenterWatcher {
 
     func start() {
         // Survive a NotificationCenter restart (pid change): a crash/relaunch of
-        // the renderer must not silence the Hub. Terminate detaches the stale
-        // observer; launch re-attaches to the fresh pid.
+        // the renderer must not silence the Hub. Both handlers are pid-matched —
+        // launch attaches to the event's own pid, and only the *watched* pid's
+        // termination detaches, so with launch-before-terminate ordering the old
+        // pid's delayed death never tears down the fresh observer.
         launchObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
-            guard Self.isNotificationCenter(note) else { return }
-            MainActor.assumeIsolated { self?.attach() }
+            guard let pid = Self.notificationCenterPID(note) else { return }
+            MainActor.assumeIsolated { self?.attach(to: pid) }
         }
         terminateObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
-            guard Self.isNotificationCenter(note) else { return }
-            MainActor.assumeIsolated { self?.detachObserver() }
+            guard let pid = Self.notificationCenterPID(note) else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.watchedPID == pid else { return }
+                self.detachObserver()
+                // launchd relaunches NC and `didLaunch` re-attaches; the retry
+                // is the belt for a dropped launch note.
+                self.scheduleRetry("NotificationCenter terminated")
+            }
         }
-        attach()
+        // Ride the Companion toggle (#378): off means detached — eyes closed,
+        // not merely admissions dropped downstream. The initial emission drives
+        // the launch-time attach, so an enabled toggle attaches here and a
+        // disabled one stays blind until flipped.
+        toggleTask = Task { [weak self] in
+            guard let self else { return }
+            for await enabled in Observations({ self.isEnabled() }) {
+                if enabled { self.attach() } else { self.goBlind() }
+            }
+        }
     }
 
     func stop() {
@@ -86,13 +119,28 @@ final class NotificationCenterWatcher {
         }
         launchObserver = nil
         terminateObserver = nil
-        detachObserver()
+        toggleTask?.cancel()
+        toggleTask = nil
+        goBlind()
     }
 
     // MARK: - Attach / detach
 
-    private func attach() {
-        guard let pid = Self.runningNotificationCenterPID() else { return }
+    /// Bind the AX observer, to `launchedPID` when a launch event supplies it
+    /// (the running-app lookup can still return the stale twin mid-restart),
+    /// otherwise to the looked-up live pid. Every failure path schedules a
+    /// retry, so blindness self-heals: the Accessibility grant lands with no
+    /// callback, and a fresh install starts blind until the owner grants it.
+    private func attach(to launchedPID: pid_t? = nil) {
+        guard isEnabled() else { return }
+        guard AXIsProcessTrusted() else {
+            scheduleRetry("Accessibility not granted")
+            return
+        }
+        guard let pid = launchedPID ?? Self.runningNotificationCenterPID() else {
+            scheduleRetry("NotificationCenter not running")
+            return
+        }
         // Already bound to the live pid — nothing to do. Bound to a *stale* pid
         // (NC relaunched and `didLaunch` beat `didTerminate`, or arrived without
         // it) — detach the dead observer first, so a restart never leaves the
@@ -106,8 +154,7 @@ final class NotificationCenterWatcher {
         var created: AXObserver?
         let status = AXObserverCreate(pid, notificationWatcherAXCallback, &created)
         guard status == .success, let created else {
-            Log.companion.error(
-                "NotificationCenterWatcher: AXObserverCreate failed (\(status.rawValue))")
+            scheduleRetry("AXObserverCreate failed (\(status.rawValue))")
             return
         }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -117,17 +164,62 @@ final class NotificationCenterWatcher {
         // its UI, so that path is a leaf check (read only when the element is
         // itself the banner), never a walk per element. A banner seen twice
         // collapses at admission on its UUID.
-        AXObserverAddNotification(
+        let windowStatus = AXObserverAddNotification(
             created, app, kAXWindowCreatedNotification as CFString, refcon)
-        AXObserverAddNotification(created, app, kAXCreatedNotification as CFString, refcon)
+        let elementStatus = AXObserverAddNotification(
+            created, app, kAXCreatedNotification as CFString, refcon)
+        // Attached means *registered*: an observer with neither signal hears
+        // nothing, and marking it attached would leave the Hub silently blind
+        // (a pre-grant race looks exactly like this — both calls fail).
+        guard windowStatus == .success || elementStatus == .success else {
+            scheduleRetry(
+                "AX registration failed (window \(windowStatus.rawValue), "
+                    + "element \(elementStatus.rawValue))")
+            return
+        }
+        if windowStatus != .success || elementStatus != .success {
+            Log.companion.error(
+                "NotificationCenterWatcher: partial AX registration (window "
+                    + "\(windowStatus.rawValue), element \(elementStatus.rawValue))")
+        }
         CFRunLoopAddSource(
             CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(created), .defaultMode)
 
         appElement = app
         observer = created
         watchedPID = pid
+        retryTask?.cancel()
+        retryTask = nil
+        lastAttachFailure = nil
         Log.companion.info(
             "NotificationCenterWatcher: attached to NotificationCenter pid \(pid)")
+    }
+
+    /// One retry in flight at a time; each failed attach schedules the next,
+    /// so the poll ends the moment an attach succeeds (or the toggle goes
+    /// off — `attach` then returns without rescheduling).
+    private func scheduleRetry(_ reason: String) {
+        if reason != lastAttachFailure {
+            lastAttachFailure = reason
+            Log.companion.error(
+                "NotificationCenterWatcher: not attached — \(reason); "
+                    + "retrying every \(Self.retrySeconds)s")
+        }
+        guard retryTask == nil else { return }
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.retrySeconds))
+            guard let self, !Task.isCancelled else { return }
+            self.retryTask = nil
+            self.attach()
+        }
+    }
+
+    /// Toggle-off / stop: end the blind-side poll and drop the observer.
+    private func goBlind() {
+        retryTask?.cancel()
+        retryTask = nil
+        lastAttachFailure = nil
+        detachObserver()
     }
 
     private func detachObserver() {
@@ -143,8 +235,8 @@ final class NotificationCenterWatcher {
     /// Called from the AX callback in its own (nonisolated) domain, on the main
     /// run loop. The AX reads happen here, so the non-Sendable `element` never
     /// crosses onto the main actor — only the toggle check and the Sendable
-    /// results do. Off the toggle it reads nothing: disabled means its eyes are
-    /// closed, not merely that admissions are dropped downstream.
+    /// results do. Off the toggle it reads nothing — the observer detaches on
+    /// disable; this check covers a callback racing the detach.
     ///
     /// `deep` follows the notification: a new *window* is walked for the banner
     /// under it; a bare *element*-created fires per element as NC builds its UI
@@ -171,12 +263,17 @@ final class NotificationCenterWatcher {
             .first?.processIdentifier
     }
 
-    // Called from the workspace observers' `@Sendable` blocks, so it must not
-    // hop the Notification (non-Sendable) onto the main actor: `nonisolated`
-    // keeps the read in the block's own domain.
-    private nonisolated static func isNotificationCenter(_ note: Notification) -> Bool {
-        (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
-            .bundleIdentifier == notificationCenterBundleID
+    // The event's own pid when the launched/terminated app is NotificationCenter,
+    // nil otherwise. Called from the workspace observers' `@Sendable` blocks, so
+    // it must not hop the Notification (non-Sendable) onto the main actor:
+    // `nonisolated` keeps the read in the block's own domain.
+    private nonisolated static func notificationCenterPID(_ note: Notification) -> pid_t? {
+        guard
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication,
+            app.bundleIdentifier == notificationCenterBundleID
+        else { return nil }
+        return app.processIdentifier
     }
 
     // MARK: - Tree walk + field reading

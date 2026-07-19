@@ -27,7 +27,8 @@ weighing decisions:
   ambitious for local hardware"; aim at the frontier in every decision,
   product and code alike.
 - **Constraints are the design material** — one GPU, tight RAM,
-  sandboxed, offline: design within them, not around them.
+  offline: design within them, not around them. (The agent left the
+  App Sandbox for cross-process perception — ADR-0047.)
 - **Knowing the user is first-class** — persistent memory of goals,
   habits, and preferences is the product, not a feature.
 
