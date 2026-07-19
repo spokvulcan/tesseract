@@ -1745,6 +1745,17 @@ _Avoid_: `EvictionPolicy.modelProfile` / `.alpha` (retired statics), eviction se
 (not a user **Setting**), model profile as a global. ("Flop profile" = the immutable
 per-architecture cost model; the config is the pair whose `alpha` half is mutable.)
 
+**Eviction Candidate Policy**:
+The pure selection of "who is evicted next", shared shape on both tiers: the RAM
+ladder (preferred-utility → global-utility → the residual oldest-first fallbacks,
+**Budget Floor** members never victims) and the SSD terminal-loss ordering, each a
+value-in/decision-out function of tier contents plus the **Eviction Configuration**.
+The tier managers keep every effect — drain loop, demotion, `dropBody`, the ledger
+lock; only the naming of the victim lives here.
+_Avoid_: `findEvictionCandidate` / `terminalLossOrder`-on-the-ledger (the retired
+private homes), eviction policy (unqualified — `EvictionPolicy` is the scorer it
+composes, not the selection).
+
 **AlphaTuner inversion**:
 The dependency direction between tuner and cache: the **AlphaTuner** is constructed
 with the production `flopProfile`, replays each grid-search candidate in its own

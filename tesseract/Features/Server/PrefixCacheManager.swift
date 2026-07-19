@@ -326,14 +326,6 @@ final class PrefixCacheManager {
         case preserveBackings
     }
 
-    private struct EvictionCandidate {
-        let partitionKey: CachePartitionKey
-        let tree: TokenRadixTree
-        let node: RadixTreeNode
-        let strategy: EvictionEvent.Strategy
-        let score: EvictionScore?
-    }
-
     // MARK: - Lookup
 
     struct LookupResult: Sendable {
@@ -2176,11 +2168,12 @@ final class PrefixCacheManager {
         var events: [EvictionEvent] = []
         while totalSnapshotBytes > memoryBudgetBytes {
             guard
-                let candidate = findEvictionCandidate(
+                let candidate = EvictionCandidatePolicy.candidate(
                     now: now,
                     orderedPartitions: orderedPartitions,
                     preferred: preferred,
-                    protected: protected
+                    protected: protected,
+                    config: evictionConfig
                 )
             else { break }
 
@@ -2197,7 +2190,7 @@ final class PrefixCacheManager {
             // node removal here is gone — `canEvictNode` is unrepresentable
             // when violated, so there is nothing for a caller to forget.
             //
-            // `findEvictionCandidate` filters body-less nodes, so
+            // `EvictionCandidatePolicy.candidate` filters body-less nodes, so
             // `dropBody` is guaranteed non-ignored and returns the
             // dropped checkpoint type.
             let offset = candidate.node.tokenOffset
@@ -2399,7 +2392,7 @@ final class PrefixCacheManager {
     /// then no ref attaches and the drop settles terminal, which is the
     /// honest outcome.
     private func demoteBeforeDrop(
-        _ candidate: EvictionCandidate,
+        _ candidate: EvictionCandidatePolicy.Candidate,
         now: ContinuousClock.Instant
     ) {
         // A chain-prefix-backed node (ADR-0012) skips demotion outright:
@@ -2495,112 +2488,5 @@ final class PrefixCacheManager {
         }
     }
 
-    /// Pick one snapshot to evict from the supplied (already-sorted) trees.
-    ///
-    /// Strategy (in order):
-    /// 1. **Preferred utility**: if a `preferredTree` is supplied, score
-    ///    its eligible nodes (every body-bearing node — uniform eviction,
-    ///    ADR-0019) and return the lowest-utility one. This is the
-    ///    writing-partition-first rule.
-    /// 2. **Global utility**: if the preferred tree has no eligible
-    ///    candidates (or none was supplied), score eligible nodes across
-    ///    all partitions and return the lowest-utility one. Preserves
-    ///    Marconi's "global utility" semantics for single-partition
-    ///    configurations and for the spill-over case when the writing
-    ///    partition is already drained.
-    /// 3. **Preferred fallback**: if both utility paths are empty but
-    ///    the preferred tree still has any unprotected snapshot, drop
-    ///    the oldest one from the preferred tree. With uniform
-    ///    eligibility this is a residual safety net (the eligible set
-    ///    equals the snapshot set), kept so the hard budget invariant
-    ///    never depends on scoring returning a victim.
-    /// 4. **Global fallback**: drop the oldest snapshot from any tree,
-    ///    so the hard budget invariant holds in degenerate cases like a
-    ///    zero-budget drain.
-    private func findEvictionCandidate(
-        now: ContinuousClock.Instant,
-        orderedPartitions: [(key: CachePartitionKey, tree: TokenRadixTree)],
-        preferred: (key: CachePartitionKey, tree: TokenRadixTree)? = nil,
-        protected: Set<ObjectIdentifier> = []
-    ) -> EvictionCandidate? {
-        func unprotected(_ nodes: [RadixTreeNode]) -> [RadixTreeNode] {
-            protected.isEmpty
-                ? nodes
-                : nodes.filter { !protected.contains(ObjectIdentifier($0)) }
-        }
-
-        // 1. Preferred utility — writing-partition-first.
-        if let preferred {
-            let preferredCandidates = unprotected(preferred.tree.eligibleEvictionNodes())
-            if let victim = EvictionPolicy.selectVictim(
-                candidates: preferredCandidates, now: now, config: evictionConfig
-            ) {
-                return EvictionCandidate(
-                    partitionKey: preferred.key,
-                    tree: preferred.tree,
-                    node: victim.node,
-                    strategy: .utility,
-                    score: victim.score
-                )
-            }
-        }
-
-        // 2. Global utility — spill to other partitions.
-        var partitionByNode: [ObjectIdentifier: (key: CachePartitionKey, tree: TokenRadixTree)] =
-            [:]
-        var candidates: [RadixTreeNode] = []
-        for partition in orderedPartitions where partition.tree !== preferred?.tree {
-            for node in unprotected(partition.tree.eligibleEvictionNodes()) {
-                partitionByNode[ObjectIdentifier(node)] = partition
-                candidates.append(node)
-            }
-        }
-        if let victim = EvictionPolicy.selectVictim(
-            candidates: candidates, now: now, config: evictionConfig
-        ),
-            let partition = partitionByNode[ObjectIdentifier(victim.node)]
-        {
-            return EvictionCandidate(
-                partitionKey: partition.key,
-                tree: partition.tree,
-                node: victim.node,
-                strategy: .utility,
-                score: victim.score
-            )
-        }
-
-        // 3. Preferred fallback — oldest snapshot in the writing partition.
-        if let preferred,
-            let oldest = unprotected(preferred.tree.allSnapshotNodes()).min(
-                by: { $0.lastAccessTime < $1.lastAccessTime }
-            )
-        {
-            return EvictionCandidate(
-                partitionKey: preferred.key,
-                tree: preferred.tree,
-                node: oldest,
-                strategy: .fallback,
-                score: nil
-            )
-        }
-
-        // 4. Global fallback — oldest snapshot anywhere.
-        return orderedPartitions
-            .lazy
-            .flatMap { partition in
-                unprotected(partition.tree.allSnapshotNodes())
-                    .lazy.map { (partition: partition, node: $0) }
-            }
-            .min(by: { $0.node.lastAccessTime < $1.node.lastAccessTime })
-            .map { candidate in
-                EvictionCandidate(
-                    partitionKey: candidate.partition.key,
-                    tree: candidate.partition.tree,
-                    node: candidate.node,
-                    strategy: .fallback,
-                    score: nil
-                )
-            }
-    }
 }
 // swiftlint:enable type_body_length

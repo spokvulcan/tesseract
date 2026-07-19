@@ -674,7 +674,7 @@ final class TokenRadixTree {
     /// actually expensive — the SSD ledger's type-protected cut. The
     /// remaining RAM protection is the **Budget Floor** (in-flight
     /// restore pins + the freshest leaf), applied by the caller.
-    /// `findEvictionCandidate`'s oldest-first fallback still backstops
+    /// The **Eviction Candidate Policy**'s oldest-first fallback still backstops
     /// the degenerate case where utility scoring yields no victim.
     func eligibleEvictionNodes() -> [RadixTreeNode] {
         var result: [RadixTreeNode] = []

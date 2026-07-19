@@ -176,7 +176,7 @@ final class TieredSnapshotStore {
     }
 
     /// Deterministic key-sorted iteration. The eviction drain pins a
-    /// single ordered list across all rounds of `findEvictionCandidate`
+    /// single ordered list across all rounds of `EvictionCandidatePolicy.candidate`
     /// so tie-breaks stay stable; callers rely on the ordering being
     /// consistent across calls within one drain.
     func orderedPartitions() -> [(key: CachePartitionKey, tree: TokenRadixTree)] {
