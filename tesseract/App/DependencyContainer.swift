@@ -560,15 +560,19 @@ final class DependencyContainer: ObservableObject {
     /// Jarvis's ambient presence (#327 §3): the glyph and the chat strip
     /// render it; the runner and the summons path drive it.
     lazy var companionPresence = CompanionPresence(recorder: companionFlightRecorder)
+    /// `.companionHeadless` keeps the `.companionOnly` tools and drops
+    /// `.dialogueOnly` — a Mission Control turn has no dialogue to report
+    /// back from (#372). Web access stays ungated for the Companion's turns
+    /// (current behavior, preserved — ADR-0048). One constant feeds both the
+    /// factory's build-time resolve and the runner's per-turn re-resolve, so
+    /// the two can't drift.
+    private let companionGating = ToolGating(
+        consumer: .companionHeadless, webAccessEnabled: true)
     lazy var companionTurnRunner = CompanionTurnRunner(
         // Deferred bootstrap (`unowned` is safe: the container outlives every
         // consumer) — a second full agent whose context never collides with
         // the chat session's, over the same shared tool registry.
         makeAgent: { [unowned self] in
-            // `.companionHeadless` keeps the `.companionOnly` tools and drops
-            // `.dialogueOnly` — a Mission Control turn has no dialogue to
-            // report back from (#372). Web access stays ungated for the
-            // Companion's turns (current behavior, preserved — ADR-0048).
             AgentFactory.makeAgent(
                 inferenceService: self.serverInferenceService,
                 packageRegistry: self.packageRegistry,
@@ -576,9 +580,18 @@ final class DependencyContainer: ObservableObject {
                 toolRegistry: self.newToolRegistry,
                 contextManager: self.contextManager,
                 settingsManager: self.settingsManager,
-                gating: ToolGating(consumer: .companionHeadless, webAccessEnabled: true),
+                gating: self.companionGating,
                 mcpToolsExtension: self.mcpClientManager.toolsExtension
             )
+        },
+        // The registry moves under the cached agent — the browser MCP server
+        // connects asynchronously, servers reconnect — so every turn re-runs
+        // the same resolve the factory ran at build time (ADR-0048).
+        syncActiveTools: { [unowned self] agent in
+            let tools = ActiveToolSet.resolve(
+                from: self.newToolRegistry.allTools, gating: self.companionGating)
+            agent.updateTools(tools)
+            agent.syncSystemPrompt(facts: ActiveToolSet.promptFacts(for: tools))
         },
         arbiter: inferenceArbiter,
         conversationStore: agentConversationStore,

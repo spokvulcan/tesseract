@@ -33,6 +33,12 @@ final class CompanionTurnRunner {
     private(set) var isRunning = false
 
     private let makeAgent: () -> Agent
+    /// Re-resolve the live tool set (and its prompt facts) into the cached
+    /// agent — the headless mirror of the run controller's per-prompt sync
+    /// (ADR-0048). The registry moves under a cached agent: the browser MCP
+    /// server connects asynchronously and servers reconnect, and a turn must
+    /// see the registry as it stands, not as it stood at first build.
+    private let syncActiveTools: (Agent) -> Void
     private let arbiter: any InferenceArbitrating
     private let conversationStore: AgentConversationStore
     /// Mission Control's memory decoration (ADR-0045): the same enrich verb the
@@ -54,6 +60,7 @@ final class CompanionTurnRunner {
 
     init(
         makeAgent: @escaping () -> Agent,
+        syncActiveTools: @escaping (Agent) -> Void,
         arbiter: any InferenceArbitrating,
         conversationStore: AgentConversationStore,
         memory: MemoryEngine,
@@ -64,6 +71,7 @@ final class CompanionTurnRunner {
         isModelDownloaded: @escaping (String) -> Bool
     ) {
         self.makeAgent = makeAgent
+        self.syncActiveTools = syncActiveTools
         self.arbiter = arbiter
         self.conversationStore = conversationStore
         self.conversationMemory = ConversationMemory(memory: memory)
@@ -105,6 +113,9 @@ final class CompanionTurnRunner {
         )
 
         let agent = ensureAgent()
+        // Every turn, not just the first: a cached agent's tool set and
+        // prompt must track the live registry (ADR-0048).
+        syncActiveTools(agent)
 
         // The same enrichment the chat path applies (ADR-0035 §5, ADR-0045):
         // retrieval against the opening, ridden as injectedContext so the

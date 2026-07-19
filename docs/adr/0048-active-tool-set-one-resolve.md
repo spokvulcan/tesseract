@@ -59,6 +59,14 @@ prompt through the reassembler **only when the facts change**, guarded like
 `updateTools`. The companion factory's inline filter is deleted; it passes
 `.companionHeadless` instead.
 
+The resolve is **per turn on both paths**, not per build.
+`CompanionTurnRunner` caches its agent across headless turns, and the
+registry moves under a cached agent (the browser MCP server connects
+asynchronously; servers reconnect) — so the runner re-runs the
+container-wired sync before every turn, exactly like the interactive send
+path. Build-time-only resolution was the late-connect defect in headless
+form.
+
 The prompt is no longer static-but-wrong: it is stable until a real
 orientation change (a Web Access flip, or browser tools materializing after
 a late MCP connect), and each such change costs one deliberate prefix-cache
