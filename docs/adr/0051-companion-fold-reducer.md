@@ -41,12 +41,15 @@ shrinks to gather → decide → perform.
   nothing drained and nothing due, else `present` with `fireWake` values
   (the reducer is the home of wake-state flips — the fired copy rides the
   effect) and the beat's `runResurfacingPass`.
-- `settle(batch:wakes:outcome:now:)` — the invariant's home. A completed
-  turn yields `consumeEvents` + guarded `deliverFiredWake` (the performer
-  re-reads so a `revise_wake` flip back to booked wins over delivery) and
-  clears the ledger whole; a failure counts an attempt under the batch's
-  earliest wake (or event), re-presents everything while retries remain,
-  then yields `fallbackBanner` values — Events deliberately absent.
+- `settle(batch:wakes:outcome:now:)` — the invariant's home. Its `wakes`
+  are the presentation's *fired* copies, so rebook and fallback carry the
+  stamped `firedAt` through the ladder instead of clobbering it. A
+  completed turn yields `consumeEvents` + guarded `deliverFiredWake` (the
+  performer re-reads so a `revise_wake` flip back to booked wins over
+  delivery) and clears the ledger whole; a failure counts an attempt under
+  the batch's earliest wake (or event), re-presents everything while
+  retries remain, then yields `fallbackBanner` values — Events
+  deliberately absent.
 - `reaction(outcome:wakeID:conversationID:note:)` → the reaction writes,
   heard first for every outcome; the reply's followup-wake *content* is
   composed here, while the performer mints ids and dates.

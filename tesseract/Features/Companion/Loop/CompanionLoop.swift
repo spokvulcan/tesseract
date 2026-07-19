@@ -223,19 +223,28 @@ final class CompanionLoop {
     /// due wakes fired — into Mission Control. Gather → decide (the
     /// reducer) → perform: every write here is an effect value first.
     private func runFoldTurn(
-        dueWakes wakes: [CompanionWake], origin: TurnOrigin, carriesBeat: Bool, now: Date
+        dueWakes: [CompanionWake], origin: TurnOrigin, carriesBeat: Bool, now: Date
     ) async {
         // Drain: the whole pending queue becomes this turn's batch, marked
         // presented in one transaction. Anything admitted after this instant
         // waits for the next turn.
         let batch = (try? await store.drainPendingEvents(at: now)) ?? []
 
+        // From presentation on, the plan's fired copies are the turn's wake
+        // values: settlement must see the stamped `firedAt`, or a retry's
+        // rebook (and the exhausted fallback) would clobber it back to nil.
+        let wakes: [CompanionWake]
         let resurfaced: [CompanionWake]
-        switch reducer.begin(batch: batch, dueWakes: wakes, carriesBeat: carriesBeat, now: now)
+        switch reducer.begin(
+            batch: batch, dueWakes: dueWakes, carriesBeat: carriesBeat, now: now)
         {
         case .skip:
             return
         case .present(let effects):
+            wakes = effects.compactMap {
+                guard case .fireWake(let wake) = $0 else { return nil }
+                return wake
+            }
             resurfaced = await perform(effects, now: now)
         }
 

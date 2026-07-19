@@ -52,8 +52,9 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
         /// and flips only a wake still `.fired` — a wake the turn itself
         /// moved (revise_wake back to booked) is respected.
         case deliverFiredWake(id: UUID, turnID: UUID, conversationID: UUID)
-        /// Failure with retries remaining: the wake re-presents as booked
-        /// (the pre-fire value — order and content untouched).
+        /// Failure with retries remaining: the wake re-presents as booked —
+        /// the fired value flipped back, `firedAt` kept, so the stamp
+        /// survives the ladder (order and content untouched).
         case rebookWake(CompanionWake)
         /// Failure with retries remaining: the Events go back to pending
         /// in their original order.
@@ -112,9 +113,11 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
 
     /// The turn's settlement — the invariant's home. A completed turn
     /// (`outcome` non-nil) consumes; a failed one re-presents everything
-    /// while retries remain, then falls back to banners. The attempt
-    /// ledger is keyed by the batch's earliest wake (or event) and cleared
-    /// whole on any success — the shipped semantics.
+    /// while retries remain, then falls back to banners. `wakes` are the
+    /// presentation's *fired* copies (what `begin` emitted), so rebook and
+    /// fallback carry the stamped `firedAt` instead of clobbering it. The
+    /// attempt ledger is keyed by the batch's earliest wake (or event) and
+    /// cleared whole on any success — the shipped semantics.
     mutating func settle(
         batch: [CompanionEvent],
         wakes: [CompanionWake],

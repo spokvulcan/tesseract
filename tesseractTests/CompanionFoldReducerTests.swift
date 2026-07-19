@@ -103,8 +103,8 @@ struct CompanionFoldReducerTests {
     }
 
     /// The failure half, retries remaining: everything re-presents — wakes
-    /// back to booked (their pre-fire values), events back to pending —
-    /// and nothing is consumed.
+    /// flipped back to booked, events back to pending — and nothing is
+    /// consumed.
     @Test func failedTurnRepresentsEverythingWhileRetriesRemain() {
         var reducer = CompanionFoldReducer()
         let events = [makeEvent()]
@@ -142,6 +142,64 @@ struct CompanionFoldReducerTests {
         // batch starts the ladder over instead of banner-spamming.
         let third = reducer.settle(batch: events, wakes: [wake], outcome: nil, now: now)
         #expect(third.count == 2)
+    }
+
+    /// The stamp survives the ladder: threading the presentation's fired
+    /// copies through settlement — as the loop does — keeps `firedAt` at
+    /// its first value across the rebook, the re-fire, and the exhausted
+    /// fallback. Stamped once, never re-stamped, never dropped.
+    @Test func firedAtSurvivesTheRetryLadder() {
+        var reducer = CompanionFoldReducer()
+        let wake = makeWake()
+
+        // First presentation stamps the wake.
+        guard
+            case .present(let firstEffects) = reducer.begin(
+                batch: [], dueWakes: [wake], carriesBeat: false, now: now)
+        else {
+            Issue.record("expected a present plan")
+            return
+        }
+        let fired = firedWakes(in: firstEffects)
+        #expect(fired.map(\.firedAt) == [now])
+
+        // First failure: the rebooked copy keeps the stamp.
+        var rebooked = fired[0]
+        rebooked.state = .booked
+        let firstSettle = reducer.settle(batch: [], wakes: fired, outcome: nil, now: now)
+        #expect(firstSettle == [.rebookWake(rebooked)])
+        #expect(rebooked.firedAt == now)
+
+        // The retry fires later — the stamp stays the first one's.
+        let later = now.addingTimeInterval(60)
+        guard
+            case .present(let retryEffects) = reducer.begin(
+                batch: [], dueWakes: [rebooked], carriesBeat: false, now: later)
+        else {
+            Issue.record("expected a present plan")
+            return
+        }
+        let refired = firedWakes(in: retryEffects)
+        #expect(refired.map(\.firedAt) == [now])
+
+        // Exhaustion: the banner fallback still carries the first stamp.
+        var delivered = refired[0]
+        delivered.state = .delivered
+        delivered.consumedAt = later
+        let fallback = reducer.settle(batch: [], wakes: refired, outcome: nil, now: later)
+        #expect(fallback == [.fallbackBanner(delivered)])
+        #expect(delivered.firedAt == now)
+    }
+
+    /// The loop's own extraction: the plan's fired copies become the
+    /// turn's wake values for everything after presentation.
+    private func firedWakes(
+        in effects: [CompanionFoldReducer.Effect]
+    ) -> [CompanionWake] {
+        effects.compactMap {
+            guard case .fireWake(let wake) = $0 else { return nil }
+            return wake
+        }
     }
 
     /// The attempt ledger keys by the earliest wake, falling back to the
