@@ -74,6 +74,11 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
         /// agenda.
         case stampResurfacedHeard
         case openConversation(id: UUID)
+        /// He engaged a banner with no live conversation behind it: mint a
+        /// dialogue seeded with the banner's own line as the entity's first
+        /// words — the same engage contract as the overlay summons
+        /// (ADR-0052). Mission Control is never a click destination.
+        case beginDialogue(line: String?)
         /// His reply becomes a followup wake due now: the next turn sees
         /// it with full situation context — one machinery, no side
         /// channel. The performer mints the wake (id/dates are its
@@ -169,11 +174,13 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
 
     /// What the owner's reaction to a posted banner writes. Heard is
     /// stamped first for every outcome — engage, reply, and wave-off alike
-    /// are proof the delivery reached him (#309).
+    /// are proof the delivery reached him (#309). `line` is the banner's
+    /// own body — the dialogue seed when an engage mints one (ADR-0052).
     func reaction(
         outcome: CompanionPingOutcome,
         wakeID: UUID?,
         conversationID: UUID?,
+        line: String? = nil,
         note: String?
     ) -> [Effect] {
         var effects: [Effect] = []
@@ -186,8 +193,15 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
                 effects.append(.engageWake(id: wakeID))
             }
             effects.append(.stampResurfacedHeard)
-            if let conversationID {
+            // An engage lands him in a conversation he can actually talk
+            // in (ADR-0052): a correlated owner conversation reopens; the
+            // fold itself — read-only, never a click destination — and a
+            // correlation-less banner mint a dialogue seeded with the
+            // banner's line instead.
+            if let conversationID, conversationID != AgentConversation.missionControlID {
                 effects.append(.openConversation(id: conversationID))
+            } else {
+                effects.append(.beginDialogue(line: line))
             }
         case .replied:
             effects.append(.stampResurfacedHeard)

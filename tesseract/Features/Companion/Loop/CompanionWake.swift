@@ -67,6 +67,21 @@ nonisolated struct CompanionWake: Sendable, Identifiable, Equatable {
     /// reaction ever reached this wake.
     var heardAt: Date?
 
+    /// The briefing-facing short id — enough of the UUID to name this wake
+    /// in a `revise_wake`/`cancel_wake` call without quoting the whole
+    /// thing. Rendered as `[id a1b2c3]` wherever a briefing lists wakes.
+    var shortID: String { String(id.uuidString.prefix(6)).lowercased() }
+
+    /// The one-line rendering every briefing shares: class, content, and —
+    /// only while the wake is open (`booked`/`fired`, the states
+    /// `openWake(matching:)` resolves by short prefix and the wake tools can
+    /// act on) — the `[id a1b2c3]` handle. A terminal wake renders no handle:
+    /// an id the tools would reject is an invitation to a failing call.
+    var briefingLine: String {
+        let handle = state == .booked || state == .fired ? " [id \(shortID)]" : ""
+        return "[\(wakeClass.rawValue)] \(content)\(handle)"
+    }
+
     init(
         id: UUID = UUID(),
         content: String,

@@ -30,8 +30,9 @@ import Testing
             currentConversationID: { dialogueID },
             depositLanded: { landed = $0 })
 
-        // The tool exists only in dialogue chats — the audience IS the rule.
-        #expect(tool.audience == .dialogueOnly)
+        // The tool exists in every owner chat and never in the headless
+        // loop (ADR-0052) — the audience IS the rule.
+        #expect(tool.audience == .chatOnly)
 
         let reply = try await toolText(
             tool, ["report": .string("He decided to move the dentist to Thursday.")])

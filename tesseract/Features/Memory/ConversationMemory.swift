@@ -98,9 +98,7 @@ final class ConversationMemory {
     func enrich(
         _ outgoing: any AgentMessageProtocol & Sendable
     ) async -> any AgentMessageProtocol & Sendable {
-        guard let user = outgoing.asUser else { return outgoing }
-        let enriched = await enrich(user)
-        return outgoing is CoreMessage ? CoreMessage.user(enriched) : enriched
+        await outgoing.decoratingUser { await enrich($0) }
     }
 
     /// The typed door — callers that hold a bare `UserMessage` (the loop's

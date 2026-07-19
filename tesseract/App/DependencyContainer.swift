@@ -328,8 +328,8 @@ final class DependencyContainer: ObservableObject {
                 recorder: companionFlightRecorder,
                 context: companionTurnContext
             ))
-        // The deposit door (ADR-0046 #372) — `.dialogueOnly`: surfaces only
-        // while a summoned dialogue is the current chat, and the headless
+        // The deposit door (ADR-0046 #372, widened by ADR-0052) —
+        // `.chatOnly`: every owner conversation carries it; the headless
         // agent's tool set drops it.
         registry.appendBuiltInTool(
             createReportBackTool(
@@ -393,7 +393,7 @@ final class DependencyContainer: ObservableObject {
         contextManager: contextManager,
         settingsManager: settingsManager,
         gating: ToolGating(
-            consumer: .interactiveChat,
+            consumer: .chat,
             webAccessEnabled: settingsManager.webAccessEnabled
         ),
         mcpToolsExtension: mcpClientManager.toolsExtension
@@ -542,6 +542,16 @@ final class DependencyContainer: ObservableObject {
                 store: memoryStore,
                 isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
             ),
+            // The Fold Briefing (ADR-0052): every owner conversation opens
+            // as the one mind — the fold's recent life on the first message,
+            // re-briefed when the fold advances.
+            foldBriefing: CompanionFoldBriefing(
+                store: memoryStore,
+                missionControl: { [unowned self] in
+                    self.agentConversationStore.missionControl()
+                },
+                isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+            ),
             // The dialogue ledger's activity signal (#372) — lazy through the
             // container so the session and the ledger can reference each other.
             onDialogueActivity: { [weak self] id in
@@ -567,7 +577,7 @@ final class DependencyContainer: ObservableObject {
     /// render it; the runner and the summons path drive it.
     lazy var companionPresence = CompanionPresence(recorder: companionFlightRecorder)
     /// `.companionHeadless` keeps the `.companionOnly` tools and drops
-    /// `.dialogueOnly` — a Mission Control turn has no dialogue to report
+    /// `.chatOnly` — a Mission Control turn has no conversation to report
     /// back from (#372). Web access stays ungated for the Companion's turns
     /// (current behavior, preserved — ADR-0048). One constant feeds both the
     /// factory's build-time resolve and the runner's per-turn re-resolve, so
@@ -644,6 +654,12 @@ final class DependencyContainer: ObservableObject {
             self?.companionSummons.deliver(line: text)
         },
         openConversation: { [weak self] id in self?.presentConversation(id) },
+        // A banner engage with no live conversation behind it (or one
+        // correlated to the read-only fold) mints a dialogue seeded with
+        // the banner's line — the overlay engage's door (ADR-0052).
+        beginDialogue: { [weak self] line in
+            self?.companionDialogue.begin(line: line, via: "banner-engage")
+        },
         perceiveDayStart: { [weak self] now, present in
             self?.companionPerception.dayStartIfDue(now: now, ownerPresent: present)
         },

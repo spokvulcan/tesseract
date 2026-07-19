@@ -401,4 +401,16 @@ extension AgentMessageProtocol {
         if let core = self as? CoreMessage, case .toolResult(let t) = core { return t }
         return nil
     }
+
+    /// The wrapper-restore contract every outgoing-message decorator shares
+    /// (memory enrich, identity, fold briefing): only a user message takes
+    /// injected context, and whatever shape the send handed over goes back
+    /// in that shape — a `CoreMessage` stays a `CoreMessage`.
+    func decoratingUser(
+        _ decorate: (UserMessage) async -> UserMessage
+    ) async -> any AgentMessageProtocol & Sendable {
+        guard let user = asUser else { return self }
+        let decorated = await decorate(user)
+        return self is CoreMessage ? CoreMessage.user(decorated) : decorated
+    }
 }

@@ -23,17 +23,15 @@ import Foundation
 nonisolated struct ToolGating: Sendable, Equatable {
 
     /// Which agent the resolved set feeds. Audience rules (ADR-0040 §10,
-    /// ADR-0046 #372) are consumer facts, not per-tool special cases.
+    /// ADR-0052) are consumer facts, not per-tool special cases.
     enum Consumer: Sendable, Equatable {
-        /// The interactive chat with no summoned dialogue open:
-        /// `.companionOnly` and `.dialogueOnly` tools are both dropped.
-        case interactiveChat
-        /// The interactive chat while a summoned dialogue is the current
-        /// conversation: `.dialogueOnly` tools (`report_back`) surface.
-        case dialogueChat
+        /// Any owner-facing chat — interactive or summoned dialogue, one
+        /// contract (ADR-0052): `.chatOnly` tools (`report_back`) surface,
+        /// `.companionOnly` delivery tools are dropped.
+        case chat
         /// The Companion's headless Mission Control agent: `.companionOnly`
-        /// tools surface; `.dialogueOnly` never do — a Mission Control turn
-        /// has no dialogue to report back from.
+        /// tools surface; `.chatOnly` never do — a Mission Control turn
+        /// has no conversation to report back from.
         case companionHeadless
     }
 
@@ -80,12 +78,10 @@ nonisolated enum ActiveToolSet {
     ) -> [AgentToolDefinition] {
         var tools: [AgentToolDefinition]
         switch gating.consumer {
-        case .interactiveChat:
-            tools = all.filter { $0.audience == .all }
-        case .dialogueChat:
+        case .chat:
             tools = all.filter { $0.audience != .companionOnly }
         case .companionHeadless:
-            tools = all.filter { $0.audience != .dialogueOnly }
+            tools = all.filter { $0.audience != .chatOnly }
         }
         if !gating.webAccessEnabled {
             tools.removeAll { webGatedToolNames.contains($0.name) }

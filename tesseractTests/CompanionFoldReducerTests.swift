@@ -259,6 +259,35 @@ struct CompanionFoldReducerTests {
             ])
     }
 
+    /// An engage correlated to Mission Control — read-only, never a click
+    /// destination — mints a dialogue seeded with the banner's line instead
+    /// (ADR-0052), and so does an engage with no correlation at all (the
+    /// pre-ADR-0052 dead click).
+    @Test func engagementNeverOpensTheFoldItMintsADialogue() {
+        let reducer = CompanionFoldReducer()
+        let wakeID = UUID()
+        let toFold = reducer.reaction(
+            outcome: .engaged, wakeID: wakeID,
+            conversationID: AgentConversation.missionControlID,
+            line: "Evening journal is open, sir.", note: nil)
+        #expect(
+            toFold == [
+                .stampWakeHeard(id: wakeID),
+                .engageWake(id: wakeID),
+                .stampResurfacedHeard,
+                .beginDialogue(line: "Evening journal is open, sir."),
+            ])
+
+        let uncorrelated = reducer.reaction(
+            outcome: .engaged, wakeID: nil, conversationID: nil,
+            line: "You're in, sir.", note: nil)
+        #expect(
+            uncorrelated == [
+                .stampResurfacedHeard,
+                .beginDialogue(line: "You're in, sir."),
+            ])
+    }
+
     /// A reply becomes a followup wake due now, carrying his words and the
     /// conversation, and accelerates the loop; an empty reply just stamps.
     @Test func replyBooksTheFollowupAndAccelerates() {

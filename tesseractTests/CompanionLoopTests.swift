@@ -725,9 +725,10 @@ import Testing
         #expect(text.contains("Seed left for today: start with the evaluator"))
         #expect(text.contains("Yesterday was never closed"))
         #expect(text.contains("DUE NOW"))
-        #expect(text.contains("[rhythm] morning planning (overdue by 8 min)"))
+        #expect(
+            text.contains("[rhythm] morning planning [id \(due.shortID)] (overdue by 8 min)"))
         #expect(text.contains("Your booked future:"))
-        #expect(text.contains("evening journal"))
+        #expect(text.contains("evening journal [id \(upcoming.shortID)]"))
     }
 
     @Test func appUseEvidenceRendersRecencyOrItsAbsence() {

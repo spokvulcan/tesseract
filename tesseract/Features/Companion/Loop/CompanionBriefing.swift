@@ -133,8 +133,7 @@ enum CompanionBriefing {
             for wake in inputs.dueWakes {
                 let overdue = Int(inputs.now.timeIntervalSince(wake.due) / 60)
                 let lateness = overdue > 5 ? " (overdue by \(overdue) min)" : ""
-                lines.append(
-                    "- [\(wake.wakeClass.rawValue)] \(wake.content)\(lateness)")
+                lines.append("- \(wake.briefingLine)\(lateness)")
             }
         }
         if !inputs.resurfacedWakes.isEmpty {
@@ -151,7 +150,7 @@ enum CompanionBriefing {
             for wake in inputs.upcomingWakes {
                 lines.append(
                     "- \(wake.due.formatted(date: .abbreviated, time: .shortened)) "
-                        + "[\(wake.wakeClass.rawValue)] \(wake.content)")
+                        + wake.briefingLine)
             }
         } else {
             lines.append("You have NOTHING booked ahead — establish your rhythm.")

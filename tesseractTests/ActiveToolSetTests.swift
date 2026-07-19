@@ -30,14 +30,14 @@ struct ActiveToolSetTests {
     }
 
     /// A registry-shaped universe: built-ins, a companion-only tool, a
-    /// dialogue-only tool, a real browser tool name, and a non-browser
+    /// chat-only tool, a real browser tool name, and a non-browser
     /// extension tool.
     private var universe: [AgentToolDefinition] {
         [
             tool("read"),
             tool(skillToolName),
             tool("track", audience: .companionOnly),
-            tool("report_back", audience: .dialogueOnly),
+            tool("report_back", audience: .chatOnly),
             tool("browser.search"),
             tool("files.list"),
         ]
@@ -54,28 +54,21 @@ struct ActiveToolSetTests {
 
     // MARK: - resolve: audience rules per consumer
 
-    /// The interactive chat carries neither companion-only nor dialogue-only
-    /// tools (ADR-0040 §10, ADR-0046 #372).
-    @Test func interactiveChatDropsCompanionOnlyAndDialogueOnly() {
-        let resolved = names(.interactiveChat, web: true)
+    /// Every owner-facing chat carries the chat-only tools (`report_back` —
+    /// ADR-0052's one contract) while companion-only delivery tools still
+    /// never reach a chat the owner is looking at (ADR-0040 §10).
+    @Test func chatKeepsChatOnlyDropsCompanionOnly() {
+        let resolved = names(.chat, web: true)
+        #expect(resolved.contains("report_back"))
         #expect(!resolved.contains("track"))
-        #expect(!resolved.contains("report_back"))
         #expect(resolved.contains("read"))
         #expect(resolved.contains("browser.search"))
     }
 
-    /// A summoned dialogue surfaces the dialogue-only tools; companion-only
-    /// tools still never reach a chat the owner is looking at.
-    @Test func dialogueChatKeepsDialogueOnlyDropsCompanionOnly() {
-        let resolved = names(.dialogueChat, web: true)
-        #expect(resolved.contains("report_back"))
-        #expect(!resolved.contains("track"))
-    }
-
     /// The Companion's headless agent keeps its companion-only tools and never
-    /// carries dialogue-only ones — a Mission Control turn has no dialogue to
+    /// carries chat-only ones — a Mission Control turn has no conversation to
     /// report back from (#372).
-    @Test func companionHeadlessKeepsCompanionOnlyDropsDialogueOnly() {
+    @Test func companionHeadlessKeepsCompanionOnlyDropsChatOnly() {
         let resolved = names(.companionHeadless, web: true)
         #expect(resolved.contains("track"))
         #expect(!resolved.contains("report_back"))
@@ -88,7 +81,7 @@ struct ActiveToolSetTests {
     /// what it says (#190, US #16).
     @Test func webOffStripsBrowserToolsForEveryConsumer() {
         for consumer: ToolGating.Consumer in [
-            .interactiveChat, .dialogueChat, .companionHeadless,
+            .chat, .companionHeadless,
         ] {
             let resolved = names(consumer, web: false)
             #expect(!resolved.contains("browser.search"))
@@ -97,13 +90,14 @@ struct ActiveToolSetTests {
     }
 
     @Test func webOnKeepsBrowserTools() {
-        #expect(names(.interactiveChat, web: true).contains("browser.search"))
+        #expect(names(.chat, web: true).contains("browser.search"))
     }
 
     /// Registry order is the loop's dispatch precedence — resolve must keep it.
     @Test func resolvePreservesInputOrder() {
-        let resolved = names(.interactiveChat, web: true)
-        #expect(resolved == ["read", skillToolName, "browser.search", "files.list"])
+        let resolved = names(.chat, web: true)
+        #expect(
+            resolved == ["read", skillToolName, "report_back", "browser.search", "files.list"])
     }
 
     // MARK: - promptFacts
@@ -124,7 +118,7 @@ struct ActiveToolSetTests {
     /// unrepresentable through this seam.
     @Test func promptFactsAgreeWithResolvedSetForEveryGating() {
         for consumer: ToolGating.Consumer in [
-            .interactiveChat, .dialogueChat, .companionHeadless,
+            .chat, .companionHeadless,
         ] {
             for web in [true, false] {
                 let resolved = ActiveToolSet.resolve(

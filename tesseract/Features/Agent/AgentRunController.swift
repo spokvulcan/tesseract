@@ -38,11 +38,6 @@ final class AgentRunController {
     private let arbiter: any InferenceArbitrating
     private let toolRegistry: ToolRegistry?
     private let settings: SettingsManager?
-    /// Whether the current chat is a summoned dialogue (ADR-0046 #372) —
-    /// gates the `.dialogueOnly` tools (`report_back`) per prompt. Settable
-    /// post-construction like `reportError`: the Chat Session builds this
-    /// controller before `self` exists to capture.
-    @ObservationIgnored private var isDialogueOpen: @MainActor () -> Bool = { false }
     /// Failures inside the lease task surface through the coordinator's shared
     /// `error` banner via this injected closure. Settable post-construction so the
     /// coordinator can wire it once `self` is fully initialized.
@@ -70,12 +65,6 @@ final class AgentRunController {
         self.toolRegistry = toolRegistry
         self.settings = settings
         self.reportError = reportError
-    }
-
-    /// Wire the dialogue probe (ADR-0046 #372) after construction, like
-    /// `setReportError`.
-    func setIsDialogueOpen(_ probe: @escaping @MainActor () -> Bool) {
-        isDialogueOpen = probe
     }
 
     /// Wire the report-error sink after construction (the coordinator injects its
@@ -199,15 +188,14 @@ final class AgentRunController {
 
     /// Resolve the live tool set before each prompt so the LLM sees the
     /// current set — audience and Web Access rules live in `ActiveToolSet`
-    /// (ADR-0048), this method only names the gating context: the interactive
-    /// chat, or a summoned dialogue when one is the current conversation
-    /// (ADR-0046 #372). The same resolve's prompt facts drive
-    /// `syncSystemPrompt`, so the system prompt's orientation sections track
-    /// the callable set instead of the raw registry.
+    /// (ADR-0048); every owner-facing chat is one consumer now (ADR-0052).
+    /// The same resolve's prompt facts drive `syncSystemPrompt`, so the
+    /// system prompt's orientation sections track the callable set instead
+    /// of the raw registry.
     private func syncActiveTools() {
         guard let toolRegistry else { return }
         let gating = ToolGating(
-            consumer: isDialogueOpen() ? .dialogueChat : .interactiveChat,
+            consumer: .chat,
             webAccessEnabled: settings?.webAccessEnabled == true
         )
         let tools = ActiveToolSet.resolve(from: toolRegistry.allTools, gating: gating)

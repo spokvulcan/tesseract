@@ -20,6 +20,21 @@ nonisolated enum CompanionPingOutcome: String, Sendable {
     case dismissed
 }
 
+/// One banner reaction, correlation included. The correlation (wake,
+/// conversation, the banner's own line) rides the notification's `userInfo`
+/// (ADR-0052) — Notification Center persists it, so a click on a banner
+/// posted before the last relaunch still routes; the in-memory ping map it
+/// replaces died with its process.
+nonisolated struct CompanionPingReaction: Sendable {
+    let outcome: CompanionPingOutcome
+    /// Inline reply text, when the outcome is `.replied`.
+    let note: String?
+    let wakeID: UUID?
+    let conversationID: UUID?
+    /// The banner's body — the dialogue seed when an engage mints one.
+    let line: String
+}
+
 // MARK: - CompanionNotifier
 
 /// PROTOTYPE — the walking skeleton's notification surface (map #301, #303).
@@ -34,9 +49,10 @@ final class CompanionNotifier {
     nonisolated static let categoryID = "companion.ping"
     nonisolated static let replyActionID = "companion.reply"
     nonisolated static let laterActionID = "companion.later"
-    nonisolated static let beatUserInfoKey = "beat"
+    nonisolated static let wakeUserInfoKey = "wake"
+    nonisolated static let conversationUserInfoKey = "conversation"
 
-    var onOutcome: ((UUID, String, CompanionPingOutcome, String?) -> Void)?
+    var onOutcome: ((CompanionPingReaction) -> Void)?
 
     private let delegate = CompanionNotificationDelegate()
     private var isArmed = false
@@ -46,8 +62,8 @@ final class CompanionNotifier {
     func activate() async -> Bool {
         let center = UNUserNotificationCenter.current()
         if !isArmed {
-            delegate.onOutcome = { [weak self] pingID, beatID, outcome, note in
-                self?.onOutcome?(pingID, beatID, outcome, note)
+            delegate.onOutcome = { [weak self] reaction in
+                self?.onOutcome?(reaction)
             }
             center.delegate = delegate
             let reply = UNTextInputNotificationAction(
@@ -72,21 +88,30 @@ final class CompanionNotifier {
         }
     }
 
-    /// Posts one ping immediately; the ping's UUID is the request identifier,
-    /// so outcomes route back to the exact `fired` line in the log.
-    func post(pingID: UUID, beatID: String, title: String, body: String) async {
+    /// Posts one ping immediately. The correlation rides `userInfo`
+    /// (ADR-0052): Notification Center is the durable carrier, so a reaction
+    /// after any relaunch still knows its wake, conversation, and line.
+    func post(
+        title: String, body: String,
+        wakeID: UUID? = nil, conversationID: UUID? = nil
+    ) async {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
         content.categoryIdentifier = Self.categoryID
-        content.userInfo = [Self.beatUserInfoKey: beatID]
+        var userInfo: [String: String] = [:]
+        if let wakeID { userInfo[Self.wakeUserInfoKey] = wakeID.uuidString }
+        if let conversationID {
+            userInfo[Self.conversationUserInfoKey] = conversationID.uuidString
+        }
+        content.userInfo = userInfo
         let request = UNNotificationRequest(
-            identifier: pingID.uuidString, content: content, trigger: nil)
+            identifier: UUID().uuidString, content: content, trigger: nil)
         do {
             try await UNUserNotificationCenter.current().add(request)
         } catch {
-            Log.companion.error("Posting ping \(pingID.uuidString) failed: \(error)")
+            Log.companion.error("Posting ping failed: \(error)")
         }
     }
 }
@@ -100,8 +125,7 @@ nonisolated final class CompanionNotificationDelegate: NSObject,
 {
     /// Written exactly once on the MainActor before the delegate is installed
     /// (`center.delegate =` publishes it); read-only afterwards.
-    nonisolated(unsafe) var onOutcome:
-        (@MainActor @Sendable (UUID, String, CompanionPingOutcome, String?) -> Void)?
+    nonisolated(unsafe) var onOutcome: (@MainActor @Sendable (CompanionPingReaction) -> Void)?
 
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification
@@ -114,11 +138,13 @@ nonisolated final class CompanionNotificationDelegate: NSObject,
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
         let request = response.notification.request
-        guard request.content.categoryIdentifier == CompanionNotifier.categoryID,
-            let pingID = UUID(uuidString: request.identifier)
+        guard request.content.categoryIdentifier == CompanionNotifier.categoryID
         else { return }
-        let beatID =
-            request.content.userInfo[CompanionNotifier.beatUserInfoKey] as? String ?? "unknown"
+        let userInfo = request.content.userInfo
+        let wakeID = (userInfo[CompanionNotifier.wakeUserInfoKey] as? String)
+            .flatMap(UUID.init(uuidString:))
+        let conversationID = (userInfo[CompanionNotifier.conversationUserInfoKey] as? String)
+            .flatMap(UUID.init(uuidString:))
 
         let outcome: CompanionPingOutcome
         var note: String?
@@ -133,6 +159,10 @@ nonisolated final class CompanionNotificationDelegate: NSObject,
             outcome = .engaged
         }
 
-        await onOutcome?(pingID, beatID, outcome, note)
+        await onOutcome?(
+            CompanionPingReaction(
+                outcome: outcome, note: note,
+                wakeID: wakeID, conversationID: conversationID,
+                line: request.content.body))
     }
 }

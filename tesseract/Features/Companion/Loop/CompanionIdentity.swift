@@ -53,16 +53,13 @@ final class CompanionIdentity {
         return user.with(injectedContext: combined)
     }
 
-    /// The pipeline door — the same wrapper-restore contract as
-    /// `ConversationMemory.enrich(_:)`: whatever shape the send handed over
-    /// goes back in that shape.
+    /// The pipeline door — `decoratingUser` is the shared wrapper-restore
+    /// contract.
     func decorate(
         _ outgoing: any AgentMessageProtocol & Sendable,
         transcript: [any AgentMessageProtocol & Sendable]
     ) async -> any AgentMessageProtocol & Sendable {
-        guard let user = outgoing.asUser else { return outgoing }
-        let decorated = await decorate(user, transcript: transcript)
-        return outgoing is CoreMessage ? CoreMessage.user(decorated) : decorated
+        await outgoing.decoratingUser { await decorate($0, transcript: transcript) }
     }
 
     /// A conversation switch — the next conversation carries its own block.
