@@ -61,15 +61,14 @@ nonisolated struct AgentToolDefinition: Sendable {
     /// Companion's headless agent only — they act at a distance and must
     /// never appear in the chat the owner is already looking at
     /// (ADR-0040 §10); the interactive run controller filters on this.
-    /// `.dialogueOnly` tools exist only in summoned dialogue chats
-    /// (ADR-0046 #372): the interactive controller includes them iff the
-    /// current conversation is a dialogue, and the Companion's headless
-    /// agent never carries them — a Mission Control turn has no dialogue
-    /// to report back from.
+    /// `.chatOnly` tools exist in every owner-facing chat (ADR-0052 — the
+    /// summoned-dialogue restriction died with the interactive/dialogue
+    /// contract split) and never in the Companion's headless agent — a
+    /// Mission Control turn has no conversation to report back from.
     enum Audience: Sendable {
         case all
         case companionOnly
-        case dialogueOnly
+        case chatOnly
     }
 
     let name: String

@@ -71,7 +71,8 @@ struct AgentConversation: Identifiable, Sendable {
     /// there is exactly one standing conversation, so the loop finds it by id
     /// across relaunches, and deleting it just means the next turn re-seeds it
     /// empty under the same id — no index scan, no second source of truth.
-    static let missionControlID = UUID(uuidString: "AD460046-0367-4366-B301-000000000001")!
+    nonisolated static let missionControlID = UUID(
+        uuidString: "AD460046-0367-4366-B301-000000000001")!
 
     /// Whether this is the fold's standing conversation (ADR-0046).
     var isMissionControl: Bool { origin == .missionControl }

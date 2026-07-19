@@ -72,6 +72,31 @@ extension MemoryStore {
         return try Self.decodeWakes(stmt)
     }
 
+    /// Wakes that fired inside the window, any state since — the Fold
+    /// Briefing's "recently fired" list (ADR-0052).
+    func recentWakeActivity(since: Date) throws -> [CompanionWake] {
+        let stmt = try db.prepare(
+            "\(Self.wakeSelect) WHERE firedAt IS NOT NULL AND firedAt >= ?1 ORDER BY firedAt")
+        stmt.bind(1, since.timeIntervalSince1970)
+        return try Self.decodeWakes(stmt)
+    }
+
+    /// Resolve a wake token the entity read off a briefing: a full UUID, or
+    /// the short id the briefing renders (`[id a1b2c3]`). Short match runs
+    /// over open (booked or fired) wakes — the states `revise_wake` and
+    /// `cancel_wake` operate on; an ambiguous prefix resolves to nil and
+    /// the tool's "check the briefing's list" error carries the day.
+    func openWake(matching token: String) throws -> CompanionWake? {
+        if let id = UUID(uuidString: token) { return try wake(id: id) }
+        let lowered = token.lowercased()
+        guard lowered.count >= 4 else { return nil }
+        let stmt = try db.prepare(
+            "\(Self.wakeSelect) WHERE state IN ('booked', 'fired')")
+        let matches = try Self.decodeWakes(stmt)
+            .filter { $0.id.uuidString.lowercased().hasPrefix(lowered) }
+        return matches.count == 1 ? matches.first : nil
+    }
+
     /// Promise-class wakes landing on a given local day — the visible-budget
     /// check reads this count. Keyed on `due` (the day the touchpoint reaches
     /// the owner), not the booking day: a promise booked today for Thursday

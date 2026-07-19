@@ -46,6 +46,10 @@ final class CompanionLoop {
     private let isEnabled: () -> Bool
     private let speak: @MainActor (String) -> Void
     private let openConversation: @MainActor (UUID) -> Void
+    /// A banner engage with no live conversation behind it mints a dialogue
+    /// seeded with the banner's line (ADR-0052) — the same door the overlay
+    /// summons engage uses.
+    private let beginDialogue: @MainActor (String?) -> Void
     /// The perception substrate's day-start door (ADR-0046, #368/#371): the
     /// tick hands over the facts; the producer detects and admits.
     private let perceiveDayStart: @MainActor (_ now: Date, _ ownerPresent: Bool) -> Void
@@ -66,8 +70,6 @@ final class CompanionLoop {
     private var didRunLaunchRecovery = false
     /// Briefing evidence: the last tick that saw the owner engaged.
     private var lastOwnerEngagedAt: Date?
-    /// Posted notification pings → their correlation, for reaction routing.
-    private var postedPings: [UUID: (wakeID: UUID?, conversationID: UUID?)] = [:]
 
     init(
         store: MemoryStore,
@@ -82,6 +84,7 @@ final class CompanionLoop {
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
         openConversation: @escaping @MainActor (UUID) -> Void,
+        beginDialogue: @escaping @MainActor (String?) -> Void = { _ in },
         perceiveDayStart: @escaping @MainActor (Date, Bool) -> Void,
         foldTokens: @escaping () -> Int = { 0 },
         earlyFold: @escaping @MainActor () async -> Void = {}
@@ -98,6 +101,7 @@ final class CompanionLoop {
         self.isEnabled = isEnabled
         self.speak = speak
         self.openConversation = openConversation
+        self.beginDialogue = beginDialogue
         self.perceiveDayStart = perceiveDayStart
         self.foldTokens = foldTokens
         self.earlyFold = earlyFold
@@ -107,8 +111,8 @@ final class CompanionLoop {
 
     func start() {
         guard tickTask == nil else { return }
-        notifier.onOutcome = { [weak self] pingID, _, outcome, note in
-            self?.handleReaction(pingID: pingID, outcome: outcome, note: note)
+        notifier.onOutcome = { [weak self] reaction in
+            self?.handleReaction(reaction)
         }
         // Mac-wake is the one transition the tick can sleep through the moment
         // of — force an immediate evaluation instead of waiting half a minute.
@@ -331,11 +335,9 @@ final class CompanionLoop {
             case .representEvents(let ids):
                 try? await store.representEvents(ids: ids)
             case .fallbackBanner(let wake):
-                let pingID = UUID()
-                postedPings[pingID] = (wake.id, nil)
                 await notifier.post(
-                    pingID: pingID, beatID: wake.wakeClass.rawValue, title: "Jarvis",
-                    body: wake.content)
+                    pingID: UUID(), beatID: wake.wakeClass.rawValue, title: "Jarvis",
+                    body: wake.content, wakeID: wake.id)
                 try? await store.upsertWake(wake)
                 recorder.record("delivery.fallback", wakeID: wake.id, note: wake.content)
             case .stampWakeHeard(let id):
@@ -349,6 +351,8 @@ final class CompanionLoop {
                 try? await store.stampResurfacedHeard(at: Date())
             case .openConversation(let id):
                 openConversation(id)
+            case .beginDialogue(let line):
+                beginDialogue(line)
             case .bookReplyFollowup(let content, let conversationID):
                 let wake = CompanionWake(
                     content: content, due: Date(), wakeClass: .followup,
@@ -398,14 +402,15 @@ final class CompanionLoop {
     // MARK: - Delivery plumbing (the tools' closures land here)
 
     /// The `notify` tool's door: posts under the turn's correlation so the
-    /// owner's reaction routes back to the right wake and conversation.
+    /// owner's reaction routes back to the right wake and conversation —
+    /// carried in the notification itself (ADR-0052), so the route survives
+    /// relaunch.
     func deliverNotification(title: String, body: String) async {
-        let pingID = UUID()
         let context = runner.context
-        postedPings[pingID] = (context.wakeIDs.first, context.conversationID)
         await notifier.post(
-            pingID: pingID, beatID: context.origin?.rawValue ?? "companion",
-            title: title, body: body)
+            pingID: UUID(), beatID: context.origin?.rawValue ?? "companion",
+            title: title, body: body,
+            wakeID: context.wakeIDs.first, conversationID: context.conversationID)
         recorder.record(
             "delivery.notification",
             wakeID: context.wakeIDs.first,
@@ -420,10 +425,9 @@ final class CompanionLoop {
     /// (not read from the runner) because the overlay's give-up can outlive
     /// the turn that raised it.
     func deliverUnansweredFallback(line: String, wakeID: UUID?, conversationID: UUID?) async {
-        let pingID = UUID()
-        postedPings[pingID] = (wakeID, conversationID)
         await notifier.post(
-            pingID: pingID, beatID: "summons-fallback", title: "Jarvis", body: line)
+            pingID: UUID(), beatID: "summons-fallback", title: "Jarvis", body: line,
+            wakeID: wakeID, conversationID: conversationID)
         recorder.record(
             "delivery.notification",
             wakeID: wakeID,
@@ -446,19 +450,19 @@ final class CompanionLoop {
 
     // MARK: - Reactions
 
-    private func handleReaction(pingID: UUID, outcome: CompanionPingOutcome, note: String?) {
-        let correlation = postedPings.removeValue(forKey: pingID)
+    private func handleReaction(_ reaction: CompanionPingReaction) {
         recorder.record(
-            "reaction.\(outcome.rawValue)",
-            wakeID: correlation?.wakeID,
-            conversationID: correlation?.conversationID,
-            note: note)
+            "reaction.\(reaction.outcome.rawValue)",
+            wakeID: reaction.wakeID,
+            conversationID: reaction.conversationID,
+            note: reaction.note)
 
         let effects = reducer.reaction(
-            outcome: outcome,
-            wakeID: correlation?.wakeID,
-            conversationID: correlation?.conversationID,
-            note: note)
+            outcome: reaction.outcome,
+            wakeID: reaction.wakeID,
+            conversationID: reaction.conversationID,
+            line: reaction.line,
+            note: reaction.note)
         Task { [weak self] in
             await self?.perform(effects, now: Date())
         }

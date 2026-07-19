@@ -67,6 +67,11 @@ nonisolated struct CompanionWake: Sendable, Identifiable, Equatable {
     /// reaction ever reached this wake.
     var heardAt: Date?
 
+    /// The briefing-facing short id — enough of the UUID to name this wake
+    /// in a `revise_wake`/`cancel_wake` call without quoting the whole
+    /// thing. Rendered as `[id a1b2c3]` wherever a briefing lists wakes.
+    var shortID: String { String(id.uuidString.prefix(6)).lowercased() }
+
     init(
         id: UUID = UUID(),
         content: String,

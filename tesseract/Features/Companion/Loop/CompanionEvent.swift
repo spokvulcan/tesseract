@@ -218,6 +218,20 @@ extension CompanionEvent {
         guard !excluded.contains(app.lowercased()) else { return nil }
 
         let title = captured.title.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // The invariant's stacked form (#378, field-found): a collapsed
+        // notification stack reads as app "Stacked summary" with the real
+        // app leading the title ("Tesseract Agent: Jarvis — 32m ago"), so
+        // the display-name match above never fires. Match the title's
+        // leading segment against the self set too.
+        if app.lowercased() == "stacked summary",
+            let leading = title.split(separator: ":").first.map({
+                $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }),
+            excluded.contains(leading)
+        {
+            return nil
+        }
         let subtitle = captured.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = captured.body.trimmingCharacters(in: .whitespacesAndNewlines)
 

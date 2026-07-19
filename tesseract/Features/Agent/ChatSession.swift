@@ -95,9 +95,9 @@ final class ChatSession {
         conversationStore.currentConversation?.isMissionControl ?? false
     }
 
-    /// Whether the current chat is a summoned dialogue (ADR-0046 #372) — the
-    /// run controller keys the `.dialogueOnly` tool set (`report_back`) off
-    /// this, per prompt.
+    /// Whether the current chat is a summons-minted dialogue. Provenance
+    /// only since ADR-0052 (every owner chat shares one contract now); no
+    /// tool gating keys off it.
     var isDialogueOpen: Bool {
         conversationStore.currentConversation?.origin == .dialogue
     }
@@ -193,6 +193,11 @@ final class ChatSession {
     /// send path, so this seam covers both. Optional for the same reason
     /// memory is: the chat must run without the Companion.
     private let companionIdentity: CompanionIdentity?
+    /// The Fold Briefing (ADR-0052): every owner conversation opens as the
+    /// one mind — the fold's recent life rides the first outgoing message,
+    /// and again whenever the fold advanced meanwhile. Optional for the
+    /// same reason identity is.
+    private let foldBriefing: CompanionFoldBriefing?
     /// Every send into a dialogue-origin conversation is reported through
     /// this door (ADR-0046 #372) — the dialogue ledger's activity signal,
     /// which arms the Report-Back nudge accounting.
@@ -225,11 +230,13 @@ final class ChatSession {
         onConversationSwitch: @MainActor @escaping () -> Void = {},
         conversationMemory: ConversationMemory? = nil,
         companionIdentity: CompanionIdentity? = nil,
+        foldBriefing: CompanionFoldBriefing? = nil,
         onDialogueActivity: @MainActor @escaping (UUID) -> Void = { _ in },
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
         self.conversationMemory = conversationMemory
         self.companionIdentity = companionIdentity
+        self.foldBriefing = foldBriefing
         self.onDialogueActivity = onDialogueActivity
         self.agent = agent
         self.conversationStore = conversationStore
@@ -250,7 +257,6 @@ final class ChatSession {
         )
 
         agentRun.setReportError { [weak self] message in self?.error = message }
-        agentRun.setIsDialogueOpen { [weak self] in self?.isDialogueOpen ?? false }
         // A settle with the Pending Row still up means the user message never
         // entered the agent context — hand it back to the composer.
         agentRun.setOnRunSettled { [weak self] in self?.settlePendingUserMessage() }
@@ -611,9 +617,11 @@ final class ChatSession {
 
         Log.agent.info("User message (\(trimmed.count) chars, \(images.count) images): \(trimmed)")
 
-        // The dialogue ledger's activity signal (ADR-0046 #372): every send —
-        // typed, dictated, or the harness's own nudge — counts as exchange.
-        if isDialogueOpen, let id = conversationStore.currentConversation?.id {
+        // The conversation ledger's activity signal (ADR-0046 #372, widened
+        // by ADR-0052 to every owner conversation): every send — typed,
+        // dictated, or the harness's own nudge — counts as exchange. The
+        // Mission Control guard above already excluded the fold.
+        if let id = conversationStore.currentConversation?.id {
             onDialogueActivity(id)
         }
 
@@ -642,8 +650,14 @@ final class ChatSession {
                 if let conversationMemory = self.conversationMemory {
                     message = await conversationMemory.enrich(message)
                 }
-                // Identity decorates after memory so its block leads the
-                // injected context — who you are, then what you recall.
+                // Decoration order is inside-out — each decorator prepends,
+                // so the injected context reads identity, then the fold
+                // briefing, then memory: who you are, what your fold is
+                // living, what you recall (ADR-0052).
+                if let briefing = self.foldBriefing {
+                    message = await briefing.decorate(
+                        message, transcript: self.agent.state.messages)
+                }
                 if let identity = self.companionIdentity {
                     message = await identity.decorate(
                         message, transcript: self.agent.state.messages)
@@ -875,6 +889,7 @@ final class ChatSession {
         error = nil
         conversationMemory?.reset()
         companionIdentity?.reset()
+        foldBriefing?.reset()
         debugLogger.reset()
         onConversationSwitch()
     }

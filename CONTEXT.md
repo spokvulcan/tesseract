@@ -1380,12 +1380,14 @@ _Avoid_: summary (mechanical flavor — the digest is the entity's own memory
 practice), compaction (the operation, not the artifact).
 
 **Report-Back**:
-What a summoned dialogue owes **Mission Control**: a deposit — on end, at a
-milestone, or when nudged after going quiet — that lands as an **Event**, so
-the one mind knows what its conversations concluded. Dialogues stay their own
-chats; cognition stays in the fold.
+What every owner conversation owes **Mission Control** — summoned dialogue and
+owner-opened chat alike (ADR-0052): a deposit — on end, at a milestone, or
+when nudged once after going quiet — that lands as an **Event**, so the one
+mind knows what its conversations concluded. Conversations stay their own
+chats; cognition stays in the fold; whether anything concluded at all is the
+entity's judgment, never code's.
 _Avoid_: summary (it carries decisions and debts, not prose recap), sync,
-hand-off.
+hand-off, chat capture (the harness never authors a deposit).
 
 **Wake**:
 One persisted row granting the entity a future turn — a promise, a rhythm beat,
@@ -1439,6 +1441,18 @@ its own due and upcoming **Wake**s, recency of last interaction. Gathering is
 mechanical; interpreting it is the turn's job.
 _Avoid_: prompt (it's one input to the turn, not the instructions), snapshot
 (the flight recorder's word for the verbatim copy a trace keeps).
+
+**Fold Briefing**:
+The code-rendered account of the fold's recent life handed to an owner
+conversation — today's contract, due and recently-fired **Wake**s, recent
+deliveries, the entity's last fold-turn conclusions verbatim — so every chat
+opens as the one mind, current, and re-briefs when the fold advances
+mid-conversation (ADR-0052). The **Situation Briefing**'s conversation-facing
+sibling: gathering is mechanical, interpreting is the entity's job; it closes
+with the **Report-Back** contract line.
+_Avoid_: status block (it carries his own conclusions, not just state),
+digest (the entity-authored nightly artifact), situation briefing (the
+turn-facing sibling), fold summary.
 
 **Standing Instructions**:
 The entity's self-authored policy document — one versioned text in two

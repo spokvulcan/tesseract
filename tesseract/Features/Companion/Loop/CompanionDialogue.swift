@@ -2,13 +2,14 @@
 //  CompanionDialogue.swift
 //  tesseract
 //
-//  The summoned dialogue's ledger (ADR-0046 #372): dialogue out, Report-Back
-//  in. A summons engagement mints a separate dialogue chat — voice or typed,
-//  the same conversation — and this type tracks what that dialogue owes
-//  Mission Control: a deposit through `report_back`. A dialogue that ends or
-//  goes quiet without depositing gets exactly one harness nudge, on the
-//  record; what the deposit says, and whether one is warranted at all,
-//  remains the entity's judgment — the harness only asks.
+//  The conversation ledger (ADR-0046 #372, widened by ADR-0052): dialogue
+//  out, Report-Back in. Every owner conversation — a summons-minted
+//  dialogue or the owner's own chat, voice or typed — owes Mission Control
+//  a deposit through `report_back`, and this type tracks the active one's
+//  debt. A conversation that ends or goes quiet without depositing gets
+//  exactly one harness nudge, on the record; what the deposit says, and
+//  whether one is warranted at all, remains the entity's judgment — the
+//  harness only asks.
 //
 
 import Foundation
@@ -27,9 +28,10 @@ final class CompanionDialogue {
     /// transcript (that visibility IS the record's other half).
     static let nudgeMessage = """
         <harness-nudge>
-        This dialogue is winding down. If it concluded anything Mission Control \
-        should know — a decision, a promise, anything owed — deposit it now with \
-        report_back. If nothing concluded, say so briefly; never invent a deposit.
+        This conversation is winding down. If it concluded anything Mission \
+        Control should know — a decision, a promise, anything owed — deposit it \
+        now with report_back. If nothing concluded, say so briefly; never invent \
+        a deposit.
         </harness-nudge>
         """
 

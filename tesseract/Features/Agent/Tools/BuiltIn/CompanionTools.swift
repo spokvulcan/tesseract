@@ -179,7 +179,9 @@ nonisolated func createReviseWakeTool(
             type: "object",
             properties: [
                 "id": PropertySchema(
-                    type: "string", description: "The wake's id, from the briefing's list."),
+                    type: "string",
+                    description: "The wake's id from the briefing's list — the short "
+                        + "'[id a1b2c3]' form or the full UUID."),
                 "content": PropertySchema(
                     type: "string", description: "New one-line content, if it changes."),
                 "at": PropertySchema(
@@ -192,13 +194,10 @@ nonisolated func createReviseWakeTool(
             required: ["id"]
         ),
         execute: { _, argsJSON, _, _ in
-            guard
-                let id = ToolArgExtractor.string(argsJSON, key: "id")
-                    .flatMap(UUID.init(uuidString:))
-            else {
+            guard let token = ToolArgExtractor.string(argsJSON, key: "id") else {
                 throw CompanionToolError(message: "revise_wake requires the wake's 'id'.")
             }
-            guard var wake = try await store.wake(id: id),
+            guard var wake = try await store.openWake(matching: token),
                 wake.state == .booked || wake.state == .fired
             else {
                 throw CompanionToolError(
@@ -272,24 +271,25 @@ nonisolated func createCancelWakeTool(
             type: "object",
             properties: [
                 "id": PropertySchema(
-                    type: "string", description: "The wake's id, from the briefing's list."),
+                    type: "string",
+                    description: "The wake's id from the briefing's list — the short "
+                        + "'[id a1b2c3]' form or the full UUID."),
                 "why": PropertySchema(
                     type: "string", description: "One line: why this wake is no longer needed."),
             ],
             required: ["id", "why"]
         ),
         execute: { _, argsJSON, _, _ in
-            guard
-                let id = ToolArgExtractor.string(argsJSON, key: "id")
-                    .flatMap(UUID.init(uuidString:))
-            else {
+            guard let token = ToolArgExtractor.string(argsJSON, key: "id") else {
                 throw CompanionToolError(message: "cancel_wake requires the wake's 'id'.")
             }
             guard let why = ToolArgExtractor.string(argsJSON, key: "why"), !why.isEmpty else {
                 throw CompanionToolError(
                     message: "cancel_wake requires 'why' — the record must say.")
             }
-            guard var wake = try await store.wake(id: id), wake.state == .booked else {
+            guard var wake = try await store.openWake(matching: token),
+                wake.state == .booked
+            else {
                 throw CompanionToolError(
                     message: "No booked wake with that id — only a booked wake can be "
                         + "cancelled; check the briefing's list.")

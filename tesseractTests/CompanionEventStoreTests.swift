@@ -337,6 +337,25 @@ private func event(
         #expect(payload.contains("PR merged"))
     }
 
+    /// The invariant's stacked form (field-found on 2026-07-19): a collapsed
+    /// stack reads as app "Stacked summary" with the real app leading the
+    /// title, so the plain display-name match never fires. Self stacks drop;
+    /// other apps' stacks still become Events.
+    @Test func stackedSummariesOfOwnBannersDrop() {
+        let selfStackIsNil =
+            CompanionEvent.notification(
+                from: captured(
+                    app: "Stacked summary", title: "Tesseract Agent: Jarvis",
+                    body: "32m ago"),
+                selfDisplayNames: ["Tesseract Agent", "Tesseract"]) == nil
+        #expect(selfStackIsNil)
+
+        let otherStack = CompanionEvent.notification(
+            from: captured(app: "Stacked summary", title: "Slack: #general", body: "2 new"),
+            selfDisplayNames: ["Tesseract Agent"])
+        #expect(otherStack != nil)
+    }
+
     @Test func idDerivesFromBannerUUIDNotContent() {
         let a = CompanionEvent.notification(
             from: captured(app: "Mail", title: "one", uuid: "abc"), selfDisplayNames: [])
