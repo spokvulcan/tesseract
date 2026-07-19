@@ -116,8 +116,19 @@ read workflow-file diffs yourself before merging.**
   scripts/release/package.sh 0.0.0-local
   ```
 
+## The agent is not sandboxed (ADR-0047)
+
+The agent ships **non-sandboxed** — `ENABLE_APP_SANDBOX = NO`, no
+`com.apple.security.app-sandbox` entitlement — because an ambient assistant
+must read other processes (notifications via Accessibility, the screen next),
+which the App Sandbox forbids. Hardened Runtime stays on, so notarization and
+Developer-ID signing are unchanged; this is only viable *because* distribution
+is Developer ID, not the App Store (the Store mandates the sandbox). The Mac
+App Store is therefore closed to the agent — `SIGNING_METHOD=app-store` is
+reserved for the future *server*, a contained product that can be sandboxed.
+
 ## Deferred by design (ADR-0017)
 
-Sparkle auto-update (needs an opt-in privacy design first), Homebrew cask,
-and the Mac App Store variant (`scripts/release/archive.sh` already takes
-`SIGNING_METHOD=app-store` for that future).
+Sparkle auto-update (needs an opt-in privacy design first), Homebrew cask, and
+the Mac App Store variant — now a *server*-only future (`scripts/release/archive.sh`
+already takes `SIGNING_METHOD=app-store`), not an agent path (see ADR-0047).

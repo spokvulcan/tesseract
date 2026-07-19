@@ -116,8 +116,44 @@ import Testing
         _ store: MemoryStore, kind: String, _ payload: [String: JSONValue]
     ) async throws -> String {
         try await toolText(
-            createTrackTool(store: store),
+            createTrackTool(store: store, recorder: scratchRecorder()),
             ["kind": .string(kind), "payload": .object(payload)])
+    }
+
+    // MARK: - Hold (#379/#380)
+
+    @Test func holdVerdictLandsOnTheFlightRecorder() async throws {
+        let store = try scratchStore()
+        let recorder = scratchRecorder()
+        let tool = createTrackTool(store: store, recorder: recorder, context: nil)
+
+        let result = try await toolText(
+            tool,
+            [
+                "kind": .string("hold"),
+                "payload": .object([
+                    "app": .string("Slack"), "title": .string("standup thread"),
+                    "why": .string("he is heads-down; not worth breaking focus"),
+                ]),
+            ])
+        #expect(result.contains("Slack"))
+
+        let records = recorder.records(since: Date().addingTimeInterval(-60))
+        #expect(records.count == 1)
+        #expect(records[0].event == "hold.tracked")
+        #expect(records[0].snapshot?["app"] == "Slack")
+        #expect(records[0].snapshot?["title"] == "standup thread")
+        #expect(records[0].note == "he is heads-down; not worth breaking focus")
+    }
+
+    @Test func holdRequiresAppAndWhy() async throws {
+        let store = try scratchStore()
+        let tool = createTrackTool(store: store, recorder: scratchRecorder(), context: nil)
+        await #expect(throws: TrackingToolError.self) {
+            _ = try await toolText(
+                tool,
+                ["kind": .string("hold"), "payload": .object(["app": .string("Slack")])])
+        }
     }
 
     // MARK: - Observations
@@ -347,7 +383,7 @@ import Testing
 
     @Test func unknownKindAndMalformedPayloadFailLoudly() async throws {
         let store = try scratchStore()
-        let tool = createTrackTool(store: store)
+        let tool = createTrackTool(store: store, recorder: scratchRecorder())
         await #expect(throws: TrackingToolError.self) {
             _ = try await tool.execute(
                 "t", ["kind": .string("mood"), "payload": .object([:])], nil, nil)

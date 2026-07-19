@@ -29,6 +29,10 @@ final class CompanionPerception {
     private let store: MemoryStore
     private let recorder: CompanionFlightRecorder
     private let isEnabled: () -> Bool
+    /// Display names that are Tesseract's own, so its banners never become
+    /// Events (#378's self-exclusion invariant — the AX tree has no bundle
+    /// ids, only display names). Injected so tests can pin the set.
+    private let selfDisplayNames: Set<String>
     /// Test hosts bootstrap the full container against the real app container
     /// (issue #360), so without this gate every test run would admit phantom
     /// launch events into the owner's queue — the same reason durable
@@ -39,6 +43,9 @@ final class CompanionPerception {
 
     private var macWakeObserver: NSObjectProtocol?
     private var dayChangeObserver: NSObjectProtocol?
+    /// The Notification Hub's AX watcher (#378) — created on `start`, never in
+    /// a test host. Nil until then.
+    private var notificationWatcher: NotificationCenterWatcher?
     private var started = false
     /// The day key already admitted this process — a cheap edge on the tick's
     /// level signal, so a quiet afternoon isn't a stream of collapsed
@@ -50,12 +57,29 @@ final class CompanionPerception {
         store: MemoryStore,
         recorder: CompanionFlightRecorder,
         isEnabled: @escaping () -> Bool,
+        selfDisplayNames: Set<String> = CompanionPerception.ownDisplayNames,
         isTestHost: Bool = ProcessEnvironment.isRunningTests
     ) {
         self.store = store
         self.recorder = recorder
         self.isEnabled = isEnabled
+        self.selfDisplayNames = selfDisplayNames
         self.isTestHost = isTestHost
+    }
+
+    /// Tesseract's own banner display names — what its `UNUserNotificationCenter`
+    /// posts appear as in the NC tree (`CFBundleDisplayName` is "Tesseract
+    /// Agent"). The bare "Tesseract" is kept for robustness.
+    static var ownDisplayNames: Set<String> {
+        var names: Set<String> = ["Tesseract Agent", "Tesseract"]
+        for key in ["CFBundleDisplayName", "CFBundleName"] {
+            if let value = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+                !value.isEmpty
+            {
+                names.insert(value)
+            }
+        }
+        return names
     }
 
     func start() {
@@ -84,6 +108,22 @@ final class CompanionPerception {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.dayRolled(now: Date()) }
         }
+
+        // The Notification Hub's watcher (#378): AX observation of the live
+        // NotificationCenter process. Never in a test host — there is no live
+        // banner renderer to read, and the #360 container-sharing rule that
+        // gates admission applies to perception too. The watcher rides the
+        // Companion toggle itself (attach on enable, detach on disable), and
+        // admission is gated again at `admit`.
+        if !isTestHost {
+            let watcher = NotificationCenterWatcher(
+                isEnabled: isEnabled,
+                onNotification: { [weak self] captured in
+                    self?.notificationArrived(captured)
+                })
+            watcher.start()
+            notificationWatcher = watcher
+        }
     }
 
     func stop() {
@@ -95,6 +135,8 @@ final class CompanionPerception {
             NotificationCenter.default.removeObserver(dayChangeObserver)
             self.dayChangeObserver = nil
         }
+        notificationWatcher?.stop()
+        notificationWatcher = nil
         started = false
     }
 
@@ -142,6 +184,19 @@ final class CompanionPerception {
                 occurredAt: end))
     }
 
+    /// The Notification Hub's producer (#378): a banner the watcher read
+    /// becomes exactly one Event through the same admission door as every other
+    /// kind. Self-exclusion, the body cap, and the deterministic id (so a
+    /// re-observed banner collapses at admission) live in the factory; nil
+    /// there — a self-banner or an empty read — never admits.
+    func notificationArrived(_ captured: CapturedNotification) {
+        guard
+            let event = CompanionEvent.notification(
+                from: captured, selfDisplayNames: selfDisplayNames)
+        else { return }
+        admit(event)
+    }
+
     /// Internal, not private: the calendar-day rollover handler — tests drive
     /// it with controlled dates.
     func dayRolled(now: Date) {
@@ -166,10 +221,19 @@ final class CompanionPerception {
         Task { [store, recorder] in
             do {
                 guard try await store.admitEvent(event) else { return }
-                recorder.record(
-                    "event.admitted",
-                    snapshot: ["kind": event.kind.rawValue, "eventID": event.id.uuidString],
-                    note: event.content)
+                var snapshot = [
+                    "kind": event.kind.rawValue, "eventID": event.id.uuidString,
+                ]
+                // The source app rides the record for notification and
+                // app-switch kinds, so the Hub aggregator can pair a held
+                // notification with a later switch to its app (#380). The
+                // switch's *start* rides too (`at`), so the pairing keys off
+                // when the owner moved to the app, not when he later left it —
+                // the record's own stamp lands at the session's close.
+                let hints = event.recordHints
+                if let app = hints.app { snapshot["app"] = app }
+                if let at = hints.at { snapshot["at"] = String(at) }
+                recorder.record("event.admitted", snapshot: snapshot, note: event.content)
             } catch {
                 Log.companion.error("Event admission failed: \(error.localizedDescription)")
             }

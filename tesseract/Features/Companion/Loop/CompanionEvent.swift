@@ -32,6 +32,8 @@ nonisolated enum CompanionEventKind: String, Codable, Sendable {
     case powerChange = "power-change"
     /// A sustained app switch (brief flips never become Events).
     case appSwitch = "app-switch"
+    /// Another app banner-notified the owner (the Notification Hub, #378).
+    case notificationArrived = "notification-arrived"
 }
 
 /// The queue's state machine — the wake table's proven shape (fired-but-
@@ -117,6 +119,129 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
     /// no door hand-rolls (and mis-escapes) its own literal.
     static func payloadJSON(_ value: some Encodable) -> String? {
         (try? JSONEncoder().encode(value)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    /// The correlation hints projected off the payload for the flight-recorder
+    /// record — both decoded in one pass, because admission surfaces both and
+    /// decoding each on its own would parse the same payload string twice:
+    /// - `app`: the source app notification and app-switch events name.
+    /// - `at`: for a span-shaped payload, the session's *start* — when the owner
+    ///   switched *to* the app, not when he later left it. The app-switch admits
+    ///   at the session's close, so surfacing `start` lets the inferred-miss
+    ///   tally (#380) correlate against a real switch-to rather than the app he
+    ///   was already in. Nil for a notification payload (its epoch field is
+    ///   `occurredAt`, not `start`).
+    /// Either is nil when the payload lacks that field (or has no payload).
+    var recordHints: (app: String?, at: Int?) {
+        guard let payload, let data = payload.data(using: .utf8),
+            let hints = try? JSONDecoder().decode(PayloadHints.self, from: data)
+        else { return (nil, nil) }
+        let trimmed = hints.app?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ((trimmed?.isEmpty ?? true) ? nil : trimmed, hints.start)
+    }
+
+    /// The minimal projection `recordHints` decodes — only the two correlation
+    /// keys, never the full body the payload also carries.
+    private struct PayloadHints: Decodable {
+        let app: String?
+        let start: Int?
+    }
+}
+
+// MARK: - Notification Hub (#378)
+
+/// One banner the Notification Hub watched, as the AX layer read it — the
+/// producer's raw perception before it becomes an Event. Fields are best-
+/// effort: the AX tree exposes a display name (never a bundle ID) and,
+/// defensively, may hand back only the flattened `AXDescription`, so any
+/// field may be empty.
+nonisolated struct CapturedNotification: Sendable, Equatable {
+    /// Source-app display name — the only identity the tree exposes.
+    let app: String
+    let title: String
+    let subtitle: String
+    let body: String
+    /// The banner's `AXIdentifier` — a stable per-notification UUID when the
+    /// tree carried one; nil falls back to a content-derived id.
+    let uuid: String?
+    let occurredAt: Date
+
+    init(
+        app: String, title: String, subtitle: String = "", body: String = "",
+        uuid: String? = nil, occurredAt: Date = Date()
+    ) {
+        self.app = app
+        self.title = title
+        self.subtitle = subtitle
+        self.body = body
+        self.uuid = uuid
+        self.occurredAt = occurredAt
+    }
+}
+
+extension CompanionEvent {
+
+    /// The announceable content line caps the body at a few hundred chars; the
+    /// full body rides uncapped in the payload (#378).
+    nonisolated static let notificationBodyCap = 500
+
+    /// The payload shape a notification Event persists — the full fields the
+    /// content line trims; `recordHints` decodes `app` back off it at admission.
+    nonisolated struct NotificationPayload: Codable {
+        let app: String
+        let title: String
+        let subtitle: String?
+        let body: String
+        let uuid: String?
+        /// Unix seconds — the same epoch convention the span payload keeps.
+        let occurredAt: Int
+    }
+
+    /// Turn a watched banner into exactly one Event, or nil to drop it. The
+    /// self-exclusion invariant lives here (#378): Tesseract's own banners
+    /// never become Events, matched on display name because the tree carries no
+    /// bundle IDs. The id is deterministic from the banner UUID, so the same
+    /// banner re-observed across a watcher re-attach collapses at admission;
+    /// without a UUID it derives from the content, still collapsing exact
+    /// repeats.
+    ///
+    /// `nonisolated`: extension members default to `@MainActor` under the
+    /// project's default isolation, but the producer path reads banners off the
+    /// main actor (`NotificationCenterWatcher.handleCreated`), so this must run
+    /// anywhere — the base type is already a `nonisolated struct`.
+    nonisolated static func notification(
+        from captured: CapturedNotification, selfDisplayNames: Set<String>
+    ) -> CompanionEvent? {
+        let app = captured.app.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !app.isEmpty else { return nil }
+        let excluded = selfDisplayNames.map { $0.lowercased() }
+        guard !excluded.contains(app.lowercased()) else { return nil }
+
+        let title = captured.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = captured.subtitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = captured.body.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let occasion =
+            captured.uuid.map { "notification:\($0)" }
+            ?? "notification:\(app)|\(title)|\(subtitle)|\(body)"
+
+        let cappedBody =
+            body.count > notificationBodyCap
+            ? String(body.prefix(notificationBodyCap)) + "…" : body
+        let tail = [title, cappedBody].filter { !$0.isEmpty }.joined(separator: " — ")
+        let content = tail.isEmpty ? app : "\(app): \(tail)"
+
+        let payload = NotificationPayload(
+            app: app, title: title, subtitle: subtitle.isEmpty ? nil : subtitle,
+            body: body, uuid: captured.uuid,
+            occurredAt: Int(captured.occurredAt.timeIntervalSince1970))
+
+        return CompanionEvent(
+            id: deterministicID(occasion),
+            kind: .notificationArrived,
+            content: content,
+            payload: payloadJSON(payload),
+            occurredAt: captured.occurredAt)
     }
 }
 

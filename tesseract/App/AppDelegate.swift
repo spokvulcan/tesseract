@@ -25,6 +25,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Ensure only one instance of the app runs at a time
         ensureSingleInstance()
 
+        // Un-sandbox cutover (#381, ADR-0047): carry the downloaded models over
+        // from the retired container before anything reads the model path.
+        // Runs here — ahead of the window task's `container.setup()`, which is
+        // where `modelStorageURL` is first evaluated.
+        SandboxMigration.migrateModelsIfNeeded()
+
         // Setup window lifecycle tracking
         setupWindowTracking()
 
