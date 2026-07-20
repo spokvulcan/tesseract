@@ -103,6 +103,7 @@ private func runLoop(
     var pendingMessages = initialPending
     let allNewMessages = MessageAccumulator()
     var isFirstTurn = true
+    var replayGuard = TurnReplayGuard()
 
     // OUTER LOOP: handles follow-ups
     outerLoop: while true {
@@ -116,7 +117,9 @@ private func runLoop(
             }
             isFirstTurn = false
 
-            // 2. Push pending messages into context
+            // 2. Push pending messages into context. Any interjection
+            // (steering, follow-up) resets the replay chain: repeating a turn
+            // after the user spoke is a fresh request, not a replay.
             if !pendingMessages.isEmpty {
                 for msg in pendingMessages {
                     context.messages.append(msg)
@@ -125,6 +128,7 @@ private func runLoop(
                     emit(.messageEnd(message: msg))
                 }
                 pendingMessages.removeAll()
+                replayGuard.reset()
             }
 
             // 3. Stream assistant response
@@ -199,16 +203,52 @@ private func runLoop(
                 break innerLoop
             }
 
-            // 6. Execute tool calls
-            let (toolResults, steeringMessages) = await executeToolCalls(
-                toolCalls: toolCalls,
-                tools: context.tools ?? [],
-                context: &context,
-                allNewMessages: allNewMessages,
-                signal: signal,
-                getSteeringMessages: config.getSteeringMessages,
-                emit: emit
-            )
+            // 5b. Replay breaker: an identical consecutive turn never
+            // re-executes its tools — the first replay gets corrective results
+            // (one chance to recover), the second stops the run. See
+            // `TurnReplayGuard` for why local models fall into this attractor.
+            let replayVerdict = replayGuard.observe(assistantMessage)
+            if case .replay(let consecutive) = replayVerdict,
+                consecutive >= TurnReplayGuard.maxReplays
+            {
+                Log.agent.error(
+                    "Turn replay breaker: identical turn repeated "
+                        + "\(consecutive + 1)x — stopping the run")
+                emit(.generationError(message: TurnReplayGuard.terminationNotice))
+                emit(
+                    .turnEnd(
+                        message: assistantMessage, toolResults: [],
+                        contextMessages: context.messages))
+                emit(.agentEnd(messages: allNewMessages.snapshot()))
+                return
+            }
+
+            // 6. Execute tool calls — or, on a replayed turn, refuse
+            // re-execution and commit corrective results instead.
+            let toolResults: [ToolResultMessage]
+            let steeringMessages: [any AgentMessageProtocol & Sendable]
+            if case .replay = replayVerdict {
+                Log.agent.warning(
+                    "Turn replay breaker: identical turn — refusing "
+                        + "\(toolCalls.count) tool call(s), injecting corrective results")
+                toolResults = commitReplayRefusals(
+                    toolCalls: toolCalls,
+                    context: &context,
+                    allNewMessages: allNewMessages,
+                    emit: emit
+                )
+                steeringMessages = []
+            } else {
+                (toolResults, steeringMessages) = await executeToolCalls(
+                    toolCalls: toolCalls,
+                    tools: context.tools ?? [],
+                    context: &context,
+                    allNewMessages: allNewMessages,
+                    signal: signal,
+                    getSteeringMessages: config.getSteeringMessages,
+                    emit: emit
+                )
+            }
 
             emit(
                 .turnEnd(
@@ -368,6 +408,45 @@ private func streamAssistantResponse(
     return .success(finalMessage, .endOfTurn)
 }
 
+// MARK: - Tool Outcome Commit
+
+/// The single commit step for a tool outcome — the counterpart of pi-mono's
+/// `emitToolCallOutcome`. Every branch that lands a result (execution,
+/// unknown tool, unparseable arguments, steering skip, replay refusal) goes
+/// through this exact append + emit×2 sequence.
+private func commitToolOutcome(
+    _ result: ToolResultMessage,
+    context: inout AgentContext,
+    allNewMessages: MessageAccumulator,
+    emit: (AgentEvent) -> Void
+) {
+    context.messages.append(result)
+    allNewMessages.append(result)
+    emit(.messageStart(message: result))
+    emit(.messageEnd(message: result))
+}
+
+// MARK: - Replay Refusal
+
+/// Commit a corrective error result for each of a replayed turn's tool calls,
+/// without executing anything — no execution events; the calls never ran.
+private func commitReplayRefusals(
+    toolCalls: [ToolCallInfo],
+    context: inout AgentContext,
+    allNewMessages: MessageAccumulator,
+    emit: @escaping @Sendable (AgentEvent) -> Void
+) -> [ToolResultMessage] {
+    toolCalls.map { call in
+        let result = ToolResultMessage.skipped(
+            toolCallId: call.id, toolName: call.name,
+            reason: TurnReplayGuard.replayRefusal
+        )
+        commitToolOutcome(
+            result, context: &context, allNewMessages: allNewMessages, emit: emit)
+        return result
+    }
+}
+
 // MARK: - Tool Execution
 
 /// Execute tool calls sequentially. Steering messages can interrupt remaining tools.
@@ -383,16 +462,13 @@ private func executeToolCalls(
     var results: [ToolResultMessage] = []
     var steeringMessages: [any AgentMessageProtocol & Sendable] = []
 
-    // The single commit step for a tool outcome — every branch (unknown tool,
-    // unparseable arguments, missing parameters, normal result, steering skip)
-    // lands its result through this exact append×3 + emit×2 sequence, the
-    // counterpart of pi-mono's `emitToolCallOutcome`.
+    // Every branch (unknown tool, unparseable arguments, missing parameters,
+    // normal result, steering skip) lands its result through the shared
+    // `commitToolOutcome` sequence, collecting it for this turn's results.
     func commit(_ result: ToolResultMessage) {
         results.append(result)
-        context.messages.append(result)
-        allNewMessages.append(result)
-        emit(.messageStart(message: result))
-        emit(.messageEnd(message: result))
+        commitToolOutcome(
+            result, context: &context, allNewMessages: allNewMessages, emit: emit)
     }
 
     for (index, call) in toolCalls.enumerated() {
