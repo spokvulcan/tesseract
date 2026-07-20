@@ -34,8 +34,9 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     ///
     /// Penalty processors are seeded with `fullText` — the iterator's own
     /// input is a single token, which would otherwise be the entire
-    /// repetition/presence/frequency context (same contract as
-    /// `PrefillExecutor.makeIterator`).
+    /// repetition/frequency context (same contract as
+    /// `PrefillExecutor.makeIterator`; the presence penalty is output-only
+    /// and ignores the seed, see `AgentLogitProcessors`).
     init(
         remainder: LMInput.Text,
         fullText: LMInput.Text,
@@ -47,7 +48,7 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         self.model = model
         self.cache = cache
         self.state = state
-        self.processor = parameters.processor()
+        self.processor = AgentLogitProcessors.processor(for: parameters)
         self.sampler = parameters.sampler()
         self.maxTokens = parameters.maxTokens
         self.y = remainder
@@ -78,7 +79,7 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     ) throws {
         self.model = model
         self.cache = cache
-        self.processor = parameters.processor()
+        self.processor = AgentLogitProcessors.processor(for: parameters)
         self.sampler = parameters.sampler()
         self.maxTokens = parameters.maxTokens
         self.y = input.text
