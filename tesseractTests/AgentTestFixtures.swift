@@ -94,6 +94,21 @@ func scratchRecorder() -> CompanionFlightRecorder {
     CompanionFlightRecorder(directory: makeTempDir("scratch-flight"))
 }
 
+/// Minimal thread-safe mutable box for observing side effects from `@Sendable`
+/// closures (tool executions, event handlers). Consolidates the copy the
+/// loop-level suites each declared privately.
+nonisolated final class Locked<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Value
+
+    init(_ value: Value) { stored = value }
+
+    var value: Value {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 /// Shared generation-event fixtures: a terminal `AgentGeneration.Info` and a
 /// minimal `ToolCall`. Consolidates the builders the accumulator and projection
 /// suites had each copied, so a change to `AgentGeneration.Info`'s init (or

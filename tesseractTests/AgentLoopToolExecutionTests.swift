@@ -99,19 +99,6 @@ struct AgentLoopToolExecutionTests {
         }
     }
 
-    /// Minimal thread-safe mutable box for observing tool executions.
-    private nonisolated final class Locked<Value: Sendable>: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stored: Value
-
-        init(_ value: Value) { stored = value }
-
-        var value: Value {
-            get { lock.lock(); defer { lock.unlock() }; return stored }
-            set { lock.lock(); stored = newValue; lock.unlock() }
-        }
-    }
-
     private func makeConfig(
         getSteeringMessages: (@Sendable () async -> [any AgentMessageProtocol])? = nil,
         getFollowUpMessages: (@Sendable () async -> [any AgentMessageProtocol])? = nil

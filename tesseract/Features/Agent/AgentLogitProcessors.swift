@@ -42,24 +42,23 @@ nonisolated struct OutputPresencePenalty: LogitProcessor {
     private let penalty: Float
     private let capacity: Int
     private var buffer: MLXArray
-    private var positions: MLXArray
-    private var sampledCount = 0
-    private var writeIndex = 0
+    /// Tokens sampled so far; ring position and fill level both derive from it.
+    private var sampledTotal = 0
 
     init(penalty: Float, capacity: Int = OutputPresencePenalty.defaultCapacity) {
         precondition(capacity > 0)
         self.penalty = penalty
         self.capacity = capacity
         self.buffer = MLXArray.zeros([capacity], type: Int32.self)
-        self.positions = MLXArray.arange(capacity)
     }
 
     /// Output-only: the prompt never enters the ring.
     mutating func prompt(_ prompt: MLXArray) {}
 
     func process(logits: MLXArray) -> MLXArray {
-        guard sampledCount > 0 else { return logits }
-        let valid = sampledCount < capacity ? buffer[..<sampledCount] : buffer
+        let filled = min(sampledTotal, capacity)
+        guard filled > 0 else { return logits }
+        let valid = filled < capacity ? buffer[..<filled] : buffer
         let broadcastIndices = valid.asType(.uint32)[.newAxis, 0...]
         // Scatter-write of `value − penalty` per unique index: writing the
         // same value to the same index twice is idempotent, so a token is
@@ -69,10 +68,8 @@ nonisolated struct OutputPresencePenalty: LogitProcessor {
     }
 
     mutating func didSample(token: MLXArray) {
-        let mask = positions .== Int32(writeIndex)
-        buffer = MLX.where(mask, token.asType(.int32), buffer)
-        writeIndex = (writeIndex + 1) % capacity
-        sampledCount = min(sampledCount + 1, capacity)
+        buffer[sampledTotal % capacity] = token.asType(.int32).reshaped([])
+        sampledTotal += 1
     }
 }
 
@@ -115,16 +112,19 @@ nonisolated enum AgentLogitProcessors {
             presence = OutputPresencePenalty(penalty: presencePenalty)
         }
 
+        // Rebuild the vendor processor with presence stripped. Rests on the
+        // vendor contract that `processor()` sources its presence context
+        // from `presencePenalty` alone — if that ever changes, presence
+        // would leak back into the vendor window here.
         var stripped = parameters
         stripped.presencePenalty = nil
-        let vendorPenalties = stripped.processor()
 
-        switch (vendorPenalties, presence) {
-        case (nil, nil): return nil
-        case (let vendor?, nil): return vendor
-        case (nil, let presence?): return presence
-        case (let vendor?, let presence?):
-            return CompositeLogitProcessor([vendor, presence])
+        let processors: [any LogitProcessor] =
+            [stripped.processor(), presence].compactMap { $0 }
+        switch processors.count {
+        case 0: return nil
+        case 1: return processors[0]
+        default: return CompositeLogitProcessor(processors)
         }
     }
 }
