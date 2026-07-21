@@ -668,6 +668,16 @@ into sound — a collaborator seam, not a model port, and the distinction from
 **Speech Synthesizer** (which makes the samples) is the whole point.
 _Avoid_: AudioPlaybackManager (one adapter), AVAudioEngine (used inside it), player.
 
+**Streaming Scheduler**:
+The pure push-scheduling decider (ADR-0054) both **Audio Playback** adapters and
+the in-memory peer drive: the buffer counters, the start gate, finish detection,
+and the stream epoch that makes a stale buffer completion ignorable after a
+stop/restart. Verdicts out, every AVAudioEngine effect stays in the adapters —
+the fourth policy/performer value machine after lifecycle, duck, and hold.
+_Avoid_: playback scheduler (AVAudioPlayerNode's own scheduling), stream pump
+(retired **Segment Playback** vocabulary), duplicating the fold per adapter (the
+pre-#395 shape).
+
 **Playback Diagnostics Dump**:
 The pure value that turns one TTS playback's captured samples plus conditions into
 the on-disk diagnostic artifact bytes (WAV + metadata) — the playback-side sibling
