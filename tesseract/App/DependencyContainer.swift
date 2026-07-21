@@ -1006,75 +1006,169 @@ final class DependencyContainer: ObservableObject {
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true
-        // Register dictation push-to-talk — through the same registration API
-        // as every other hotkey (audit #285 item 7).
-        hotkeyManager.registerHotkey(
-            id: HotkeyManager.dictationHotkeyID,
-            combo: settingsManager.hotkey,
-            onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
-            onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() }
+        // The launch steps and their cross-step ordering invariants are declared,
+        // validated, and executed as a BootstrapSequence — the runner checks the
+        // declared order against the invariants (routes-before-bindings,
+        // perception-callbacks-before-start, agent-before-MCP) before running any
+        // step. See `bootstrapSequence()` / `BootstrapStep` below.
+        await bootstrapSequence().run()
+    }
+
+    // MARK: - Bootstrap declaration
+
+    /// The production launch steps, in launch order. This enum is the single
+    /// source of step identity: `bootstrapSequence()` builds exactly one closure
+    /// per case through an exhaustive switch, so the executed order is
+    /// `allCases` order and no step can be declared without a closure — the
+    /// declaration (names + invariants, below) and the execution cannot diverge.
+    nonisolated enum BootstrapStep: String, CaseIterable {
+        case registerHotkeys
+        case attachDictationMeters
+        case registerMessageCodecs
+        case startHotkeyListening
+        case registerHTTPRoutes
+        case startAppBindings
+        case startCompanionLoop
+        case wirePerceptionCallbacks
+        case startCompanionPerception
+        case materializeAgent
+        case startMCPClient
+    }
+
+    /// Declared step names in launch order — reachable without a container so the
+    /// declaration is testable (the container isn't constructible in tests).
+    nonisolated static var bootstrapStepNames: [String] {
+        BootstrapStep.allCases.map(\.rawValue)
+    }
+
+    /// The order-critical cross-step invariants, each with the reason a reorder
+    /// would break. Reachable without a container, like the step names.
+    nonisolated static var bootstrapInvariants: [BootstrapSequence.Invariant] {
+        [
+            .init(
+                before: BootstrapStep.registerHTTPRoutes.rawValue,
+                after: BootstrapStep.startAppBindings.rawValue,
+                why: "App Bindings starts the HTTP server; its routes must be "
+                    + "registered before the server that serves them starts."
+            ),
+            .init(
+                before: BootstrapStep.wirePerceptionCallbacks.rawValue,
+                after: BootstrapStep.startCompanionPerception.rawValue,
+                why: "The perception substrate invokes the power / app-session "
+                    + "callbacks once started; they must be wired first."
+            ),
+            .init(
+                before: BootstrapStep.materializeAgent.rawValue,
+                after: BootstrapStep.startMCPClient.rawValue,
+                why: "Materializing the agent registers its MCP tools extension "
+                    + "with the ExtensionHost before the MCP manager refreshes "
+                    + "the registry (ADR-0048 late-connect hazard)."
+            ),
+        ]
+    }
+
+    /// Build the production sequence. Step order is `BootstrapStep.allCases`;
+    /// each case maps to exactly one closure via the exhaustive switch in
+    /// `bootstrapAction(for:)`, so declaration and execution stay in lockstep.
+    func bootstrapSequence() -> BootstrapSequence {
+        BootstrapSequence(
+            steps: BootstrapStep.allCases.map { step in
+                BootstrapSequence.Step(name: step.rawValue, run: bootstrapAction(for: step))
+            },
+            invariants: Self.bootstrapInvariants
         )
-        // Register TTS hotkey
-        hotkeyManager.registerHotkey(
-            id: "tts",
-            combo: settingsManager.ttsHotkey,
-            onDown: { [weak self] in
-                self?.speechCoordinator.onHotkeyPressed()
+    }
+
+    private func bootstrapAction(for step: BootstrapStep) -> @MainActor () async -> Void {
+        switch step {
+        case .registerHotkeys:
+            return { [self] in
+                // Register dictation push-to-talk — through the same registration
+                // API as every other hotkey (audit #285 item 7).
+                hotkeyManager.registerHotkey(
+                    id: HotkeyManager.dictationHotkeyID,
+                    combo: settingsManager.hotkey,
+                    onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
+                    onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() }
+                )
+                // Register TTS hotkey
+                hotkeyManager.registerHotkey(
+                    id: "tts",
+                    combo: settingsManager.ttsHotkey,
+                    onDown: { [weak self] in
+                        self?.speechCoordinator.onHotkeyPressed()
+                    }
+                )
+                // Register Agent hotkey
+                hotkeyManager.registerHotkey(
+                    id: "agent",
+                    combo: settingsManager.agentHotkey,
+                    onDown: { [weak self] in self?.agentVoiceInput.start() },
+                    onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
+                )
+                // Register Appshot hotkey (one-shot tap, no held state)
+                hotkeyManager.registerHotkey(
+                    id: "appshot",
+                    combo: settingsManager.appshotHotkey,
+                    onDown: { [weak self] in
+                        Task { await self?.appshotController.takeAppshot() }
+                    }
+                )
             }
-        )
-        // Register Agent hotkey
-        hotkeyManager.registerHotkey(
-            id: "agent",
-            combo: settingsManager.agentHotkey,
-            onDown: { [weak self] in self?.agentVoiceInput.start() },
-            onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
-        )
-        // Register Appshot hotkey (one-shot tap, no held state)
-        hotkeyManager.registerHotkey(
-            id: "appshot",
-            combo: settingsManager.appshotHotkey,
-            onDown: { [weak self] in
-                Task { await self?.appshotController.takeAppshot() }
+        case .attachDictationMeters:
+            return { [self] in
+                // Pump the capture engine's meter frames into the Overlay Feed —
+                // the one attachment point (the feed owns the consuming task).
+                dictationFeed.attachMeters(audioCaptureEngine.meters)
             }
-        )
-
-        // Pump the capture engine's meter frames into the Overlay Feed — the
-        // one attachment point (the feed owns the consuming task).
-        dictationFeed.attachMeters(audioCaptureEngine.meters)
-
-        // Register message codecs for the new persistence layer (Epic 2)
-        await registerCoreMessageCodecs()
-
-        hotkeyManager.startListening()
-
-        // Register HTTP server routes before App Bindings starts the server.
-        registerHTTPRoutes()
-
-        // Hand off to App Bindings: the launch ordering and every runtime
-        // subscription with a rule live (and are tested) there.
-        appBindings.start()
-
-        // Arm the Companion loop (ADR-0040) — a sleeping tick task and one
-        // due-ness evaluation per 30 s unless the Companion toggle is on.
-        companionLoop.start()
-
-        // Arm the perception substrate (ADR-0046, #368): Events accumulate on
-        // the record; nothing consumes them until the purist clock (#371).
-        sensedObservations.onPowerTransition = { [weak self] onAC in
-            self?.companionPerception.powerChanged(onACPower: onAC)
+        case .registerMessageCodecs:
+            return {
+                // Register message codecs for the new persistence layer (Epic 2)
+                await registerCoreMessageCodecs()
+            }
+        case .startHotkeyListening:
+            return { [self] in hotkeyManager.startListening() }
+        case .registerHTTPRoutes:
+            return { [self] in registerHTTPRoutes() }
+        case .startAppBindings:
+            return { [self] in
+                // Hand off to App Bindings: the launch ordering and every runtime
+                // subscription with a rule live (and are tested) there.
+                appBindings.start()
+            }
+        case .startCompanionLoop:
+            return { [self] in
+                // Arm the Companion loop (ADR-0040) — a sleeping tick task and one
+                // due-ness evaluation per 30 s unless the Companion toggle is on.
+                companionLoop.start()
+            }
+        case .wirePerceptionCallbacks:
+            return { [self] in
+                // Arm the perception substrate (ADR-0046, #368): Events accumulate
+                // on the record; nothing consumes them until the purist clock (#371).
+                sensedObservations.onPowerTransition = { [weak self] onAC in
+                    self?.companionPerception.powerChanged(onACPower: onAC)
+                }
+                sensedObservations.onSustainedAppSession = { [weak self] app, start, end in
+                    self?.companionPerception.sustainedAppSession(app: app, start: start, end: end)
+                }
+            }
+        case .startCompanionPerception:
+            return { [self] in companionPerception.start() }
+        case .materializeAgent:
+            return { [self] in
+                // Wire the MCP client (PRD #190). Materialize the agent first so its
+                // MCP tools extension is registered with the ExtensionHost before the
+                // manager refreshes the registry.
+                _ = agent
+            }
+        case .startMCPClient:
+            return { [self] in
+                // Connect the configured servers (the built-in Browser server plus
+                // any user-added ones) and keep them reconciled with settings.
+                mcpClientManager.start()
+            }
         }
-        sensedObservations.onSustainedAppSession = { [weak self] app, start, end in
-            self?.companionPerception.sustainedAppSession(app: app, start: start, end: end)
-        }
-        companionPerception.start()
-
-        // Wire the MCP client (PRD #190). Materialize the agent first so its
-        // MCP tools extension is registered with the ExtensionHost before the
-        // manager refreshes the registry; then connect the configured servers
-        // (the built-in Browser server plus any user-added ones) and keep them
-        // reconciled with settings.
-        _ = agent
-        mcpClientManager.start()
     }
 
     private func makeAppBindings() -> AppBindings {
