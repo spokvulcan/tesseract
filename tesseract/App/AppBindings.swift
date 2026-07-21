@@ -332,14 +332,17 @@ final class AppBindings {
                 for await (enabled, companionModel) in Observations({
                     (self.settings.companionHeartbeatEnabled, self.settings.companionModelID)
                 }) {
-                    guard enabled, !companionModel.isEmpty,
-                        companionModel != self.settings.selectedAgentModelID,
-                        self.inputs.isAgentModelDownloaded(companionModel)
+                    guard
+                        let adopted = ModelSelectionHealing.adoptedCompanionAgentDefault(
+                            companionEnabled: enabled,
+                            companionModelID: companionModel,
+                            selectedAgentModelID: self.settings.selectedAgentModelID,
+                            isDownloaded: self.inputs.isAgentModelDownloaded)
                     else { continue }
                     Log.companion.info(
-                        "Companion enabled — \(companionModel) becomes the agent default (ADR-0040 §9)"
+                        "Companion enabled — \(adopted) becomes the agent default (ADR-0040 §9)"
                     )
-                    self.settings.selectedAgentModelID = companionModel
+                    self.settings.selectedAgentModelID = adopted
                 }
             })
 
