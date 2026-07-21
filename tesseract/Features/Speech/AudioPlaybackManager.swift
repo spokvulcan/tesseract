@@ -18,30 +18,28 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
 
-    // Streaming state — progressive chunk scheduling
+    // Streaming format for buffer creation — the engine owns the connection.
     private var streamingFormat: AVAudioFormat?
-    private var streamFinished = false
-    private var pendingBufferCount = 0
-    private var playerStarted = false
+
+    // The push scheduler's counters, start gate, finish detection, and stream
+    // epoch (StreamingScheduler / ADR-0054). Every counter mutation and gate
+    // decision is a verdict from here; this adapter performs only the
+    // `AVAudioPlayerNode`/engine calls.
+    private var scheduler = StreamingScheduler()
 
     // Non-nil while paused: the clock position to hold. `AVAudioPlayerNode`
     // reports no render time while paused, which would read as a rewind to 0.
+    // Adapter-local — the machine has no notion of render time.
     private var pausedTime: TimeInterval?
 
     // The scheduled-audio loudness timeline behind `playbackLevel()`.
     private var envelope = PlaybackEnvelope()
 
-    private(set) var totalScheduledSamples: Int = 0
-    private var streamingSampleRate: Int = 0
-
     var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
 
     // MARK: - Playback time tracking
 
-    var totalScheduledDuration: TimeInterval {
-        guard streamingSampleRate > 0 else { return 0 }
-        return Double(totalScheduledSamples) / Double(streamingSampleRate)
-    }
+    var totalScheduledDuration: TimeInterval { scheduler.totalScheduledDuration }
 
     func currentPlaybackTime() -> TimeInterval {
         if let pausedTime { return pausedTime }
@@ -138,12 +136,8 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         playerNode = player
         player.volume = 1.0
         streamingFormat = format
-        streamFinished = false
-        pendingBufferCount = 0
-        playerStarted = false
+        scheduler.beginStream(sampleRate: sampleRate)
         pausedTime = nil
-        totalScheduledSamples = 0
-        streamingSampleRate = sampleRate
         envelope.begin(sampleRate: sampleRate)
         isPlaying = true
 
@@ -161,14 +155,15 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
             return
         }
 
-        totalScheduledSamples += samples.count
+        let outcome = scheduler.appendChunk(sampleCount: samples.count)
         envelope.append(samples: samples)
-        pendingBufferCount += 1
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.pendingBufferCount -= 1
-                if self.streamFinished && self.pendingBufferCount <= 0 {
+                // A stopped/restarted node flushes its handlers — the epoch
+                // guard (ADR-0054) drops a stale completion before it can
+                // decrement the new stream's counter and finish it early.
+                if case .finished = self.scheduler.bufferCompleted(epoch: outcome.epoch) {
                     self.isPlaying = false
                     self.onPlaybackFinished?()
                 }
@@ -176,38 +171,34 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         }
 
         // Start playback on first chunk — unless paused before audio arrived.
-        if !playerStarted && pausedTime == nil {
+        if outcome.startPlayer {
             node.play()
-            playerStarted = true
         }
     }
 
     func finishStreaming() {
-        streamFinished = true
-
-        // If all buffers already drained, finish now
-        if pendingBufferCount <= 0 {
+        // If all buffers already drained, finish now; otherwise the last
+        // buffer's completion callback handles it.
+        if case .finishedNow = scheduler.finishStream() {
             isPlaying = false
             onPlaybackFinished?()
         }
-        // Otherwise the last buffer's completion callback handles it
     }
 
     // MARK: - Pause / resume
 
     func pause() {
-        guard pausedTime == nil else { return }
+        guard scheduler.pause() else { return }
         pausedTime = currentPlaybackTime()
         playerNode?.pause()
         isPlaying = false
     }
 
     func resume() {
-        guard pausedTime != nil else { return }
+        guard scheduler.resume() else { return }
         pausedTime = nil
         if let node = playerNode {
             node.play()
-            playerStarted = true
             isPlaying = true
         }
     }
@@ -221,12 +212,8 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         playerNode = nil
         audioEngine = nil
         streamingFormat = nil
-        streamFinished = false
-        pendingBufferCount = 0
-        playerStarted = false
+        scheduler.stop()
         pausedTime = nil
-        totalScheduledSamples = 0
-        streamingSampleRate = 0
         envelope.reset()
         isPlaying = false
     }

@@ -24,24 +24,24 @@ final class VoiceSessionPlayback: AudioPlayback {
     private let host: AudioCaptureEngine
     private let fallback = AudioPlaybackManager()
 
-    // Hosted-mode streaming state — mirrors `AudioPlaybackManager`'s
-    // push-based scheduling, with the node owned by the host engine.
+    // Hosted-mode streaming, with the node owned by the host engine. The
+    // push scheduler's counters, start gate, finish detection, and stream
+    // epoch live in the shared value machine (StreamingScheduler / ADR-0054),
+    // the same one the dedicated adapter and the in-memory peer drive; this
+    // adapter performs only the `AVAudioPlayerNode` calls.
     private var node: AVAudioPlayerNode?
     private var streamingFormat: AVAudioFormat?
-    private var streamFinished = false
-    private var pendingBufferCount = 0
-    private var playerStarted = false
+    private var scheduler = StreamingScheduler()
+
+    /// Adapter-local clock position held while paused — the machine has no
+    /// notion of render time.
     private var pausedTime: TimeInterval?
-    private var totalScheduledSamples = 0
-    private var streamingSampleRate = 0
+
     /// True from a hosted `startStreaming` until the audio drains or stops —
-    /// the `playbackLevel` gate, mirroring the manager's `isPlaying`.
-    private var hostedPlaying: Bool {
-        node != nil && !(streamFinished && pendingBufferCount <= 0)
-    }
-    /// Guards stale buffer-completion callbacks (a stopped node flushes its
-    /// handlers) against the counters of a newer streaming session.
-    private var streamEpoch = 0
+    /// the `playbackLevel` gate, mirroring the manager's `isPlaying`. The
+    /// stale-completion epoch guard that used to live here as `streamEpoch`
+    /// is now the machine's, shared with the dedicated adapter.
+    private var hostedPlaying: Bool { scheduler.hasUndrainedAudio }
 
     // The scheduled-audio loudness timeline behind `playbackLevel()` — the
     // Echo Floor's far-end signal reads one envelope domain on both paths.
@@ -80,9 +80,7 @@ final class VoiceSessionPlayback: AudioPlayback {
     // MARK: - AudioPlayback
 
     var totalScheduledDuration: TimeInterval {
-        if usingFallback { return fallback.totalScheduledDuration }
-        guard streamingSampleRate > 0 else { return 0 }
-        return Double(totalScheduledSamples) / Double(streamingSampleRate)
+        usingFallback ? fallback.totalScheduledDuration : scheduler.totalScheduledDuration
     }
 
     func play(samples: [Float], sampleRate: Int) {
@@ -100,7 +98,7 @@ final class VoiceSessionPlayback: AudioPlayback {
             // Buffers schedule against the format the host connected the
             // node at — the engine owns the connection, never re-derived.
             streamingFormat = hosted.format
-            streamingSampleRate = sampleRate
+            scheduler.beginStream(sampleRate: sampleRate)
             usingFallback = false
             envelope.begin(sampleRate: sampleRate)
             Log.speech.info("Voice reply routed through the VPIO engine (hosted)")
@@ -123,23 +121,22 @@ final class VoiceSessionPlayback: AudioPlayback {
             return
         }
 
-        totalScheduledSamples += samples.count
+        let outcome = scheduler.appendChunk(sampleCount: samples.count)
         envelope.append(samples: samples)
-        pendingBufferCount += 1
-        let epoch = streamEpoch
         node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.streamEpoch == epoch else { return }
-                self.pendingBufferCount -= 1
-                if self.streamFinished && self.pendingBufferCount <= 0 {
+                guard let self else { return }
+                // A stopped node flushes its handlers — the machine's epoch
+                // guard drops a stale completion before it decrements a newer
+                // session's counter.
+                if case .finished = self.scheduler.bufferCompleted(epoch: outcome.epoch) {
                     self.onPlaybackFinished?()
                 }
             }
         }
 
-        if !playerStarted && pausedTime == nil {
+        if outcome.startPlayer {
             node.play()
-            playerStarted = true
         }
     }
 
@@ -148,8 +145,7 @@ final class VoiceSessionPlayback: AudioPlayback {
             fallback.finishStreaming()
             return
         }
-        streamFinished = true
-        if pendingBufferCount <= 0 {
+        if case .finishedNow = scheduler.finishStream() {
             onPlaybackFinished?()
         }
     }
@@ -159,7 +155,7 @@ final class VoiceSessionPlayback: AudioPlayback {
             fallback.pause()
             return
         }
-        guard pausedTime == nil else { return }
+        guard scheduler.pause() else { return }
         pausedTime = currentPlaybackTime()
         node?.pause()
     }
@@ -169,12 +165,9 @@ final class VoiceSessionPlayback: AudioPlayback {
             fallback.resume()
             return
         }
-        guard pausedTime != nil else { return }
+        guard scheduler.resume() else { return }
         pausedTime = nil
-        if let node {
-            node.play()
-            playerStarted = true
-        }
+        node?.play()
     }
 
     func currentPlaybackTime() -> TimeInterval {
@@ -220,16 +213,11 @@ final class VoiceSessionPlayback: AudioPlayback {
     /// teardown paths (`stop`, `hostEngineInvalidated`) share, so they
     /// cannot drift as fields are added.
     private func resetStreamingState() {
-        streamEpoch += 1
+        scheduler.stop()
         requestedVolume = 1.0
         node = nil
         streamingFormat = nil
-        streamFinished = false
-        pendingBufferCount = 0
-        playerStarted = false
         pausedTime = nil
-        totalScheduledSamples = 0
-        streamingSampleRate = 0
         envelope.reset()
         usingFallback = false
     }

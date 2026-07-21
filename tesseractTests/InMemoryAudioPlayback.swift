@@ -5,8 +5,9 @@
 //  A hermetic, in-memory `AudioPlayback` for tests — a *peer implementation* of
 //  `AudioPlaybackManager`, not a mock. It records what the coordinator scheduled
 //  (one-shot plays, the streaming session, appended chunks, pause/resume,
-//  finish/stop) and computes `totalScheduledDuration` the same way the
-//  real manager does. Its playback clock is a *pure virtual clock*: it reads 0
+//  finish/stop) and derives `totalScheduledDuration` from the same
+//  `StreamingScheduler` value machine the real adapters drive (ADR-0054) —
+//  no hand-copied formula. Its playback clock is a *pure virtual clock*: it reads 0
 //  until a test calls `advance(by:)`, never tracks wall-clock, and is untouched by
 //  the lifecycle methods — so long-form pacing logic can be driven deterministically.
 //  `firePlaybackFinished()` stands in for the audio layer reporting that scheduled
@@ -45,12 +46,10 @@ final class InMemoryAudioPlayback: AudioPlayback {
     /// loudness at the playback head.
     var scriptedPlaybackLevel: Float = 0
 
-    private var totalScheduledSamples = 0
-    private var streamingSampleRate = 0
-    var totalScheduledDuration: TimeInterval {
-        guard streamingSampleRate > 0 else { return 0 }
-        return Double(totalScheduledSamples) / Double(streamingSampleRate)
-    }
+    /// The same push-scheduling value machine the production adapters drive —
+    /// the peer no longer re-derives the duration formula (ADR-0054).
+    private var scheduler = StreamingScheduler()
+    var totalScheduledDuration: TimeInterval { scheduler.totalScheduledDuration }
 
     func currentPlaybackTime() -> TimeInterval { virtualPlaybackTime }
 
@@ -63,18 +62,18 @@ final class InMemoryAudioPlayback: AudioPlayback {
     func startStreaming(sampleRate: Int) {
         startStreamingCount += 1
         startedSampleRates.append(sampleRate)
-        totalScheduledSamples = 0
-        streamingSampleRate = sampleRate
+        scheduler.beginStream(sampleRate: sampleRate)
         volume = 1.0
     }
 
     func appendChunk(samples: [Float]) {
         appendedChunks.append(samples)
-        totalScheduledSamples += samples.count
+        _ = scheduler.appendChunk(sampleCount: samples.count)
     }
 
     func finishStreaming() {
         finishStreamingCount += 1
+        _ = scheduler.finishStream()
     }
 
     func pause() {
@@ -89,8 +88,7 @@ final class InMemoryAudioPlayback: AudioPlayback {
 
     func stop() {
         stopCount += 1
-        totalScheduledSamples = 0
-        streamingSampleRate = 0
+        scheduler.stop()
         volume = 1.0
     }
 
