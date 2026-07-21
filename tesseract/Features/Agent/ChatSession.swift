@@ -782,15 +782,9 @@ final class ChatSession {
         }
 
         let body = SkillRegistry.bodyContent(of: fullText)
-        let skillDir = URL(fileURLWithPath: filePath).deletingLastPathComponent().path
 
-        var message = """
-            <skill name="\(skillName)" location="\(filePath)">
-            References are relative to \(skillDir).
-
-            \(body)
-            </skill>
-            """
+        var message = SkillEnvelope.injection(
+            name: skillName, location: filePath, body: body)
 
         if !arguments.isEmpty {
             message += "\n\n\(arguments)"

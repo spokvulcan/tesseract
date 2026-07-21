@@ -1184,6 +1184,21 @@ conversation.
 _Avoid_: frecency (not the V1 mechanism), MRU/recently-used (counts, not recency),
 live re-sort (explicitly rejected — the order never shifts mid-conversation).
 
+**Skill Envelope**:
+The one home for how injected **Skill** content is framed (ADR review Strong #6):
+three renderers — the `<skill name=… location=…>…</skill>` user-message
+*injection*, the `use_skill` *tool result*, the *linked file* result — and one
+parser. Only the injection format is persisted (transcripts store it, the **Skill
+Invocation Row** re-parses it), so only it earns an inverse, governed by the
+round-trip law `parse(injection(x)) == x` for every realistic skill; the
+tool-result formats are model-facing prose and parser-less by design. Round-trip
+boundary (name with `"`/`>`, body with a literal `</skill>`) is documented-lossy,
+not escaped — escaping would change the bytes the model reads or the persisted
+block.
+_Avoid_: skill block (vague), per-call-site literals (the pre-#401 shape — a
+contract living only as matching producer/fixture literals drifts green), parsing
+the tool results (deliberately parser-less).
+
 ### Living memory read paths
 
 The three distinct ways memory reaches the model (ADR-0035); they are not

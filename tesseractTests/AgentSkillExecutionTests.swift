@@ -120,9 +120,12 @@ struct AgentSkillExecutionTests {
         let user = try #require(firstUserMessage(agent))
         // The injected skill block wraps the body; the composer text rides as
         // arguments; the pending images are forwarded (the PRD's known gap).
-        #expect(user.content.hasPrefix("<skill name=\"proofread\""))
-        #expect(user.content.contains("Fix errors only."))
-        #expect(user.content.hasSuffix("my draft text"))
+        // Parse through the envelope so we assert the message is a *valid*
+        // invocation block, not just that it starts with the right bytes.
+        let block = try #require(SkillEnvelope.parse(user.content))
+        #expect(block.skillName == "proofread")
+        #expect(block.injectedBlock.contains("Fix errors only."))
+        #expect(block.argumentText == "my draft text")
         #expect(user.images.map(\.id) == [attachment.id])
         // A user-initiated invocation records usage.
         #expect(settings.skillUsageCount(skillName: "proofread") == 1)
@@ -143,8 +146,9 @@ struct AgentSkillExecutionTests {
 
         #expect(sent == true)
         let user = try #require(firstUserMessage(agent))
-        #expect(user.content.hasPrefix("<skill name=\"summarize\""))
-        #expect(user.content.hasSuffix("</skill>"))
+        let block = try #require(SkillEnvelope.parse(user.content))
+        #expect(block.skillName == "summarize")
+        #expect(block.argumentText.isEmpty)
         #expect(user.images.isEmpty)
     }
 
@@ -206,8 +210,9 @@ struct AgentSkillExecutionTests {
         try await settle(session)
 
         let user = try #require(firstUserMessage(agent))
-        #expect(user.content.hasPrefix("<skill name=\"explain\""))
-        #expect(user.content.hasSuffix("this error"))
+        let block = try #require(SkillEnvelope.parse(user.content))
+        #expect(block.skillName == "explain")
+        #expect(block.argumentText == "this error")
         #expect(settings.skillUsageCount(skillName: "explain") == 1)
     }
 
@@ -226,6 +231,7 @@ struct AgentSkillExecutionTests {
         try await settle(session)
 
         let user = try #require(firstUserMessage(agent))
-        #expect(user.content.hasSuffix("guten Tag\n\nDefault target language: Ukrainian"))
+        let block = try #require(SkillEnvelope.parse(user.content))
+        #expect(block.argumentText == "guten Tag\n\nDefault target language: Ukrainian")
     }
 }

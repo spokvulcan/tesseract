@@ -100,9 +100,8 @@ private nonisolated func loadSkill(_ skill: SkillMetadata) -> AgentToolResult {
     let body = SkillRegistry.bodyContent(of: fullText)
     let skillDir = fileURL.deletingLastPathComponent()
 
-    var output = "# Skill: \(skill.name)\n"
-    output += "Location: \(skill.filePath)\n\n"
-    output += body
+    var output = SkillEnvelope.toolResult(
+        name: skill.name, location: skill.filePath, body: body)
 
     let linked = enumerateLinkedFiles(in: skillDir, skillFile: fileURL)
     if !linked.isEmpty {
@@ -147,7 +146,7 @@ private nonisolated func loadLinkedFile(
         return .error(msg)
     }
 
-    return .text("# \(skill.name) / \(relativePath)\n\n\(content)")
+    return .text(SkillEnvelope.linkedFile(name: skill.name, path: relativePath, content: content))
 }
 
 /// Scans a skill directory for linked files (references, templates, scripts, etc.).
