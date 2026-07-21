@@ -1424,6 +1424,19 @@ _Avoid_: turn runner (the performer of the agent run, not a decider),
 handleTurnFailure (the retired inline home), fold reducer (unqualified — the
 **Event Fold** names the algorithm; this is its write-side decider).
 
+**Reaction**:
+The owner's answer to one delivered line, whatever the surface — a banner
+click, inline reply, or wave-off; an overlay-summons engage or dismiss —
+reported through the loop's one door and decided by the **Companion Fold
+Reducer**'s reaction table: heard stamped first for every outcome, an engage
+upgrading the wake and landing him in a conversation (the correlated chat, or
+a minted dialogue tagged with the surface's provenance). A summons that
+lapses unanswered is *not* a Reaction — nothing reached him — and takes the
+fallback-banner path instead (#391).
+_Avoid_: ping outcome (the wire enum, one input to the table), banner
+handling (one surface of several), per-surface reaction writes (the pre-#391
+summons defect — hand-rolled writes that dropped the wakeID).
+
 **Turn**:
 One full agent run granted to the entity by pending **Event**s or a due
 **Wake**. Every turn appends, origin-tagged, to **Mission Control** — full

@@ -657,8 +657,8 @@ final class DependencyContainer: ObservableObject {
         // A banner engage with no live conversation behind it (or one
         // correlated to the read-only fold) mints a dialogue seeded with
         // the banner's line — the overlay engage's door (ADR-0052).
-        beginDialogue: { [weak self] line in
-            self?.companionDialogue.begin(line: line, via: "banner-engage")
+        beginDialogue: { [weak self] line, via in
+            self?.companionDialogue.begin(line: line, via: via)
         },
         perceiveDayStart: { [weak self] now, present in
             self?.companionPerception.dayStartIfDue(now: now, ownerPresent: present)
@@ -718,8 +718,8 @@ final class DependencyContainer: ObservableObject {
             await self?.companionVoicePrototype.summonBeat(title: title, line: line)
                 ?? .unanswered
         },
-        beginDialogue: { [weak self] line in
-            self?.companionDialogue.begin(line: line, via: "summons-engage")
+        reportReaction: { [weak self] reaction in
+            await self?.companionLoop.processReaction(reaction, surface: .overlaySummons)
         },
         enterVoiceSession: { [weak self] via in
             self?.companionVoiceSession.enter(via: via)

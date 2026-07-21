@@ -49,7 +49,7 @@ final class CompanionLoop {
     /// A banner engage with no live conversation behind it mints a dialogue
     /// seeded with the banner's line (ADR-0052) — the same door the overlay
     /// summons engage uses.
-    private let beginDialogue: @MainActor (String?) -> Void
+    private let beginDialogue: @MainActor (String?, _ via: String) -> Void
     /// The perception substrate's day-start door (ADR-0046, #368/#371): the
     /// tick hands over the facts; the producer detects and admits.
     private let perceiveDayStart: @MainActor (_ now: Date, _ ownerPresent: Bool) -> Void
@@ -84,7 +84,7 @@ final class CompanionLoop {
         isEnabled: @escaping () -> Bool,
         speak: @escaping @MainActor (String) -> Void,
         openConversation: @escaping @MainActor (UUID) -> Void,
-        beginDialogue: @escaping @MainActor (String?) -> Void = { _ in },
+        beginDialogue: @escaping @MainActor (String?, _ via: String) -> Void = { _, _ in },
         perceiveDayStart: @escaping @MainActor (Date, Bool) -> Void,
         foldTokens: @escaping () -> Int = { 0 },
         earlyFold: @escaping @MainActor () async -> Void = {}
@@ -349,8 +349,8 @@ final class CompanionLoop {
                 try? await store.stampResurfacedHeard(at: Date())
             case .openConversation(let id):
                 openConversation(id)
-            case .beginDialogue(let line):
-                beginDialogue(line)
+            case .beginDialogue(let line, let via):
+                beginDialogue(line, via)
             case .bookReplyFollowup(let content, let conversationID):
                 let wake = CompanionWake(
                     content: content, due: Date(), wakeClass: .followup,
@@ -448,6 +448,21 @@ final class CompanionLoop {
     // MARK: - Reactions
 
     private func handleReaction(_ reaction: CompanionPingReaction) {
+        Task { [weak self] in
+            await self?.processReaction(reaction, surface: .banner)
+        }
+    }
+
+    /// The one **Reaction** door (#391): every delivery surface — the
+    /// banner callback above, the overlay summons through its injected
+    /// report closure — lands here, so the record and the reducer's
+    /// reaction table cannot be skipped per surface. Awaitable so a caller
+    /// can sequence its own choreography after the decided writes (the
+    /// summons enters the voice session only once the engage's dialogue
+    /// exists).
+    func processReaction(
+        _ reaction: CompanionPingReaction, surface: CompanionFoldReducer.ReactionSurface
+    ) async {
         recorder.record(
             "reaction.\(reaction.outcome.rawValue)",
             wakeID: reaction.wakeID,
@@ -459,10 +474,9 @@ final class CompanionLoop {
             wakeID: reaction.wakeID,
             conversationID: reaction.conversationID,
             line: reaction.line,
-            note: reaction.note)
-        Task { [weak self] in
-            await self?.perform(effects, now: Date())
-        }
+            note: reaction.note,
+            surface: surface)
+        await perform(effects, now: Date())
     }
 
     private func requestAuthorizationOnce() {

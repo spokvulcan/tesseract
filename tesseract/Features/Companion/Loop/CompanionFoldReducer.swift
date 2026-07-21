@@ -74,11 +74,12 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
         /// agenda.
         case stampResurfacedHeard
         case openConversation(id: UUID)
-        /// He engaged a banner with no live conversation behind it: mint a
-        /// dialogue seeded with the banner's own line as the entity's first
-        /// words — the same engage contract as the overlay summons
-        /// (ADR-0052). Mission Control is never a click destination.
-        case beginDialogue(line: String?)
+        /// He engaged a delivery with no live conversation behind it: mint a
+        /// dialogue seeded with the delivery's own line as the entity's first
+        /// words — the same engage contract on every surface (ADR-0052).
+        /// Mission Control is never a click destination. `via` is the
+        /// dialogue ledger's provenance tag, derived from the surface.
+        case beginDialogue(line: String?, via: String)
         /// His reply becomes a followup wake due now: the next turn sees
         /// it with full situation context — one machinery, no side
         /// channel. The performer mints the wake (id/dates are its
@@ -172,16 +173,38 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
 
     // MARK: - Reactions
 
-    /// What the owner's reaction to a posted banner writes. Heard is
-    /// stamped first for every outcome — engage, reply, and wave-off alike
-    /// are proof the delivery reached him (#309). `line` is the banner's
-    /// own body — the dialogue seed when an engage mints one (ADR-0052).
+    /// Which delivery surface a **Reaction** came through. One input to the
+    /// reaction table (#391): the decided writes are surface-agnostic; only
+    /// the minted dialogue's provenance tag differs.
+    enum ReactionSurface: Equatable, Sendable {
+        /// A Notification Center banner (click, inline reply, wave-off).
+        case banner
+        /// The overlay summons (ADR-0040 §10) — engage or dismiss; an
+        /// unanswered summons is not a Reaction (nothing reached him) and
+        /// takes the fallback-banner path instead.
+        case overlaySummons
+
+        /// The dialogue ledger's provenance tag for an engage-minted chat.
+        var dialogueVia: String {
+            switch self {
+            case .banner: "banner-engage"
+            case .overlaySummons: "summons-engage"
+            }
+        }
+    }
+
+    /// What the owner's **Reaction** to one delivered line writes — every
+    /// surface reports through this one table (#391). Heard is stamped
+    /// first for every outcome — engage, reply, and wave-off alike are
+    /// proof the delivery reached him (#309). `line` is the delivery's own
+    /// body — the dialogue seed when an engage mints one (ADR-0052).
     func reaction(
         outcome: CompanionPingOutcome,
         wakeID: UUID?,
         conversationID: UUID?,
         line: String? = nil,
-        note: String?
+        note: String?,
+        surface: ReactionSurface
     ) -> [Effect] {
         var effects: [Effect] = []
         if let wakeID {
@@ -201,7 +224,7 @@ nonisolated struct CompanionFoldReducer: Sendable, Equatable {
             if let conversationID, conversationID != AgentConversation.missionControlID {
                 effects.append(.openConversation(id: conversationID))
             } else {
-                effects.append(.beginDialogue(line: line))
+                effects.append(.beginDialogue(line: line, via: surface.dialogueVia))
             }
         case .replied:
             effects.append(.stampResurfacedHeard)

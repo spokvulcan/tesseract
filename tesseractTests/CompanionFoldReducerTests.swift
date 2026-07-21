@@ -239,7 +239,8 @@ struct CompanionFoldReducerTests {
         let reducer = CompanionFoldReducer()
         let wakeID = UUID()
         let effects = reducer.reaction(
-            outcome: .dismissed, wakeID: wakeID, conversationID: nil, note: nil)
+            outcome: .dismissed, wakeID: wakeID, conversationID: nil, note: nil,
+            surface: .banner)
         #expect(effects == [.stampWakeHeard(id: wakeID)])
     }
 
@@ -249,7 +250,8 @@ struct CompanionFoldReducerTests {
         let reducer = CompanionFoldReducer()
         let wakeID = UUID()
         let effects = reducer.reaction(
-            outcome: .engaged, wakeID: wakeID, conversationID: conversationID, note: nil)
+            outcome: .engaged, wakeID: wakeID, conversationID: conversationID, note: nil,
+            surface: .banner)
         #expect(
             effects == [
                 .stampWakeHeard(id: wakeID),
@@ -269,22 +271,22 @@ struct CompanionFoldReducerTests {
         let toFold = reducer.reaction(
             outcome: .engaged, wakeID: wakeID,
             conversationID: AgentConversation.missionControlID,
-            line: "Evening journal is open, sir.", note: nil)
+            line: "Evening journal is open, sir.", note: nil, surface: .banner)
         #expect(
             toFold == [
                 .stampWakeHeard(id: wakeID),
                 .engageWake(id: wakeID),
                 .stampResurfacedHeard,
-                .beginDialogue(line: "Evening journal is open, sir."),
+                .beginDialogue(line: "Evening journal is open, sir.", via: "banner-engage"),
             ])
 
         let uncorrelated = reducer.reaction(
             outcome: .engaged, wakeID: nil, conversationID: nil,
-            line: "You're in, sir.", note: nil)
+            line: "You're in, sir.", note: nil, surface: .banner)
         #expect(
             uncorrelated == [
                 .stampResurfacedHeard,
-                .beginDialogue(line: "You're in, sir."),
+                .beginDialogue(line: "You're in, sir.", via: "banner-engage"),
             ])
     }
 
@@ -293,7 +295,8 @@ struct CompanionFoldReducerTests {
     @Test func replyBooksTheFollowupAndAccelerates() {
         let reducer = CompanionFoldReducer()
         let effects = reducer.reaction(
-            outcome: .replied, wakeID: nil, conversationID: conversationID, note: "on my way")
+            outcome: .replied, wakeID: nil, conversationID: conversationID, note: "on my way",
+            surface: .banner)
         #expect(
             effects == [
                 .stampResurfacedHeard,
@@ -304,7 +307,39 @@ struct CompanionFoldReducerTests {
             ])
 
         let empty = reducer.reaction(
-            outcome: .replied, wakeID: nil, conversationID: nil, note: "")
+            outcome: .replied, wakeID: nil, conversationID: nil, note: "",
+            surface: .banner)
         #expect(empty == [.stampResurfacedHeard])
+    }
+
+    /// The overlay summons reports through the same table (#391): an engage
+    /// stamps heard, upgrades the wake, and mints the dialogue — identical
+    /// writes to a banner engage, only the dialogue's provenance differs.
+    @Test func summonsEngageDecidesTheSameWritesAsABannerEngage() {
+        let reducer = CompanionFoldReducer()
+        let wakeID = UUID()
+        let effects = reducer.reaction(
+            outcome: .engaged, wakeID: wakeID,
+            conversationID: AgentConversation.missionControlID,
+            line: "Standup in ten, sir.", note: "overlay", surface: .overlaySummons)
+        #expect(
+            effects == [
+                .stampWakeHeard(id: wakeID),
+                .engageWake(id: wakeID),
+                .stampResurfacedHeard,
+                .beginDialogue(line: "Standup in ten, sir.", via: "summons-engage"),
+            ])
+    }
+
+    /// A summons wave-off is still a heard delivery — the stamp the
+    /// pre-#391 summons path skipped, letting an answered promise die
+    /// delivered-unheard in the resurfacing ladder.
+    @Test func summonsDismissalStampsHeard() {
+        let reducer = CompanionFoldReducer()
+        let wakeID = UUID()
+        let effects = reducer.reaction(
+            outcome: .dismissed, wakeID: wakeID, conversationID: nil, note: "overlay",
+            surface: .overlaySummons)
+        #expect(effects == [.stampWakeHeard(id: wakeID)])
     }
 }

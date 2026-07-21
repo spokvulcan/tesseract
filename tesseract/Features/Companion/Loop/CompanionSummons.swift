@@ -6,8 +6,11 @@
 //  raise the picked overlay concept when the wearing toggle routes summonses
 //  through it, route the owner's answer, and keep §11's first guarantee — an
 //  unanswered summons falls back to a notification banner; no delivery
-//  evaporates silently. Conduct lives here so the composition root stays
-//  pure wiring; the container hands this type doors, never behavior.
+//  evaporates silently. Choreography only: an answered summons is a
+//  **Reaction**, reported through the loop's one reaction door so the fold
+//  reducer decides every write (#391) — this type never touches wake state
+//  or mints dialogues itself. Conduct lives here so the composition root
+//  stays pure wiring; the container hands this type doors, never behavior.
 //
 
 import Foundation
@@ -26,10 +29,11 @@ final class CompanionSummons {
     /// Raises the picked overlay concept and waits out the owner's answer.
     private let summonOverlay:
         (_ title: String, _ line: String) async -> CompanionBeatSummonsOutcome
-    /// Engaging opens a summoned dialogue chat (ADR-0046 #372) — its own
-    /// conversation, seeded with the summons line, owing a Report-Back —
-    /// never Mission Control, which is the loop's record, not a chat.
-    private let beginDialogue: (String) -> Void
+    /// The loop's one **Reaction** door (#391): an engage or dismiss is
+    /// reported here — the fold reducer stamps heard, upgrades the wake,
+    /// and mints the summoned dialogue chat (ADR-0046 #372, ADR-0052);
+    /// awaited so choreography can follow the decided writes.
+    private let reportReaction: (CompanionPingReaction) async -> Void
     private let enterVoiceSession: (String) -> Void
     /// The loop's banner door for the §11 fallback, correlation passed in
     /// because the overlay's give-up can outlive the turn that raised it.
@@ -45,7 +49,7 @@ final class CompanionSummons {
         speakUnderOverlay: @escaping (String) -> Void,
         summonOverlay:
             @escaping (_ title: String, _ line: String) async -> CompanionBeatSummonsOutcome,
-        beginDialogue: @escaping (String) -> Void,
+        reportReaction: @escaping (CompanionPingReaction) async -> Void,
         enterVoiceSession: @escaping (String) -> Void,
         postFallbackBanner:
             @escaping (_ line: String, _ wakeID: UUID?, _ conversationID: UUID?) async -> Void
@@ -57,7 +61,7 @@ final class CompanionSummons {
         self.speakPlain = speakPlain
         self.speakUnderOverlay = speakUnderOverlay
         self.summonOverlay = summonOverlay
-        self.beginDialogue = beginDialogue
+        self.reportReaction = reportReaction
         self.enterVoiceSession = enterVoiceSession
         self.postFallbackBanner = postFallbackBanner
     }
@@ -88,27 +92,45 @@ final class CompanionSummons {
             presence.beginSummons()
             defer { presence.endSummons() }
             let outcome = await summonOverlay("Jarvis", line)
-            switch outcome {
-            case .engaged:
-                recorder.record(
-                    "reaction.engaged", conversationID: conversationID, note: "overlay")
-                // Dialogue out (ADR-0046 #372): the engagement opens its own
-                // chat with the summons line as the entity's first words, and
-                // the voice session rides it.
-                beginDialogue(line)
-                enterVoiceSession("summons-engage")
-            case .dismissed:
-                recorder.record(
-                    "reaction.dismissed", conversationID: conversationID, note: "overlay")
-            case .unanswered:
-                recorder.record(
-                    "reaction.unheard", conversationID: conversationID,
-                    note: "overlay summons unanswered")
-                // §11 guarantee 1: the missed overlay leaves the same line as
-                // a banner in Notification Center — a visible artifact, and a
-                // late reaction still routes through its correlation.
-                await postFallbackBanner(line, wakeID, conversationID)
-            }
+            await conclude(
+                outcome: outcome, line: line,
+                wakeID: wakeID, conversationID: conversationID)
+        }
+    }
+
+    /// Route the overlay's answer. An engage or dismiss is a **Reaction** —
+    /// reported through the loop's one door with the snapshotted
+    /// correlation, so the wake is stamped heard (and upgraded on engage)
+    /// exactly as a banner reaction would be (#391); the voice session is
+    /// entered only after the report so the engage's minted dialogue is the
+    /// one it rides. An unanswered summons reached no one — not a Reaction —
+    /// and keeps §11's fallback-banner guarantee instead.
+    func conclude(
+        outcome: CompanionBeatSummonsOutcome,
+        line: String,
+        wakeID: UUID?,
+        conversationID: UUID?
+    ) async {
+        switch outcome {
+        case .engaged:
+            await reportReaction(
+                CompanionPingReaction(
+                    outcome: .engaged, note: "overlay",
+                    wakeID: wakeID, conversationID: conversationID, line: line))
+            enterVoiceSession("summons-engage")
+        case .dismissed:
+            await reportReaction(
+                CompanionPingReaction(
+                    outcome: .dismissed, note: "overlay",
+                    wakeID: wakeID, conversationID: conversationID, line: line))
+        case .unanswered:
+            recorder.record(
+                "reaction.unheard", wakeID: wakeID, conversationID: conversationID,
+                note: "overlay summons unanswered")
+            // §11 guarantee 1: the missed overlay leaves the same line as
+            // a banner in Notification Center — a visible artifact, and a
+            // late reaction still routes through its correlation.
+            await postFallbackBanner(line, wakeID, conversationID)
         }
     }
 }
