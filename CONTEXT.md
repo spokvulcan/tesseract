@@ -488,6 +488,17 @@ token-stream vocabulary, not the model handle); Inference Session (collides with
 **Inference Arbiter**); model surface / perform wrapper (the mechanism, not the
 concept); widening it before a second consumer needs a member.
 
+**Stream Lifecycle Driver**:
+The module owning one streaming completion's transport-lifecycle race — the
+disconnect watch, the idle keepalive, and the drive as first-finisher-wins —
+behind injected transport closures, sitting below the ADR-0015 dispatcher seam.
+It is the reason a client abort cancels a long prefill promptly (and an idle
+prefill keeps proxies from timing out): `CompletionHandler` builds the SSE
+envelope and hands the race to the driver rather than constructing a task group
+inline.
+_Avoid_: SSE framing (`SSEWriter`'s); the event pump (`streamGenerationEvents`);
+keepalive timer (one task inside it, not the module).
+
 ### Streaming tool calls
 
 **Argument Transcoder**:
