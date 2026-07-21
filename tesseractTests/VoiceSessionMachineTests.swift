@@ -83,7 +83,7 @@ struct VoiceSessionMachineHarness {
 extension [VoiceSessionMachine.Effect] {
     var recordNames: [String] {
         compactMap {
-            if case .record(let name, _) = $0 { name } else { nil }
+            if case .record(let event, _) = $0 { event.rawValue } else { nil }
         }
     }
 
@@ -91,7 +91,7 @@ extension [VoiceSessionMachine.Effect] {
 
     func snapshot(of name: String) -> [String: String]? {
         for effect in self {
-            if case .record(let event, let snapshot) = effect, event == name {
+            if case .record(let event, let snapshot) = effect, event.rawValue == name {
                 return snapshot
             }
         }
@@ -113,7 +113,7 @@ extension [VoiceSessionMachine.Effect] {
         #expect(
             effects == [
                 .beginVoiceHold,
-                .record(event: "voice.session-entered", snapshot: ["via": "test"]),
+                .record(event: .voiceSessionEntered, snapshot: ["via": "test"]),
                 .overlayBeginSession,
                 .openCapture,
                 .feedState(.listening),
@@ -221,7 +221,7 @@ extension [VoiceSessionMachine.Effect] {
             effects == [
                 .presentSpokenReply("hello there"),
                 .speak("hello there"),
-                .record(event: "voice.reply-spoken", snapshot: ["chars": "11"]),
+                .record(event: .voiceReplySpoken, snapshot: ["chars": "11"]),
             ])
         #expect(h.machine.phase == .speaking)
     }

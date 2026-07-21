@@ -67,7 +67,7 @@ nonisolated func createLogFeedbackTool(
         ),
         execute: { _, argsJSON, _, _ in
             guard let kind = ToolArgExtractor.string(argsJSON, key: "kind"),
-                feedbackKinds.contains(kind)
+                let event = CompanionTraceEvent(feedbackKind: kind)
             else {
                 throw FlightRecorderToolError(
                     message: "log_feedback requires kind: \(feedbackKinds.joined(separator: "|"))"
@@ -83,7 +83,7 @@ nonisolated func createLogFeedbackTool(
             let conversationID = await currentConversationID()
 
             recorder.record(
-                "feedback.\(kind)",
+                event,
                 source: .modelReported,
                 wakeID: about.flatMap(UUID.init(uuidString:)),
                 conversationID: conversationID,

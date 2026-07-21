@@ -79,10 +79,10 @@ final class CompanionDialogue {
     func begin(line: String?, via: String) {
         guard let id = openDialogue(line) else { return }
         if let previous = activeConversationID, previous != id, hadExchange, !deposited {
-            recorder.record("dialogue.superseded", conversationID: previous)
+            recorder.record(.dialogueSuperseded, conversationID: previous)
         }
         arm(on: id)
-        recorder.record("dialogue.began", conversationID: id, snapshot: ["via": via])
+        recorder.record(.dialogueBegan, conversationID: id, snapshot: ["via": via])
     }
 
     /// Every send into a dialogue-origin conversation lands here (the chat
@@ -163,7 +163,7 @@ final class CompanionDialogue {
             !isAgentBusy() && currentConversationID() == conversationID && !deposited
         if delivered { sendNudge(Self.nudgeMessage) }
         recorder.record(
-            delivered ? "dialogue.nudged" : "dialogue.nudge-missed",
+            delivered ? .dialogueNudged : .dialogueNudgeMissed,
             conversationID: conversationID,
             snapshot: ["reason": reason])
     }

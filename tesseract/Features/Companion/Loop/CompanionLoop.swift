@@ -152,7 +152,7 @@ final class CompanionLoop {
                     "Test wake from Settings — greet him briefly and confirm the loop works.",
                 due: Date(), wakeClass: .followup)
             try? await store.upsertWake(wake)
-            recorder.record("wake.booked", wakeID: wake.id, snapshot: ["class": "followup"])
+            recorder.record(.wakeBooked, wakeID: wake.id, snapshot: ["class": "followup"])
             await evaluate()
         }
     }
@@ -190,7 +190,7 @@ final class CompanionLoop {
                 occurredAt: wake.due)
             if (try? await store.admitEvent(event)) == true {
                 recorder.record(
-                    "event.admitted",
+                    .eventAdmitted,
                     wakeID: wake.id,
                     snapshot: ["kind": "wake-due", "eventID": event.id.uuidString],
                     note: wake.content)
@@ -209,7 +209,7 @@ final class CompanionLoop {
             return
         case .recordDeferral(let pendingCount, let firstWakeID):
             recorder.record(
-                "turn.deferred", wakeID: firstWakeID,
+                .turnDeferred, wakeID: firstWakeID,
                 snapshot: ["pending": String(pendingCount), "reason": "model-slot-busy"])
         case .foldTurn(let dueWakes, let origin, let carriesBeat):
             await runFoldTurn(
@@ -306,7 +306,7 @@ final class CompanionLoop {
             case .fireWake(let wake):
                 try? await store.upsertWake(wake)
                 recorder.record(
-                    "wake.fired", wakeID: wake.id,
+                    .wakeFired, wakeID: wake.id,
                     snapshot: [
                         "class": wake.wakeClass.rawValue,
                         "due": CompanionWakeTime.format(wake.due),
@@ -328,7 +328,7 @@ final class CompanionLoop {
                 current.consumedAt = Date()
                 try? await store.upsertWake(current)
                 recorder.record(
-                    "wake.consumed", wakeID: id, turnID: turnID,
+                    .wakeConsumed, wakeID: id, turnID: turnID,
                     conversationID: conversationID)
             case .rebookWake(let wake):
                 try? await store.upsertWake(wake)
@@ -337,7 +337,7 @@ final class CompanionLoop {
             case .fallbackBanner(let wake):
                 await notifier.post(title: "Jarvis", body: wake.content, wakeID: wake.id)
                 try? await store.upsertWake(wake)
-                recorder.record("delivery.fallback", wakeID: wake.id, note: wake.content)
+                recorder.record(.deliveryFallback, wakeID: wake.id, note: wake.content)
             case .stampWakeHeard(let id):
                 try? await store.stampWakeHeard(id: id, at: Date())
             case .engageWake(let id):
@@ -375,7 +375,7 @@ final class CompanionLoop {
             // First run: install the instructions seed as version 1 — from
             // version 2 on, the document is the entity's own (ADR-0040 §12).
             if (try? await store.seedInstructionsIfNeeded(CompanionInstructions.seed)) == true {
-                recorder.record("instructions.seeded", snapshot: ["version": "1"])
+                recorder.record(.instructionsSeeded, snapshot: ["version": "1"])
             }
             // Crash recovery — the invariant, both tables: fired-but-
             // unconsumed wakes re-book, presented-but-unconsumed Events go
@@ -385,14 +385,14 @@ final class CompanionLoop {
             {
                 try? await store.representEvents(ids: orphanEvents.map(\.id))
                 recorder.record(
-                    "event.represented", snapshot: ["count": String(orphanEvents.count)])
+                    .eventRepresented, snapshot: ["count": String(orphanEvents.count)])
             }
             guard let orphans = try? await store.unconsumedFiredWakes(), !orphans.isEmpty
             else { return }
             for var wake in orphans {
                 wake.state = .booked
                 try? await store.upsertWake(wake)
-                recorder.record("wake.represented", wakeID: wake.id, note: wake.content)
+                recorder.record(.wakeRepresented, wakeID: wake.id, note: wake.content)
             }
         }
     }
@@ -409,7 +409,7 @@ final class CompanionLoop {
             title: title, body: body,
             wakeID: context.wakeIDs.first, conversationID: context.conversationID)
         recorder.record(
-            "delivery.notification",
+            .deliveryNotification,
             wakeID: context.wakeIDs.first,
             turnID: context.turnID,
             conversationID: context.conversationID,
@@ -426,7 +426,7 @@ final class CompanionLoop {
             title: "Jarvis", body: line,
             wakeID: wakeID, conversationID: conversationID)
         recorder.record(
-            "delivery.notification",
+            .deliveryNotification,
             wakeID: wakeID,
             conversationID: conversationID,
             snapshot: ["reason": "summons-unanswered"],
@@ -438,7 +438,7 @@ final class CompanionLoop {
         let context = runner.context
         speak(text)
         recorder.record(
-            "delivery.spoken",
+            .deliverySpoken,
             wakeID: context.wakeIDs.first,
             turnID: context.turnID,
             conversationID: context.conversationID,
@@ -464,7 +464,7 @@ final class CompanionLoop {
         _ reaction: CompanionPingReaction, surface: CompanionFoldReducer.ReactionSurface
     ) async {
         recorder.record(
-            "reaction.\(reaction.outcome.rawValue)",
+            CompanionTraceEvent(reaction: reaction.outcome),
             wakeID: reaction.wakeID,
             conversationID: reaction.conversationID,
             note: reaction.note)
@@ -484,11 +484,11 @@ final class CompanionLoop {
         didRequestAuthorization = true
         Task { [notifier, recorder, calendar] in
             let granted = await notifier.activate()
-            if !granted { recorder.record("loop.auth-denied") }
+            if !granted { recorder.record(.loopAuthDenied) }
             // Calendar is briefing material (stage G) — denial just means the
             // situation block carries no schedule; nothing else changes.
             let calendarGranted = await calendar.requestAccessIfNeeded()
-            if !calendarGranted { recorder.record("loop.calendar-denied") }
+            if !calendarGranted { recorder.record(.loopCalendarDenied) }
         }
     }
 

@@ -125,7 +125,7 @@ final class CompanionSummons {
                     wakeID: wakeID, conversationID: conversationID, line: line))
         case .unanswered:
             recorder.record(
-                "reaction.unheard", wakeID: wakeID, conversationID: conversationID,
+                .reactionUnheard, wakeID: wakeID, conversationID: conversationID,
                 note: "overlay summons unanswered")
             // §11 guarantee 1: the missed overlay leaves the same line as
             // a banner in Notification Center — a visible artifact, and a

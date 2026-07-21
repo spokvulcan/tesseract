@@ -23,7 +23,6 @@ nonisolated enum CompanionWeeklyAggregator {
         var promisesDropped = 0
         var deliveriesByRung: [String: Int] = [:]
         var reactions: [String: Int] = [:]
-        var callbackVerdicts: [String: Int] = [:]
         var turnFailures = 0
         var toggleOffIncidents = 0
         /// The Notification Hub's evidence (#380), counts only — the model
@@ -54,26 +53,31 @@ nonisolated enum CompanionWeeklyAggregator {
         var appSwitches: [(app: String, ts: Double)] = []
         var deliveryTimes: [Double] = []
         for record in records {
-            switch record.event {
-            case "wake.booked":
+            // Names not in the vocabulary (legacy v0 `beat.*`, a future
+            // version's events) are skipped by name — forward-compat (#393).
+            guard let event = CompanionTraceEvent(rawValue: record.event) else { continue }
+            // Exhaustive on purpose: a new event family forces a decision here,
+            // producer and reader sharing one symbol (#393). The `.rawValue`
+            // strings the report emits (rung, reaction kind) are derived here so
+            // the wire text is unchanged.
+            switch event {
+            case .wakeBooked:
                 report.wakesBooked += 1
                 if record.snapshot?["class"] == "promise" { report.promisesBooked += 1 }
-            case "wake.fired":
+            case .wakeFired:
                 report.wakesFired += 1
-            case "wake.consumed":
+            case .wakeConsumed:
                 report.wakesConsumed += 1
-            case "wake.delivered-unheard":
+            case .wakeDeliveredUnheard:
                 report.promisesDeliveredUnheard += 1
-            case "wake.dropped":
+            case .wakeDropped:
                 report.promisesDropped += 1
-            case "turn.failed":
+            case .turnFailed:
                 report.turnFailures += 1
-            case "feedback.toggle-off":
+            case .feedbackToggleOff:
                 report.toggleOffIncidents += 1
-            case "callback.delivered":
-                let verdict = record.snapshot?["verdict"] ?? "unknown"
-                report.callbackVerdicts[verdict, default: 0] += 1
-            case "event.admitted":
+                appendFeedbackLine(record, to: &report)
+            case .eventAdmitted:
                 switch record.snapshot?["kind"] {
                 case "notification-arrived":
                     report.notificationsAdmitted += 1
@@ -92,30 +96,74 @@ nonisolated enum CompanionWeeklyAggregator {
                 default:
                     break
                 }
-            case "hold.tracked":
+            case .holdTracked:
                 report.trackedHolds += 1
-            default:
+            // Deliveries — the rung is the case; the ladder shares the tally,
+            // and every rung feeds the inferred-miss suppression window (#380).
+            case .deliveryFallback:
+                recordDelivery("fallback", ts: record.ts, into: &report, times: &deliveryTimes)
+            case .deliveryNotification:
+                recordDelivery("notification", ts: record.ts, into: &report, times: &deliveryTimes)
+            case .deliverySpoken:
+                recordDelivery("spoken", ts: record.ts, into: &report, times: &deliveryTimes)
+            case .deliveryGlyph:
+                recordDelivery("glyph", ts: record.ts, into: &report, times: &deliveryTimes)
+            case .deliverySummons:
+                recordDelivery("summons", ts: record.ts, into: &report, times: &deliveryTimes)
+            // Reactions — the kind is the case.
+            case .reactionEngaged:
+                report.reactions["engaged", default: 0] += 1
+            case .reactionReplied:
+                report.reactions["replied", default: 0] += 1
+            case .reactionDismissed:
+                report.reactions["dismissed", default: 0] += 1
+            case .reactionUnheard:
+                report.reactions["unheard", default: 0] += 1
+            case .reactionBargeIn:
+                report.reactions["barge-in", default: 0] += 1
+            // Feedback testimony — the verbatim note rides along, untallied.
+            case .feedbackSolicited, .feedbackSpontaneous, .feedbackFabricationFlag,
+                .feedbackAnnoyance, .feedbackDialChange:
+                appendFeedbackLine(record, to: &report)
+            // Recorded for replay, not the weekly numbers.
+            case .wakeRevised, .wakeCancelled, .wakeRepresented, .wakeResurfaced,
+                .eventRepresented,
+                .instructionsSeeded, .instructionsRevised, .instructionsSleepReview,
+                .instructionsOwnerEdited,
+                .turnStarted, .turnDeferred, .turnCompleted,
+                .dialogueBegan, .dialogueSuperseded, .dialogueNudged, .dialogueNudgeMissed,
+                .digestRejected, .digestFolded, .digestFailed,
+                .glyphChanged, .glyphNoticeCleared,
+                .loopAuthDenied, .loopCalendarDenied,
+                .reportBackDeposited,
+                .voiceSessionEntered, .voiceSessionExited, .voiceReplySpoken, .voiceOwnerTurn,
+                .voiceWatchdogExit, .voiceBargeSoftOnset, .voiceBargeFalseResume,
+                .voiceEnergySample, .voiceBargeSuppressed:
                 break
-            }
-            if record.event.hasPrefix("delivery.") {
-                let rung = String(record.event.dropFirst("delivery.".count))
-                report.deliveriesByRung[rung, default: 0] += 1
-                deliveryTimes.append(record.ts)
-            }
-            if record.event.hasPrefix("reaction.") {
-                let kind = String(record.event.dropFirst("reaction.".count))
-                report.reactions[kind, default: 0] += 1
-            }
-            if record.event.hasPrefix("feedback."), let note = record.note {
-                let day = Date(timeIntervalSince1970: record.ts)
-                    .formatted(date: .abbreviated, time: .omitted)
-                report.feedbackLines.append("(\(day)) \(note)")
             }
         }
         report.inferredMissCandidates = inferredMisses(
             notifications: notifications, appSwitches: appSwitches,
             deliveryTimes: deliveryTimes)
         return report
+    }
+
+    /// One delivery rung: the by-rung tally plus the shared inferred-miss
+    /// suppression window (every delivery, whatever the rung, counts).
+    private static func recordDelivery(
+        _ rung: String, ts: Double, into report: inout Report, times: inout [Double]
+    ) {
+        report.deliveriesByRung[rung, default: 0] += 1
+        times.append(ts)
+    }
+
+    /// A dated verbatim feedback line, when the record carried a note.
+    private static func appendFeedbackLine(_ record: CompanionTraceRecord, to report: inout Report)
+    {
+        guard let note = record.note else { return }
+        let day = Date(timeIntervalSince1970: record.ts)
+            .formatted(date: .abbreviated, time: .omitted)
+        report.feedbackLines.append("(\(day)) \(note)")
     }
 
     /// A notification is a plausible miss when he switched to its source app
@@ -167,11 +215,6 @@ nonisolated enum CompanionWeeklyAggregator {
             let reactions = report.reactions.sorted { $0.key < $1.key }
                 .map { "\($0.key) \($0.value)" }.joined(separator: ", ")
             lines.append("Owner reactions: \(reactions).")
-        }
-        if !report.callbackVerdicts.isEmpty {
-            let verdicts = report.callbackVerdicts.sorted { $0.key < $1.key }
-                .map { "\($0.key) \($0.value)" }.joined(separator: ", ")
-            lines.append("Callback verdicts: \(verdicts).")
         }
         if report.notificationsAdmitted > 0 || report.trackedHolds > 0
             || report.inferredMissCandidates > 0

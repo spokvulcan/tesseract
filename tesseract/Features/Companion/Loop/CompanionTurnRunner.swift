@@ -105,7 +105,7 @@ final class CompanionTurnRunner {
 
         let modelID = effectiveModelID()
         recorder.record(
-            "turn.started",
+            .turnStarted,
             turnID: turnID,
             conversationID: conversationID,
             modelID: modelID,
@@ -146,12 +146,12 @@ final class CompanionTurnRunner {
             }
         } catch is CancellationError {
             recorder.record(
-                "turn.failed", turnID: turnID, conversationID: conversationID,
+                .turnFailed, turnID: turnID, conversationID: conversationID,
                 note: "cancelled")
             return nil
         } catch {
             recorder.record(
-                "turn.failed", turnID: turnID, conversationID: conversationID,
+                .turnFailed, turnID: turnID, conversationID: conversationID,
                 note: error.localizedDescription)
             return nil
         }
@@ -168,7 +168,7 @@ final class CompanionTurnRunner {
 
         let summary = Self.lastAssistantText(in: messages) ?? "(silent turn)"
         recorder.record(
-            "turn.completed",
+            .turnCompleted,
             turnID: turnID,
             conversationID: conversationID,
             modelID: modelID,

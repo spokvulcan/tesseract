@@ -46,7 +46,7 @@ nonisolated final class CompanionFlightRecorder: Sendable {
     // MARK: - Writing (app code only)
 
     func record(
-        _ event: String,
+        _ event: CompanionTraceEvent,
         source: CompanionTraceSource = .appObserved,
         at timestamp: Date = Date(),
         wakeID: UUID? = nil,
@@ -56,6 +56,36 @@ nonisolated final class CompanionFlightRecorder: Sendable {
         modelID: String? = nil,
         snapshot: [String: String]? = nil,
         note: String? = nil
+    ) {
+        append(
+            event: event.rawValue,
+            source: source,
+            at: timestamp,
+            wakeID: wakeID,
+            turnID: turnID,
+            conversationID: conversationID,
+            policyVersion: policyVersion,
+            modelID: modelID,
+            snapshot: snapshot,
+            note: note
+        )
+    }
+
+    /// Raw-string append. Private on purpose: the vocabulary is closed for
+    /// producers (they go through `record(_:)` above), and the only caller of
+    /// this is the v0 import below, whose legacy `beat.*` names are historical
+    /// and outside the vocabulary.
+    private func append(
+        event: String,
+        source: CompanionTraceSource,
+        at timestamp: Date,
+        wakeID: UUID?,
+        turnID: UUID?,
+        conversationID: UUID?,
+        policyVersion: String?,
+        modelID: String?,
+        snapshot: [String: String]?,
+        note: String?
     ) {
         let line = CompanionTraceRecord(
             ts: timestamp.timeIntervalSince1970,
@@ -150,10 +180,15 @@ nonisolated final class CompanionFlightRecorder: Sendable {
             if let trigger = entry.trigger { snapshot["trigger"] = trigger }
             if let scheduledFor = entry.scheduledFor { snapshot["scheduledFor"] = scheduledFor }
             if let late = entry.lateSeconds { snapshot["lateSeconds"] = String(late) }
-            record(
-                "beat.\(entry.event)",
+            append(
+                event: "beat.\(entry.event)",
+                source: .appObserved,
                 at: ts,
                 wakeID: entry.ping.flatMap(UUID.init(uuidString:)),
+                turnID: nil,
+                conversationID: nil,
+                policyVersion: nil,
+                modelID: nil,
                 snapshot: snapshot.isEmpty ? nil : snapshot,
                 note: entry.note
             )

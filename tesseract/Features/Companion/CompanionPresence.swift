@@ -97,7 +97,7 @@ final class CompanionPresence {
     func clearEntityNotice(reason: String = "tool") {
         guard entityNoticeRaised else { return }
         entityNoticeRaised = false
-        recorder.record("glyph.notice-cleared", snapshot: ["reason": reason])
+        recorder.record(.glyphNoticeCleared, snapshot: ["reason": reason])
         recompute()
     }
 
@@ -114,7 +114,7 @@ final class CompanionPresence {
             }
         guard new != state else { return }
         state = new
-        recorder.record("glyph.changed", snapshot: ["state": new.rawValue])
+        recorder.record(.glyphChanged, snapshot: ["state": new.rawValue])
         onChange?(new)
     }
 }
