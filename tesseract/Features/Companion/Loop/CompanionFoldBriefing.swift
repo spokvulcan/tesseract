@@ -109,33 +109,23 @@ final class CompanionFoldBriefing {
         lines.append(
             "Your own fold's recent life (Mission Control), as of "
                 + "\(now.formatted(date: .abbreviated, time: .shortened)):")
-        if let today, !today.chain.isEmpty {
-            lines.append(today.chainSummary)
-        } else {
-            lines.append("No contract for today yet.")
-        }
+        lines.append(CompanionFoldRender.contractLine(today: today))
         if !due.isEmpty {
-            lines.append("Due now:")
+            lines.append(CompanionFoldRender.dueHeading(triggeredThisTurn: false))
             for wake in due {
-                lines.append("- \(wake.briefingLine)")
+                lines.append(CompanionFoldRender.dueWakeLine(wake))
             }
         }
         if !fired.isEmpty {
             lines.append("Recently fired:")
             for wake in fired {
-                let when =
-                    wake.firedAt?.formatted(date: .omitted, time: .shortened) ?? "?"
-                lines.append(
-                    "- \(when) \(wake.briefingLine) "
-                        + "(\(wake.state.rawValue)\(wake.heardAt == nil ? ", unheard" : ""))")
+                lines.append(CompanionFoldRender.firedWakeLine(wake))
             }
         }
         if !upcoming.isEmpty {
-            lines.append("Booked ahead:")
+            lines.append(CompanionFoldRender.upcomingHeading)
             for wake in upcoming {
-                lines.append(
-                    "- \(wake.due.formatted(date: .abbreviated, time: .shortened)) "
-                        + wake.briefingLine)
+                lines.append(CompanionFoldRender.upcomingWakeLine(wake))
             }
         }
         if !activity.deliveries.isEmpty {

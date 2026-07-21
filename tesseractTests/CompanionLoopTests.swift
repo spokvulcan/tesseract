@@ -727,7 +727,7 @@ import Testing
         #expect(text.contains("DUE NOW"))
         #expect(
             text.contains("[rhythm] morning planning [id \(due.shortID)] (overdue by 8 min)"))
-        #expect(text.contains("Your booked future:"))
+        #expect(text.contains("Booked ahead:"))
         #expect(text.contains("evening journal [id \(upcoming.shortID)]"))
     }
 

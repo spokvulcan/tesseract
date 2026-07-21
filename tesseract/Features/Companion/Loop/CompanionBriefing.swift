@@ -122,18 +122,12 @@ enum CompanionBriefing {
                 lines.append("Seed left for today: \(seed)")
             }
         }
-        if let today = inputs.today, !today.chain.isEmpty {
-            lines.append(today.chainSummary)
-        } else {
-            lines.append("No contract for today yet.")
-        }
+        lines.append(CompanionFoldRender.contractLine(today: inputs.today))
 
         if !inputs.dueWakes.isEmpty {
-            lines.append("DUE NOW — the wakes that triggered this turn:")
+            lines.append(CompanionFoldRender.dueHeading(triggeredThisTurn: true))
             for wake in inputs.dueWakes {
-                let overdue = Int(inputs.now.timeIntervalSince(wake.due) / 60)
-                let lateness = overdue > 5 ? " (overdue by \(overdue) min)" : ""
-                lines.append("- \(wake.briefingLine)\(lateness)")
+                lines.append(CompanionFoldRender.dueWakeLine(wake, now: inputs.now))
             }
         }
         if !inputs.resurfacedWakes.isEmpty {
@@ -146,11 +140,9 @@ enum CompanionBriefing {
             }
         }
         if !inputs.upcomingWakes.isEmpty {
-            lines.append("Your booked future:")
+            lines.append(CompanionFoldRender.upcomingHeading)
             for wake in inputs.upcomingWakes {
-                lines.append(
-                    "- \(wake.due.formatted(date: .abbreviated, time: .shortened)) "
-                        + wake.briefingLine)
+                lines.append(CompanionFoldRender.upcomingWakeLine(wake))
             }
         } else {
             lines.append("You have NOTHING booked ahead — establish your rhythm.")

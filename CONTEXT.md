@@ -1534,7 +1534,8 @@ cadence-granted turn died with the **Event Fold**).
 The code-gathered context handed to the entity at the start of every turn:
 time, presence span, frontmost app, calendar (read-through), contract state,
 its own due and upcoming **Wake**s, recency of last interaction. Gathering is
-mechanical; interpreting it is the turn's job.
+mechanical; interpreting it is the turn's job. Its contract, due, and upcoming
+lines come from the shared Companion Fold Render primitives (#403).
 _Avoid_: prompt (it's one input to the turn, not the instructions), snapshot
 (the flight recorder's word for the verbatim copy a trace keeps).
 
@@ -1545,7 +1546,9 @@ deliveries, the entity's last fold-turn conclusions verbatim — so every chat
 opens as the one mind, current, and re-briefs when the fold advances
 mid-conversation (ADR-0052). The **Situation Briefing**'s conversation-facing
 sibling: gathering is mechanical, interpreting is the entity's job; it closes
-with the **Report-Back** contract line.
+with the **Report-Back** contract line. Its contract, due, upcoming, and
+recently-fired lines come from the shared Companion Fold Render primitives
+(#403).
 _Avoid_: status block (it carries his own conclusions, not just state),
 digest (the entity-authored nightly artifact), situation briefing (the
 turn-facing sibling), fold summary.
