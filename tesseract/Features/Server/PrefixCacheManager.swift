@@ -702,7 +702,9 @@ final class PrefixCacheManager {
 
             attempt += 1
             if attempt >= Self.maxHydrationRetries {
-                return missAfterFailedHydration(initial: initial, partitionKey: partitionKey)
+                return SnapshotResolutionLadder.missAfterFailedHydration(
+                    initial: initial, partitionKey: partitionKey
+                )
             }
         }
     }
@@ -730,46 +732,56 @@ final class PrefixCacheManager {
         )
         let hydrateSeconds = Date.timeIntervalSinceReferenceDate - hydrateStart
 
-        guard let hydrated else {
-            // An interrupted read (PRD #149 item 7) is not a failure: the
-            // backing is intact, the node stays hittable for the next
-            // caller — surface a clean miss without clearing anything.
-            if interruption?() == true {
-                diagnostics.logSkip(stage: "hydration", reason: "interrupted")
-                return missAfterFailedHydration(initial: initial, partitionKey: partitionKey)
-            }
-            // Hydration failed: `loadSync` already removed the on-disk file; the
-            // forgiving clear removes the now-bodyless node so the caller's
-            // re-lookup falls back to the next-shallower resident body. A failed
-            // hydration calls neither `recordHit` nor `promote`.
+        // Ask the ladder what this read means; perform the decided effects. The
+        // interruption check follows `loadSync` and only when the body is absent
+        // (a materialized body is always a hit — PRD #149 item 7).
+        switch SnapshotResolutionLadder.hydrationOutcome(
+            succeeded: hydrated != nil,
+            interrupted: hydrated == nil && interruption?() == true,
+            kind: .ssd
+        ) {
+        case .interruptedMiss:
+            // Interrupted, not failed: the backing is intact, the node stays
+            // hittable for the next caller — a clean miss, clear nothing.
+            diagnostics.logSkip(stage: "hydration", reason: "interrupted")
+            return SnapshotResolutionLadder.missAfterFailedHydration(
+                initial: initial, partitionKey: partitionKey
+            )
+        case .failedCleanup:
+            // **Committed Ref Cleanup**: `loadSync` already removed the on-disk
+            // file; the forgiving clear removes the now-bodyless node so the
+            // caller's re-lookup falls back to the next-shallower resident body.
+            // A failed hydration calls neither `recordHit` nor `promote`.
             await MainActor.run {
                 self.clearCommittedSnapshotRefAfterHydrationFailure(
                     node: ctx.node, partitionKey: partitionKey
                 )
             }
             return nil
-        }
+        case .hydratedHit:
+            guard let hydrated else { return nil }
+            diagnostics.log(
+                PrefixCacheDiagnostics.SSDHitEvent(
+                    id: ctx.snapshotRef.snapshotID, hydrateMs: hydrateSeconds
+                ))
+            let hydratedBytes = ctx.snapshotRef.bytesOnDisk
+            await MainActor.run {
+                // The load-bearing ordering on success: bump SSD recency, then
+                // promote the hydrated body, then fold the measurement.
+                ctx.hydrating.recordHit(id: ctx.snapshotRef.snapshotID)
+                self.promote(node: ctx.node, snapshot: hydrated, partitionKey: partitionKey)
+                // Fold the observed hydration into the rolling bytes/s
+                // estimate — a real measured operation, never a constant.
+                self.recordHydrationMeasurement(bytes: hydratedBytes, seconds: hydrateSeconds)
+            }
+            diagnostics.log(
+                PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.snapshotRef.snapshotID))
 
-        diagnostics.log(
-            PrefixCacheDiagnostics.SSDHitEvent(
-                id: ctx.snapshotRef.snapshotID, hydrateMs: hydrateSeconds
-            ))
-        let hydratedBytes = ctx.snapshotRef.bytesOnDisk
-        await MainActor.run {
-            // The load-bearing ordering on success: bump SSD recency, then
-            // promote the hydrated body, then fold the measurement.
-            ctx.hydrating.recordHit(id: ctx.snapshotRef.snapshotID)
-            self.promote(node: ctx.node, snapshot: hydrated, partitionKey: partitionKey)
-            // Fold the observed hydration into the rolling bytes/s
-            // estimate — a real measured operation, never a constant.
-            self.recordHydrationMeasurement(bytes: hydratedBytes, seconds: hydrateSeconds)
+            return SnapshotResolutionLadder.hydratedHit(
+                hydrated, initial: initial, promptTokenCount: promptTokenCount,
+                partitionKey: partitionKey, hydrateSeconds: hydrateSeconds
+            )
         }
-        diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.snapshotRef.snapshotID))
-
-        return hydratedHit(
-            hydrated, initial: initial, promptTokenCount: promptTokenCount,
-            partitionKey: partitionKey, hydrateSeconds: hydrateSeconds
-        )
     }
 
     /// **Chain-Prefix Restore** hydration (ADR-0012): compose the owning
@@ -795,41 +807,51 @@ final class PrefixCacheManager {
         )
         let hydrateSeconds = Date.timeIntervalSinceReferenceDate - hydrateStart
 
-        guard let hydrated else {
+        // The chain-side mirror of `resolveSSDHit`: same ladder decision, a
+        // point clear (not a committed-ref clear) on real failure.
+        switch SnapshotResolutionLadder.hydrationOutcome(
+            succeeded: hydrated != nil,
+            interrupted: hydrated == nil && interruption?() == true,
+            kind: .chainPrefix
+        ) {
+        case .interruptedMiss:
             // Interrupted, not failed — the chain stays intact (PRD #149
             // item 7); the point clears only on a real compose failure.
-            if interruption?() == true {
-                diagnostics.logSkip(stage: "hydration", reason: "interrupted")
-                return missAfterFailedHydration(initial: initial, partitionKey: partitionKey)
-            }
+            diagnostics.logSkip(stage: "hydration", reason: "interrupted")
+            return SnapshotResolutionLadder.missAfterFailedHydration(
+                initial: initial, partitionKey: partitionKey
+            )
+        case .failedCleanup:
             await MainActor.run {
                 self.clearChainPrefixRestorePointAfterHydrationFailure(
                     node: ctx.node, partitionKey: partitionKey
                 )
             }
             return nil
-        }
+        case .hydratedHit:
+            guard let hydrated else { return nil }
+            diagnostics.log(
+                PrefixCacheDiagnostics.SSDHitEvent(
+                    id: ctx.point.ownerSnapshotID, hydrateMs: hydrateSeconds
+                ))
+            await MainActor.run {
+                ctx.hydrating.recordHit(id: ctx.point.ownerSnapshotID)
+                self.promoteChainPrefix(
+                    node: ctx.node, snapshot: hydrated, partitionKey: partitionKey
+                )
+                self.recordHydrationMeasurement(
+                    bytes: ctx.point.prefixBytes, seconds: hydrateSeconds
+                )
+            }
+            diagnostics.log(
+                PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.point.ownerSnapshotID))
 
-        diagnostics.log(
-            PrefixCacheDiagnostics.SSDHitEvent(
-                id: ctx.point.ownerSnapshotID, hydrateMs: hydrateSeconds
-            ))
-        await MainActor.run {
-            ctx.hydrating.recordHit(id: ctx.point.ownerSnapshotID)
-            self.promoteChainPrefix(
-                node: ctx.node, snapshot: hydrated, partitionKey: partitionKey
-            )
-            self.recordHydrationMeasurement(
-                bytes: ctx.point.prefixBytes, seconds: hydrateSeconds
+            return SnapshotResolutionLadder.hydratedHit(
+                hydrated, initial: initial, promptTokenCount: promptTokenCount,
+                partitionKey: partitionKey, hydrateSeconds: hydrateSeconds,
+                wasChainPrefixRestore: true
             )
         }
-        diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: ctx.point.ownerSnapshotID))
-
-        return hydratedHit(
-            hydrated, initial: initial, promptTokenCount: promptTokenCount,
-            partitionKey: partitionKey, hydrateSeconds: hydrateSeconds,
-            wasChainPrefixRestore: true
-        )
     }
 
     /// The **Hydration Gate** (PRD #149 item 7, HiCache's min-hit gate
@@ -857,15 +879,17 @@ final class PrefixCacheManager {
             let alternative = tree.findBestSnapshot(
                 tokens: tokens, updateAccess: false, includeSnapshotRefs: false
             )
-            let alternativeOffset = alternative?.0.state.body?.tokenOffset ?? 0
-            guard
-                !EvictionPolicy.hydrationGateAdmits(
-                    hydrationBytes: hydrationBytes,
-                    hitOffset: hitOffset,
-                    alternativeOffset: alternativeOffset,
-                    config: self.evictionConfig
-                )
-            else { return nil }
+            let alternativeBody = alternative?.0.state.body
+            let admits = EvictionPolicy.hydrationGateAdmits(
+                hydrationBytes: hydrationBytes,
+                hitOffset: hitOffset,
+                alternativeOffset: alternativeBody?.tokenOffset ?? 0,
+                config: self.evictionConfig
+            )
+            let outcome = SnapshotResolutionLadder.gateOutcome(
+                admitsHydration: admits, hasAlternativeBody: alternativeBody != nil
+            )
+            guard outcome != .hydrate else { return nil }
 
             diagnostics.logSkip(
                 stage: "hydration",
@@ -874,96 +898,53 @@ final class PrefixCacheManager {
                     ("id", hitID),
                     ("bytes", "\(hydrationBytes)"),
                     ("hitOffset", "\(hitOffset)"),
-                    ("alternativeOffset", "\(alternativeOffset)"),
+                    ("alternativeOffset", "\(alternativeBody?.tokenOffset ?? 0)"),
                 ]
             )
             let (treeMatchDepth, divergence) = tree.matchPrompt(tokens: tokens)
-            // Serve the peeked alternative as a real hit — the same node the
-            // gate priced against (identical `tokens`, `includeSnapshotRefs`),
-            // so bump its access directly rather than re-walking the tree.
-            guard let (node, _) = alternative, let body = node.state.body else {
-                return Resolved(
-                    lookup: LookupResult(
-                        snapshot: nil, partitionKey: partitionKey,
-                        snapshotTokenOffset: 0, sharedPrefixLength: treeMatchDepth,
-                        reason: .missNoSnapshotInPrefix,
+            switch outcome {
+            case .hydrate:
+                return nil  // handled above
+            case .fallbackMiss:
+                return SnapshotResolutionLadder.gateFallbackMiss(
+                    partitionKey: partitionKey, treeMatchDepth: treeMatchDepth,
+                    divergence: divergence
+                )
+            case .serveAlternative:
+                // Serve the peeked alternative as a real hit — the same node the
+                // gate priced against (identical `tokens`, `includeSnapshotRefs`),
+                // so bump its access directly rather than re-walking the tree.
+                // The ladder guaranteed a resident body; the guard is a safety
+                // net that degrades to a miss rather than trusting the invariant.
+                guard let (node, _) = alternative, let body = node.state.body else {
+                    return SnapshotResolutionLadder.gateFallbackMiss(
+                        partitionKey: partitionKey, treeMatchDepth: treeMatchDepth,
                         divergence: divergence
-                    ),
-                    hydratedFromSSD: false, hydrationSeconds: 0
+                    )
+                }
+                node.lastAccessTime = .now
+                let recordedHitID = self.store.noteLookupHit(on: node)
+                self.recordHitSavings(restoredOffset: body.tokenOffset)
+                if let pinRequestID {
+                    self.pinRestorePath(node: node, requestID: pinRequestID)
+                }
+                if let recordedHitID {
+                    diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: recordedHitID))
+                }
+                return SnapshotResolutionLadder.gateFallbackHit(
+                    body: body, partitionKey: partitionKey,
+                    promptTokenCount: promptTokenCount, treeMatchDepth: treeMatchDepth,
+                    recordedHitID: recordedHitID, divergence: divergence
                 )
             }
-            node.lastAccessTime = .now
-            let recordedHitID = self.store.noteLookupHit(on: node)
-            self.recordHitSavings(restoredOffset: body.tokenOffset)
-            if let pinRequestID {
-                self.pinRestorePath(node: node, requestID: pinRequestID)
-            }
-            if let recordedHitID {
-                diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: recordedHitID))
-            }
-            return Resolved(
-                lookup: LookupResult(
-                    snapshot: body,
-                    partitionKey: partitionKey,
-                    snapshotTokenOffset: body.tokenOffset,
-                    sharedPrefixLength: treeMatchDepth,
-                    reason: .hit(
-                        snapshotOffset: body.tokenOffset,
-                        totalTokens: promptTokenCount,
-                        type: body.checkpointType
-                    ),
-                    recordedHitSnapshotID: recordedHitID,
-                    divergence: divergence
-                ),
-                hydratedFromSSD: false, hydrationSeconds: 0
-            )
         }
     }
 
-    private nonisolated func missAfterFailedHydration(
-        initial: LookupResult,
-        partitionKey: CachePartitionKey
-    ) -> Resolved {
-        Resolved(
-            lookup: LookupResult(
-                snapshot: nil,
-                partitionKey: partitionKey,
-                snapshotTokenOffset: 0,
-                sharedPrefixLength: initial.sharedPrefixLength,
-                reason: .missNoSnapshotInPrefix,
-                divergence: initial.divergence
-            ),
-            hydratedFromSSD: true,
-            hydrationSeconds: 0
-        )
-    }
-
-    private nonisolated func hydratedHit(
-        _ hydrated: HybridCacheSnapshot,
-        initial: LookupResult,
-        promptTokenCount: Int,
-        partitionKey: CachePartitionKey,
-        hydrateSeconds: TimeInterval,
-        wasChainPrefixRestore: Bool = false
-    ) -> Resolved {
-        Resolved(
-            lookup: LookupResult(
-                snapshot: hydrated,
-                partitionKey: partitionKey,
-                snapshotTokenOffset: hydrated.tokenOffset,
-                sharedPrefixLength: initial.sharedPrefixLength,
-                reason: .hit(
-                    snapshotOffset: hydrated.tokenOffset,
-                    totalTokens: promptTokenCount,
-                    type: hydrated.checkpointType
-                ),
-                divergence: initial.divergence
-            ),
-            hydratedFromSSD: true,
-            hydrationSeconds: hydrateSeconds,
-            wasChainPrefixRestore: wasChainPrefixRestore
-        )
-    }
+    // `missAfterFailedHydration` and `hydratedHit` — the two pure `Resolved`
+    // builders — moved wholesale into `SnapshotResolutionLadder` (issue #400):
+    // they held no manager state, only shaped a value, so they are the ladder's
+    // hit/miss value transforms now. The gate's fallback shapes live there too
+    // (`gateFallbackHit` / `gateFallbackMiss`).
 
     /// When a lookup restores at `K` but the tree already matches farther to
     /// `M`, synthesize a checkpoint at `M` so the next request can skip the

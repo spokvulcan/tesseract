@@ -48,11 +48,18 @@ Admission**; distinct from `restoreCache`, the later model-affine step that appl
 a resolved snapshot into a live cache (resolution picks *which*, restore
 *applies* it). Owned by the **Prefix Cache Manager** as its single read-side
 entry, never a free-standing module reaching back across the manager's mutation
-seam.
+seam. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
+now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
+consults; ownership is unmoved, the manager still performs every effect (the
+awaits, the tree/ledger mutations, the hydration call, pin placement, telemetry)
+and the ladder holds no references at all.
 _Avoid_: a standalone "hydrator" module (the retired shape that reached back into
-the manager — resolution is manager-owned); **Snapshot Hydrating** (a different
-concept: the off-main handle, not the choose step); restore/restoreCache (the
-apply step, not the choose step).
+the manager — resolution is manager-owned); a ladder holding references to the
+manager/tree/ledger/hydrating handle (the retired hydrator's shape again — the
+ladder takes plain facts, returns decision values); **Snapshot Hydrating** (a
+different concept: the off-main handle, not the choose step); restore/restoreCache
+(the apply step, not the choose step).
 
 **Snapshot Hydrating**:
 The narrow off-main handle that **Snapshot Resolution** depends on to materialize
@@ -1176,6 +1183,21 @@ default order. Recomputed at conversation start and held stable within a
 conversation.
 _Avoid_: frecency (not the V1 mechanism), MRU/recently-used (counts, not recency),
 live re-sort (explicitly rejected — the order never shifts mid-conversation).
+
+**Skill Envelope**:
+The one home for how injected **Skill** content is framed (ADR review Strong #6):
+three renderers — the `<skill name=… location=…>…</skill>` user-message
+*injection*, the `use_skill` *tool result*, the *linked file* result — and one
+parser. Only the injection format is persisted (transcripts store it, the **Skill
+Invocation Row** re-parses it), so only it earns an inverse, governed by the
+round-trip law `parse(injection(x)) == x` for every realistic skill; the
+tool-result formats are model-facing prose and parser-less by design. Round-trip
+boundary (name with `"`/`>`, body with a literal `</skill>`) is documented-lossy,
+not escaped — escaping would change the bytes the model reads or the persisted
+block.
+_Avoid_: skill block (vague), per-call-site literals (the pre-#401 shape — a
+contract living only as matching producer/fixture literals drifts green), parsing
+the tool results (deliberately parser-less).
 
 ### Living memory read paths
 

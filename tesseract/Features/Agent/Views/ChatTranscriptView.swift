@@ -164,7 +164,7 @@ private struct ChatItemRow: View {
     var body: some View {
         switch item {
         case .user(let message):
-            if let skill = SkillInvocationBlock.parse(message.content) {
+            if let skill = SkillEnvelope.parse(message.content) {
                 SkillInvocationRowView(
                     block: skill, images: message.images, timestamp: message.timestamp)
             } else {
