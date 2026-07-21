@@ -129,7 +129,7 @@ nonisolated struct VoiceSessionMachine {
         case stageToComposer(String)
         /// A flight-recorder record; the performer stamps session and
         /// conversation IDs.
-        case record(event: String, snapshot: [String: String])
+        case record(event: CompanionTraceEvent, snapshot: [String: String])
     }
 
     // MARK: - Soft Barge (two-stage barge-in, ADR-0041)
@@ -324,7 +324,7 @@ nonisolated struct VoiceSessionMachine {
         // fast-fail into the 1 s backoff until the mic is live.
         var effects: [Effect] = [
             .beginVoiceHold,
-            .record(event: "voice.session-entered", snapshot: ["via": via]),
+            .record(event: .voiceSessionEntered, snapshot: ["via": via]),
             .overlayBeginSession,
         ]
         effects += beginListening(now: now)
@@ -343,7 +343,7 @@ nonisolated struct VoiceSessionMachine {
         phase = .idle
         effects.append(
             .record(
-                event: "voice.session-exited",
+                event: .voiceSessionExited,
                 snapshot: ["reason": reason, "exchanges": String(exchanges)]))
         effects.append(.overlayEndSession)
         return effects
@@ -372,7 +372,7 @@ nonisolated struct VoiceSessionMachine {
         effects += attemptOpenCapture(now: now)
         effects.append(.speak(text))
         effects.append(
-            .record(event: "voice.reply-spoken", snapshot: ["chars": String(text.count)]))
+            .record(event: .voiceReplySpoken, snapshot: ["chars": String(text.count)]))
         return effects
     }
 
@@ -394,7 +394,7 @@ nonisolated struct VoiceSessionMachine {
         var effects: [Effect] = [
             .pauseSpeaking,
             energyRecord(
-                "reaction.barge-in",
+                .reactionBargeIn,
                 extra: ["offsetSeconds": speakingOffsetSeconds(now: now), "detector": source]),
         ]
         // Fresh take from the interruption on — the playback-period audio
@@ -422,7 +422,7 @@ nonisolated struct VoiceSessionMachine {
         settledTicks = 0
         var effects: [Effect] = [
             energyRecord(
-                "voice.barge-soft-onset",
+                .voiceBargeSoftOnset,
                 extra: ["offsetSeconds": speakingOffsetSeconds(now: now)]),
             .fadeSpeech(target: Self.softDuckLevel, duration: Self.softDuckRampDown),
         ]
@@ -447,7 +447,7 @@ nonisolated struct VoiceSessionMachine {
         return [
             .pauseSpeaking,
             energyRecord(
-                "reaction.barge-in",
+                .reactionBargeIn,
                 extra: [
                     "offsetSeconds": speakingOffsetSeconds(now: now), "detector": detector,
                 ]),
@@ -510,7 +510,7 @@ nonisolated struct VoiceSessionMachine {
             effects.append(.closeCapture)
             captureOpen = false
         }
-        effects.append(energyRecord("voice.barge-false-resume", extra: ["reason": reason]))
+        effects.append(energyRecord(.voiceBargeFalseResume, extra: ["reason": reason]))
         if speechDoneCallbackSeen {
             // The utterance drained while barged — nothing to restore.
             effects.append(.fadeSpeech(target: 1.0, duration: 0))
@@ -589,13 +589,13 @@ nonisolated struct VoiceSessionMachine {
         case .speaking:
             var effects: [Effect] = []
             if tickCount % Self.energySampleEveryTicks == 0 {
-                effects.append(energyRecord("voice.energy-sample", extra: [:]))
+                effects.append(energyRecord(.voiceEnergySample, extra: [:]))
             }
             if event == .speechStarted {
                 if energyBargeMuted {
                     // The escalation ladder's top: the detector cried wolf
                     // ≥4 times this utterance — log, never react.
-                    effects.append(energyRecord("voice.barge-suppressed", extra: [:]))
+                    effects.append(energyRecord(.voiceBargeSuppressed, extra: [:]))
                 } else {
                     effects += softBargeIn(now: now)
                 }
@@ -613,7 +613,7 @@ nonisolated struct VoiceSessionMachine {
                     settledTicks = 0
                     effects.append(
                         .record(
-                            event: "voice.watchdog-exit",
+                            event: .voiceWatchdogExit,
                             snapshot: ["speechState": tick.speechDescription]))
                     effects += utteranceFinished(now: now)
                 }
@@ -687,7 +687,7 @@ nonisolated struct VoiceSessionMachine {
         exchanges += 1
         effects.append(
             .record(
-                event: "voice.owner-turn", snapshot: ["chars": String(trimmed.count)]))
+                event: .voiceOwnerTurn, snapshot: ["chars": String(trimmed.count)]))
         guard tunables.autoSend else {
             // The escape hatch (#310 taste ledger): stage, never send.
             effects.append(.stageToComposer(trimmed))
@@ -730,7 +730,7 @@ nonisolated struct VoiceSessionMachine {
     /// A barge-family record with the detector's inputs at this instant
     /// stamped alongside the event's own fields, so field tuning is never
     /// blind again (the 2026-07-17 storms shipped no numbers at all).
-    private func energyRecord(_ event: String, extra: [String: String]) -> Effect {
+    private func energyRecord(_ event: CompanionTraceEvent, extra: [String: String]) -> Effect {
         let energy: [String: String] = [
             "level": String(format: "%.3f", lastLevel),
             "threshold": String(

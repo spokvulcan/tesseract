@@ -140,7 +140,7 @@ nonisolated func createBookWakeTool(
             )
             try await store.upsertWake(wake)
             await recorder.record(
-                "wake.booked",
+                .wakeBooked,
                 wakeID: wake.id,
                 turnID: context.turnID,
                 conversationID: context.conversationID,
@@ -232,7 +232,7 @@ nonisolated func createReviseWakeTool(
             wake.state = .booked
             try await store.upsertWake(wake)
             await recorder.record(
-                "wake.revised",
+                .wakeRevised,
                 wakeID: wake.id,
                 turnID: context.turnID,
                 conversationID: context.conversationID,
@@ -297,7 +297,7 @@ nonisolated func createCancelWakeTool(
             wake.state = .cancelled
             try await store.upsertWake(wake)
             await recorder.record(
-                "wake.cancelled",
+                .wakeCancelled,
                 wakeID: wake.id,
                 turnID: context.turnID,
                 conversationID: context.conversationID,
@@ -388,7 +388,7 @@ nonisolated func createReviseInstructionsTool(
             let version = try await store.appendInstructions(
                 text: composed, author: "entity", note: why)
             await recorder.record(
-                "instructions.revised",
+                .instructionsRevised,
                 turnID: context.turnID,
                 conversationID: context.conversationID,
                 snapshot: [
@@ -515,7 +515,7 @@ nonisolated func createSetGlyphTool(
                 await presence.clearEntityNotice()
             }
             await recorder.record(
-                "delivery.glyph",
+                .deliveryGlyph,
                 turnID: context.turnID,
                 conversationID: context.conversationID,
                 snapshot: ["state": state]
@@ -561,7 +561,7 @@ nonisolated func createSummonOverlayTool(
             }
             await summon(line)
             await recorder.record(
-                "delivery.summons",
+                .deliverySummons,
                 wakeID: context.wakeIDs.first,
                 turnID: context.turnID,
                 conversationID: context.conversationID,

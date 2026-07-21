@@ -148,7 +148,7 @@ private nonisolated func trackHold(
     var snapshot = ["app": app]
     if let title, !title.isEmpty { snapshot["title"] = title }
     await recorder.record(
-        "hold.tracked",
+        .holdTracked,
         turnID: context?.turnID,
         conversationID: context?.conversationID,
         snapshot: snapshot,

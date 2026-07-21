@@ -319,7 +319,7 @@ final class CompanionVoiceSessionController {
 
     /// Every voice.* record carries the session's stable ID (#354) — one
     /// session's events group without timestamp heuristics.
-    private func recordVoice(_ event: String, snapshot: [String: String]) {
+    private func recordVoice(_ event: CompanionTraceEvent, snapshot: [String: String]) {
         var snapshot = snapshot
         snapshot["sessionID"] = sessionID.uuidString
         recorder.record(

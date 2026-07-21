@@ -1437,6 +1437,19 @@ _Avoid_: ping outcome (the wire enum, one input to the table), banner
 handling (one surface of several), per-surface reaction writes (the pre-#391
 summons defect — hand-rolled writes that dropped the wakeID).
 
+**Trace Vocabulary**:
+The closed, typed set of flight-recorder event names (`CompanionTraceEvent`)
+that every producer writes and the weekly aggregator reads, named once so the
+contract is compile-checked in both directions: a producer typo is a compile
+error, and the aggregator's exhaustive switch forces a decision when a new
+name is added. The `rawValue` is the wire string the JSONL corpus stores, so
+names on disk that aren't in the set — legacy v0 `beat.*`, a future version's
+events — decode to `nil` at the reader and are skipped by name (#393).
+_Avoid_: event string (the wire encoding a trace line persists, not the
+vocabulary), log category (the `Log` enum's channels, unrelated), metric name
+(a weekly-report field, which *consumes* events — the reader side, not the
+name).
+
 **Turn**:
 One full agent run granted to the entity by pending **Event**s or a due
 **Wake**. Every turn appends, origin-tagged, to **Mission Control** — full

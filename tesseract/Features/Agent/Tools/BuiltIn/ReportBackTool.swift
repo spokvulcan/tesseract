@@ -64,7 +64,7 @@ nonisolated func createReportBackTool(
                 throw CompanionToolError(message: "The deposit could not be queued.")
             }
             recorder.record(
-                "report-back.deposited",
+                .reportBackDeposited,
                 conversationID: conversationID,
                 snapshot: ["eventID": event.id.uuidString],
                 note: trimmed)

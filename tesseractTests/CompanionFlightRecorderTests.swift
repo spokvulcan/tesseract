@@ -24,11 +24,11 @@ private func scratchDirectory(_ label: String) -> URL {
         let recorder = CompanionFlightRecorder(directory: scratchDirectory("flight"))
         let wakeID = UUID()
         recorder.record(
-            "wake.booked", wakeID: wakeID, snapshot: ["class": "promise"],
+            .wakeBooked, wakeID: wakeID, snapshot: ["class": "promise"],
             note: "ask about the dentist")
-        recorder.record("wake.fired", wakeID: wakeID)
+        recorder.record(.wakeFired, wakeID: wakeID)
         recorder.record(
-            "delivery.notification", source: .appObserved, wakeID: wakeID)
+            .deliveryNotification, source: .appObserved, wakeID: wakeID)
 
         let records = recorder.records(since: Date().addingTimeInterval(-60))
         #expect(records.count == 3)
@@ -76,26 +76,27 @@ private func scratchDirectory(_ label: String) -> URL {
 
     @Test func aggregatorComputesDeterministicNumbers() {
         var records: [CompanionTraceRecord] = []
-        func add(_ event: String, snapshot: [String: String]? = nil, note: String? = nil) {
+        func add(
+            _ event: CompanionTraceEvent, snapshot: [String: String]? = nil, note: String? = nil
+        ) {
             records.append(
                 CompanionTraceRecord(
-                    ts: Date().timeIntervalSince1970, event: event, source: .appObserved,
+                    ts: Date().timeIntervalSince1970, event: event.rawValue, source: .appObserved,
                     snapshot: snapshot, note: note))
         }
-        add("wake.booked", snapshot: ["class": "promise"])
-        add("wake.booked", snapshot: ["class": "rhythm"])
-        add("wake.fired")
-        add("wake.fired")
-        add("wake.consumed")
-        add("wake.dropped")
-        add("delivery.notification")
-        add("delivery.spoken")
-        add("delivery.spoken")
-        add("reaction.engaged")
-        add("reaction.dismissed")
-        add("callback.delivered", snapshot: ["verdict": "specific-true"])
-        add("turn.failed")
-        add("feedback.solicited", note: "less pinging before noon")
+        add(.wakeBooked, snapshot: ["class": "promise"])
+        add(.wakeBooked, snapshot: ["class": "rhythm"])
+        add(.wakeFired)
+        add(.wakeFired)
+        add(.wakeConsumed)
+        add(.wakeDropped)
+        add(.deliveryNotification)
+        add(.deliverySpoken)
+        add(.deliverySpoken)
+        add(.reactionEngaged)
+        add(.reactionDismissed)
+        add(.turnFailed)
+        add(.feedbackSolicited, note: "less pinging before noon")
 
         let report = CompanionWeeklyAggregator.aggregate(records)
         #expect(report.wakesBooked == 2)
@@ -105,7 +106,6 @@ private func scratchDirectory(_ label: String) -> URL {
         #expect(report.promisesDropped == 1)
         #expect(report.deliveriesByRung == ["notification": 1, "spoken": 2])
         #expect(report.reactions == ["engaged": 1, "dismissed": 1])
-        #expect(report.callbackVerdicts == ["specific-true": 1])
         #expect(report.turnFailures == 1)
         #expect(report.feedbackLines.count == 1)
 
@@ -118,23 +118,27 @@ private func scratchDirectory(_ label: String) -> URL {
     @Test func aggregatorTalliesTheNotificationHub() {
         let base = Date().timeIntervalSince1970
         var records: [CompanionTraceRecord] = []
-        func add(_ event: String, at offset: TimeInterval, snapshot: [String: String]? = nil) {
+        func add(
+            _ event: CompanionTraceEvent, at offset: TimeInterval,
+            snapshot: [String: String]? = nil
+        ) {
             records.append(
                 CompanionTraceRecord(
-                    ts: base + offset, event: event, source: .appObserved, snapshot: snapshot))
+                    ts: base + offset, event: event.rawValue, source: .appObserved,
+                    snapshot: snapshot))
         }
         // Two notifications admitted.
-        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
-        add("event.admitted", at: 300, snapshot: ["kind": "notification-arrived", "app": "Slack"])
+        add(.eventAdmitted, at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
+        add(.eventAdmitted, at: 300, snapshot: ["kind": "notification-arrived", "app": "Slack"])
         // Mail: he switched to Mail three minutes later, nothing escalated
         // between — a plausible miss.
-        add("event.admitted", at: 180, snapshot: ["kind": "app-switch", "app": "Mail"])
+        add(.eventAdmitted, at: 180, snapshot: ["kind": "app-switch", "app": "Mail"])
         // Slack: escalated before he switched to it — NOT a miss.
-        add("delivery.spoken", at: 320)
-        add("event.admitted", at: 380, snapshot: ["kind": "app-switch", "app": "Slack"])
+        add(.deliverySpoken, at: 320)
+        add(.eventAdmitted, at: 380, snapshot: ["kind": "app-switch", "app": "Slack"])
         // One held notification, and one escalation reaction.
-        add("hold.tracked", at: 60, snapshot: ["app": "Calendar"])
-        add("reaction.engaged", at: 130)
+        add(.holdTracked, at: 60, snapshot: ["app": "Calendar"])
+        add(.reactionEngaged, at: 130)
 
         let report = CompanionWeeklyAggregator.aggregate(records)
         #expect(report.notificationsAdmitted == 2)
@@ -151,19 +155,23 @@ private func scratchDirectory(_ label: String) -> URL {
     @Test func inferredMissCountsEachNotificationOnceAndSkipsLateSwitches() {
         let base = Date().timeIntervalSince1970
         var records: [CompanionTraceRecord] = []
-        func add(_ event: String, at offset: TimeInterval, snapshot: [String: String]? = nil) {
+        func add(
+            _ event: CompanionTraceEvent, at offset: TimeInterval,
+            snapshot: [String: String]? = nil
+        ) {
             records.append(
                 CompanionTraceRecord(
-                    ts: base + offset, event: event, source: .appObserved, snapshot: snapshot))
+                    ts: base + offset, event: event.rawValue, source: .appObserved,
+                    snapshot: snapshot))
         }
-        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
+        add(.eventAdmitted, at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
         // Two later switches to Mail — the notification is one candidate, not two.
-        add("event.admitted", at: 120, snapshot: ["kind": "app-switch", "app": "Mail"])
-        add("event.admitted", at: 200, snapshot: ["kind": "app-switch", "app": "Mail"])
+        add(.eventAdmitted, at: 120, snapshot: ["kind": "app-switch", "app": "Mail"])
+        add(.eventAdmitted, at: 200, snapshot: ["kind": "app-switch", "app": "Mail"])
         // A switch past the window doesn't count.
-        add("event.admitted", at: 1000, snapshot: ["kind": "notification-arrived", "app": "News"])
+        add(.eventAdmitted, at: 1000, snapshot: ["kind": "notification-arrived", "app": "News"])
         add(
-            "event.admitted", at: 1000 + 900,
+            .eventAdmitted, at: 1000 + 900,
             snapshot: ["kind": "app-switch", "app": "News"])
 
         let report = CompanionWeeklyAggregator.aggregate(records)
@@ -171,26 +179,37 @@ private func scratchDirectory(_ label: String) -> URL {
         #expect(report.inferredMissCandidates == 1)  // Mail once; News too late
     }
 
+    @Test func traceEventRawValuesAreUnique() {
+        // The rawValue is the wire string every producer and the aggregator
+        // share; a collision is silent data corruption (#393).
+        let rawValues = CompanionTraceEvent.allCases.map(\.rawValue)
+        #expect(Set(rawValues).count == rawValues.count)
+    }
+
     @Test func inferredMissKeysOffTheSwitchStartNotTheSessionClose() {
         let base = Date().timeIntervalSince1970
         var records: [CompanionTraceRecord] = []
-        func add(_ event: String, at offset: TimeInterval, snapshot: [String: String]? = nil) {
+        func add(
+            _ event: CompanionTraceEvent, at offset: TimeInterval,
+            snapshot: [String: String]? = nil
+        ) {
             records.append(
                 CompanionTraceRecord(
-                    ts: base + offset, event: event, source: .appObserved, snapshot: snapshot))
+                    ts: base + offset, event: event.rawValue, source: .appObserved,
+                    snapshot: snapshot))
         }
         // He was already in Slack when the ping arrived: the session started
         // before the notification (`at` = base − 200) and closed after it
         // (record stamp = base + 300, inside the window). Keying off the close
         // would wrongly score it a miss; keying off the start must not.
-        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Slack"])
+        add(.eventAdmitted, at: 0, snapshot: ["kind": "notification-arrived", "app": "Slack"])
         add(
-            "event.admitted", at: 300,
+            .eventAdmitted, at: 300,
             snapshot: ["kind": "app-switch", "app": "Slack", "at": String(Int(base - 200))])
         // Mail he genuinely switched *to* after its ping — start is after it.
-        add("event.admitted", at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
+        add(.eventAdmitted, at: 0, snapshot: ["kind": "notification-arrived", "app": "Mail"])
         add(
-            "event.admitted", at: 400,
+            .eventAdmitted, at: 400,
             snapshot: ["kind": "app-switch", "app": "Mail", "at": String(Int(base + 90))])
 
         let report = CompanionWeeklyAggregator.aggregate(records)

@@ -233,7 +233,7 @@ final class CompanionPerception {
                 let hints = event.recordHints
                 if let app = hints.app { snapshot["app"] = app }
                 if let at = hints.at { snapshot["at"] = String(at) }
-                recorder.record("event.admitted", snapshot: snapshot, note: event.content)
+                recorder.record(.eventAdmitted, snapshot: snapshot, note: event.content)
             } catch {
                 Log.companion.error("Event admission failed: \(error.localizedDescription)")
             }

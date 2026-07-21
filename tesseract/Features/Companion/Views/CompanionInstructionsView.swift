@@ -139,7 +139,7 @@ struct CompanionInstructionsView: View {
                 text: text, author: "owner", note: note)
         else { return }
         recorder.record(
-            "instructions.owner-edited",
+            .instructionsOwnerEdited,
             snapshot: ["version": String(version), "chars": String(text.count)],
             note: note)
         saveNote = ""

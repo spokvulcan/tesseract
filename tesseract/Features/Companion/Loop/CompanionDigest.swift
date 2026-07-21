@@ -265,7 +265,7 @@ final class CompanionDigest {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !digest.isEmpty, digest.count <= Self.digestMaxLength else {
                     self.recorder.record(
-                        "digest.rejected",
+                        .digestRejected,
                         snapshot: ["reason": reason, "length": String(digest.count)])
                     return .failed
                 }
@@ -281,7 +281,7 @@ final class CompanionDigest {
                 updated.messages = spliced
                 self.conversationStore.save(updated)
                 self.recorder.record(
-                    "digest.folded",
+                    .digestFolded,
                     conversationID: fresh.id,
                     snapshot: [
                         "reason": reason,
@@ -294,7 +294,7 @@ final class CompanionDigest {
             }
         } catch {
             Log.companion.error("Digest fold failed: \(error.localizedDescription)")
-            self.recorder.record("digest.failed", snapshot: ["reason": reason])
+            self.recorder.record(.digestFailed, snapshot: ["reason": reason])
             return .failed
         }
     }

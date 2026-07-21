@@ -130,7 +130,7 @@ nonisolated enum CompanionResurfacing {
                 if wake.heardAt == nil {
                     wake.state = .deliveredUnheard
                     recorder.record(
-                        "wake.delivered-unheard", wakeID: wake.id, note: wake.content)
+                        .wakeDeliveredUnheard, wakeID: wake.id, note: wake.content)
                 } else {
                     // Resurfaced and heard — it did its job; terminal delivered.
                     wake.state = .delivered
@@ -145,7 +145,7 @@ nonisolated enum CompanionResurfacing {
         for var wake in candidates {
             wake.state = .resurfaced
             try? await store.upsertWake(wake)
-            recorder.record("wake.resurfaced", wakeID: wake.id, note: wake.content)
+            recorder.record(.wakeResurfaced, wakeID: wake.id, note: wake.content)
             resurfaced.append(wake)
         }
         return resurfaced

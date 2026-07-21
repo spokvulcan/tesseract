@@ -103,13 +103,13 @@ final class CompanionSleep {
             let version = try? await store.appendInstructions(
                 text: revision.text, author: "entity", note: "sleep review: \(revision.why)")
             recorder.record(
-                "instructions.sleep-review",
+                .instructionsSleepReview,
                 snapshot: [
                     "verdict": "revised", "version": version.map(String.init) ?? "?",
                 ],
                 note: revision.why)
         } else {
-            recorder.record("instructions.sleep-review", snapshot: ["verdict": "kept"])
+            recorder.record(.instructionsSleepReview, snapshot: ["verdict": "kept"])
         }
 
         var updated = (try? await store.loopDayState(todayKey)) ?? CompanionLoopDayState()
