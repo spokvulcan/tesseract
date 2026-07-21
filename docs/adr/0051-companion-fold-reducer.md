@@ -77,3 +77,36 @@ no-op store calls.
   is a reducer case plus a decision-table row, not a fourth inline home.
 - The loop remains unconstructed by tests — deliberately: what it still
   owns is wiring and performance. The decisions left it.
+
+## Amendment — every delivery surface reports through the one door (#391, 2026-07-21)
+
+The 2026-07-21 architecture review found the "one home" claim violated
+from day one: the overlay summons (`CompanionSummons`) never called
+`reaction(...)`. On engage it hand-rolled a record + dialogue mint and
+dropped the wakeID entirely — no `stampWakeHeard`, no `engageWake` — so a
+summons-delivered promise the owner actually engaged still read unheard
+and re-entered the resurfacing ladder, able to die `delivered_unheard`.
+A dismiss skipped the heard stamp the same way.
+
+The invariant now names surfaces explicitly:
+
+- **Reactions are surface-agnostic.** `reaction(...)` takes a
+  `ReactionSurface` (`.banner`, `.overlaySummons`); the decided writes are
+  identical on every surface, and only the minted dialogue's provenance
+  tag (`via`) derives from it. `.beginDialogue` carries that `via`.
+- **One report door on the loop.** `CompanionLoop.processReaction(_:surface:)`
+  is the single entry: it records the `reaction.*` trace line (now always
+  correlated with the wakeID) and performs the reducer's effects. The
+  banner callback wraps it; the summons reports through an injected
+  closure the container wires to it.
+- **The summons is choreography only.** It reports engage/dismiss and
+  sequences its voice-session entry *after* the awaited report, so the
+  engage's minted dialogue is the one the session rides. It no longer
+  holds a `beginDialogue` door. An unanswered summons is deliberately
+  *not* a Reaction — nothing reached him — and keeps the §11
+  fallback-banner path.
+- A new delivery surface is a `ReactionSurface` case plus a wired report
+  closure — never a fourth set of inline writes.
+
+`CompanionSummonsTests` construct the summons for the first time and pin
+the correlation, the report-before-voice ordering, and the fallback.
