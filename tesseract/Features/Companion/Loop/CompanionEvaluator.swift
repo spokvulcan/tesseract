@@ -98,8 +98,16 @@ nonisolated struct CompanionEvaluator {
         if signals.gpuBusy {
             if !deferralLogged {
                 deferralLogged = true
+                // A due wake whose `.wakeDue` Event is already in the queue
+                // is one pending thing, not two (#404): count events, plus
+                // only the due wakes no admitted Event represents.
+                let representedIDs = Set(
+                    signals.pendingEvents.lazy.filter { $0.kind == .wakeDue }.map(\.id))
+                let unrepresentedDue = signals.dueWakes.count {
+                    !representedIDs.contains(CompanionEvent.wakeDueID($0.id))
+                }
                 return .recordDeferral(
-                    pendingCount: signals.pendingEvents.count + signals.dueWakes.count,
+                    pendingCount: signals.pendingEvents.count + unrepresentedDue,
                     firstWakeID: signals.dueWakes.first?.id)
             }
             return .wait
