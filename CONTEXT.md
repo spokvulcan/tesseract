@@ -169,6 +169,20 @@ partitions are grace-stamped without inflating the anchor.
 _Avoid_: TTL, expiry (absolute-clock framings); cache eviction (that is the
 byte-budget LRU cut — GC is staleness, not space).
 
+**Warm-Start Plan**:
+The pure decision the **Snapshot Ledger** makes from a decoded manifest before
+touching disk: which partitions and descriptors to keep, the grace-stamp
+mutations, the **Stale-Partition GC** anchor cut with its typed invalidation
+reasons, the seed byte total, the persist-needed flag, and the file deletions as
+root-relative paths. The ledger performs it — install under the lock, persist per
+the flag, delete off the hot path — but decides none of it (ADR-0055; sibling to
+the **Eviction Candidate Policy**). The reused **Warm-Start Outcome** is the
+partitioned view it returns to the manager.
+_Avoid_: warm-start outcome as the whole decision (that value is only the
+manager-facing partition view the plan wraps); manifest rebuild (the corrupt-file
+directory walk that *feeds* a plan, not the plan itself); TTL/expiry framings
+(staleness is anchor-relative, see the Stale-Partition GC avoids).
+
 ### SSD leaf extension
 
 **Snapshot Segment**:
