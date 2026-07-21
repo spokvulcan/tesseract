@@ -115,6 +115,14 @@ nonisolated struct CompanionEvent: Identifiable, Equatable, Sendable {
             .withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
     }
 
+    /// The id law for a wake's due-ness Event (ADR-0046): one wake, one
+    /// `.wakeDue` Event, ever — and the one place a reader can recognize
+    /// "this Event is that wake" (the render de-dup and the deferral
+    /// telemetry, #404) without a payload parse.
+    static func wakeDueID(_ wakeID: UUID) -> UUID {
+        deterministicID("wake-due:\(wakeID.uuidString)")
+    }
+
     /// Kind-shaped payload JSON — the one encoder every producer shares, so
     /// no door hand-rolls (and mis-escapes) its own literal.
     static func payloadJSON(_ value: some Encodable) -> String? {
@@ -264,9 +272,20 @@ extension CompanionEvent {
 /// `events` argument, rendered.
 nonisolated enum CompanionEventBatch {
 
-    static func render(_ events: [CompanionEvent], now: Date = Date()) -> String {
-        guard !events.isEmpty else { return "" }
-        let lines = events.enumerated().map { index, event -> String in
+    /// `dueWakes` are the wakes the situation block already renders under
+    /// DUE NOW: their `.wakeDue` Events are suppressed here (#404), so one
+    /// due wake reaches the entity once, not in two formats. Presentation
+    /// only — the fold still consumes the suppressed Event exactly as
+    /// before. A `.wakeDue` Event whose wake is *not* in the list (the wake
+    /// was cancelled or completed between admission and this turn) still
+    /// renders: nothing else tells the entity it happened.
+    static func render(
+        _ events: [CompanionEvent], dueWakes: [CompanionWake] = [], now: Date = Date()
+    ) -> String {
+        let dueEventIDs = Set(dueWakes.map { CompanionEvent.wakeDueID($0.id) })
+        let rendered = events.filter { $0.kind != .wakeDue || !dueEventIDs.contains($0.id) }
+        guard !rendered.isEmpty else { return "" }
+        let lines = rendered.enumerated().map { index, event -> String in
             let when = event.occurredAt.formatted(date: .omitted, time: .shortened)
             return "\(index + 1). [\(event.kind.rawValue)] \(when) — \(event.content)"
         }

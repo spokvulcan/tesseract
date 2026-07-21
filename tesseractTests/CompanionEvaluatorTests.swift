@@ -189,6 +189,30 @@ import Testing
         #expect(decision == .recordDeferral(pendingCount: 2, firstWakeID: due.id))
     }
 
+    /// A due wake whose `.wakeDue` Event is already admitted is one pending
+    /// thing, not two (#404): here one wake + its Event + one unrelated
+    /// event count 2, not 3.
+    @Test func deferralCountsAWakeWithItsAdmittedEventOnce() {
+        var evaluator = CompanionEvaluator()
+        let due = wake()
+        let wakeEvent = CompanionEvent(
+            id: CompanionEvent.wakeDueID(due.id), kind: .wakeDue, content: due.content,
+            payload: nil, occurredAt: due.due, state: .pending, seq: nil,
+            admittedAt: due.due, presentedAt: nil, consumedAt: nil, turnID: nil)
+        let decision = evaluator.decide(
+            signals(pending: [event(), wakeEvent], due: [due], gpuBusy: true))
+        #expect(decision == .recordDeferral(pendingCount: 2, firstWakeID: due.id))
+    }
+
+    /// An event-less due wake (its admission raced or failed) still counts —
+    /// the fixed rule is "not already represented", not "wakes never count".
+    @Test func deferralStillCountsAnEventlessDueWake() {
+        var evaluator = CompanionEvaluator()
+        let due = wake()
+        let decision = evaluator.decide(signals(due: [due], gpuBusy: true))
+        #expect(decision == .recordDeferral(pendingCount: 1, firstWakeID: due.id))
+    }
+
     @Test func deferralRecordsOncePerBusyEpisode() {
         var evaluator = CompanionEvaluator()
         let due = wake()

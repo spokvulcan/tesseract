@@ -184,7 +184,7 @@ final class CompanionLoop {
         let dueWakes = (try? await store.dueWakes(asOf: now)) ?? []
         for wake in dueWakes {
             let event = CompanionEvent(
-                id: CompanionEvent.deterministicID("wake-due:\(wake.id.uuidString)"),
+                id: CompanionEvent.wakeDueID(wake.id),
                 kind: .wakeDue,
                 content: "[\(wake.wakeClass.rawValue)] \(wake.content)",
                 occurredAt: wake.due)
@@ -285,7 +285,7 @@ final class CompanionLoop {
         return [
             CompanionInstructions.wrap(instructions),
             CompanionBriefing.render(inputs),
-            CompanionEventBatch.render(events, now: now),
+            CompanionEventBatch.render(events, dueWakes: dueWakes, now: now),
             template,
         ].filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
