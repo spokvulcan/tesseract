@@ -27,7 +27,7 @@ final class MenuBarManager: NSObject {
 
     /// What the status glyph reflects. Dictation wins over speech: it is
     /// the acute, push-to-talk interaction.
-    enum Activity: Equatable {
+    nonisolated enum Activity: Equatable, Sendable {
         case idle
         case listening
         case processing
@@ -76,12 +76,11 @@ final class MenuBarManager: NSObject {
     private var companionActivity: Activity = .idle
     private var appliedActivity: Activity = .idle
 
-    /// Companion presence is the lowest rung: anything the owner is actively
-    /// doing (dictating, listening to TTS) outranks it.
+    /// The applied glyph state — merge decided by the resolver.
     private var activity: Activity {
-        if dictationActivity != .idle { return dictationActivity }
-        if speechActivity != .idle { return speechActivity }
-        return companionActivity
+        MenuBarActivityResolver.merged(
+            dictation: dictationActivity, speech: speechActivity,
+            companion: companionActivity)
     }
 
     init(settings: SettingsManager) {
@@ -108,34 +107,17 @@ final class MenuBarManager: NSObject {
     // MARK: - State pushes (App Bindings)
 
     func updateState(from phase: DictationFeed.Phase) {
-        switch phase {
-        case .idle, .error:
-            dictationActivity = .idle
-        case .recording:
-            dictationActivity = .listening
-        case .processing, .proofreading:
-            dictationActivity = .processing
-        }
+        dictationActivity = MenuBarActivityResolver.activity(fromDictation: phase)
         applyActivityToIcon()
     }
 
     func updateState(fromSpeech speechState: SpeechState) {
-        switch speechState {
-        case .idle, .capturingText, .paused, .error:
-            speechActivity = .idle
-        case .generating, .streaming, .streamingLongForm, .playing:
-            speechActivity = .speaking
-        }
+        speechActivity = MenuBarActivityResolver.activity(fromSpeech: speechState)
         applyActivityToIcon()
     }
 
     func updateState(fromCompanion presence: CompanionPresence.State) {
-        switch presence {
-        case .idle: companionActivity = .idle
-        case .thinking: companionActivity = .thinking
-        case .summoning: companionActivity = .summoning
-        case .asleep: companionActivity = .asleep
-        }
+        companionActivity = MenuBarActivityResolver.activity(fromCompanion: presence)
         applyActivityToIcon()
     }
 
@@ -604,6 +586,57 @@ private final class ClickThroughImageView: NSImageView {
 
 /// Pure derivations for the menu's pinned language entries — kept
 /// nonisolated and value-in/value-out so they are directly testable.
+/// The status glyph's activity decisions (#396): the three per-source
+/// phase mappings and the priority merge, kept nonisolated and
+/// value-in/value-out so they are directly testable — the same treatment
+/// `MenuBarLanguagePins` below got, one screen down. `MenuBarManager`
+/// stores the per-source values and applies what these return; the glyph
+/// rendering stays dumb over the result.
+nonisolated enum MenuBarActivityResolver {
+
+    /// Dictation is the acute, push-to-talk interaction.
+    static func activity(fromDictation phase: DictationFeed.Phase) -> MenuBarManager.Activity {
+        switch phase {
+        case .idle, .error: .idle
+        case .recording: .listening
+        case .processing, .proofreading: .processing
+        }
+    }
+
+    /// Anything audibly in flight reads as speaking; capture and pause
+    /// leave the glyph alone.
+    static func activity(fromSpeech state: SpeechState) -> MenuBarManager.Activity {
+        switch state {
+        case .idle, .capturingText, .paused, .error: .idle
+        case .generating, .streaming, .streamingLongForm, .playing: .speaking
+        }
+    }
+
+    /// The Companion's presence rungs map one-to-one (#327 §3).
+    static func activity(fromCompanion presence: CompanionPresence.State) -> MenuBarManager.Activity
+    {
+        switch presence {
+        case .idle: .idle
+        case .thinking: .thinking
+        case .summoning: .summoning
+        case .asleep: .asleep
+        }
+    }
+
+    /// The priority ladder: dictation outranks speech outranks Companion
+    /// presence — anything the owner is actively doing beats the quietest
+    /// rung.
+    static func merged(
+        dictation: MenuBarManager.Activity,
+        speech: MenuBarManager.Activity,
+        companion: MenuBarManager.Activity
+    ) -> MenuBarManager.Activity {
+        if dictation != .idle { return dictation }
+        if speech != .idle { return speech }
+        return companion
+    }
+}
+
 nonisolated enum MenuBarLanguagePins {
 
     /// Dictation pins: the current selection first, then recents (newest
