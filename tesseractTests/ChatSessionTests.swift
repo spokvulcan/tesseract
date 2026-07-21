@@ -484,6 +484,44 @@ struct ChatSessionTests {
         #expect(agent.context.messages.count == 2)
     }
 
+    // MARK: - Opening context (ADR-0052 injection point)
+
+    /// The opening-context seam runs at send, sees the conversation transcript,
+    /// and its decorated message is what reaches the agent — so the identity +
+    /// fold-briefing block the container composes rides the conversation's first
+    /// outgoing message (ADR-0052's injection point). Pinned at the session
+    /// level: the seam's output must survive onto the message the agent gets.
+    @Test func openingContextRidesTheFirstMessageOfAConversation() async throws {
+        let agent = makeNoOpAgent(modelID: "opening-context-test")
+        let sawTranscriptCounts = Locked<[Int]>([])
+        let session = ChatSession(
+            agent: agent,
+            conversationStore: InMemoryAgentConversationStore(),
+            arbiter: InMemoryInferenceArbiter(),
+            openingContext: { outgoing, transcript in
+                sawTranscriptCounts.value.append(transcript.count)
+                return await outgoing.decoratingUser { user in
+                    user.with(
+                        injectedContext: [
+                            "<opening-context>fold</opening-context>", user.injectedContext,
+                        ].compactMap { $0 }.joined(separator: "\n\n"))
+                }
+            },
+            liveMarkdownThrottle: .zero
+        )
+
+        session.sendMessage("first message")
+        try await waitUntilIdle(session)
+
+        let user = try #require(agent.state.messages.compactMap(\.asUser).first)
+        // The seam's block reached the agent on the first user message, and it
+        // ran against an empty transcript — the conversation's opening turn.
+        #expect(
+            user.injectedContext?.contains("<opening-context>fold</opening-context>") == true)
+        #expect(user.content == "first message")
+        #expect(sawTranscriptCounts.value.first == 0)
+    }
+
     // MARK: - Pending Row
 
     /// `sendMessage` raises the Pending Row synchronously — the transcript

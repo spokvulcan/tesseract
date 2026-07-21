@@ -1139,6 +1139,19 @@ on the spine) and from the pure parser/registry types it merely drives.
 _Avoid_: command executor / router (execution stays on the spine), slash command
 registry (the pure type it drives).
 
+**Skill Execution**:
+The chat's collaborator for firing a **Skill** (ADR-0045 continuation, #408): it owns
+what a fire *is* — assembling the argument text from the drained composer draft,
+rendering the **Skill Envelope** injection block around the skill body, and recording
+the user-initiated invocation for the **Skill Usage Ranking** — and returns the
+injection for the **Chat Session** spine to send. Touches no `Agent`, no arbiter, no
+error banner (a load failure is a nil render the spine surfaces). Held by the session;
+a no-op default leaf in tests, the container-wired one (assembly + recording on the
+**Skill Pill** controller) in production.
+_Avoid_: skill tool (the model-invoked **SkillTool** `use_skill`), command execution
+(the palette/spine that routes a slash command *to* this), executeSkill-the-method
+(the retired inline home this replaced).
+
 ### Agent skills
 
 **Skill**:

@@ -509,7 +509,28 @@ final class DependencyContainer: ObservableObject {
     // skill argument assembly, draft clearing) arrives as closures so the
     // session never holds the controllers.
     lazy var chatSession: ChatSession = {
-        ChatSession(
+        // The opening-context sources, composed into the session's one
+        // `openingContext` seam below (ADR-0052) and reset together on a
+        // conversation switch. Hoisted to locals so both closures capture the
+        // same instances.
+        //
+        // One Jarvis everywhere (#370): the IDENTITY section rides the
+        // interactive chat — and the voice session, which sends through it.
+        let companionIdentity = CompanionIdentity(
+            store: memoryStore,
+            isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+        )
+        // The Fold Briefing (ADR-0052): every owner conversation opens as the
+        // one mind — the fold's recent life on the first message, re-briefed
+        // when the fold advances.
+        let foldBriefing = CompanionFoldBriefing(
+            store: memoryStore,
+            missionControl: { [unowned self] in
+                self.agentConversationStore.missionControl()
+            },
+            isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
+        )
+        return ChatSession(
             agent: agent,
             conversationStore: agentConversationStore,
             arbiter: inferenceArbiter,
@@ -520,38 +541,38 @@ final class DependencyContainer: ObservableObject {
             contextWindow: 262_144,
             summarize: internalCompletion,
             commandRegistry: { [commandPalette] in commandPalette.commandRegistry },
-            assembleSkillArguments: { [skillPills] name, text in
-                skillPills.assembleArguments(skillName: name, userText: text)
-            },
-            recordSkillInvocation: { [skillPills] name in
-                skillPills.recordUserInvocation(skillName: name)
-            },
+            skillExecution: SkillExecution(
+                assembleArguments: { [skillPills] name, text in
+                    skillPills.assembleArguments(skillName: name, userText: text)
+                },
+                recordInvocation: { [skillPills] name in
+                    skillPills.recordUserInvocation(skillName: name)
+                }
+            ),
             clearComposerDraft: { [composerDraft] in composerDraft.clearDraft() },
             restoreComposerDraft: { [composerDraft] text, images in
                 composerDraft.restore(text: text, images: images)
             },
-            onConversationSwitch: { [composerDraft, agentSystemPromptInspector, skillPills] in
+            onConversationSwitch: {
+                [composerDraft, agentSystemPromptInspector, skillPills] in
                 composerDraft.resetEphemeral()
                 agentSystemPromptInspector.reset()
                 skillPills.refreshPills()
+                // The opening-context boundary reset (was the session's
+                // `companionIdentity?.reset()` / `foldBriefing?.reset()`).
+                companionIdentity.reset()
+                foldBriefing.reset()
             },
             conversationMemory: ConversationMemory(memory: memoryEngine),
-            // One Jarvis everywhere (#370): the IDENTITY section rides the
-            // interactive chat — and the voice session, which sends through it.
-            companionIdentity: CompanionIdentity(
-                store: memoryStore,
-                isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
-            ),
-            // The Fold Briefing (ADR-0052): every owner conversation opens
-            // as the one mind — the fold's recent life on the first message,
-            // re-briefed when the fold advances.
-            foldBriefing: CompanionFoldBriefing(
-                store: memoryStore,
-                missionControl: { [unowned self] in
-                    self.agentConversationStore.missionControl()
-                },
-                isEnabled: { [settingsManager] in settingsManager.companionHeartbeatEnabled }
-            ),
+            // The one opening-context seam: fold briefing then identity, so the
+            // injected context reads identity outermost, then the fold briefing,
+            // then (in the session, after this) memory — the ADR-0052 order.
+            openingContext: { message, transcript in
+                var decorated = message
+                decorated = await foldBriefing.decorate(decorated, transcript: transcript)
+                decorated = await companionIdentity.decorate(decorated, transcript: transcript)
+                return decorated
+            },
             // The dialogue ledger's activity signal (#372) — lazy through the
             // container so the session and the ledger can reference each other.
             onDialogueActivity: { [weak self] id in
