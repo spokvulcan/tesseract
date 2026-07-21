@@ -48,11 +48,18 @@ Admission**; distinct from `restoreCache`, the later model-affine step that appl
 a resolved snapshot into a live cache (resolution picks *which*, restore
 *applies* it). Owned by the **Prefix Cache Manager** as its single read-side
 entry, never a free-standing module reaching back across the manager's mutation
-seam.
+seam. The lookup-then-hydrate *choosing* — the Hydration Gate outcome, the
+promote-on-success vs typed-cleanup-on-failure fork, the gate-fallback shapes —
+now lives in a pure decision ladder (`SnapshotResolutionLadder`) the manager
+consults; ownership is unmoved, the manager still performs every effect (the
+awaits, the tree/ledger mutations, the hydration call, pin placement, telemetry)
+and the ladder holds no references at all.
 _Avoid_: a standalone "hydrator" module (the retired shape that reached back into
-the manager — resolution is manager-owned); **Snapshot Hydrating** (a different
-concept: the off-main handle, not the choose step); restore/restoreCache (the
-apply step, not the choose step).
+the manager — resolution is manager-owned); a ladder holding references to the
+manager/tree/ledger/hydrating handle (the retired hydrator's shape again — the
+ladder takes plain facts, returns decision values); **Snapshot Hydrating** (a
+different concept: the off-main handle, not the choose step); restore/restoreCache
+(the apply step, not the choose step).
 
 **Snapshot Hydrating**:
 The narrow off-main handle that **Snapshot Resolution** depends on to materialize
