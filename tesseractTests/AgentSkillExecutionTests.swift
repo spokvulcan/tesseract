@@ -72,12 +72,14 @@ struct AgentSkillExecutionTests {
             conversationStore: InMemoryAgentConversationStore(),
             arbiter: InMemoryInferenceArbiter(),
             settings: settings,
-            assembleSkillArguments: { name, text in
-                skillPills.assembleArguments(skillName: name, userText: text)
-            },
-            recordSkillInvocation: { name in
-                skillPills.recordUserInvocation(skillName: name)
-            },
+            skillExecution: SkillExecution(
+                assembleArguments: { name, text in
+                    skillPills.assembleArguments(skillName: name, userText: text)
+                },
+                recordInvocation: { name in
+                    skillPills.recordUserInvocation(skillName: name)
+                }
+            ),
             liveMarkdownThrottle: .zero
         )
     }

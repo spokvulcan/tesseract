@@ -165,11 +165,11 @@ final class ChatSession {
     /// The slash-command registry, provided by the view-owned Command Palette
     /// leaf so parsing here can never drift from the popup's listing.
     private let commandRegistry: @MainActor () -> SlashCommandRegistry
-    /// Skill-invocation assembly + usage recording, provided by the view-owned
-    /// Skill Pill leaf (identity/no-op when absent, e.g. in tests).
-    private let assembleSkillArguments:
-        @MainActor (_ skillName: String, _ userText: String) -> String
-    private let recordSkillInvocation: @MainActor (_ skillName: String) -> Void
+    /// The **Skill Execution** leaf (ADR-0045 continuation, #408): renders the
+    /// Skill Envelope injection a fire sends and records the invocation. The
+    /// send itself stays here on the spine; the default no-op leaf when absent
+    /// (tests), the container-wired one in production.
+    private let skillExecution: SkillExecution
     /// `/clear` discards the view-owned composer draft through this hook.
     private let clearComposerDraft: @MainActor () -> Void
     /// A run that settles before its user message committed (cancel while
@@ -188,19 +188,26 @@ final class ChatSession {
     /// because memory must be a thing the chat can run *without* — a memory
     /// failure may never take a turn down.
     private let conversationMemory: ConversationMemory?
-    /// One Jarvis everywhere (ADR-0046, #370): hangs the IDENTITY section on
-    /// the conversation's first outgoing message — voice turns ride the same
-    /// send path, so this seam covers both. Optional for the same reason
-    /// memory is: the chat must run without the Companion.
-    private let companionIdentity: CompanionIdentity?
-    /// The Fold Briefing (ADR-0052): every owner conversation opens as the
-    /// one mind — the fold's recent life rides the first outgoing message,
-    /// and again whenever the fold advanced meanwhile. Optional for the
-    /// same reason identity is.
-    private let foldBriefing: CompanionFoldBriefing?
-    /// Every send into a dialogue-origin conversation is reported through
-    /// this door (ADR-0046 #372) — the dialogue ledger's activity signal,
-    /// which arms the Report-Back nudge accounting.
+    /// The opening-context decorator (ADR-0052): the container composes the
+    /// IDENTITY block (once per conversation, #370) and the Fold Briefing
+    /// (first message, then whenever the fold advanced meanwhile) into one
+    /// seam, so the session no longer knows there are two sources. Applied to
+    /// the outgoing message inside the run task *after* memory enrichment, so
+    /// identity/briefing read outermost and memory innermost — who you are,
+    /// what your fold is living, what you recall (the ADR-0052 injected-context
+    /// order). Voice turns ride the same send path, so this seam covers both.
+    /// The conversation-boundary reset of both sources rides
+    /// `onConversationSwitch`. Identity (a no-op pass-through) when absent, as
+    /// in tests: the chat must run without the Companion.
+    private let openingContext:
+        @MainActor (
+            _ outgoing: any AgentMessageProtocol & Sendable,
+            _ transcript: [any AgentMessageProtocol & Sendable]
+        ) async -> any AgentMessageProtocol & Sendable
+    /// A **spine signal** (stays on the Chat Session, not a leaf): every send
+    /// into an owner conversation is reported through this door (ADR-0046 #372,
+    /// widened by ADR-0052 to every owner conversation) — the dialogue ledger's
+    /// activity signal, which arms the Report-Back nudge accounting.
     private let onDialogueActivity: @MainActor (UUID) -> Void
     private let debugLogger = AgentDebugLogger()
 
@@ -221,22 +228,21 @@ final class ChatSession {
         commandRegistry: @MainActor @escaping () -> SlashCommandRegistry = {
             SlashCommandRegistry()
         },
-        assembleSkillArguments: @MainActor @escaping (String, String) -> String = { _, text in text
-        },
-        recordSkillInvocation: @MainActor @escaping (String) -> Void = { _ in },
+        skillExecution: SkillExecution = SkillExecution(),
         clearComposerDraft: @MainActor @escaping () -> Void = {},
         restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in
         },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
         conversationMemory: ConversationMemory? = nil,
-        companionIdentity: CompanionIdentity? = nil,
-        foldBriefing: CompanionFoldBriefing? = nil,
+        openingContext:
+            @MainActor @escaping (
+                any AgentMessageProtocol & Sendable, [any AgentMessageProtocol & Sendable]
+            ) async -> any AgentMessageProtocol & Sendable = { outgoing, _ in outgoing },
         onDialogueActivity: @MainActor @escaping (UUID) -> Void = { _ in },
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
         self.conversationMemory = conversationMemory
-        self.companionIdentity = companionIdentity
-        self.foldBriefing = foldBriefing
+        self.openingContext = openingContext
         self.onDialogueActivity = onDialogueActivity
         self.agent = agent
         self.conversationStore = conversationStore
@@ -246,8 +252,7 @@ final class ChatSession {
         self.contextWindow = contextWindow
         self.summarize = summarize
         self.commandRegistry = commandRegistry
-        self.assembleSkillArguments = assembleSkillArguments
-        self.recordSkillInvocation = recordSkillInvocation
+        self.skillExecution = skillExecution
         self.clearComposerDraft = clearComposerDraft
         self.restoreComposerDraft = restoreComposerDraft
         self.onConversationSwitch = onConversationSwitch
@@ -650,18 +655,12 @@ final class ChatSession {
                 if let conversationMemory = self.conversationMemory {
                     message = await conversationMemory.enrich(message)
                 }
-                // Decoration order is inside-out — each decorator prepends,
-                // so the injected context reads identity, then the fold
-                // briefing, then memory: who you are, what your fold is
-                // living, what you recall (ADR-0052).
-                if let briefing = self.foldBriefing {
-                    message = await briefing.decorate(
-                        message, transcript: self.agent.state.messages)
-                }
-                if let identity = self.companionIdentity {
-                    message = await identity.decorate(
-                        message, transcript: self.agent.state.messages)
-                }
+                // The opening context rides *after* memory, so the composed
+                // identity + fold-briefing blocks read outermost and memory
+                // innermost — who you are, what your fold is living, what you
+                // recall (the ADR-0052 injected-context order). The container
+                // composes the two sources; the session applies the one seam.
+                message = await self.openingContext(message, self.agent.state.messages)
                 // The Pending Row is keyed by id and is showing the same
                 // content, so swapping it for the decorated value is invisible —
                 // but it keeps the row and the message that reached the agent
@@ -714,12 +713,7 @@ final class ChatSession {
         case .builtIn:
             executeBuiltIn(command.name, arguments: arguments)
         case .skill(let filePath):
-            let sent = executeSkill(
-                filePath: filePath, skillName: command.name,
-                arguments: assembleSkillArguments(command.name, arguments))
-            if sent {
-                recordSkillInvocation(command.name)
-            }
+            fireSkill(name: command.name, filePath: filePath, userText: arguments, images: [])
         case .extension:
             error = "Extension commands are not wired yet: /\(command.name)"
         }
@@ -764,33 +758,27 @@ final class ChatSession {
 
     // MARK: - Skill execution
 
-    /// Inject the skill body as the user message (the established `<skill>`
-    /// wrapper — a user-message injection, never a system-prompt mutation, so
-    /// the prefix cache's stable prefix is untouched). Returns whether the
-    /// injection was sent — false when the skill file failed to load, so
-    /// callers can skip usage counting and restore their draft.
+    /// Fire a Skill: ask the **Skill Execution** leaf to render the injection
+    /// (the `<skill>` wrapper around the body plus assembled arguments — a
+    /// user-message injection, never a system-prompt mutation, so the prefix
+    /// cache's stable prefix is untouched), send it on the spine, and record
+    /// the invocation. Returns whether the fire was sent — false when the skill
+    /// file failed to load, so callers can restore their draft. Load-error
+    /// surfacing and the send are the spine's; assembly, the envelope render,
+    /// and usage recording are the leaf's.
     @discardableResult
-    func executeSkill(
-        filePath: String, skillName: String, arguments: String,
-        images: [ImageAttachment] = []
+    private func fireSkill(
+        name: String, filePath: String, userText: String, images: [ImageAttachment]
     ) -> Bool {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: filePath)),
-            let fullText = String(data: data, encoding: .utf8)
+        guard
+            let injection = skillExecution.render(
+                skillName: name, filePath: filePath, userText: userText, images: images)
         else {
             error = "Failed to load skill: \(filePath)"
             return false
         }
-
-        let body = SkillRegistry.bodyContent(of: fullText)
-
-        var message = SkillEnvelope.injection(
-            name: skillName, location: filePath, body: body)
-
-        if !arguments.isEmpty {
-            message += "\n\n\(arguments)"
-        }
-
-        sendMessage(message, images: images, bypassCommandParsing: true)
+        sendMessage(injection.message, images: injection.images, bypassCommandParsing: true)
+        skillExecution.recordFired(name)
         return true
     }
 
@@ -801,16 +789,8 @@ final class ChatSession {
     @discardableResult
     func fireSkillPill(_ pill: SkillPill, draftText: String, images: [ImageAttachment]) -> Bool {
         guard !agentRun.isGenerating else { return false }
-        let sent = executeSkill(
-            filePath: pill.filePath,
-            skillName: pill.name,
-            arguments: assembleSkillArguments(pill.name, draftText),
-            images: images
-        )
-        if sent {
-            recordSkillInvocation(pill.name)
-        }
-        return sent
+        return fireSkill(
+            name: pill.name, filePath: pill.filePath, userText: draftText, images: images)
     }
 
     // MARK: - Conversation lifecycle
@@ -882,8 +862,9 @@ final class ChatSession {
         toolStartInstants.removeAll()
         error = nil
         conversationMemory?.reset()
-        companionIdentity?.reset()
-        foldBriefing?.reset()
+        // The opening-context sources (identity, fold briefing) reset on the
+        // same conversation boundary — the container hangs their reset on
+        // `onConversationSwitch`, so the session no longer names the two.
         debugLogger.reset()
         onConversationSwitch()
     }

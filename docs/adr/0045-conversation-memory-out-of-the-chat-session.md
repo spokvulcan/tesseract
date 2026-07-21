@@ -66,3 +66,21 @@ does not cover.
   collaborator.
 - Behavior-preserving: no observable delta on main. `title` and `persists`
   accept exactly the message shapes they did before.
+
+## Continuation (#408, 2026-07-22)
+
+The move this ADR made once was made twice more when the Chat Session diet
+finished (the 2026-07-21 architecture review's Worth-exploring #9). The leaf
+list off the fold's `handle(event)` seam grew: memory (here), then skill
+execution and opening context. **`SkillExecution`** took `executeSkill`'s
+inline home — argument assembly, the Skill Envelope injection render (#401),
+usage recording — leaving the Chat Session one thin call that sends the leaf's
+rendered injection on the spine. **`openingContext`** collapsed the session's
+two `companionIdentity` + `foldBriefing` sources into one composed closure the
+container wires per ADR-0052, so the session stops knowing there are two
+sources (the boundary reset of both rides `onConversationSwitch`). Same shape,
+same win: the extracted logic gains its own decision-table tests
+(`SkillExecutionTests`), the session's init shrank (20 → 18 parameters), and
+the type moves further toward the fold-only shape its glossary entry claims.
+No observable delta — the rendered injection and the injected-context order
+(identity, then briefing, then memory) are byte-identical to the inline paths.
