@@ -313,7 +313,11 @@ nonisolated struct PersistedSnapshotDescriptor: Codable, Sendable, Equatable {
         partitionDigest: String
     ) -> String {
         let shardByte = String(snapshotID.prefix(1))
-        return "partitions/\(partitionDigest)/snapshots/\(shardByte)/\(snapshotID).safetensors"
+        return SnapshotDiskLayout.snapshotFile(
+            digest: partitionDigest,
+            shard: shardByte,
+            name: "\(snapshotID).safetensors"
+        )
     }
 }
 

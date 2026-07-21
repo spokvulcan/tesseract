@@ -549,10 +549,9 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
         _ meta: PartitionMeta,
         digest: String
     ) {
-        let dir =
-            rootURL
-            .appendingPathComponent("partitions")
-            .appendingPathComponent(digest)
+        let dir = rootURL.appendingPathComponent(
+            SnapshotDiskLayout.partitionDirectory(digest: digest)
+        )
         let url = dir.appendingPathComponent("_meta.json")
         do {
             try FileManager.default.createDirectory(
@@ -1212,7 +1211,9 @@ extension SnapshotLedger {
             if FileManager.default.fileExists(atPath: manifestURL.path) {
                 try? FileManager.default.moveItem(at: manifestURL, to: backupURL)
             }
-            let partitionsDir = rootURL.appendingPathComponent("partitions")
+            let partitionsDir = rootURL.appendingPathComponent(
+                SnapshotDiskLayout.partitionsRoot
+            )
             if FileManager.default.fileExists(atPath: partitionsDir.path) {
                 Task.detached {
                     try? FileManager.default.removeItem(at: partitionsDir)
@@ -1242,7 +1243,9 @@ extension SnapshotLedger {
     private nonisolated func rebuildManifestFromDirectoryWalk(
         expectedFingerprint: String
     ) -> WarmStartOutcome {
-        let partitionsDir = rootURL.appendingPathComponent("partitions")
+        let partitionsDir = rootURL.appendingPathComponent(
+            SnapshotDiskLayout.partitionsRoot
+        )
         guard FileManager.default.fileExists(atPath: partitionsDir.path) else {
             Log.agent.info(
                 "SnapshotLedger rebuild: no `partitions/` directory, starting fresh"
@@ -1306,7 +1309,9 @@ extension SnapshotLedger {
                 else { continue }
                 for name in fileNames where name.hasSuffix(".safetensors") {
                     let fileURL = shardDir.appendingPathComponent(name)
-                    let relativePath = "partitions/\(digest)/snapshots/\(shard)/\(name)"
+                    let relativePath = SnapshotDiskLayout.snapshotFile(
+                        digest: digest, shard: shard, name: name
+                    )
                     walkedFiles[relativePath] = fileURL
                     guard let descriptor = extractDescriptorFromFile(fileURL),
                         descriptor.partitionDigest == digest
@@ -1387,179 +1392,52 @@ extension SnapshotLedger {
         persistManifestAfter: Bool,
         source: String
     ) -> WarmStartOutcome {
-        var restored = SnapshotManifest.empty()
-        var invalidated: [WarmStartOutcome.InvalidatedPartition] = []
-        let now = Date().timeIntervalSinceReferenceDate
-
-        // Chain-total bytes per partition, so each reclaim can report
-        // what it returned to the budget.
-        var bytesByPartition: [String: Int] = [:]
-        for descriptor in loaded.snapshots.values {
-            bytesByPartition[descriptor.partitionDigest, default: 0] += descriptor.totalBytes
-        }
-        func invalidate(
-            _ digest: String,
-            _ meta: PartitionMeta,
-            _ reason: WarmStartOutcome.PartitionInvalidationReason
-        ) {
-            invalidated.append(
-                WarmStartOutcome.InvalidatedPartition(
-                    digest: digest,
-                    modelID: meta.modelID,
-                    bytes: bytesByPartition[digest] ?? 0,
-                    reason: reason
-                ))
-        }
-
-        // True when a legacy meta was grace-stamped below — the stamp
-        // must reach disk this session or the GC clock never starts.
-        var mutatedRestoredMeta = false
-
-        // Stale-partition GC (PRD #150): staleness is measured against
-        // the freshest valid partition's use stamp, not the wall clock
-        // — an idle week must not reclaim the whole tier (see
-        // `SSDStalePartitionPolicy`). Legacy metas without a stamp are
-        // treated as fresh here and grace-stamped below.
-        // Anchor on *real* stamps only: a legacy nil-stamped partition
-        // is about to be grace-stamped, and letting it count as "used
-        // now" would inflate the anchor and reclaim a genuinely-stamped
-        // sibling at the migration launch — the wall-clock regression
-        // the relative rule exists to prevent. No stamps anywhere → no
-        // anchor → nothing reclaimed this launch.
-        let tierMostRecentUse = loaded.partitions.values
-            .filter {
-                $0.schemaVersion == SnapshotManifestSchema.currentVersion
-                    && $0.modelFingerprint == expectedFingerprint
-            }
-            .compactMap(\.lastUsedAt)
-            .max()
-
-        for (digest, meta) in loaded.partitions {
-            // Stale `PartitionMeta` inside a current-version manifest
-            // signals a hand-edited or partially upgraded file — drop it
-            // rather than reattach under stale canonicalization.
-            guard meta.schemaVersion == SnapshotManifestSchema.currentVersion else {
-                invalidate(digest, meta, .schemaStale)
-                continue
-            }
-            guard meta.modelFingerprint == expectedFingerprint else {
-                invalidate(digest, meta, .fingerprintChanged)
-                continue
-            }
-            // A legacy meta without a stamp is grace-stamped to "now" —
-            // the clock starts here, it does not retroactively reclaim
-            // long-lived caches.
-            if let lastUsed = meta.lastUsedAt {
-                if let anchor = tierMostRecentUse,
-                    anchor - lastUsed > SSDStalePartitionPolicy.maxUnusedAge
-                {
-                    invalidate(digest, meta, .staleUnused)
-                    continue
-                }
-                restored.partitions[digest] = meta
-            } else {
-                var graced = meta
-                graced.lastUsedAt = now
-                restored.partitions[digest] = graced
-                mutatedRestoredMeta = true
-            }
-        }
-
-        var descriptorsByDigest: [String: [PersistedSnapshotDescriptor]] = [:]
-        var deadDescriptorFiles: [URL] = []
-        for (id, desc) in loaded.snapshots {
-            guard restored.partitions[desc.partitionDigest] != nil else { continue }
-            // Same rationale as the `PartitionMeta` filter above.
-            guard desc.schemaVersion == SnapshotManifestSchema.currentVersion else {
-                deadDescriptorFiles.append(
-                    contentsOf: chainFileURLs(for: desc)
-                )
-                continue
-            }
-            // Drop descriptors whose wire-format checkpoint type no
-            // longer decodes — `PrefixCacheManager.warmStart` would skip
-            // them silently otherwise, leaving their bytes stranded in
-            // `currentSSDBytes`.
-            guard
-                HybridCacheSnapshot.CheckpointType(
-                    wireString: desc.checkpointType
-                ) != nil
-            else {
-                deadDescriptorFiles.append(
-                    contentsOf: chainFileURLs(for: desc)
-                )
-                continue
-            }
-            restored.snapshots[id] = desc
-            descriptorsByDigest[desc.partitionDigest, default: []].append(desc)
-        }
-
-        let seedBytes = restored.snapshots.values.reduce(0) { $0 + $1.totalBytes }
-
-        // Reclaims and grace stamps must reach disk even on the normal
-        // manifest-load path (which otherwise defers persistence to the
-        // next mutation): an unpersisted grace stamp restarts the GC
-        // clock every launch, and an unpersisted reclaim resurfaces the
-        // partition's dangling descriptors on the next read.
-        let persistAfter =
-            persistManifestAfter || mutatedRestoredMeta || !invalidated.isEmpty
+        // The three warm-start decisions are pure — the **Warm-Start
+        // Plan** (ADR-0055). Read + decode already happened upstream;
+        // here the ledger only derives the plan and then performs its
+        // effects: install under the lock, schedule the persist per the
+        // plan's flag, and delete the plan's paths off the hot path.
+        let plan = WarmStartPlanner.plan(
+            loaded: loaded,
+            expectedFingerprint: expectedFingerprint,
+            now: Date().timeIntervalSinceReferenceDate,
+            persistManifestAfter: persistManifestAfter
+        )
 
         lock.lock()
-        self.manifest = restored
-        self.currentSSDBytes = seedBytes
-        if persistAfter {
+        self.manifest = plan.manifest
+        self.currentSSDBytes = plan.seedBytes
+        if plan.persistNeeded {
             self.manifestDirty = true
             scheduleManifestPersistLocked()
         }
         lock.unlock()
 
-        let validPartitions: [WarmStartOutcome.Partition] = restored.partitions.map {
-            digest, meta in
-            WarmStartOutcome.Partition(
-                digest: digest,
-                meta: meta,
-                descriptors: (descriptorsByDigest[digest] ?? [])
-                    .sorted { $0.snapshotID < $1.snapshotID }
-            )
-        }
-        .sorted { $0.digest < $1.digest }
-
-        if !invalidated.isEmpty {
+        // Both invalidated partition directories and dead-descriptor chain
+        // files ride in `plan.deletions` as root-relative paths — one
+        // detached sweep off the hot path.
+        if !plan.deletions.isEmpty {
             let capturedRoot = rootURL
-            let capturedDigests = invalidated.map(\.digest)
+            let relativePaths = plan.deletions
             Task.detached {
-                for digest in capturedDigests {
-                    let dir =
-                        capturedRoot
-                        .appendingPathComponent("partitions")
-                        .appendingPathComponent(digest)
-                    try? FileManager.default.removeItem(at: dir)
-                }
-            }
-        }
-
-        if !deadDescriptorFiles.isEmpty {
-            let urls = deadDescriptorFiles
-            Task.detached {
-                for url in urls {
-                    try? FileManager.default.removeItem(at: url)
+                for relativePath in relativePaths {
+                    try? FileManager.default.removeItem(
+                        at: capturedRoot.appendingPathComponent(relativePath)
+                    )
                 }
             }
         }
 
         Log.agent.info(
             "SnapshotLedger.seedFromWarmStart source=\(source) "
-                + "partitions=\(restored.partitions.count) "
-                + "snapshots=\(restored.snapshots.count) "
-                + "bytes=\(seedBytes) "
-                + "invalidated=\(invalidated.count) "
-                + "dead=\(deadDescriptorFiles.count)"
+                + "partitions=\(plan.manifest.partitions.count) "
+                + "snapshots=\(plan.manifest.snapshots.count) "
+                + "bytes=\(plan.seedBytes) "
+                + "invalidated=\(plan.outcome.invalidated.count) "
+                + "deletions=\(plan.deletions.count)"
         )
 
-        return WarmStartOutcome(
-            validPartitions: validPartitions,
-            invalidated: invalidated.sorted { $0.digest < $1.digest }
-        )
+        return plan.outcome
     }
 
     /// Read only the header of a placeholder container file and return
