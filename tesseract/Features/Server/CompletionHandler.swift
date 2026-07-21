@@ -590,7 +590,6 @@ struct CompletionHandler: Sendable {
         let created = Int(Date().timeIntervalSince1970)
         let model = Self.echoModelID(requestModel: request.model, physical: start.modelID)
         let includeUsage = request.stream_options?.include_usage == true
-        let idleKeepaliveInterval: Duration = .milliseconds(250)
 
         // Emit initial chunk with role
         guard
@@ -604,39 +603,18 @@ struct CompletionHandler: Sendable {
             return
         }
 
-        let outcome = await withTaskGroup(of: StreamingOutcome.self) { group in
-            group.addTask {
-                await writer.waitForDisconnect()
-                guard !Task.isCancelled else { return .cancelled }
-                start.cancel()
-                return .disconnected(.connectionState)
-            }
-
-            group.addTask {
-                // Keepalive: while the stream is idle, probe the transport
-                // frequently so client aborts cancel long prefill promptly.
-                while true {
-                    do {
-                        try await Task.sleep(for: idleKeepaliveInterval)
-                        try Task.checkCancellation()
-                    } catch is CancellationError {
-                        return .cancelled
-                    } catch {
-                        return .failed(error.localizedDescription)
-                    }
-
-                    guard await sse.idleFor(atLeast: idleKeepaliveInterval) else {
-                        continue
-                    }
-
-                    guard await sse.keepalive("keepalive") else {
-                        start.cancel()
-                        return .disconnected(.keepaliveWrite)
-                    }
-                }
-            }
-
-            group.addTask {
+        // The transport-lifecycle race — disconnect watch, idle keepalive
+        // prober, and the drive as first-finisher-wins — lives in the driver
+        // (keepalive cadence defaulted to today's value there). The handler
+        // hands it the SSE/writer probes and the generation pump.
+        let outcome = await StreamLifecycleDriver.run(
+            transport: StreamLifecycleDriver.Transport(
+                waitForDisconnect: { await writer.waitForDisconnect() },
+                idleFor: { await sse.idleFor(atLeast: $0) },
+                sendKeepalive: { await sse.keepalive("keepalive") }
+            ),
+            onTransportCancel: start.cancel,
+            drive: {
                 await Self.streamGenerationEvents(
                     start.stream,
                     envelope: ChunkEnvelope(
@@ -656,11 +634,7 @@ struct CompletionHandler: Sendable {
                     send: { await sse.send($0) }
                 )
             }
-
-            let first = await group.next() ?? .cancelled
-            group.cancelAll()
-            return first
-        }
+        )
 
         switch outcome {
         case .completed(let accumulator, let info, let wireStreamedToolCalls):
