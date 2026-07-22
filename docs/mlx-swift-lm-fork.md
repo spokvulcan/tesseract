@@ -26,10 +26,12 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
-## Current pin (2026-07-18)
+## Current pin (2026-07-23)
 
-Base: upstream `main` @ `343cae3` (contains merged #398/#399/#411/#418).
-Carried on top, in order:
+Base: upstream `main` @ `eaefe75` (adds Qwen3.5 interleaved M-RoPE
+optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
+#232, Gemma 4 MTP speculative decoding #415, tool-schema `$defs` hoisting
+#434). Carried on top, in order:
 
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
