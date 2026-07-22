@@ -116,4 +116,12 @@ this table. Decode falls steeply with context on the dense model
 
 ### Experiments
 
-_None yet._
+**E0 — methodology shakedown (baseline vs itself).** Ran `parity-ab.sh` with
+the same binary on both arms (qwen3.5-4b-paro, 1 round, ctx=128): quality
+gate PASS (token-identical across separate processes — cross-process
+reproducibility confirmed); same-binary noise floor measured: decode ±0.1%,
+prefill at ctx=128 ±2%, peak GB ±0. **Calibrations: (a) the ≥1% win bar is
+meaningful for decode and 8K/32K prefill, but ctx=128 prefill needs ≥2%;
+(b) load-time comparisons must discard round 1** (first arm pays one-time
+warmup: 3.02 s vs 0.96 s same binary). Not an optimization; no code change.
+
