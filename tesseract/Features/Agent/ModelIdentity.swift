@@ -282,9 +282,27 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// parse-failure path and `LLMActor`'s pre-load path agree in one place.
     private static func interpretFlopProfile(configJSON: [String: Any]?) -> ModelFlopProfile {
         guard let root = configJSON,
-            let topModelType = root["model_type"] as? String,
-            topModelType.hasPrefix("qwen3_5")
+            let topModelType = root["model_type"] as? String
         else { return .fallback }
+
+        // Nanbeige's looped transformer is dense attention with every layer
+        // executed `num_loops` times per token — price it as loops × layers
+        // attention/MLP blocks, no SSM share (issue #422).
+        if topModelType == "nanbeige" {
+            guard let hiddenLayers = root["num_hidden_layers"] as? Int,
+                let hiddenSize = root["hidden_size"] as? Int
+            else { return .fallback }
+            let effectiveLayers = hiddenLayers * max(root["num_loops"] as? Int ?? 1, 1)
+            return ModelFlopProfile(
+                attentionLayers: effectiveLayers,
+                ssmLayers: 0,
+                mlpLayers: effectiveLayers,
+                hiddenSize: hiddenSize,
+                ssmStateDim: 0
+            )
+        }
+
+        guard topModelType.hasPrefix("qwen3_5") else { return .fallback }
 
         let textConfig = (root["text_config"] as? [String: Any]) ?? root
         guard let hiddenLayers = textConfig["num_hidden_layers"] as? Int,
