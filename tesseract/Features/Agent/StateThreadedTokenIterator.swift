@@ -19,7 +19,10 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     private let model: any LanguageModel
     private var cache: [any KVCache]
     private var state: LMOutput.State?
-    private var processor: (any LogitProcessor)?
+    /// Resolved once through the ``GenerationLogitProcessor`` seam; exposed
+    /// read-only so wiring tests can assert this path attached the app
+    /// processor rather than a vendor default.
+    private(set) var processor: (any LogitProcessor)?
     private let sampler: any LogitSampler
     private var y: LMInput.Text
 
@@ -48,7 +51,8 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         self.model = model
         self.cache = cache
         self.state = state
-        self.processor = AgentLogitProcessors.processor(for: parameters)
+        self.processor = GenerationLogitProcessor.resolve(
+            for: parameters, pathQuantizesKVUpFront: true)
         self.sampler = parameters.sampler()
         self.maxTokens = parameters.maxTokens
         self.y = remainder
@@ -79,7 +83,8 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     ) throws {
         self.model = model
         self.cache = cache
-        self.processor = AgentLogitProcessors.processor(for: parameters)
+        self.processor = GenerationLogitProcessor.resolve(
+            for: parameters, pathQuantizesKVUpFront: true)
         self.sampler = parameters.sampler()
         self.maxTokens = parameters.maxTokens
         self.y = input.text

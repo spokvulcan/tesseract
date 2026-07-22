@@ -161,7 +161,10 @@ nonisolated enum PrefillExecutor {
         cache: inout [any KVCache],
         parameters: GenerateParameters
     ) throws -> TokenIterator {
-        guard let penaltyProcessor = AgentLogitProcessors.processor(for: parameters) else {
+        guard
+            let penaltyProcessor = GenerationLogitProcessor.resolve(
+                for: parameters, pathQuantizesKVUpFront: true)
+        else {
             return try TokenIterator(
                 input: LMInput(text: remainder),
                 model: model,
