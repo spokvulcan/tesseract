@@ -11,7 +11,9 @@ PROJECT="$PROJECT_DIR/tesseract.xcodeproj"
 SCHEME="tesseract"
 CONFIGURATION="Release"
 DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
-BENCH_DIR="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark"
+# The app is not sandboxed (ADR-0047), so FileManager.temporaryDirectory is
+# the real per-user temp dir, not the container tmp.
+BENCH_DIR="$(getconf DARWIN_USER_TEMP_DIR)tesseract-debug/benchmark"
 LOG_FILE="$BENCH_DIR/latest.log"
 RESULTS_DIR="$BENCH_DIR/results"
 REPO_RESULTS="$PROJECT_DIR/benchmarks/results"
