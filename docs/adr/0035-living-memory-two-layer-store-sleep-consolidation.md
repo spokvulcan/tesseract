@@ -276,3 +276,19 @@ The second repair pass on the live store followed the same offline grammar as th
 - **Difficulty (`D`)** is stored but not fitted in v1 — with a 4-level grade from a noisy local judge it may simply be unidentifiable, and two numbers (`S`, `SS`) may be the honest schema.
 - **Per-cue decay.** Interference theory says competition lives at the *cue*, not the memory. Conditioning need-probability on cue-cluster density is the most scientifically defensible refinement available, and it changes the schema.
 - **Cross-system benchmark comparison** — ruled out of map #314's scope by the owner; the in-map bar is the owner-corpus baseline.
+
+## Amendment (2026-07-22): MemoryCallback deleted
+
+`MemoryCallback` — the three-gate morning-callback composer (`clean` /
+`grounded` / `critique`, "The sixth finding" above) — was never wired into a
+production caller. The 2026-07-21 architecture review verified it end to end:
+built, 11 tests green, zero call sites; the flight-recorder metric it was
+supposed to feed (`callback.delivered`) was structurally unpopulatable and was
+already removed with the Trace Vocabulary work (PR #398). The owner's call is
+delete, not wire: the module and its tests are gone.
+
+The morning-beat live runs recorded above happened — the gates ran then, from
+wiring that no longer exists. If a morning callback returns as a product
+surface, this section and "The sixth finding" are its spec: the three gates,
+the hedge rule, and the hardcoded-fallback contract were all argued from live
+failures and should be rebuilt, not rediscovered.
