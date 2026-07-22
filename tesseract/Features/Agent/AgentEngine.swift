@@ -376,19 +376,6 @@ final class AgentEngine {
         activeGeneration = nil
     }
 
-    /// Shared generation logic for both prompt-based and message-based entry points.
-    private func startGeneration(
-        input: UserInput,
-        toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
-    ) throws -> AsyncThrowingStream<AgentGeneration, Error> {
-        try startManagedGeneration(
-            input: input,
-            toolSpecs: toolSpecs,
-            parameters: parameters
-        ).stream
-    }
-
     private func startManagedGeneration(
         input: UserInput,
         toolSpecs: [ToolSpec]?,

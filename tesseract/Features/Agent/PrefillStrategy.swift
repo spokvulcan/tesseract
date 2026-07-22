@@ -94,16 +94,13 @@ nonisolated enum PrefillStrategy: Equatable, Sendable {
                 parameters: parameters
             )
         case .singleShot:
-            // With penalties configured, build the processor through
-            // `AgentLogitProcessors` so presence gets output-only semantics
-            // (the vendor init would build the prompt-seeded window
-            // internally). Only on the unquantized-KV path: the explicit-
-            // processor init has no in-iterator cache quantization, and this
-            // arm has no up-front quantization point that reproduces the
-            // vendor's quantize-after-prefill order. `kvBits` is nil on every
-            // agent preset (#252), so the carve-out is theoretical.
-            if parameters.kvBits == nil,
-                let processor = AgentLogitProcessors.processor(for: parameters)
+            // The single-shot arm has no up-front quantization point, so it
+            // resolves the processor through the ``GenerationLogitProcessor``
+            // seam with `pathQuantizesKVUpFront: false`: an app processor when
+            // `kvBits` is nil (output-only presence), the vendor init otherwise
+            // (the seam's `kvBits` carve-out — theoretical, #252).
+            if let processor = GenerationLogitProcessor.resolve(
+                for: parameters, pathQuantizesKVUpFront: false)
             {
                 return try TokenIterator(
                     input: input,

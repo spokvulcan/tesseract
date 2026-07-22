@@ -72,3 +72,21 @@ invalidates the prefix cache for no proven gain).
 - `AgentGenerateParameters.presenceContextSize` still exists but no longer
   drives the main paths; it parameterizes only the vendor window on the
   quantized-KV single-shot carve-out.
+
+## Amendment (2026-07-22)
+
+The "replaces `GenerateParameters.processor()` on every generation path" clause
+above was, at ship time, verified only at the pure factory's home — no test
+covered the four wiring sites that had to *call* it, and one (single-shot)
+re-implemented the `kvBits` carve-out by hand. That is the same wiring-not-math
+shape whose earlier lapse was the original inert-penalty bug (issue #405).
+
+The clause is now enforced structurally by one seam, `GenerationLogitProcessor`
+(`Features/Agent/GenerationLogitProcessor.swift`): a pure `nonisolated` decider
+`resolve(for:pathQuantizesKVUpFront:)` that owns the "which processor does this
+generation get" decision, including the `kvBits` carve-out (folded into the
+`pathQuantizesKVUpFront` flag). All four sites — single-shot prefill, chunked-
+prefill decode, and both state-threaded decode inits — route through it; none
+hand-picks a processor. Decision rows and per-path wiring (the state-threaded
+iterators asserted to hold the seam's `OutputPresencePenalty`, not the vendor
+default) are tested in `GenerationLogitProcessorTests`.
