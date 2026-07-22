@@ -25,6 +25,10 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
     case qwenInstructGeneral
     /// Qwen3.5/3.6 instruct (non-thinking) mode — reasoning tasks.
     case qwenInstructReasoning
+    /// Nanbeige4.2 agentic/tool-use profile (the model's default here).
+    case nanbeigeAgentic
+    /// Nanbeige4.2 chat/reasoning profile (the model's generation_config).
+    case nanbeigeChatReasoning
 
     var id: String { rawValue }
 
@@ -35,6 +39,8 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
         case .qwenThinkingCoding: "Thinking – Coding (WebDev)"
         case .qwenInstructGeneral: "Instruct – General"
         case .qwenInstructReasoning: "Instruct – Reasoning"
+        case .nanbeigeAgentic: "Nanbeige – Agentic"
+        case .nanbeigeChatReasoning: "Nanbeige – Chat/Reasoning"
         }
     }
 
@@ -50,6 +56,10 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
             "temp 0.7, top_p 0.80, top_k 20, presence 1.5 — general chat in non-thinking mode."
         case .qwenInstructReasoning:
             "temp 1.0, top_p 0.95, top_k 20, presence 1.5 — reasoning tasks in non-thinking mode."
+        case .nanbeigeAgentic:
+            "temp 1.0, top_p 0.95, top_k 20, no penalties — Nanbeige4.2 recommendation for agentic tool use."
+        case .nanbeigeChatReasoning:
+            "temp 0.6, top_p 0.95, top_k 20, no penalties — Nanbeige4.2 recommendation for chat and reasoning."
         }
     }
 
@@ -102,6 +112,16 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
             return Overrides(
                 temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0,
                 presencePenalty: 1.5, repetitionPenalty: nil
+            )
+        case .nanbeigeAgentic:
+            return Overrides(
+                temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0,
+                presencePenalty: nil, repetitionPenalty: nil
+            )
+        case .nanbeigeChatReasoning:
+            return Overrides(
+                temperature: 0.6, topP: 0.95, topK: 20, minP: 0.0,
+                presencePenalty: nil, repetitionPenalty: nil
             )
         }
     }

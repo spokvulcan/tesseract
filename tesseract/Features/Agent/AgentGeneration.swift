@@ -167,10 +167,22 @@ struct AgentGenerateParameters: Sendable, Codable {
         repetitionPenalty: 1.05
     )
 
+    /// Nanbeige4.2 agentic/tool-use profile (model card: temperature 1.0 for
+    /// agentic scenarios; top_p/top_k from the shipped generation_config).
+    /// No penalties — a thinking-by-default model, same rationale as
+    /// ``qwen36Thinking``. The chat/reasoning profile (temp 0.6) is offered
+    /// as the `SamplingPreset.nanbeigeChatReasoning` settings override.
+    static let nanbeige42 = AgentGenerateParameters(
+        temperature: 1.0,
+        topP: 0.95,
+        topK: 20
+    )
+
     /// Returns the recommended parameters for a given model ID.
     static func forModel(_ modelID: String) -> AgentGenerateParameters {
         if modelID.contains("opus-distill") { return .qwen3OpusDistill }
         if modelID.contains("thinking") { return .qwen3Thinking }
+        if modelID.hasPrefix("nanbeige") { return .nanbeige42 }
         if modelID.hasPrefix("ornith-9b") { return .ornith9b }
         if modelID.hasPrefix("ornith-35b") { return .ornith35b }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
