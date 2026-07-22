@@ -305,7 +305,8 @@ struct CompletionHandler: Sendable {
         let renderContext = TemplateRenderContext.resolve(
             requestKwargs: request.chat_template_kwargs?.booleanFlags,
             appEnabledFlags: appEnabledFlags,
-            declaredFlags: modelState.declaredTemplateFlags
+            declaredFlags: modelState.declaredTemplateFlags,
+            templateDefaults: modelState.templateFlagDefaults
         )
         let normalized = MessageConverter.normalizeRequest(
             repairedRequest.messages,

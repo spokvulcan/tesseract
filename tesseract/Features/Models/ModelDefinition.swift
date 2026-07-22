@@ -238,6 +238,19 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
+            id: "nanbeige4.2-3b-8bit",
+            displayName: "Nanbeige4.2-3B (MLX 8-bit)",
+            description:
+                "Compact agentic model with a Looped Transformer (22 layers run twice, shared weights). Strong tool use and reasoning for its size.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "MercuriusDream/Nanbeige4.2-3B-mlx-8bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.4 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "ornith-9b",
             displayName: "Ornith 1.0 9B (MLX 6-bit)",
             description:

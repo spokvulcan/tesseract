@@ -61,6 +61,20 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func nanbeigeIdMapsToNanbeige42Preset() {
+        // Agentic profile from the model card (temp 1.0); no penalties — a
+        // thinking-by-default model, same rationale as the qwen thinking
+        // presets.
+        let params = AgentGenerateParameters.forModel("nanbeige4.2-3b-8bit")
+        #expect(params.temperature == 1.0)
+        #expect(params.topP == 0.95)
+        #expect(params.topK == 20)
+        #expect(params.presencePenalty == nil)
+        #expect(params.repetitionPenalty == nil)
+        #expect(params.thinkingSafeguard.enabled == true)
+    }
+
+    @MainActor
     @Test func qwen36ThinkingPresetHasNoPresencePenalty() {
         #expect(AgentGenerateParameters.qwen36Thinking.temperature == 0.6)
         #expect(AgentGenerateParameters.qwen36Thinking.topP == 0.95)
@@ -128,6 +142,28 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func nanbeigeAgenticMatchesSpec() {
+        let out = SamplingPreset.nanbeigeAgentic.apply(to: .default)
+        #expect(out.temperature == 1.0)
+        #expect(out.topP == 0.95)
+        #expect(out.topK == 20)
+        #expect(out.minP == 0.0)
+        #expect(out.presencePenalty == nil)
+        #expect(out.repetitionPenalty == nil)
+    }
+
+    @MainActor
+    @Test func nanbeigeChatReasoningMatchesSpec() {
+        let out = SamplingPreset.nanbeigeChatReasoning.apply(to: .default)
+        #expect(out.temperature == 0.6)
+        #expect(out.topP == 0.95)
+        #expect(out.topK == 20)
+        #expect(out.minP == 0.0)
+        #expect(out.presencePenalty == nil)
+        #expect(out.repetitionPenalty == nil)
+    }
+
+    @MainActor
     @Test func presetPreservesNonSamplingFields() {
         var base = AgentGenerateParameters.default
         base.maxTokens = 131_072
@@ -154,6 +190,7 @@ struct AgentGenerateParametersTests {
         let presets: [SamplingPreset] = [
             .qwenThinkingGeneral, .qwenThinkingCoding,
             .qwenInstructGeneral, .qwenInstructReasoning,
+            .nanbeigeAgentic, .nanbeigeChatReasoning,
         ]
         for preset in presets {
             var base = AgentGenerateParameters.default

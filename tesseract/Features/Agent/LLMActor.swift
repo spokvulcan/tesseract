@@ -448,6 +448,12 @@ actor LLMActor {
         serverCompletion?.modelIdentity?.declaredTemplateFlags ?? []
     }
 
+    /// Template-default value per declared render flag, from the same
+    /// load-time identity snapshot. Empty before a load installs one.
+    func loadedTemplateFlagDefaults() -> [TemplateRenderFlag: Bool] {
+        serverCompletion?.modelIdentity?.templateFlagDefaults ?? [:]
+    }
+
     /// Tool-call format of the loaded model, read from the same load-time
     /// identity snapshot as the render flags. `nil` before a load installs
     /// one, or when the model has no override (vendor JSON default) — the

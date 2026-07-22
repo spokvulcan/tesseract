@@ -73,6 +73,10 @@ final class InferenceArbiter: InferenceArbitrating {
     /// Empty when nothing is loaded.
     var loadedDeclaredTemplateFlags: Set<TemplateRenderFlag> { agentEngine.declaredTemplateFlags }
 
+    /// Template-default value per declared flag of the loaded `.llm` model.
+    /// Empty when nothing is loaded.
+    var loadedTemplateFlagDefaults: [TemplateRenderFlag: Bool] { agentEngine.templateFlagDefaults }
+
     /// Tool-call format of the loaded `.llm` model — the identity the server's
     /// Argument Transcoder keys off. `nil` when nothing is loaded or the model
     /// has no override (vendor JSON default).

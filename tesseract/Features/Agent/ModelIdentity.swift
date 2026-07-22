@@ -93,6 +93,15 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// and Qwen3.5-PARO (which lacks it) is naturally excluded.
     let declaredTemplateFlags: Set<TemplateRenderFlag>
 
+    /// The template-default value of each declared render flag — the state the
+    /// template renders when the kwarg is absent. Qwen3.6 strips prior think
+    /// blocks unless `preserve_thinking is true` (default `false`); Nanbeige4.2
+    /// preserves them unless `preserve_thinking is false` (default `true`).
+    /// `TemplateRenderContext.resolve` emits a kwarg only where the desired
+    /// state differs from this default, so neither polarity fragments the
+    /// cache partition for a render the template would produce anyway.
+    let templateFlagDefaults: [TemplateRenderFlag: Bool]
+
     /// FLOP/state-size profile the eviction policy scores against. **Total**:
     /// a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
     /// never `nil`, so the single consumer (`EvictionPolicy`) never handles an
@@ -140,7 +149,11 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.isMoE = modelType == "qwen3_5_moe"
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
-        self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
+        let declaredFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
+        self.declaredTemplateFlags = declaredFlags
+        self.templateFlagDefaults = Self.interpretTemplateFlagDefaults(
+            chatTemplate: chatTemplate, declaredFlags: declaredFlags
+        )
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
             configJSON: configJSON
@@ -202,6 +215,36 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             })
     }
 
+    /// Interpret each declared flag's template-default value from the shape of
+    /// the template's own test. A template that branches on
+    /// `preserve_thinking is false` only changes its render when handed an
+    /// explicit `false` — so its default is to preserve (`true`). The Qwen3.6
+    /// shape (`preserve_thinking is true`) defaults to strip (`false`), as
+    /// does a bare truthiness test, where an absent kwarg is falsy.
+    private static func interpretTemplateFlagDefaults(
+        chatTemplate: String?,
+        declaredFlags: Set<TemplateRenderFlag>
+    ) -> [TemplateRenderFlag: Bool] {
+        guard let chatTemplate, !declaredFlags.isEmpty else { return [:] }
+        let scannable = stripJinjaComments(chatTemplate)
+        return Dictionary(
+            uniqueKeysWithValues: declaredFlags.map { flag in
+                let pattern =
+                    "(?<![A-Za-z0-9_])"
+                    + NSRegularExpression.escapedPattern(for: flag.rawValue)
+                    + "\\s+is\\s+false(?![A-Za-z0-9_])"
+                let matchesIsFalse =
+                    (try? NSRegularExpression(pattern: pattern))
+                    .map {
+                        $0.firstMatch(
+                            in: scannable,
+                            range: NSRange(scannable.startIndex..., in: scannable)
+                        ) != nil
+                    } ?? false
+                return (flag, matchesIsFalse)
+            })
+    }
+
     /// Remove `{# … #}` Jinja comment blocks (non-greedy, spanning newlines)
     /// so a flag mentioned only in a comment is not read as a declaration.
     private static func stripJinjaComments(_ template: String) -> String {
@@ -239,9 +282,27 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// parse-failure path and `LLMActor`'s pre-load path agree in one place.
     private static func interpretFlopProfile(configJSON: [String: Any]?) -> ModelFlopProfile {
         guard let root = configJSON,
-            let topModelType = root["model_type"] as? String,
-            topModelType.hasPrefix("qwen3_5")
+            let topModelType = root["model_type"] as? String
         else { return .fallback }
+
+        // Nanbeige's looped transformer is dense attention with every layer
+        // executed `num_loops` times per token — price it as loops × layers
+        // attention/MLP blocks, no SSM share (issue #422).
+        if topModelType == "nanbeige" {
+            guard let hiddenLayers = root["num_hidden_layers"] as? Int,
+                let hiddenSize = root["hidden_size"] as? Int
+            else { return .fallback }
+            let effectiveLayers = hiddenLayers * max(root["num_loops"] as? Int ?? 1, 1)
+            return ModelFlopProfile(
+                attentionLayers: effectiveLayers,
+                ssmLayers: 0,
+                mlpLayers: effectiveLayers,
+                hiddenSize: hiddenSize,
+                ssmStateDim: 0
+            )
+        }
+
+        guard topModelType.hasPrefix("qwen3_5") else { return .fallback }
 
         let textConfig = (root["text_config"] as? [String: Any]) ?? root
         guard let hiddenLayers = textConfig["num_hidden_layers"] as? Int,

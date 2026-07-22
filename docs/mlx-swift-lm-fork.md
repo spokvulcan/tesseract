@@ -39,6 +39,7 @@ Carried on top, in order:
 | `feat(paroquant): MoE PARO path — RotateSwitchGLU + loader passes` | PARO quantization for MoE models (Qwen3.6-35B-A3B) | Not filed — candidate follow-up to #164 |
 | `perf(prefill): balance the prompt chunks instead of leaving a remainder` | Equal prefill chunks; kills the degenerate remainder forward (~9% prefill, tesseract #258) | Not filed — candidate |
 | `feat(paroquant): Prepared Checkpoint + O(1) AWQ conversion matching` | Prepared Checkpoint artifact + O(1) matcher (ADR-0032) | Not filed — candidate follow-up to #164 |
+| `feat(models): Nanbeige looped-transformer support` | Nanbeige4.2 model (`nanbeige`): shared-weight layer loops, per-loop KV caches, xmlFunction tool calls, `<think>` reasoning config | **Filed as [#460](https://github.com/ml-explore/mlx-swift-lm/pull/460)** (2026-07-23, branch `feat/nanbeige-looped-transformer` — cherry-pick on upstream `main` @ `1032402`); Python-side counterpart is MercuriusDream/mlx-lm `add-nanbeige-model` |
 
 ## Contributed back
 
@@ -52,6 +53,7 @@ Carried on top, in order:
 | [#399](https://github.com/ml-explore/mlx-swift-lm/pull/399) | Qwen3.5/3.6 windowed prefill + state-threaded warm continuation (multi-turn M-RoPE drift fix) | Merged 2026-07-14 |
 | [#398](https://github.com/ml-explore/mlx-swift-lm/pull/398) | Qwen3VL default per-image 1,280 vision-token budget | Merged 2026-07-15 |
 | [issue #420](https://github.com/ml-explore/mlx-swift-lm/issues/420) | Qwen2/2.5/3-VL drop cross-turn state (same class as #399) | Filed; follow-up PR offered |
+| [#460](https://github.com/ml-explore/mlx-swift-lm/pull/460) | Nanbeige4.2 looped-transformer model support | Filed 2026-07-23 |
 
 Earlier fork-era contributions (#167 ToolCallProcessor schema plumbing, #168
 TokenRing fix) predate the submodule pin scheme; see ADR-0006 for that history.

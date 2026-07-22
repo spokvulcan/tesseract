@@ -106,6 +106,29 @@ struct ModelIdentityTests {
         #expect(profile != .qwen35_4B_PARO)
     }
 
+    @Test func flopProfilePricesNanbeigeLoopsAsEffectiveDepth() throws {
+        // The looped transformer runs every layer `num_loops` times per token
+        // (issue #422) — eviction must price 44 dense attention blocks, not
+        // fall back to the hybrid Qwen 4B profile.
+        let dir = try makeModelDir(
+            config: #"""
+                {
+                  "model_type": "nanbeige",
+                  "num_hidden_layers": 22,
+                  "hidden_size": 3072,
+                  "num_loops": 2
+                }
+                """#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let profile = ModelIdentity(directory: dir).flopProfile
+        #expect(profile.attentionLayers == 44)
+        #expect(profile.mlpLayers == 44)
+        #expect(profile.ssmLayers == 0)
+        #expect(profile.hiddenSize == 3072)
+        #expect(profile != .qwen35_4B_PARO)
+    }
+
     /// An unknown `model_type` falls back to `.qwen35_4B_PARO` — the field is
     /// Total, so eviction never handles an absent profile. (Was `nil` when the
     /// detector lived on `LLMActor`.)

@@ -589,7 +589,10 @@ final class MemoryEngine {
     /// rather than guess. Only a live memory can be contested — a superseded
     /// one is already history, and a contested one is already queued.
     func contest(handle: String, reason: String, now: Date = Date()) async -> ContestOutcome {
-        let key = handle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // `recall` prints the handle bracketed — "[a1b2c3d4]" — and models copy
+        // it verbatim, brackets included; accept that form.
+        let key = handle.lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]").union(.whitespacesAndNewlines))
         guard key.count >= 6, key.allSatisfy(\.isHexDigit) else { return .notFound }
         let all = (try? await store.memories(status: nil, limit: 5_000)) ?? []
         let matches = all.filter { $0.id.uuidString.lowercased().hasPrefix(key) }
