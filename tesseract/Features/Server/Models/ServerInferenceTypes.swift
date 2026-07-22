@@ -40,6 +40,11 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     /// allowlist for `chat_template_kwargs` and the per-model
     /// **Preserve-Thinking Render** setting (issue #98).
     let declaredTemplateFlags: Set<TemplateRenderFlag>
+    /// Template-default value per declared flag
+    /// (`ModelIdentity.templateFlagDefaults`) — lets the completion handler
+    /// emit a render kwarg only where the desired state differs from what
+    /// the template renders anyway, in either polarity.
+    let templateFlagDefaults: [TemplateRenderFlag: Bool]
     /// The loaded model's tool-call format (`ModelIdentity.toolCallFormat`) —
     /// what the completion handler's Argument Transcoder keys off. `nil`
     /// means "no override": the parser then falls back to the vendor JSON
@@ -50,11 +55,13 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
         modelID: String,
         visionMode: Bool,
         declaredTemplateFlags: Set<TemplateRenderFlag> = [],
+        templateFlagDefaults: [TemplateRenderFlag: Bool] = [:],
         toolCallFormat: ToolCallFormat? = nil
     ) {
         self.modelID = modelID
         self.visionMode = visionMode
         self.declaredTemplateFlags = declaredTemplateFlags
+        self.templateFlagDefaults = templateFlagDefaults
         self.toolCallFormat = toolCallFormat
     }
 

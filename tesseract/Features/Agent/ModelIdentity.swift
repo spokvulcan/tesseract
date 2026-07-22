@@ -93,6 +93,15 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// and Qwen3.5-PARO (which lacks it) is naturally excluded.
     let declaredTemplateFlags: Set<TemplateRenderFlag>
 
+    /// The template-default value of each declared render flag — the state the
+    /// template renders when the kwarg is absent. Qwen3.6 strips prior think
+    /// blocks unless `preserve_thinking is true` (default `false`); Nanbeige4.2
+    /// preserves them unless `preserve_thinking is false` (default `true`).
+    /// `TemplateRenderContext.resolve` emits a kwarg only where the desired
+    /// state differs from this default, so neither polarity fragments the
+    /// cache partition for a render the template would produce anyway.
+    let templateFlagDefaults: [TemplateRenderFlag: Bool]
+
     /// FLOP/state-size profile the eviction policy scores against. **Total**:
     /// a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
     /// never `nil`, so the single consumer (`EvictionPolicy`) never handles an
@@ -140,7 +149,11 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.isMoE = modelType == "qwen3_5_moe"
         self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
-        self.declaredTemplateFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
+        let declaredFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
+        self.declaredTemplateFlags = declaredFlags
+        self.templateFlagDefaults = Self.interpretTemplateFlagDefaults(
+            chatTemplate: chatTemplate, declaredFlags: declaredFlags
+        )
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
             configJSON: configJSON
@@ -199,6 +212,36 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         return Set(
             TemplateRenderFlag.allCases.filter {
                 referencesIdentifier($0.rawValue, in: scannable)
+            })
+    }
+
+    /// Interpret each declared flag's template-default value from the shape of
+    /// the template's own test. A template that branches on
+    /// `preserve_thinking is false` only changes its render when handed an
+    /// explicit `false` — so its default is to preserve (`true`). The Qwen3.6
+    /// shape (`preserve_thinking is true`) defaults to strip (`false`), as
+    /// does a bare truthiness test, where an absent kwarg is falsy.
+    private static func interpretTemplateFlagDefaults(
+        chatTemplate: String?,
+        declaredFlags: Set<TemplateRenderFlag>
+    ) -> [TemplateRenderFlag: Bool] {
+        guard let chatTemplate, !declaredFlags.isEmpty else { return [:] }
+        let scannable = stripJinjaComments(chatTemplate)
+        return Dictionary(
+            uniqueKeysWithValues: declaredFlags.map { flag in
+                let pattern =
+                    "(?<![A-Za-z0-9_])"
+                    + NSRegularExpression.escapedPattern(for: flag.rawValue)
+                    + "\\s+is\\s+false(?![A-Za-z0-9_])"
+                let matchesIsFalse =
+                    (try? NSRegularExpression(pattern: pattern))
+                    .map {
+                        $0.firstMatch(
+                            in: scannable,
+                            range: NSRange(scannable.startIndex..., in: scannable)
+                        ) != nil
+                    } ?? false
+                return (flag, matchesIsFalse)
             })
     }
 

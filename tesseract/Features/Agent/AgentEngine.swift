@@ -62,6 +62,19 @@ final class AgentEngine {
     /// synchronously on the MainActor (issue #98). Empty when unloaded.
     private(set) var declaredTemplateFlags: Set<TemplateRenderFlag> = []
 
+    /// Template-default value per declared render flag
+    /// (`ModelIdentity.templateFlagDefaults`) — cached at load beside
+    /// `declaredTemplateFlags`. Empty when unloaded.
+    private(set) var templateFlagDefaults: [TemplateRenderFlag: Bool] = [:]
+
+    /// The agent loop's render context, resolved at load: the agent always
+    /// wants prior-turn thinking stripped (a small model re-reading every
+    /// past turn's CoT measurably loses tool accuracy — issue #422 A/B), so
+    /// on a preserve-by-default template (Nanbeige4.2) this carries
+    /// `preserve_thinking: false`, and on a strip-by-default one (Qwen3.6)
+    /// it is canonical — byte-identical renders to before.
+    private(set) var agentRenderContext: TemplateRenderContext = .canonical
+
     /// The loaded model's tool-call format (`ModelIdentity.toolCallFormat`) —
     /// cached at load like `declaredTemplateFlags` so the server's Argument
     /// Transcoder keys off the same identity the parser uses. `nil` when
@@ -169,11 +182,20 @@ final class AgentEngine {
             agentTokenizer = tokenizer
             promptStartsThinking = startsThinking
             declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
+            templateFlagDefaults = await llmActor.loadedTemplateFlagDefaults()
+            agentRenderContext = TemplateRenderContext.resolve(
+                requestKwargs: nil,
+                appEnabledFlags: [],
+                declaredFlags: declaredTemplateFlags,
+                templateDefaults: templateFlagDefaults
+            )
             toolCallFormat = await llmActor.loadedToolCallFormat()
             loadedVisionMode = visionMode
             isModelLoaded = true
             loadingStatus = ""
-            Log.agent.info("Model loaded — promptStartsThinking=\(promptStartsThinking)")
+            Log.agent.info(
+                "Model loaded — promptStartsThinking=\(promptStartsThinking) "
+                    + "agentRenderKwargs=\(agentRenderContext.kwargs)")
         } catch {
             loadingStatus = ""
             Log.agent.error("Failed to load model: \(error)")
@@ -242,6 +264,7 @@ final class AgentEngine {
             messages: messages,
             toolSpecs: toolSpecs,
             parameters: parameters,
+            renderContext: agentRenderContext,
             progressHandler: nil
         ).stream
     }
@@ -333,6 +356,8 @@ final class AgentEngine {
         agentTokenizer = nil
         promptStartsThinking = false
         declaredTemplateFlags = []
+        templateFlagDefaults = [:]
+        agentRenderContext = .canonical
         toolCallFormat = nil
         loadedVisionMode = false
         isModelLoaded = false

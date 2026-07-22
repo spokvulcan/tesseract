@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import MLXLMCommon
 import Testing
 
 @testable import Tesseract_Agent
@@ -42,6 +43,100 @@ struct PreserveThinkingRenderTests {
         #expect(
             ModelIdentity(configJSON: nil, chatTemplate: nil)
                 .declaredTemplateFlags.isEmpty)
+    }
+
+    // MARK: - Template-default polarity (issue #422)
+
+    @Test func nanbeigeShapeTemplateDefaultsToPreserve() {
+        // Nanbeige4.2 strips only on an explicit `false` — so its default
+        // render preserves prior thinking.
+        let identity = ModelIdentity(
+            configJSON: nil,
+            chatTemplate: """
+                {%- if (preserve_thinking is defined and preserve_thinking is false) \
+                and (loop.index0 < ns.last_query_index) %}...{%- endif %}
+                """
+        )
+        #expect(identity.declaredTemplateFlags == [preserveFlag])
+        #expect(identity.templateFlagDefaults == [preserveFlag: true])
+    }
+
+    @Test func qwen36ShapeTemplateDefaultsToStrip() {
+        // Qwen3.6 preserves only on an explicit `true`; a bare truthiness
+        // test behaves the same (absent kwarg is falsy).
+        for template in [
+            "{%- if (preserve_thinking is defined and preserve_thinking is true) %}...{%- endif %}",
+            "{%- if preserve_thinking %}...{%- endif %}",
+        ] {
+            let identity = ModelIdentity(configJSON: nil, chatTemplate: template)
+            #expect(identity.templateFlagDefaults == [preserveFlag: false])
+        }
+    }
+
+    @Test func invertedPolarityEmitsTheKwargOnlyWhenStripping() {
+        let declared: Set<TemplateRenderFlag> = [preserveFlag]
+        let preserveByDefault: [TemplateRenderFlag: Bool] = [preserveFlag: true]
+
+        // Desired strip on a preserve-by-default template: the `false` kwarg
+        // is exactly the value that changes the render, so it must be
+        // emitted AND fragment the partition.
+        let strip = TemplateRenderContext.resolve(
+            requestKwargs: nil,
+            appEnabledFlags: [],
+            declaredFlags: declared,
+            templateDefaults: preserveByDefault
+        )
+        #expect(strip.kwargs == [preserveFlag: false])
+        #expect(!strip.preservesThinking)
+        #expect(strip.digest != HTTPPrefixCacheConversation.defaultTemplateContextDigest)
+
+        // Desired preserve on the same template is the render the template
+        // produces anyway: no kwarg, canonical digest, existing partitions —
+        // but the semantics still read as preserving.
+        let preserve = TemplateRenderContext.resolve(
+            requestKwargs: nil,
+            appEnabledFlags: [preserveFlag],
+            declaredFlags: declared,
+            templateDefaults: preserveByDefault
+        )
+        #expect(preserve.kwargs.isEmpty)
+        #expect(preserve.preservesThinking)
+        #expect(preserve.digest == HTTPPrefixCacheConversation.defaultTemplateContextDigest)
+    }
+
+    @Test func agentUserInputCarriesTheStripKwargIntoTheRender() {
+        // The agent's resolved context for a preserve-by-default template
+        // must land in `UserInput.additionalContext` — that dictionary is
+        // what the tokenizer's chat-template apply receives.
+        let strip = TemplateRenderContext.resolve(
+            requestKwargs: nil,
+            appEnabledFlags: [],
+            declaredFlags: [preserveFlag],
+            templateDefaults: [preserveFlag: true]
+        )
+        let input = AgentEngine.buildUserInput(
+            systemPrompt: "system",
+            messages: [.user(content: "hi")],
+            toolSpecs: nil,
+            renderContext: strip
+        )
+        #expect(input.additionalContext?[preserveFlag.rawValue] as? Bool == false)
+
+        // Canonical stays exactly what callers pass today: no context at all.
+        let canonical = AgentEngine.buildUserInput(
+            systemPrompt: "system",
+            messages: [.user(content: "hi")],
+            toolSpecs: nil,
+            renderContext: .canonical
+        )
+        #expect(canonical.additionalContext == nil)
+    }
+
+    @Test func oppositeKwargValuesLandInDistinctPartitions() {
+        let asFalse = TemplateRenderContext(kwargs: [preserveFlag: false], preservesThinking: false)
+        let asTrue = TemplateRenderContext(kwargs: [preserveFlag: true], preservesThinking: true)
+        #expect(asFalse.digest != asTrue.digest)
+        #expect(asFalse.digest != HTTPPrefixCacheConversation.defaultTemplateContextDigest)
     }
 
     // MARK: - Resolution (request wins, setting falls back, allowlist gates)
