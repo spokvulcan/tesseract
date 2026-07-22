@@ -137,6 +137,25 @@ struct MemoryToolContractTests {
         #expect(again.content.textContent.contains("Already disputed"))
     }
 
+    @Test("The handle works exactly as recall prints it — brackets included")
+    func contestAcceptsTheBracketedHandle() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("memory-tool-contract-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let engine = try makeEngine(root: root)
+
+        let wrong = try #require(await engine.remember("He prefers tea."))
+        let handle = String(wrong.id.uuidString.prefix(8)).lowercased()
+        let tool = createContestTool(memory: engine)
+
+        // Found live on 2026-07-22: a small model passed "[fa00bad3]" — the
+        // handle exactly as recall renders it — and the veto bounced.
+        let result = try await tool.execute(
+            "contest-bracketed",
+            ["memory": .string("[\(handle)]"), "reason": .string("he said coffee")], nil, nil)
+        #expect(result.content.textContent.contains("Contested"))
+    }
+
     @Test("recall lines lead with the handle contest addresses them by")
     func recallLinesCarryHandles() {
         let record = MemoryRecord(
