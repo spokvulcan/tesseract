@@ -42,6 +42,7 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 | `perf(prefill): balance the prompt chunks instead of leaving a remainder` | Equal prefill chunks; kills the degenerate remainder forward (~9% prefill, tesseract #258) | Not filed — candidate |
 | `feat(paroquant): Prepared Checkpoint + O(1) AWQ conversion matching` | Prepared Checkpoint artifact + O(1) matcher (ADR-0032) | Not filed — candidate follow-up to #164 |
 | `feat(models): Nanbeige looped-transformer support` | Nanbeige4.2 model (`nanbeige`): shared-weight layer loops, per-loop KV caches, xmlFunction tool calls, `<think>` reasoning config | **Filed as [#460](https://github.com/ml-explore/mlx-swift-lm/pull/460)** (2026-07-23, branch `feat/nanbeige-looped-transformer` — cherry-pick on upstream `main` @ `1032402`); Python-side counterpart is MercuriusDream/mlx-lm `add-nanbeige-model` |
+| `perf(paroquant): rotate gate_up before the MoE expert gather/sort` | Rotate L token rows pre-gather instead of L×topK rows post-gather (bitwise-identical); +3–4.5% MoE prefill at 8K–32K (tesseract experiments-ledger E1) | Not filed — candidate (fold into the MoE PARO commit when #164-follow-up opens) |
 
 ## Contributed back
 

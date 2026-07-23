@@ -125,3 +125,21 @@ meaningful for decode and 8K/32K prefill, but ctx=128 prefill needs ≥2%;
 (b) load-time comparisons must discard round 1** (first arm pays one-time
 warmup: 3.02 s vs 0.96 s same binary). Not an optimization; no code change.
 
+**E1 — MoE prefill: rotate `gate_up` before the expert gather/sort, not
+after.** Hypothesis: `PairwiseRotation` is row-independent and `gatherSort`
+only duplicates rows, so rotating `L` rows pre-gather is bitwise-identical
+to rotating `L×topK` rows post-gather — at 1/8 the rotation work per MoE
+layer per chunk. Change: `Vendor/.../ParoQuant/RotateSwitchGLU.swift` — moved
+`gateUpRot.rotate(x)` ahead of `gatherSort` (one line; docs updated).
+Measure: 3-round interleaved A/B, qwen3.6-35b-a3b-paro, contexts
+128/8192/32768. Gate: **PASS** (20/20 pairs token-identical). Numbers:
+prefill **+1.35/+3.15%** (128), **+3.21/+3.35%** (8K), **+4.50/+4.00%**
+(32K); decode +1.3/+0.7% (128), +1.7/+2.3% (8K), −4.3/−0.3% (32K — code
+path at decode is provably identical (`doSort=false`), wobble inside the
+32K-decode noise band, not reproduced across runs); peak +0.05–0.14%
+(≤30 MB counter noise; the change mechanically reduces transient
+33 MB→4 MB for the rotated copy per layer-chunk). Load −5.8% (within
+load-warmup bias, not claimed). **Verdict: ACCEPTED** — reproducible ≥1%
+prefill win at all contexts, no mechanistically-possible regression.
+Vendor commit on the pin branch; gitlink in tesseract.
+
