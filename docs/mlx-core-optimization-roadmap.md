@@ -37,10 +37,18 @@ Legend for evidence: E# = experiment in `benchmarks/experiments-ledger.md`.
 
 - **Evidence (E10):** xctrace Metal System Trace on a ctx=128 decode: GPU
   busy 78%, **~40 command buffers per token, ~60 µs inter-buffer gaps**
-  ≈ 2.5 ms of the 12.5 ms step idle.
+  ≈ 2.5 ms of the 12.5 ms step idle. (C2, 2026-07-23: the mechanism is
+  real — raising `MLX_MAX_OPS_PER_BUFFER` 50→400 gave MoE 8K decode
+  +3.5%, 6/6 pairs.)
 - **Fix:** mlx-core eval scheduling: coalesce more kernels per command
   buffer, cheaper per-buffer setup, fewer sync boundaries. App/vendor can
   assist by shrinking per-step graph size (fewer ops → fewer segments).
+- **C2 verdict (REJECTED as an env knob):** a global op-cap raise is
+  blocked by three reproducible regressions — dense 8K decode −2.7%
+  (6/6 at 400), dense 128 peak +7.25% (10/10 across 200/400; temporaries
+  held per-buffer), MoE 128 prefill −4.5% (9/10, mechanism unidentified).
+  Viable forms left: **graph-size-aware cap** or **mid-buffer temporary
+  release** — eval.cpp/device.cpp internals.
 - **Estimated gain:** up to ~20% decode if fully recovered; realistic
   **~10% decode** (both models).
 - **Risk:** medium-high (eval internals; contract subtle).
@@ -51,11 +59,17 @@ Legend for evidence: E# = experiment in `benchmarks/experiments-ledger.md`.
   gather_qmv decode shape (B=8) = 51 µs at **88 GB/s**; dense qmm same
   bytes = 41 µs at 108 GB/s. Decode is latency/occupancy-limited at M=1;
   E5 showed call-*count* reduction buys ~0 — per-call latency binds.
-- **Fix:** persistent/persistent-ish vector GEMM scheduling, K-split with
-  cross-tile reduction for tiny M, tuned dequant vector loads.
-- **Estimated gain:** qmv-class work is ~half of decode; lifting the
-  latency floor ⇒ **~10% decode** (overlaps M2 — measure jointly).
-- **Risk:** medium (kernel work; unrelated kernels share the floor).
+- **C3 verdict (2026-07-23, REJECTED):** in isolation (single-graph
+  timing, disjoint expert sets) the decode-shape gather_qmv runs at
+  **~306 GB/s — the DRAM envelope** — and rps geometry (4→32) moves it
+  ≤3.5%, bitwise-identical. E10's 88 GB/s is an eval-environment
+  artifact (overlap/contention within the token graph), not kernel
+  geometry. **No kernel lever here; the decode gap is M2-class.**
+- **Fix:** (dead — see C3) persistent vector GEMM scheduling, K-split
+  (dead under the bitwise rule: changes accumulation order).
+- **Estimated gain:** none via the kernel. Fold the remaining decode
+  question into M2.
+- **Risk:** (closed)
 
 ## M4 — fused rotate+dequant+GEMM (PARO without the rotated-x round trip)
 
