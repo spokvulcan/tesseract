@@ -805,24 +805,26 @@ verdicts there need ≥5 rounds and per-round pairing, never single runs.**
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `fbf2fb86` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `404070e2` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `fbf2fb86` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `404070e2` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
-  == `tesseract-exp-c1.app` (current main: C1 tiles, fbf2fb86) — use
-  `tesseract-c1-accepted.app` as the A/B baseline for the next experiment.
-- **Pins (current):** spokvulcan/mlx-swift `3bd912db` (pin-tesseract) ←
-  spokvulcan/mlx `fbf2fb86`; mlx-swift-lm pin branch `0ae1a18`.
+  (C1 tiles, fbf2fb86), **`tesseract-c4.app` (current main: C1+C4,
+  404070e2) — the A/B baseline for the next experiment.**
+- **Pins (current):** spokvulcan/mlx-swift `73e7f42` (pin-tesseract) ←
+  spokvulcan/mlx `404070e2`; mlx-swift-lm pin branch `a0b4a55`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
   read-only — `chmod u+w` before patching.
-- **Next (C4):** CPU dispatch-cost attribution for the M9 hypothesis (MoE
-  decode is CPU-dispatch-bound: ~1900 kernels/token × ~5–13 µs): extend the
-  probe with a long enqueue-only gather_qmv loop and `sample` it; if string
-  building + pipeline lookup is a real share → C4 = pipeline-state lookup
-  caching in mlx-core (bitwise-trivial CPU change). Then M5 (attention
-  fallback tail), M4 (fused rotate+GEMM), M8 (expert prefetch probe).
+- **Next (C5):** per-cbuf buffer-retention coalescing in gpu::eval —
+  measured ~10% of the decode generation thread is per-op scaffolding
+  (buffer-retention `unordered_set` + completion-block per op); attach ONE
+  retention handler per command buffer at commit instead (identical
+  release timing — same cbuf — bitwise-trivial). Then the M2 residual
+  (cost *per* boundary: fence-map churn, encoder/fence recreation),
+  M5 (attention fallback tail), M4 (fused rotate+GEMM), M8 (expert
+  prefetch probe).
