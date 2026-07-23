@@ -826,6 +826,35 @@ pairs) only when a verdict-relevant metric lands inside the noise floor
 (32K decode/prefill almost always do). Cutting rounds indiscriminately
 on 32K would have mis-verdicted C4/v3 and C5b twice each.
 
+**C6 — custom-kernel (kernel_name, kernel_source) memoization —
+ACCEPTED.** Attribution (post-C5 production MoE 8K decode sample, 2862
+gen-thread samples): `gatedDeltaUpdate`'s `MLXFastKernel` call =
+72 samples (2.5% of the thread), of which **~46 in `std::regex`
+construction + `regex_replace`** — `metal_kernel`'s closure rebuilt
+`kernel_name`/`kernel_source` on every call (every token × every GDN
+layer, both models are GDN hybrids) while the compiled MTLLibrary is
+already device-cached. Same sample, updated landscape for the queue:
+eval_impl tape machinery 41.5% (2089 under async_eval minus 901
+gpu::eval), gpu::eval op dispatch 31.5%, Swift graph build 26.6%;
+per-boundary costs shrunk to end_encoding 42 + commit 48 +
+get_command_encoder 80 samples (≈5.9% total, recoverable fraction
+smaller). Change: memoize the generated (kernel_name, kernel_source)
+per call site (cache captured in the closure); key = template_args +
+per-input dtype/ndim/size-class (write_signature's `size() < 8`
+address-space branch) + output_dtypes — everything else the strings
+depend on is closure-fixed, so a hit is byte-identical by construction.
+Zero numerics. A/B (3 rounds 128/8K/32K + 10-pair 32K resolutions,
+both models, gates 9/9 + 9/9 + 10/10 + 10/10 = 38/38 token-identical):
+**MoE decode +3.66% (128), +3.11% (8K), +3.55/+4.67% (32K)**; MoE
+32K prefill **+1.72%** (the 3-pair −1.51% reading was thermal noise);
+dense 128/8K flat (+0.17%), dense 32K +1.39/+0.07% (the 3-pair
++20.87% was a throttled baseline round — resolution protocol caught
+both); **peaks exactly flat everywhere**. Ported @ `spokvulcan/mlx`
+**3ec72a24** (`perf(metal): memoize custom-kernel source generation
+(C6)`), mlx-swift pin **99e27254**, mlx-swift-lm pin **cbeb6ee**;
+checkout re-sync verified `diff fbf2fb86 == C4+C5+C6` exactly, no
+local mods.
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -835,18 +864,19 @@ on 32K would have mis-verdicted C4/v3 and C5b twice each.
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `8d11dd1d` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `3ec72a24` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `8d11dd1d` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `3ec72a24` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
   (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
-  **`tesseract-c5-accepted.app` (current main: C1+C4+C5, 8d11dd1d) — the
+  `tesseract-c5-accepted.app` (C1+C4+C5, 8d11dd1d),
+  **`tesseract-c6-accepted.app` (current main: C1+C4+C5+C6, 3ec72a24) — the
   A/B baseline for the next experiment.**
-- **Pins (current):** spokvulcan/mlx-swift `5c16b28` (pin-tesseract) ←
-  spokvulcan/mlx `8d11dd1d`; mlx-swift-lm pin branch `98e9e28`.
+- **Pins (current):** spokvulcan/mlx-swift `99e27254` (pin-tesseract) ←
+  spokvulcan/mlx `3ec72a24`; mlx-swift-lm pin branch `cbeb6ee`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
@@ -855,9 +885,12 @@ on 32K would have mis-verdicted C4/v3 and C5b twice each.
   context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
   only when the signal is inside the noise floor (32K decode/prefill
   almost always are — never verdict a 32K metric on one run).
-- **Next (C6+):** M2 residual — cost *per* cbuf boundary (fence-map
-  churn in `end_encoding`, encoder+fence recreation ≈ 4.6% of the decode
-  thread pre-C4; commits now fewer but each still pays it); eval_impl
-  tape machinery (~17% of decode thread — BFS+cache hash work, needs a
-  careful design); M5 (attention fallback tail), M4 (fused rotate+GEMM),
-  M8 (expert prefetch probe).
+- **Next (C7+):** per-cbuf boundary residual (end_encoding 42 + commit 48 +
+  get_command_encoder 80 of 2862 gen-thread samples ≈ 5.9% total, smaller
+  recoverable fraction — fence-map churn, encoder/fence recreation);
+  **eval_impl tape machinery = the C++ whale: 41.5% of the decode thread**
+  (DFS degree pass + BFS tape build + per-node hash-map work in
+  transforms.cpp — durable fix is graph-level: compiled step function →
+  1-op tape, which also kills the 26.6% Swift graph build; that is the
+  app-side 2×-decode prize, in scope since 2026-07-24); M5 (attention
+  fallback tail), M4 (fused rotate+GEMM), M8 (expert prefetch probe).
