@@ -796,6 +796,36 @@ gates 18/18 + 10/10 + 18/18 token-identical. **The 32K-context prefill
 and decode metrics on this machine carry ±5-10% thermal variance —
 verdicts there need ≥5 rounds and per-round pairing, never single runs.**
 
+**C5 — per-cbuf buffer-retention coalescing — ACCEPTED (as C5b, no
+dedup).** Attribution (production decode sample, line-level): per-op
+retention scaffolding in `gpu::eval` ≈ **8.5% of the decode generation
+thread** (completion-block per op `eval.cpp:68` 4.1%, retention-set
+inserts `eval.cpp:47` 2.5%, outputs copy 1.8%, plus disposal on Metal
+completion queues). Change: ops push input/sibling Data ptrs into the
+stream's pending vector (skipping donated inputs, exactly the old set's
+semantics); the batch flushes as **one completed handler per command
+buffer at commit** (`Device::commit_command_buffer` is the single
+funnel). Attach point = the same cbuf the ops were encoded in → release
+timing identical by construction. First form included a sort+unique
+dedup at commit: **REJECTED by the data** (dense 128 decode −1.22%,
+6/6 — the per-commit sort costs more than the per-op hashing it saved
+on commit-dense decode); dropping the dedup restored dense to flat
+(duplicate refs die together in the same handler — cosmetic only).
+Final numbers (3 rounds 128/8K/32K both models + a 5-round MoE 32K
+resolution, gates 18/18 + 18/18 + 10/10 token-identical): **MoE 8K
+decode +3.92% (5/6)**, MoE 128 +0.93% (noise), MoE 32K −0.45% mean of
+10 (noise), dense flat everywhere, **peak memory exactly unchanged**
+(19.51/20.36/21.59 and 3.19/3.99/5.54 — semantics preservation
+verified). Ported @ `spokvulcan/mlx` **8d11dd1d**, mlx-swift pin
+**5c16b28**, mlx-swift-lm pin **98e9e28**.
+
+**Harness amendment (user directive, 2026-07-24): default A/B is now
+3 pairs per context per model** (`BENCH_RUNS=1` × 3 rounds — script
+takes `BENCH_RUNS`, default still 2). Escalate to 5 rounds × 2 (10
+pairs) only when a verdict-relevant metric lands inside the noise floor
+(32K decode/prefill almost always do). Cutting rounds indiscriminately
+on 32K would have mis-verdicted C4/v3 and C5b twice each.
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -805,26 +835,29 @@ verdicts there need ≥5 rounds and per-round pairing, never single runs.**
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `404070e2` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `8d11dd1d` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `404070e2` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `8d11dd1d` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
-  (C1 tiles, fbf2fb86), **`tesseract-c4.app` (current main: C1+C4,
-  404070e2) — the A/B baseline for the next experiment.**
-- **Pins (current):** spokvulcan/mlx-swift `73e7f42` (pin-tesseract) ←
-  spokvulcan/mlx `404070e2`; mlx-swift-lm pin branch `a0b4a55`.
+  (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
+  **`tesseract-c5-accepted.app` (current main: C1+C4+C5, 8d11dd1d) — the
+  A/B baseline for the next experiment.**
+- **Pins (current):** spokvulcan/mlx-swift `5c16b28` (pin-tesseract) ←
+  spokvulcan/mlx `8d11dd1d`; mlx-swift-lm pin branch `98e9e28`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
   read-only — `chmod u+w` before patching.
-- **Next (C5):** per-cbuf buffer-retention coalescing in gpu::eval —
-  measured ~10% of the decode generation thread is per-op scaffolding
-  (buffer-retention `unordered_set` + completion-block per op); attach ONE
-  retention handler per command buffer at commit instead (identical
-  release timing — same cbuf — bitwise-trivial). Then the M2 residual
-  (cost *per* boundary: fence-map churn, encoder/fence recreation),
-  M5 (attention fallback tail), M4 (fused rotate+GEMM), M8 (expert
-  prefetch probe).
+- **Measurement protocol (2026-07-24):** default A/B = **3 pairs** per
+  context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
+  only when the signal is inside the noise floor (32K decode/prefill
+  almost always are — never verdict a 32K metric on one run).
+- **Next (C6+):** M2 residual — cost *per* cbuf boundary (fence-map
+  churn in `end_encoding`, encoder+fence recreation ≈ 4.6% of the decode
+  thread pre-C4; commits now fewer but each still pays it); eval_impl
+  tape machinery (~17% of decode thread — BFS+cache hash work, needs a
+  careful design); M5 (attention fallback tail), M4 (fused rotate+GEMM),
+  M8 (expert prefetch probe).
