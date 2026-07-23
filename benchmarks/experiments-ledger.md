@@ -342,3 +342,20 @@ at decode; MoE decode flat (bandwidth-dominated); 32K discarded
 (throttle zone); peak +0.00%, load noise. **Verdict: ACCEPTED** —
 multiple metrics ≥1% reproducible on both models, no regression.
 Vendor commit `8d1fb7b`; gitlink in tesseract.
+
+**E8b — GDN scan software pipelining.** Hypothesis: the scan's ~0.5 µs
+serial per step per CTA (E8) is dependent-load latency; register-
+prefetching t+1's q/k/v/g/beta during t's arithmetic hides it — bitwise
+-identical by construction (same values, same arithmetic order; loads
+have no side effects). Change: `GatedDelta.swift` t-loop rewritten with
+cur/next register pipeline (reverted). Measure (probe, vendor
+`gatedDeltaUpdate` vs verbatim pre-edit kernel, f16): **y and state
+bitwise IDENTICAL** at T ∈ {512, 1024, 2048, 1}; speed T=512 1.03×,
+**T=1024 0.82×, T=2048 0.80×**, T=1 0.96×. **Verdict: REJECTED** — the
+manual pipeline is ~20% slower at production sizes (16 extra live
+registers/thread: spills or occupancy loss; the compiler was already
+scheduling loads fine). Reverted completely. **This closes the GDN-scan
+line:** it is sequential-latency-bound (E8), the only bitwise-legal
+restructure makes it slower (E8b), and any parallel-scan/chunked variant
+changes f32 rounding order (dead under the zero-loss rule). The ~5.5%
+of 32K prefill the scan costs is a floor for this stack.
