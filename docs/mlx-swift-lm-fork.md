@@ -65,16 +65,17 @@ TokenRing fix) predate the submodule pin scheme; see ADR-0006 for that history.
 
 ## Upstream candidates outside this fork (mlx-core)
 
-Findings from the inference-optimization loop
-(`benchmarks/experiments-ledger.md`) whose fix lives in mlx-core (Cmlx),
-which we do not fork. Upstreamable as evidence-backed issues against
-`ml-explore/mlx`; tracked here so they aren't lost in the ledger. Filing is
-the owner's call.
+Findings from the inference-optimization loop whose fix lives in mlx-core
+(Cmlx), which we do not fork. The measured opportunity list is
+`docs/mlx-core-optimization-roadmap.md` (M1–M8); evidence per experiment in
+`benchmarks/experiments-ledger.md`. Two are ripe for filing as
+evidence-backed issues against `ml-explore/mlx` — owner's call:
 
-| Finding | Evidence | Status |
-| --- | --- | --- |
-| `gather_qmm` small-rows-per-expert tiling loss is occupancy, not bandwidth (tesseract #256) | TFLOP/s-vs-B/E sweep at fixed FLOPs (E=256, N=512, K=2048, 4-bit, gs=128): 1.37→7.69 TFLOP/s from B/E=4→256, converging to the dense 4-bit qmm rate (7.41); B/E=32 reads weights at 43 GB/s effective of ~300 available. Worth ~14% of 35B MoE prefill (ledger E4) | Not filed — candidate issue |
-| Decode command-buffer segmentation: ~22% of MoE decode is inter-buffer idle | xctrace Metal System Trace during ctx=128 decode: GPU busy 78%; ~40 command buffers/token with ~60 µs gaps; busy time spread over ~1,900 small kernels/token with 10–50 µs per-call floors (small-M qmv/gather_qmv geometry) (ledger E10) | Not filed — candidate issue |
+- **M1** — `gather_qmm_rhs` tile geometry at small rows-per-expert:
+  occupancy loss, not a bandwidth roofline (tesseract #256, ledger E4);
+  worth ~12–15% of 35B MoE prefill. Not filed.
+- **M2** — decode command-buffer segmentation: ~22% of MoE decode is
+  inter-buffer idle (ledger E10). Not filed.
 
 ## Evidence asset branches — never delete
 
