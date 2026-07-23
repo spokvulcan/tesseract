@@ -58,7 +58,7 @@ run_arm() {
         --bench-model-id "$MODEL_ID" \
         --bench-output "$outdir" \
         --bench-contexts "$CONTEXTS" \
-        --bench-runs 2 \
+        --bench-runs "${BENCH_RUNS:-2}" \
         --bench-max-new "$MAX_NEW" &
     local open_pid=$!
     sleep 8  # allow launch before the nice check
