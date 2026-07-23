@@ -29,6 +29,13 @@ if pgrep -x "Tesseract Agent" >/dev/null; then
     exit 1
 fi
 
+# Stale reports from a previous experiment would mix into this run's verdict
+# (parity_compare.py rglobs everything under OUT_ROOT) — always start clean.
+if [ -e "$OUT_ROOT" ]; then
+    echo "Removing stale results from a previous run: $OUT_ROOT"
+    rm -rf "$OUT_ROOT"
+fi
+
 run_arm() {
     local app="$1" label="$2" round="$3"
     local outdir="$OUT_ROOT/$label/round$round"

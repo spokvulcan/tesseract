@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 
-def load_runs(root: Path) -> dict:
-    """Return {(context, run): record} plus per-file load records."""
+def load_runs(root: Path) -> tuple:
+    """Return ({(context, run): [records per round]}, [load records])."""
     runs = {}
     loads = []
     for report in sorted(root.rglob("paro_parity_bench_*.json")):
@@ -44,12 +44,32 @@ def main() -> int:
         print("FATAL: missing reports on one side", file=sys.stderr)
         return 2
 
+    # 0. Symmetry checks — a hard gate must never pass on partial data
+    # (a crashed arm must FAIL the comparison, not silently shrink it).
+    base_keys, exp_keys = set(base_runs), set(exp_runs)
+    if base_keys != exp_keys:
+        print("FATAL: context/run keys differ between arms:", file=sys.stderr)
+        for key in sorted(base_keys - exp_keys):
+            print(f"  only in baseline:   ctx={key[0]} run={key[1]}", file=sys.stderr)
+        for key in sorted(exp_keys - base_keys):
+            print(f"  only in experiment: ctx={key[0]} run={key[1]}", file=sys.stderr)
+        return 2
+    count_mismatch = {
+        key: (len(base_runs[key]), len(exp_runs[key]))
+        for key in base_keys
+        if len(base_runs[key]) != len(exp_runs[key])
+    }
+    if count_mismatch:
+        print("FATAL: per-key round counts differ (crashed arm?):", file=sys.stderr)
+        for (ctx, run), (nb, ne) in sorted(count_mismatch.items()):
+            print(f"  ctx={ctx} run={run}: baseline {nb} rounds vs experiment {ne}",
+                  file=sys.stderr)
+        return 2
+
     # 1. Quality gate — token identity per (context, run), all rounds.
     gate_failures = 0
     compared = 0
     for key in sorted(base_runs):
-        if key not in exp_runs:
-            continue
         for b, e in zip(base_runs[key], exp_runs[key]):
             compared += 1
             if b["tokenIDs"] != e["tokenIDs"]:
@@ -60,8 +80,6 @@ def main() -> int:
                     min(len(b["tokenIDs"]), len(e["tokenIDs"])),
                 )
                 print(f"GATE FAIL ctx={ctx} run={run}: token IDs diverge at index {first_diff}")
-    if len(base_runs) != len(exp_runs):
-        print(f"WARN: context/run keys differ ({len(base_runs)} vs {len(exp_runs)})")
     print(f"\nQUALITY GATE: {compared} (context,run,round) pairs compared, "
           f"{'PASS — token-identical' if gate_failures == 0 else f'FAIL — {gate_failures} mismatches'}")
 
