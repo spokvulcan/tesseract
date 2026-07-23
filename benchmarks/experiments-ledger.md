@@ -316,3 +316,29 @@ q/k/v during t's compute — identical arithmetic); chunked/parallel-scan
 works: the scan is ~5.5% of 32K prefill (1.9 ms × 30 layers × 32 chunks
 / 33 s); a 2× cut ≈ +2.7% prefill. Queued behind E6b (rotation
 simd-shuffle rewrite, larger expected win).
+
+**E6b — simdgroup-resident rotation kernel (barrier elimination).**
+Hypothesis: the rotation kernel's cost is its krot=8 serialized
+`threadgroup_barrier` rounds (E6's probe: 10–30 GB/s effective = latency
+-bound); making one CTA a single 32-lane simdgroup per (row-tile,
+channel-group) makes per-round sync free, while keeping per-element f32
+arithmetic identical (bitwise by construction). Change:
+`PairwiseRotation.swift` + `RotateQuantizedLinear.swift` — 32-lane CTAs,
+compile-time krot (register-resident coefficients), row-major f32 tile
+(old layout had an 8-way bank conflict), float4 IO, explicit write-back
+cast (fixes the latent bf16 compile bug as a bonus); requires
+groupSize==128 (precondition). Implemented by a coder subagent (died to
+3× transient 429 after producing the design + probe); validated by me:
+isolated probe (ABBA, f16) **1.67–2.03× faster** at [1024,2048],
+[997,2560], [8192,512], [512,9216], **bitwise IDENTICAL everywhere**,
+decode [1,2048] unchanged; vendor-class bitwise check through real
+`PairwiseRotation.rotate` IDENTICAL. App A/B (3 rounds ABBA vs current
+main, both models): gate **PASS** (18/18 each). **MoE prefill
++1.83/+2.51% (8K)**; **dense prefill +1.59/+2.14% (8K), +1.86/+1.26%
+(128)**; **dense decode +4.38/+3.38% (128), +4.03/+4.96% (8K)** — the
+tile=1 restructure (old 64-thread CTA, half the lanes idle + 8 CTA
+barriers; new 32-lane simdgroup) aggregates ~100 rotation launches/token
+at decode; MoE decode flat (bandwidth-dominated); 32K discarded
+(throttle zone); peak +0.00%, load noise. **Verdict: ACCEPTED** —
+multiple metrics ≥1% reproducible on both models, no regression.
+Vendor commit `8d1fb7b`; gitlink in tesseract.
