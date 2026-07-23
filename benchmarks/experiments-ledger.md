@@ -298,3 +298,21 @@ Translation: ~6.5–22 ms off warm-path restore (TTFT) and cold-prefill
 capture per snapshot at realistic sizes (200–700 MB). **Verdict:
 ACCEPTED** — ≥4× on the copy mechanism that sits on the warm-TTFT and
 cold-prefill paths, byte-identical, functional gate green.
+
+**E8 — GDN scan probe: sequential-latency-bound; only software
+pipelining is bitwise-legal.** Method: direct `gatedDeltaUpdate` timing
+at the production shapes (f16, [1,T,16,128]/[1,T,32,128], state f32),
+T ∈ {128, 512, 1024, 2048}, mask on/off. Numbers: T=1024 → **2.0 ms**
+(matches #234's 1.9 ms/layer/chunk — harness consistent); T=512 → 1.2 ms;
+T=2048 → 3.8 ms; masked ≈ unmasked at large T, faster at small T (mask
+skips FMAs). Scaling: ~1.8–2.4 µs/step at T≥512, fixed ~1.2 ms overhead
+at small T. Attribution: ~0.5 µs serial per step per CTA × ~4 CTA waves
+— dependent-load latency in the sequential recurrence, NOT bandwidth
+(~20 MB moved → 53 µs floor) and NOT threadgroup barriers (the kernel
+uses 2 `simd_sum`/step, no CTA barrier — source read). Legal levers
+under the bitwise rule: **software pipelining only** (prefetch t+1's
+q/k/v during t's compute — identical arithmetic); chunked/parallel-scan
+(Blelloch) changes f32 rounding order → dead. Prize if pipelining
+works: the scan is ~5.5% of 32K prefill (1.9 ms × 30 layers × 32 chunks
+/ 33 s); a 2× cut ≈ +2.7% prefill. Queued behind E6b (rotation
+simd-shuffle rewrite, larger expected win).
