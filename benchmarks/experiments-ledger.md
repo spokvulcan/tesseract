@@ -223,3 +223,31 @@ kernel pair across B/E 16–128 → modeled ≈ +1.7% of 35B prefill (MoE
 matmuls = 42.8%×78% of prefill per #254; gate/up = 2/3 of them × 7.5%).
 That becomes E5.
 
+**E5 — fused gate+up gathered QMM (MoE).** Hypothesis: one N=1024
+gathered QMM replaces two N=512 calls (shared input, shared indices) →
+~7.5% on 2/3 of MoE matmuls → ≥1.5% app prefill. Change:
+`RotateSwitchGLU` + `ParoQuantLoader` — load-time concat of gate/up
+expert weights along the output dim (group-boundary-legal), placeholder
+replacement of the separate children, one fused `gatherQuantizedMM` +
+last-axis split per forward. Probe-verified bitwise-identical on the
+exact production shapes (5-D decode, 3-D sorted prefill) before any app
+run. Four measurement attempts; token gate **PASS on all** (18/18, 20/20).
+Final numbers (5-round ABBA vs E2 binary): 8K prefill **+0.48/+0.40%**
+(6/6 positive across all attempts — real, but sub-1%); 32K per-round
+prefill pairings −11.6…+5.0% (thermal noise, no consistent win); decode
+flat; peak +140 MB transient at 8K/32K (sub-floor); **load +1.2 s
+(+25%)** — the fusion's load-time cost survives every optimization
+(per-array eval overhead × 120 arrays; verify-walk removal didn't help).
+**Verdict: REJECTED** — a sub-bar speed win against a certain load cost.
+Reverted completely. Implementation lessons (reusable): (1) `ModuleInfo`
+parameters trap on direct mutation — release modules via
+`update(modules:)` placeholder replacement; (2) probe shapes must match
+production exactly — the gathered-QMM output is **5-D** `[B,L,topK,1,2N]`
+at decode, 3-D on the sorted prefill path (a 3-D-only probe missed this
+and the first build broke the load-time warmup generation); (3) never
+build derived tensors before `eval(model)` — lazy checkpoint tensors
+materialize one-at-a-time (+2.3 s, +11 GB loadPeak); (4) the vendor's
+"ParoQuant load phases" os_log is the load-cost ruler; (5) the 8K MoE
+prefill zone (~1490 t/s) is near-saturated — kernel-level wins there
+shrink ~3× vs naive attribution (1.07× on the pair → 0.5% app).
+
