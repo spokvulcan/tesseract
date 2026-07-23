@@ -348,7 +348,9 @@ barriers; new 32-lane simdgroup) aggregates ~100 rotation launches/token
 at decode; MoE decode flat (bandwidth-dominated); 32K discarded
 (throttle zone); peak +0.00%, load noise. **Verdict: ACCEPTED** —
 multiple metrics ≥1% reproducible on both models, no regression.
-Vendor commit `8d1fb7b`; gitlink in tesseract.
+Vendor commit `8d1fb7b`; gitlink in tesseract. (Review-round follow-up:
+`017086e` restores the generic kernel as the groupSize != 128 fallback —
+see the review-round entry below.)
 
 **E8b — GDN scan software pipelining.** Hypothesis: the scan's ~0.5 µs
 serial per step per CTA (E8) is dependent-load latency; register-
@@ -421,3 +423,76 @@ checks included). Translation: every server request runs this detect
 once — ~205 ms off TTFT per request at 10K-token prefix scale (scales
 with prefix size; ~10 ms at the E2E's 500-token prefixes). **Verdict:
 ACCEPTED.**
+
+## Review round — PR #424 (2026-07-23, post-loop)
+
+Two external reviews (Fable 5; GPT 5.6) covered the loop's PR. Both
+converged on the same load-bearing findings; those were fixed the same
+day. The speculative findings were declined with reasons, recorded here
+so they don't get re-litigated.
+
+**Fixed:**
+
+- **E6b narrowed vendor generality (top code finding, both reviews).**
+  The simdgroup rotation dispatch precondition-crashed on
+  `groupSize != 128`, while the vendor's own `ParoQuantTests` exercise
+  group sizes 8 and 64 — a real crash-regression in the existing suite
+  and a fork-rule violation (vendor changes must be upstreamable). Fix:
+  restored the pre-E6b generic kernel verbatim as the fallback for
+  `groupSize != 128`, dispatched from a single shared
+  `dispatchPairwiseRotation` used by both `PairwiseRotation` and
+  `RotateQuantizedLinear` (the simdgroup kernel still serves 128; the
+  fallback also preserves the pre-E6b bf16 limitation, now documented).
+  Verified: `swift test --filter ParoQuant` — **24/24 pass**.
+  **Protocol amendment: a vendor `ParoQuantTests` run is required for
+  every vendor-touching experiment from now on** — it would have caught
+  this at E6b.
+- **The A/B gate could false-pass (both reviews, independently).**
+  `parity_compare.py` skipped missing keys and `zip()`-truncated unequal
+  round counts; `parity-ab.sh` never cleaned `/tmp/parity-ab`, so
+  experiment N+1 could inherit experiment N's reports. Now: mismatched
+  key sets or per-key round counts are FATAL (exit 2) before any token
+  comparison, and the runner wipes its staging dir at start.
+- **E7's "byte-equality" gate was value-equality (both reviews).**
+  `SnapshotBenchRunner` compared snapshots with numeric `.==` (blind to
+  ±0 / NaN payloads) and silently skipped the check when a capture
+  returned nil while still logging IDENTICAL. Now compares raw bytes
+  (`asData(access: .copy)`) and a nil capture fails loudly.
+- **The E11 memo had no unit tests (Fable).** Added
+  `StablePrefixDetectorMemoTests`: hit avoids re-probing (probe-count
+  assertions), hit tolerates new user content, a colliding/stale entry
+  degrades to a fresh detect and never returns a wrong boundary, and the
+  256-entry eviction stays correct. All three detector suites now reset
+  the process-global memo per test (`init` → `resetMemo()`); all are
+  `@MainActor`, so resets can't race another suite's detect.
+
+**Declined, with reasons:**
+
+- *Restore the teacher-forced logit-parity gate (GPT, P1).* The loop's
+  binding contract is token-identity (Rules above), and all three vendor
+  accepts are pure reorderings — structural bitwise arguments plus
+  probe-verified bitwise kernels plus thousands of identical tokens on
+  both models. Logit parity becomes the binding gate the moment an
+  experiment touches accumulation order; the roadmap's M4 (fused
+  rotate+dequant+GEMM) is already flagged for exactly that. No harness
+  change now.
+- *Memo key omits tokenizer identity (GPT, P2).* The hit path re-hashes
+  the current request's prefix tokens: a different tokenizer yields
+  different token IDs → hash mismatch → fresh detect. Staleness needs a
+  template swap with byte-identical prefix tokenization, and even then
+  yields a valid-but-shorter boundary (cache reuse, not correctness).
+  Not worth key churn.
+- *Upstream PR filing for the three new carries (ADR-0006).* Real
+  process debt; deferred to one batched upstream PR pending owner
+  go-ahead (outward-facing action). Tracked in
+  `docs/mlx-swift-lm-fork.md`.
+- *Nits* — tokenHash Data building (measured 0.73 ms; cold), typed
+  bench errors, memo eviction policy. The `-> dict` annotation was fixed
+  in passing; the rest move neither correctness nor speed.
+
+**Gate status:** `hybrid-cache-correctness` **PASS** (all 11 checks;
+mid-prefill restore bitwise at K=[512,1024,1536], mamba/KV/quantized-KV
+state maxAbsDiff=0.0, 16K restore exact) — the `docs/testing.md`
+loaded-model gate for the E7/E11 files, now on record. Vendor
+`ParoQuantTests` 24/24 (above); detector suites green (memo tests
+included).
