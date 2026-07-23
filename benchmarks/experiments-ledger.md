@@ -359,3 +359,17 @@ line:** it is sequential-latency-bound (E8), the only bitwise-legal
 restructure makes it slower (E8b), and any parallel-scan/chunked variant
 changes f32 rounding order (dead under the zero-loss rule). The ~5.5%
 of 32K prefill the scan costs is a floor for this stack.
+
+**E9 — decode lm_head QMM: at the practical roofline, no lever.**
+Probe (quantizedMM, [248320, 2048] 4-bit gs=128, f16 activations): M=1
+(decode) = 1.155 ms at **234 GB/s** effective weight-read (254 MB);
+M=1024 = 10.4 TFLOP/s ≈ 82% of peak GEMM. Dense f16 GEMV reference:
+342 GB/s (2.98 ms for 1.02 GB) — the 4-bit dequant GEMV's ~68%-of-GEMV
+-bandwidth is inherent to the format; quantized already beats dense on
+time (1.16 vs 2.98 ms). Logit-subset compute would change output (dead
+under the rule). **Verdict: no-go, roofline — the ~0.25 GB/step lm_head
+read is fundamental.** Spin-off question, now the biggest open decode
+mystery: MoE decode weight traffic ≈ 1.3 GB/step → ~5.5 ms floor at the
+lm_head's own measured 234 GB/s, but decode measures 12.5 ms — **~2× of
+MoE decode is NOT bandwidth-explained** (kernel-count, gather_qmv
+geometry, or CPU dispatch — unprofiled). Becomes E10.
