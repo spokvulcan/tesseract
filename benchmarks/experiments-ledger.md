@@ -177,3 +177,20 @@ degradation". (4) Marginal effects must be isolated against the previous
 experiment's binary, not the session baseline (which accumulates accepted
 wins).
 
+**E3 — compile-fuse `preciseSwiGLU` (GDN gated norm).** Hypothesis: same
+fusion family as E2 — 5 kernels → 1 per gated norm per step (~120–150
+launches/token) should speed decode. Change: `Vendor/.../Qwen3Next.swift` —
+`compiledPreciseSwiGLU` (reverted). Measure: marginal isolation A/B
+(E2-app vs E3-app, ABBA, 3 rounds, 128/8192, both models). Gate: **PASS**
+(12/12 each). Numbers: MoE decode −0.5/−0.3% (128), −1.5/+0.5% (8K);
+dense decode +0.3/+1.3% (128), +0.5/−0.6% (8K); prefill ±0.5–1.9%
+(noise-signed); peak −0.4/−0.5% consistently (20–70 MB — real but sub-1%).
+**Verdict: REJECTED** — no reproducible ≥1% win on any metric. The
+carried information: **after E2, decode is no longer launch-bound** — the
+elementwise-fusion family is exhausted (E2 already collected the available
+win; the gated-norm chain's larger ~4K-element tensors were never
+latency-bound). Consequences, no iterations spent: **E4 (rotation `params`
+array cache), E6 (dense `silu(g)*up` fusion), E7 (`sigmoidMultiply`
+fusion) demoted** — same micro-op class with smaller counts, cannot clear
+the bar. Diff reverted; vendor tree clean.
+
