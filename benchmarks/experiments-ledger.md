@@ -665,6 +665,137 @@ environment (M2-class: scheduling/overlap), not gather_qmv geometry —
 M3 amended in the roadmap. Probe hooks stay uncommitted in the fork
 clone; nothing reached the app or the pins.
 
+**C4 attribution (M9 confirmed; basis for the C4 experiment).** Three
+measurements, all on the c1-accepted build:
+
+1. **Enqueue probe** (`/tmp/gather-sweep c4`, batches of 1900 decode-shape
+   gather_qmv + one eval + one sync per batch): graph-build **0.6 µs/call**,
+   eval-enqueue **13.0 µs/call**; dispatch happens **inline on the calling
+   thread** (the MLX StreamThread is idle — no cross-thread handoff). In the
+   probe the GPU keeps pace (13.7 µs DRAM-bound kernel), so 44% of wall is
+   throttle waits; pure CPU dispatch ≈ 4.6 µs/op, of which kname building +
+   pipeline lookup (fmt/get_template_definition) is only **~9%** — below the
+   20% bar, so pipeline-state caching is **not** the C4 lever.
+2. **Production decode sample** (`sample` on the parity bench, 35B MoE,
+   ctx 8192, steady generation; generation thread = 4519 samples ≈ 13.2 ms
+   token): **50.1% inline per-op C++ dispatch** (eval_impl:237 subtree), of
+   which gpu::eval 32.9%; **~28% Swift-side** (graph build + sampling +
+   detok in TokenIterator.next); **8.4% GPU-throttle wait** (eval_impl:252);
+   3.8% finalize. No single frame >5% — the tax is spread across ~15 sites
+   (primitives, encoder, allocator, fence, graph machinery); event machinery
+   ≈0.4% (not a lever); CustomKernel cost is ordinary encoder+barrier work
+   (the per-call full-source string compare does not show). **M9 confirmed:
+   decode is ~85% CPU, GPU mostly idle.**
+3. **Commit anatomy** (env-gated counters in the DerivedData checkout —
+   `MLX_COMMIT_STATS`, probe-only, reverted after): caps 50 ops/50 MB
+   (arch applegpu_g15s), all commits on stream 0.
+   - **MoE decode: ~37 mid-commits/token, MB-cap-bound** — 50 MB of unique
+     input bytes (weight slices) every ~20–24 ops; mid = 71% of commits,
+     rest finalize/throttle tail. ~10 µs CPU per commit ⇒ ~2.8% of decode
+     in mid-commit overhead alone, plus GPU cbuf-boundary gaps (E10's 22%
+     idle estimate).
+   - **Dense decode: ~18 mid-commits/token, OPS-cap-bound** (50 ops at
+     ~27 MB unique bytes; the sub-cap averages in earlier readings were
+     dilution by small finalize tail-commits).
+   - App evals once per ~2 tokens (ops/eval ≈ 4350 MoE — convertToToken's
+     item() covers the forward graph; asyncEval covers cache state).
+   - **C2 reinterpretation:** C2's ops-cap raise could not have changed
+     MoE mid-commit cadence (MB-bound) ⇒ its MoE "+3.5% decode" and
+     "−4.5% 128-prefill" were very likely systematic artifacts, not cap
+     effects; only the dense effects (ops-bound: decode −2.7%, peak
+     +240 MB) were mechanistically real.
+
+**C4 env probe (`MLX_MAX_MB_PER_BUFFER` 50→200, same-binary ABBA, 3 rounds ×
+128/8K/32K, both models) — flat knob REJECTED, split-cap (v2) in progress.**
+MoE: **decode +8.75% (128), +8.70% (8K), +6.93% (32K), 6/6 everywhere**;
+prefill 128/8K flat (+0.2/+1.0); BUT **peak +7.18% (8K: 20.72→22.21 GB),
++7.91% (32K: 21.91→23.64 GB), 6/6**, and 32K prefill −2.02% (5/6). Dense:
+decode −0.5% (128) / −1.4% (8K) / **−7.4% (32K, 6/6)**; prefill −3.0% (32K);
+**peak +45.8% (8K: 4.61→6.72 GB), +33.5% (32K), 6/6**. Instrumented anatomy
+of the experiment arm: MoE mid-commits 37→**20/token** (ops-cap 50 binds at
+~37 ops/84 MB before 200 MB is reached) — the +8.7% decode win is mostly
+NOT per-commit CPU (~1.3% worth); it is **~60–68 µs of GPU-side pipeline
+drain per cbuf boundary** (matches E10's ~60 µs gaps), i.e. fewer+bigger
+cbufs keep the GPU fed in CPU-bound decode. Dense 32K decode is different:
+GPU-bound (weights 2.2 GB + full KV re-read ≈ 12+ ms GPU of the 18.5 ms
+step) — bigger cbufs starve the GPU between chunks (CPU must build a chunk
+before the GPU starts it), hence −7.4%. **The flat MB knob is REJECTED**
+(peak regressions alone disqualify it on both models). v2 design: split the
+accounting — commit on `ops > 50 || unique output (temporary) bytes > X ||
+unique input (mostly persistent weight) bytes > 200`; prefill temporaries
+stay on today's cadence (peak protected), decode weight-traffic stops
+forcing boundaries (MoE win preserved), dense decode untouched (ops-bound).
+X sized from measured output-bytes-per-commit (next measurement); the dense
+32K decode regression is expected to vanish with peak fixed (pool-pressure
+hypothesis) and is re-checked by the v2 A/B.
+
+**C4 v2 A/B (`in200 | out50 | ops50`) — decode win holds, peak halved but
+still reject-level.** MoE: **decode +7.40% (128), +9.72% (8K), +15.41%
+(32K), 6/6**; prefill flat (+0.6/+0.8/−0.4); **peak +3.76% (8K), +4.62%
+(32K), 6/6** (down from +7.2/+7.9). Dense: 32K decode recovered to +3.08%
+(noisy 4/6 — the flat-200 −7.4% was pool/peak-pressure, not scheduling);
+8K decode −0.48%; **peak +11.64% (8K: 4.61→5.14), +17.69% (32K:
+6.10→7.18), 6/6** (down from +45.8/+33.5). **Mechanism located via
+active-memory trajectory ticks** (`activeMB` in the commit probe): decode-
+phase active memory is IDENTICAL across arms (MoE 8K: 18464 vs 18473;
+dense 32K: 3710 vs 3711) — the entire peak regression is **prefill-phase
+live temporaries** (v2 prefill commits ~2× fewer: MoE 8K +298 MB at tick,
+dense 32K chunks +300-700 MB). `runPeakGB` = MLX active-memory peak.
+Output-bytes at stock commit points: MoE 8K prefill ≈ 9.7 MB, MoE 32K ≈
+16–37, dense 32K ≈ 27–55 (prefill chunked at 1024 → per-op outputs are
+0.5–4 MB; MoE decode ≈ 0.075 MB/op, dense ≈ 0.2–0.3). **v3: `out10`**
+reproduces stock's prefill commit points at every context (slightly
+tighter at 32K — harmless), while decode stays `in200`-driven (MoE out10
+binds at ~133 ops ≈ 15/token, in200 at ~80 ≈ 24/token — the win zone).
+
+**C4 v3 A/B (`in200 | out10 | ops50`) — MoE fully clean, dense 32K decode
+kills it.** MoE: **decode +8.50% (128), +10.58% (8K), +3.78% (32K), 6/6**;
+prefill flat/positive; **peak −1.74% (8K), −1.44% (32K) — improved**;
+gate 18/18 IDENT. Dense: **peak −13.46% (8K: 4.61→3.99 GB), −9.04% (32K),
+−2.16% (128)** (out10's tighter prefill cadence — a real bonus); decode
+128/8K −0.4/−0.5% (6/6, sub-1%); **32K decode −1.92% (8/10 over a 5-round
+resolution run)** — reproducible: dense 32K decode is GPU-bound (weights
+2.2 GB + KV re-read ≈ 12+ ms GPU of the 18.5 ms step) and `in200`'s ~4×
+coarser FFN-driven commits starve the pipeline. **v3 REJECTED.**
+**v4 (GPU-bound-adaptive in-cap) — REJECTED at probe.** Two detectors
+tried: completion-lag (relax when last cbuf completed <T µs ago — feedback
+oscillation: relaxed cbufs are intrinsically slow to complete, the regime
+un-detects itself; MoE mid/token 37→42, worse than stock) and
+queue-depth hysteresis (relax ≤2, tighten ≥6 active tasks — MoE decode's
+equilibrium queue depth sits at 3–6, never relaxes: mid/token ≈ 60,
+tok/s = stock). **Physics: MoE decode is boundary-limited, not
+GPU-throughput-limited — the GPU is busy either way, so no GPU-side
+signal separates it from dense 32K's starvation-limited regime.** A
+phase-accurate signal (prefill vs decode) exists only in the app/library —
+out of Cmlx scope. **v5: static compromise `in100 | out10`** (dense FFN
+29 MB/op → commits ~1.7× coarser than stock vs ~4× at in200, halving the
+starvation; MoE ~40 ops/commit ≈ 27 mid/token, keeps ~half+ of the v3
+win) — A/B running.
+
+**C4 v5 (`in100 | out10 | ops50`) — ACCEPTED.** Same-binary ABBA (3
+rounds MoE, 4 rounds dense, 128/8K/32K, gates 18/18 + 24/24
+token-identical). MoE: **decode +2.63% (128), +4.50% (8K), +2.36%
+(32K)** (6/6, 6/6, 4/6); prefill flat (outliers are round-1 warmup);
+**peak −1.74% (8K), −1.44% (32K)**. Dense: **32K decode +4.19% (5/8 —
+the v3 −1.92% gone)**; 128/8K decode −0.4/−0.1% (flat); prefill
+flat/positive; **peak −2.16% (128), −13.46% (8K: 4.61→3.99 GB), −9.19%
+(32K: 6.10→5.54 GB)** — the out10 leg is a peak-memory win in its own
+right. Ported to `spokvulcan/mlx` `pin-tesseract` @ **404070e2**
+(`perf(metal): relaxed input cap + output-byte commit accounting (C4)`),
+mlx-swift pin @ **73e7f42**, three Package.swift pins in lockstep;
+checkout re-sync verified `diff fbf2fb86 == C4 patch` exactly; probe
+instrumentation fully reverted. Defaults shipped: ops 20/40/50 (arch,
+unchanged), **in 100 MB, out 10 MB** (ctor, env-overridable). Clean-build
+confirmation A/B (pinned build vs `tesseract-c1-accepted.app`, 3 rounds
+128/8K/32K + a 5-round MoE 32K resolution): MoE decode **+2.45% (128,
+6/6), +4.97% (8K, 6/6), +0.93% (32K, noise-dominated ±5)**; MoE prefill
+noise (32K −0.53% mean of 10, 3/10 — the earlier −6.1% and +7.3% readings
+were both thermal outliers); dense decode flat at every context
+(+0.06% 32K); peaks −1.7/−1.4% (MoE 8K/32K), −2.2/−13.5/−9.0% (dense);
+gates 18/18 + 10/10 + 18/18 token-identical. **The 32K-context prefill
+and decode metrics on this machine carry ±5-10% thermal variance —
+verdicts there need ≥5 rounds and per-round pairing, never single runs.**
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
