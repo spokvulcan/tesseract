@@ -613,3 +613,29 @@ killed to unblock the in-flight leg. Also on record: **do not edit
 `parity-ab.sh` while a run is parked inside it** — bash re-reads the file
 and a mid-run edit shifted offsets, producing a syntax error at the loop
 tail (data intact; the script's own footer died).
+
+**C2 — `MLX_MAX_OPS_PER_BUFFER` raise (M2 probe) — REJECTED.** Hypothesis:
+raising the per-command-buffer op cap (default 50 on M3 Max) reduces the
+decode command-buffer segmentation E10 measured (~40 CBs/token, ~60 µs
+gaps ≈ 22% idle) → decode win, no numerics (scheduling only). Method:
+same-binary A/B via `ARM_ENV_experiment` (no rebuild — env is read once
+per process), 3 rounds cap=400 + 2 rounds cap=200, contexts 128/8192,
+both models. Gates: **PASS everywhere** (12/12 + 8/8 + 8/8 + 8/8,
+token-identical — scheduling is output-neutral as expected). Numbers
+(per-round pairs): **MoE decode +2.9…+4.4% at 8K (6/6 positive at 400,
+mean +3.5%), +0.9…+2.1% at 128** — the E10 mechanism confirmed as real.
+BUT three reproducible regressions kill the global knob: (a) **dense 8K
+decode −2.7% at 400 (6/6 negative)**; (b) **dense 128 peak +7.25%**
+(3.26→3.50 GB, +240 MB — 10/10 pairs across BOTH cap values; temporaries
+held across a whole large buffer instead of released at 50-op
+boundaries); (c) **MoE 128 prefill −4…−5%** (9/10 pairs across both
+caps; opposite-sign from dense-128 prefill, so not pure noise —
+mechanism unidentified). 200 weakens the MoE win (+1.9%) without
+clearing (b)/(c). **Verdict: REJECTED at 200 and 400.** The MoE decode
+win is real but every global form of it carries a reproducible ≥1%
+regression. Recorded follow-ups (folded into M2's roadmap entry): a
+graph-size-aware cap (win zone = ~1900-kernel MoE decode steps,
+regression zones = small graphs) or mid-buffer temporary release (kills
+the +240 MB) — eval.cpp/device.cpp internals, a deliberate project, not
+an env knob. Note: a model-scoped policy (MoE-only cap) still fails on
+regression (c).

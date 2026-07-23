@@ -77,13 +77,15 @@ run_arm() {
     # (observed 2026-07-23: app idle in the AppKit run loop, report unwritten)
     # and `open -W` waits forever — kill the app after ARM_TIMEOUT (default
     # 600s; a full 3-context MoE arm is ~110s) so the loop can't park.
+    # The subshell is fully redirected: an orphaned watchdog `sleep` holding
+    # the script's stdout pipe otherwise delays the caller's `tail` EOF by
+    # up to ARM_TIMEOUT seconds per arm (observed, same day).
     (
         sleep "${ARM_TIMEOUT:-600}"
         if pgrep -x "Tesseract Agent" >/dev/null; then
-            echo "WATCHDOG: arm exceeded ${ARM_TIMEOUT:-600}s — killing hung app" >&2
             killall "Tesseract Agent" 2>/dev/null || true
         fi
-    ) &
+    ) >/dev/null 2>&1 &
     local watchdog_pid=$!
     wait "$open_pid" 2>/dev/null || true
     kill "$watchdog_pid" 2>/dev/null || true
