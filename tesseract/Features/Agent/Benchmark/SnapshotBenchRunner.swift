@@ -59,23 +59,32 @@ final class SnapshotBenchRunner {
             eval(caches.flatMap { $0.state })
 
             // Byte-equality gate: device capture vs host capture of the same
-            // source must produce bit-identical snapshot arrays.
-            if let devSnap = HybridCacheSnapshot.capture(
-                cache: caches, offset: tokens, type: .leaf, copyStrategy: .device),
+            // source must produce bit-identical snapshot arrays. Compared as
+            // raw bytes rather than numeric == so ±0 / NaN-payload / FTZ
+            // differences count as failures, and a nil capture fails loudly
+            // instead of silently skipping the check.
+            let failuresBefore = byteCheckFailures
+            guard
+                let devSnap = HybridCacheSnapshot.capture(
+                    cache: caches, offset: tokens, type: .leaf, copyStrategy: .device),
                 let hostSnap = HybridCacheSnapshot.capture(
                     cache: caches, offset: tokens, type: .leaf, copyStrategy: .host)
-            {
-                for (d, h) in zip(devSnap.layers, hostSnap.layers) {
-                    for (da, ha) in zip(d.state, h.state) {
-                        if !(da .== ha).all().item(Bool.self) {
-                            byteCheckFailures += 1
-                        }
+            else {
+                byteCheckFailures += 1
+                log("ctx=\(tokens): byte-equality device-vs-host FAILED (capture returned nil)")
+                continue
+            }
+            for (d, h) in zip(devSnap.layers, hostSnap.layers) {
+                for (da, ha) in zip(d.state, h.state) {
+                    if da.asData(access: .copy).data != ha.asData(access: .copy).data {
+                        byteCheckFailures += 1
                     }
                 }
             }
             log(
                 "ctx=\(tokens): byte-equality device-vs-host "
-                    + (byteCheckFailures == 0 ? "IDENTICAL" : "FAILED (\(byteCheckFailures))"))
+                    + (byteCheckFailures == failuresBefore
+                        ? "IDENTICAL" : "FAILED (\(byteCheckFailures - failuresBefore))"))
 
             for round in 0..<rounds {
                 for (name, strategy) in round % 2 == 0 ? strategies : strategies.reversed() {
