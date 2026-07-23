@@ -60,7 +60,7 @@ let package = Package(
 
     ],
     dependencies: [
-        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "54ca1ec7cf9601c39809720725211afe601cfdd5"),
+        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "3bd912dbdd113186de26faceca416dbcd945184d"),
         .package(path: "../mlx-swift-lm"),
         .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.8.1"))

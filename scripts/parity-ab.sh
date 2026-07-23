@@ -43,7 +43,17 @@ run_arm() {
     killall "Tesseract Agent" 2>/dev/null || true
     sleep 1
     echo "── round $round / $label: $(basename "$app")"
-    open -W "$app" --args \
+    # Optional per-arm env injection (e.g. ARM_ENV_experiment='MLX_X=1'); each
+    # entry becomes one `open --env` flag. Harness-only; logged in the ledger.
+    local env_var_name="ARM_ENV_${label}"
+    local -a env_flags=()
+    if [ -n "${!env_var_name:-}" ]; then
+        local kv
+        for kv in ${!env_var_name}; do
+            env_flags+=(--env "$kv")
+        done
+    fi
+    open -W "${env_flags[@]+"${env_flags[@]}"}" "$app" --args \
         --paro-parity-bench \
         --bench-model-id "$MODEL_ID" \
         --bench-output "$outdir" \
@@ -63,7 +73,24 @@ run_arm() {
             exit 1
         fi
     fi
+    # Watchdog: a bench arm occasionally completes its work but never exits
+    # (observed 2026-07-23: app idle in the AppKit run loop, report unwritten)
+    # and `open -W` waits forever — kill the app after ARM_TIMEOUT (default
+    # 600s; a full 3-context MoE arm is ~110s) so the loop can't park.
+    (
+        sleep "${ARM_TIMEOUT:-600}"
+        if pgrep -x "Tesseract Agent" >/dev/null; then
+            echo "WATCHDOG: arm exceeded ${ARM_TIMEOUT:-600}s — killing hung app" >&2
+            killall "Tesseract Agent" 2>/dev/null || true
+        fi
+    ) &
+    local watchdog_pid=$!
     wait "$open_pid" 2>/dev/null || true
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+    if ! ls "$outdir"/paro-parity-bench/*.json >/dev/null 2>&1; then
+        echo "WARNING: no report written for $label round $round (arm hung?) — compare will treat the mismatch as FATAL." >&2
+    fi
 }
 
 for round in $(seq 1 "$ROUNDS"); do

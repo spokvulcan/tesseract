@@ -63,6 +63,10 @@ DerivedData (`git ls-tree 0bb916c Source/Cmlx/` and the resolved checkout).
 
 1. Save the current Release `.app` as the A/B baseline (`/tmp/...`).
 2. Edit Cmlx sources **in the DerivedData checkout's submodule** (fast loop).
+   Gotcha: SwiftPM checkouts are **read-only** (`-r--r--r--`) — `chmod u+w`
+   the files first (a later `xcodebuild -resolvePackageDependencies` or the
+   revert in step 4 restores them). The Edit tool is workspace-scoped and
+   cannot touch DerivedData — patch via shell.
 3. Build + measure Release-only (`scripts/bench.sh`, `scripts/parity-ab.sh`,
    ABBA, nice 0, serialized GPU; parity gate `--paro-parity-bench`
    token-identical on both PARO models for anything numeric).
@@ -83,6 +87,30 @@ DerivedData (`git ls-tree 0bb916c Source/Cmlx/` and the resolved checkout).
      `git -C <DD>/checkouts/mlx-swift/Source/Cmlx/mlx diff ce45c525` — it must
      equal the accepted diff exactly.
 5. Tree clean between iterations (tesseract + Vendor submodule).
+
+## macOS/SwiftPM builds JIT the Metal kernels — no instantiation plumbing
+
+On this platform `Package.swift` excludes `nojit_kernels.cpp` and the
+`kernels/` dir; `jit_kernels.cpp` generates Metal source at runtime from
+template definitions (e.g. `get_gather_qmm_kernel` substitutes tile params
+into the template and caches by kernel name). Consequences:
+
+- Tile-geometry / template-param changes need **host-side edits only** —
+  no `instantiate_*` lines, no metallib rebuild; the kernel is regenerated
+  on first dispatch with the new name.
+- **Kernel-body edits have two homes**: the canonical
+  `Source/Cmlx/mlx/mlx/backend/metal/kernels/*.{h,metal}` AND the checked-in
+  JIT string copies `Source/Cmlx/mlx-generated/*.cpp` (verbatim string of
+  the kernel source with `#line` markers — SwiftPM builds the JIT from
+  these, it does not regenerate them). Edit both consistently, or
+  regenerate via `tools/update-mlx.sh`'s cmake step (`make <kernel>` under
+  `mlx/backend/metal`, then copy `build/mlx/backend/metal/jit/*` into
+  `mlx-generated/`). Verify a hand edit by diffing the `.h` against the
+  string body.
+- Standalone SwiftPM probes can't find `default.metallib` at init; copy the
+  app's `mlx-swift_Cmlx.bundle/.../default.metallib` next to the probe
+  binary as `mlx.metallib` (colocated-library fallback). It's only needed
+  to satisfy device init — JIT covers the templated kernels.
 
 ## Re-converging on vanilla
 

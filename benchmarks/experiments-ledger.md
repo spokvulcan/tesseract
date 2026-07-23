@@ -558,3 +558,58 @@ except the expected second-arm thermal dip on the second 8K prefill
 same artifact shape appeared in E0/E2). **Verdict: scheme VALIDATED** —
 fork chain is the new baseline; all C-experiments pin/fork from here.
 (Not an optimization; infra commit.)
+
+**C1 — rows-per-expert-aware `gather_qmm_rhs` tile geometry (M1).**
+Hypothesis: with sorted rhs indices, a BM=16 tile is what keeps tiles
+inside single-expert runs at small B/E, but at production's B/E=32 a wider
+32×64 tile is outright faster (single-segment tiles + denser MMA) — pick
+geometry by measured rows-per-expert: `(bm,bn,bk,wm,wn) = (32,64,32,1,2)`
+when `M/E >= 32`, stock `(16,32,32,1,2)` below. Bitwise by construction
+(per-element K-accumulation order is tile-geometry-independent — verified
+empirically, not just argued). Pre-evidence (standalone sweep harness,
+probe-only `MLX_GQMM_CFG` env hook in the fork clone, ABBA in-process,
+f16, production shapes E=256/N=512/K=2048 + down_proj N=2048/K=512): at
+B/E=32 — **+13.6%** (gate/up shape) and **+12.5%** (down shape); +19–22%
+at B/E=64–128; 0.6–0.8× at B/E≤24 (the straddle cliff → threshold 32);
+**bitwise IDENTICAL for every config at every B/E**; dense-qmm anchor
+9.5–10.1 TFLOP/s, the winner reaches 96% of it (gather overhead ~gone).
+Note: macOS/SwiftPM builds JIT the kernels (`jit_kernels.cpp`, not
+nojit) — geometry changes need host edits only, no instantiation plumbing;
+and the sweep's absolute TFLOP/s ran ~1.5× above E4's (harness/thermal
+calibration differs — within-run ABBA ratios are the evidence, absolute
+anchors are not). Change (one hunk in
+`Cmlx/mlx/backend/metal/quantized.cpp`, DerivedData checkout): E from the
+weight batch dims, `M/E >= 32` → `bm=32, bn=64`. Measure: (a) 3-round
+ABBA MoE full contexts — gate **PASS** (18/18 token-identical); 32K
+prefill per-round pairs **+7.3/+2.1 | +7.9/−2.1 | +8.2/+13.7** (mean
++6.2%, 5/6 positive); 8K prefill +0.7/±0 in calm rounds, negative only
+inside the mid-session thermal-collapse round; decode mixed ± (mean ~0 —
+prefill-only kernel, untouched); peak flat. (b) dense control 2 rounds —
+gate **PASS** (8/8); perf pure noise (incl. a −6.6% pooled 8K-prefill
+reading *with identical code paths* — the afternoon's noise floor on
+record). (c) 4-round 8K MoE tie-break — gate **PASS** (8/8); per-round
+−1.1/+2.2/+0.6/−3.2 | −1.3/+2.2/+1.6/+16.3 (mean **+2.2%**, 5/8
+positive) — no reproducible 8K regression; the 8K zone is
+dispatch-saturated (E5 lesson: kernel wins shrink ~3× there). **Verdict:
+ACCEPTED** — reproducible ≥1% win (32K prefill +6.2%, three readings
+≥+7%), no reproducible regression on any other metric, 34/34 pairs
+token-identical across the three runs. E4's "~12–15% of 35B prefill"
+estimate was calibrated on its 5.14-TFLOP/s harness reading; this
+session's harness reads the stock kernel ~1.5× faster, and the measured
+app win is +6% at 32K — the opportunity existed (M1's premise stands),
+its size was overestimated by the older harness. Ported to
+`spokvulcan/mlx` `pin-tesseract`; pins moved (see scheme doc).
+
+**Harness amendments (from C1, non-numeric):** (1) `parity-ab.sh` gained
+per-arm env injection (`ARM_ENV_baseline/experiment`, via `open --env`) —
+for the C2 op-cap probe. (2) `parity-ab.sh` gained a per-arm **watchdog**
+(`ARM_TIMEOUT`, default 600 s): a dense-leg arm completed its bench but
+never exited (idle in the AppKit run loop, report unwritten — *baseline*
+binary, one-off flake, not the experiment) and `open -W` parked 34 min;
+the leg was killed and re-run. Lesson recorded mid-flight: the orphaned
+watchdog `sleep` inherits the script's stdout pipe and delays `tail` EOF —
+watchdog output is now redirected away from the pipe; orphan sleeps were
+killed to unblock the in-flight leg. Also on record: **do not edit
+`parity-ab.sh` while a run is parked inside it** — bash re-reads the file
+and a mid-run edit shifted offsets, producing a syntax error at the loop
+tail (data intact; the script's own footer died).
