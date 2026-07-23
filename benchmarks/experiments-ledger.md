@@ -664,3 +664,34 @@ environment.** The MoE decode 2× gap (E9/E10) is therefore eval-
 environment (M2-class: scheduling/overlap), not gather_qmv geometry —
 M3 amended in the roadmap. Probe hooks stay uncommitted in the fork
 clone; nothing reached the app or the pins.
+
+### Operational state (persisted for context compaction; reload after resume)
+
+- **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
+  `~/projects/mlx-swift`; needs `default.metallib` copied next to the binary
+  as `mlx.metallib` (from the app bundle's `mlx-swift_Cmlx.bundle`). Sections:
+  fidelity + B/E sweep (`MLX_GQMM_CFG`), down_proj shape, dense anchor,
+  gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
+  (seconds — incremental Cmlx).
+- **Fork clone state (standing, do NOT clean):**
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `fbf2fb86` + uncommitted probe
+  hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
+  rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
+  rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
+  `~/projects/mlx` = clean at `fbf2fb86` (pin-tesseract tip).
+- **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
+  `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
+  == `tesseract-exp-c1.app` (current main: C1 tiles, fbf2fb86) — use
+  `tesseract-c1-accepted.app` as the A/B baseline for the next experiment.
+- **Pins (current):** spokvulcan/mlx-swift `3bd912db` (pin-tesseract) ←
+  spokvulcan/mlx `fbf2fb86`; mlx-swift-lm pin branch `0ae1a18`.
+- **Build checkout:** the app target's DerivedData is
+  `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
+  (several stale siblings exist; that one is current). Checkout files are
+  read-only — `chmod u+w` before patching.
+- **Next (C4):** CPU dispatch-cost attribution for the M9 hypothesis (MoE
+  decode is CPU-dispatch-bound: ~1900 kernels/token × ~5–13 µs): extend the
+  probe with a long enqueue-only gather_qmv loop and `sample` it; if string
+  building + pipeline lookup is a real share → C4 = pipeline-state lookup
+  caching in mlx-core (bitwise-trivial CPU change). Then M5 (attention
+  fallback tail), M4 (fused rotate+GEMM), M8 (expert prefetch probe).
