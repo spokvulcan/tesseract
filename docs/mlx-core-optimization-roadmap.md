@@ -129,3 +129,34 @@ Legend for evidence: E# = experiment in `benchmarks/experiments-ledger.md`.
 - **Probe harness pattern:** scratch SwiftPM package on the vendor path
   (2 s rebuilds) with legacy-vs-new kernel copies, ABBA timing, bitwise
   gates — used by E4/E6b/E8b/E9/E10; reuse it before any app-level run.
+
+## Kickoff prompt for the next session (Cmlx loop)
+
+> Run the same endless inference-optimization experiment loop, now scoped
+> to **mlx-core (Cmlx)**. Goal: make the Qwen3.5/3.6 PARO models (dense
+> AND MoE) faster — prefill, decode, TTFT, CPU overhead, peak memory —
+> with ZERO output-quality loss (no quantization changes, no KV-cache
+> quantization, no accuracy-for-speed trades).
+>
+> Before the first experiment: read `benchmarks/experiments-ledger.md`
+> (rules, measurement discipline, proven no-gos — never repeat a logged
+> failure) and `docs/mlx-core-optimization-roadmap.md` (the measured
+> opportunity list M1–M8). Start with **M1 — `gather_qmm_rhs` tile
+> geometry at small rows-per-expert** (measured 40.5% of peak at
+> production B/E=32, occupancy not bandwidth — already answered, don't
+> re-measure; ~12–15% of 35B prefill). First task before any experiment:
+> establish a buildable mlx-core fork/pin scheme (the app pins
+> ml-explore/mlx-swift at an exact revision whose Cmlx tracks
+> ml-explore/mlx @ `dc43e62d`) and record it in the ledger.
+>
+> Rules (unchanged): exactly one hypothesis per iteration; implement
+> minimally; measure Release-only via `scripts/bench.sh` (interleaved ABBA
+> against saved binaries, nice 0, serialized GPU — Debug MLX is ~20×
+> slower; quit the running app first). Quality gate: anything touching
+> numerics or the model graph must pass `--paro-parity-bench` (greedy)
+> token-identical vs the unmodified baseline on both target models.
+> Verdict: reproducible ≥1% win on any metric, no regression on the
+> others → commit (Conventional Commits) + log ACCEPTED; otherwise revert
+> completely + log REJECTED. Append to the ledger either way; tree clean
+> between iterations. Never stop — keep generating and testing hypotheses
+> until interrupted.
