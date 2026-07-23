@@ -251,3 +251,25 @@ materialize one-at-a-time (+2.3 s, +11 GB loadPeak); (4) the vendor's
 prefill zone (~1490 t/s) is near-saturated — kernel-level wins there
 shrink ~3× vs naive attribution (1.07× on the pair → 0.5% app).
 
+**E6 — rotation kernel tile tuning (4 → 16 rows/tile).** Hypothesis:
+larger `ROWS_PER_TILE` at prefill batches amortizes the krot barrier
+rounds + per-tile coefficient loads in the PARO rotation kernel → ≥1%
+prefill on both models. Probe (direct `PairwiseRotation.rotate` timing,
+tile variants interleaved within one process via a temporary env hook):
+tile=16 −27% at [1024,2048], −15% at [997,2560] and [8192,512] vs 4;
+tile=32 regresses (occupancy+tails); **bitwise-identical across tiles**.
+Also found: production runs F16 (the 35B checkpoint stores F16 despite
+`"dtype": "bfloat16"` in config) — the kernel has a *latent* bf16 compile
+failure on a path nothing takes (noted, not fixed here). Change: tile
+selection 1 / 4 / 16 by batch (reverted). Measure: 3-round ABBA both
+models + 4-round 8K tie-break, gates **PASS** everywhere. Numbers: MoE 8K
+prefill per-round +0.69/+0.68/+1.00/+0.91/+0.77/+1.99/+1.28/−0.28 (mean
+**+0.88%**); dense 8K +0.48…+1.22% (mean ~0.8%); 32K confounded by
+throttle; decode/peak/load flat (decode code provably identical — tile=1
+at batch=1). **Verdict: REJECTED** — real, consistent, mechanistically
+supported (probe + sign-consistency across 16+ readings), but the mean is
+~0.85% < 1%. The probe's real payload: the rotation kernel runs at
+10–30 GB/s effective — it is barrier/latency-bound, not bandwidth-bound,
+so the lever is restructuring (register-resident simd-shuffle, no
+threadgroup tile, no barriers) not tuning. That is E6b.
+
