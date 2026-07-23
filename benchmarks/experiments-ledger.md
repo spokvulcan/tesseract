@@ -496,3 +496,65 @@ state maxAbsDiff=0.0, 16K restore exact) — the `docs/testing.md`
 loaded-model gate for the E7/E11 files, now on record. Vendor
 `ParoQuantTests` 24/24 (above); detector suites green (memo tests
 included).
+
+---
+
+## Session 2026-07-23 — Cmlx (mlx-core) loop
+
+Same rules and measurement discipline as the first session (above), now
+scoped to **mlx-core (Cmlx)** per `docs/mlx-core-optimization-roadmap.md`.
+Experiments in this loop are numbered **C0, C1, …** to keep them distinct
+from the app/vendor loop's E-series. Git HEAD at session start: the
+post-review-round tree.
+
+### Infrastructure: buildable mlx-core fork/pin scheme (prerequisite task)
+
+The Cmlx sources reach the build only as a **git submodule of mlx-swift**
+(`Source/Cmlx/mlx`), so the fork has two levels, both under `spokvulcan`
+(scheme doc: `docs/mlx-core-fork.md`):
+
+- `spokvulcan/mlx` branch **`pin-tesseract`** @ `ce45c525` — exact upstream
+  content (mlx `v0.31.1`), the writable mlx-core. Append-only.
+- `spokvulcan/mlx-swift` branch **`pin-tesseract`** @ `54ca1ec` — upstream
+  `0bb916c` (the 0.31.6 tag the app pinned) + ONE commit: `.gitmodules`
+  points `Source/Cmlx/mlx` at `spokvulcan/mlx`. Zero source diff. mlx-c
+  submodule untouched (`ml-explore/mlx-c` @ `0726ca9`).
+- Lockstep pins (`54ca1ec7cf9601c39809720725211afe601cfdd5`):
+  `Vendor/mlx-audio-swift/Package.swift`, `Vendor/tesseract-speech/
+  Package.swift` (in-tree), `Vendor/mlx-swift-lm/Package.swift` (commit
+  `37702c8` on its `pin-upstream-mlx-swift` branch; tesseract gitlink bump).
+
+**Corrected pin fact:** the roadmap/kickoff said "Cmlx tracks ml-explore/mlx
+@ dc43e62d". `dc43e62d` is an mlx-**swift** revision seen in a stale
+DerivedData checkout, not an mlx revision. The mlx-core the app builds is
+`ce45c52505c8158ea48d2a54e8caae05efd86bfe` (tag `v0.31.1`), the
+`Source/Cmlx/mlx` gitlink recorded by mlx-swift `0bb916c` — verified via
+`git ls-tree 0bb916c Source/Cmlx/` and the resolved app DerivedData
+checkout. Roadmap note amended.
+
+Also established this session (source read, `device.h`/`device.cpp`):
+`is_nax_available()` = macOS 26.2+ AND arch gen ≥ 17 (non-phone); M3 Max is
+`g15s` → gen 15 → **nax is unavailable on this machine** — the production
+`gather_qmm_rhs` path is the non-nax kernel (`bm=16, bn=32, bk=32, wm=1,
+wn=2`), not the nax one (`bm=64`). M1 targets the non-nax kernel.
+
+Per-iteration workflow (in `docs/mlx-core-fork.md`): edit in the live
+DerivedData checkout's submodule → build/bench → REJECTED: `git checkout
+-- .` in the submodule; ACCEPTED: port diff to `~/projects/mlx`
+(`pin-tesseract`) + gitlink bump in `~/projects/mlx-swift` + three-pin
+lockstep move + tesseract commit, then re-resolve and verify the port
+(`git diff ce45c525` in the checkout == accepted diff).
+
+### Experiments
+
+**C0 — fork-scheme shakedown (pre-fork binary vs fork-built binary).**
+Provenance-only change (byte-identical sources), so the binary content is
+unchanged by construction; run to *prove* the fork chain builds and stays
+output-identical. Method: `parity-ab.sh`, 1 round, contexts 128/8192,
+pre-fork saved binary vs fork-pinned Release build. Gate: **PASS both
+models** (4/4 pairs each, token-identical). Perf: everything within ±2.7%
+except the expected second-arm thermal dip on the second 8K prefill
+(dense −13.4%, MoE −7.3% — single-round ABBA has no BA balancing; the
+same artifact shape appeared in E0/E2). **Verdict: scheme VALIDATED** —
+fork chain is the new baseline; all C-experiments pin/fork from here.
+(Not an optimization; infra commit.)

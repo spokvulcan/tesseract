@@ -5,10 +5,12 @@ entry is grounded in a measurement made that session — no priors. The
 session's full record: `benchmarks/experiments-ledger.md`. The mlx-core
 sources referenced live in the pinned checkout
 (`DerivedData/.../SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/`;
-upstream `ml-explore/mlx` @ `dc43e62d`). Scope note: these need changes in
-**Cmlx / mlx-core** (or an mlx fork) — deliberately out of the app +
-mlx-swift-lm scope of the completed loop. Gain estimates are the measured
-attribution × the measured headroom, not hopes.
+the gitlink records upstream `ml-explore/mlx` @ `ce45c525` = tag `v0.31.1` —
+an earlier version of this note said `dc43e62d`, which is an mlx-**swift**
+revision, not mlx). Scope note: these need changes in **Cmlx / mlx-core** —
+the app now consumes a writable fork (`spokvulcan/mlx` + `spokvulcan/mlx-swift`,
+scheme in `docs/mlx-core-fork.md`, established 2026-07-23 for the Cmlx loop).
+Gain estimates are the measured attribution × the measured headroom, not hopes.
 
 Legend for evidence: E# = experiment in `benchmarks/experiments-ledger.md`.
 
