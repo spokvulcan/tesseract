@@ -194,3 +194,32 @@ array cache), E6 (dense `silu(g)*up` fusion), E7 (`sigmoidMultiply`
 fusion) demoted** — same micro-op class with smaller counts, cannot clear
 the bar. Diff reverted; vendor tree clean.
 
+**E4 — #256 research verdict: `gather_qmm` headroom is occupancy, not
+bandwidth.** Hypothesis under test (from issue #256): "the B/E=32→128
+TFLOP/s headroom is reachable at fixed B/E (tiling), not a weight-
+bandwidth roofline." Method: standalone sweep harness (scratch SwiftPM
+pkg on the vendor) timing `gatherQuantizedMM` on the sorted-rhs fast path
+at the real shapes (E=256, N=512, K=2048, 4-bit, gs=128 per config.json —
+#256's table said 64, the checkpoint says 128), bf16 activations, uniform
+random routing. **Sweep harness gotcha found:** x must be 3-D `[B,1,K]`
+with 1-D indices (production's post-gatherSort shape); a 4-D x makes
+`indices_or_default` broadcast `[B,1]×[B]→[B,B]` and silently computes B×
+redundant work (32 GiB alloc at B=2048). Results: 1.37 / 2.34 / 3.61 /
+**5.14** / 6.34 / 7.16 / 7.69 TFLOP/s at B/E = 4/8/16/**32**/64/128/256
+(% of 12.69 peak: 10.8→60.6). Dense 4-bit qmm at B/E=32's FLOPs: 7.41
+TFLOP/s; the gather kernel CONVERGES to it (7.69) at B/E=256. Analysis:
+weights are 67 MB → 0.22 ms bandwidth floor; B/E=32 takes 3.34 ms at an
+effective 43 GB/s of ~300 available — nowhere near bandwidth-saturated;
+TFLOP/s grows with rows-per-expert and saturates at the dense-GEMM rate.
+**Verdict: recoverable tiling/occupancy loss, NOT a roofline** — #256's
+~14%-of-prefill estimate confirmed as existing. But the tile geometry
+(`bm=16/64`, per-expert tile padding at small B/E) lives in Cmlx
+(mlx-core), which this loop does not fork — the kernel-internal fix is
+upstream territory (owner's call to file). In-scope lever identified and
+kernel-probed: **`gate_proj`+`up_proj` fused into one gathered QMM at
+N=1024** (shared x and indices; concat along the output dim at the
+group-128 boundary, per-element bitwise-identical): **1.07–1.09×** on the
+kernel pair across B/E 16–128 → modeled ≈ +1.7% of 35B prefill (MoE
+matmuls = 42.8%×78% of prefill per #254; gate/up = 2/3 of them × 7.5%).
+That becomes E5.
+
