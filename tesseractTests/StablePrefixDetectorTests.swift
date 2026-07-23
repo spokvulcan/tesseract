@@ -74,6 +74,11 @@ struct StablePrefixDetectorTests {
 
     private let tokenizer = MockTokenizer()
 
+    init() {
+        // The detector's memo is process-global — start every test clean.
+        StablePrefixDetector.resetMemo()
+    }
+
     /// Tokenize a full conversation through the mock template for verification.
     private func tokenizeFull(
         systemPrompt: String,

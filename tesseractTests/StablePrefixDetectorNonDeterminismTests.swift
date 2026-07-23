@@ -113,6 +113,11 @@ struct StablePrefixDetectorNonDeterminismTests {
         ]
     }
 
+    init() {
+        // The detector's memo is process-global — start every test clean.
+        StablePrefixDetector.resetMemo()
+    }
+
     // MARK: - 1. reproducesNonDeterminism
 
     /// Reproduces the production bug: calling applyChatTemplate twice with the
