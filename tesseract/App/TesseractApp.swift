@@ -62,16 +62,20 @@ struct TesseractApp: App {
             Self.runHarness("PARO parity bench") {
                 try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--snapshot-bench") {
+            Self.runHarness("Snapshot bench") {
+                try await SnapshotBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--prefix-cache-e2e") {
+            Self.runHarness("Prefix cache E2E") {
+                try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
+            }
         } else if args.contains("--benchmark") {
             Task { @MainActor in
                 do { try await BenchmarkRunner().run() } catch {
                     Log.agent.error("Benchmark failed: \(error)")
                 }
                 exit(0)
-            }
-        } else if args.contains("--prefix-cache-e2e") {
-            Self.runHarness("Prefix cache E2E") {
-                try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--hybrid-cache-correctness") {
             Self.runHarness("Hybrid cache correctness") {

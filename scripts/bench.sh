@@ -22,6 +22,12 @@ for arg in "$@"; do
     if [ "$arg" = "--paro-parity-bench" ]; then
         LOG_FILE="$BENCH_DIR/paro-parity-bench/latest.log"
         break
+    elif [ "$arg" = "--snapshot-bench" ]; then
+        LOG_FILE="$BENCH_DIR/snapshot-bench/latest.log"
+        break
+    elif [ "$arg" = "--prefix-cache-e2e" ]; then
+        LOG_FILE="$BENCH_DIR/prefix-cache-e2e/latest.log"
+        break
     fi
 done
 RESULTS_DIR="$BENCH_DIR/results"

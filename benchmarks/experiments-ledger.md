@@ -273,3 +273,28 @@ supported (probe + sign-consistency across 16+ readings), but the mean is
 so the lever is restructuring (register-resident simd-shuffle, no
 threadgroup tile, no barriers) not tuning. That is E6b.
 
+**E7 — device-side deep copy for prefix-cache snapshots (warm TTFT).**
+Hypothesis (app-side map H2): `HybridCacheSnapshot.deepCopyState`'s host
+round trip (`asData`→`Data`→`MLXArray` — two memcpys + a snapshot-sized
+`Data` transient per array, per layer, per capture/restore) is pure
+overhead; a device-side copy is faster and removes the transient.
+Change: `tesseract/Features/Server/HybridCacheSnapshot.swift` —
+`deepCopyState` becomes `array * 1` (device multiply-by-one: binary ops
+always allocate a fresh output ⇒ independence by construction; IEEE
+x×1.0 == x exactly, bytes bit-identical) returned **lazy**, with capture
+and restore each hoisting ONE `eval` per operation (per-array syncs made
+the device path ~2× *slower* than host at 200–300 MB — 80 arrays × ~0.2
+ms sync; one hoisted eval fixes it). New `--snapshot-bench` runner
+(synthetic 35B-shaped cache stack, within-process ABBA, byte-equality
+gate) + bench.sh/dispatch routing. Measure: **byte-equality IDENTICAL**
+at 8K/32K; **`--prefix-cache-e2e` PASS** (all 19 checks, output equality
+on hit paths). Numbers (mean of 4 rounds × 3 iters): at 232 MB snapshot:
+capture 8.2 → **1.9 ms (~4.3×)**, restore 8.2 → **1.9 ms (~4.3×)**; at
+735 MB: capture 26.7 → **4.7 ms (~5.7×)**, restore 26.8 → **4.7 ms
+(~5.7×)**. Peak unchanged (0.70/2.21 GB both strategies — the host
+path's per-array `Data` frees between arrays, so the transient never
+accumulated; the claimed peak benefit is **dead**, recorded honestly).
+Translation: ~6.5–22 ms off warm-path restore (TTFT) and cold-prefill
+capture per snapshot at realistic sizes (200–700 MB). **Verdict:
+ACCEPTED** — ≥4× on the copy mechanism that sits on the warm-TTFT and
+cold-prefill paths, byte-identical, functional gate green.
