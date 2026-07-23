@@ -143,3 +143,37 @@ load-warmup bias, not claimed). **Verdict: ACCEPTED** — reproducible ≥1%
 prefill win at all contexts, no mechanistically-possible regression.
 Vendor commit on the pin branch; gitlink in tesseract.
 
+**E2 — compile-fuse `computeGatedDeltaG` (GDN decay chain).** Hypothesis:
+decode is partly launch-bound; fusing the 6-kernel elementwise g chain
+(`exp(-exp(aLog.f32) * softplus(a + dtBias))`, ~180 launches/token on the
+35B, ~144 on the 4B) into one compiled kernel speeds decode. Pre-evidence:
+standalone probe verified MLX `compile(shapeless:)` is **bitwise-identical**
+to the unfused chain on the real shapes/dtypes — including bf16-intermediate
+controls, refuting the "fusion loses intermediate rounding" prior for this
+op class (reusable fact). Change: `Vendor/.../GatedDelta.swift` —
+`compiledGatedDeltaG` behind the same function. Measure: (a) 3-round A/B vs
+pre-E1 baseline, both models, 128/8192/32768 — MoE decode +4.2–6.4% (128),
++4.1/+19.4% (8K), but thermal throttle collapsed the 32K zone in BOTH arms
+(MoE 60→15 t/s; trap 2 — numbers there unusable); (b) marginal isolation
+A/B (E1-app vs E1+E2-app, 128/8192): **MoE decode +5.05/+2.28% (128),
++3.66/+3.11% (8K)**; (c) reversed-arm-order control (dense): 128 decode
++1.35/+1.45% in BOTH orders (real), 8K decode −0.89/−0.14% — combined with
+earlier readings 6/6 negative, mean ≈ −0.5%, order-independent, inside the
+same-binary session band for dense-8K decode (±0.5%). Gate: **PASS** both
+models (18/18 + 8/8 + 8/8 pairs token-identical). **Verdict: ACCEPTED** —
+MoE decode +3.1±1.1% (4/4 ≥ +2.3%), dense-128 decode +1.4% (6/6 ≥ +0.9%),
+prefill/peak unchanged; the lone negative (dense-8K decode −0.5%) is below
+the ≥1% materiality floor and within the harness's own band for that
+metric.
+
+**Protocol amendments (from E2):** (1) `parity-ab.sh` now alternates the
+first arm per round (ABBA) — the second arm is thermally disadvantaged and
+it contaminates sub-1% verdicts. (2) Decode-focused experiments use
+contexts 128,8192 — 32K decode is thermally chaotic and KV-bandwidth-
+dominated, so launch-count effects vanish there anyway. (3) Regression
+materiality floor = ≥1%, symmetric with the win bar — sub-1% is inside the
+measured noise band (E0), so "no regression" means "no reproducible ≥1%
+degradation". (4) Marginal effects must be isolated against the previous
+experiment's binary, not the session baseline (which accumulates accepted
+wins).
+

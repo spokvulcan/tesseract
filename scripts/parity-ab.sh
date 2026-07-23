@@ -60,8 +60,15 @@ run_arm() {
 }
 
 for round in $(seq 1 "$ROUNDS"); do
-    run_arm "$BASELINE_APP" baseline "$round"
-    run_arm "$EXPERIMENT_APP" experiment "$round"
+    # ABBA: alternate which arm runs first each round — the second arm is
+    # thermally disadvantaged, which contaminates sub-1% verdicts (E2).
+    if (( round % 2 == 1 )); then
+        run_arm "$BASELINE_APP" baseline "$round"
+        run_arm "$EXPERIMENT_APP" experiment "$round"
+    else
+        run_arm "$EXPERIMENT_APP" experiment "$round"
+        run_arm "$BASELINE_APP" baseline "$round"
+    fi
 done
 
 killall "Tesseract Agent" 2>/dev/null || true
