@@ -57,6 +57,13 @@ changes, no KV-cache quantization, no accuracy-for-speed trades.
 
 ## Open questions from prior art
 
+- **The remaining optimization surface now lives in mlx-core** — see
+  `docs/mlx-core-optimization-roadmap.md` (M1–M8 with measured
+  evidence and gain estimates: #256 tile fix ~12–15% of 35B prefill,
+  decode segmentation ~10%, small-M qmv floors ~10%, fused rotate+QMM
+  ~3–4% prefill, attention tail ~1–2%, tokenizer path, GDN scan floor,
+  MoE expert prefetch ~5–10% MoE decode).
+
 - **#256 `gather_qmm` rows-per-expert headroom** — unresolved: 43.2% of peak
   at B/E=32 → 64.4% at B/E=128. Bandwidth roofline (unrecoverable) or tiling
   (recoverable, ~14% of prefill)? Needs a TFLOP/s-vs-B/E sweep at fixed total
