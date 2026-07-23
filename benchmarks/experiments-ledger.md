@@ -396,3 +396,21 @@ latency, not call count, binds. **Verdict: the remaining MoE decode gap
 lives in mlx-core (eval scheduling, small-M qmv/gather tiling) —
 upstream territory, same class as #256. No in-scope experiment to run;
 logged so the loop doesn't re-attack MoE decode micro-structure.**
+
+**E11 — memoize the stable-prefix two-probe detect (server TTFT).**
+Hypothesis (app-side map H3): `StablePrefixDetector.detect` runs two
+Jinja renders + BPE encodes of system+tools per server request; the
+result depends only on (systemPrompt, tools, additionalContext), all
+stable in production → memoize it. Change: `StablePrefixDetector.swift` —
+memo keyed by SHA-256 of the inputs, storing (commonLength, hash of the
+common prefix tokens); a hit runs the SAME fullTokens verification
+(prefix-hash match) and ratio guard as a fresh detect, so a wrong-for-
+this-template entry degrades to a fresh detect, never a wrong boundary.
+New `--prefix-detect-bench` runner (production-scale: ~10K-token system
+prompt + 40 tool specs, real tokenizer, ABBA miss-vs-hit). Measure:
+**miss 206.09 ms vs hit 0.73 ms per request — saves 205.36 ms (99.6%)**,
+0 mismatches over 6 rounds; **`--prefix-cache-e2e` PASS** (boundary
+checks included). Translation: every server request runs this detect
+once — ~205 ms off TTFT per request at 10K-token prefix scale (scales
+with prefix size; ~10 ms at the E2E's 500-token prefixes). **Verdict:
+ACCEPTED.**

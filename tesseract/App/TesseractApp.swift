@@ -66,6 +66,10 @@ struct TesseractApp: App {
             Self.runHarness("Snapshot bench") {
                 try await SnapshotBenchRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--prefix-detect-bench") {
+            Self.runHarness("Prefix detect bench") {
+                try await PrefixDetectBenchRunner(runner: BenchmarkRunner()).run()
+            }
         } else if args.contains("--prefix-cache-e2e") {
             Self.runHarness("Prefix cache E2E") {
                 try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()

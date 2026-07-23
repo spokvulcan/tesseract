@@ -25,6 +25,9 @@ for arg in "$@"; do
     elif [ "$arg" = "--snapshot-bench" ]; then
         LOG_FILE="$BENCH_DIR/snapshot-bench/latest.log"
         break
+    elif [ "$arg" = "--prefix-detect-bench" ]; then
+        LOG_FILE="$BENCH_DIR/prefix-detect-bench/latest.log"
+        break
     elif [ "$arg" = "--prefix-cache-e2e" ]; then
         LOG_FILE="$BENCH_DIR/prefix-cache-e2e/latest.log"
         break
