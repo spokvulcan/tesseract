@@ -373,3 +373,26 @@ mystery: MoE decode weight traffic ≈ 1.3 GB/step → ~5.5 ms floor at the
 lm_head's own measured 234 GB/s, but decode measures 12.5 ms — **~2× of
 MoE decode is NOT bandwidth-explained** (kernel-count, gather_qmv
 geometry, or CPU dispatch — unprofiled). Becomes E10.
+
+**E10 — attribution of the MoE decode 2× gap: mlx-core internals, out of
+scope.** Question (from E9): MoE decode ≈ 1.3 GB/step → ~5.5 ms floor at
+the lm_head's measured 234 GB/s, but decode is 12.5 ms — where is the
+rest? Method: xctrace Metal System Trace attach during a ctx=128 parity
+decode + two probes (trap-5 warning: the first gather probe read 350
+µs/call = 85% sync artifact; amortized re-measure required). Findings:
+(a) **GPU busy 78% during decode** (2,891 command buffers over 0.92 s,
+sum-of-durations) — ~40 command buffers per token with ~60 µs inter-
+buffer gaps ⇒ **~22% of decode is command-buffer segmentation /
+.sync / dispatch idle — mlx-core eval scheduling, not app/vendor.** (b)
+Amortized probes: gather_qmv at the decode shape (B=8 unsorted) = 51 µs
+& **88 GB/s**; dense 4-bit qmm of the same bytes = 41 µs & 108 GB/s;
+lm_head qmv = 234 GB/s (E9). Busy-time is spread across ~1,900
+kernels/token, all small-work-per-call at M=1 → decode is latency/
+occupancy-limited, with per-call floors (~10–50 µs) set by kernel-
+internal geometry. In-scope collectibles: E2's fusion and E6b's
+rotation/kernel restructure already took the available wins; E5's
+call-count reduction (−40 qmv calls/token) measured ~0 — per-call
+latency, not call count, binds. **Verdict: the remaining MoE decode gap
+lives in mlx-core (eval scheduling, small-M qmv/gather tiling) —
+upstream territory, same class as #256. No in-scope experiment to run;
+logged so the loop doesn't re-attack MoE decode micro-structure.**
