@@ -639,3 +639,28 @@ regression zones = small graphs) or mid-buffer temporary release (kills
 the +240 MB) — eval.cpp/device.cpp internals, a deliberate project, not
 an env knob. Note: a model-scoped policy (MoE-only cap) still fails on
 regression (c).
+
+**C3 — `gather_qmv` results-per-simdgroup geometry (M3 probe) — REJECTED
+at probe, no app run.** Hypothesis: the decode gather_qmv kernels (E10:
+51 µs / 88 GB/s at the B=8 decode shape) are latency/geometry-bound;
+raising rows-per-CTA (rps 4→8/16/32, per-row arithmetic untouched →
+bitwise by construction) lifts them. Method: probe-only `MLX_GQMV_RPS`
+env hook + rps template param (quantized.h AND `mlx-generated/
+quantized.cpp` — the two-homes rule), production decode shapes
+(gate/up N=512/K=2048, down N=2048/K=512, f16), ABBA in-process.
+**Bitwise IDENTICAL at every rps** (gate confirms the by-construction
+argument). Numbers: rps=4 → **13.7 µs / 306 GB/s** at BOTH shapes in
+isolation; rps=8: +0.0/+3.5%; rps=16/32: flat-to-negative. No ≥1%
+geometry lever. Two harness traps found and fixed en route (reusable):
+(a) eval-per-call on ~50 µs kernels floors at **~220 µs of CPU dispatch
+per call** — single-graph-of-N-calls is the only honest way to time
+kernels this small; (b) looping identical index sets goes **cache-hot**
+(8 experts ≈ 34 MB stays in the system cache → a false 500 GB/s);
+disjoint expert sets cycling all 256 (134 MB working set) are mandatory
+for decode-realistic weight traffic. **Verdict: no kernel lever — the
+kernel already runs at the machine's ~300 GB/s DRAM envelope in
+isolation; E10's 88 GB/s does not reproduce outside the production eval
+environment.** The MoE decode 2× gap (E9/E10) is therefore eval-
+environment (M2-class: scheduling/overlap), not gather_qmv geometry —
+M3 amended in the roadmap. Probe hooks stay uncommitted in the fork
+clone; nothing reached the app or the pins.
