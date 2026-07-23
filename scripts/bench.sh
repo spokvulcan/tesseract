@@ -15,6 +15,24 @@ DERIVED_DATA_GLOB="$HOME/Library/Developer/Xcode/DerivedData/tesseract-*"
 # the real per-user temp dir, not the container tmp.
 BENCH_DIR="$(getconf DARWIN_USER_TEMP_DIR)tesseract-debug/benchmark"
 LOG_FILE="$BENCH_DIR/latest.log"
+# The parity harness keeps its own log subdirectory; bench.sh must watch that
+# one when driven with --paro-parity-bench, otherwise it times out at 30s and
+# orphans a still-running benchmark process (map #230 trap 1).
+for arg in "$@"; do
+    if [ "$arg" = "--paro-parity-bench" ]; then
+        LOG_FILE="$BENCH_DIR/paro-parity-bench/latest.log"
+        break
+    elif [ "$arg" = "--snapshot-bench" ]; then
+        LOG_FILE="$BENCH_DIR/snapshot-bench/latest.log"
+        break
+    elif [ "$arg" = "--prefix-detect-bench" ]; then
+        LOG_FILE="$BENCH_DIR/prefix-detect-bench/latest.log"
+        break
+    elif [ "$arg" = "--prefix-cache-e2e" ]; then
+        LOG_FILE="$BENCH_DIR/prefix-cache-e2e/latest.log"
+        break
+    fi
+done
 RESULTS_DIR="$BENCH_DIR/results"
 REPO_RESULTS="$PROJECT_DIR/benchmarks/results"
 

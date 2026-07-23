@@ -42,6 +42,13 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 | `perf(prefill): balance the prompt chunks instead of leaving a remainder` | Equal prefill chunks; kills the degenerate remainder forward (~9% prefill, tesseract #258) | Not filed — candidate |
 | `feat(paroquant): Prepared Checkpoint + O(1) AWQ conversion matching` | Prepared Checkpoint artifact + O(1) matcher (ADR-0032) | Not filed — candidate follow-up to #164 |
 | `feat(models): Nanbeige looped-transformer support` | Nanbeige4.2 model (`nanbeige`): shared-weight layer loops, per-loop KV caches, xmlFunction tool calls, `<think>` reasoning config | **Filed as [#460](https://github.com/ml-explore/mlx-swift-lm/pull/460)** (2026-07-23, branch `feat/nanbeige-looped-transformer` — cherry-pick on upstream `main` @ `1032402`); Python-side counterpart is MercuriusDream/mlx-lm `add-nanbeige-model` |
+| `perf(paroquant): rotate gate_up before the MoE expert gather/sort` | Rotate L token rows pre-gather instead of L×topK rows post-gather (bitwise-identical); +3–4.5% MoE prefill at 8K–32K (tesseract experiments-ledger E1) | Not filed — candidate (fold into the MoE PARO commit when #164-follow-up opens) |
+| `perf(paroquant): compile-fuse the GatedDelta decay gate chain` | One compiled kernel for the 6-kernel elementwise g chain per GDN layer per step (bitwise-identical); +3.1% MoE decode, +1.4% dense decode at ctx=128 (tesseract experiments-ledger E2) | Not filed — candidate (general to all GDN models, e.g. Qwen3Next) |
+| `perf(paroquant): simdgroup-resident rotation kernel — no CTA barriers` | 32-lane simdgroup CTAs, compile-time krot, row-major tile, float4 IO for groupSize 128; generic pre-E6b kernel restored as the fallback for other group sizes (shared `dispatchPairwiseRotation`); bitwise-identical; kernel 1.7–2× at prefill shapes; +1.8–2.5% MoE prefill, +1.3–2.1% dense prefill, +3.4–5% dense decode (tesseract experiments-ledger E6b) | Not filed — candidate (fold into #164 follow-up; also fixes the latent bf16 compile failure) |
+
+The three perf carries above (E1/E2/E6b) are queued for one batched
+upstream PR folded into the #164 follow-up; filing deferred pending owner
+go-ahead (2026-07-23 review round, tesseract PR #424).
 
 ## Contributed back
 
@@ -59,6 +66,20 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 
 Earlier fork-era contributions (#167 ToolCallProcessor schema plumbing, #168
 TokenRing fix) predate the submodule pin scheme; see ADR-0006 for that history.
+
+## Upstream candidates outside this fork (mlx-core)
+
+Findings from the inference-optimization loop whose fix lives in mlx-core
+(Cmlx), which we do not fork. The measured opportunity list is
+`docs/mlx-core-optimization-roadmap.md` (M1–M8); evidence per experiment in
+`benchmarks/experiments-ledger.md`. Two are ripe for filing as
+evidence-backed issues against `ml-explore/mlx` — owner's call:
+
+- **M1** — `gather_qmm_rhs` tile geometry at small rows-per-expert:
+  occupancy loss, not a bandwidth roofline (tesseract #256, ledger E4);
+  worth ~12–15% of 35B MoE prefill. Not filed.
+- **M2** — decode command-buffer segmentation: ~22% of MoE decode is
+  inter-buffer idle (ledger E10). Not filed.
 
 ## Evidence asset branches — never delete
 

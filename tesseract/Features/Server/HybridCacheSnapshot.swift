@@ -44,6 +44,14 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         case branchPoint  // Phase 2: speculative Marconi checkpoint
     }
 
+    /// Which mechanism `deepCopyState` uses. Production uses ``device``;
+    /// `host` exists so the snapshot benchmark can time the previous
+    /// implementation (within-process ABBA, per the #258 protocol).
+    enum CopyStrategy: Sendable {
+        case host
+        case device
+    }
+
     /// True deep copy of a cache-state array into a freshly-allocated backing
     /// that shares no Metal buffer with `array`.
     ///
@@ -59,15 +67,27 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// `kIOGPUCommandBufferCallbackErrorInvalidResource` thrown uncatchably
     /// from MLX's `check_error` on the Metal completion queue → SIGABRT.
     ///
-    /// `asData(access: .copy)` evaluates the array and copies it into a fresh,
-    /// contiguous `Data`; `MLXArray(data:)` copies *that* into a new MLX-owned
-    /// allocation (`mlx_array_new_data`), so the result is independent of the
-    /// source. This mirrors what the SSD tier already does on every restore
-    /// (`SSDSnapshotStore.materializeLayerArrays`) — only the RAM tier aliased.
+    /// **Device copy (current):** `array * 1` — a multiply-by-one in the
+    /// array's own dtype. MLX binary ops always materialize a freshly
+    /// allocated output (they never write in place), so the result is
+    /// independent of the source by construction; IEEE `x × 1.0 == x`
+    /// exactly (including −0), so the bytes are bit-identical. The copy is
+    /// returned **lazy**: the caller materializes all of an operation's
+    /// copies with one `eval` — per-array syncs made captures ~2× *slower*
+    /// than the host path at 200–300 MB snapshot sizes (measured:
+    /// `--snapshot-bench`), one hoisted `eval` makes it ~2–4× faster.
     ///
-    /// Must run on the Metal-affine thread (`container.perform`): `asData`
-    /// drains pending lazy work via `eval`. Every caller already is.
-    static func deepCopyState(_ array: MLXArray) -> MLXArray {
+    /// **Host copy (previous):** `asData(access: .copy)` evaluates the array
+    /// and copies it into a fresh, contiguous `Data`; `MLXArray(data:)`
+    /// copies *that* into a new MLX-owned allocation (`mlx_array_new_data`),
+    /// so the result is likewise independent — at two memcpys plus the
+    /// transient. This mirrors what the SSD tier already does on every
+    /// restore (`SSDSnapshotStore.materializeLayerArrays`).
+    ///
+    /// Must run on the Metal-affine thread (`container.perform`): the
+    /// callers' hoisted `eval` drains pending lazy work exactly as `asData`
+    /// did. Every caller already is.
+    static func deepCopyState(_ array: MLXArray, strategy: CopyStrategy = .device) -> MLXArray {
         // A zero-element array has no materialized backing buffer, yet its
         // `physicalSize` (max |shape·stride|) can be nonzero when it is a view
         // that kept its parent's strides — e.g. a `RotatingKVCache` captured
@@ -78,7 +98,12 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         if array.size == 0 {
             return MLXArray.zeros(array.shape, dtype: array.dtype)
         }
-        return MLXArray(data: array.asData(access: .copy))
+        switch strategy {
+        case .device:
+            return array * MLXArray(1).asType(array.dtype)
+        case .host:
+            return MLXArray(data: array.asData(access: .copy))
+        }
     }
 
     /// Capture from live cache during prefill. Deep-copies all state arrays
@@ -89,19 +114,23 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     static func capture(
         cache: [any KVCache],
         offset: Int,
-        type: CheckpointType
+        type: CheckpointType,
+        copyStrategy: CopyStrategy = .device
     ) -> HybridCacheSnapshot? {
         var totalBytes = 0
         var layers: [LayerState] = []
         layers.reserveCapacity(cache.count)
+        var copiedArrays: [MLXArray] = []
+        copiedArrays.reserveCapacity(cache.count * 2)
 
         for layer in cache {
             guard let className = classNameForCache(layer) else {
                 return nil
             }
             let state = layer.state.map { array -> MLXArray in
-                let copy = deepCopyState(array)
+                let copy = deepCopyState(array, strategy: copyStrategy)
                 totalBytes += copy.nbytes
+                copiedArrays.append(copy)
                 return copy
             }
             layers.append(
@@ -112,6 +141,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                     offset: layer.offset
                 ))
         }
+
+        // One pipeline sync for the whole capture — per-array syncs made the
+        // device copy slower than the host path it replaces (measured:
+        // --snapshot-bench). Runs on the Metal-affine thread, as asData did.
+        eval(copiedArrays)
 
         return HybridCacheSnapshot(
             tokenOffset: offset,
@@ -144,7 +178,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// Throws ``RestoreError`` when a layer's class or metaState shape is not
     /// restorable (corrupt or truncated persisted data) — callers treat that
     /// as a cache miss.
-    func restore() throws -> [any KVCache] {
+    func restore(copyStrategy: CopyStrategy = .device) throws -> [any KVCache] {
         let classBreakdown = Dictionary(grouping: layers, by: { $0.className })
             .mapValues { $0.count }
             .map { "\($0.key):\($0.value)" }
@@ -156,7 +190,10 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 + "layers=\(layers.count) maxLayerOffset=\(maxOffset) "
                 + "classBreakdown=\(classBreakdown)"
         )
-        return try layers.enumerated().map { layerIndex, layerState -> any KVCache in
+        var copiedArrays: [MLXArray] = []
+        copiedArrays.reserveCapacity(layers.count * 2)
+        let restored: [any KVCache] = try layers.enumerated().map {
+            layerIndex, layerState -> any KVCache in
             // ArraysCache (and its MambaCache subclass) reject direct metaState
             // assignment upstream — slot reconstruction goes through its own path.
             if layerState.className == "MambaCache" || layerState.className == "ArraysCache" {
@@ -164,7 +201,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                     mamba: layerState.className == "MambaCache",
                     state: layerState.state,
                     metaState: layerState.metaState,
-                    offset: layerState.offset
+                    offset: layerState.offset,
+                    copyStrategy: copyStrategy,
+                    copiedArrays: &copiedArrays
                 )
             }
 
@@ -209,7 +248,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 // Deep copy, not an alias: the rebuilt live cache must own
                 // private buffers so its in-place `update` writes never reach
                 // the tree-stored snapshot's backing. See ``deepCopyState(_:)``.
-                cache.state = layerState.state.map { Self.deepCopyState($0) }
+                cache.state = layerState.state.map { array -> MLXArray in
+                    let copy = Self.deepCopyState(array, strategy: copyStrategy)
+                    copiedArrays.append(copy)
+                    return copy
+                }
             }
             cache.metaState = layerState.metaState
 
@@ -223,6 +266,10 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
             return cache
         }
+        // One pipeline sync for the whole restore (same rationale as the
+        // capture path — see ``capture(cache:offset:type:copyStrategy:)``).
+        eval(copiedArrays)
+        return restored
     }
 
     // MARK: - Chunked Prefill
@@ -385,11 +432,17 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// `[slotCount, presentSlots (comma-separated), leftPadding (comma-separated, optional)]`;
     /// the legacy format (`[""]`) restores compacted state via the `state` setter.
     private static func makeArraysCache(
-        mamba: Bool, state: [MLXArray], metaState: [String], offset: Int
+        mamba: Bool, state: [MLXArray], metaState: [String], offset: Int,
+        copyStrategy: CopyStrategy = .device,
+        copiedArrays: inout [MLXArray]
     ) -> ArraysCache {
         // Deep copy, not an alias (see ``deepCopyState(_:)``): the rebuilt
         // ArraysCache/MambaCache must own private buffers.
-        let copied = state.map { deepCopyState($0) }
+        let copied = state.map { array -> MLXArray in
+            let copy = deepCopyState(array, strategy: copyStrategy)
+            copiedArrays.append(copy)
+            return copy
+        }
         let cache: ArraysCache
         if metaState.count >= 2, let slotCount = Int(metaState[0]) {
             let presentSlots =

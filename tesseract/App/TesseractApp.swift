@@ -54,16 +54,32 @@ struct TesseractApp: App {
 
     init() {
         let args = CommandLine.arguments
-        if args.contains("--benchmark") {
+        // `--paro-parity-bench` precedes `--benchmark`: scripts/bench.sh always
+        // passes `--benchmark`, so the perf-ruler/gate harness is opt-in via
+        // extra args forwarded by bench.sh (`bench.sh quick --model X
+        // --paro-parity-bench`). Plain `--benchmark` runs are unaffected.
+        if args.contains("--paro-parity-bench") {
+            Self.runHarness("PARO parity bench") {
+                try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--snapshot-bench") {
+            Self.runHarness("Snapshot bench") {
+                try await SnapshotBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--prefix-detect-bench") {
+            Self.runHarness("Prefix detect bench") {
+                try await PrefixDetectBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--prefix-cache-e2e") {
+            Self.runHarness("Prefix cache E2E") {
+                try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--benchmark") {
             Task { @MainActor in
                 do { try await BenchmarkRunner().run() } catch {
                     Log.agent.error("Benchmark failed: \(error)")
                 }
                 exit(0)
-            }
-        } else if args.contains("--prefix-cache-e2e") {
-            Self.runHarness("Prefix cache E2E") {
-                try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--hybrid-cache-correctness") {
             Self.runHarness("Hybrid cache correctness") {
@@ -76,10 +92,6 @@ struct TesseractApp: App {
         } else if args.contains("--paroquant-vlm-smoke") {
             Self.runHarness("ParoQuant VLM smoke") {
                 try await ParoQuantVLMSmokeRunner(runner: BenchmarkRunner()).run()
-            }
-        } else if args.contains("--paro-parity-bench") {
-            Self.runHarness("PARO parity bench") {
-                try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--prepared-checkpoint-parity") {
             Self.runHarness("Prepared Checkpoint parity") {

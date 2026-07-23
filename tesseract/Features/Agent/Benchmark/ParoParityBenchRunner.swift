@@ -80,6 +80,10 @@ final class ParoParityBenchRunner {
         let stopReason: String
         let runPeakGB: Double
         let activeAfterGB: Double
+        /// The exact generated token IDs (greedy). The optimization-experiment
+        /// quality gate: an experiment's report must reproduce the unmodified
+        /// baseline's IDs per (context, run) — token-identical output.
+        let tokenIDs: [Int]
     }
 
     nonisolated private struct Measurement: Sendable {
@@ -90,6 +94,7 @@ final class ParoParityBenchRunner {
         let generationTokenCount: Int
         let generateSeconds: Double
         let stopReason: String
+        let tokenIDs: [Int]
 
         /// Total prompt-processing seconds. `loopPromptSeconds`
         /// (`GenerateCompletionInfo.promptTime`) already contains the vendor
@@ -189,7 +194,8 @@ final class ParoParityBenchRunner {
                         ? Double(m.generationTokenCount) / m.generateSeconds : 0,
                     stopReason: m.stopReason,
                     runPeakGB: Double(stats.peakMB) / 1000,
-                    activeAfterGB: Double(stats.activeMB) / 1000
+                    activeAfterGB: Double(stats.activeMB) / 1000,
+                    tokenIDs: m.tokenIDs
                 )
                 records.append(record)
                 log(
@@ -299,20 +305,29 @@ final class ParoParityBenchRunner {
             )
         }
 
-        let (stream, completion) = TokenGenerationLoop.start(
+        // Consume upstream's raw token stream directly (no detokenize /
+        // tool-call mapping — the bench needs the exact token IDs for the
+        // experiment quality gate, and the reference protocol times the
+        // model, not the text renderer). Timing still comes from the
+        // upstream task's own GenerateCompletionInfo, as before.
+        let (stream, generationTask) = generateTokenTask(
             promptTokenCount: promptTokenCount,
             modelConfiguration: context.configuration,
             tokenizer: context.tokenizer,
-            iterator: iterator,
-            tools: nil
+            iterator: iterator
         )
         var info: GenerateCompletionInfo?
+        var tokenIDs: [Int] = []
+        tokenIDs.reserveCapacity(256)
         for await event in stream {
-            if case .info(let i) = event {
+            switch event {
+            case .token(let token):
+                tokenIDs.append(token)
+            case .info(let i):
                 info = i
             }
         }
-        await completion.value
+        await generationTask.value
 
         guard let info else {
             throw ParoParityBenchError.missingCompletionInfo
@@ -324,7 +339,8 @@ final class ParoParityBenchRunner {
             loopPromptSeconds: info.promptTime,
             generationTokenCount: info.generationTokenCount,
             generateSeconds: info.generateTime,
-            stopReason: String(describing: info.stopReason)
+            stopReason: String(describing: info.stopReason),
+            tokenIDs: tokenIDs
         )
     }
 
