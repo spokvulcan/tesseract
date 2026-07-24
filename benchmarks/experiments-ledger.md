@@ -1442,3 +1442,35 @@ softmax/argpartition/takealong (~80, but top-k index order must be
 preserved exactly or the weighted sum reorders). **Do not re-attempt:
 anything that raises dispatch count for a "better" kernel, resource
 barriers, serial dispatch, or rotation batching.**
+
+**C16 — GDN decode conv1d as fused multiply-adds — ACCEPTED.** First
+experiment sized against the new conversion factors (a barrier ≈ 4.14 µs,
+a dispatch ≈ 1.00 µs) *before* building it. At S == 1 the depthwise
+`conv1d` over `[convState | qkv]` is a fixed 4-term dot per channel;
+written as elementwise multiply-adds it folds into the surrounding
+compiled segment, so the `Convolution` wave disappears — −1 dispatch and
+−1 **barrier** per GDN layer (30/token ⇒ ~0.155 ms ⇒ ~1.5% predicted).
+Bitwise by probe, not by argument: the accumulation must run in f32 and
+round once at the end (what MLX's Convolution kernel does) — over 8192
+channels, f16 **and** bf16, f32-accumulation is **IDENTICAL in every
+channel** (sequential and pairwise-tree forms both), while native-dtype
+accumulation differs in ~47% of channels. Prefill and any S > 1 call keep
+the original conv (byte-identical path). Measured (`parity-ab.sh`,
+`BENCH_RUNS=1`): **MoE 8K decode 9/10 pairs positive, median +1.77%**,
+pairwise mean +0.92% with one environmental collapse round (−6.96%, in a
+window where the baseline arm also fell 94.3 → 87.7) left in; 3-pair run
++1.38% (3/3) at 8K and +0.60% (3/3) at 128. **Dense flat** (10 pairs:
+−0.01% pooled, median +0.45%, 7/10 — no regression). Prefill +0.18% MoE /
++0.09% dense; **peaks exactly flat** on both. Parity gate **32/32
+token-identical** (10+10+6+6) plus an in-model single-run check.
+Vendor-only change (no Cmlx diff), `pin-upstream-mlx-swift` @ **46a8088**.
+
+**Method note worth reusing.** The predicted value (~1.5%) and the
+measured median (+1.77%) agree, which is the first time in this loop that
+a decode change was *sized* correctly in advance. The two constants that
+made it possible — 1.00 µs per dispatch and 4.14 µs per hazard barrier —
+are the units to price any future decode idea in. Next candidates by the
+same arithmetic: RMSNorm absorbing a trailing elementwise consumer (~40
+barriers ≈ 2%), the router's softmax/argpartition/takealong chain (~80
+barriers ≈ 3–4%, but top-k index order must be preserved exactly or the
+weighted expert sum reorders).
