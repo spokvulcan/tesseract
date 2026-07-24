@@ -1,5 +1,90 @@
 # Changelog
 
+## [1.10.0](https://github.com/spokvulcan/tesseract/compare/v1.9.0...v1.10.0) (2026-07-24)
+
+
+### Features
+
+* **companion:** Notification Hub v1 — Jarvis reads every banner (PRD [#376](https://github.com/spokvulcan/tesseract/issues/376)) ([#382](https://github.com/spokvulcan/tesseract/issues/382)) ([409e2e7](https://github.com/spokvulcan/tesseract/commit/409e2e7f8b21fca914099fd97fcf2b5ad6d11d51))
+* **companion:** the Event Fold, whole (ADR-0046, [#367](https://github.com/spokvulcan/tesseract/issues/367)–[#373](https://github.com/spokvulcan/tesseract/issues/373)) ([#374](https://github.com/spokvulcan/tesseract/issues/374)) ([9937d59](https://github.com/spokvulcan/tesseract/commit/9937d59f8c37265a5c183dbf26faebf40f232995))
+* **models:** Nanbeige4.2-3B agent model (looped transformer, MLX 8-bit) ([#421](https://github.com/spokvulcan/tesseract/issues/421)) ([80b7ac5](https://github.com/spokvulcan/tesseract/commit/80b7ac5d2345d18195ba7706b7d1003c9681b74b))
+
+
+### Bug Fixes
+
+* **agent:** turn replay breaker + output-only presence penalty (ADR-0053) ([#390](https://github.com/spokvulcan/tesseract/issues/390)) ([59dd88c](https://github.com/spokvulcan/tesseract/commit/59dd88c5bba1aa19bd04ad1a3b1ce5d5710cecb4))
+* **agent:** turn replay breaker + output-only presence penalty (ADR-0053) ([#392](https://github.com/spokvulcan/tesseract/issues/392)) ([c667c66](https://github.com/spokvulcan/tesseract/commit/c667c660604115e7dbfa558695b499dda91fd72f))
+* review-round fixes for the C1–C13 mlx-core loop — C13 uncompilable kernel, C11/C12 model leak, hardening ([#426](https://github.com/spokvulcan/tesseract/issues/426)) ([3d1b15c](https://github.com/spokvulcan/tesseract/commit/3d1b15cc8f2e22c1ce137eb62e6bf99130668764))
+
+
+### Performance Improvements
+
+* inference-optimization experiment loop — E1/E2/E6b/E7/E11 accepted (+5-6% MoE prefill, +3% MoE decode, +5-6.5% dense decode, −205ms TTFT) ([#424](https://github.com/spokvulcan/tesseract/issues/424)) ([7b55591](https://github.com/spokvulcan/tesseract/commit/7b555911e1a603646bc101342cb535a45cb29ea1))
+* **metal:** rows-per-expert-aware gather_qmm_rhs tile geometry (C1) ([e6b3702](https://github.com/spokvulcan/tesseract/commit/e6b370204ae094d7aa78870b2f957073f8c95389))
+* **mlx-core:** C13 ACCEPTED — fused causal-mask+softmax for SDPA fallback (MoE 32K prefill ~+3%) ([dc93c18](https://github.com/spokvulcan/tesseract/commit/dc93c18256cd9a089483f824974a7a1988e388a0))
+* **mlx-core:** C4 ACCEPTED — relaxed input cap + output-byte commit accounting ([79bf712](https://github.com/spokvulcan/tesseract/commit/79bf7122b838426655ef865b19ab6b03cd8bac08))
+* **mlx-core:** C5 ACCEPTED — per-cbuf buffer-retention coalescing ([a25a297](https://github.com/spokvulcan/tesseract/commit/a25a297141c9b209c65394c35bdfa6d0433c07dd))
+* **mlx-core:** C6 ACCEPTED — custom-kernel source memo (MoE decode +3.1-4.7%) ([4ac8873](https://github.com/spokvulcan/tesseract/commit/4ac88734c6986613a19ac5883d61d855626f7cc3))
+* **mlx-core:** C7 ACCEPTED — per-model commit policy (MoE decode +3.7-5.9%) ([268ea1e](https://github.com/spokvulcan/tesseract/commit/268ea1e4dc7565e4ee1d9a5dd9b78d56a2cba2a1))
+* **mlx-core:** C8 ACCEPTED — eval_impl flat degree map (MoE decode +1.4-2%) ([3308f25](https://github.com/spokvulcan/tesseract/commit/3308f25b1fff31738260c7fd25c685700c09d694))
+* **mlx-core:** C9 ACCEPTED — gather identity-index cache (MoE 8K prefill +3.6%) ([909d589](https://github.com/spokvulcan/tesseract/commit/909d58914df443c20093b6d1c6f3eab61a0efb75))
+* **qwen35:** C11 ACCEPTED — compiled MoE block in decode (MoE decode +3-7%) ([7106e77](https://github.com/spokvulcan/tesseract/commit/7106e7729077fb43dbee3bddc148fe6ffa2fef6a))
+* **qwen35:** C12 ACCEPTED — compiled GDN decode step (dense 128 decode +1.75%, MoE +0.94%) ([863eb66](https://github.com/spokvulcan/tesseract/commit/863eb66930ee6e5fdbe9b6460eaa8c007a74f537))
+
+
+### Code Refactoring
+
+* **agent:** Active Tool Set — one resolve for tools and prompt (ADR-0048) ([#383](https://github.com/spokvulcan/tesseract/issues/383)) ([f7c71a4](https://github.com/spokvulcan/tesseract/commit/f7c71a46b95ec39a42f243d857e4f32c10cfe4a1))
+* **agent:** Chat Session diet — skill execution and opening context become leaves ([#414](https://github.com/spokvulcan/tesseract/issues/414)) ([b991ef1](https://github.com/spokvulcan/tesseract/commit/b991ef1340d435ddc8d10d37f461fd443ea03c1c))
+* **agent:** one seam for the generation logit-processor decision ([#405](https://github.com/spokvulcan/tesseract/issues/405)) ([#419](https://github.com/spokvulcan/tesseract/issues/419)) ([b4af19f](https://github.com/spokvulcan/tesseract/commit/b4af19fe0654123392b52de812dbfe3fef4fdc46))
+* **agent:** Prefill Strategy — one route decision for the raw arms (ADR-0044) ([#364](https://github.com/spokvulcan/tesseract/issues/364)) ([df6a6ef](https://github.com/spokvulcan/tesseract/commit/df6a6ef3949b8527c50455604ffa13dae3a03d46))
+* **agent:** Skill Envelope — render and parse as enforced inverses ([#413](https://github.com/spokvulcan/tesseract/issues/413)) ([8ba2c82](https://github.com/spokvulcan/tesseract/commit/8ba2c820e1d4ed2cffd0ae8f7add5b69542c6a99))
+* **app:** Bootstrap Sequence — setup()'s ordering invariants, declared and assertable ([#415](https://github.com/spokvulcan/tesseract/issues/415)) ([10bd642](https://github.com/spokvulcan/tesseract/commit/10bd642d09cbda1eb15a8ef7e6058fe31cac0187))
+* **app:** Model Selection Healing — both availability rules in one decider ([#416](https://github.com/spokvulcan/tesseract/issues/416)) ([8ec0464](https://github.com/spokvulcan/tesseract/commit/8ec04645c03f971d82b876cd7aaa680b8aeb2429))
+* **audio:** Hold Wiring Arbiter — the voice hold's races as a value machine (ADR-0050) ([#385](https://github.com/spokvulcan/tesseract/issues/385)) ([1febfa7](https://github.com/spokvulcan/tesseract/commit/1febfa71f0fa61c33cb4bfa0fdf5275a0992331b))
+* **companion:** Companion Fold Reducer — the Event Fold's write side as one decider (ADR-0051) ([#386](https://github.com/spokvulcan/tesseract/issues/386)) ([b1b22f1](https://github.com/spokvulcan/tesseract/commit/b1b22f1583a578afda053a48329cd0ae2eba70e7))
+* **companion:** Companion Fold Render — shared line primitives under both briefings ([#417](https://github.com/spokvulcan/tesseract/issues/417)) ([f94429b](https://github.com/spokvulcan/tesseract/commit/f94429b5ec976b5541079cbcb0d16104fc8c89d5))
+* **companion:** due-wake presentation de-dup — render once, count once ([#418](https://github.com/spokvulcan/tesseract/issues/418)) ([47d12eb](https://github.com/spokvulcan/tesseract/commit/47d12eb4c9c5a11fcf83e0965a40c81ccfcbf96a))
+* **companion:** Reaction Single-Homing — every surface reports through the reducer ([#394](https://github.com/spokvulcan/tesseract/issues/394)) ([ac44bab](https://github.com/spokvulcan/tesseract/commit/ac44bab3fded160114fa8c400928da6bb6b7d813))
+* **companion:** Trace Vocabulary — typed flight-recorder events ([#398](https://github.com/spokvulcan/tesseract/issues/398)) ([7b274ec](https://github.com/spokvulcan/tesseract/commit/7b274ecdfc5f9b3ac879c6191405e81931f4430c))
+* **companion:** Voice Session Machine — the session loop as a pure reducer (ADR-0042) ([#362](https://github.com/spokvulcan/tesseract/issues/362)) ([30c10e7](https://github.com/spokvulcan/tesseract/commit/30c10e75f7538e08e60047756dc565af54467aa4))
+* **companion:** Wake Evaluator — the pure decider ADR-0040 promised (ADR-0043) ([#363](https://github.com/spokvulcan/tesseract/issues/363)) ([64e042b](https://github.com/spokvulcan/tesseract/commit/64e042b5a03b13f9f0e6f8e635eeeb31bbe60cc6))
+* **memory:** Conversation Memory — the chat's memory fold out of the Chat Session (ADR-0045) ([#365](https://github.com/spokvulcan/tesseract/issues/365)) ([974958e](https://github.com/spokvulcan/tesseract/commit/974958e7cb1d5d8e9b917649b5f6c35d75d15883))
+* **memory:** delete the unwired MemoryCallback ([#420](https://github.com/spokvulcan/tesseract/issues/420)) ([1457f13](https://github.com/spokvulcan/tesseract/commit/1457f131ed0544f1fb1d4b0f27efc7ba19728ed9))
+* **platform:** Menu Bar Activity Resolver — the priority merge beside its precedent ([#409](https://github.com/spokvulcan/tesseract/issues/409)) ([7bb5e3c](https://github.com/spokvulcan/tesseract/commit/7bb5e3cac9ef2b4aae57e2ab61ce163588cbbf15))
+* **server:** Eviction Candidate Policy — pure victim selection on both tiers (ADR-0049) ([#384](https://github.com/spokvulcan/tesseract/issues/384)) ([b4d6d32](https://github.com/spokvulcan/tesseract/commit/b4d6d322db726ddbb83c4a6ff13b80238ae79314))
+* **server:** Snapshot Resolution ladder — pure hydration decisions, ownership unmoved ([#412](https://github.com/spokvulcan/tesseract/issues/412)) ([aaf0196](https://github.com/spokvulcan/tesseract/commit/aaf01963346869e6b378727cf4d684a1119ce7b0))
+* **server:** Stream Lifecycle Driver — the SSE transport race, testable without a socket ([#411](https://github.com/spokvulcan/tesseract/issues/411)) ([a1e5ac9](https://github.com/spokvulcan/tesseract/commit/a1e5ac978e6d705157b6ecbd62d57a3845f6d963))
+* **server:** Warm-Start Planner — the ledger's pure rebuild decisions (ADR-0055) ([#410](https://github.com/spokvulcan/tesseract/issues/410)) ([a2113ca](https://github.com/spokvulcan/tesseract/commit/a2113ca1e215edeb9149a848a5a4bd699513889e))
+* **speech:** Streaming Scheduler — one value machine under both playback adapters (ADR-0054) ([#402](https://github.com/spokvulcan/tesseract/issues/402)) ([bbfb3c4](https://github.com/spokvulcan/tesseract/commit/bbfb3c4583dfea4bdbcfd36a1019f84a47420d94))
+
+
+### Documentation
+
+* **bench:** C10 REJECTED — metadata-only fast path; CPU slack means spread-out CPU cuts no longer convert ([756943e](https://github.com/spokvulcan/tesseract/commit/756943e88989a2a2388d7fa85304b1fd47da48dc))
+* **bench:** C2 REJECTED — MLX_MAX_OPS_PER_BUFFER raise (M2 probe) ([cb9e581](https://github.com/spokvulcan/tesseract/commit/cb9e581fe3daab56980eb37b2f8426e1a170c7b3))
+* **bench:** C3 REJECTED at probe — no gather_qmv geometry lever (M3) ([baf3bab](https://github.com/spokvulcan/tesseract/commit/baf3bab5d539f49778c5a5eb386bdade57a6a81d))
+* **bench:** M4 REJECTED at probe — fused rotate+qmv bitwise-exact but 2x slower (geometry); two-kernel pipeline wins ([8d47f12](https://github.com/spokvulcan/tesseract/commit/8d47f12253153133dee0eb2671ba3cf1533b0bc4))
+* **bench:** M8 REJECTED at probe — expert routing locality 2.4/8, prefetch dead ([90c6942](https://github.com/spokvulcan/tesseract/commit/90c6942916fbe17981864b5aa280578195647438))
+* **bench:** persist operational state after C4 (pins, binaries, C5 queue) ([e24c621](https://github.com/spokvulcan/tesseract/commit/e24c621d306d44fac244f98ee439f231198005e0))
+* **bench:** persist operational state for session resume ([2b17481](https://github.com/spokvulcan/tesseract/commit/2b174818eefabb8a36cbeab07b5d8806477a6378))
+* **roadmap:** amend M2/M3 with C2/C3 verdicts ([b7c8519](https://github.com/spokvulcan/tesseract/commit/b7c8519bad9a0517a0a772fd3d2988e05d0e0743))
+* **roadmap:** future optimization work — ranked remaining opportunities after C1-C13 ([fabf9f7](https://github.com/spokvulcan/tesseract/commit/fabf9f736dacd1c39952b1a75089d9e116b4fd2a))
+
+
+### Build System
+
+* **deps:** pin Cmlx via spokvulcan/mlx + mlx-swift forks ([a6bc8c8](https://github.com/spokvulcan/tesseract/commit/a6bc8c8f891c61a5a7ed31ae1fa1f0432898e4bd))
+
+
+### Miscellaneous Chores
+
+* **bench:** BENCH_RUNS env in parity-ab.sh (default A/B is 3 pairs now) ([033f900](https://github.com/spokvulcan/tesseract/commit/033f9009372e8cb9f0e61a436a19cbac579f887e))
+* Package.resolved for C6 pins ([1f49e4c](https://github.com/spokvulcan/tesseract/commit/1f49e4c6cff36517c3ea88676948333e5803f491))
+* **server:** persist per-request decode tok/s at notice level ([ca6b47d](https://github.com/spokvulcan/tesseract/commit/ca6b47d975e5ee1d2f1f05ba8b68a548e6989a1e))
+* **vendor:** re-pin mlx-swift-lm on upstream 343cae3; drop the gemma carries ([f6fc839](https://github.com/spokvulcan/tesseract/commit/f6fc839ee5e7336cb09f7f76a79370a079ecf9ca))
+* **vendor:** re-pin mlx-swift-lm on upstream eaefe75 ([#423](https://github.com/spokvulcan/tesseract/issues/423)) ([5d955f4](https://github.com/spokvulcan/tesseract/commit/5d955f46fe76a621eefa88632a315b68c642d350))
+
 ## [1.9.0](https://github.com/spokvulcan/tesseract/compare/v1.8.1...v1.9.0) (2026-07-16)
 
 
