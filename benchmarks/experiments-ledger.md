@@ -916,6 +916,27 @@ clean. Do not re-probe without a different prediction signal (router
 logits trajectory, not set identity).
 
 ### Operational state (persisted for context compaction; reload after resume)
+**C9 — gather_mm/gather_qmm identity-index cache — ACCEPTED.**
+Attribution (C6 decode sample census): `Arange::eval_gpu` = 45/2862
+gen-thread samples (1.6%) — `indices_or_default` (ops.cpp) rebuilt
+`arange+reshape` identity row indices on EVERY gather call with no
+explicit lhs indices: `QuantizedSwitchLinear` passes only rhs expert
+ids, so 3 gathers × 40 MoE layers ≈ 120 Arange dispatches + ~240 tape
+nodes per decode token (and per prefill chunk: arange(1024) × 120 × 32
+chunks). Change: cache the evaluated array per shape (bounded 64-entry
+map, FNV-1a key — the first string-key form ate ~0.5% itself,
+measured; mutex-guarded). Constant leaf, read-only consumers, zero
+numerics. A/B: 3-pair leg muddy (8K −1.27% mixed) → 10-pair
+escalation at 128/8K (gate 20/20; first leg's gates 9/9 + 9/9): **MoE
+8K prefill +3.57/+3.55%** (both run blocks, prompt s −3.37/−3.35),
+**8K decode +0.69/+1.99%**; 128 decode 5/5 split mean −0.35% (noise,
+no reproducible regression); 128 prefill mixed (0.17 s legs, noisy);
+dense unaffected (path unused), peaks exactly flat. Ported @
+`spokvulcan/mlx` **625f2aea**, mlx-swift pin **c9796ec4**,
+mlx-swift-lm pin **f72302c**; checkout re-sync verified `diff
+fbf2fb86 == C4..C9` exactly, no local mods.
+
+### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
   `~/projects/mlx-swift`; needs `default.metallib` copied next to the binary
@@ -924,21 +945,22 @@ logits trajectory, not set identity).
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `595a3fe1` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `625f2aea` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `595a3fe1` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `625f2aea` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
   (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
   `tesseract-c5-accepted.app` (C1+C4+C5, 8d11dd1d),
   `tesseract-c6-accepted.app` (…+C6, 3ec72a24),
   `tesseract-c7-accepted.app` (…+C7, 6ab29e36),
-  **`tesseract-c8-accepted.app` (current main: C1+C4..C8, 595a3fe1) — the
+  `tesseract-c8-accepted.app` (…+C8, 595a3fe1),
+  **`tesseract-c9-accepted.app` (current main: C1+C4..C9, 625f2aea) — the
   A/B baseline for the next experiment.**
-- **Pins (current):** spokvulcan/mlx-swift `0b3289cb` (pin-tesseract) ←
-  spokvulcan/mlx `595a3fe1`; mlx-swift-lm pin branch `b5eb5ef`.
+- **Pins (current):** spokvulcan/mlx-swift `c9796ec4` (pin-tesseract) ←
+  spokvulcan/mlx `625f2aea`; mlx-swift-lm pin branch `f72302c`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
@@ -947,7 +969,7 @@ logits trajectory, not set identity).
   context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
   only when the signal is inside the noise floor (32K decode/prefill
   almost always are — never verdict a 32K metric on one run).
-- **Next (C9+):** M8 REJECTED at probe (expert overlap 2.4/8 — see
+- **Next (C10+):** M8 REJECTED at probe (expert overlap 2.4/8 — see
   entry). M5 (attention fallback tail — head_dim 256 blocks sdpa_full,
   prefill runs the unfused fallback: scale-mul + bool-mask + where +
   softmax + 2 GEMMs over [B,H,1024,S] scores ≈ 6 full passes; fuse
