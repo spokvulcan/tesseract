@@ -1102,6 +1102,115 @@ dense flat. Ported @ `spokvulcan/mlx` **ed107a94**, mlx-swift pin
 
 ---
 
+## Session 2026-07-25 — full-step graph caching (C14)
+
+Base: main `3d1b15cc` (post-PR #426), pins mlx `a3673067` / mlx-swift
+`457a0d6d` / mlx-swift-lm `68ad25f`. **The C13-era baseline binary is not a
+valid base any more:** at mlx `ed107a94` the C13 fused causal-softmax kernel
+declares its output `{"out"}` while the body aliases
+`device bfloat16_t* out = y;`, so the generated source does not compile and
+the fused path throws at first dispatch (verified by reading both
+revisions). PR #426 fixed it (`{"y"}`). A/B baseline for this session is a
+fresh Release build of `3d1b15cc` (`/tmp/tesseract-c14-base.app`).
+
+### C14 attribution — decode is GPU-paced, so the roadmap's premise is wrong
+
+`sample` on the generation thread (Release, 1024-token decode runs, 9 s
+windows; subtree totals with same-symbol nesting removed):
+
+| | MoE 35B @8K | dense 4B @8K |
+| --- | --- | --- |
+| GPU-completion wait (`Scheduler::wait_for_one`) | **33.4%** | **13.8%** |
+| op dispatch (`gpu::eval`) | 41.7% | 47.0% |
+| Swift graph build (model forward) | 14.1% | 26.3% |
+| detach/destructors | 2.9% | 4.2% |
+
+That wait is `transforms.cpp:424` — `n_active_tasks() > MAX_ACTIVE_TASKS`
+(=10, `transforms.cpp:26`) — i.e. the generation thread blocked *because the
+CPU ran ahead of the GPU*. **Decode is GPU-paced on both models, with ~1/3
+(MoE) and ~1/7 (dense) CPU slack.** The roadmap's item-1 premise (~25% Swift
+graph build + ~40% eval walk *on the critical path*, decode 8K "~96 →
+140–200 t/s") is therefore not the shape of the problem: removing CPU work
+cannot pay more than the slack. C10's lesson, re-confirmed post-C13 and now
+with the mechanism named. The 2× decode target needs GPU-chain shortening,
+not graph caching — see the follow-up queue below.
+
+### C14 — whole-step decode schedule — ACCEPTED (small)
+
+Three milestones, each gated on its own; all landed together.
+
+**(A) FA-layer purity refactor.** The attention decode body split into pure
+functions around the cache write. **The concat form of "cache as input" was
+killed by arithmetic before it was written:** materialising the grown cache
+costs ~64 MB extra traffic per FA layer per token at 8K on the dense model
+(kvHeads 4 × headDim 256 × 8192 × 2 B, read+write, K and V) ≈ 512 MB/token
+over 8 layers ≈ 1.5 ms of a 10.5 ms step, 4× worse at 32K — no fusion pays
+that back. Keeping `cache.update`'s in-place slice_update also keeps the
+donation MLX depends on: `SliceUpdate::eval_gpu` always calls `copy_gpu`,
+which donates only when `is_donatable()` (`array_desc_.use_count() == 1`,
+`array.h:294`) — today's KV write is in-place *only* because Swift drops its
+reference to the old buffer. Gate: PASS, 12/12 token-identical.
+
+**(B) Per-layer compiled decode blocks.** The whole layer traced per
+instance (norm → attention → residual → norm → MLP → residual). GDN layers
+are one trace, subsuming C11+C12 *plus* the glue those left in Swift; FA
+layers are two traces split at the cache write. **No shapeless compilation
+is needed anywhere** — GDN state shapes are context-independent, so the SDPA
+is the only shape-varying op and it stays outside; rope also stays outside
+(its scalar offset moves per token and a trace would bake it). Gate PASS;
+MoE 128 decode +1.08% (3/3).
+
+**(C) Whole-step schedule.** `Qwen35TextModelInner.decodeStep` tiles the
+step into segments running from just after one FA layer's SDPA to just
+before the next one's: **11 traced segments for the MoE** (40 layers), 9 for
+the dense, against ~40 per-layer traces in B and full Swift graph building
+at base. Embedding opens the first segment, the final norm closes the last;
+anything unusual (real mask, quantized/turbo cache, GDN layer with no state)
+falls back. Engagement verified in the profile (`decodeStep` present,
+per-layer `callAsFunction` absent), and it did what it was supposed to do to
+the CPU: **Swift graph build 14.1% → 9.8%, GPU wait 33.4% → 37.3%** — i.e.
+the CPU got slacker and the GPU pace did not move. **C added ~nothing over
+B in tok/s, exactly as the attribution predicted.**
+
+Numbers (10 pairs = 5 rounds × 2 runs, ABBA, vs base; token gates PASS
+throughout — **108 pairs token-identical** across every run this session,
+20 of them on the exact shipped binary per model):
+**MoE 128 decode +1.33%** (8/8 positive excluding a cold first-arm round;
++2.33% over all 10), **MoE 8K decode +0.67%** (8/8 positive), **dense 8K
+decode +1.73%** (7/8 positive on the shipped binary), dense 128 +0.31%
+(5/8, flat), **peaks exactly flat on both models** (19.12/19.93 and
+2.77/3.56), prefill untouched by construction (L > 1 keeps the old path).
+**Verdict: ACCEPTED** — ≥1% reproducible on two metrics across both models
+with sign consistency, nothing regressed. Vendor-only change; Cmlx pins
+unchanged. Vendor suites green (ParoQuantTests 24/24, Qwen35 suites 11/11).
+Absolute tok/s drifts down across a long bench session (the dense 10-pair
+ran at 88–94 t/s where the morning's ran at 95–99) — only within-round
+pairs are comparable, as the protocol says.
+
+**Measurement artifact worth remembering:** on the dense model the *6th
+consecutive app launch* of a run collapsed on every metric — including
+code-identical prefill (911 → 685 t/s) — in 4 out of 4 three-round runs.
+Three-round dense verdicts are unsafe on a machine already warm from
+benching; the 10-pair form spreads the effect across both arms.
+
+**Follow-up queue (aimed by the attribution above, not by the roadmap):**
+the GPU serial chain is now the only thing that converts. Largest
+identified in-scope class: **shared-input rotation batching.**
+`RotateQuantizedLinear` dispatches rotate+qmm per projection, and the
+projections of a layer that share an input (GDN `in_proj_qkv/z/b/a`,
+attention q/k/v, the MoE block's router + shared expert) rotate the *same*
+activation with different coefficient sets — ~511 rotation launches/token on
+the MoE, of which ~310 are batchable into one dispatch per group by putting
+the set index on the grid's z axis (per-element arithmetic untouched ⇒
+bitwise by construction). At decode the rotation grid is 16 threadgroups ×
+32 threads — pure launch latency. Probe first (a `rotbatch` rig section is
+drafted: verbatim production body + a z-axis variant, bitwise gate, ABBA
+over 32 disjoint activations), then port. This is *not* the logged "PARO
+projection fusion" no-go (#257), which was about fusing the GEMMs — each
+projection keeps its own rotation, they just share one launch.
+
+---
+
 ## Review round 2026-07-24 — PR #425 full-diff review fixes
 
 Two-agent adversarial review of the whole C1–C13 loop (PR #425) found
