@@ -883,6 +883,26 @@ regression. Ported: `spokvulcan/mlx` **6ab29e36**, mlx-swift pin
 mlx-swift-lm pin **b3a4b41**; checkout re-sync verified `diff
 fbf2fb86 == C4+C5+C6+C7` exactly, no local mods.
 
+**C8 — eval_impl per-token hash-map machinery — ACCEPTED.** The DFS
+degree pass + BFS tape build performed several `std::unordered_map`
+operations per graph edge per eval (profiles had the walk at ~18% of
+the decode generation thread excluding waits); the tape loop also did
+a per-node `open_streams` insert + `events` map lookup (hundreds of
+nodes back-to-back on ONE stream during decode) and per-input
+`needs_fence` probes against an almost-always-empty map. Change: flat
+open-addressing id→degree map (Fibonacci-hashed power-of-two slot
+array, tombstone deletes, probed by key only — tape order unchanged),
+last-stream guard for the open_streams/events work, `needs_fence`
+empty fast-paths. Same walk, same tape, zero numerics. A/B (3 rounds
+both models, gates 9/9 + 9/9 = 18/18 token-identical): **MoE decode
++1.98% (128, 3/3: +1.10/+2.59/+2.29), +1.43% (8K, 2/3 + one
+−0.07%)**; dense 128/8K flat (+0.70/−0.01%); prefill flat; **peaks
+exactly flat**; 32K deltas positive but throttled-regime (absolute
+13–27 t/s — machine thermally saturated, not verdictable, and not
+needed for the verdict). Ported @ `spokvulcan/mlx` **595a3fe1**,
+mlx-swift pin **0b3289cb**, mlx-swift-lm pin **b5eb5ef**; checkout
+re-sync verified `diff fbf2fb86 == C4..C8` exactly, no local mods.
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -892,20 +912,21 @@ fbf2fb86 == C4+C5+C6+C7` exactly, no local mods.
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `6ab29e36` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `595a3fe1` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `6ab29e36` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `595a3fe1` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
   (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
   `tesseract-c5-accepted.app` (C1+C4+C5, 8d11dd1d),
   `tesseract-c6-accepted.app` (…+C6, 3ec72a24),
-  **`tesseract-c7-accepted.app` (current main: C1+C4+C5+C6+C7, 6ab29e36) —
-  the A/B baseline for the next experiment.**
-- **Pins (current):** spokvulcan/mlx-swift `1069e872` (pin-tesseract) ←
-  spokvulcan/mlx `6ab29e36`; mlx-swift-lm pin branch `b3a4b41`.
+  `tesseract-c7-accepted.app` (…+C7, 6ab29e36),
+  **`tesseract-c8-accepted.app` (current main: C1+C4..C8, 595a3fe1) — the
+  A/B baseline for the next experiment.**
+- **Pins (current):** spokvulcan/mlx-swift `0b3289cb` (pin-tesseract) ←
+  spokvulcan/mlx `595a3fe1`; mlx-swift-lm pin branch `b5eb5ef`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
