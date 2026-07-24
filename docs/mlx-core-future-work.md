@@ -25,7 +25,30 @@ target (+20–30%) and prefill target (+10–20%) are both met.
 
 ## Remaining opportunities, ranked by (value × probability) / effort
 
-### 1. Full-step graph caching — the remaining structural decode prize
+### 1. Full-step graph caching — DONE, and it re-aimed the whole list (C14)
+
+**Status 2026-07-25: built, ACCEPTED, and small — read this before planning
+any further CPU-side decode work.** The premise below (~25% Swift graph
+build + ~40% eval walk *on the critical path*) was measured and is wrong:
+`sample` on the generation thread shows it blocked in
+`Scheduler::wait_for_one` **33.4% of MoE decode and 13.8% of dense decode**
+(`transforms.cpp:424`, `n_active_tasks() > MAX_ACTIVE_TASKS`), i.e. the CPU
+already runs ahead of the GPU. Decode is **GPU-paced**; CPU savings cannot
+pay more than that slack.
+
+C14 built the thing anyway (whole decode step as 11 traced segments for the
+MoE / 9 for the dense, split only where the KV cache is written) and
+measured it: Swift graph build 14.1% → 9.8%, GPU wait 33.4% → **37.3%**,
+and tok/s +1.33% (MoE 128 decode), +0.67% (MoE 8K), +1.73% (dense 8K).
+Accepted, but the 8K "→ 140–200 t/s" estimate below was never reachable this
+way. **The 2× decode prize is GPU-serial-chain work** — fewer/faster
+kernels — not graph caching. Ledger has the numbers and the next target
+(shared-input rotation batching: ~310 of ~511 rotation launches per MoE
+token are one dispatch per group).
+
+Original entry, kept for the reasoning:
+
+#### Full-step graph caching — the remaining structural decode prize
 
 Decode is serial-chain-bound: ~4,400 dispatched ops/token (census in the
 ledger). After C4–C13 the CPU has slack at 8K but the GPU still executes
