@@ -936,6 +936,37 @@ dense unaffected (path unused), peaks exactly flat. Ported @
 mlx-swift-lm pin **f72302c**; checkout re-sync verified `diff
 fbf2fb86 == C4..C9` exactly, no local mods.
 
+**C10 — metadata-only primitive fast path — REJECTED (CPU slack: the
+saving is real but not pipeline-critical).** Motivated by the op census
+(~4,400 ops per MoE decode token; Transpose 323 + ExpandDims 88 +
+Squeeze 92 + Contiguous 32 ≈ 535 view ops/token whose `eval_gpu` is
+pure stride/flag metadata), the tape loop inline-evaluated the 8
+verified metadata-only primitives (Transpose, ExpandDims, Squeeze,
+Split, Broadcast, BroadcastAxes, Copy, StopGradient — all delegate
+`eval_gpu` to the common metadata `eval`; Slice/View/Reshape excluded:
+they can dispatch copies) and skipped the `gpu::eval` scaffolding.
+Verified non-effects before benching: `buffer_ops` increments only on
+kernel dispatch (never views), so commit cadence is untouched;
+retention is redundant by producer. A/B (3 rounds + 10-pair
+resolutions, gates 9/9 + 9/9 + 10/10 + 10/10 token-identical, peaks
+flat): MoE 8K decode **−0.43/+0.07 (10 pairs) — no win**; dense 32K
+decode 3-pair −3.84% (3/3) did NOT reproduce (10-pair +11.5/+1.45 —
+the same thermal-noise class both directions). **Lesson logged for the
+loop: post-C4..C9 the 8K decode CPU has slack — spread-out CPU-only
+cuts no longer convert to tok/s. Remaining decode wins must shorten
+the GPU serial chain (fewer/smaller kernels — fusion in the
+E2-bitwise class) or the commit boundaries.** Reverted completely.
+
+**Op census (TESS_OP_CENSUS probe, since reverted — MoE 35B decode,
+~4,400 dispatched ops/token):** Matmul ~280, CustomKernel ~258 (GDN
+scan + rotations), GatherQMM ~129, QuantizedMatmul ~140, view ops
+~535, raw elementwise (Multiply 194, Add 130, Sigmoid 86, Sum 86,
+Divide 43) ~540, already-compiled segments ~305, Transpose 323,
+Softmax ~43, ArgPartition ~33, Convolution ~32, SliceUpdate ~21,
+Arange ~0.25 (post-C9). The elementwise soup + its view-op entourage
+is the largest remaining fusion target; CPU-side per-node cost is no
+longer the lever (see C10 lesson).
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -969,12 +1000,12 @@ fbf2fb86 == C4..C9` exactly, no local mods.
   context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
   only when the signal is inside the noise floor (32K decode/prefill
   almost always are — never verdict a 32K metric on one run).
-- **Next (C10+):** M8 REJECTED at probe (expert overlap 2.4/8 — see
-  entry). M5 (attention fallback tail — head_dim 256 blocks sdpa_full,
-  prefill runs the unfused fallback: scale-mul + bool-mask + where +
-  softmax + 2 GEMMs over [B,H,1024,S] scores ≈ 6 full passes; fuse
-  mask-materialize+where into one kernel = ~1% prefill, softmax stays
-  the primitive so bits are trivially preserved), M4 (fused
-  rotate+dequant+GEMM, ~3-4% prefill, high risk — parity gate
-  arbitrates), M6 (tokenizer, TTFT, deprioritized — 1% of TTFT at 32K),
-  M7 deprioritized.
+- **Next (C11+):** M8 REJECTED at probe; C10 REJECTED (CPU slack —
+  spread-out CPU cuts stopped converting post-C9; aim at the GPU
+  serial chain). Op census logged above (~4,400 ops/MoE-token; raw
+  elementwise ~540/token = the fusion target). Queue: elementwise-soup
+  fusion in the E2-bitwise class (compile() more of the per-layer
+  chains — router top-k normalize, GDN gating, attention gate; GPU
+  serial-chain shortening is the mechanism), M4 (fused rotate+GEMM,
+  ~3-4% prefill, high risk), M5 (fallback mask+softmax, ~1% prefill),
+  M6/M7 deprioritized.
