@@ -986,6 +986,24 @@ unchanged (mlx 625f2aea, mlx-swift c9796ec4). Opens C12+ for the same
 pattern on the attention + GDN blocks (cache state must become
 inputs/outputs first — GDN is 30/40 layers and the biggest block).
 
+**C12 — compiled GDN decode step with explicit state — ACCEPTED.**
+`Qwen35GatedDeltaNet` decode (S==1, unmasked, cached) runs through a
+per-instance compiled closure; conv/recurrent state crosses as
+inputs/outputs (compiled functions must be pure — first decode token
+falls back to explicit zero states matching `gatedDeltaUpdate`'s
+internal init). Elementwise chains (conv-silu, gating, norms) fuse in
+the E2-bitwise class. Prefill/masked/cacheless keep the unfused body,
+so prefill is byte-identical (the 3-pair 128-prefill +21% and dense
+−2.83% readings were thermal noise by construction). A/B: 3-pair leg
+muddy (8K −0.69%) → 10-pair escalation at 128/8K both models (gates
+20/20 + 18/18 token-identical, peaks exactly flat): **dense 128
+decode +1.75% (10/10), MoE 128 decode +0.94% (10/10)**; 8K decode
+flat both models (−0.3/+0.3% means). MoE's smaller win vs C11 is the
+`compile_replace` replay cost over the GDN block's ~20-node tape × 30
+layers — logged as the limiting factor for further block compiles.
+Committed on `pin-upstream-mlx-swift` @ **e77d05d**; Cmlx pins
+unchanged.
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -1008,10 +1026,11 @@ inputs/outputs first — GDN is 30/40 layers and the biggest block).
   `tesseract-c7-accepted.app` (…+C7, 6ab29e36),
   `tesseract-c8-accepted.app` (…+C8, 595a3fe1),
   `tesseract-c9-accepted.app` (…+C9, 625f2aea),
-  **`tesseract-c11-accepted.app` (current main: C1+C4..C9+C11, 3bb0f17) —
-  the A/B baseline for the next experiment.**
+  `tesseract-c11-accepted.app` (…+C11, 3bb0f17),
+  **`tesseract-c12-accepted.app` (current main: C1+C4..C9+C11+C12, e77d05d)
+  — the A/B baseline for the next experiment.**
 - **Pins (current):** spokvulcan/mlx-swift `c9796ec4` (pin-tesseract) ←
-  spokvulcan/mlx `625f2aea`; mlx-swift-lm pin branch `3bb0f17`.
+  spokvulcan/mlx `625f2aea`; mlx-swift-lm pin branch `e77d05d`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
