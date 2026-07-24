@@ -1028,6 +1028,32 @@ bitwise trivially** — unlocks M5-class fused-kernel replications
 Artifacts: `/tmp/gather-sweep/Sources/gather-sweep/main.swift`,
 `m4-fused-kernel.metal`, logs (rig preserved, nothing committed).
 
+**C13 — fused causal-mask + softmax for the SDPA ops fallback (M5) —
+ACCEPTED.** Probe-driven (`/tmp/gather-sweep`, agent-0): ceiling
+measured first — the causal chain (greater_equal → where(bf16
+finfo.min) → softmax precise) costs ~6.5 ms per 32K layer-chunk, of
+which mask+where ≈ 3.0 ms (≈5% of 32K prefill at 320 layer-chunks);
+the fused kernel (verbatim looped-softmax precise body, N_READS=4,
+causal select injected at both load sites) lands exactly on the
+softmax traffic floor (3.5 ms, −45% at 32K, −61% at 8K) and is
+**bitwise IDENT on 14/14 configs** (3 seeds × S∈{8192,32768} ×
+offsets). Bitwise enabler: the masked value is exact bf16 finfo.min as
+f32 and exp(min−max) underflows to exact 0; threadgroup lsize must
+equal the production dispatch (1024). Port: `fast.cpp` fallback
+lambda, predicated on (do_causal, no array mask, no sinks, bf16,
+axis>4096, row-contiguous) — block-softmax sizes, sinks, array/additive
+masks keep the stock chain. Also removes the 512MB masked-scores
+intermediate + 32MB bool mask per layer-chunk. App A/B (3-pair +
+two 10-pair sets incl. post-cool-down, **gates 48/48 token-identical**,
+peaks flat): MoE 32K prefill **+2.80% mean of 20 pairs** (11/9 rounds,
+median +0.71% — thermal saturation; accepted on the strictly-
+subtractive-mechanism argument: the change only removes two memory
+passes, no regression channel exists, and the app mean matches the
+probe-predicted +3%); 128/8K flat (fused engages kL>4096 only);
+dense flat. Ported @ `spokvulcan/mlx` **ed107a94**, mlx-swift pin
+**e20b0d86**, mlx-swift-lm pin **8eeec20**; checkout re-sync verified
+`diff fbf2fb86 == C4..C13` exactly.
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -1037,11 +1063,11 @@ Artifacts: `/tmp/gather-sweep/Sources/gather-sweep/main.swift`,
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `625f2aea` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `ed107a94` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `625f2aea` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `ed107a94` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
   (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
@@ -1051,10 +1077,11 @@ Artifacts: `/tmp/gather-sweep/Sources/gather-sweep/main.swift`,
   `tesseract-c8-accepted.app` (…+C8, 595a3fe1),
   `tesseract-c9-accepted.app` (…+C9, 625f2aea),
   `tesseract-c11-accepted.app` (…+C11, 3bb0f17),
-  **`tesseract-c12-accepted.app` (current main: C1+C4..C9+C11+C12, e77d05d)
-  — the A/B baseline for the next experiment.**
-- **Pins (current):** spokvulcan/mlx-swift `c9796ec4` (pin-tesseract) ←
-  spokvulcan/mlx `625f2aea`; mlx-swift-lm pin branch `e77d05d`.
+  `tesseract-c12-accepted.app` (…+C12, e77d05d),
+  **`tesseract-c13-accepted.app` (current main: C1+C4..C9+C11..C13,
+  ed107a94) — the A/B baseline for the next experiment.**
+- **Pins (current):** spokvulcan/mlx-swift `e20b0d86` (pin-tesseract) ←
+  spokvulcan/mlx `ed107a94`; mlx-swift-lm pin branch `8eeec20`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
