@@ -1315,3 +1315,130 @@ stock chain bitwise in the app. Attribution: no other fix in the E arm
 can move 32K prefill (M3 Max C4 caps are value-identical, C9's map
 swap is negligible), so the delta isolates C13. Raw reports:
 session scratchpad `parity/results-{moe,moe32k,dense}`.
+
+## Session 2026-07-25 (b) — the decode roofline, and three rejections
+
+Continuation of the C14 session. Goal was ~2× decode (MoE 8K
+~96 → ~180 t/s). **That target is not reachable within the zero-loss
+constraint on this architecture, and this session says so with
+numbers.** What follows is the measured model of where a MoE decode
+token goes, then the three hypotheses it killed. Nothing shipped;
+tree, vendor and the mlx checkout are all back at their pinned
+commits, verified token-identical.
+
+**Correction to the C14 entry.** It claimed "~511 rotation launches
+per MoE token, ~310 batchable". Wrong — read from the checkpoint
+header (`model.safetensors`, 130 `.theta` prefixes: 30×{in_proj_qkv,
+in_proj_z, out_proj} + 10×{q,k,v,o}), there are **130** rotations per
+token and no MoE-block rotations at all (this checkpoint has no
+`gate_up_rot`/`down_rot`; `RotateSwitchGLU` is never instantiated).
+Corroborated by the older op census (CustomKernel ~258 = GDN scan +
+rotations). The batchable subset — projections sharing an input — is
+~50, not ~310.
+
+**Decode is GPU-paced with no idle bubbles.** AGX driver utilization
+counter (`ioreg -c AGXAccelerator`, 16 ms sampling) over a 500-token
+8K decode window: median **100%**, p10 100%, mean 97.6 (boundary
+samples). Prefill 99.1%. So every remaining win must come out of GPU
+time, not out of CPU slack or scheduling gaps.
+
+**Byte budget (the denominator everything else is measured against).**
+From the safetensors header plus the loader's quantization predicate
+(`isParoQuantIOLayer` quantizes **only** `embed_tokens` and `lm_head`
+— the router `mlp.gate`, `shared_expert.*` and `shared_expert_gate`
+stay **F16**, which the earlier estimates had as 4-bit): per token at
+8K = 539 MB GDN + 145 FA + 523 experts (top-8) + 252 shared expert +
+42 router + 270 lm_head + 168 KV + 63 GDN state = **2002 MB**. At the
+measured 10.5 ms/token that is **189 GB/s**.
+
+**The anchor: 371 GB/s.** `lm_head` (one 2048×248320 4-bit qmv, 270 MB)
+runs at 371 GB/s *inside the model* — 93% of the M3 Max's 400 GB/s.
+The machine streams fine. Cold-DRAM ceiling confirmed independently in
+the rig at N=131072 (142 MB, cache-defeating): 388 GB/s.
+
+**Attribution (in-app `--block-bench` probe, sync floor 0.21 ms
+subtracted; parts sum to the whole: gdn 7.52 + fa 2.43 ≈ inner 9.93).**
+
+| class | ms | MB | GB/s | % of anchor |
+|---|---|---|---|---|
+| MoE blocks ×40 | 4.77 | 817 | 171 | 46% |
+| GDN attn ×30 | 4.42 | 602 | 136 | 37% |
+| FA attn ×10 | 1.24 | 313 | 253 | 68% |
+| lm_head | 0.83 | 270 | 371 | 100% |
+
+Sub-block: switch_mlp ×40 3.33 ms (157 GB/s), in_proj_qkv ×30 1.28
+(208), shared expert ×40 1.44 (175), in_proj_z ×30 0.90 (149),
+out_proj ×30 0.87 (154), router ×40 0.74 (57). **Efficiency tracks
+matmul size, not bytes** — everything but `lm_head` is latency-bound,
+not bandwidth-bound.
+
+**Wave census (mlx `CommandEncoder` instrumentation; two runs at
+maxNew 100/300, subtracted).** Per decode token: **1892 dispatches,
+972 hazard barriers** — average wave width 1.95, i.e. the graph is
+~1000 serial steps deep. Barriers by primitive (per token): RMSNorm
+157, CustomKernel 144, QuantizedMatmul 80, CompiledBroadcastMultiply
+65, then ~12 entries at ~30–40 (one per layer): Matmul 40 (for 260
+dispatches — those *do* overlap), Softmax, ArgPartition, Sum, Add,
+GatherQMM 39 (120 dispatches), Concatenate 29, Convolution 29.
+
+**The bound: barriers off → +62%.** Skipping the hazard barrier
+entirely (numerically garbage, timing-valid) takes 8K decode
+**95.07 → 153.80 t/s** (10.52 → 6.50 ms). So ~4.0 ms of the token is
+serialization at hazard points and ~5.3 ms is weight streaming that is
+already at ~95% of peak. **That is the whole budget: there is no 2×
+inside it without changing arithmetic.**
+
+**C15 — shared-input rotation batching — REJECTED (arithmetic, not
+geometry).** Probe (z-axis batched rotation, per-element body
+untouched): **bitwise IDENTICAL** at all four configs, 2.0–3.5× faster
+per group (sets=3/4/6 at hidden 2048/2560; batched dispatch ~5–6.5 µs
+regardless of set count). But the lever is only ~50 dispatches/token
+(see the correction above), and the marginal cost of a dispatch in the
+real pipeline was measured at **1.00 µs** (`--dispatch-probe` slope:
+N=0/200/400 serial 1-element adds appended to every decode step, two
+N=0 legs agreeing at 94.60/94.69 t/s; linear fit over N≤400 — N=800
+leaves the regime at 1.69 µs/op). 50 × 1.00 µs = **0.48%** of a token,
+below the 1% bar. Killed before porting. **Rule of thumb banked: a 1%
+decode win needs ~105 dispatches removed.**
+
+**Serial dispatch instead of concurrent+barriers — REJECTED, −19%.**
+`computeCommandEncoder(MTL::DispatchTypeSerial)` with the explicit
+barriers dropped (Metal then orders dispatches itself): 77.21/77.11
+vs 94.77/94.95 t/s. MLX's concurrent-dispatch + explicit-hazard-barrier
+scheme is already the better one; the overlap it buys is worth +23%.
+
+**Resource-scoped hazard barriers — REJECTED, −7% (and the first
+reading was a correctness bug).** MLX emits an encoder-wide
+`memoryBarrier(BarrierScopeBuffers)` although it knows exactly which
+buffers are hazards. Narrowing it to `memoryBarrier(resources,count)`
+read **+1.7%** (95.69/96.65 vs 94.51/94.63, tokens identical) — but
+that version kept MLX's `prev_outputs_ = next_outputs_` reset, which is
+sound only for an encoder-wide barrier: a resource-scoped barrier does
+not order the *unlisted* buffers, so the reset silently drops live
+hazards (a race that merely did not fire). The sound version (erase
+only the barriered resources, keep the rest in the hazard set) runs
+**88.05/88.35 t/s, −7%**, with barriers up 33% (325k → 433k per run).
+The win was the bug. **Logged as a trap: a scheduling change that
+reads positive and token-identical can still be unsound — check the
+invariant, not just the gate.**
+
+**Housekeeping resolved.** The mlx checkout carried an *uncommitted*
+`output_shapes` diff (CustomKernel/GatherMM/GatherQMM/Split shapeless-
+replay scaffolding) left over from the discarded pre-C14 attempt.
+Stashed, rebuilt, re-run: token-identical and same speed, i.e. **inert**
+— the shipped C14 compiles concrete shapes and never consults it.
+Dropped; the checkout is back at the pinned `a3673067` and the
+committed pins are honest.
+
+**Where the remaining decode work is (ranked, all small).** The 4.0 ms
+serialization budget is spread over 972 barriers whose depth is the
+model's dataflow. Cutting it means removing *serial* steps, and the
+bitwise constraint blocks the reduction-order changes that would give
+big wins (split-K, fused-norm rewrites, custom top-k). What is left is
+per-site fusion in the E2-bitwise class, each worth ~1–2%: GDN
+conv-state concat + conv1d → one kernel (~30 barriers), RMSNorm
+absorbing its trailing elementwise consumer (~40), the router chain's
+softmax/argpartition/takealong (~80, but top-k index order must be
+preserved exactly or the weighted sum reorders). **Do not re-attempt:
+anything that raises dispatch count for a "better" kernel, resource
+barriers, serial dispatch, or rotation batching.**

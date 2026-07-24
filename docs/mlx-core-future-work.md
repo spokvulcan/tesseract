@@ -5,6 +5,32 @@ against the state in `benchmarks/experiments-ledger.md` (the ledger's
 rules, measurement protocol, and rejected-experiment list are
 prerequisites — do not retry a logged failure).
 
+## Read this first: the decode budget is closed (2026-07-25)
+
+A MoE 8K decode token is **10.5 ms**, and it now has a complete measured
+account (ledger, session 2026-07-25 (b)):
+
+- **~5.3 ms is weight streaming** of 2002 MB/token, already running at
+  ~95% of the M3 Max's 400 GB/s (`lm_head` hits 371 GB/s *in-model*;
+  cold-DRAM ceiling 388 GB/s in the rig). Irreducible without changing
+  quantization — i.e. without changing numerics.
+- **~4.0 ms is serialization** at 972 hazard barriers (1892 dispatches,
+  average wave width 1.95). Measured directly: skipping the barriers
+  takes decode 95.07 → 153.80 t/s (+62%), numerically garbage.
+- The GPU is **98–99% busy** throughout decode — no idle bubbles, no CPU
+  slack left to convert.
+
+So **the "~2× decode / 180–270 t/s" goal is off the table under the
+zero-output-change constraint.** The floor is ~5.3 ms of streaming plus
+the serialization of a ~1000-deep graph; the levers that would collapse
+that depth (split-K, rewriting fused norms as elementwise, a custom
+top-k) all change reduction order and therefore output. Everything below
+should be read as "1–3% each", not as a path to 2×.
+
+Also corrected there: this checkpoint has **130** rotations/token (not
+~511) and quantizes **only** `embed_tokens`/`lm_head` — the router and
+shared expert are F16, which is 294 MB/token of the budget.
+
 ## Banked so far (all parity-gated token-identical, both PARO models)
 
 | Metric | Before (2026-07-23, quiet) | After (C13) | Compounded A/B |
@@ -78,14 +104,22 @@ floor for ~1.5 GB active weights/token at ~350–400 GB/s effective).
 Start with a spike: pure-function decode step for ONE model, measure,
 then decide.
 
-### 2. Projection batching (QKV, in_proj_b+a) — ~1–2% decode, medium effort
+### 2. Projection batching (QKV, in_proj_b+a) — DEAD for the rotated set
 
-q/k/v projections share one input; GDN `in_proj_b`/`in_proj_a` share
-another. Concat along the output dim at load time → one GEMM instead of
-3 (attention) / 2 (GDN). Per-output-element dot is output-index-
-independent, so bitwise-plausible — must be probe-verified like C1
-(qmv lane→data mapping per output element is preserved under output
-concat; the gate decides). ~40–50 matmul dispatches/token saved.
+Two independent reasons, both established 2026-07-25:
+
+1. **Structural.** PARO rotates the *activation* per projection, with
+   different coefficients each. Two projections that share `x` do not
+   share `rot(x)`, so an output-dim weight concat cannot serve both.
+   Block-diagonal weights would double the weight bytes. This is the
+   "PARO projection fusion — NO-GO, structural" ledger row; it applies
+   to q/k/v (all rotated) and to `in_proj_qkv`/`in_proj_z`. The
+   unrotated projections (router, shared expert) *could* concat, but
+   their output dims differ and see (2).
+2. **Not worth it anyway.** Extra *independent* dispatches cost only
+   ~1.75–3.5 µs each (rig: one N=8192 qmv vs 16 N=512 qmvs differ by
+   28 µs total), because independent kernels overlap. Fusion pays only
+   where the dispatches are *serial*, and these are not.
 
 ### 3. Attention-block compile (C11/C12 pattern) — ~1% decode
 
@@ -149,7 +183,12 @@ slack), expert-weight prefetch (M8 — routing locality 2.4/8), fused
 rotate+dequant+GEMM (M4 — bitwise-exact but 2× slower by qmv
 threadgroup geometry; the two-kernel pipeline is the right design),
 chunked/parallel GDN scan (rounding order), full-step `compile` *with*
-fused replay assumptions from outside the E2-bitwise class.
+fused replay assumptions from outside the E2-bitwise class,
+**shared-input rotation batching (C15 — probe was bitwise-identical and
+2–3.5× on the group, but the lever is only ~50 dispatches ≈ 0.48%)**,
+**serial dispatch instead of concurrent+barriers (−19%)**, and
+**resource-scoped hazard barriers (−7% once the bookkeeping is made
+sound; the +1.7% first reading was a dropped-hazard race)**.
 
 ## Banked meta-lessons (use them)
 
@@ -165,3 +204,13 @@ fused replay assumptions from outside the E2-bitwise class.
 - Probe protocol: one big lazy graph for timing, 32 disjoint input sets,
   ABBA; 32K-context metrics carry ±5–10% thermal variance — never
   verdict them on single runs (10-pair minimum).
+- **Conversion factor: one dispatch ≈ 1.00 µs in the real decode
+  pipeline** (measured by appending N serial no-op kernels to the decode
+  step). A 1% decode win needs ~105 dispatches removed. Size any
+  "fewer kernels" idea against this *before* building it.
+- **Independent kernels overlap; dependent ones do not.** Fusing
+  independent dispatches buys ~2–3.5 µs each; the expensive thing is a
+  *serial* link. Optimize graph depth, not graph width.
+- A scheduling change can read positive, token-identical, and still be
+  unsound (resource barriers, above) — verify the invariant, not just
+  the parity gate.
