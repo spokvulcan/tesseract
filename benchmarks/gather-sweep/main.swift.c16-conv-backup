@@ -1,0 +1,67 @@
+// C16 probe — can the GDN decode conv1d be replaced by elementwise
+// multiply-adds that `compile` folds into the surrounding segment?
+//
+// At decode the conv is a 4-tap depthwise conv over [convState | qkv]:
+//     out[c] = sum_k in[k, c] * w[c, k, 0]
+// If a plain elementwise expression reproduces MLX's Convolution output
+// bit-for-bit, the Concatenate + Convolution pair (one wave each, ~30
+// barriers/token) collapses into the neighbouring compiled kernel.
+//
+// Bitwise gate only — no timing. Compare raw bit patterns, not `.==`.
+import Foundation
+import MLX
+import MLXNN
+
+let convDim = 8192
+let kernelSize = 4
+
+func bits(_ a: MLXArray) -> [Float] {
+    a.asType(.float32).asArray(Float.self)
+}
+
+for dtype in [DType.float16, DType.bfloat16] {
+    let conv = Conv1d(
+        inputChannels: convDim, outputChannels: convDim, kernelSize: kernelSize,
+        stride: 1, padding: 0, dilation: 1, groups: convDim, bias: false)
+    let w = MLXRandom.normal([convDim, kernelSize, 1]).asType(dtype)
+    conv.update(parameters: ModuleParameters.unflattened(["weight": w]))
+
+    let convState = MLXRandom.normal([1, kernelSize - 1, convDim]).asType(dtype)
+    let qkv = MLXRandom.normal([1, 1, convDim]).asType(dtype)
+    let input = MLX.concatenated([convState, qkv], axis: 1)
+    eval(w, convState, qkv, input)
+
+    let reference = conv(input)  // [1, 1, convDim]
+    eval(reference)
+
+    // taps: w[:, k, 0] as [convDim]
+    let taps = (0 ..< kernelSize).map { k in w[0..., k, 0] }
+    let rows = (0 ..< kernelSize).map { k in input[0..., k, 0...] }  // [1, convDim]
+
+    // Variant A — accumulate in the element dtype, left to right.
+    var a = rows[0] * taps[0]
+    for k in 1 ..< kernelSize { a = a + rows[k] * taps[k] }
+
+    // Variant B — accumulate in f32, round once at the end.
+    var b = rows[0].asType(.float32) * taps[0].asType(.float32)
+    for k in 1 ..< kernelSize {
+        b = b + rows[k].asType(.float32) * taps[k].asType(.float32)
+    }
+    let bOut = b.asType(dtype)
+
+    // Variant C — f32 accumulate, pairwise tree.
+    let p0 = rows[0].asType(.float32) * taps[0].asType(.float32)
+        + rows[1].asType(.float32) * taps[1].asType(.float32)
+    let p1 = rows[2].asType(.float32) * taps[2].asType(.float32)
+        + rows[3].asType(.float32) * taps[3].asType(.float32)
+    let cOut = (p0 + p1).asType(dtype)
+
+    eval(a, bOut, cOut)
+    let ref = bits(reference.reshaped(-1))
+    for (name, v) in [("A dtype-acc", a), ("B f32-acc seq", bOut), ("C f32-acc tree", cOut)] {
+        let got = bits(v.reshaped(-1))
+        let same = ref.count == got.count && zip(ref, got).allSatisfy { $0.bitPattern == $1.bitPattern }
+        let diffs = zip(ref, got).filter { $0.bitPattern != $1.bitPattern }.count
+        print("\(dtype) \(name): \(same ? "IDENTICAL" : "differs in \(diffs)/\(ref.count)")")
+    }
+}

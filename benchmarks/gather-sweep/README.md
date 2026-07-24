@@ -12,6 +12,12 @@ in `/tmp/gather-sweep` does not survive reboots.
 - `Sources/gather-sweep/main.swift` — current rig (M5/C13 sections).
 - `main.swift.gqmm-backup` / `main.swift.m4-backup` — the C1 gather_qmm
   B/E sweep and the M4 fused rotate+dequant rig, kept verbatim.
+- `main.swift.c16-conv-backup` — the C16 gate (depthwise conv1d at S == 1
+  vs elementwise multiply-adds: f32 accumulation is bitwise-identical in
+  all 8192 channels for f16 and bf16, native-dtype accumulation is not)
+  plus the qmv latency/fusion sweep behind the 2026-07-25 roofline entry
+  (dependent-chain vs independent-call cost, and the control that
+  separates rig overhead from kernel time).
 - `Package.swift` depends on the local clone `/Users/owl/projects/mlx-swift`
   (branch `pin-tesseract`) by absolute path — adjust if your clone lives
   elsewhere. Probe-only env hooks (`MLX_GQMM_CFG`, `MLX_GQMV_RPS`) exist
