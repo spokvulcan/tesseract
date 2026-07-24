@@ -1004,6 +1004,30 @@ layers — logged as the limiting factor for further block compiles.
 Committed on `pin-upstream-mlx-swift` @ **e77d05d**; Cmlx pins
 unchanged.
 
+**M4 — fused rotate+dequant+dot — REJECTED at probe (geometry, not
+numerics).** Probe in `/tmp/gather-sweep` (coder subagent, full
+harness + gates): the fused kernel (rotation phase into a bf16
+threadgroup tile + verbatim `qmv_fast_impl` body) is **bitwise
+IDENTICAL to the two-kernel pipeline on the first attempt** — 3 seeds
+× K∈{2048,2560} × rps∈{4,8,16,32}, all IDENT; both phases isolate-
+clean. The numerics worry was unfounded because MLXFast JIT compiles
+with `fastMathEnabled(false)` (device.cpp:619): identical expressions
+→ identical codegen, no fma tuning needed. **But fused is ~2×
+SLOWER** (ABBA, 32 disjoint weight sets): qmv's N/8 = 256-threadgroup
+grid makes every threadgroup redundantly re-rotate the full K vector
+(16 groups × 8 rounds of barrier-separated tile math + ~72KB
+coefficient re-reads per threadgroup ≈ 18MB L2 traffic vs 2MB
+weights); the standalone rotation does the same work across 16
+threadgroups, fully latency-hidden (~2µs). Only rps=32 (non-production
+geometry) reaches parity. For MoE it's strictly worse (rotations
+shared across 8 experts → 8× multiplier). **The two-kernel pipeline
+is the right design; do not revisit unless geometry changes.**
+Meta-lesson banked: **verbatim arithmetic in MLXFast JIT reproduces
+bitwise trivially** — unlocks M5-class fused-kernel replications
+(mask+softmax) that were previously rated risky.
+Artifacts: `/tmp/gather-sweep/Sources/gather-sweep/main.swift`,
+`m4-fused-kernel.metal`, logs (rig preserved, nothing committed).
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
