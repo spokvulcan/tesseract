@@ -855,6 +855,34 @@ both); **peaks exactly flat everywhere**. Ported @ `spokvulcan/mlx`
 checkout re-sync verified `diff fbf2fb86 == C4+C5+C6` exactly, no
 local mods.
 
+**C7 — per-model commit policy (app-signalled regime) — ACCEPTED.**
+C4/v3 (`in200`) measured +8.50/+10.58/+3.78% MoE decode but was
+REJECTED for dense 32K (−1.92%); C4/v4 proved no GPU-side signal can
+separate MoE's boundary-limited decode from dense 32K's
+starvation-limited one. The app knows the model — and app-side entered
+scope 2026-07-24. Change (full stack): mlx caps become runtime-settable
+(`std::atomic` members + `Device::set_commit_limits` + namespace
+wrapper + `extern "C" mlx_metal_set_commit_limits`; a 0 leg is left
+unchanged); mlx-swift exposes it (`mlx/c/commit_limits.h` in the Cmlx
+umbrella + `GPU.setCommitLimits` shim); `LLMActor.loadModel` calls it
+on every load keyed off the existing `ModelIdentity.isMoE`
+(`qwen3_5_moe`): **MoE → 200 MB input cap, dense → 100 MB** (setting
+on every load keeps MoE↔dense switching correct). Commit points are
+scheduling boundaries only — commit-point invariance already gated in
+C4. A/B (3 rounds 128/8K/32K, gates 9/9 + 9/9 + 10/10
+token-identical): **MoE decode +5.89% (128), +5.86% (8K), +3.67%
+(32K)** — matching the +5.9/+5.3/+2.8 prediction from the C4 v3-vs-v5
+delta; prefill flat; peaks flat (+0.22% at 128, noise). Dense
+128/8K/prefill/peaks exactly flat (the dense arm passes the
+compiled-in default — no mechanism for an effect); dense 32K decode
+3-pair −5.67% did NOT reproduce in the 10-pair resolution (+5.3/+11.8,
+opposite sign) — machine was thermally throttling hard (absolute dense
+32K throughput swung 70→40→23 t/s across the afternoon); noise, not
+regression. Ported: `spokvulcan/mlx` **6ab29e36**, mlx-swift pin
+**1069e872** (also carries the `GPU.setCommitLimits` + header),
+mlx-swift-lm pin **b3a4b41**; checkout re-sync verified `diff
+fbf2fb86 == C4+C5+C6+C7` exactly, no local mods.
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -864,19 +892,20 @@ local mods.
   gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
   (seconds — incremental Cmlx).
 - **Fork clone state (standing, do NOT clean):**
-  `~/projects/mlx-swift/Source/Cmlx/mlx` = `3ec72a24` + uncommitted probe
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `6ab29e36` + uncommitted probe
   hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
   rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
   rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
-  `~/projects/mlx` = clean at `3ec72a24` (pin-tesseract tip).
+  `~/projects/mlx` = clean at `6ab29e36` (pin-tesseract tip).
 - **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
   `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
   (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
   `tesseract-c5-accepted.app` (C1+C4+C5, 8d11dd1d),
-  **`tesseract-c6-accepted.app` (current main: C1+C4+C5+C6, 3ec72a24) — the
-  A/B baseline for the next experiment.**
-- **Pins (current):** spokvulcan/mlx-swift `99e27254` (pin-tesseract) ←
-  spokvulcan/mlx `3ec72a24`; mlx-swift-lm pin branch `cbeb6ee`.
+  `tesseract-c6-accepted.app` (…+C6, 3ec72a24),
+  **`tesseract-c7-accepted.app` (current main: C1+C4+C5+C6+C7, 6ab29e36) —
+  the A/B baseline for the next experiment.**
+- **Pins (current):** spokvulcan/mlx-swift `1069e872` (pin-tesseract) ←
+  spokvulcan/mlx `6ab29e36`; mlx-swift-lm pin branch `b3a4b41`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
@@ -885,12 +914,14 @@ local mods.
   context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
   only when the signal is inside the noise floor (32K decode/prefill
   almost always are — never verdict a 32K metric on one run).
-- **Next (C7+):** per-cbuf boundary residual (end_encoding 42 + commit 48 +
-  get_command_encoder 80 of 2862 gen-thread samples ≈ 5.9% total, smaller
-  recoverable fraction — fence-map churn, encoder/fence recreation);
-  **eval_impl tape machinery = the C++ whale: 41.5% of the decode thread**
-  (DFS degree pass + BFS tape build + per-node hash-map work in
-  transforms.cpp — durable fix is graph-level: compiled step function →
-  1-op tape, which also kills the 26.6% Swift graph build; that is the
-  app-side 2×-decode prize, in scope since 2026-07-24); M5 (attention
-  fallback tail), M4 (fused rotate+GEMM), M8 (expert prefetch probe).
+- **Next (C8+):** eval_impl tape machinery = the C++ whale: ~530
+  recoverable gen-thread samples of 2862 (DFS degree pass + BFS tape
+  build + tape-loop bookkeeping + detach; wait_for_one 576 is GPU
+  backpressure, not work). Compiled-step push investigated and
+  DEPRIORITIZED: `compile_replace` rebuilds the full tape per call
+  (O(tape) allocs), so no_fuse replay buys little, and fused replay
+  changes elementwise rounding → fails the token-identical gate by
+  design. Per-cbuf boundary residual measured small (recoverable <1%:
+  end_encoding 42 + commit 48 + get_command_encoder 80 samples, mostly
+  Metal driver `commit()`/encoder-ctor). M5 (attention fallback tail),
+  M4 (fused rotate+GEMM), M8 (expert prefetch probe).

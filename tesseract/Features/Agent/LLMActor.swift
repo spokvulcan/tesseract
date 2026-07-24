@@ -110,6 +110,15 @@ actor LLMActor {
                 + "format=\(format.map { "\($0)" } ?? "json (default)")"
         )
 
+        // C7: per-model Metal commit policy. MoE decode is boundary-limited
+        // (GPU busy either way) so the relaxed 200 MB input cap collapses
+        // commit-boundary drains (~+6% MoE decode TPS measured); dense decode
+        // is starvation-limited and keeps the balanced 100 MB cap (C4/v3
+        // regressed dense 32K at 200 MB). Commit points are scheduling
+        // boundaries only — results are commit-point invariant. Set on every
+        // load so switching MoE↔dense in one session restores the right leg.
+        GPU.setCommitLimits(maxMBPerBuffer: identity.isMoE ? 200 : 100)
+
         if let ssdConfig {
             Log.agent.info(
                 "prefix-cache ssd enabled=\(ssdConfig.enabled) "
