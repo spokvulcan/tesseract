@@ -24,7 +24,7 @@ repos:
         entry: xcrun swift-format format --in-place --parallel --configuration .swift-format
         language: system
         types: [swift]
-        exclude: '^(Vendor/|.*/\.build/)'
+        exclude: '^(Vendor/|benchmarks/gather-sweep/|.*/\.build/)'
         require_serial: true
 
       - id: swiftlint
@@ -32,5 +32,5 @@ repos:
         entry: swiftlint lint --quiet --config .swiftlint.yml
         language: system
         types: [swift]
-        exclude: '^(Vendor/|.*/\.build/)'
+        exclude: '^(Vendor/|benchmarks/gather-sweep/|.*/\.build/)'
         require_serial: true

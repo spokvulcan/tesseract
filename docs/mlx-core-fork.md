@@ -14,14 +14,18 @@ tesseract.xcodeproj
        url: https://github.com/spokvulcan/mlx-swift
        revision: <exact commit on branch pin-tesseract>
   └─ spokvulcan/mlx-swift @ pin-tesseract
-       = ml-explore/mlx-swift @ 0bb916c (the 0.31.6 tag) + ONE commit
-         (54ca1ec): .gitmodules provenance edit only, zero source diff
+       = ml-explore/mlx-swift @ 0bb916c (the 0.31.6 tag) + one provenance
+         commit (54ca1ec: .gitmodules only, zero source diff) + one
+         gitlink-bump commit per accepted Cmlx change
        └─ submodule Source/Cmlx/mlx  → https://github.com/spokvulcan/mlx
-            branch pin-tesseract, gitlink @ ce45c525 (== upstream mlx v0.31.1)
+            branch pin-tesseract = upstream mlx v0.31.1 (ce45c525) + the
+            accepted Cmlx commits, append-only
        └─ submodule Source/Cmlx/mlx-c → ml-explore/mlx-c @ 0726ca9 (untouched)
 ```
 
-Pin revision as of scheme creation: `54ca1ec7cf9601c39809720725211afe601cfdd5`
+The branch tips move with every accepted experiment; the **current** pins are
+whatever the three `Package.swift` files record (the diagram describes the
+structure, not a snapshot). Scheme creation started from `54ca1ec`
 (provenance-only). Every ACCEPTED Cmlx experiment adds one commit on
 `spokvulcan/mlx` `pin-tesseract`, one gitlink-bump commit on
 `spokvulcan/mlx-swift` `pin-tesseract`, and moves the three Package.swift pins
@@ -85,7 +89,18 @@ DerivedData (`git ls-tree 0bb916c Source/Cmlx/` and the resolved checkout).
    - After an accepted re-pin: `xcodebuild -resolvePackageDependencies`
      re-syncs the DerivedData checkout; verify the port with
      `git -C <DD>/checkouts/mlx-swift/Source/Cmlx/mlx diff ce45c525` — it must
-     equal the accepted diff exactly.
+     equal the accepted diff exactly. **This check only catches resolution
+     failures — after re-resolve the checkout equals the pin by
+     construction, so it can NOT prove the pin matches the text that was
+     benched.** A port typo ships silently through it (C13 shipped a
+     rename that made the kernel uncompilable exactly this way — review
+     round 2026-07-24).
+   - **Clean-build confirmation (mandatory):** rebuild Release from the
+     re-pinned tree and re-run the touched path once (one smoke round of
+     `parity-ab.sh` against the pre-experiment baseline, or at minimum a
+     bench leg that dispatches the changed kernel). Only then is the
+     experiment's accepted state considered ported. C4 had this step and
+     was fine; C13 skipped it and shipped broken.
 5. Tree clean between iterations (tesseract + Vendor submodule).
 
 ## macOS/SwiftPM builds JIT the Metal kernels — no instantiation plumbing

@@ -1099,3 +1099,86 @@ dense flat. Ported @ `spokvulcan/mlx` **ed107a94**, mlx-swift pin
   serial-chain shortening is the mechanism), M4 (fused rotate+GEMM,
   ~3-4% prefill, high risk), M5 (fallback mask+softmax, ~1% prefill),
   M6/M7 deprioritized.
+
+---
+
+## Review round 2026-07-24 — PR #425 full-diff review fixes
+
+Two-agent adversarial review of the whole C1–C13 loop (PR #425) found
+three defect classes the loop's gates structurally could not catch; all
+fixed this round on `fix/cmlx-review-round-425` (tesseract) + new fork
+commits. **A parity re-gate round (3-pair 128/8K/32K, both models,
+escalation per protocol) is REQUIRED before the C13 win is re-banked** —
+the C13 fix re-enables a kernel the merged tree could never run; all
+other fixes are scheduling/lifecycle/docs-only.
+
+**F1 — C13 shipped uncompilable (CRITICAL; latent crash, MoE kL>4096).**
+The port to `fast.cpp` renamed the custom-kernel output to `"out"` while
+the body kept the probe's alias `device bfloat16_t* out = y;` — `y`
+undefined, `out` redeclared; the JIT-generated source cannot compile, so
+the fused path threw at first dispatch on any MoE prefill/generation
+crossing kL=4096 (the probe rig names its output `"y"`:
+`gather-sweep/main.swift`; the benched binaries ran that text — the
+measured +2.8%/48-48 gates are genuine, the *ported artifact* was
+broken). Proven both ways by compiling the reconstructed generated
+source: as-merged fails (`redefinition of 'out'`, `use of undeclared
+identifier 'y'`), fixed compiles clean. Why the workflow missed it: the
+post-port "checkout diff == accepted diff" check is tautological after
+re-resolution, and C13 (unlike C4) never got a clean-build confirmation
+run. Workflow amended in `docs/mlx-core-fork.md`: clean-build + smoke
+round is now mandatory per accept. Fix `spokvulcan/mlx` **5ca82d9f**
+(output renamed `"y"` to keep the body byte-identical to the
+probe-proven text; predicate also hardened — the `row_contiguous` clause
+was vacuous at graph build (ArrayDesc defaults flags true; the real
+guarantee is CustomKernel's ensure_row_contiguous copy), fused path now
+also excluded inside function-transform traces (CustomKernel has no
+vjp/jvp/vmap), on non-Metal devices/builds, and on int32 grid overflow;
+stock else-branch reindented).
+
+**F2 — C11/C12 leaked the whole previous model on MoE↔dense switch
+(HIGH).** The stored compiled closures captured their module strongly:
+module → compiledForward/compiledDecode → CompiledFunction → closure →
+module. The cycle also kept `CompiledFunction.deinit` from running, so
+`mlx_detail_compile_erase` never freed the backend tape (weights baked
+as trace constants). Fix mlx-swift-lm **be5a09b**: `[unowned self]`
+(the closures live only on their module — cannot outlive it) + red/green
+regression test `Qwen35CompiledDecodeLifecycleTests` (tiny hybrid
+MoE+GDN model, two compiled decode steps, weak-ref dealloc assert:
+fails on `[self]`, passes on `[unowned self]`; needs a colocated
+`mlx.metallib` next to the xctest binary — same standalone-SwiftPM
+gotcha as the probe rig).
+
+**F3 — hardening batch (fork commits 90ec2bb9, a3673067 + app/docs).**
+C9: exact-Shape cache keys (FNV was the *key*, not the hasher — a 2^-64
+collision would silently return wrong indices), cache now publishes only
+evaluated constants (no unevaluated node shared across threads/streams),
+function-transform traces bypass it. C4: per-arch cap table respected
+(Mac-class 'g'/'s'/'d' → 100, phone keeps stock 20/40; M3 Max behavior
+unchanged), units documented honestly (both legs count data_size()
+elements, not bytes — "MB" is upstream's misnomer). C7: duplicate
+`private:` dropped. C5: retention vector re-reserves its capacity. C8:
+signed stream sentinel. App: `GPU.setCommitLimits` moved to the
+load-success store point (failed load keeps the resident model's
+policy) and `unloadModel` restores the balanced default (the policy is
+process-global — co-resident TTS runs under the resident LLM's caps,
+scheduling-only, now documented at the call site). Docs: fork-doc
+diagram de-staled + mandatory clean-build step; C11/C12 + review rows
+added to `docs/mlx-swift-lm-fork.md`; future-work #5 got the 96%-vs-
+40–50% anchor reconciliation caveat and new #8 (C6 hit-path copies —
+deliberately NOT fixed blind; needs its own A/B, CustomKernel member
+surface).
+
+**Deliberately not changed** (review calls, rationale on the PR):
+C6 hit-path string copies (primitive-surface refactor, own iteration);
+per-lease typed commit policy for TTS (over-engineering, unmeasured —
+lease serialization makes it scheduling-only); GDN compiled/unfused
+body duplication (price of the compile pattern; a dedup refactor would
+touch proven code without a gate); Apple copyright headers on
+fork-authored files (upstream contribution convention); `extern "C"`
+surface in libmlx (mlx-c submodule stays untouched by design).
+
+**Probe rig preserved durably:** `/tmp/gather-sweep` (Package.swift,
+sources, M4 kernel) copied to `benchmarks/gather-sweep/` — it is the
+instrument that proves the bitwise claims (M4/M5/C13) and /tmp does not
+survive reboots. Runtime metallib copy requirement documented in its
+README.

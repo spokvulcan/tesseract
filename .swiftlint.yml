@@ -20,6 +20,9 @@ excluded:
   - Vendor
   - .build
   - DerivedData
+  # Lab probe rig imported verbatim — the ledger's bitwise evidence came
+  # from this exact text; app rules do not apply to it.
+  - benchmarks/gather-sweep
 
 disabled_rules:
   # Owned by swift-format — disabled to avoid double-reporting / conflicts.

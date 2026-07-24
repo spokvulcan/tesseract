@@ -46,10 +46,16 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 | `perf(paroquant): rotate gate_up before the MoE expert gather/sort` | Rotate L token rows pre-gather instead of L×topK rows post-gather (bitwise-identical); +3–4.5% MoE prefill at 8K–32K (tesseract experiments-ledger E1) | Not filed — candidate (fold into the MoE PARO commit when #164-follow-up opens) |
 | `perf(paroquant): compile-fuse the GatedDelta decay gate chain` | One compiled kernel for the 6-kernel elementwise g chain per GDN layer per step (bitwise-identical); +3.1% MoE decode, +1.4% dense decode at ctx=128 (tesseract experiments-ledger E2) | Not filed — candidate (general to all GDN models, e.g. Qwen3Next) |
 | `perf(paroquant): simdgroup-resident rotation kernel — no CTA barriers` | 32-lane simdgroup CTAs, compile-time krot, row-major tile, float4 IO for groupSize 128; generic pre-E6b kernel restored as the fallback for other group sizes (shared `dispatchPairwiseRotation`); bitwise-identical; kernel 1.7–2× at prefill shapes; +1.8–2.5% MoE prefill, +1.3–2.1% dense prefill, +3.4–5% dense decode (tesseract experiments-ledger E6b) | Not filed — candidate (fold into #164 follow-up; also fixes the latent bf16 compile failure) |
+| `perf(qwen35): compile the MoE block during decode (C11)` | Per-instance compiled MoE block closure, decode (L==1) only; router/shared-expert/residual elementwise fuse; +3–7% MoE decode (tesseract experiments-ledger C11) | Not filed — candidate (general to Qwen3.5/3.6 MoE) |
+| `perf(qwen35): compile the GDN decode step with explicit state (C12)` | Compiled GDN decode step, conv/recurrent state as explicit I/O; +1.75% dense 128 decode, +0.94% MoE (ledger C12) | Not filed — candidate (pattern generalizes to other GDN models) |
+| `fix(qwen35): unowned captures for the compiled decode closures` | Breaks the module→closure→module retain cycle C11/C12 shipped — the cycle leaked each block, its weights, and the compiled mlx tape on every model release; + `Qwen35CompiledDecodeLifecycleTests` red/green regression test (2026-07-24 review round, tesseract PR #425 follow-up) | Travels with C11/C12 if filed |
 
 The three perf carries above (E1/E2/E6b) are queued for one batched
 upstream PR folded into the #164 follow-up; filing deferred pending owner
-go-ahead (2026-07-23 review round, tesseract PR #424).
+go-ahead (2026-07-23 review round, tesseract PR #424). The pin-branch
+history also carries one `chore: pin mlx-swift to <rev>` commit per
+accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round) —
+lockstep bookkeeping, never upstream.
 
 ## Contributed back
 

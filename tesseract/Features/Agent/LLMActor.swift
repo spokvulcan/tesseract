@@ -110,15 +110,6 @@ actor LLMActor {
                 + "format=\(format.map { "\($0)" } ?? "json (default)")"
         )
 
-        // C7: per-model Metal commit policy. MoE decode is boundary-limited
-        // (GPU busy either way) so the relaxed 200 MB input cap collapses
-        // commit-boundary drains (~+6% MoE decode TPS measured); dense decode
-        // is starvation-limited and keeps the balanced 100 MB cap (C4/v3
-        // regressed dense 32K at 200 MB). Commit points are scheduling
-        // boundaries only — results are commit-point invariant. Set on every
-        // load so switching MoE↔dense in one session restores the right leg.
-        GPU.setCommitLimits(maxMBPerBuffer: identity.isMoE ? 200 : 100)
-
         if let ssdConfig {
             Log.agent.info(
                 "prefix-cache ssd enabled=\(ssdConfig.enabled) "
@@ -529,6 +520,11 @@ actor LLMActor {
         modelContainer = nil
         agentTokenizer = nil
         serverCompletion = nil
+        // No model resident — restore the balanced commit policy so later
+        // MLX work (TTS bursts, the next load's warmup) doesn't inherit a
+        // MoE-tuned leg. Scheduling-only either way; this keeps the global
+        // state accounted for.
+        GPU.setCommitLimits(maxMBPerBuffer: 100)
     }
 
     /// Cancel-and-await the active **Server Completion**, leaving the model
@@ -735,6 +731,19 @@ actor LLMActor {
                 + "headroomBytes=\(Defaults.prefixCacheHeadroomBytes) "
                 + "budgetBytes=\(prefixCacheBudgetBytes)"
         )
+        // C7: per-model Metal commit policy. MoE decode is boundary-limited
+        // (GPU busy either way) so the relaxed 200 input cap collapses
+        // commit-boundary drains (~+6% MoE decode TPS measured); dense decode
+        // is starvation-limited and keeps the balanced 100 cap (C4/v3
+        // regressed dense 32K at 200). Commit points are scheduling
+        // boundaries only — results are commit-point invariant. Applied at
+        // the store point so a failed load leaves the policy matching the
+        // still-resident previous model, and every successful load —
+        // including MoE↔dense switches — installs its own leg. The policy is
+        // process-global: co-resident MLX work (TTS under its own GPU lease)
+        // runs under the resident LLM's caps, which is scheduling-only;
+        // `unloadModel` restores the balanced default.
+        GPU.setCommitLimits(maxMBPerBuffer: identity.isMoE ? 200 : 100)
         modelContainer = container
         agentTokenizer = tokenizer
         ensureServerCompletion().installLoadedModelFacts(
