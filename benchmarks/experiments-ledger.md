@@ -903,6 +903,18 @@ needed for the verdict). Ported @ `spokvulcan/mlx` **595a3fe1**,
 mlx-swift pin **0b3289cb**, mlx-swift-lm pin **b5eb5ef**; checkout
 re-sync verified `diff fbf2fb86 == C4..C8` exactly, no local mods.
 
+**M8 — expert-weight prefetch — REJECTED at probe (routing locality
+does not exist).** Instrumented `Qwen35SparseMoeBlock` with a
+throwaway capture hook (TESS_PROBE_ROUTING; per-layer top-k indices
+held lazily, evaluated off the hot path) and measured consecutive-token
+expert-set overlap on a real 256-token decode (MoE 35B-A3B, 128 ctx):
+**mean overlap 2.4/8, median 2.48/8, exact-set rate ≈ 0.0** across all
+40 MoE layers (min layer 0.63/8). A previous-token prefetch would warm
+~70% wrong weights — pure wasted bandwidth on a bus that is already
+the decode bottleneck. No kernel work built; probe reverted, tree
+clean. Do not re-probe without a different prediction signal (router
+logits trajectory, not set identity).
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -935,14 +947,12 @@ re-sync verified `diff fbf2fb86 == C4..C8` exactly, no local mods.
   context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
   only when the signal is inside the noise floor (32K decode/prefill
   almost always are — never verdict a 32K metric on one run).
-- **Next (C8+):** eval_impl tape machinery = the C++ whale: ~530
-  recoverable gen-thread samples of 2862 (DFS degree pass + BFS tape
-  build + tape-loop bookkeeping + detach; wait_for_one 576 is GPU
-  backpressure, not work). Compiled-step push investigated and
-  DEPRIORITIZED: `compile_replace` rebuilds the full tape per call
-  (O(tape) allocs), so no_fuse replay buys little, and fused replay
-  changes elementwise rounding → fails the token-identical gate by
-  design. Per-cbuf boundary residual measured small (recoverable <1%:
-  end_encoding 42 + commit 48 + get_command_encoder 80 samples, mostly
-  Metal driver `commit()`/encoder-ctor). M5 (attention fallback tail),
-  M4 (fused rotate+GEMM), M8 (expert prefetch probe).
+- **Next (C9+):** M8 REJECTED at probe (expert overlap 2.4/8 — see
+  entry). M5 (attention fallback tail — head_dim 256 blocks sdpa_full,
+  prefill runs the unfused fallback: scale-mul + bool-mask + where +
+  softmax + 2 GEMMs over [B,H,1024,S] scores ≈ 6 full passes; fuse
+  mask-materialize+where into one kernel = ~1% prefill, softmax stays
+  the primitive so bits are trivially preserved), M4 (fused
+  rotate+dequant+GEMM, ~3-4% prefill, high risk — parity gate
+  arbitrates), M6 (tokenizer, TTFT, deprioritized — 1% of TTFT at 32K),
+  M7 deprioritized.
