@@ -81,10 +81,16 @@ small.
 
 Post-C1 the gather_qmm kernel sits at ~40–50% of the dense-qmm anchor
 (occupancy-limited at production B/E=32, not bandwidth-limited — C1
-evidence). A different algorithm shape (persistent CTAs, different
+evidence). NB: the C1 ledger entry also records "the winner reaches 96%
+of the anchor" from the same sweep — the two readings are at different
+points (the 96% is the best-case large-B/E end, the 40–50% is the
+production-shape point), but the entry does not pin the B/E of each.
+**Re-establish the production-shape anchor ratio in the probe rig first**
+— if the kernel is already near the anchor at B/E=32, this whole item is
+dead. A different algorithm shape (persistent CTAs, different
 rows-per-expert mapping) within the SAME per-element K-accumulation
 order is the only legal axis (split-K changes rounding → dead). Probe
-in `/tmp/gather-sweep` before any app work. +2–4% prefill if a
+in `benchmarks/gather-sweep` before any app work. +2–4% prefill if a
 geometry exists; unknown probability.
 
 ### 6. Speculative decoding for the dense model — big but needs a draft
@@ -100,6 +106,16 @@ model (out of zero-loss scope).
 
 0.29 s tokenize at 32K (~1% of TTFT there; seconds at 100K+). Encode-loop
 optimization in swift-transformers. Deprioritized.
+
+### 8. C6 hit path still copies the cached kernel source — micro, own A/B
+
+The custom-kernel memo returns (kernel_name, kernel_source) by value on
+every hit: multi-KB string copies per GDN-layer call that then move into
+the CustomKernel primitive. Eliminating them means CustomKernel holding
+`shared_ptr<const string>` members — a primitive-surface refactor, so it
+needs its own measured iteration (deliberately NOT folded into the
+2026-07-24 review-fix batch). Expected ≲1% decode; post-C10 rules say
+spread-out CPU cuts may not convert — measure before believing.
 
 ## Dead ends (evidence in the ledger — do not retry)
 

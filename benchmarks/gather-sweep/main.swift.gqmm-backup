@@ -1,0 +1,326 @@
+import Foundation
+import MLX
+
+// M1 probe: gather_qmm_rhs tile-geometry sweep at the production 35B MoE
+// shapes (E=256, N=512, K=2048, 4-bit, gs=128), sorted-rhs fast path.
+// Tile configs are selected per dispatch via MLX_GQMM_CFG (probe-only env
+// hook in quantized.cpp). ABBA-interleaved within one process; bitwise gate
+// vs the stock config (16,32,32,1,2) for every candidate at every B/E.
+
+let E = 256
+let N = 512
+let K = 2048
+let gs = 128
+let bits = 4
+
+// === C4: CPU dispatch-cost attribution (M9) ===
+// Enqueue-only decode workload: batches of ~1900 gather_qmv calls (≈ one MoE
+// decode token's kernel count) + one eval + one sync per batch, matching the
+// production decode step structure. Prints per-call graph-build and
+// eval-enqueue CPU cost, then holds a ~25 s window for `sample`.
+func runC4() {
+    let E = 256, N2 = 512, K2 = 2048, gs = 128, bits = 4, topK = 8
+    let wFull = MLXRandom.normal([E, N2, K2], type: Float16.self)
+    let (wq, sc, bi) = MLX.quantized(wFull, groupSize: gs, bits: bits)
+    let x = MLXRandom.normal([1, 1, K2], type: Float16.self)
+    // 32 disjoint expert sets — cold weight reads like production decode.
+    let idxSets: [MLXArray] = (0 ..< 32).map { s in
+        MLXArray((0 ..< topK).map { UInt32((s * topK + $0) % E) })
+    }
+    eval(wq, sc, x)
+    for s in idxSets { eval(s) }
+    func call(_ i: Int) -> MLXArray {
+        MLX.gatherQuantizedMM(x, wq, scales: sc, biases: bi, rhsIndices: idxSets[i % 32],
+                              transpose: true, groupSize: gs, bits: bits, sortedIndices: false)
+    }
+    do {  // pipeline warm
+        var outs: [MLXArray] = []
+        for j in 0 ..< 64 { outs.append(call(j)) }
+        eval(outs)
+        _ = outs.last!.sum().item(Float.self)
+    }
+    let batch = 1900
+    var build: [Double] = [], enq: [Double] = []
+    for _ in 0 ..< 6 {
+        var outs: [MLXArray] = []
+        outs.reserveCapacity(batch)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        for j in 0 ..< batch { outs.append(call(j)) }
+        let t1 = CFAbsoluteTimeGetCurrent()
+        eval(outs)
+        let t2 = CFAbsoluteTimeGetCurrent()
+        _ = outs.last!.sum().item(Float.self)
+        build.append((t1 - t0) / Double(batch))
+        enq.append((t2 - t1) / Double(batch))
+    }
+    let med = { (v: [Double]) in v.sorted()[v.count / 2] }
+    print(String(format: "C4 graph-build %.2f us/call, eval-enqueue %.2f us/call (batch=%d)",
+                 med(build) * 1e6, med(enq) * 1e6, batch))
+    print("C4 SAMPLING WINDOW OPEN pid=\(getpid())")
+    fflush(stdout)
+    var sink: Float = 0
+    let deadline = CFAbsoluteTimeGetCurrent() + 25
+    var n = 0
+    while CFAbsoluteTimeGetCurrent() < deadline {
+        var outs: [MLXArray] = []
+        outs.reserveCapacity(batch)
+        for j in 0 ..< batch { outs.append(call(j)) }
+        eval(outs)
+        sink += outs.last!.sum().item(Float.self)
+        n += 1
+    }
+    print("C4 SAMPLING WINDOW CLOSED batches=\(n) sink=\(sink)")
+}
+
+if CommandLine.arguments.contains("c4") {
+    runC4()
+    exit(0)
+}
+
+let cfgs = [
+    "16,32,32,1,2",  // stock (baseline)
+    "32,32,32,2,2",  // dense-qmm geometry
+    "32,64,32,2,2",  // wide N tile
+    "32,32,32,1,2",  // tall M per thread, 64 threads
+    "32,64,32,1,2",  // wide N + tall M, 64 threads
+    "64,64,32,2,2",  // large tile
+]
+let rpes = [4, 8, 16, 24, 32, 64, 128]
+
+func gatherCall(_ x: MLXArray, _ wq: MLXArray, _ sc: MLXArray, _ bi: MLXArray?,
+                _ idx: MLXArray) -> MLXArray {
+    MLX.gatherQuantizedMM(
+        x, wq, scales: sc, biases: bi,
+        rhsIndices: idx,
+        transpose: true, groupSize: gs, bits: bits,
+        sortedIndices: true)
+}
+
+func flops(_ B: Int) -> Double { 2.0 * Double(B) * Double(N) * Double(K) }
+
+func timeCfg(_ cfg: String, reps: Int, x: MLXArray, _ wq: MLXArray, _ sc: MLXArray,
+             _ bi: MLXArray?, _ idx: MLXArray, B: Int) -> Double {
+    setenv("MLX_GQMM_CFG", cfg, 1)
+    var y = gatherCall(x, wq, sc, bi, idx)
+    eval(y)  // pipeline/warm
+    let t0 = CFAbsoluteTimeGetCurrent()
+    for _ in 0 ..< reps {
+        y = gatherCall(x, wq, sc, bi, idx)
+        eval(y)
+    }
+    _ = y.sum().item(Float.self)  // sync
+    let dt = CFAbsoluteTimeGetCurrent() - t0
+    return dt / Double(reps)
+}
+
+func bitwiseCheck(_ cfg: String, x: MLXArray, _ wq: MLXArray, _ sc: MLXArray,
+                  _ bi: MLXArray?, _ idx: MLXArray) -> (Bool, Float) {
+    setenv("MLX_GQMM_CFG", "16,32,32,1,2", 1)
+    let ref = gatherCall(x, wq, sc, bi, idx)
+    eval(ref)
+    setenv("MLX_GQMM_CFG", cfg, 1)
+    let out = gatherCall(x, wq, sc, bi, idx)
+    eval(out)
+    let eq = (ref .== out).all().item(Bool.self)
+    let mad = abs(ref - out).max().item(Float.self)
+    return (eq, mad)
+}
+
+// Weights: quantize real f16 matrices for realistic scale/bias payloads.
+let wFull = MLXRandom.normal([E, N, K], type: Float16.self)
+let (wq, sc, biOpt) = MLX.quantized(wFull, groupSize: gs, bits: bits)
+eval(wq, sc)
+if let bi = biOpt { eval(bi) }
+
+// Harness fidelity: stock config, both dtypes, B/E=32 — expect ≈ E4's
+// 5.14 TFLOP/s (bf16 probe) before trusting any comparison.
+print("== fidelity: stock cfg, B/E=32 ==")
+for dt in ["f16", "bf16"] {
+    let rpe = 32
+    let B = E * rpe
+    let x0 = MLXRandom.normal([B, 1, K], type: Float16.self)
+    let x = dt == "bf16" ? x0.asType(.bfloat16) : x0
+    let idx = MLXArray((0 ..< B).map { UInt32($0 / rpe) })
+    eval(x, idx)
+    let t = timeCfg("16,32,32,1,2", reps: 100, x: x, wq, sc, biOpt, idx, B: B)
+    print(String(format: "%@ stock: %.3f ms  %.2f TFLOP/s", dt, t * 1e3, flops(B) / t / 1e12))
+}
+
+print("== sweep (f16) ==")
+print("rpe,cfg,ms,tflops,vs_stock,bitwise,maxAbsDiff")
+for rpe in rpes {
+    let B = E * rpe
+    let x = MLXRandom.normal([B, 1, K], type: Float16.self)
+    let idx = MLXArray((0 ..< B).map { UInt32($0 / rpe) })
+    eval(x, idx)
+    let reps = max(30, Int(0.9 / (flops(B) / 5e12)))
+    // bitwise gates first (untimed)
+    var gates: [String] = []
+    for cfg in cfgs where cfg != cfgs[0] {
+        let (eq, mad) = bitwiseCheck(cfg, x: x, wq, sc, biOpt, idx)
+        gates.append(String(format: "%@:%@/%.1g", cfg, eq ? "IDENT" : "DIFF", mad))
+    }
+    // ABBA-interleaved timing: [0..n,n..0]
+    var acc: [String: [Double]] = [:]
+    for cfg in cfgs { acc[cfg] = [] }
+    let order = Array(0 ..< cfgs.count) + Array((0 ..< cfgs.count).reversed())
+    for i in order {
+        let cfg = cfgs[i]
+        let t = timeCfg(cfg, reps: reps, x: x, wq, sc, biOpt, idx, B: B)
+        acc[cfg]!.append(t)
+    }
+    let mean = { (v: [Double]) in v.reduce(0, +) / Double(v.count) }
+    let stockMs = mean(acc[cfgs[0]]!)
+    for (ci, cfg) in cfgs.enumerated() {
+        let ms = mean(acc[cfg]!)
+        let gate = ci == 0 ? "" : gates[ci - 1]
+        print("\(rpe),\(cfg),\(String(format: "%.4f", ms * 1e3)),\(String(format: "%.3f", flops(B) / ms / 1e12)),\(String(format: "%.3f", stockMs / ms)),,\(gate)")
+    }
+    fflush(stdout)
+}
+
+// Dense anchor: quantizedMM at the same total FLOPs (E4's 7.41 TFLOP/s).
+print("== dense anchor (f16) ==")
+let wD = MLXRandom.normal([N, K], type: Float16.self)
+let (wqD, scD, biD) = MLX.quantized(wD, groupSize: gs, bits: bits)
+eval(wqD, scD)
+for rpe in [32, 128] {
+    let B = E * rpe
+    let x2 = MLXRandom.normal([B, K], type: Float16.self)
+    eval(x2)
+    var y = MLX.quantizedMM(x2, wqD, scales: scD, biases: biD, transpose: true, groupSize: gs, bits: bits)
+    eval(y)
+    let reps = max(20, Int(0.6 / (flops(B) / 7e12)))
+    let t0 = CFAbsoluteTimeGetCurrent()
+    for _ in 0 ..< reps {
+        y = MLX.quantizedMM(x2, wqD, scales: scD, biases: biD, transpose: true, groupSize: gs, bits: bits)
+        eval(y)
+    }
+    _ = y.sum().item(Float.self)
+    let dt = (CFAbsoluteTimeGetCurrent() - t0) / Double(reps)
+    print(String(format: "dense B=%d: %.3f ms  %.2f TFLOP/s", B, dt * 1e3, flops(B) / dt / 1e12))
+}
+
+// down_proj shape (N=2048, K=512) at production rpe=32 — the third expert
+// QMM; the winner must not regress there.
+print("== down_proj shape N=2048 K=512, rpe=32 (f16) ==")
+do {
+    let N2 = 2048, K2 = 512, rpe = 32, B = E * rpe
+    let wFull2 = MLXRandom.normal([E, N2, K2], type: Float16.self)
+    let (wq2, sc2, bi2) = MLX.quantized(wFull2, groupSize: gs, bits: bits)
+    let x = MLXRandom.normal([B, 1, K2], type: Float16.self)
+    let idx = MLXArray((0 ..< B).map { UInt32($0 / rpe) })
+    eval(wq2, sc2, x, idx)
+    func gather2() -> MLXArray {
+        MLX.gatherQuantizedMM(x, wq2, scales: sc2, biases: bi2, rhsIndices: idx,
+                              transpose: true, groupSize: gs, bits: bits, sortedIndices: true)
+    }
+    var acc: [String: [Double]] = [:]
+    for cfg in cfgs { acc[cfg] = [] }
+    let order = Array(0 ..< cfgs.count) + Array((0 ..< cfgs.count).reversed())
+    // bitwise gates
+    setenv("MLX_GQMM_CFG", cfgs[0], 1)
+    let ref = gather2(); eval(ref)
+    var gateBad = false
+    for cfg in cfgs where cfg != cfgs[0] {
+        setenv("MLX_GQMM_CFG", cfg, 1)
+        let out = gather2(); eval(out)
+        if !(ref .== out).all().item(Bool.self) { gateBad = true; print("DIFF at \(cfg)") }
+    }
+    print("gates: \(gateBad ? "FAIL" : "all IDENT")")
+    let reps = 100
+    for i in order {
+        let cfg = cfgs[i]
+        setenv("MLX_GQMM_CFG", cfg, 1)
+        var y = gather2(); eval(y)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        for _ in 0 ..< reps { y = gather2(); eval(y) }
+        _ = y.sum().item(Float.self)
+        acc[cfg]!.append((CFAbsoluteTimeGetCurrent() - t0) / Double(reps))
+    }
+    let mean = { (v: [Double]) in v.reduce(0, +) / Double(v.count) }
+    let stockMs = mean(acc[cfgs[0]]!)
+    let fl = 2.0 * Double(B) * Double(N2) * Double(K2)
+    for cfg in cfgs {
+        let ms = mean(acc[cfg]!)
+        print("\(cfg),\(String(format: "%.4f", ms * 1e3)) ms,\(String(format: "%.3f", fl / ms / 1e12)) TF,vs_stock \(String(format: "%.3f", stockMs / ms))")
+    }
+}
+
+// === C3: gather_qmv decode-shape sweep (MLX_GQMV_RPS) ===
+// Decode MoE: x [1,1,K], rhs_indices [8] (topK experts, unsorted).
+// Stock rps=4 (bn=8). Candidates 8/16/32. Bitwise gate vs rps=4.
+print("== gather_qmv decode sweep (f16) ==")
+let rpsCfgs = ["4", "8", "16", "32"]
+func qmvSweep(N2: Int, K2: Int, label: String) {
+    let topK = 8
+    let wFull2 = MLXRandom.normal([E, N2, K2], type: Float16.self)
+    let (wq2, sc2, bi2) = MLX.quantized(wFull2, groupSize: gs, bits: bits)
+    let x = MLXRandom.normal([1, 1, K2], type: Float16.self)
+    // 32 disjoint expert sets cycling through all 256 experts — total weight
+    // footprint 32*4.2MB = 134MB >> L2, so every call reads (mostly) cold
+    // weights like production decode (E10: 88 GB/s), not cache-hot re-reads.
+    let idxSets: [MLXArray] = (0 ..< 32).map { s in
+        MLXArray((0 ..< topK).map { UInt32((s * topK + $0) % E) })
+    }
+    eval(wq2, sc2, x)
+    for s in idxSets { eval(s) }
+    func call(_ i: Int) -> MLXArray {
+        MLX.gatherQuantizedMM(x, wq2, scales: sc2, biases: bi2, rhsIndices: idxSets[i % 32],
+                              transpose: true, groupSize: gs, bits: bits, sortedIndices: false)
+    }
+    // bitwise gate vs rps=4 (set 0)
+    setenv("MLX_GQMV_RPS", "4", 1)
+    let ref = call(0); eval(ref)
+    var gateBad = false
+    for c in rpsCfgs where c != "4" {
+        setenv("MLX_GQMV_RPS", c, 1)
+        let out = call(0); eval(out)
+        if !(ref .== out).all().item(Bool.self) {
+            gateBad = true
+            let mad = abs(ref - out).max().item(Float.self)
+            print("\(label) rps=\(c): DIFF maxAbs=\(mad)")
+        }
+    }
+    print("\(label) gates: \(gateBad ? "FAIL" : "all IDENT")")
+    let reps = 2000
+    var acc: [String: [Double]] = [:]
+    for c in rpsCfgs { acc[c] = [] }
+    let order = [0, 1, 2, 3, 3, 2, 1, 0]
+    for i in order {
+        let c = rpsCfgs[i]
+        setenv("MLX_GQMV_RPS", c, 1)
+        do {  // warm: pipeline compile + prime
+            var outs: [MLXArray] = []
+            for j in 0 ..< 64 { outs.append(call(j)) }
+            eval(outs)
+        }
+        // one lazy graph of `reps` calls, single eval — measures GPU
+        // throughput, not per-call CPU dispatch (E10's sync-artifact trap:
+        // eval-per-call floors at ~220 us of CPU per 50 us kernel).
+        var outs: [MLXArray] = []
+        outs.reserveCapacity(reps)
+        let t0 = CFAbsoluteTimeGetCurrent()
+        for j in 0 ..< reps { outs.append(call(j)) }
+        let t1 = CFAbsoluteTimeGetCurrent()
+        eval(outs)
+        let t2 = CFAbsoluteTimeGetCurrent()
+        _ = outs[outs.count - 1].sum().item(Float.self)
+        let t3 = CFAbsoluteTimeGetCurrent()
+        let wall = t3 - t0
+        acc[c]!.append(wall / Double(reps))
+        if c == "4" {
+            print("\(label) rps=4 detail: graph-build \(String(format: "%.1f", (t1 - t0) * 1e3)) ms, eval-enqueue \(String(format: "%.1f", (t2 - t1) * 1e3)) ms, completion \(String(format: "%.1f", (t3 - t2) * 1e3)) ms, wall/call \(String(format: "%.1f", wall / Double(reps) * 1e6)) us")
+        }
+    }
+    let mean = { (v: [Double]) in v.reduce(0, +) / Double(v.count) }
+    let stock = mean(acc["4"]!)
+    let bytes = Double(topK * N2 * K2) / 2.0  // 4-bit weights
+    for c in rpsCfgs {
+        let t = mean(acc[c]!)
+        print("\(label) rps=\(c): \(String(format: "%.1f", t * 1e6)) us  \(String(format: "%.0f", bytes / t / 1e9)) GB/s  vs_stock \(String(format: "%.3f", stock / t))")
+    }
+    setenv("MLX_GQMV_RPS", "4", 1)
+}
+qmvSweep(N2: 512, K2: 2048, label: "gate/up N=512 K=2048")
+qmvSweep(N2: 2048, K2: 512, label: "down N=2048 K=512")

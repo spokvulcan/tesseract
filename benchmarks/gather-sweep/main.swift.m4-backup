@@ -1,0 +1,810 @@
+import Foundation
+import MLX
+
+// M4 probe: fused rotate+dequant+dot Metal kernel for the PARO decode (M=1)
+// path, vs the production two-kernel pipeline (paro_rotate_r1_k8_bfloat16 +
+// affine_qmv_fast<bfloat16_t,128,4>).
+//
+//   arm "ref":   rotation kernel (MLXFast, verbatim simdgroupMetalSource
+//                output) -> MLX.quantizedMM(transpose:true, gs:128, bits:4)
+//   arm "fused": single MLXFast kernel. Phase 1 replicates the rotation
+//                kernel's arithmetic per 128-group (2 simdgroups x 8 groups,
+//                simdgroup_barrier between rounds), rounds to bf16 into a
+//                threadgroup tile, ONE threadgroup_barrier, then the exact
+//                qmv_fast_impl body with x read from the tile.
+//
+// Bitwise risk map (verified this session):
+//   - MLXFast JIT compiles with fastMathEnabled(false)
+//     (mlx/backend/metal/device.cpp:619).
+//   - The prebuilt default.metallib (affine_qmv_fast) is built by Xcode with
+//     MTL_FAST_MATH = YES (tesseract.xcodeproj/project.pbxproj:380,441).
+//   => phase 1 is JIT-vs-JIT (same flags, same expressions): likely equal.
+//      phase 2 is JIT(fastmath-off)-vs-metallib(fastmath-on): the risk.
+//   Variants: p1v = rotation store expr, p2v = qdot tail expr.
+
+let KROT = 8
+let GS = 128
+let BITS = 4
+
+// MARK: - Deterministic RNG for pair generation
+
+struct SplitMix64 {
+    var state: UInt64
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+/// packed_pairs layout expected by the rotation kernel:
+/// [krot, half_hidden] int32, index k*half_hidden + g*half_gs + slot,
+/// slot t of group g holds perm_g[2t] | (perm_g[2t+1] << 16) where perm_g is
+/// a permutation of 0..<128 (each round partitions the group's channels).
+func makePackedPairs(krot: Int, numGroups: Int, gs: Int, seed: UInt64) -> MLXArray {
+    var rng = SplitMix64(state: seed)
+    let half = gs / 2
+    var out = [Int32](repeating: 0, count: krot * numGroups * half)
+    var perm = [Int](0 ..< gs)
+    for k in 0 ..< krot {
+        for g in 0 ..< numGroups {
+            for i in stride(from: gs - 1, through: 1, by: -1) {
+                let j = Int(rng.next() % UInt64(i + 1))
+                perm.swapAt(i, j)
+            }
+            for t in 0 ..< half {
+                out[k * numGroups * half + g * half + t] =
+                    Int32(perm[2 * t] | (perm[2 * t + 1] << 16))
+            }
+        }
+    }
+    return MLXArray(out, [krot, numGroups * half])
+}
+
+// MARK: - Reference rotation kernel source
+// Verbatim output of simdgroupMetalSource(rowsPerTile: 1, krot: 8,
+// elementType: "bfloat16_t", elementType4: "bfloat4") from
+// Vendor/mlx-swift-lm/.../ParoQuant/PairwiseRotation.swift.
+
+let rotationRefSource = """
+    constexpr int ROWS_PER_TILE = 1;
+    constexpr int KROT          = 8;
+
+    const int batch_size  = params[0];
+    const int hidden_size = params[1];
+    const int group_size  = params[3];
+
+    const int half_gs     = group_size / 2;
+    const int half_hidden = hidden_size / 2;
+
+    const int tile_idx  = threadgroup_position_in_grid.x;
+    const int group_idx = threadgroup_position_in_grid.y;
+    const int lane      = thread_index_in_threadgroup;
+    const int gbase     = group_idx * group_size;
+
+    // Rotation coefficients for this lane's two pair slots of every round
+    float cos_vals[KROT][2], sin_vals[KROT][2];
+    int   pair_vals[KROT][2];
+
+    for (int k = 0; k < KROT; k++) {
+        for (int u = 0; u < 2; u++) {
+            int idx = k * half_hidden + group_idx * half_gs + lane + u * 32;
+            cos_vals[k][u]  = float(cos_theta[idx]);
+            sin_vals[k][u]  = float(sin_theta[idx]);
+            pair_vals[k][u] = int(packed_pairs[idx]);
+        }
+    }
+
+    threadgroup float tile[ROWS_PER_TILE * 128];
+
+    // Load activation tile into shared memory (fuse channel scales).
+    // Lane owns channels lane*4 .. lane*4+3 of the group.
+    float sc0 = float(channel_scales[gbase + lane * 4 + 0]);
+    float sc1 = float(channel_scales[gbase + lane * 4 + 1]);
+    float sc2 = float(channel_scales[gbase + lane * 4 + 2]);
+    float sc3 = float(channel_scales[gbase + lane * 4 + 3]);
+    for (int r = 0; r < ROWS_PER_TILE; r++) {
+        int row = tile_idx * ROWS_PER_TILE + r;
+        if (row < batch_size) {
+            bfloat4 xh = ((const device bfloat4*)(x + row * hidden_size + gbase))[lane];
+            float4 tv;
+            tv[0] = float(xh[0]) * sc0;
+            tv[1] = float(xh[1]) * sc1;
+            tv[2] = float(xh[2]) * sc2;
+            tv[3] = float(xh[3]) * sc3;
+            *(threadgroup float4*)(tile + r * 128 + lane * 4) = tv;
+        }
+    }
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Apply pairwise Givens rotations in-place
+    for (int k = 0; k < KROT; k++) {
+        for (int u = 0; u < 2; u++) {
+            int i_local = pair_vals[k][u] & 0xFFFF;
+            int j_local = pair_vals[k][u] >> 16;
+            float c = cos_vals[k][u], s = sin_vals[k][u];
+            for (int m = 0; m < ROWS_PER_TILE; m++) {
+                float a = tile[m * 128 + i_local];
+                float b = tile[m * 128 + j_local];
+                tile[m * 128 + i_local] = a * c + b * s;
+                tile[m * 128 + j_local] = b * c - a * s;
+            }
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    // Write results back
+    for (int r = 0; r < ROWS_PER_TILE; r++) {
+        int row = tile_idx * ROWS_PER_TILE + r;
+        if (row < batch_size) {
+            float4 tv = *(threadgroup float4*)(tile + r * 128 + lane * 4);
+            bfloat4 ov;
+            ov[0] = bfloat16_t(tv[0]);
+            ov[1] = bfloat16_t(tv[1]);
+            ov[2] = bfloat16_t(tv[2]);
+            ov[3] = bfloat16_t(tv[3]);
+            *(device bfloat4*)(out + row * hidden_size + gbase + lane * 4) = ov;
+        }
+    }
+    """
+
+// MARK: - Fused kernel sources
+//
+// Phase-2 helpers are copied from Cmlx quantized.h (affine_qmv_fast path,
+// T=bfloat16_t, U=float, group_size=128, bits=4): pack_factor=8,
+// bytes_per_pack=4, values_per_thread=16, block_size=512,
+// scale_step_per_thread=8, num_simdgroups=2, results_per_simdgroup=4.
+// Only two deviations from the verbatim text: load_vector gets a threadgroup
+// variant for the rotated tile, and the template noise is removed. All
+// arithmetic expressions are character-identical.
+
+func fusedHeader(p2v: Int) -> String {
+    let qdotReturn: String
+    switch p2v {
+    case 2: qdotReturn = "return fma(scale, accum, sum * bias);"
+    case 3: qdotReturn = "return fma(sum, bias, scale * accum);"
+    default: qdotReturn = "return scale * accum + sum * bias;"
+    }
+    return """
+        // load_vector<T=bfloat16_t, U=float, values_per_thread=16, bits=4>
+        // (quantized.h) with x in threadgroup address space.
+        inline float load_vector_tg(const threadgroup bfloat16_t* x, thread float* x_thread) {
+          float sum = 0;
+          for (int i = 0; i < 16; i += 4) {
+            sum += x[i] + x[i + 1] + x[i + 2] + x[i + 3];
+            x_thread[i] = x[i];
+            x_thread[i + 1] = x[i + 1] / 16.0f;
+            x_thread[i + 2] = x[i + 2] / 256.0f;
+            x_thread[i + 3] = x[i + 3] / 4096.0f;
+          }
+          return sum;
+        }
+        // Same body, original device address space (clone/isolation mode).
+        inline float load_vector_dev(const device bfloat16_t* x, thread float* x_thread) {
+          float sum = 0;
+          for (int i = 0; i < 16; i += 4) {
+            sum += x[i] + x[i + 1] + x[i + 2] + x[i + 3];
+            x_thread[i] = x[i];
+            x_thread[i + 1] = x[i + 1] / 16.0f;
+            x_thread[i + 2] = x[i + 2] / 256.0f;
+            x_thread[i + 3] = x[i + 3] / 4096.0f;
+          }
+          return sum;
+        }
+        // qdot<U=float, values_per_thread=16, bits=4> (quantized.h)
+        inline float qdot4(
+            const device uint8_t* w,
+            const thread float* x_thread,
+            float scale,
+            float bias,
+            float sum) {
+          float accum = 0;
+          const device uint16_t* ws = (const device uint16_t*)w;
+          for (int i = 0; i < 4; i++) {
+            accum +=
+                (x_thread[4 * i] * (ws[i] & 0x000f) +
+                 x_thread[4 * i + 1] * (ws[i] & 0x00f0) +
+                 x_thread[4 * i + 2] * (ws[i] & 0x0f00) +
+                 x_thread[4 * i + 3] * (ws[i] & 0xf000));
+          }
+          \(qdotReturn)
+        }
+        """
+}
+
+/// Rotation store expressions (p1v). v1 = verbatim standalone kernel,
+/// v2 = fma-contracted, v3 = forced separate temporaries.
+func rotStores(p1v: Int) -> String {
+    switch p1v {
+    case 2:
+        return """
+                        tile[i_local] = fma(a, c, b * s);
+                        tile[j_local] = fma(b, c, -(a * s));
+            """
+    case 3:
+        return """
+                        float ac = a * c; float bs = b * s;
+                        tile[i_local] = ac + bs;
+                        float bc = b * c; float as_ = a * s;
+                        tile[j_local] = bc - as_;
+            """
+    default:
+        return """
+                        tile[i_local] = a * c + b * s;
+                        tile[j_local] = b * c - a * s;
+            """
+    }
+}
+
+/// Fused kernel body. mode 0 = full fused (rotate + qmv), mode 1 = clone
+/// (qmv only, x from device - isolates phase 2), mode 2 = rotate only with
+/// the fused 2-simdgroup layout (isolates phase 1).
+func fusedBody(K: Int, p1v: Int, mode: Int, rps: Int = 4) -> String {
+    let numGroups = K / GS
+    let groupsPerSimd = numGroups / 2
+    let phase1 = """
+        // ---- phase 1: pairwise rotation, arithmetic identical to
+        // paro_rotate_r1_k8_bfloat16; simdgroup s handles groups
+        // [s*G, (s+1)*G). Same per-lane coefficient caching, same f32
+        // expressions, same simdgroup barriers, same bf16 rounding.
+        constexpr int KHID = \(K);
+        constexpr int KROTV = \(KROT);
+        constexpr int GSV = \(GS);
+        constexpr int HALF_HIDDENV = KHID / 2;
+        constexpr int GROUPS_PER_SIMD = \(groupsPerSimd);
+
+        const uint lane_u = thread_index_in_simdgroup;
+        const uint sgid = simdgroup_index_in_threadgroup;
+        const int lane = int(lane_u);
+
+        threadgroup float stage[2 * 128];
+        threadgroup bfloat16_t xrot[KHID];
+
+        for (int g = 0; g < GROUPS_PER_SIMD; g++) {
+            const int group_idx = int(sgid) * GROUPS_PER_SIMD + g;
+            const int gbase = group_idx * GSV;
+
+            float cos_vals[KROTV][2], sin_vals[KROTV][2];
+            int   pair_vals[KROTV][2];
+
+            for (int k = 0; k < KROTV; k++) {
+                for (int u = 0; u < 2; u++) {
+                    int idx = k * HALF_HIDDENV + group_idx * (GSV / 2) + lane + u * 32;
+                    cos_vals[k][u]  = float(cos_theta[idx]);
+                    sin_vals[k][u]  = float(sin_theta[idx]);
+                    pair_vals[k][u] = int(packed_pairs[idx]);
+                }
+            }
+
+            threadgroup float* tile = stage + sgid * 128;
+
+            float sc0 = float(channel_scales[gbase + lane * 4 + 0]);
+            float sc1 = float(channel_scales[gbase + lane * 4 + 1]);
+            float sc2 = float(channel_scales[gbase + lane * 4 + 2]);
+            float sc3 = float(channel_scales[gbase + lane * 4 + 3]);
+            {
+                bfloat4 xh = ((const device bfloat4*)(x + gbase))[lane];
+                float4 tv;
+                tv[0] = float(xh[0]) * sc0;
+                tv[1] = float(xh[1]) * sc1;
+                tv[2] = float(xh[2]) * sc2;
+                tv[3] = float(xh[3]) * sc3;
+                *(threadgroup float4*)(tile + lane * 4) = tv;
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            for (int k = 0; k < KROTV; k++) {
+                for (int u = 0; u < 2; u++) {
+                    int i_local = pair_vals[k][u] & 0xFFFF;
+                    int j_local = pair_vals[k][u] >> 16;
+                    float c = cos_vals[k][u], s = sin_vals[k][u];
+                    float a = tile[i_local];
+                    float b = tile[j_local];
+        \(rotStores(p1v: p1v))
+                }
+                simdgroup_barrier(mem_flags::mem_threadgroup);
+            }
+
+            {
+                float4 tv = *(threadgroup float4*)(tile + lane * 4);
+                bfloat4 ov;
+                ov[0] = bfloat16_t(tv[0]);
+                ov[1] = bfloat16_t(tv[1]);
+                ov[2] = bfloat16_t(tv[2]);
+                ov[3] = bfloat16_t(tv[3]);
+        \(mode == 2
+            ? "        *(device bfloat4*)(y + gbase + lane * 4) = ov;"
+            : "        *(threadgroup bfloat4*)(xrot + gbase + lane * 4) = ov;")
+            }
+        }
+        """
+
+    if mode == 2 { return phase1 }
+
+    let xSetup =
+        mode == 1
+        ? "const device bfloat16_t* xp = x + lane2 * 16;"
+        : """
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        const threadgroup bfloat16_t* xp = xrot + lane2 * 16;
+        """
+    let loadCall = mode == 1 ? "load_vector_dev(xp, x_thread)" : "load_vector_tg(xp, x_thread)"
+    let phase1Part = mode == 1 ? "" : phase1 + "\n"
+
+    return """
+        \(phase1Part)\
+        // ---- phase 2: qmv_fast_impl<bfloat16_t, 128, 4> verbatim body,
+        // x from \(mode == 1 ? "device (clone)" : "the threadgroup tile").
+        // in_vec_size=KHID, out_vec_size=N (grid y covers N/(2*RPS)), tid.x=0.
+        // RPS=results_per_simdgroup: per-row arithmetic is RPS-independent
+        // (same lane->data mapping, same simd_sum tree), so RPS != 4 stays
+        // bitwise-identical to the production rps=4 kernel while amortising
+        // the redundant phase-1 rotation over 2*RPS rows per threadgroup.
+        {
+            const uint lane_u2 = \(mode == 1 ? "thread_index_in_simdgroup" : "lane_u");
+            const uint sgid2 = \(mode == 1 ? "simdgroup_index_in_threadgroup" : "sgid");
+            const int lane2 = int(lane_u2);
+            constexpr int RPS = \(rps);
+            constexpr int in_vec_size_w = \(K) * 4 / 8;   // K * bytes_per_pack / pack_factor
+            constexpr int in_vec_size_g = \(K) / \(GS);   // K / group_size
+
+            const int out_row = int(threadgroup_position_in_grid.y) * (2 * RPS) + int(sgid2) * RPS;
+
+            const device uint8_t* ws = (const device uint8_t*)w;
+            const device bfloat16_t* scales_p = scales;
+            const device bfloat16_t* biases_p = biases;
+            device bfloat16_t* yp = y;
+
+            thread float x_thread[16];
+            thread float result[RPS] = {0};
+
+            ws += out_row * in_vec_size_w + lane2 * 2 * 4;
+            scales_p += out_row * in_vec_size_g + lane2 / 8;
+            biases_p += out_row * in_vec_size_g + lane2 / 8;
+            \(xSetup)
+            yp += out_row;
+
+            for (int k = 0; k < \(K); k += 512) {
+                float sum = \(loadCall);
+
+                for (int row = 0; row < RPS; row++) {
+                    const device uint8_t* wl = ws + row * in_vec_size_w;
+                    const device bfloat16_t* sl = scales_p + row * in_vec_size_g;
+                    const device bfloat16_t* bl = biases_p + row * in_vec_size_g;
+
+                    float s = sl[0];
+                    float b = bl[0];
+                    result[row] += qdot4(wl, x_thread, s, b, sum);
+                }
+
+                ws += 512 * 4 / 8;
+                scales_p += 512 / \(GS);
+                biases_p += 512 / \(GS);
+                xp += 512;
+            }
+
+            for (int row = 0; row < RPS; row++) {
+                result[row] = simd_sum(result[row]);
+                if (lane2 == 0) {
+                    yp[row] = static_cast<bfloat16_t>(result[row]);
+                }
+            }
+        }
+        """
+}
+
+// MARK: - Kernel construction
+
+func makeRotationKernel() -> MLXFast.MLXFastKernel {
+    MLXFast.metalKernel(
+        name: "paro_rotate_ref_r1_k8_bf16",
+        inputNames: ["x", "packed_pairs", "cos_theta", "sin_theta", "channel_scales", "params"],
+        outputNames: ["out"],
+        source: rotationRefSource)
+}
+
+func makeFusedKernel(K: Int, p1v: Int, p2v: Int, mode: Int, rps: Int = 4) -> MLXFast.MLXFastKernel {
+    MLXFast.metalKernel(
+        name: "m4_K\(K)_p1v\(p1v)_p2v\(p2v)_m\(mode)_rps\(rps)",
+        inputNames: [
+            "x", "packed_pairs", "cos_theta", "sin_theta", "channel_scales",
+            "w", "scales", "biases",
+        ],
+        outputNames: ["y"],
+        source: fusedBody(K: K, p1v: p1v, mode: mode, rps: rps),
+        header: fusedHeader(p2v: p2v))
+}
+
+// MARK: - Probe data
+
+struct ProbeData {
+    let x: MLXArray
+    let pairs: MLXArray
+    let cosT: MLXArray
+    let sinT: MLXArray
+    let chScales: MLXArray
+    let paramsArr: MLXArray
+    let K: Int
+}
+
+func genProbeData(seed: UInt64, K: Int) -> ProbeData {
+    MLXRandom.seed(seed)
+    let x = MLXRandom.normal([1, K], dtype: .bfloat16)
+    let cosT = MLXRandom.uniform(low: -1.0, high: 1.0, [KROT, K / 2], dtype: .bfloat16)
+    let sinT = MLXRandom.uniform(low: -1.0, high: 1.0, [KROT, K / 2], dtype: .bfloat16)
+    let chScales = MLXRandom.uniform(low: 0.5, high: 1.5, [K], dtype: .bfloat16)
+    let pairs = makePackedPairs(krot: KROT, numGroups: K / GS, gs: GS, seed: seed ^ 0x5bd1_e995)
+    let paramsArr = MLXArray([Int32(1), Int32(K), Int32(KROT), Int32(GS)])
+    eval(x, cosT, sinT, chScales, pairs, paramsArr)
+    return ProbeData(x: x, pairs: pairs, cosT: cosT, sinT: sinT,
+                     chScales: chScales, paramsArr: paramsArr, K: K)
+}
+
+struct WeightSet {
+    let wq: MLXArray
+    let sc: MLXArray
+    let bi: MLXArray?
+}
+
+func genWeights(seed: UInt64, N: Int, K: Int, count: Int) -> [WeightSet] {
+    MLXRandom.seed(seed)
+    var sets: [WeightSet] = []
+    for _ in 0 ..< count {
+        let w = MLXRandom.normal([N, K], dtype: .bfloat16)
+        let (wq, sc, bi) = MLX.quantized(w, groupSize: GS, bits: BITS)
+        eval(wq, sc)
+        if let bi { eval(bi) }
+        sets.append(WeightSet(wq: wq, sc: sc, bi: bi))
+    }
+    return sets
+}
+
+// MARK: - Pipelines
+
+let rotKernel = makeRotationKernel()
+
+func rotateRef(_ d: ProbeData) -> MLXArray {
+    rotKernel(
+        [d.x, d.pairs, d.cosT, d.sinT, d.chScales, d.paramsArr],
+        grid: (32, d.K / GS, 1), threadGroup: (32, 1, 1),
+        outputShapes: [[1, d.K]], outputDTypes: [.bfloat16])[0]
+}
+
+func referenceY(_ d: ProbeData, _ ws: WeightSet, N: Int) -> MLXArray {
+    MLX.quantizedMM(rotateRef(d), ws.wq, scales: ws.sc, biases: ws.bi,
+                    transpose: true, groupSize: GS, bits: BITS)
+}
+
+func fusedY(_ d: ProbeData, _ ws: WeightSet, N: Int, kernel: MLXFast.MLXFastKernel,
+            rps: Int = 4) -> MLXArray {
+    kernel(
+        [d.x, d.pairs, d.cosT, d.sinT, d.chScales, ws.wq, ws.sc, ws.bi!],
+        grid: (32, N / rps, 1), threadGroup: (32, 2, 1),
+        outputShapes: [[1, N]], outputDTypes: [.bfloat16])[0]
+}
+
+// MARK: - Bitwise comparison
+
+/// Returns true on exact equality; prints mismatch stats otherwise.
+func bitwiseGate(_ name: String, _ ref: MLXArray, _ out: MLXArray, quiet: Bool = false) -> Bool {
+    eval(ref, out)
+    let eq = (ref .== out).all().item(Bool.self)
+    if eq {
+        if !quiet { print("\(name): IDENT (\(ref.size) outputs)") }
+        return true
+    }
+    let nDiff = (ref .!= out).asType(.int32).sum().item(Int32.self)
+    let refF = ref.asType(.float32)
+    let outF = out.asType(.float32)
+    let mad = abs(refF - outF).max().item(Float.self)
+    print("\(name): DIFF count=\(nDiff)/\(ref.size) maxAbs=\(mad)")
+    let mask = (ref .!= out).asType(.int32).asArray(Int32.self)
+    let rf = refF.asArray(Float.self)
+    let of = outF.asArray(Float.self)
+    var shown = 0
+    for i in 0 ..< mask.count where mask[i] != 0 && shown < 8 {
+        // bf16 ulp at |ref|: 2^(floor(log2|v|)-7)
+        let v = abs(rf[i])
+        let ulp = v > 0 ? powf(2, floor(log2f(v)) - 7) : powf(2, -133)
+        print(String(
+            format: "  [%d] ref=%.9g out=%.9g  delta=%.3g (~%.1f ulp)",
+            i, rf[i], of[i], of[i] - rf[i], (of[i] - rf[i]) / ulp))
+        shown += 1
+    }
+    return false
+}
+
+// MARK: - Gates
+
+func runGates(K: Int, N: Int, seeds: [UInt64]) -> (p1v: Int, p2v: Int)? {
+    print("== bitwise gates K=\(K) N=\(N) ==")
+    var firstData: ProbeData?
+    var firstWeights: WeightSet?
+    var yRefBySeed: [UInt64: MLXArray] = [:]
+    var dataBySeed: [UInt64: ProbeData] = [:]
+    var weightsBySeed: [UInt64: WeightSet] = [:]
+
+    for seed in seeds {
+        let d = genProbeData(seed: seed, K: K)
+        let ws = genWeights(seed: seed ^ 0x9e37_79b9, N: N, K: K, count: 1)[0]
+        let yRef = referenceY(d, ws, N: N)
+        eval(yRef)
+        yRefBySeed[seed] = yRef
+        dataBySeed[seed] = d
+        weightsBySeed[seed] = ws
+        if firstData == nil { firstData = d; firstWeights = ws }
+    }
+    let d0 = firstData!
+    let ws0 = firstWeights!
+
+    // Candidate (p1v, p2v) in search order. (1,1) is verbatim on both sides.
+    var candidates: [(Int, Int)] = [(1, 1)]
+
+    func tryCandidate(_ p1v: Int, _ p2v: Int, quiet: Bool = false) -> Bool {
+        let k = makeFusedKernel(K: K, p1v: p1v, p2v: p2v, mode: 0)
+        var allOk = true
+        for seed in seeds {
+            let ok = bitwiseGate(
+                "fused(p1v=\(p1v),p2v=\(p2v)) seed=\(seed)",
+                yRefBySeed[seed]!, fusedY(dataBySeed[seed]!, weightsBySeed[seed]!, N: N, kernel: k),
+                quiet: quiet)
+            allOk = allOk && ok
+        }
+        return allOk
+    }
+
+    if tryCandidate(1, 1) { return (1, 1) }
+
+    // Isolation: phase 2 (clone, device-x) against quantizedMM, and phase 1
+    // (rotate-only, fused 2-simdgroup layout) against the standalone kernel.
+    print("-- isolation: phase 2 clone (mode 1) vs quantizedMM --")
+    let rotX0 = rotateRef(d0)
+    eval(rotX0)
+    let yQmm0 = MLX.quantizedMM(rotX0, ws0.wq, scales: ws0.sc, biases: ws0.bi,
+                                transpose: true, groupSize: GS, bits: BITS)
+    eval(yQmm0)
+    var p2Pass: [Int] = []
+    for p2v in [1, 2, 3] {
+        let k = makeFusedKernel(K: K, p1v: 1, p2v: p2v, mode: 1)
+        let dRot = ProbeData(x: rotX0, pairs: d0.pairs, cosT: d0.cosT, sinT: d0.sinT,
+                             chScales: d0.chScales, paramsArr: d0.paramsArr, K: K)
+        if bitwiseGate("clone(p2v=\(p2v))", yQmm0,
+                       fusedY(dRot, ws0, N: N, kernel: k), quiet: false) {
+            p2Pass.append(p2v)
+        }
+    }
+    print("-- isolation: phase 1 (mode 2) vs standalone rotation --")
+    var p1Pass: [Int] = []
+    for p1v in [1, 2, 3] {
+        let k = makeFusedKernel(K: K, p1v: p1v, p2v: 1, mode: 2)
+        let out = k(
+            [d0.x, d0.pairs, d0.cosT, d0.sinT, d0.chScales, ws0.wq, ws0.sc, ws0.bi!],
+            grid: (32, N / 4, 1), threadGroup: (32, 2, 1),
+            outputShapes: [[1, K]], outputDTypes: [.bfloat16])[0]
+        if bitwiseGate("rotInFused(p1v=\(p1v))", rotX0, out, quiet: false) {
+            p1Pass.append(p1v)
+        }
+    }
+    print("isolation: p1 pass=\(p1Pass) p2 pass=\(p2Pass)")
+
+    if !p1Pass.isEmpty && !p2Pass.isEmpty {
+        candidates = p1Pass.flatMap { p1 in p2Pass.map { p2 in (p1, p2) } }
+    } else if !p2Pass.isEmpty {
+        candidates = [(1, p2Pass[0]), (2, p2Pass[0]), (3, p2Pass[0])]
+    } else if !p1Pass.isEmpty {
+        candidates = [(p1Pass[0], 2), (p1Pass[0], 3)]
+    } else {
+        candidates = [(1, 2), (1, 3), (2, 1), (3, 1)]
+    }
+    for (p1v, p2v) in candidates.prefix(4) {
+        if tryCandidate(p1v, p2v) { return (p1v, p2v) }
+    }
+    print("GATES: no variant achieved bitwise equality")
+    return nil
+}
+
+// MARK: - Timing
+
+struct ArmTime {
+    var wall: Double = 0
+    var build: Double = 0
+    var tail: Double = 0
+    var blocks: Int = 0
+}
+
+/// One block: `calls` invocations inside ONE lazy graph, single eval, then
+/// sync. Weight sets cycle i % sets.count (32 disjoint sets -> cold weight
+/// reads like production decode).
+@discardableResult
+func timeBlock(calls: Int, body: (Int) -> MLXArray) -> (wall: Double, build: Double, tail: Double) {
+    var outs: [MLXArray] = []
+    outs.reserveCapacity(calls)
+    let t0 = CFAbsoluteTimeGetCurrent()
+    for j in 0 ..< calls { outs.append(body(j)) }
+    let t1 = CFAbsoluteTimeGetCurrent()
+    eval(outs)
+    let t2 = CFAbsoluteTimeGetCurrent()
+    _ = outs[outs.count - 1].sum().item(Float.self)
+    let t3 = CFAbsoluteTimeGetCurrent()
+    return (t3 - t0, t1 - t0, t3 - t2)
+}
+
+func warm(calls: Int, body: (Int) -> MLXArray) {
+    var outs: [MLXArray] = []
+    for j in 0 ..< calls { outs.append(body(j)) }
+    eval(outs)
+    _ = outs.last!.sum().item(Float.self)
+}
+
+func runTiming(K: Int, N: Int, p1v: Int, p2v: Int, rps: Int = 4) {
+    print("== timing K=\(K) N=\(N) fused variant (p1v=\(p1v),p2v=\(p2v),rps=\(rps)) ==")
+    let d = genProbeData(seed: 42, K: K)
+    let sets = genWeights(seed: 777, N: N, K: K, count: 32)
+    let fused = makeFusedKernel(K: K, p1v: p1v, p2v: p2v, mode: 0, rps: rps)
+    let rotX = rotateRef(d)
+    eval(rotX)
+
+    let ref = { (i: Int) -> MLXArray in referenceY(d, sets[i % 32], N: N) }
+    let fus = { (i: Int) -> MLXArray in fusedY(d, sets[i % 32], N: N, kernel: fused, rps: rps) }
+    let qmm = { (i: Int) -> MLXArray in
+        MLX.quantizedMM(rotX, sets[i % 32].wq, scales: sets[i % 32].sc,
+                        biases: sets[i % 32].bi, transpose: true, groupSize: GS, bits: BITS)
+    }
+
+    // sanity: fused matches ref on the timing data too
+    _ = bitwiseGate("timing-data fused vs ref", referenceY(d, sets[0], N: N),
+                    fusedY(d, sets[0], N: N, kernel: fused, rps: rps))
+
+    warm(calls: 16, body: ref)
+    warm(calls: 16, body: fus)
+    warm(calls: 16, body: qmm)
+
+    let calls = 100
+    var acc: [String: ArmTime] = ["ref": ArmTime(), "fused": ArmTime(), "qmm": ArmTime()]
+    // ABBA interleave of the two principal arms; qmm context at the end.
+    let order = ["ref", "fused", "fused", "ref", "ref", "fused", "fused", "ref"]
+    for arm in order {
+        let body = arm == "ref" ? ref : fus
+        let (wall, build, tail) = timeBlock(calls: calls, body: body)
+        acc[arm]!.wall += wall
+        acc[arm]!.build += build
+        acc[arm]!.tail += tail
+        acc[arm]!.blocks += 1
+        print(String(format: "  block %@ wall/iter %.2f us (build %.2f, tail %.2f)",
+                     arm, wall / Double(calls) * 1e6, build / Double(calls) * 1e6,
+                     tail / Double(calls) * 1e6))
+    }
+    // context arm: quantizedMM alone on the pre-rotated x
+    for _ in 0 ..< 4 {
+        let (wall, build, tail) = timeBlock(calls: calls, body: qmm)
+        acc["qmm"]!.wall += wall
+        acc["qmm"]!.build += build
+        acc["qmm"]!.tail += tail
+        acc["qmm"]!.blocks += 1
+    }
+
+    let weightBytes = Double(N * K / 8 * 4 + N * (K / GS) * 2 * 2)
+    print("arm,us/iter,build-us/iter,tail-us/iter,GB/s(weights)")
+    for arm in ["ref", "fused", "qmm"] {
+        let a = acc[arm]!
+        let w = a.wall / Double(a.blocks * calls)
+        print(String(format: "%@,%.2f,%.2f,%.2f,%.0f",
+                     arm, w * 1e6, a.build / Double(a.blocks * calls) * 1e6,
+                     a.tail / Double(a.blocks * calls) * 1e6, weightBytes / w / 1e9))
+    }
+    let refW = acc["ref"]!.wall / Double(acc["ref"]!.blocks * calls)
+    let fusW = acc["fused"]!.wall / Double(acc["fused"]!.blocks * calls)
+    print(String(format: "SAVING: ref %.2f us -> fused %.2f us  = %.1f%% (%.2fx)",
+                 refW * 1e6, fusW * 1e6, (refW - fusW) / refW * 100, refW / fusW))
+}
+
+// MARK: - RPS sweep
+//
+// Per-row dot arithmetic is RPS-independent (same lane->data mapping, same
+// simd_sum tree), so fused kernels with RPS != 4 remain bitwise-identical to
+// the production rps=4 pipeline — verified below. Larger RPS => fewer
+// threadgroups => the redundant phase-1 rotation (which every threadgroup
+// re-computes for the full K vector) is amortised over 2*RPS rows.
+func runRpsSweep(K: Int, N: Int) {
+    print("== rps sweep K=\(K) N=\(N) (bitwise gate + ABBA timing per rps) ==")
+    let d = genProbeData(seed: 42, K: K)
+    let sets = genWeights(seed: 777, N: N, K: K, count: 32)
+    let yRef = referenceY(d, sets[0], N: N)
+    eval(yRef)
+
+    let ref = { (i: Int) -> MLXArray in referenceY(d, sets[i % 32], N: N) }
+    warm(calls: 16, body: ref)
+
+    let calls = 100
+    var refW = 0.0
+    var refBlocks = 0
+    for rps in [4, 8, 16, 32] {
+        let k = makeFusedKernel(K: K, p1v: 1, p2v: 1, mode: 0, rps: rps)
+        let fus = { (i: Int) -> MLXArray in fusedY(d, sets[i % 32], N: N, kernel: k, rps: rps) }
+        let ok = bitwiseGate("fused rps=\(rps)", yRef,
+                             fusedY(d, sets[0], N: N, kernel: k, rps: rps), quiet: true)
+        print("fused rps=\(rps) gate: \(ok ? "IDENT" : "DIFF")")
+        warm(calls: 16, body: fus)
+        var fusW = 0.0
+        var fusBlocks = 0
+        // ABBA: ref,fus,fus,ref
+        for arm in ["ref", "fus", "fus", "ref"] {
+            let body = arm == "ref" ? ref : fus
+            let (wall, _, _) = timeBlock(calls: calls, body: body)
+            if arm == "ref" { refW += wall; refBlocks += 1 } else { fusW += wall; fusBlocks += 1 }
+        }
+        let r = refW / Double(refBlocks * calls)
+        let f = fusW / Double(fusBlocks * calls)
+        print(String(format: "rps=%d: ref %.2f us vs fused %.2f us  (%.2fx)",
+                     rps, r * 1e6, f * 1e6, r / f))
+    }
+    print(String(format: "sweep ref average: %.2f us", refW / Double(refBlocks * calls) * 1e6))
+}
+
+// MARK: - Driver
+
+setvbuf(stdout, nil, _IONBF, 0)  // unbuffered: survive crashes with logs intact
+
+let args = CommandLine.arguments
+let doTimeOnly = args.contains("time")
+let doSweep = args.contains("sweep")
+let doDump = args.contains("dump")
+let pArg = args.firstIndex(of: "variant").map { args[$0 + 1] }
+
+if doDump {
+    // Emit the exact Metal source of the winning fused kernel for the record.
+    let header = fusedHeader(p2v: 1)
+    let body = fusedBody(K: 2048, p1v: 1, mode: 0, rps: 4)
+    let text = """
+        // M4 fused rotate+dequant+dot kernel (winning variant p1v=1, p2v=1 — verbatim
+        // arithmetic on both phases; bitwise-identical to the two-kernel pipeline on
+        // all tested seeds/shapes). Kernel name: m4_K2048_p1v1_p2v1_m0_rps4.
+        // Generated signature (MLXFast wraps this):
+        //   inputs:  x (device bfloat16_t*), packed_pairs (device int*),
+        //            cos_theta/sin_theta (device bfloat16_t*),
+        //            channel_scales (device bfloat16_t*),
+        //            w (device uint*), scales/biases (device bfloat16_t*)
+        //   output:  y (device bfloat16_t*, [1, 2048])
+        //   grid (threads): (32, N/4, 1), threadgroup: (32, 2, 1)
+        //   attributes: threadgroup_position_in_grid, thread_index_in_simdgroup,
+        //               simdgroup_index_in_threadgroup
+        // ---- header (helpers, prepended by MLXFast after metal::utils()) ----
+        \(header)
+        // ---- body ----
+        \(body)
+        """
+    try! text.write(toFile: "/tmp/gather-sweep/m4-fused-kernel.metal",
+                    atomically: true, encoding: .utf8)
+    print("wrote /tmp/gather-sweep/m4-fused-kernel.metal")
+    exit(0)
+}
+
+if doSweep {
+    runRpsSweep(K: 2048, N: 2048)
+} else if !doTimeOnly {
+    let seeds: [UInt64] = [42, 1234, 98765]
+    let winner = runGates(K: 2048, N: 2048, seeds: seeds)
+    if let winner {
+        print("WINNER (K=2048): p1v=\(winner.p1v) p2v=\(winner.p2v)")
+        // bonus: same variant at the dense model's hidden shape K=2560, N=2560
+        print("== bonus gate K=2560 N=2560, winner variant ==")
+        let d = genProbeData(seed: 42, K: 2560)
+        let ws = genWeights(seed: 4242, N: 2560, K: 2560, count: 1)[0]
+        let yRef = referenceY(d, ws, N: 2560)
+        let k = makeFusedKernel(K: 2560, p1v: winner.p1v, p2v: winner.p2v, mode: 0)
+        _ = bitwiseGate("fused K=2560", yRef, fusedY(d, ws, N: 2560, kernel: k))
+        runTiming(K: 2048, N: 2048, p1v: winner.p1v, p2v: winner.p2v)
+    } else {
+        // still collect perf numbers with the verbatim variant
+        runTiming(K: 2048, N: 2048, p1v: 1, p2v: 1)
+    }
+} else {
+    var p1v = 1, p2v = 1
+    if let pArg {
+        let parts = pArg.split(separator: ",")
+        if parts.count == 2 { p1v = Int(parts[0])!; p2v = Int(parts[1])! }
+    }
+    runTiming(K: 2048, N: 2048, p1v: p1v, p2v: p2v)
+}
