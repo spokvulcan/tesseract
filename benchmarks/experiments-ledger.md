@@ -1108,9 +1108,10 @@ Two-agent adversarial review of the whole C1–C13 loop (PR #425) found
 three defect classes the loop's gates structurally could not catch; all
 fixed this round on `fix/cmlx-review-round-425` (tesseract) + new fork
 commits. **A parity re-gate round (3-pair 128/8K/32K, both models,
-escalation per protocol) is REQUIRED before the C13 win is re-banked** —
-the C13 fix re-enables a kernel the merged tree could never run; all
-other fixes are scheduling/lifecycle/docs-only.
+escalation per protocol) is REQUIRED before the C13 win is re-banked**
+(run same day — PASS, record at the end of this section) — the C13 fix
+re-enables a kernel the merged tree could never run; all other fixes
+are scheduling/lifecycle/docs-only.
 
 **F1 — C13 shipped uncompilable (CRITICAL; latent crash, MoE kL>4096).**
 The port to `fast.cpp` renamed the custom-kernel output to `"out"` while
@@ -1182,3 +1183,26 @@ sources, M4 kernel) copied to `benchmarks/gather-sweep/` — it is the
 instrument that proves the bitwise claims (M4/M5/C13) and /tmp does not
 survive reboots. Runtime metallib copy requirement documented in its
 README.
+
+**Parity re-gate (same day, post-fix chain) — PASS; C13 re-banked.**
+A/B: fresh baseline build @ tesseract `8d47f122` (C12-state pins
+mlx-swift `c9796ec` ← mlx `625f2aea`, vendor `e77d05d` — the same
+A-side as C13's original acceptance) vs the fix branch @ `d0c8091f`
+(mlx `a3673067` chain); `BENCH_RUNS=1`, `parity-ab.sh`. MoE
+`qwen3.6-35b-a3b-paro`, 3-pair 128/8K/32K: gate 9/9 token-identical;
+128/8K flat (+0.3–0.7%); 32K unverdictable at 3 pairs (slot bias: the
+second arm of every round lost 23–51% and E drew second in 2/3 — the
+same thermal saturation the acceptance logged). Escalated per
+protocol, 10-pair 32K-only after a 3-min cool-down: **gate 10/10, 32K
+prefill +3.10%** (pairwise mean +3.61%, median +8.07%, E wins 8/10,
+two environmental outliers −34%/−14% left in), decode +0.86% (flat —
+C13 cannot touch decode), peak identical 21.59 GB. Matches the
+acceptance (+2.80%/20 pairs) and the probe prediction (+3%). Dense
+`qwen3.5-4b-paro` control, 3-pair full grid: gate 9/9, all metrics
+within −0.7…+3.1% noise, peaks byte-identical, load flat. Totals:
+**28/28 token-identical pairs, 0 crashes across 38 arm launches** —
+the fixed kernel compiles, engages at kL>4096, and reproduces the
+stock chain bitwise in the app. Attribution: no other fix in the E arm
+can move 32K prefill (M3 Max C4 caps are value-identical, C9's map
+swap is negligible), so the delta isolates C13. Raw reports:
+session scratchpad `parity/results-{moe,moe32k,dense}`.
