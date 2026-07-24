@@ -31,9 +31,9 @@
     {
       "identity" : "mlx-swift",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ml-explore/mlx-swift",
+      "location" : "https://github.com/spokvulcan/mlx-swift",
       "state" : {
-        "revision" : "0bb916c67f4b9e5c682cbe02a42c701c93ab5021"
+        "revision" : "e20b0d866ad622f538dc5ba2363696a9213e36d1"
       }
     },
     {

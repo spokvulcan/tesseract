@@ -36,6 +36,7 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
 | `fix: pin upstream ml-explore/mlx-swift at 0.31.6; drop retained-CB fork` | Exact-revision mlx-swift pin, matching mlx-audio-swift — SwiftPM cannot mix revision and version requirements for one package | Permanent local; never upstream |
+| `fix: pin mlx-swift to the spokvulcan fork (Cmlx experiment loop)` | mlx-swift pin moves to `spokvulcan/mlx-swift` @ `54ca1ec` (upstream 0bb916c + .gitmodules provenance only) so Cmlx is writable via `spokvulcan/mlx` — scheme: `docs/mlx-core-fork.md` | Permanent local; never upstream |
 | `fix(paroquant): convert every AWQ prefix and cast scales to f16` | AWQ→PARO conversion correctness | Not filed — candidate follow-up to #164 |
 | `refactor(paroquant): extract PairwiseRotation from RotateQuantizedLinear` | Shared rotation core for the MoE path | Not filed — candidate (prerequisite of the MoE commit) |
 | `feat(paroquant): MoE PARO path — RotateSwitchGLU + loader passes` | PARO quantization for MoE models (Qwen3.6-35B-A3B) | Not filed — candidate follow-up to #164 |
@@ -70,7 +71,9 @@ TokenRing fix) predate the submodule pin scheme; see ADR-0006 for that history.
 ## Upstream candidates outside this fork (mlx-core)
 
 Findings from the inference-optimization loop whose fix lives in mlx-core
-(Cmlx), which we do not fork. The measured opportunity list is
+(Cmlx). Since 2026-07-23 Cmlx **is** forked — `spokvulcan/mlx` +
+`spokvulcan/mlx-swift`, scheme and per-iteration workflow in
+`docs/mlx-core-fork.md`. The measured opportunity list is
 `docs/mlx-core-optimization-roadmap.md` (M1–M8); evidence per experiment in
 `benchmarks/experiments-ledger.md`. Two are ripe for filing as
 evidence-backed issues against `ml-explore/mlx` — owner's call:

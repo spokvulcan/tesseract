@@ -496,3 +496,606 @@ state maxAbsDiff=0.0, 16K restore exact) — the `docs/testing.md`
 loaded-model gate for the E7/E11 files, now on record. Vendor
 `ParoQuantTests` 24/24 (above); detector suites green (memo tests
 included).
+
+---
+
+## Session 2026-07-23 — Cmlx (mlx-core) loop
+
+Same rules and measurement discipline as the first session (above), now
+scoped to **mlx-core (Cmlx)** per `docs/mlx-core-optimization-roadmap.md`.
+Experiments in this loop are numbered **C0, C1, …** to keep them distinct
+from the app/vendor loop's E-series. Git HEAD at session start: the
+post-review-round tree.
+
+### Infrastructure: buildable mlx-core fork/pin scheme (prerequisite task)
+
+The Cmlx sources reach the build only as a **git submodule of mlx-swift**
+(`Source/Cmlx/mlx`), so the fork has two levels, both under `spokvulcan`
+(scheme doc: `docs/mlx-core-fork.md`):
+
+- `spokvulcan/mlx` branch **`pin-tesseract`** @ `ce45c525` — exact upstream
+  content (mlx `v0.31.1`), the writable mlx-core. Append-only.
+- `spokvulcan/mlx-swift` branch **`pin-tesseract`** @ `54ca1ec` — upstream
+  `0bb916c` (the 0.31.6 tag the app pinned) + ONE commit: `.gitmodules`
+  points `Source/Cmlx/mlx` at `spokvulcan/mlx`. Zero source diff. mlx-c
+  submodule untouched (`ml-explore/mlx-c` @ `0726ca9`).
+- Lockstep pins (`54ca1ec7cf9601c39809720725211afe601cfdd5`):
+  `Vendor/mlx-audio-swift/Package.swift`, `Vendor/tesseract-speech/
+  Package.swift` (in-tree), `Vendor/mlx-swift-lm/Package.swift` (commit
+  `37702c8` on its `pin-upstream-mlx-swift` branch; tesseract gitlink bump).
+
+**Corrected pin fact:** the roadmap/kickoff said "Cmlx tracks ml-explore/mlx
+@ dc43e62d". `dc43e62d` is an mlx-**swift** revision seen in a stale
+DerivedData checkout, not an mlx revision. The mlx-core the app builds is
+`ce45c52505c8158ea48d2a54e8caae05efd86bfe` (tag `v0.31.1`), the
+`Source/Cmlx/mlx` gitlink recorded by mlx-swift `0bb916c` — verified via
+`git ls-tree 0bb916c Source/Cmlx/` and the resolved app DerivedData
+checkout. Roadmap note amended.
+
+Also established this session (source read, `device.h`/`device.cpp`):
+`is_nax_available()` = macOS 26.2+ AND arch gen ≥ 17 (non-phone); M3 Max is
+`g15s` → gen 15 → **nax is unavailable on this machine** — the production
+`gather_qmm_rhs` path is the non-nax kernel (`bm=16, bn=32, bk=32, wm=1,
+wn=2`), not the nax one (`bm=64`). M1 targets the non-nax kernel.
+
+Per-iteration workflow (in `docs/mlx-core-fork.md`): edit in the live
+DerivedData checkout's submodule → build/bench → REJECTED: `git checkout
+-- .` in the submodule; ACCEPTED: port diff to `~/projects/mlx`
+(`pin-tesseract`) + gitlink bump in `~/projects/mlx-swift` + three-pin
+lockstep move + tesseract commit, then re-resolve and verify the port
+(`git diff ce45c525` in the checkout == accepted diff).
+
+### Experiments
+
+**C0 — fork-scheme shakedown (pre-fork binary vs fork-built binary).**
+Provenance-only change (byte-identical sources), so the binary content is
+unchanged by construction; run to *prove* the fork chain builds and stays
+output-identical. Method: `parity-ab.sh`, 1 round, contexts 128/8192,
+pre-fork saved binary vs fork-pinned Release build. Gate: **PASS both
+models** (4/4 pairs each, token-identical). Perf: everything within ±2.7%
+except the expected second-arm thermal dip on the second 8K prefill
+(dense −13.4%, MoE −7.3% — single-round ABBA has no BA balancing; the
+same artifact shape appeared in E0/E2). **Verdict: scheme VALIDATED** —
+fork chain is the new baseline; all C-experiments pin/fork from here.
+(Not an optimization; infra commit.)
+
+**C1 — rows-per-expert-aware `gather_qmm_rhs` tile geometry (M1).**
+Hypothesis: with sorted rhs indices, a BM=16 tile is what keeps tiles
+inside single-expert runs at small B/E, but at production's B/E=32 a wider
+32×64 tile is outright faster (single-segment tiles + denser MMA) — pick
+geometry by measured rows-per-expert: `(bm,bn,bk,wm,wn) = (32,64,32,1,2)`
+when `M/E >= 32`, stock `(16,32,32,1,2)` below. Bitwise by construction
+(per-element K-accumulation order is tile-geometry-independent — verified
+empirically, not just argued). Pre-evidence (standalone sweep harness,
+probe-only `MLX_GQMM_CFG` env hook in the fork clone, ABBA in-process,
+f16, production shapes E=256/N=512/K=2048 + down_proj N=2048/K=512): at
+B/E=32 — **+13.6%** (gate/up shape) and **+12.5%** (down shape); +19–22%
+at B/E=64–128; 0.6–0.8× at B/E≤24 (the straddle cliff → threshold 32);
+**bitwise IDENTICAL for every config at every B/E**; dense-qmm anchor
+9.5–10.1 TFLOP/s, the winner reaches 96% of it (gather overhead ~gone).
+Note: macOS/SwiftPM builds JIT the kernels (`jit_kernels.cpp`, not
+nojit) — geometry changes need host edits only, no instantiation plumbing;
+and the sweep's absolute TFLOP/s ran ~1.5× above E4's (harness/thermal
+calibration differs — within-run ABBA ratios are the evidence, absolute
+anchors are not). Change (one hunk in
+`Cmlx/mlx/backend/metal/quantized.cpp`, DerivedData checkout): E from the
+weight batch dims, `M/E >= 32` → `bm=32, bn=64`. Measure: (a) 3-round
+ABBA MoE full contexts — gate **PASS** (18/18 token-identical); 32K
+prefill per-round pairs **+7.3/+2.1 | +7.9/−2.1 | +8.2/+13.7** (mean
++6.2%, 5/6 positive); 8K prefill +0.7/±0 in calm rounds, negative only
+inside the mid-session thermal-collapse round; decode mixed ± (mean ~0 —
+prefill-only kernel, untouched); peak flat. (b) dense control 2 rounds —
+gate **PASS** (8/8); perf pure noise (incl. a −6.6% pooled 8K-prefill
+reading *with identical code paths* — the afternoon's noise floor on
+record). (c) 4-round 8K MoE tie-break — gate **PASS** (8/8); per-round
+−1.1/+2.2/+0.6/−3.2 | −1.3/+2.2/+1.6/+16.3 (mean **+2.2%**, 5/8
+positive) — no reproducible 8K regression; the 8K zone is
+dispatch-saturated (E5 lesson: kernel wins shrink ~3× there). **Verdict:
+ACCEPTED** — reproducible ≥1% win (32K prefill +6.2%, three readings
+≥+7%), no reproducible regression on any other metric, 34/34 pairs
+token-identical across the three runs. E4's "~12–15% of 35B prefill"
+estimate was calibrated on its 5.14-TFLOP/s harness reading; this
+session's harness reads the stock kernel ~1.5× faster, and the measured
+app win is +6% at 32K — the opportunity existed (M1's premise stands),
+its size was overestimated by the older harness. Ported to
+`spokvulcan/mlx` `pin-tesseract`; pins moved (see scheme doc).
+
+**Harness amendments (from C1, non-numeric):** (1) `parity-ab.sh` gained
+per-arm env injection (`ARM_ENV_baseline/experiment`, via `open --env`) —
+for the C2 op-cap probe. (2) `parity-ab.sh` gained a per-arm **watchdog**
+(`ARM_TIMEOUT`, default 600 s): a dense-leg arm completed its bench but
+never exited (idle in the AppKit run loop, report unwritten — *baseline*
+binary, one-off flake, not the experiment) and `open -W` parked 34 min;
+the leg was killed and re-run. Lesson recorded mid-flight: the orphaned
+watchdog `sleep` inherits the script's stdout pipe and delays `tail` EOF —
+watchdog output is now redirected away from the pipe; orphan sleeps were
+killed to unblock the in-flight leg. Also on record: **do not edit
+`parity-ab.sh` while a run is parked inside it** — bash re-reads the file
+and a mid-run edit shifted offsets, producing a syntax error at the loop
+tail (data intact; the script's own footer died).
+
+**C2 — `MLX_MAX_OPS_PER_BUFFER` raise (M2 probe) — REJECTED.** Hypothesis:
+raising the per-command-buffer op cap (default 50 on M3 Max) reduces the
+decode command-buffer segmentation E10 measured (~40 CBs/token, ~60 µs
+gaps ≈ 22% idle) → decode win, no numerics (scheduling only). Method:
+same-binary A/B via `ARM_ENV_experiment` (no rebuild — env is read once
+per process), 3 rounds cap=400 + 2 rounds cap=200, contexts 128/8192,
+both models. Gates: **PASS everywhere** (12/12 + 8/8 + 8/8 + 8/8,
+token-identical — scheduling is output-neutral as expected). Numbers
+(per-round pairs): **MoE decode +2.9…+4.4% at 8K (6/6 positive at 400,
+mean +3.5%), +0.9…+2.1% at 128** — the E10 mechanism confirmed as real.
+BUT three reproducible regressions kill the global knob: (a) **dense 8K
+decode −2.7% at 400 (6/6 negative)**; (b) **dense 128 peak +7.25%**
+(3.26→3.50 GB, +240 MB — 10/10 pairs across BOTH cap values; temporaries
+held across a whole large buffer instead of released at 50-op
+boundaries); (c) **MoE 128 prefill −4…−5%** (9/10 pairs across both
+caps; opposite-sign from dense-128 prefill, so not pure noise —
+mechanism unidentified). 200 weakens the MoE win (+1.9%) without
+clearing (b)/(c). **Verdict: REJECTED at 200 and 400.** The MoE decode
+win is real but every global form of it carries a reproducible ≥1%
+regression. Recorded follow-ups (folded into M2's roadmap entry): a
+graph-size-aware cap (win zone = ~1900-kernel MoE decode steps,
+regression zones = small graphs) or mid-buffer temporary release (kills
+the +240 MB) — eval.cpp/device.cpp internals, a deliberate project, not
+an env knob. Note: a model-scoped policy (MoE-only cap) still fails on
+regression (c).
+
+**C3 — `gather_qmv` results-per-simdgroup geometry (M3 probe) — REJECTED
+at probe, no app run.** Hypothesis: the decode gather_qmv kernels (E10:
+51 µs / 88 GB/s at the B=8 decode shape) are latency/geometry-bound;
+raising rows-per-CTA (rps 4→8/16/32, per-row arithmetic untouched →
+bitwise by construction) lifts them. Method: probe-only `MLX_GQMV_RPS`
+env hook + rps template param (quantized.h AND `mlx-generated/
+quantized.cpp` — the two-homes rule), production decode shapes
+(gate/up N=512/K=2048, down N=2048/K=512, f16), ABBA in-process.
+**Bitwise IDENTICAL at every rps** (gate confirms the by-construction
+argument). Numbers: rps=4 → **13.7 µs / 306 GB/s** at BOTH shapes in
+isolation; rps=8: +0.0/+3.5%; rps=16/32: flat-to-negative. No ≥1%
+geometry lever. Two harness traps found and fixed en route (reusable):
+(a) eval-per-call on ~50 µs kernels floors at **~220 µs of CPU dispatch
+per call** — single-graph-of-N-calls is the only honest way to time
+kernels this small; (b) looping identical index sets goes **cache-hot**
+(8 experts ≈ 34 MB stays in the system cache → a false 500 GB/s);
+disjoint expert sets cycling all 256 (134 MB working set) are mandatory
+for decode-realistic weight traffic. **Verdict: no kernel lever — the
+kernel already runs at the machine's ~300 GB/s DRAM envelope in
+isolation; E10's 88 GB/s does not reproduce outside the production eval
+environment.** The MoE decode 2× gap (E9/E10) is therefore eval-
+environment (M2-class: scheduling/overlap), not gather_qmv geometry —
+M3 amended in the roadmap. Probe hooks stay uncommitted in the fork
+clone; nothing reached the app or the pins.
+
+**C4 attribution (M9 confirmed; basis for the C4 experiment).** Three
+measurements, all on the c1-accepted build:
+
+1. **Enqueue probe** (`/tmp/gather-sweep c4`, batches of 1900 decode-shape
+   gather_qmv + one eval + one sync per batch): graph-build **0.6 µs/call**,
+   eval-enqueue **13.0 µs/call**; dispatch happens **inline on the calling
+   thread** (the MLX StreamThread is idle — no cross-thread handoff). In the
+   probe the GPU keeps pace (13.7 µs DRAM-bound kernel), so 44% of wall is
+   throttle waits; pure CPU dispatch ≈ 4.6 µs/op, of which kname building +
+   pipeline lookup (fmt/get_template_definition) is only **~9%** — below the
+   20% bar, so pipeline-state caching is **not** the C4 lever.
+2. **Production decode sample** (`sample` on the parity bench, 35B MoE,
+   ctx 8192, steady generation; generation thread = 4519 samples ≈ 13.2 ms
+   token): **50.1% inline per-op C++ dispatch** (eval_impl:237 subtree), of
+   which gpu::eval 32.9%; **~28% Swift-side** (graph build + sampling +
+   detok in TokenIterator.next); **8.4% GPU-throttle wait** (eval_impl:252);
+   3.8% finalize. No single frame >5% — the tax is spread across ~15 sites
+   (primitives, encoder, allocator, fence, graph machinery); event machinery
+   ≈0.4% (not a lever); CustomKernel cost is ordinary encoder+barrier work
+   (the per-call full-source string compare does not show). **M9 confirmed:
+   decode is ~85% CPU, GPU mostly idle.**
+3. **Commit anatomy** (env-gated counters in the DerivedData checkout —
+   `MLX_COMMIT_STATS`, probe-only, reverted after): caps 50 ops/50 MB
+   (arch applegpu_g15s), all commits on stream 0.
+   - **MoE decode: ~37 mid-commits/token, MB-cap-bound** — 50 MB of unique
+     input bytes (weight slices) every ~20–24 ops; mid = 71% of commits,
+     rest finalize/throttle tail. ~10 µs CPU per commit ⇒ ~2.8% of decode
+     in mid-commit overhead alone, plus GPU cbuf-boundary gaps (E10's 22%
+     idle estimate).
+   - **Dense decode: ~18 mid-commits/token, OPS-cap-bound** (50 ops at
+     ~27 MB unique bytes; the sub-cap averages in earlier readings were
+     dilution by small finalize tail-commits).
+   - App evals once per ~2 tokens (ops/eval ≈ 4350 MoE — convertToToken's
+     item() covers the forward graph; asyncEval covers cache state).
+   - **C2 reinterpretation:** C2's ops-cap raise could not have changed
+     MoE mid-commit cadence (MB-bound) ⇒ its MoE "+3.5% decode" and
+     "−4.5% 128-prefill" were very likely systematic artifacts, not cap
+     effects; only the dense effects (ops-bound: decode −2.7%, peak
+     +240 MB) were mechanistically real.
+
+**C4 env probe (`MLX_MAX_MB_PER_BUFFER` 50→200, same-binary ABBA, 3 rounds ×
+128/8K/32K, both models) — flat knob REJECTED, split-cap (v2) in progress.**
+MoE: **decode +8.75% (128), +8.70% (8K), +6.93% (32K), 6/6 everywhere**;
+prefill 128/8K flat (+0.2/+1.0); BUT **peak +7.18% (8K: 20.72→22.21 GB),
++7.91% (32K: 21.91→23.64 GB), 6/6**, and 32K prefill −2.02% (5/6). Dense:
+decode −0.5% (128) / −1.4% (8K) / **−7.4% (32K, 6/6)**; prefill −3.0% (32K);
+**peak +45.8% (8K: 4.61→6.72 GB), +33.5% (32K), 6/6**. Instrumented anatomy
+of the experiment arm: MoE mid-commits 37→**20/token** (ops-cap 50 binds at
+~37 ops/84 MB before 200 MB is reached) — the +8.7% decode win is mostly
+NOT per-commit CPU (~1.3% worth); it is **~60–68 µs of GPU-side pipeline
+drain per cbuf boundary** (matches E10's ~60 µs gaps), i.e. fewer+bigger
+cbufs keep the GPU fed in CPU-bound decode. Dense 32K decode is different:
+GPU-bound (weights 2.2 GB + full KV re-read ≈ 12+ ms GPU of the 18.5 ms
+step) — bigger cbufs starve the GPU between chunks (CPU must build a chunk
+before the GPU starts it), hence −7.4%. **The flat MB knob is REJECTED**
+(peak regressions alone disqualify it on both models). v2 design: split the
+accounting — commit on `ops > 50 || unique output (temporary) bytes > X ||
+unique input (mostly persistent weight) bytes > 200`; prefill temporaries
+stay on today's cadence (peak protected), decode weight-traffic stops
+forcing boundaries (MoE win preserved), dense decode untouched (ops-bound).
+X sized from measured output-bytes-per-commit (next measurement); the dense
+32K decode regression is expected to vanish with peak fixed (pool-pressure
+hypothesis) and is re-checked by the v2 A/B.
+
+**C4 v2 A/B (`in200 | out50 | ops50`) — decode win holds, peak halved but
+still reject-level.** MoE: **decode +7.40% (128), +9.72% (8K), +15.41%
+(32K), 6/6**; prefill flat (+0.6/+0.8/−0.4); **peak +3.76% (8K), +4.62%
+(32K), 6/6** (down from +7.2/+7.9). Dense: 32K decode recovered to +3.08%
+(noisy 4/6 — the flat-200 −7.4% was pool/peak-pressure, not scheduling);
+8K decode −0.48%; **peak +11.64% (8K: 4.61→5.14), +17.69% (32K:
+6.10→7.18), 6/6** (down from +45.8/+33.5). **Mechanism located via
+active-memory trajectory ticks** (`activeMB` in the commit probe): decode-
+phase active memory is IDENTICAL across arms (MoE 8K: 18464 vs 18473;
+dense 32K: 3710 vs 3711) — the entire peak regression is **prefill-phase
+live temporaries** (v2 prefill commits ~2× fewer: MoE 8K +298 MB at tick,
+dense 32K chunks +300-700 MB). `runPeakGB` = MLX active-memory peak.
+Output-bytes at stock commit points: MoE 8K prefill ≈ 9.7 MB, MoE 32K ≈
+16–37, dense 32K ≈ 27–55 (prefill chunked at 1024 → per-op outputs are
+0.5–4 MB; MoE decode ≈ 0.075 MB/op, dense ≈ 0.2–0.3). **v3: `out10`**
+reproduces stock's prefill commit points at every context (slightly
+tighter at 32K — harmless), while decode stays `in200`-driven (MoE out10
+binds at ~133 ops ≈ 15/token, in200 at ~80 ≈ 24/token — the win zone).
+
+**C4 v3 A/B (`in200 | out10 | ops50`) — MoE fully clean, dense 32K decode
+kills it.** MoE: **decode +8.50% (128), +10.58% (8K), +3.78% (32K), 6/6**;
+prefill flat/positive; **peak −1.74% (8K), −1.44% (32K) — improved**;
+gate 18/18 IDENT. Dense: **peak −13.46% (8K: 4.61→3.99 GB), −9.04% (32K),
+−2.16% (128)** (out10's tighter prefill cadence — a real bonus); decode
+128/8K −0.4/−0.5% (6/6, sub-1%); **32K decode −1.92% (8/10 over a 5-round
+resolution run)** — reproducible: dense 32K decode is GPU-bound (weights
+2.2 GB + KV re-read ≈ 12+ ms GPU of the 18.5 ms step) and `in200`'s ~4×
+coarser FFN-driven commits starve the pipeline. **v3 REJECTED.**
+**v4 (GPU-bound-adaptive in-cap) — REJECTED at probe.** Two detectors
+tried: completion-lag (relax when last cbuf completed <T µs ago — feedback
+oscillation: relaxed cbufs are intrinsically slow to complete, the regime
+un-detects itself; MoE mid/token 37→42, worse than stock) and
+queue-depth hysteresis (relax ≤2, tighten ≥6 active tasks — MoE decode's
+equilibrium queue depth sits at 3–6, never relaxes: mid/token ≈ 60,
+tok/s = stock). **Physics: MoE decode is boundary-limited, not
+GPU-throughput-limited — the GPU is busy either way, so no GPU-side
+signal separates it from dense 32K's starvation-limited regime.** A
+phase-accurate signal (prefill vs decode) exists only in the app/library —
+out of Cmlx scope. **v5: static compromise `in100 | out10`** (dense FFN
+29 MB/op → commits ~1.7× coarser than stock vs ~4× at in200, halving the
+starvation; MoE ~40 ops/commit ≈ 27 mid/token, keeps ~half+ of the v3
+win) — A/B running.
+
+**C4 v5 (`in100 | out10 | ops50`) — ACCEPTED.** Same-binary ABBA (3
+rounds MoE, 4 rounds dense, 128/8K/32K, gates 18/18 + 24/24
+token-identical). MoE: **decode +2.63% (128), +4.50% (8K), +2.36%
+(32K)** (6/6, 6/6, 4/6); prefill flat (outliers are round-1 warmup);
+**peak −1.74% (8K), −1.44% (32K)**. Dense: **32K decode +4.19% (5/8 —
+the v3 −1.92% gone)**; 128/8K decode −0.4/−0.1% (flat); prefill
+flat/positive; **peak −2.16% (128), −13.46% (8K: 4.61→3.99 GB), −9.19%
+(32K: 6.10→5.54 GB)** — the out10 leg is a peak-memory win in its own
+right. Ported to `spokvulcan/mlx` `pin-tesseract` @ **404070e2**
+(`perf(metal): relaxed input cap + output-byte commit accounting (C4)`),
+mlx-swift pin @ **73e7f42**, three Package.swift pins in lockstep;
+checkout re-sync verified `diff fbf2fb86 == C4 patch` exactly; probe
+instrumentation fully reverted. Defaults shipped: ops 20/40/50 (arch,
+unchanged), **in 100 MB, out 10 MB** (ctor, env-overridable). Clean-build
+confirmation A/B (pinned build vs `tesseract-c1-accepted.app`, 3 rounds
+128/8K/32K + a 5-round MoE 32K resolution): MoE decode **+2.45% (128,
+6/6), +4.97% (8K, 6/6), +0.93% (32K, noise-dominated ±5)**; MoE prefill
+noise (32K −0.53% mean of 10, 3/10 — the earlier −6.1% and +7.3% readings
+were both thermal outliers); dense decode flat at every context
+(+0.06% 32K); peaks −1.7/−1.4% (MoE 8K/32K), −2.2/−13.5/−9.0% (dense);
+gates 18/18 + 10/10 + 18/18 token-identical. **The 32K-context prefill
+and decode metrics on this machine carry ±5-10% thermal variance —
+verdicts there need ≥5 rounds and per-round pairing, never single runs.**
+
+**C5 — per-cbuf buffer-retention coalescing — ACCEPTED (as C5b, no
+dedup).** Attribution (production decode sample, line-level): per-op
+retention scaffolding in `gpu::eval` ≈ **8.5% of the decode generation
+thread** (completion-block per op `eval.cpp:68` 4.1%, retention-set
+inserts `eval.cpp:47` 2.5%, outputs copy 1.8%, plus disposal on Metal
+completion queues). Change: ops push input/sibling Data ptrs into the
+stream's pending vector (skipping donated inputs, exactly the old set's
+semantics); the batch flushes as **one completed handler per command
+buffer at commit** (`Device::commit_command_buffer` is the single
+funnel). Attach point = the same cbuf the ops were encoded in → release
+timing identical by construction. First form included a sort+unique
+dedup at commit: **REJECTED by the data** (dense 128 decode −1.22%,
+6/6 — the per-commit sort costs more than the per-op hashing it saved
+on commit-dense decode); dropping the dedup restored dense to flat
+(duplicate refs die together in the same handler — cosmetic only).
+Final numbers (3 rounds 128/8K/32K both models + a 5-round MoE 32K
+resolution, gates 18/18 + 18/18 + 10/10 token-identical): **MoE 8K
+decode +3.92% (5/6)**, MoE 128 +0.93% (noise), MoE 32K −0.45% mean of
+10 (noise), dense flat everywhere, **peak memory exactly unchanged**
+(19.51/20.36/21.59 and 3.19/3.99/5.54 — semantics preservation
+verified). Ported @ `spokvulcan/mlx` **8d11dd1d**, mlx-swift pin
+**5c16b28**, mlx-swift-lm pin **98e9e28**.
+
+**Harness amendment (user directive, 2026-07-24): default A/B is now
+3 pairs per context per model** (`BENCH_RUNS=1` × 3 rounds — script
+takes `BENCH_RUNS`, default still 2). Escalate to 5 rounds × 2 (10
+pairs) only when a verdict-relevant metric lands inside the noise floor
+(32K decode/prefill almost always do). Cutting rounds indiscriminately
+on 32K would have mis-verdicted C4/v3 and C5b twice each.
+
+**C6 — custom-kernel (kernel_name, kernel_source) memoization —
+ACCEPTED.** Attribution (post-C5 production MoE 8K decode sample, 2862
+gen-thread samples): `gatedDeltaUpdate`'s `MLXFastKernel` call =
+72 samples (2.5% of the thread), of which **~46 in `std::regex`
+construction + `regex_replace`** — `metal_kernel`'s closure rebuilt
+`kernel_name`/`kernel_source` on every call (every token × every GDN
+layer, both models are GDN hybrids) while the compiled MTLLibrary is
+already device-cached. Same sample, updated landscape for the queue:
+eval_impl tape machinery 41.5% (2089 under async_eval minus 901
+gpu::eval), gpu::eval op dispatch 31.5%, Swift graph build 26.6%;
+per-boundary costs shrunk to end_encoding 42 + commit 48 +
+get_command_encoder 80 samples (≈5.9% total, recoverable fraction
+smaller). Change: memoize the generated (kernel_name, kernel_source)
+per call site (cache captured in the closure); key = template_args +
+per-input dtype/ndim/size-class (write_signature's `size() < 8`
+address-space branch) + output_dtypes — everything else the strings
+depend on is closure-fixed, so a hit is byte-identical by construction.
+Zero numerics. A/B (3 rounds 128/8K/32K + 10-pair 32K resolutions,
+both models, gates 9/9 + 9/9 + 10/10 + 10/10 = 38/38 token-identical):
+**MoE decode +3.66% (128), +3.11% (8K), +3.55/+4.67% (32K)**; MoE
+32K prefill **+1.72%** (the 3-pair −1.51% reading was thermal noise);
+dense 128/8K flat (+0.17%), dense 32K +1.39/+0.07% (the 3-pair
++20.87% was a throttled baseline round — resolution protocol caught
+both); **peaks exactly flat everywhere**. Ported @ `spokvulcan/mlx`
+**3ec72a24** (`perf(metal): memoize custom-kernel source generation
+(C6)`), mlx-swift pin **99e27254**, mlx-swift-lm pin **cbeb6ee**;
+checkout re-sync verified `diff fbf2fb86 == C4+C5+C6` exactly, no
+local mods.
+
+**C7 — per-model commit policy (app-signalled regime) — ACCEPTED.**
+C4/v3 (`in200`) measured +8.50/+10.58/+3.78% MoE decode but was
+REJECTED for dense 32K (−1.92%); C4/v4 proved no GPU-side signal can
+separate MoE's boundary-limited decode from dense 32K's
+starvation-limited one. The app knows the model — and app-side entered
+scope 2026-07-24. Change (full stack): mlx caps become runtime-settable
+(`std::atomic` members + `Device::set_commit_limits` + namespace
+wrapper + `extern "C" mlx_metal_set_commit_limits`; a 0 leg is left
+unchanged); mlx-swift exposes it (`mlx/c/commit_limits.h` in the Cmlx
+umbrella + `GPU.setCommitLimits` shim); `LLMActor.loadModel` calls it
+on every load keyed off the existing `ModelIdentity.isMoE`
+(`qwen3_5_moe`): **MoE → 200 MB input cap, dense → 100 MB** (setting
+on every load keeps MoE↔dense switching correct). Commit points are
+scheduling boundaries only — commit-point invariance already gated in
+C4. A/B (3 rounds 128/8K/32K, gates 9/9 + 9/9 + 10/10
+token-identical): **MoE decode +5.89% (128), +5.86% (8K), +3.67%
+(32K)** — matching the +5.9/+5.3/+2.8 prediction from the C4 v3-vs-v5
+delta; prefill flat; peaks flat (+0.22% at 128, noise). Dense
+128/8K/prefill/peaks exactly flat (the dense arm passes the
+compiled-in default — no mechanism for an effect); dense 32K decode
+3-pair −5.67% did NOT reproduce in the 10-pair resolution (+5.3/+11.8,
+opposite sign) — machine was thermally throttling hard (absolute dense
+32K throughput swung 70→40→23 t/s across the afternoon); noise, not
+regression. Ported: `spokvulcan/mlx` **6ab29e36**, mlx-swift pin
+**1069e872** (also carries the `GPU.setCommitLimits` + header),
+mlx-swift-lm pin **b3a4b41**; checkout re-sync verified `diff
+fbf2fb86 == C4+C5+C6+C7` exactly, no local mods.
+
+**C8 — eval_impl per-token hash-map machinery — ACCEPTED.** The DFS
+degree pass + BFS tape build performed several `std::unordered_map`
+operations per graph edge per eval (profiles had the walk at ~18% of
+the decode generation thread excluding waits); the tape loop also did
+a per-node `open_streams` insert + `events` map lookup (hundreds of
+nodes back-to-back on ONE stream during decode) and per-input
+`needs_fence` probes against an almost-always-empty map. Change: flat
+open-addressing id→degree map (Fibonacci-hashed power-of-two slot
+array, tombstone deletes, probed by key only — tape order unchanged),
+last-stream guard for the open_streams/events work, `needs_fence`
+empty fast-paths. Same walk, same tape, zero numerics. A/B (3 rounds
+both models, gates 9/9 + 9/9 = 18/18 token-identical): **MoE decode
++1.98% (128, 3/3: +1.10/+2.59/+2.29), +1.43% (8K, 2/3 + one
+−0.07%)**; dense 128/8K flat (+0.70/−0.01%); prefill flat; **peaks
+exactly flat**; 32K deltas positive but throttled-regime (absolute
+13–27 t/s — machine thermally saturated, not verdictable, and not
+needed for the verdict). Ported @ `spokvulcan/mlx` **595a3fe1**,
+mlx-swift pin **0b3289cb**, mlx-swift-lm pin **b5eb5ef**; checkout
+re-sync verified `diff fbf2fb86 == C4..C8` exactly, no local mods.
+
+**M8 — expert-weight prefetch — REJECTED at probe (routing locality
+does not exist).** Instrumented `Qwen35SparseMoeBlock` with a
+throwaway capture hook (TESS_PROBE_ROUTING; per-layer top-k indices
+held lazily, evaluated off the hot path) and measured consecutive-token
+expert-set overlap on a real 256-token decode (MoE 35B-A3B, 128 ctx):
+**mean overlap 2.4/8, median 2.48/8, exact-set rate ≈ 0.0** across all
+40 MoE layers (min layer 0.63/8). A previous-token prefetch would warm
+~70% wrong weights — pure wasted bandwidth on a bus that is already
+the decode bottleneck. No kernel work built; probe reverted, tree
+clean. Do not re-probe without a different prediction signal (router
+logits trajectory, not set identity).
+
+**C9 — gather_mm/gather_qmm identity-index cache — ACCEPTED.**
+Attribution (C6 decode sample census): `Arange::eval_gpu` = 45/2862
+gen-thread samples (1.6%) — `indices_or_default` (ops.cpp) rebuilt
+`arange+reshape` identity row indices on EVERY gather call with no
+explicit lhs indices: `QuantizedSwitchLinear` passes only rhs expert
+ids, so 3 gathers × 40 MoE layers ≈ 120 Arange dispatches + ~240 tape
+nodes per decode token (and per prefill chunk: arange(1024) × 120 × 32
+chunks). Change: cache the evaluated array per shape (bounded 64-entry
+map, FNV-1a key — the first string-key form ate ~0.5% itself,
+measured; mutex-guarded). Constant leaf, read-only consumers, zero
+numerics. A/B: 3-pair leg muddy (8K −1.27% mixed) → 10-pair
+escalation at 128/8K (gate 20/20; first leg's gates 9/9 + 9/9): **MoE
+8K prefill +3.57/+3.55%** (both run blocks, prompt s −3.37/−3.35),
+**8K decode +0.69/+1.99%**; 128 decode 5/5 split mean −0.35% (noise,
+no reproducible regression); 128 prefill mixed (0.17 s legs, noisy);
+dense unaffected (path unused), peaks exactly flat. Ported @
+`spokvulcan/mlx` **625f2aea**, mlx-swift pin **c9796ec4**,
+mlx-swift-lm pin **f72302c**; checkout re-sync verified `diff
+fbf2fb86 == C4..C9` exactly, no local mods.
+
+**C10 — metadata-only primitive fast path — REJECTED (CPU slack: the
+saving is real but not pipeline-critical).** Motivated by the op census
+(~4,400 ops per MoE decode token; Transpose 323 + ExpandDims 88 +
+Squeeze 92 + Contiguous 32 ≈ 535 view ops/token whose `eval_gpu` is
+pure stride/flag metadata), the tape loop inline-evaluated the 8
+verified metadata-only primitives (Transpose, ExpandDims, Squeeze,
+Split, Broadcast, BroadcastAxes, Copy, StopGradient — all delegate
+`eval_gpu` to the common metadata `eval`; Slice/View/Reshape excluded:
+they can dispatch copies) and skipped the `gpu::eval` scaffolding.
+Verified non-effects before benching: `buffer_ops` increments only on
+kernel dispatch (never views), so commit cadence is untouched;
+retention is redundant by producer. A/B (3 rounds + 10-pair
+resolutions, gates 9/9 + 9/9 + 10/10 + 10/10 token-identical, peaks
+flat): MoE 8K decode **−0.43/+0.07 (10 pairs) — no win**; dense 32K
+decode 3-pair −3.84% (3/3) did NOT reproduce (10-pair +11.5/+1.45 —
+the same thermal-noise class both directions). **Lesson logged for the
+loop: post-C4..C9 the 8K decode CPU has slack — spread-out CPU-only
+cuts no longer convert to tok/s. Remaining decode wins must shorten
+the GPU serial chain (fewer/smaller kernels — fusion in the
+E2-bitwise class) or the commit boundaries.** Reverted completely.
+
+**Op census (TESS_OP_CENSUS probe, since reverted — MoE 35B decode,
+~4,400 dispatched ops/token):** Matmul ~280, CustomKernel ~258 (GDN
+scan + rotations), GatherQMM ~129, QuantizedMatmul ~140, view ops
+~535, raw elementwise (Multiply 194, Add 130, Sigmoid 86, Sum 86,
+Divide 43) ~540, already-compiled segments ~305, Transpose 323,
+Softmax ~43, ArgPartition ~33, Convolution ~32, SliceUpdate ~21,
+Arange ~0.25 (post-C9). The elementwise soup + its view-op entourage
+is the largest remaining fusion target; CPU-side per-node cost is no
+longer the lever (see C10 lesson).
+
+**C11 — compiled MoE block during decode (E2 fusion class) —
+ACCEPTED.** The op census' largest remaining class was ~540 raw
+elementwise kernels/token; post-C10's lesson (spread-out CPU cuts
+don't convert) the mechanism here is **GPU serial-chain shortening**:
+`Qwen35SparseMoeBlock` decode now runs through a per-instance
+`compile`d closure (router takeAlong/sum/divide, shared-expert
+sigmoid+multiply, residuals fuse; matmuls/gathers/custom kernels tape
+through unchanged). First form compiled all shapes: **128 prefill
+−5.43%** (one-time compile-trace on a 0.17 s leg; 8K/32K prefill were
+flat) — final form compiles **L==1 only** (prefill is GEMM-dominated,
+fusion measured +0.3% there). A/B final (3 rounds both models, gates
+9/9 + 9/9 token-identical, peaks exactly flat): **MoE decode +5.16%
+(128, 3/3: +3.83/+8.12/+3.68), +2.99% (8K, 3/3: +2.50/+3.48/+2.98),
++7.28% (32K)**; prefill flat (+0.49/−0.05/+1.44); dense flat
+(unaffected path). This is a Vendor/mlx-swift-lm change (no Cmlx
+diff): committed on `pin-upstream-mlx-swift` @ **3bb0f17**; Cmlx pins
+unchanged (mlx 625f2aea, mlx-swift c9796ec4). Opens C12+ for the same
+pattern on the attention + GDN blocks (cache state must become
+inputs/outputs first — GDN is 30/40 layers and the biggest block).
+
+**C12 — compiled GDN decode step with explicit state — ACCEPTED.**
+`Qwen35GatedDeltaNet` decode (S==1, unmasked, cached) runs through a
+per-instance compiled closure; conv/recurrent state crosses as
+inputs/outputs (compiled functions must be pure — first decode token
+falls back to explicit zero states matching `gatedDeltaUpdate`'s
+internal init). Elementwise chains (conv-silu, gating, norms) fuse in
+the E2-bitwise class. Prefill/masked/cacheless keep the unfused body,
+so prefill is byte-identical (the 3-pair 128-prefill +21% and dense
+−2.83% readings were thermal noise by construction). A/B: 3-pair leg
+muddy (8K −0.69%) → 10-pair escalation at 128/8K both models (gates
+20/20 + 18/18 token-identical, peaks exactly flat): **dense 128
+decode +1.75% (10/10), MoE 128 decode +0.94% (10/10)**; 8K decode
+flat both models (−0.3/+0.3% means). MoE's smaller win vs C11 is the
+`compile_replace` replay cost over the GDN block's ~20-node tape × 30
+layers — logged as the limiting factor for further block compiles.
+Committed on `pin-upstream-mlx-swift` @ **e77d05d**; Cmlx pins
+unchanged.
+
+**M4 — fused rotate+dequant+dot — REJECTED at probe (geometry, not
+numerics).** Probe in `/tmp/gather-sweep` (coder subagent, full
+harness + gates): the fused kernel (rotation phase into a bf16
+threadgroup tile + verbatim `qmv_fast_impl` body) is **bitwise
+IDENTICAL to the two-kernel pipeline on the first attempt** — 3 seeds
+× K∈{2048,2560} × rps∈{4,8,16,32}, all IDENT; both phases isolate-
+clean. The numerics worry was unfounded because MLXFast JIT compiles
+with `fastMathEnabled(false)` (device.cpp:619): identical expressions
+→ identical codegen, no fma tuning needed. **But fused is ~2×
+SLOWER** (ABBA, 32 disjoint weight sets): qmv's N/8 = 256-threadgroup
+grid makes every threadgroup redundantly re-rotate the full K vector
+(16 groups × 8 rounds of barrier-separated tile math + ~72KB
+coefficient re-reads per threadgroup ≈ 18MB L2 traffic vs 2MB
+weights); the standalone rotation does the same work across 16
+threadgroups, fully latency-hidden (~2µs). Only rps=32 (non-production
+geometry) reaches parity. For MoE it's strictly worse (rotations
+shared across 8 experts → 8× multiplier). **The two-kernel pipeline
+is the right design; do not revisit unless geometry changes.**
+Meta-lesson banked: **verbatim arithmetic in MLXFast JIT reproduces
+bitwise trivially** — unlocks M5-class fused-kernel replications
+(mask+softmax) that were previously rated risky.
+Artifacts: `/tmp/gather-sweep/Sources/gather-sweep/main.swift`,
+`m4-fused-kernel.metal`, logs (rig preserved, nothing committed).
+
+**C13 — fused causal-mask + softmax for the SDPA ops fallback (M5) —
+ACCEPTED.** Probe-driven (`/tmp/gather-sweep`, agent-0): ceiling
+measured first — the causal chain (greater_equal → where(bf16
+finfo.min) → softmax precise) costs ~6.5 ms per 32K layer-chunk, of
+which mask+where ≈ 3.0 ms (≈5% of 32K prefill at 320 layer-chunks);
+the fused kernel (verbatim looped-softmax precise body, N_READS=4,
+causal select injected at both load sites) lands exactly on the
+softmax traffic floor (3.5 ms, −45% at 32K, −61% at 8K) and is
+**bitwise IDENT on 14/14 configs** (3 seeds × S∈{8192,32768} ×
+offsets). Bitwise enabler: the masked value is exact bf16 finfo.min as
+f32 and exp(min−max) underflows to exact 0; threadgroup lsize must
+equal the production dispatch (1024). Port: `fast.cpp` fallback
+lambda, predicated on (do_causal, no array mask, no sinks, bf16,
+axis>4096, row-contiguous) — block-softmax sizes, sinks, array/additive
+masks keep the stock chain. Also removes the 512MB masked-scores
+intermediate + 32MB bool mask per layer-chunk. App A/B (3-pair +
+two 10-pair sets incl. post-cool-down, **gates 48/48 token-identical**,
+peaks flat): MoE 32K prefill **+2.80% mean of 20 pairs** (11/9 rounds,
+median +0.71% — thermal saturation; accepted on the strictly-
+subtractive-mechanism argument: the change only removes two memory
+passes, no regression channel exists, and the app mean matches the
+probe-predicted +3%); 128/8K flat (fused engages kL>4096 only);
+dense flat. Ported @ `spokvulcan/mlx` **ed107a94**, mlx-swift pin
+**e20b0d86**, mlx-swift-lm pin **8eeec20**; checkout re-sync verified
+`diff fbf2fb86 == C4..C13` exactly.
+
+### Operational state (persisted for context compaction; reload after resume)
+
+- **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
+  `~/projects/mlx-swift`; needs `default.metallib` copied next to the binary
+  as `mlx.metallib` (from the app bundle's `mlx-swift_Cmlx.bundle`). Sections:
+  fidelity + B/E sweep (`MLX_GQMM_CFG`), down_proj shape, dense anchor,
+  gather_qmv decode sweep (`MLX_GQMV_RPS`). Rebuild: `swift build -c release`
+  (seconds — incremental Cmlx).
+- **Fork clone state (standing, do NOT clean):**
+  `~/projects/mlx-swift/Source/Cmlx/mlx` = `ed107a94` + uncommitted probe
+  hooks — `MLX_GQMM_CFG` env in `gather_qmm_rhs`; `MLX_GQMV_RPS` env +
+  rps template param (`quantized.h` AND `mlx-generated/quantized.cpp`) +
+  rps dispatch in `gather_qmv`. All marked PROBE ONLY; never pushed.
+  `~/projects/mlx` = clean at `ed107a94` (pin-tesseract tip).
+- **App binaries (/tmp):** `tesseract-precmlx-baseline.app` (pre-fork),
+  `tesseract-cmlx-fork.app` (C0 fork build, pre-C1), `tesseract-c1-accepted.app`
+  (C1 tiles, fbf2fb86), `tesseract-c4.app` (C1+C4, 404070e2),
+  `tesseract-c5-accepted.app` (C1+C4+C5, 8d11dd1d),
+  `tesseract-c6-accepted.app` (…+C6, 3ec72a24),
+  `tesseract-c7-accepted.app` (…+C7, 6ab29e36),
+  `tesseract-c8-accepted.app` (…+C8, 595a3fe1),
+  `tesseract-c9-accepted.app` (…+C9, 625f2aea),
+  `tesseract-c11-accepted.app` (…+C11, 3bb0f17),
+  `tesseract-c12-accepted.app` (…+C12, e77d05d),
+  **`tesseract-c13-accepted.app` (current main: C1+C4..C9+C11..C13,
+  ed107a94) — the A/B baseline for the next experiment.**
+- **Pins (current):** spokvulcan/mlx-swift `e20b0d86` (pin-tesseract) ←
+  spokvulcan/mlx `ed107a94`; mlx-swift-lm pin branch `8eeec20`.
+- **Build checkout:** the app target's DerivedData is
+  `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
+  (several stale siblings exist; that one is current). Checkout files are
+  read-only — `chmod u+w` before patching.
+- **Measurement protocol (2026-07-24):** default A/B = **3 pairs** per
+  context per model (`BENCH_RUNS=1` × 3 rounds); escalate to 10 pairs
+  only when the signal is inside the noise floor (32K decode/prefill
+  almost always are — never verdict a 32K metric on one run).
+- **Next (C11+):** M8 REJECTED at probe; C10 REJECTED (CPU slack —
+  spread-out CPU cuts stopped converting post-C9; aim at the GPU
+  serial chain). Op census logged above (~4,400 ops/MoE-token; raw
+  elementwise ~540/token = the fusion target). Queue: elementwise-soup
+  fusion in the E2-bitwise class (compile() more of the per-layer
+  chains — router top-k normalize, GDN gating, attention gate; GPU
+  serial-chain shortening is the mechanism), M4 (fused rotate+GEMM,
+  ~3-4% prefill, high risk), M5 (fallback mask+softmax, ~1% prefill),
+  M6/M7 deprioritized.
