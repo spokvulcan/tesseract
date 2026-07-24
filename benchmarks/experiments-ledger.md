@@ -1474,3 +1474,28 @@ same arithmetic: RMSNorm absorbing a trailing elementwise consumer (~40
 barriers ≈ 2%), the router's softmax/argpartition/takealong chain (~80
 barriers ≈ 3–4%, but top-k index order must be preserved exactly or the
 weighted expert sum reorders).
+
+**C17 — fold the GDN q/k norm scalar into `rmsNorm`'s weight — REJECTED
+(context-split: +1.13% at 128, −0.81% at 8K).** Same arithmetic as C16:
+`scalar * rmsNorm(x, weight: none)` sits between two non-elementwise ops,
+so `compile` has nothing to fuse the multiply into and the q/k pair costs
+one hazard barrier + two dispatches per GDN layer (~30 barriers +
+60 dispatches ⇒ ~1.8% predicted). Folding the scalar into the norm's
+weight is **bitwise** — probe over [1,1,16,128], f16 and bf16, both
+scalars (invScale and invScale²): identical in every element — and the
+in-model run was token-identical with flat peaks. But it does not convert
+at long context: MoE **128 decode +1.13% (3/3 positive)**, MoE **8K
+decode −0.81% over 10 pairs (median −0.72%, E wins 2/10)**, dense 8K
+−1.76% (3 pairs, one collapse round). Gates PASS throughout (6/6 + 6/6 +
+10/10). Reverted completely; vendor back at `46a8088`.
+
+**Two lessons.** (1) **A short-context win can hide a long-context
+regression** — verdicting C17 on the clean, low-noise 128 leg alone would
+have shipped a −0.8% 8K regression. Both contexts, every time. (2) The
+barrier-arithmetic prediction is *necessary but not sufficient*: C16 and
+C17 removed comparable barrier counts and only C16 paid. The difference
+is that C16 deleted a kernel outright, while C17 moved work *into* a
+kernel whose weighted variant is evidently not free at this shape. Price
+the prediction, then still measure at both contexts — and correct the
+C16 entry's "RMSNorm absorbing a trailing elementwise consumer (~40
+barriers ≈ 2%)" line: that was this experiment, and it does not pay.
