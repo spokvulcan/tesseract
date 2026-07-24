@@ -529,11 +529,12 @@ struct CompletionHandler: Sendable {
             (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
         }
         let finishReason = projection.finishReason
-        Log.server.info(
+        Log.server.notice(
             "HTTP completion finished — completionID=\(start.completionID) "
                 + "stream=false finishReason=\(finishReason.rawValue) "
                 + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
-                + "cachedTokens=\(start.cachedTokenCount)"
+                + "cachedTokens=\(start.cachedTokenCount) "
+                + "decodeTokS=\(String(format: "%.1f", info?.tokensPerSecond ?? 0))"
         )
         await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
         do {
@@ -733,12 +734,13 @@ struct CompletionHandler: Sendable {
                 )
             )
 
-            Log.server.info(
+            Log.server.notice(
                 "HTTP completion finished — completionID=\(start.completionID) "
                     + "stream=true finishReason=\(finishReason.rawValue) "
                     + "promptTokens=\(projection.info?.promptTokenCount ?? 0) "
                     + "completionTokens=\(projection.info?.generationTokenCount ?? 0) "
-                    + "cachedTokens=\(start.cachedTokenCount)"
+                    + "cachedTokens=\(start.cachedTokenCount) "
+                    + "decodeTokS=\(String(format: "%.1f", projection.info?.tokensPerSecond ?? 0))"
             )
             await activityLog.complete(
                 handle: logHandle, finishReason: finishReason.rawValue)
