@@ -915,7 +915,6 @@ the decode bottleneck. No kernel work built; probe reverted, tree
 clean. Do not re-probe without a different prediction signal (router
 logits trajectory, not set identity).
 
-### Operational state (persisted for context compaction; reload after resume)
 **C9 — gather_mm/gather_qmm identity-index cache — ACCEPTED.**
 Attribution (C6 decode sample census): `Arange::eval_gpu` = 45/2862
 gen-thread samples (1.6%) — `indices_or_default` (ops.cpp) rebuilt
@@ -967,6 +966,26 @@ Arange ~0.25 (post-C9). The elementwise soup + its view-op entourage
 is the largest remaining fusion target; CPU-side per-node cost is no
 longer the lever (see C10 lesson).
 
+**C11 — compiled MoE block during decode (E2 fusion class) —
+ACCEPTED.** The op census' largest remaining class was ~540 raw
+elementwise kernels/token; post-C10's lesson (spread-out CPU cuts
+don't convert) the mechanism here is **GPU serial-chain shortening**:
+`Qwen35SparseMoeBlock` decode now runs through a per-instance
+`compile`d closure (router takeAlong/sum/divide, shared-expert
+sigmoid+multiply, residuals fuse; matmuls/gathers/custom kernels tape
+through unchanged). First form compiled all shapes: **128 prefill
+−5.43%** (one-time compile-trace on a 0.17 s leg; 8K/32K prefill were
+flat) — final form compiles **L==1 only** (prefill is GEMM-dominated,
+fusion measured +0.3% there). A/B final (3 rounds both models, gates
+9/9 + 9/9 token-identical, peaks exactly flat): **MoE decode +5.16%
+(128, 3/3: +3.83/+8.12/+3.68), +2.99% (8K, 3/3: +2.50/+3.48/+2.98),
++7.28% (32K)**; prefill flat (+0.49/−0.05/+1.44); dense flat
+(unaffected path). This is a Vendor/mlx-swift-lm change (no Cmlx
+diff): committed on `pin-upstream-mlx-swift` @ **3bb0f17**; Cmlx pins
+unchanged (mlx 625f2aea, mlx-swift c9796ec4). Opens C12+ for the same
+pattern on the attention + GDN blocks (cache state must become
+inputs/outputs first — GDN is 30/40 layers and the biggest block).
+
 ### Operational state (persisted for context compaction; reload after resume)
 
 - **Probe rig:** `/tmp/gather-sweep` — SwiftPM executable, local-path dep on
@@ -988,10 +1007,11 @@ longer the lever (see C10 lesson).
   `tesseract-c6-accepted.app` (…+C6, 3ec72a24),
   `tesseract-c7-accepted.app` (…+C7, 6ab29e36),
   `tesseract-c8-accepted.app` (…+C8, 595a3fe1),
-  **`tesseract-c9-accepted.app` (current main: C1+C4..C9, 625f2aea) — the
-  A/B baseline for the next experiment.**
+  `tesseract-c9-accepted.app` (…+C9, 625f2aea),
+  **`tesseract-c11-accepted.app` (current main: C1+C4..C9+C11, 3bb0f17) —
+  the A/B baseline for the next experiment.**
 - **Pins (current):** spokvulcan/mlx-swift `c9796ec4` (pin-tesseract) ←
-  spokvulcan/mlx `625f2aea`; mlx-swift-lm pin branch `f72302c`.
+  spokvulcan/mlx `625f2aea`; mlx-swift-lm pin branch `3bb0f17`.
 - **Build checkout:** the app target's DerivedData is
   `~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
   (several stale siblings exist; that one is current). Checkout files are
