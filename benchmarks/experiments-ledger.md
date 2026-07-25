@@ -1499,3 +1499,130 @@ kernel whose weighted variant is evidently not free at this shape. Price
 the prediction, then still measure at both contexts — and correct the
 C16 entry's "RMSNorm absorbing a trailing elementwise consumer (~40
 barriers ≈ 2%)" line: that was this experiment, and it does not pay.
+
+---
+
+## Session 2026-07-25 (c) — the schedule is optimal, so cut serial links
+
+Two measurements re-aimed the whole remaining list, and one of them
+closes a class of ideas permanently.
+
+### The barrier census (probe, reusable)
+
+`scratchpad/apply-census.py` patches the mlx checkout to attribute every
+GPU dispatch and every hazard barrier to the primitive that issued it
+(`eval.cpp` stamps `arr.primitive().name()` before `eval_gpu`;
+`CommandEncoder::maybeInsertBarrier` books it), and to track the ASAP
+**critical-path depth** of the dispatch DAG. `TESS_CENSUS=1`,
+`TESS_CENSUS_OUT=<path>`, table rewritten every 200k dispatches. Run the
+app binary directly — `open` does not forward env.
+
+MoE at 128 ctx, 209 tokens (tokens = `ArgReduce` dispatches, one sampler
+argmax per token): **1913.9 dispatches and 946.3 barriers per token**,
+confirming the previous session's 1892/972 from an independent angle. The
+top of the attribution table, per token:
+
+| primitive | dispatches | barriers | ms/token @4.14 µs |
+|---|---|---|---|
+| RMSNorm | 202.8 | 155.9 | 0.645 |
+| CustomKernel | 241.5 | 146.3 | 0.606 |
+| QuantizedMatmul | 131.6 | 82.7 | 0.342 |
+| CompiledBroadcastMultiply | 99.6 | 63.5 | 0.263 |
+| Matmul | 264.0 | 43.1 | 0.178 |
+| Add | 41.8 | 40.7 | 0.169 |
+| Softmax | 40.3 | 39.6 | 0.164 |
+| GatherQMM | 120.5 | 38.2 | 0.158 |
+| ArgPartition | 40.2 | 38.9 | 0.161 |
+| CompiledBroadcastDivide | 39.6 | 38.4 | 0.159 |
+| Sum | 80.4 | 37.4 | 0.155 |
+
+### Tape reordering / list scheduling — DEAD, by measurement
+
+The same run reports `criticalPathDepth=199599` against
+`barriers=197773`. **MLX's dispatch schedule is already at the graph's
+critical-path depth** (within 1%, and the model is the conservative
+direction). There is no wave to be won by reordering the tape,
+list-scheduling it, or interleaving independent chains — the ~950 waves
+per token *are* the graph's depth. The only way to remove a barrier is to
+remove a serial link. Do not revisit scheduling.
+
+### C18 — fused router top-k kernel — ACCEPTED (+1.91% MoE 128 decode)
+
+`ArgPartition::eval_gpu` carries the comment "We direct arg partition to
+sort for now" and delegates to `gpu_merge_sort`: **the router fully sorts
+all 256 experts, every MoE layer, every token, to name 8 of them.** With
+the gather/sum/divide normalise tail that is three serial dispatches and
+three encoder-wide barriers for a 256→8 selection.
+
+Rig pricing of the chain at the production shape ([1,1,256] f16, depth-400
+dependent chain, since decode is latency- not throughput-bound):
+
+| item | µs/layer | ms/token (40 layers) |
+|---|---|---|
+| `argPartition` (the full sort) | 10.9 | 0.436 |
+| `sum` + `divide` tail | 6.4 | 0.255 |
+| whole router above floor | 18.1 | 0.724 |
+
+Replaced with one custom kernel. **Bit-identical by construction**, each
+part read out of the MLX source it replaces: `sort.h`'s `LessThan`
+compares values only, `ThreadSort` swaps on strict less-than and
+`merge_step` takes from A on ties, so the sort is *stable* and element
+`i`'s ascending position is exactly `#{j: v_j < v_i} + #{j: v_j == v_i,
+j < i}`; `reduce.metal` instantiates float16 with `U = float16_t` and a
+row of 8 takes `thread_reduce` (sequential accumulation in the output
+dtype, from zero, in slot order); the divide is elementwise.
+
+Three kernel geometries were tried. The winner counts, for each expert,
+how many rank *above* it (`slot = K-1-count`) using a **single 64-bit
+compare** per element: a monotone bit key in the high 32 bits with the
+index in the low 32 folds value comparison *and* the stable tie-break
+into one operation. Saved vs the two alternatives:
+
+| variant | µs/layer saved | ms/token |
+|---|---|---|
+| null kernel, same I/O (work-free ceiling) | 13.7 | 0.548 |
+| **key64 (shipped)** | **9.92** | **0.397** |
+| value compare + explicit tie-break | 6.62 | 0.265 |
+| P=4 threads per element | 4.50 | 0.180 |
+
+The P-split being *slowest* is the C15/M4 lesson again: the kernel is
+launch/latency-bound, so adding parallelism costs more than the work it
+saves.
+
+Gate: bitwise **IDENTICAL** over float16/bfloat16/float32 × {softmax
+outputs, 16-level ties, 4-distinct-values, signed zeros, all-equal rows},
+7936 rows each. Two edge cases had to be handled explicitly to get there:
+NaN maps above `+inf` and all NaNs tie (as `LessThan` does), and the sign
+of zero is normalised, because `-0.0` and `+0.0` compare *equal* under
+`a < b` but have different bit patterns.
+
+In-model, against `46a8088`: MoE **128 decode +1.91% over 10 pairs
+(10/10 positive, +1.34%…+2.36%)**, MoE **8K decode +0.47% over 10 pairs
+(8/10 positive)**, prefill +0.23%/+0.08%, peaks exactly flat, dense
+unaffected (no MoE block on that path). **32/32 A/B pairs
+token-identical.** Committed as `e10e52f`.
+
+Decode only: at prefill the block sort's `O(E log² E)` beats this
+kernel's `O(E²)` rank count and there is no barrier to save, so many-row
+callers keep the old chain. The MLXVLM copy of the block still has the
+old chain — not exercised by either PARO model here, so not touched.
+
+### Why C18 pays less than the dispatch count suggests
+
+Census on the C18 build, same 128-ctx run: dispatches/token **1913.9 →
+1826.5 (−87.4)**, exactly the four primitives removed. But barriers/token
+went **946.3 → 978.5 (+32.2)**: `ArgPartition` −38.4 and
+`CompiledBroadcastDivide` −38.4, against `CustomKernel` +40.6 and
+**`GatherQMM` +39.8**.
+
+The expert matmuls read `inds`. In the old chain the `sum` and `divide`
+barriers fired *between* the sort and the expert matmuls, so they
+published `inds` as a side effect and `GatherQMM` got its synchronisation
+free. Delete them and `GatherQMM` has to pay for its own barrier. **C18's
+win is the deleted 256-element block sort's compute, not barriers** —
+barriers actually rose.
+
+New lesson: **a barrier can be load-bearing for a consumer other than the
+one it was counted against.** Removing a serial link only pays if the
+link it exposes was not already going to need one. Price a fusion by what
+the *consumer* still has to wait for, not by the dispatch count alone.
