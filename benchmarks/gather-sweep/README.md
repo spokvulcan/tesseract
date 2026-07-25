@@ -18,6 +18,17 @@ in `/tmp/gather-sweep` does not survive reboots.
   plus the qmv latency/fusion sweep behind the 2026-07-25 roofline entry
   (dependent-chain vs independent-call cost, and the control that
   separates rig overhead from kernel time).
+- `main.swift.c19-softmax-backup` — the C18 kernel-geometry sweep (rank
+  count vs P-split vs key64, null-kernel ceiling) plus the C19 gate: the
+  router kernel with `softmax_single_row` replicated inside it
+  (AccT=float, N_READS=4, masked to E/4 threads, MLX's simd_max/simd_sum
+  tree). Bitwise identical; rejected on speed. Keep as the reference for
+  reproducing an MLX reduction kernel exactly. The shipped C18/C16
+  contracts are additionally pinned in CI by the vendor's
+  `Qwen35BitwiseContractTests`.
+- `main.swift.prefill-anchor-backup` — gather_qmm vs dense-qmm anchor at
+  production MoE prefill dims, swept over gathered-row counts. Answers
+  "is the gather kernel behind the anchor?" (it is only at small shapes).
 - `Package.swift` depends on the local clone `/Users/owl/projects/mlx-swift`
   (branch `pin-tesseract`) by absolute path — adjust if your clone lives
   elsewhere. Probe-only env hooks (`MLX_GQMM_CFG`, `MLX_GQMV_RPS`) exist
@@ -29,14 +40,9 @@ in `/tmp/gather-sweep` does not survive reboots.
   built binary as `mlx.metallib`. JIT covers the templated kernels.
 - Build: `swift build -c release` (Release only for timing).
 
+The barrier census probe lives one level up as
+`benchmarks/apply-census.py` — it patches the mlx checkout (never
+committed there) rather than running in this rig.
+
 Nothing here runs in CI; it is lab equipment. Logs from the original
 sessions stay in the ledger, not in the repo.
-
-- `main.swift.c19-softmax-backup` — C19 gate: the router kernel with
-  `softmax_single_row` replicated inside it (AccT=float, N_READS=4, masked
-  to E/4 threads, MLX's simd_max/simd_sum tree). Bitwise identical;
-  rejected on speed. Keep as the reference for reproducing an MLX
-  reduction kernel exactly.
-- `main.swift.prefill-anchor-backup` — gather_qmm vs dense-qmm anchor at
-  production MoE prefill dims, swept over gathered-row counts. Answers
-  "is the gather kernel behind the anchor?" (it is only at small shapes).

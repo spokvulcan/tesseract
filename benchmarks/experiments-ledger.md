@@ -1509,7 +1509,8 @@ closes a class of ideas permanently.
 
 ### The barrier census (probe, reusable)
 
-`scratchpad/apply-census.py` patches the mlx checkout to attribute every
+`benchmarks/apply-census.py` (preserved there by the PR #427 review round;
+originally session scratchpad) patches the mlx checkout to attribute every
 GPU dispatch and every hazard barrier to the primitive that issued it
 (`eval.cpp` stamps `arr.primitive().name()` before `eval_gpu`;
 `CommandEncoder::maybeInsertBarrier` books it), and to track the ASAP
@@ -1743,3 +1744,53 @@ what runs, not how fast it runs: speculative decoding for the dense model
 (greedy-verified, so output-identical by construction — blocked on a
 compatible PARO draft model), or a quantization change (out of the
 zero-loss scope by definition).
+
+## Review round 2026-07-25 — PR #427 review fixes
+
+A full-diff review of the C14/C16/C18 round found no correctness defect in
+the shipped code, but six hygiene/robustness findings. All fixed in vendor
+`8519cf3` on `pin-upstream-mlx-swift` (68ad25f → 8519cf3 total for the PR):
+
+- **uint32 router indices.** The C18 kernel emitted `int32` where
+  `argpartition` emits `uint32` (mlx `ops.cpp:2561`), so the decode and
+  prefill router paths produced different index dtypes for the same
+  logical tensor. Kernel now emits `uint32`. Values were always identical;
+  both dtypes were independently parity-proven in-model (uint32 = the
+  entire pre-C18 history, int32 = the C18 gate), so this is a
+  consistency fix, not a numerics change.
+- **Dead C12 wrapper removed.** Since C14, every S == 1 decode reaches
+  `decodeForward` through the layer trace (B) or a whole-step segment (C);
+  the GDN-module-local compiled wrapper was unreachable on every path
+  (traced all callers). Body stays as `decodeForward`.
+- **Package.swift: MLXLLM lacked the MLXFast product dependency.** Xcode
+  leaks all modules of a dependency package into the search path, so the
+  app built C18 fine — but strict SwiftPM (`swift build` / `swift test`)
+  failed on `no such module 'MLXFast'`. The vendor suites had last been
+  run pre-C18; gap now closed and the dep added.
+- **The bitwise contracts are now CI-pinned** — new vendor
+  `Qwen35BitwiseContractTests`: (1) fused GDN decode body vs the unfused
+  conv1d body, f16+bf16, 256 channels (an MLX pin bump that changes
+  Convolution's accumulation now fails a unit test instead of silently
+  splitting decode from prefill); (2) fused router kernel vs the
+  argPartition/takeAlong/normalise chain over softmax rows, tie-heavy
+  rows, all-equal rows, signed zeros and NaN rows, f16/bf16/f32,
+  E∈{256,128}, norm∈{on,off}, dtype and bit patterns asserted. The
+  NaN-above-everything ordering is thereby gate-verified (previously
+  source-derived only — `sort.h`'s `LessThan` is explicitly NaN-aware,
+  `(!an) & bn`, so NaN is a true maximum equivalence class).
+- **Lifecycle coverage restored.** The whole-step schedule had silently
+  removed the MoE block's own C11 closure from the original leak test's
+  path; a quantized-cache decode variant now drives the fallback that
+  still installs it.
+- **Census preserved.** `apply-census.py` moved from the session
+  scratchpad to `benchmarks/apply-census.py` — it produced the
+  critical-path-depth result that closes the scheduling class, and was
+  the one probe not preserved.
+
+Gates for this round: vendor suites green (ParoQuantTests 24/24, Qwen35
+suites incl. the 2 new contract tests and the new lifecycle variant,
+SwitchLayers, ToolTests). No fresh 10-pair A/B was run: the only
+executed-graph change is the index dtype, whose two variants are both
+already parity-proven above; the contract tests hold the fused outputs
+bit-identical to the chain including dtype. Dead-code removal and the
+Package.swift dep do not change the executed graph.

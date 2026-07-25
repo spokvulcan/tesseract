@@ -1,4 +1,6 @@
-// C18 probe — fuse the MoE router tail into one kernel.
+// C18/C19 probe — fuse the MoE router tail into one kernel (C18: the
+// kernel-geometry sweep and bitwise gate), then fold the router softmax
+// into the same kernel (C19: gate19 below; bitwise, rejected on speed).
 //
 // Replaces, per MoE layer per decode token:
 //     inds   = argPartition(gates, kth: E-K)[..., E-K...]     (a FULL 256-sort:

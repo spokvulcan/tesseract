@@ -90,10 +90,14 @@ MoE / 9 for the dense, split only where the KV cache is written) and
 measured it: Swift graph build 14.1% → 9.8%, GPU wait 33.4% → **37.3%**,
 and tok/s +1.33% (MoE 128 decode), +0.67% (MoE 8K), +1.73% (dense 8K).
 Accepted, but the 8K "→ 140–200 t/s" estimate below was never reachable this
-way. **The 2× decode prize is GPU-serial-chain work** — fewer/faster
-kernels — not graph caching. Ledger has the numbers and the next target
-(shared-input rotation batching: ~310 of ~511 rotation launches per MoE
-token are one dispatch per group).
+way. **The 2× decode prize was GPU-serial-chain work** — fewer/faster
+kernels — not graph caching. The serial-chain follow-up this entry
+originally pointed at (shared-input rotation batching) was then probed and
+**rejected as C15**: the C14-session estimate of ~310 batchable rotation
+launches was wrong — the checkpoint has 130 rotations/token, ~50 of them
+batchable, ≈ 0.48% at the measured 1.00 µs/dispatch. See the no-go list at
+the bottom of this file; what actually converted afterwards was C16 and
+C18, and the "Read this first" section above is where the class ended.
 
 Original entry, kept for the reasoning:
 
@@ -246,7 +250,7 @@ worth)**.
   publishing `inds` to the expert matmuls for free. Price a fusion by
   what the *consumer* still has to wait for.
 - **The barrier census is reusable** —
-  `scratchpad/apply-census.py apply|revert` patches the mlx checkout to
+  `benchmarks/apply-census.py apply|revert` patches the mlx checkout to
   attribute every dispatch and barrier to its primitive and to compute the
   DAG's critical-path depth. `TESS_CENSUS=1 TESS_CENSUS_OUT=<path>`, and
   run the app binary directly (`open` does not forward env).
