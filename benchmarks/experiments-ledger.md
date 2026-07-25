@@ -1102,6 +1102,115 @@ dense flat. Ported @ `spokvulcan/mlx` **ed107a94**, mlx-swift pin
 
 ---
 
+## Session 2026-07-25 — full-step graph caching (C14)
+
+Base: main `3d1b15cc` (post-PR #426), pins mlx `a3673067` / mlx-swift
+`457a0d6d` / mlx-swift-lm `68ad25f`. **The C13-era baseline binary is not a
+valid base any more:** at mlx `ed107a94` the C13 fused causal-softmax kernel
+declares its output `{"out"}` while the body aliases
+`device bfloat16_t* out = y;`, so the generated source does not compile and
+the fused path throws at first dispatch (verified by reading both
+revisions). PR #426 fixed it (`{"y"}`). A/B baseline for this session is a
+fresh Release build of `3d1b15cc` (`/tmp/tesseract-c14-base.app`).
+
+### C14 attribution — decode is GPU-paced, so the roadmap's premise is wrong
+
+`sample` on the generation thread (Release, 1024-token decode runs, 9 s
+windows; subtree totals with same-symbol nesting removed):
+
+| | MoE 35B @8K | dense 4B @8K |
+| --- | --- | --- |
+| GPU-completion wait (`Scheduler::wait_for_one`) | **33.4%** | **13.8%** |
+| op dispatch (`gpu::eval`) | 41.7% | 47.0% |
+| Swift graph build (model forward) | 14.1% | 26.3% |
+| detach/destructors | 2.9% | 4.2% |
+
+That wait is `transforms.cpp:424` — `n_active_tasks() > MAX_ACTIVE_TASKS`
+(=10, `transforms.cpp:26`) — i.e. the generation thread blocked *because the
+CPU ran ahead of the GPU*. **Decode is GPU-paced on both models, with ~1/3
+(MoE) and ~1/7 (dense) CPU slack.** The roadmap's item-1 premise (~25% Swift
+graph build + ~40% eval walk *on the critical path*, decode 8K "~96 →
+140–200 t/s") is therefore not the shape of the problem: removing CPU work
+cannot pay more than the slack. C10's lesson, re-confirmed post-C13 and now
+with the mechanism named. The 2× decode target needs GPU-chain shortening,
+not graph caching — see the follow-up queue below.
+
+### C14 — whole-step decode schedule — ACCEPTED (small)
+
+Three milestones, each gated on its own; all landed together.
+
+**(A) FA-layer purity refactor.** The attention decode body split into pure
+functions around the cache write. **The concat form of "cache as input" was
+killed by arithmetic before it was written:** materialising the grown cache
+costs ~64 MB extra traffic per FA layer per token at 8K on the dense model
+(kvHeads 4 × headDim 256 × 8192 × 2 B, read+write, K and V) ≈ 512 MB/token
+over 8 layers ≈ 1.5 ms of a 10.5 ms step, 4× worse at 32K — no fusion pays
+that back. Keeping `cache.update`'s in-place slice_update also keeps the
+donation MLX depends on: `SliceUpdate::eval_gpu` always calls `copy_gpu`,
+which donates only when `is_donatable()` (`array_desc_.use_count() == 1`,
+`array.h:294`) — today's KV write is in-place *only* because Swift drops its
+reference to the old buffer. Gate: PASS, 12/12 token-identical.
+
+**(B) Per-layer compiled decode blocks.** The whole layer traced per
+instance (norm → attention → residual → norm → MLP → residual). GDN layers
+are one trace, subsuming C11+C12 *plus* the glue those left in Swift; FA
+layers are two traces split at the cache write. **No shapeless compilation
+is needed anywhere** — GDN state shapes are context-independent, so the SDPA
+is the only shape-varying op and it stays outside; rope also stays outside
+(its scalar offset moves per token and a trace would bake it). Gate PASS;
+MoE 128 decode +1.08% (3/3).
+
+**(C) Whole-step schedule.** `Qwen35TextModelInner.decodeStep` tiles the
+step into segments running from just after one FA layer's SDPA to just
+before the next one's: **11 traced segments for the MoE** (40 layers), 9 for
+the dense, against ~40 per-layer traces in B and full Swift graph building
+at base. Embedding opens the first segment, the final norm closes the last;
+anything unusual (real mask, quantized/turbo cache, GDN layer with no state)
+falls back. Engagement verified in the profile (`decodeStep` present,
+per-layer `callAsFunction` absent), and it did what it was supposed to do to
+the CPU: **Swift graph build 14.1% → 9.8%, GPU wait 33.4% → 37.3%** — i.e.
+the CPU got slacker and the GPU pace did not move. **C added ~nothing over
+B in tok/s, exactly as the attribution predicted.**
+
+Numbers (10 pairs = 5 rounds × 2 runs, ABBA, vs base; token gates PASS
+throughout — **108 pairs token-identical** across every run this session,
+20 of them on the exact shipped binary per model):
+**MoE 128 decode +1.33%** (8/8 positive excluding a cold first-arm round;
++2.33% over all 10), **MoE 8K decode +0.67%** (8/8 positive), **dense 8K
+decode +1.73%** (7/8 positive on the shipped binary), dense 128 +0.31%
+(5/8, flat), **peaks exactly flat on both models** (19.12/19.93 and
+2.77/3.56), prefill untouched by construction (L > 1 keeps the old path).
+**Verdict: ACCEPTED** — ≥1% reproducible on two metrics across both models
+with sign consistency, nothing regressed. Vendor-only change; Cmlx pins
+unchanged. Vendor suites green (ParoQuantTests 24/24, Qwen35 suites 11/11).
+Absolute tok/s drifts down across a long bench session (the dense 10-pair
+ran at 88–94 t/s where the morning's ran at 95–99) — only within-round
+pairs are comparable, as the protocol says.
+
+**Measurement artifact worth remembering:** on the dense model the *6th
+consecutive app launch* of a run collapsed on every metric — including
+code-identical prefill (911 → 685 t/s) — in 4 out of 4 three-round runs.
+Three-round dense verdicts are unsafe on a machine already warm from
+benching; the 10-pair form spreads the effect across both arms.
+
+**Follow-up queue (aimed by the attribution above, not by the roadmap):**
+the GPU serial chain is now the only thing that converts. Largest
+identified in-scope class: **shared-input rotation batching.**
+`RotateQuantizedLinear` dispatches rotate+qmm per projection, and the
+projections of a layer that share an input (GDN `in_proj_qkv/z/b/a`,
+attention q/k/v, the MoE block's router + shared expert) rotate the *same*
+activation with different coefficient sets — ~511 rotation launches/token on
+the MoE, of which ~310 are batchable into one dispatch per group by putting
+the set index on the grid's z axis (per-element arithmetic untouched ⇒
+bitwise by construction). At decode the rotation grid is 16 threadgroups ×
+32 threads — pure launch latency. Probe first (a `rotbatch` rig section is
+drafted: verbatim production body + a z-axis variant, bitwise gate, ABBA
+over 32 disjoint activations), then port. This is *not* the logged "PARO
+projection fusion" no-go (#257), which was about fusing the GEMMs — each
+projection keeps its own rotation, they just share one launch.
+
+---
+
 ## Review round 2026-07-24 — PR #425 full-diff review fixes
 
 Two-agent adversarial review of the whole C1–C13 loop (PR #425) found
@@ -1206,3 +1315,482 @@ stock chain bitwise in the app. Attribution: no other fix in the E arm
 can move 32K prefill (M3 Max C4 caps are value-identical, C9's map
 swap is negligible), so the delta isolates C13. Raw reports:
 session scratchpad `parity/results-{moe,moe32k,dense}`.
+
+## Session 2026-07-25 (b) — the decode roofline, and three rejections
+
+Continuation of the C14 session. Goal was ~2× decode (MoE 8K
+~96 → ~180 t/s). **That target is not reachable within the zero-loss
+constraint on this architecture, and this session says so with
+numbers.** What follows is the measured model of where a MoE decode
+token goes, then the three hypotheses it killed. Nothing shipped;
+tree, vendor and the mlx checkout are all back at their pinned
+commits, verified token-identical.
+
+**Correction to the C14 entry.** It claimed "~511 rotation launches
+per MoE token, ~310 batchable". Wrong — read from the checkpoint
+header (`model.safetensors`, 130 `.theta` prefixes: 30×{in_proj_qkv,
+in_proj_z, out_proj} + 10×{q,k,v,o}), there are **130** rotations per
+token and no MoE-block rotations at all (this checkpoint has no
+`gate_up_rot`/`down_rot`; `RotateSwitchGLU` is never instantiated).
+Corroborated by the older op census (CustomKernel ~258 = GDN scan +
+rotations). The batchable subset — projections sharing an input — is
+~50, not ~310.
+
+**Decode is GPU-paced with no idle bubbles.** AGX driver utilization
+counter (`ioreg -c AGXAccelerator`, 16 ms sampling) over a 500-token
+8K decode window: median **100%**, p10 100%, mean 97.6 (boundary
+samples). Prefill 99.1%. So every remaining win must come out of GPU
+time, not out of CPU slack or scheduling gaps.
+
+**Byte budget (the denominator everything else is measured against).**
+From the safetensors header plus the loader's quantization predicate
+(`isParoQuantIOLayer` quantizes **only** `embed_tokens` and `lm_head`
+— the router `mlp.gate`, `shared_expert.*` and `shared_expert_gate`
+stay **F16**, which the earlier estimates had as 4-bit): per token at
+8K = 539 MB GDN + 145 FA + 523 experts (top-8) + 252 shared expert +
+42 router + 270 lm_head + 168 KV + 63 GDN state = **2002 MB**. At the
+measured 10.5 ms/token that is **189 GB/s**.
+
+**The anchor: 371 GB/s.** `lm_head` (one 2048×248320 4-bit qmv, 270 MB)
+runs at 371 GB/s *inside the model* — 93% of the M3 Max's 400 GB/s.
+The machine streams fine. Cold-DRAM ceiling confirmed independently in
+the rig at N=131072 (142 MB, cache-defeating): 388 GB/s.
+
+**Attribution (in-app `--block-bench` probe, sync floor 0.21 ms
+subtracted; parts sum to the whole: gdn 7.52 + fa 2.43 ≈ inner 9.93).**
+
+| class | ms | MB | GB/s | % of anchor |
+|---|---|---|---|---|
+| MoE blocks ×40 | 4.77 | 817 | 171 | 46% |
+| GDN attn ×30 | 4.42 | 602 | 136 | 37% |
+| FA attn ×10 | 1.24 | 313 | 253 | 68% |
+| lm_head | 0.83 | 270 | 371 | 100% |
+
+Sub-block: switch_mlp ×40 3.33 ms (157 GB/s), in_proj_qkv ×30 1.28
+(208), shared expert ×40 1.44 (175), in_proj_z ×30 0.90 (149),
+out_proj ×30 0.87 (154), router ×40 0.74 (57). **Efficiency tracks
+matmul size, not bytes** — everything but `lm_head` is latency-bound,
+not bandwidth-bound.
+
+**Wave census (mlx `CommandEncoder` instrumentation; two runs at
+maxNew 100/300, subtracted).** Per decode token: **1892 dispatches,
+972 hazard barriers** — average wave width 1.95, i.e. the graph is
+~1000 serial steps deep. Barriers by primitive (per token): RMSNorm
+157, CustomKernel 144, QuantizedMatmul 80, CompiledBroadcastMultiply
+65, then ~12 entries at ~30–40 (one per layer): Matmul 40 (for 260
+dispatches — those *do* overlap), Softmax, ArgPartition, Sum, Add,
+GatherQMM 39 (120 dispatches), Concatenate 29, Convolution 29.
+
+**The bound: barriers off → +62%.** Skipping the hazard barrier
+entirely (numerically garbage, timing-valid) takes 8K decode
+**95.07 → 153.80 t/s** (10.52 → 6.50 ms). So ~4.0 ms of the token is
+serialization at hazard points and ~5.3 ms is weight streaming that is
+already at ~95% of peak. **That is the whole budget: there is no 2×
+inside it without changing arithmetic.**
+
+**C15 — shared-input rotation batching — REJECTED (arithmetic, not
+geometry).** Probe (z-axis batched rotation, per-element body
+untouched): **bitwise IDENTICAL** at all four configs, 2.0–3.5× faster
+per group (sets=3/4/6 at hidden 2048/2560; batched dispatch ~5–6.5 µs
+regardless of set count). But the lever is only ~50 dispatches/token
+(see the correction above), and the marginal cost of a dispatch in the
+real pipeline was measured at **1.00 µs** (`--dispatch-probe` slope:
+N=0/200/400 serial 1-element adds appended to every decode step, two
+N=0 legs agreeing at 94.60/94.69 t/s; linear fit over N≤400 — N=800
+leaves the regime at 1.69 µs/op). 50 × 1.00 µs = **0.48%** of a token,
+below the 1% bar. Killed before porting. **Rule of thumb banked: a 1%
+decode win needs ~105 dispatches removed.**
+
+**Serial dispatch instead of concurrent+barriers — REJECTED, −19%.**
+`computeCommandEncoder(MTL::DispatchTypeSerial)` with the explicit
+barriers dropped (Metal then orders dispatches itself): 77.21/77.11
+vs 94.77/94.95 t/s. MLX's concurrent-dispatch + explicit-hazard-barrier
+scheme is already the better one; the overlap it buys is worth +23%.
+
+**Resource-scoped hazard barriers — REJECTED, −7% (and the first
+reading was a correctness bug).** MLX emits an encoder-wide
+`memoryBarrier(BarrierScopeBuffers)` although it knows exactly which
+buffers are hazards. Narrowing it to `memoryBarrier(resources,count)`
+read **+1.7%** (95.69/96.65 vs 94.51/94.63, tokens identical) — but
+that version kept MLX's `prev_outputs_ = next_outputs_` reset, which is
+sound only for an encoder-wide barrier: a resource-scoped barrier does
+not order the *unlisted* buffers, so the reset silently drops live
+hazards (a race that merely did not fire). The sound version (erase
+only the barriered resources, keep the rest in the hazard set) runs
+**88.05/88.35 t/s, −7%**, with barriers up 33% (325k → 433k per run).
+The win was the bug. **Logged as a trap: a scheduling change that
+reads positive and token-identical can still be unsound — check the
+invariant, not just the gate.**
+
+**Housekeeping resolved.** The mlx checkout carried an *uncommitted*
+`output_shapes` diff (CustomKernel/GatherMM/GatherQMM/Split shapeless-
+replay scaffolding) left over from the discarded pre-C14 attempt.
+Stashed, rebuilt, re-run: token-identical and same speed, i.e. **inert**
+— the shipped C14 compiles concrete shapes and never consults it.
+Dropped; the checkout is back at the pinned `a3673067` and the
+committed pins are honest.
+
+**Where the remaining decode work is (ranked, all small).** The 4.0 ms
+serialization budget is spread over 972 barriers whose depth is the
+model's dataflow. Cutting it means removing *serial* steps, and the
+bitwise constraint blocks the reduction-order changes that would give
+big wins (split-K, fused-norm rewrites, custom top-k). What is left is
+per-site fusion in the E2-bitwise class, each worth ~1–2%: GDN
+conv-state concat + conv1d → one kernel (~30 barriers), RMSNorm
+absorbing its trailing elementwise consumer (~40), the router chain's
+softmax/argpartition/takealong (~80, but top-k index order must be
+preserved exactly or the weighted sum reorders). **Do not re-attempt:
+anything that raises dispatch count for a "better" kernel, resource
+barriers, serial dispatch, or rotation batching.**
+
+**C16 — GDN decode conv1d as fused multiply-adds — ACCEPTED.** First
+experiment sized against the new conversion factors (a barrier ≈ 4.14 µs,
+a dispatch ≈ 1.00 µs) *before* building it. At S == 1 the depthwise
+`conv1d` over `[convState | qkv]` is a fixed 4-term dot per channel;
+written as elementwise multiply-adds it folds into the surrounding
+compiled segment, so the `Convolution` wave disappears — −1 dispatch and
+−1 **barrier** per GDN layer (30/token ⇒ ~0.155 ms ⇒ ~1.5% predicted).
+Bitwise by probe, not by argument: the accumulation must run in f32 and
+round once at the end (what MLX's Convolution kernel does) — over 8192
+channels, f16 **and** bf16, f32-accumulation is **IDENTICAL in every
+channel** (sequential and pairwise-tree forms both), while native-dtype
+accumulation differs in ~47% of channels. Prefill and any S > 1 call keep
+the original conv (byte-identical path). Measured (`parity-ab.sh`,
+`BENCH_RUNS=1`): **MoE 8K decode 9/10 pairs positive, median +1.77%**,
+pairwise mean +0.92% with one environmental collapse round (−6.96%, in a
+window where the baseline arm also fell 94.3 → 87.7) left in; 3-pair run
++1.38% (3/3) at 8K and +0.60% (3/3) at 128. **Dense flat** (10 pairs:
+−0.01% pooled, median +0.45%, 7/10 — no regression). Prefill +0.18% MoE /
++0.09% dense; **peaks exactly flat** on both. Parity gate **32/32
+token-identical** (10+10+6+6) plus an in-model single-run check.
+Vendor-only change (no Cmlx diff), `pin-upstream-mlx-swift` @ **46a8088**.
+
+**Method note worth reusing.** The predicted value (~1.5%) and the
+measured median (+1.77%) agree, which is the first time in this loop that
+a decode change was *sized* correctly in advance. The two constants that
+made it possible — 1.00 µs per dispatch and 4.14 µs per hazard barrier —
+are the units to price any future decode idea in. Next candidates by the
+same arithmetic: RMSNorm absorbing a trailing elementwise consumer (~40
+barriers ≈ 2%), the router's softmax/argpartition/takealong chain (~80
+barriers ≈ 3–4%, but top-k index order must be preserved exactly or the
+weighted expert sum reorders).
+
+**C17 — fold the GDN q/k norm scalar into `rmsNorm`'s weight — REJECTED
+(context-split: +1.13% at 128, −0.81% at 8K).** Same arithmetic as C16:
+`scalar * rmsNorm(x, weight: none)` sits between two non-elementwise ops,
+so `compile` has nothing to fuse the multiply into and the q/k pair costs
+one hazard barrier + two dispatches per GDN layer (~30 barriers +
+60 dispatches ⇒ ~1.8% predicted). Folding the scalar into the norm's
+weight is **bitwise** — probe over [1,1,16,128], f16 and bf16, both
+scalars (invScale and invScale²): identical in every element — and the
+in-model run was token-identical with flat peaks. But it does not convert
+at long context: MoE **128 decode +1.13% (3/3 positive)**, MoE **8K
+decode −0.81% over 10 pairs (median −0.72%, E wins 2/10)**, dense 8K
+−1.76% (3 pairs, one collapse round). Gates PASS throughout (6/6 + 6/6 +
+10/10). Reverted completely; vendor back at `46a8088`.
+
+**Two lessons.** (1) **A short-context win can hide a long-context
+regression** — verdicting C17 on the clean, low-noise 128 leg alone would
+have shipped a −0.8% 8K regression. Both contexts, every time. (2) The
+barrier-arithmetic prediction is *necessary but not sufficient*: C16 and
+C17 removed comparable barrier counts and only C16 paid. The difference
+is that C16 deleted a kernel outright, while C17 moved work *into* a
+kernel whose weighted variant is evidently not free at this shape. Price
+the prediction, then still measure at both contexts — and correct the
+C16 entry's "RMSNorm absorbing a trailing elementwise consumer (~40
+barriers ≈ 2%)" line: that was this experiment, and it does not pay.
+
+---
+
+## Session 2026-07-25 (c) — the schedule is optimal, so cut serial links
+
+Two measurements re-aimed the whole remaining list, and one of them
+closes a class of ideas permanently.
+
+### The barrier census (probe, reusable)
+
+`benchmarks/apply-census.py` (preserved there by the PR #427 review round;
+originally session scratchpad) patches the mlx checkout to attribute every
+GPU dispatch and every hazard barrier to the primitive that issued it
+(`eval.cpp` stamps `arr.primitive().name()` before `eval_gpu`;
+`CommandEncoder::maybeInsertBarrier` books it), and to track the ASAP
+**critical-path depth** of the dispatch DAG. `TESS_CENSUS=1`,
+`TESS_CENSUS_OUT=<path>`, table rewritten every 200k dispatches. Run the
+app binary directly — `open` does not forward env.
+
+MoE at 128 ctx, 209 tokens (tokens = `ArgReduce` dispatches, one sampler
+argmax per token): **1913.9 dispatches and 946.3 barriers per token**,
+confirming the previous session's 1892/972 from an independent angle. The
+top of the attribution table, per token:
+
+| primitive | dispatches | barriers | ms/token @4.14 µs |
+|---|---|---|---|
+| RMSNorm | 202.8 | 155.9 | 0.645 |
+| CustomKernel | 241.5 | 146.3 | 0.606 |
+| QuantizedMatmul | 131.6 | 82.7 | 0.342 |
+| CompiledBroadcastMultiply | 99.6 | 63.5 | 0.263 |
+| Matmul | 264.0 | 43.1 | 0.178 |
+| Add | 41.8 | 40.7 | 0.169 |
+| Softmax | 40.3 | 39.6 | 0.164 |
+| GatherQMM | 120.5 | 38.2 | 0.158 |
+| ArgPartition | 40.2 | 38.9 | 0.161 |
+| CompiledBroadcastDivide | 39.6 | 38.4 | 0.159 |
+| Sum | 80.4 | 37.4 | 0.155 |
+
+### Tape reordering / list scheduling — DEAD, by measurement
+
+The same run reports `criticalPathDepth=199599` against
+`barriers=197773`. **MLX's dispatch schedule is already at the graph's
+critical-path depth** (within 1%, and the model is the conservative
+direction). There is no wave to be won by reordering the tape,
+list-scheduling it, or interleaving independent chains — the ~950 waves
+per token *are* the graph's depth. The only way to remove a barrier is to
+remove a serial link. Do not revisit scheduling.
+
+### C18 — fused router top-k kernel — ACCEPTED (+1.91% MoE 128 decode)
+
+`ArgPartition::eval_gpu` carries the comment "We direct arg partition to
+sort for now" and delegates to `gpu_merge_sort`: **the router fully sorts
+all 256 experts, every MoE layer, every token, to name 8 of them.** With
+the gather/sum/divide normalise tail that is three serial dispatches and
+three encoder-wide barriers for a 256→8 selection.
+
+Rig pricing of the chain at the production shape ([1,1,256] f16, depth-400
+dependent chain, since decode is latency- not throughput-bound):
+
+| item | µs/layer | ms/token (40 layers) |
+|---|---|---|
+| `argPartition` (the full sort) | 10.9 | 0.436 |
+| `sum` + `divide` tail | 6.4 | 0.255 |
+| whole router above floor | 18.1 | 0.724 |
+
+Replaced with one custom kernel. **Bit-identical by construction**, each
+part read out of the MLX source it replaces: `sort.h`'s `LessThan`
+compares values only, `ThreadSort` swaps on strict less-than and
+`merge_step` takes from A on ties, so the sort is *stable* and element
+`i`'s ascending position is exactly `#{j: v_j < v_i} + #{j: v_j == v_i,
+j < i}`; `reduce.metal` instantiates float16 with `U = float16_t` and a
+row of 8 takes `thread_reduce` (sequential accumulation in the output
+dtype, from zero, in slot order); the divide is elementwise.
+
+Three kernel geometries were tried. The winner counts, for each expert,
+how many rank *above* it (`slot = K-1-count`) using a **single 64-bit
+compare** per element: a monotone bit key in the high 32 bits with the
+index in the low 32 folds value comparison *and* the stable tie-break
+into one operation. Saved vs the two alternatives:
+
+| variant | µs/layer saved | ms/token |
+|---|---|---|
+| null kernel, same I/O (work-free ceiling) | 13.7 | 0.548 |
+| **key64 (shipped)** | **9.92** | **0.397** |
+| value compare + explicit tie-break | 6.62 | 0.265 |
+| P=4 threads per element | 4.50 | 0.180 |
+
+The P-split being *slowest* is the C15/M4 lesson again: the kernel is
+launch/latency-bound, so adding parallelism costs more than the work it
+saves.
+
+Gate: bitwise **IDENTICAL** over float16/bfloat16/float32 × {softmax
+outputs, 16-level ties, 4-distinct-values, signed zeros, all-equal rows},
+7936 rows each. Two edge cases had to be handled explicitly to get there:
+NaN maps above `+inf` and all NaNs tie (as `LessThan` does), and the sign
+of zero is normalised, because `-0.0` and `+0.0` compare *equal* under
+`a < b` but have different bit patterns.
+
+In-model, against `46a8088`: MoE **128 decode +1.91% over 10 pairs
+(10/10 positive, +1.34%…+2.36%)**, MoE **8K decode +0.47% over 10 pairs
+(8/10 positive)**, prefill +0.23%/+0.08%, peaks exactly flat, dense
+unaffected (no MoE block on that path). **32/32 A/B pairs
+token-identical.** Committed as `e10e52f`.
+
+Decode only: at prefill the block sort's `O(E log² E)` beats this
+kernel's `O(E²)` rank count and there is no barrier to save, so many-row
+callers keep the old chain. The MLXVLM copy of the block still has the
+old chain — not exercised by either PARO model here, so not touched.
+
+### Why C18 pays less than the dispatch count suggests
+
+Census on the C18 build, same 128-ctx run: dispatches/token **1913.9 →
+1826.5 (−87.4)**, exactly the four primitives removed. But barriers/token
+went **946.3 → 978.5 (+32.2)**: `ArgPartition` −38.4 and
+`CompiledBroadcastDivide` −38.4, against `CustomKernel` +40.6 and
+**`GatherQMM` +39.8**.
+
+The expert matmuls read `inds`. In the old chain the `sum` and `divide`
+barriers fired *between* the sort and the expert matmuls, so they
+published `inds` as a side effect and `GatherQMM` got its synchronisation
+free. Delete them and `GatherQMM` has to pay for its own barrier. **C18's
+win is the deleted 256-element block sort's compute, not barriers** —
+barriers actually rose.
+
+New lesson: **a barrier can be load-bearing for a consumer other than the
+one it was counted against.** Removing a serial link only pays if the
+link it exposes was not already going to need one. Price a fusion by what
+the *consumer* still has to wait for, not by the dispatch count alone.
+
+### C19 — fold the router's softmax into the same kernel — REJECTED (+0.64% / +0.19%)
+
+The obvious follow-on to C18: `Softmax` is 39.6 barriers and 40.3
+dispatches per token (census above), it feeds nothing but the router, and
+folding it into the C18 kernel removes a genuine serial link — the
+matmul→softmax→router chain becomes matmul→router.
+
+**It is fully replicable and it was bitwise.** `softmax_single_row` was
+reproduced verbatim inside the router kernel: `AccT = float` (the
+`precise` instantiation), `N_READS = 4`, `SIMD_SIZE = 32`, so axis 256
+runs on 64 threads; our threadgroup is 256 wide, so the softmax phase is
+masked to the first 64 with every `threadgroup_barrier` outside the mask,
+`local_max`/`local_normalizer` initialised by simdgroup 0 exactly as MLX
+does (entries 2..31 left at `Limits<float>::min = -INFINITY`, with
+`finite_min = -FLT_MAX` as the per-thread seed) so the final
+`simd_max`/`simd_sum` sees the same 32 lanes, and `fast::exp` called
+explicitly. Ranking then runs on the **`T`-rounded** probabilities, since
+that is what the sort it replaces saw. Gate: **IDENTICAL** over
+float16/bfloat16 × {normal logits, ×8-wide logits, 0.5-step ties,
+4-level ties, all-equal rows, one dominant logit}, 11 776 rows each.
+
+In-model against `e10e52f`, 10 pairs, both contexts: MoE **128 decode
++0.64% (9/10)**, MoE **8K decode +0.19% (6/10)**, peaks flat, **20/20
+token-identical**. A first attempt read +0.87%/+0.46% but its *prefill*
+legs moved −1.64%/+2.16% on a code path C19 provably does not touch, so
+that run was discarded as noise; the accepted run's prefill sentinel is
+−0.07%/−0.06%. **Reverted completely; vendor back at `e10e52f`.**
+
+Rejected on the bar, and the risk profile agrees: C18's bitwise contract
+rests on two broad properties (the sort is stable; the reduce accumulates
+sequentially in the output dtype), while C19 additionally pins `N_READS`,
+`AccT`, the exact simd reduction tree and the threadgroup padding rule —
+much more brittle, for a fifth of the gain.
+
+### The conversion constant was wrong, and that closes the class
+
+C19 is the cleanest possible calibration point: it removed **exactly one
+dispatch and one barrier per MoE layer** — 40 of each per token — and
+nothing else changed. It bought **0.058 ms/token** (+0.64% of a 9.11 ms
+token).
+
+That is **~1.4 µs per barrier+dispatch removed, not the ~5.1 µs**
+(4.14 barrier + 1.00 dispatch) the previous session's constants imply.
+The 4.14 µs came from turning *all* 972 barriers off at once, which also
+lets every kernel in the token overlap — a super-linear effect that does
+not decompose. **The marginal barrier is worth roughly a third of the
+average one.**
+
+Re-pricing every remaining decode candidate at 1.4 µs:
+
+| candidate | barriers/token | ms/token | % at 128 ctx |
+|---|---|---|---|
+| RMSNorm absorbing the residual add | ~40 | 0.056 | 0.6% |
+| the second residual (already compiled) into the next norm | ~39 | 0.055 | 0.6% |
+| `CompiledBroadcastMultiply` sites | ~64 | 0.090 | 1.0% |
+| everything else in the table | ≤40 each | ≤0.056 | ≤0.6% |
+
+**No remaining barrier-removal candidate clears 1% on its own.** Combined
+with the two facts already banked — the dispatch schedule is at the
+graph's critical-path depth, and ~5.3 ms of the token is irreducible
+weight streaming — the fusion class is exhausted under the zero-loss
+constraint. C18's win was not really a barrier win either: it was
+deleting a 256-element block sort's *compute*.
+
+The other calibration from this session: **rig savings convert to
+production at roughly 40%.** C18's rig number was 0.397 ms/token and it
+delivered 0.174 ms; C19's rig number was 0.054 ms and it delivered
+0.058 ms. Price a candidate in the rig, then halve it before deciding
+whether it is worth an in-model round.
+
+### Item 5 (gather_qmm round 2) — CLOSED at the probe, and the C1 ambiguity resolved
+
+`docs/mlx-core-future-work.md` item 5 asked for one thing first:
+re-establish the gather_qmm-vs-dense-anchor ratio *at the production
+shape*, because the C1 entry recorded both "~40–50% of the anchor" and
+"the winner reaches 96% of the anchor" without pinning the B/E of either.
+
+Probe (rig, production MoE dims — hidden 2048, intermediate 512, 256
+experts top-8, 4-bit group 64; anchor = `quantizedMatmul` over the same
+MACs with the same quantization, no gather):
+
+| gathered rows | S | up/gate | down | anchor GMAC/s | gather GMAC/s |
+|---|---|---|---|---|---|
+| 4 096 | 512 | 52.5% | 58.0% | 3690 | 1938 |
+| 16 384 | 2048 | 63.8% | 69.8% | 5735 | 3657 |
+| 65 536 | 8192 | **87.4%** | **91.4%** | 6069 | 5303 |
+
+**The ratio is shape-dependent and both C1 readings were right** — 40–50%
+is the small-shape end, ~90%+ is the large end. Prefill runs at the large
+end: at 8K the kernel is already at 87–91% of a gather-free dense qmm of
+the same arithmetic.
+
+So the headroom is ~9–13% of the expert matmuls only. Those are ~1.5 s of
+a ~5.6 s 8K prefill, so a *perfect* gather kernel would be worth ~2–3%
+prefill — and C1's sweep already searched the legal geometry space (same
+per-element K-accumulation order; split-K changes rounding and is dead).
+**Not worth an implementation round.** Item 5 closed.
+
+## Where this leaves the decode/prefill program
+
+Every lever that was priced this session came back sub-1% or already
+spent. The three budgets are now each accounted for:
+
+- **Decode streaming** — ~5.3 ms of a 10.5 ms 8K token, at ~95% of peak
+  bandwidth. Irreducible without changing quantization.
+- **Decode serialization** — the dispatch schedule is *at* the graph's
+  critical-path depth, and the marginal barrier is ~1.4 µs, so the
+  remaining fusions are ~0.6–1.0% each.
+- **Prefill** — GEMM-bound, and the GEMM is at 87–91% of a gather-free
+  anchor of the same arithmetic.
+
+What is left is not kernel work. The only remaining ≥10% ideas change
+what runs, not how fast it runs: speculative decoding for the dense model
+(greedy-verified, so output-identical by construction — blocked on a
+compatible PARO draft model), or a quantization change (out of the
+zero-loss scope by definition).
+
+## Review round 2026-07-25 — PR #427 review fixes
+
+A full-diff review of the C14/C16/C18 round found no correctness defect in
+the shipped code, but six hygiene/robustness findings. All fixed in vendor
+`8519cf3` on `pin-upstream-mlx-swift` (68ad25f → 8519cf3 total for the PR):
+
+- **uint32 router indices.** The C18 kernel emitted `int32` where
+  `argpartition` emits `uint32` (mlx `ops.cpp:2561`), so the decode and
+  prefill router paths produced different index dtypes for the same
+  logical tensor. Kernel now emits `uint32`. Values were always identical;
+  both dtypes were independently parity-proven in-model (uint32 = the
+  entire pre-C18 history, int32 = the C18 gate), so this is a
+  consistency fix, not a numerics change.
+- **Dead C12 wrapper removed.** Since C14, every S == 1 decode reaches
+  `decodeForward` through the layer trace (B) or a whole-step segment (C);
+  the GDN-module-local compiled wrapper was unreachable on every path
+  (traced all callers). Body stays as `decodeForward`.
+- **Package.swift: MLXLLM lacked the MLXFast product dependency.** Xcode
+  leaks all modules of a dependency package into the search path, so the
+  app built C18 fine — but strict SwiftPM (`swift build` / `swift test`)
+  failed on `no such module 'MLXFast'`. The vendor suites had last been
+  run pre-C18; gap now closed and the dep added.
+- **The bitwise contracts are now CI-pinned** — new vendor
+  `Qwen35BitwiseContractTests`: (1) fused GDN decode body vs the unfused
+  conv1d body, f16+bf16, 256 channels (an MLX pin bump that changes
+  Convolution's accumulation now fails a unit test instead of silently
+  splitting decode from prefill); (2) fused router kernel vs the
+  argPartition/takeAlong/normalise chain over softmax rows, tie-heavy
+  rows, all-equal rows, signed zeros and NaN rows, f16/bf16/f32,
+  E∈{256,128}, norm∈{on,off}, dtype and bit patterns asserted. The
+  NaN-above-everything ordering is thereby gate-verified (previously
+  source-derived only — `sort.h`'s `LessThan` is explicitly NaN-aware,
+  `(!an) & bn`, so NaN is a true maximum equivalence class).
+- **Lifecycle coverage restored.** The whole-step schedule had silently
+  removed the MoE block's own C11 closure from the original leak test's
+  path; a quantized-cache decode variant now drives the fallback that
+  still installs it.
+- **Census preserved.** `apply-census.py` moved from the session
+  scratchpad to `benchmarks/apply-census.py` — it produced the
+  critical-path-depth result that closes the scheduling class, and was
+  the one probe not preserved.
+
+Gates for this round: vendor suites green (ParoQuantTests 24/24, Qwen35
+suites incl. the 2 new contract tests and the new lifecycle variant,
+SwitchLayers, ToolTests). No fresh 10-pair A/B was run: the only
+executed-graph change is the index dtype, whose two variants are both
+already parity-proven above; the contract tests hold the fused outputs
+bit-identical to the chain including dtype. Dead-code removal and the
+Package.swift dep do not change the executed graph.

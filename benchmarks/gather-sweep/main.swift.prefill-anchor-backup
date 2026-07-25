@@ -1,0 +1,106 @@
+// Prefill probe — is gather_qmm actually behind the dense-qmm anchor at the
+// PRODUCTION shape? The ledger's remaining item 5 says re-establish this ratio
+// before any app work: if the kernel is already near the anchor at production
+// B/E, the whole item is dead.
+//
+// Production MoE prefill: hidden 2048, moe_intermediate 512, 256 experts,
+// top-8, 4-bit group 64. Per MoE layer, S tokens produce S*8 gathered rows
+// through gate/up ([2048->512]) and down ([512->2048]).
+//
+// Anchor = MLX.quantizedMatmul over the same MAC count, i.e. a dense qmm of
+// [S*8, K] x [N, K] with identical quantization. Same arithmetic, no gather.
+import Foundation
+import MLX
+import MLXLMCommon
+import MLXNN
+
+let hidden = 2048
+let inter = 512
+let numExperts = 256
+let topK = 8
+
+func timeIt(_ label: String, _ body: () -> MLXArray) -> Double {
+    for _ in 0 ..< 2 { eval(body()) }
+    eval(MLXArray(0))
+    var best = Double.infinity
+    for _ in 0 ..< 4 {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        eval(body())
+        best = min(best, Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)
+    }
+    print(String(format: "  %-46s %9.3f ms", (label as NSString).utf8String!, best))
+    return best
+}
+
+func quantWeights(_ e: Int, _ n: Int, _ k: Int) -> (MLXArray, MLXArray, MLXArray?) {
+    let w = MLXRandom.normal([e, n, k]).asType(.float16) * 0.02
+    return MLX.quantized(w, groupSize: 64, bits: 4)
+}
+
+for tokens in [512, 2048, 8192] {
+    print("\n=== S=\(tokens) tokens, \(numExperts) experts top-\(topK) ===")
+    let rows = tokens * topK
+
+    let logits = MLXRandom.normal([tokens, numExperts])
+    let inds = MLX.argPartition(logits, kth: numExperts - topK, axis: -1)[
+        .ellipsis, (numExperts - topK)...]
+    let sortedInds = MLX.sorted(inds.flattened())
+    eval(sortedInds)
+
+    // ---- up/gate geometry: [rows, 2048] x [E, 512, 2048] ----
+    let x = MLXRandom.normal([rows, 1, hidden]).asType(.float16)
+    let (wq, ws, wb) = quantWeights(numExperts, inter, hidden)
+    eval(x, wq, ws)
+    let tGather = timeIt("gather_qmm  [\(rows),2048] x [E,512,2048]") {
+        MLX.gatherQuantizedMM(
+            x, wq, scales: ws, biases: wb, rhsIndices: sortedInds,
+            transpose: true, groupSize: 64, bits: 4, sortedIndices: true)
+    }
+
+    let xd = MLXRandom.normal([rows, hidden]).asType(.float16)
+    let (dq, ds, db) = quantWeights(1, inter, hidden)
+    let dq2 = dq.reshaped(inter, dq.dim(-1))
+    let ds2 = ds.reshaped(inter, ds.dim(-1))
+    let db2 = db.map { $0.reshaped(inter, $0.dim(-1)) }
+    eval(xd, dq2, ds2)
+    let tDense = timeIt("dense qmm   [\(rows),2048] x [512,2048]") {
+        MLX.quantizedMatmul(
+            xd, dq2, scales: ds2, biases: db2, transpose: true, groupSize: 64, bits: 4)
+    }
+
+    // ---- down geometry: [rows, 512] x [E, 2048, 512] ----
+    let xdn = MLXRandom.normal([rows, 1, inter]).asType(.float16)
+    let (nq, ns, nb) = quantWeights(numExperts, hidden, inter)
+    eval(xdn, nq, ns)
+    let tGatherDown = timeIt("gather_qmm  [\(rows),512] x [E,2048,512]") {
+        MLX.gatherQuantizedMM(
+            xdn, nq, scales: ns, biases: nb, rhsIndices: sortedInds,
+            transpose: true, groupSize: 64, bits: 4, sortedIndices: true)
+    }
+
+    let xdn2 = MLXRandom.normal([rows, inter]).asType(.float16)
+    let (mq, ms, mb) = quantWeights(1, hidden, inter)
+    let mq2 = mq.reshaped(hidden, mq.dim(-1))
+    let ms2 = ms.reshaped(hidden, ms.dim(-1))
+    let mb2 = mb.map { $0.reshaped(hidden, $0.dim(-1)) }
+    eval(xdn2, mq2, ms2)
+    let tDenseDown = timeIt("dense qmm   [\(rows),512] x [2048,512]") {
+        MLX.quantizedMatmul(
+            xdn2, mq2, scales: ms2, biases: mb2, transpose: true, groupSize: 64, bits: 4)
+    }
+
+    let macs = Double(rows) * Double(hidden) * Double(inter)
+    print("")
+    print(
+        String(
+            format: "  up/gate: gather %7.3f ms vs anchor %7.3f ms -> gather is %5.1f%% of anchor",
+            tGather, tDense, 100 * tDense / tGather))
+    print(
+        String(
+            format: "  down   : gather %7.3f ms vs anchor %7.3f ms -> gather is %5.1f%% of anchor",
+            tGatherDown, tDenseDown, 100 * tDenseDown / tGatherDown))
+    print(
+        String(
+            format: "  anchor %7.1f GMAC/s   gather %7.1f GMAC/s", macs / tDense / 1e6,
+            macs / tGather / 1e6))
+}

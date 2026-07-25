@@ -1,0 +1,459 @@
+// C18/C19 probe — fuse the MoE router tail into one kernel (C18: the
+// kernel-geometry sweep and bitwise gate), then fold the router softmax
+// into the same kernel (C19: gate19 below; bitwise, rejected on speed).
+//
+// Replaces, per MoE layer per decode token:
+//     inds   = argPartition(gates, kth: E-K)[..., E-K...]     (a FULL 256-sort:
+//                ArgPartition::eval_gpu delegates to gpu_merge_sort)
+//     scores = takeAlong(gates, inds, -1)
+//     scores = scores / scores.sum(-1, keepDims: true)
+// with a single custom kernel.  3 serial dispatches -> 1.
+//
+// Bitwise contract, all three parts read out of the MLX source:
+//  * order  — sort.h LessThan is `a < b` on values only; ThreadSort swaps only
+//             on strict less-than and merge_step takes from A on ties, so the
+//             sort is STABLE. Position of element i in the ascending output is
+//             exactly  rank(i) = #{j: v_j < v_i} + #{j: v_j == v_i, j < i}.
+//             The tail K are those with rank >= E-K, at slot rank-(E-K).
+//  * sum    — reduce.metal instantiates float16 with U = float16_t, and
+//             row_size 8 <= 8 takes thread_reduce: sequential accumulation in
+//             HALF from 0, in slot order.
+//  * divide — compiled elementwise half / half.
+import Foundation
+import MLX
+import MLXFast
+import MLXNN
+
+let E = 256
+let K = 8
+let kth = E - K
+
+let routerSource = """
+    uint row = threadgroup_position_in_grid.y;
+    uint t = thread_position_in_threadgroup.x;
+
+    threadgroup float sv[E_];
+    threadgroup float top_v[K_];
+    threadgroup int   top_i[K_];
+
+    float v = static_cast<float>(gates[row * E_ + t]);
+    sv[t] = v;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Stable ascending rank, replicating sort.h's LessThan (NaN sorts last,
+    // NaNs tie with each other) and the merge sort's stability.
+    bool vn = isnan(v);
+    int a = 0;
+    for (uint j = 0; j < E_; ++j) {
+        float u = sv[j];
+        bool un = isnan(u);
+        bool lt = (un || vn) ? ((!un) && vn) : (u < v);
+        bool eq = (un || vn) ? (un && vn)    : (u == v);
+        a += lt ? 1 : 0;
+        a += (eq && (j < t)) ? 1 : 0;
+    }
+
+    if (a >= (int)(E_ - K_)) {
+        int slot = a - (int)(E_ - K_);
+        top_v[slot] = v;
+        top_i[slot] = (int)t;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (t == 0) {
+        // MLX thread_reduce: sequential accumulation in the OUTPUT dtype.
+        T acc = static_cast<T>(0);
+        for (int q = 0; q < K_; ++q) {
+            acc = static_cast<T>(top_v[q]) + acc;
+        }
+        for (int q = 0; q < K_; ++q) {
+            scores[row * K_ + q] = static_cast<T>(top_v[q]) / acc;
+        }
+    }
+    if (t < K_) {
+        inds[row * K_ + t] = top_i[t];
+    }
+    """
+
+let routerKernel = MLXFast.metalKernel(
+    name: "router_topk_norm",
+    inputNames: ["gates"],
+    outputNames: ["inds", "scores"],
+    source: routerSource
+)
+
+func fusedRouter(_ gates: MLXArray) -> (MLXArray, MLXArray) {
+    let rows = gates.size / E
+    let out = routerKernel(
+        [gates],
+        template: [("T", gates.dtype), ("E_", E), ("K_", K)],
+        grid: (E, rows, 1),
+        threadGroup: (E, 1, 1),
+        outputShapes: [[rows, K], [rows, K]],
+        outputDTypes: [.int32, gates.dtype]
+    )
+    return (out[0], out[1])
+}
+
+// ---- P-way split: P threads share the rank count for one element ---------
+// rank_asc(i) + greater(i) = E-1, so counting the elements ABOVE i is
+// equivalent and lets each thread scan only E/P of them; the P partials
+// combine with simd shuffles (integer adds, so no rounding to preserve).
+// slot = K-1-greater.
+let routerSourceP = """
+    uint row = threadgroup_position_in_grid.y;
+    uint tid = thread_position_in_threadgroup.x;
+    uint e = tid / P_;
+    uint part = tid % P_;
+
+    threadgroup float sv[E_];
+    threadgroup float top_v[K_];
+    threadgroup int   top_i[K_];
+
+    if (part == 0) {
+        sv[e] = static_cast<float>(gates[row * E_ + e]);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float v = sv[e];
+    bool vn = isnan(v);
+    int cnt = 0;
+    for (uint j = part; j < E_; j += P_) {
+        float u = sv[j];
+        bool un = isnan(u);
+        // sort.h LessThan: NaN is the maximum, NaNs tie with each other.
+        bool gt = (un || vn) ? ((!vn) && un) : (v < u);
+        bool eq = (un || vn) ? (un && vn)    : (u == v);
+        cnt += (gt || (eq && j > e)) ? 1 : 0;
+    }
+    for (uint d = 1; d < P_; d <<= 1) {
+        cnt += simd_shuffle_down(cnt, d);
+    }
+
+    if (part == 0 && cnt < K_) {
+        top_v[K_ - 1 - cnt] = v;
+        top_i[K_ - 1 - cnt] = (int)e;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid == 0) {
+        T acc = static_cast<T>(0);
+        for (int q = 0; q < K_; ++q) {
+            acc = static_cast<T>(top_v[q]) + acc;
+        }
+        for (int q = 0; q < K_; ++q) {
+            scores[row * K_ + q] = static_cast<T>(top_v[q]) / acc;
+        }
+    }
+    if (tid < K_) {
+        inds[row * K_ + tid] = top_i[tid];
+    }
+    """
+
+let routerKernelP = MLXFast.metalKernel(
+    name: "router_topk_norm_p",
+    inputNames: ["gates"],
+    outputNames: ["inds", "scores"],
+    source: routerSourceP
+)
+
+nonisolated(unsafe) var splitP = 4
+
+func fusedRouterP(_ gates: MLXArray) -> (MLXArray, MLXArray) {
+    let rows = gates.size / E
+    let out = routerKernelP(
+        [gates],
+        template: [("T", gates.dtype), ("E_", E), ("K_", K), ("P_", splitP)],
+        grid: (E * splitP, rows, 1),
+        threadGroup: (E * splitP, 1, 1),
+        outputShapes: [[rows, K], [rows, K]],
+        outputDTypes: [.int32, gates.dtype]
+    )
+    return (out[0], out[1])
+}
+
+// ---- null kernel: same I/O, no work — the launch+barrier+alloc floor -----
+let nullSource = """
+    uint row = threadgroup_position_in_grid.y;
+    uint t = thread_position_in_threadgroup.x;
+    if (t < K_) {
+        inds[row * K_ + t] = (int)t;
+        scores[row * K_ + t] = static_cast<T>(gates[row * E_ + t]);
+    }
+    """
+let nullKernel = MLXFast.metalKernel(
+    name: "router_null", inputNames: ["gates"], outputNames: ["inds", "scores"],
+    source: nullSource)
+func nullRouter(_ gates: MLXArray) -> (MLXArray, MLXArray) {
+    let rows = gates.size / E
+    let out = nullKernel(
+        [gates], template: [("T", gates.dtype), ("E_", E), ("K_", K)],
+        grid: (E, rows, 1), threadGroup: (E, 1, 1),
+        outputShapes: [[rows, K], [rows, K]], outputDTypes: [.int32, gates.dtype])
+    return (out[0], out[1])
+}
+
+// ---- key-sort variant: one 64-bit compare per inner iteration ------------
+// Monotone bit transform: for IEEE floats, bits ^ ((bits>>31 signed) | 0x8...)
+// is order-preserving as an unsigned int, and NaN lands above +inf (matching
+// sort.h's LessThan). Packing the index into the low bits reproduces the
+// stable sort's tie-break in the SAME comparison: larger index ranks above.
+let routerSourceKey = """
+    uint row = threadgroup_position_in_grid.y;
+    uint t = thread_position_in_threadgroup.x;
+
+    threadgroup ulong sk[E_];
+    threadgroup float top_v[K_];
+    threadgroup int   top_i[K_];
+
+    float v = static_cast<float>(gates[row * E_ + t]);
+    // -0.0 and +0.0 have different bit patterns but compare EQUAL under
+    // sort.h's `a < b`, so they must tie here too: normalise the sign of zero.
+    uint b = (v == 0.0f) ? 0u : as_type<uint>(v);
+    uint mono = isnan(v) ? 0xFFFFFFFFu : (b ^ ((uint)(((int)b) >> 31) | 0x80000000u));
+    ulong key = (((ulong)mono) << 32) | (ulong)t;
+    sk[t] = key;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    int cnt = 0;
+    for (uint j = 0; j < E_; ++j) {
+        cnt += (sk[j] > key) ? 1 : 0;
+    }
+
+    if (cnt < K_) {
+        top_v[K_ - 1 - cnt] = v;
+        top_i[K_ - 1 - cnt] = (int)t;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (t == 0) {
+        T acc = static_cast<T>(0);
+        for (int q = 0; q < K_; ++q) { acc = static_cast<T>(top_v[q]) + acc; }
+        for (int q = 0; q < K_; ++q) {
+            scores[row * K_ + q] = static_cast<T>(top_v[q]) / acc;
+        }
+    }
+    if (t < K_) { inds[row * K_ + t] = top_i[t]; }
+    """
+let routerKernelKey = MLXFast.metalKernel(
+    name: "router_topk_key", inputNames: ["gates"], outputNames: ["inds", "scores"],
+    source: routerSourceKey)
+func fusedRouterKey(_ gates: MLXArray) -> (MLXArray, MLXArray) {
+    let rows = gates.size / E
+    let out = routerKernelKey(
+        [gates], template: [("T", gates.dtype), ("E_", E), ("K_", K)],
+        grid: (E, rows, 1), threadGroup: (E, 1, 1),
+        outputShapes: [[rows, K], [rows, K]], outputDTypes: [.int32, gates.dtype])
+    return (out[0], out[1])
+}
+
+// ---- C19: softmax folded into the router kernel -------------------------
+// Replicates softmax_single_row verbatim: AccT = float (the `precise`
+// instantiation), N_READS = 4, SIMD_SIZE = 32, so axis 256 dispatches
+// (256+3)/4 = 64 threads = 2 simdgroups. Our threadgroup is E_ threads (one
+// per expert), so the softmax phase is masked to the first 64 and every
+// threadgroup_barrier stays outside the mask. local_max/local_normalizer are
+// initialised by simdgroup 0 exactly as MLX does, leaving entries 2..31 at
+// Limits<float>::min so the final simd_max/simd_sum sees the same 32 lanes.
+let routerSourceSM = """
+    uint row = threadgroup_position_in_grid.y;
+    uint t = thread_position_in_threadgroup.x;
+    uint lane = thread_index_in_simdgroup;
+    uint sg = simdgroup_index_in_threadgroup;
+
+    threadgroup float local_max[32];
+    threadgroup float local_norm[32];
+    threadgroup float pv[E_];
+    threadgroup ulong sk[E_];
+    threadgroup float top_v[K_];
+    threadgroup int   top_i[K_];
+
+    const uint SM_T = (E_ + 3) / 4;
+    bool sm = (t < SM_T);
+
+    float ld[4];
+    if (sm) {
+        for (int i = 0; i < 4; i++) {
+            ld[i] = static_cast<float>(logits[row * E_ + t * 4 + i]);
+        }
+    }
+    if (sg == 0) {
+        local_max[lane] = -INFINITY;
+        local_norm[lane] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float maxval = -FLT_MAX;
+    if (sm) {
+        for (int i = 0; i < 4; i++) { maxval = (maxval < ld[i]) ? ld[i] : maxval; }
+        maxval = simd_max(maxval);
+        if (lane == 0) { local_max[sg] = maxval; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sg == 0) {
+        float m = simd_max(local_max[lane]);
+        if (lane == 0) { local_max[0] = m; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    maxval = local_max[0];
+
+    float normalizer = 0.0f;
+    if (sm) {
+        for (int i = 0; i < 4; i++) {
+            float e = fast::exp(ld[i] - maxval);
+            ld[i] = e;
+            normalizer += e;
+        }
+        normalizer = simd_sum(normalizer);
+        if (lane == 0) { local_norm[sg] = normalizer; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sg == 0) {
+        float n = simd_sum(local_norm[lane]);
+        if (lane == 0) { local_norm[0] = n; }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float inv = 1.0f / local_norm[0];
+    if (sm) {
+        for (int i = 0; i < 4; i++) {
+            pv[t * 4 + i] = static_cast<float>(static_cast<T>(ld[i] * inv));
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // ---- top-k on the T-rounded probabilities (C18 key64) ----
+    float v = pv[t];
+    uint b = (v == 0.0f) ? 0u : as_type<uint>(v);
+    uint mono = isnan(v) ? 0xFFFFFFFFu : (b ^ ((uint)(((int)b) >> 31) | 0x80000000u));
+    ulong key = (((ulong)mono) << 32) | (ulong)t;
+    sk[t] = key;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    int above = 0;
+    for (uint j = 0; j < E_; ++j) { above += (sk[j] > key) ? 1 : 0; }
+    if (above < K_) {
+        top_v[K_ - 1 - above] = v;
+        top_i[K_ - 1 - above] = (int)t;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (t == 0) {
+        T acc = static_cast<T>(0);
+        for (int q = 0; q < K_; ++q) { acc = static_cast<T>(top_v[q]) + acc; }
+        for (int q = 0; q < K_; ++q) {
+            scores[row * K_ + q] = static_cast<T>(top_v[q]) / acc;
+        }
+    }
+    if (t < K_) { inds[row * K_ + t] = top_i[t]; }
+    """
+let routerKernelSM = MLXFast.metalKernel(
+    name: "router_softmax_topk", inputNames: ["logits"], outputNames: ["inds", "scores"],
+    source: routerSourceSM)
+func fusedRouterSM(_ logits: MLXArray) -> (MLXArray, MLXArray) {
+    let rows = logits.size / E
+    let out = routerKernelSM(
+        [logits], template: [("T", logits.dtype), ("E_", E), ("K_", K)],
+        grid: (E, rows, 1), threadGroup: (E, 1, 1),
+        outputShapes: [[rows, K], [rows, K]], outputDTypes: [.int32, logits.dtype])
+    return (out[0], out[1])
+}
+
+/// The chain C19 replaces, starting from raw logits.
+func mlxRouterFromLogits(_ logits: MLXArray) -> (MLXArray, MLXArray) {
+    mlxRouter(MLX.softmax(logits, axis: -1, precise: true))
+}
+
+func mlxRouter(_ gates: MLXArray) -> (MLXArray, MLXArray) {
+    let inds = MLX.argPartition(gates, kth: kth, axis: -1)[.ellipsis, (kth)...]
+    var scores = MLX.takeAlong(gates, inds, axis: -1)
+    scores = scores / scores.sum(axis: -1, keepDims: true)
+    return (inds, scores)
+}
+
+
+// ---- C19 bitwise gate: raw logits -> (inds, scores) ---------------------
+func gate19(_ label: String, _ makeLogits: (Int) -> MLXArray, trials: Int) {
+    var indMismatch = 0
+    var scoreMismatch = 0
+    var rows = 0
+    for trial in 0 ..< trials {
+        let z = makeLogits(trial)
+        let n = z.size / E
+        let (ia, sa) = mlxRouterFromLogits(z.reshaped(1, n, E))
+        let (ib, sb) = fusedRouterSM(z)
+        eval(ia, sa, ib, sb)
+        let A = ia.reshaped(-1).asArray(Int32.self)
+        let B = ib.reshaped(-1).asArray(Int32.self)
+        let SA = sa.asType(.float32).reshaped(-1).asArray(Float.self)
+        let SB = sb.asType(.float32).reshaped(-1).asArray(Float.self)
+        for i in 0 ..< A.count where A[i] != B[i] { indMismatch += 1 }
+        for i in 0 ..< SA.count where SA[i].bitPattern != SB[i].bitPattern { scoreMismatch += 1 }
+        rows += n
+    }
+    let verdict = (indMismatch == 0 && scoreMismatch == 0) ? "IDENTICAL" : "MISMATCH"
+    print("  \(label): \(verdict)  rows=\(rows) indDiff=\(indMismatch) scoreDiff=\(scoreMismatch)")
+}
+
+for dtype in [DType.float16, DType.bfloat16] {
+    print("\n=== C19 gate (softmax folded in), \(dtype) ===")
+    gate19("normal logits", { _ in MLXRandom.normal([64, E]).asType(dtype) }, trials: 40)
+    gate19("wide logits (x8)", { _ in (MLXRandom.normal([64, E]) * 8).asType(dtype) }, trials: 40)
+    gate19("tie-heavy (0.5 steps)", { _ in (MLX.round(MLXRandom.normal([64, E]) * 2) / 2).asType(dtype) }, trials: 40)
+    gate19("extreme ties (4 levels)", { _ in (MLX.round(MLXRandom.normal([64, E]) * 1.5) / 1.5).asType(dtype) }, trials: 40)
+    gate19("all-equal rows", { _ in MLX.full([64, E], values: MLXArray(Float(0.25))).asType(dtype) }, trials: 4)
+    gate19("one dominant logit", { _ in
+        var z = MLXRandom.normal([64, E]) * 0.01
+        z[0..., 7] = MLXArray(Float(30)).asType(z.dtype)
+        return z.asType(dtype)
+    }, trials: 20)
+}
+
+// ---- timing -------------------------------------------------------------
+let R = 400
+func timeIt(_ label: String, _ body: () -> MLXArray) -> Double {
+    for _ in 0 ..< 3 { eval(body()) }
+    eval(MLXArray(0))
+    var best = Double.infinity
+    for _ in 0 ..< 5 {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        eval(body())
+        best = min(best, Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e6)
+    }
+    print(String(format: "  %-40s %8.3f ms  %7.3f us/layer", (label as NSString).utf8String!, best, best * 1000 / Double(R)))
+    return best
+}
+
+print("\n=== dependent chain from LOGITS, [1,1,\(E)] float16, depth \(R) ===")
+let seed = MLXRandom.normal([1, 1, E]).asType(.float16)
+eval(seed)
+
+let tBase = timeIt("C16 base: softmax+argPart+take+sum+div") {
+    var v = seed
+    for _ in 0 ..< R {
+        let (_, s) = mlxRouterFromLogits(v)
+        v = v + s.sum(axis: -1, keepDims: true)
+    }
+    return v
+}
+let tC18 = timeIt("C18: softmax + fused topk") {
+    var v = seed
+    for _ in 0 ..< R {
+        let (_, s) = fusedRouterKey(MLX.softmax(v, axis: -1, precise: true))
+        v = v + s.sum(axis: -1, keepDims: true).reshaped(1, 1, 1)
+    }
+    return v
+}
+let tC19 = timeIt("C19: one kernel (softmax folded in)") {
+    var v = seed
+    for _ in 0 ..< R {
+        let (_, s) = fusedRouterSM(v)
+        v = v + s.sum(axis: -1, keepDims: true).reshaped(1, 1, 1)
+    }
+    return v
+}
+print("")
+for (n, t) in [("C18 vs base", tC18), ("C19 vs base", tC19), ("C19 vs C18", tC19)] {
+    let ref = n == "C19 vs C18" ? tC18 : tBase
+    let sv = (ref - t) * 1000 / Double(R)
+    print(String(format: "  %-12s saved %7.3f us/layer -> %6.3f ms/token over 40 layers", (n as NSString).utf8String!, sv, sv * 40 / 1000))
+}

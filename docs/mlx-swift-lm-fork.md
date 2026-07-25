@@ -47,15 +47,60 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 | `perf(paroquant): compile-fuse the GatedDelta decay gate chain` | One compiled kernel for the 6-kernel elementwise g chain per GDN layer per step (bitwise-identical); +3.1% MoE decode, +1.4% dense decode at ctx=128 (tesseract experiments-ledger E2) | Not filed — candidate (general to all GDN models, e.g. Qwen3Next) |
 | `perf(paroquant): simdgroup-resident rotation kernel — no CTA barriers` | 32-lane simdgroup CTAs, compile-time krot, row-major tile, float4 IO for groupSize 128; generic pre-E6b kernel restored as the fallback for other group sizes (shared `dispatchPairwiseRotation`); bitwise-identical; kernel 1.7–2× at prefill shapes; +1.8–2.5% MoE prefill, +1.3–2.1% dense prefill, +3.4–5% dense decode (tesseract experiments-ledger E6b) | Not filed — candidate (fold into #164 follow-up; also fixes the latent bf16 compile failure) |
 | `perf(qwen35): compile the MoE block during decode (C11)` | Per-instance compiled MoE block closure, decode (L==1) only; router/shared-expert/residual elementwise fuse; +3–7% MoE decode (tesseract experiments-ledger C11) | Not filed — candidate (general to Qwen3.5/3.6 MoE) |
-| `perf(qwen35): compile the GDN decode step with explicit state (C12)` | Compiled GDN decode step, conv/recurrent state as explicit I/O; +1.75% dense 128 decode, +0.94% MoE (ledger C12) | Not filed — candidate (pattern generalizes to other GDN models) |
+| `perf(qwen35): compile the GDN decode step with explicit state (C12)` | Compiled GDN decode step, conv/recurrent state as explicit I/O; +1.75% dense 128 decode, +0.94% MoE (ledger C12). The module-local compiled wrapper was subsumed by C14 and removed in the PR #427 review round; the compiled body (`decodeForward`) is the surviving artifact | Not filed — candidate (pattern generalizes to other GDN models) |
 | `fix(qwen35): unowned captures for the compiled decode closures` | Breaks the module→closure→module retain cycle C11/C12 shipped — the cycle leaked each block, its weights, and the compiled mlx tape on every model release; + `Qwen35CompiledDecodeLifecycleTests` red/green regression test (2026-07-24 review round, tesseract PR #425 follow-up) | Travels with C11/C12 if filed |
+| `perf(qwen35): whole-step compiled decode schedule (C14)` | The whole decode step as traced segments (11 MoE / 9 dense), split only where the KV cache is written, rather than one compiled closure per block; +1.33% MoE 128 decode, +0.67% MoE 8K, +1.73% dense 8K (ledger C14) | Not filed — candidate (supersedes C11/C12's per-block wrappers; travels with them) |
+| `perf(qwen35): C16 — decode conv1d as fused multiply-adds` | At S==1 the GDN depthwise conv is a fixed 4-term dot per channel; written as elementwise multiply-adds it folds into the surrounding compiled segment, deleting a dispatch *and* a hazard barrier per GDN layer. Bitwise only with **f32 accumulation** — native-dtype accumulation differs in ~47% of channels. +1.77% median MoE 8K decode (ledger C16) | Not filed — candidate (general to Qwen3Next-family GDN) |
+| `perf(qwen35): C18 — fused router top-k kernel` | `ArgPartition::eval_gpu` delegates to `gpu_merge_sort`, so the router fully sorted 256 experts to name 8; one custom kernel replaces the sort and the gather/sum/divide tail. Bit-identical by construction (the sort is stable, so the selection order is reproducible; the 8-wide reduce accumulates sequentially in the output dtype). Decode only — prefill keeps the block sort. +1.91% MoE 128 decode (ledger C18) | Not filed — candidate (general to every `SwitchGLU` router; the MLXVLM copy still has the old chain) |
+| `fix(qwen35): PR #427 review round — uint32 router indices, dead C12 wrapper, bitwise-contract tests` | C18 kernel emits `uint32` indices (argPartition's dtype); removes the C12 wrapper C14 obsoleted; adds `Qwen35BitwiseContractTests` (C16 conv contract + C18 router contract, NaN ordering included) and a quantized-cache lifecycle variant; MLXLLM gains the missing MLXFast product dep (strict SwiftPM builds were broken since C18) | Travels with C14/C16/C18 |
 
-The three perf carries above (E1/E2/E6b) are queued for one batched
-upstream PR folded into the #164 follow-up; filing deferred pending owner
-go-ahead (2026-07-23 review round, tesseract PR #424). The pin-branch
-history also carries one `chore: pin mlx-swift to <rev>` commit per
-accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round) —
-lockstep bookkeeping, never upstream.
+The pin-branch history also carries one `chore: pin mlx-swift to <rev>`
+commit per accepted Cmlx experiment (C4–C13 and the 2026-07-24 review
+round) — lockstep bookkeeping, never upstream.
+
+## Upstream filing queue (2026-07-25)
+
+The 2026-07-18 → 07-25 inference-perf loop is closed (ledger: C1–C19 run,
+decode/prefill program re-priced and exhausted under the zero-output-change
+constraint), so the accepted survivors are ready to shape into upstream
+PRs. Four units, each self-contained and parity-evidence-backed; file
+against `ml-explore/mlx-swift-lm` `main` with the #460 cherry-pick
+procedure. Owner go-ahead is the trigger — nothing below is filed yet.
+
+1. **Compiled decode schedule for Qwen3.5/3.6** — C11 + C12 + the unowned-
+   captures fix + C14 + the PR #427 review-round commit, squashed into one
+   PR: per-layer decode traces, the whole-step segment schedule split at
+   the KV write, the MoE block closure for non-plain cache kinds, and both
+   test files (`Qwen35CompiledDecodeLifecycleTests`,
+   `Qwen35BitwiseContractTests`). Quantization-agnostic — none of it
+   depends on PARO. Evidence: +3–7% MoE decode (C11), +1.75% dense (C12),
+   +1.33%/+0.67%/+1.73% on top (C14), 108 A/B pairs token-identical.
+2. **GDN decode conv1d as fused multiply-adds (C16)** — depends on unit 1
+   (the FMA form pays by folding into the compiled segment, and lives in
+   `decodeForward`). Small diff; general to every Qwen3Next-family GDN
+   model upstream ships. Evidence: bitwise gate (f32 accumulation, 8192
+   channels, f16+bf16) now CI-pinned by the contract tests; +1.77% median
+   MoE 8K decode.
+3. **Fused router top-k kernel (C18)** — independent of units 1–2
+   (`routerTopK` works in the uncompiled block too). Offer upstream the
+   generalization to every `SwitchGLU` router, or Qwen3.5-only first with
+   the MLXVLM copy flagged as the follow-up. Evidence: bit-identical by
+   construction with the contract tests as proof, +1.91% MoE 128 decode
+   (10/10 pairs).
+4. **PARO batch** — the existing #164 follow-up: AWQ conversion fixes,
+   `PairwiseRotation` extraction, the MoE PARO path, Prepared Checkpoint,
+   E1 (pre-gather rotation, +3–4.5% MoE prefill), E2 (decay-gate compile
+   fuse, +3.1% MoE decode), E6b (simdgroup-resident rotation kernel,
+   +1.8–5% by shape). One batched PR, queued since the 2026-07-23 review
+   round (tesseract PR #424).
+
+Also carried but filed separately when touched next: `perf(prefill):
+balance the prompt chunks` (standalone, model-agnostic, ~9% prefill).
+The mlx-core-side wins from the same loop (C4 caps, C9, C13 fused
+causal-softmax, gather identity-index cache, …) are tracked in
+`docs/mlx-core-fork.md`, and the two ripe evidence-backed `ml-explore/mlx`
+issues (M1 tile geometry, M2 command-buffer segmentation) in the section
+below — different upstream, different queue.
 
 ## Contributed back
 
