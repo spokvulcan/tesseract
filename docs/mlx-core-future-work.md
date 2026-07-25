@@ -22,10 +22,33 @@ account (ledger, session 2026-07-25 (b)):
 
 So **the "~2× decode / 180–270 t/s" goal is off the table under the
 zero-output-change constraint.** The floor is ~5.3 ms of streaming plus
-the serialization of a ~1000-deep graph; the levers that would collapse
-that depth (split-K, rewriting fused norms as elementwise, a custom
-top-k) all change reduction order and therefore output. Everything below
-should be read as "1–3% each", not as a path to 2×.
+the serialization of a ~1000-deep graph.
+
+**Update 2026-07-25 (c): the fusion class is now exhausted too.** Three
+findings close it (ledger, session (c)):
+
+1. **The schedule is already optimal.** A per-primitive barrier census
+   that also computes the ASAP critical-path depth of the dispatch DAG
+   reports `criticalPathDepth=199599` against `barriers=197773` — MLX's
+   dispatch order already sits at the graph's depth. Tape reordering,
+   list scheduling and interleaving independent chains are **dead**; the
+   only way to remove a barrier is to remove a serial link.
+2. **The marginal barrier is worth ~1.4 µs, not ~5.1 µs.** C19 removed
+   exactly one dispatch and one barrier per MoE layer and nothing else,
+   and bought 0.058 ms/token. The 4.14 µs figure came from switching
+   *all* barriers off at once, which also lets every kernel overlap — a
+   super-linear effect that does not decompose.
+3. Re-priced at 1.4 µs, **no remaining fusion candidate clears 1%**: the
+   residual-add/RMSNorm fusions are ~0.6% each, the
+   `CompiledBroadcastMultiply` sites ~1.0%, everything else less.
+
+A custom top-k turned out *not* to change output (C18 below): the sort it
+replaces is stable, so the selection order is exactly reproducible. But
+its win was deleting the sort's compute, not the barriers.
+
+Rig-to-production conversion is about **40%** (C18: 0.397 ms predicted,
+0.174 ms delivered). Price in the rig, halve it, then decide whether an
+in-model round is worth it.
 
 Also corrected there: this checkpoint has **130** rotations/token (not
 ~511) and quantizes **only** `embed_tokens`/`lm_head` — the router and
@@ -186,9 +209,14 @@ chunked/parallel GDN scan (rounding order), full-step `compile` *with*
 fused replay assumptions from outside the E2-bitwise class,
 **shared-input rotation batching (C15 — probe was bitwise-identical and
 2–3.5× on the group, but the lever is only ~50 dispatches ≈ 0.48%)**,
-**serial dispatch instead of concurrent+barriers (−19%)**, and
+**serial dispatch instead of concurrent+barriers (−19%)**,
 **resource-scoped hazard barriers (−7% once the bookkeeping is made
-sound; the +1.7% first reading was a dropped-hazard race)**.
+sound; the +1.7% first reading was a dropped-hazard race)**,
+**tape reordering / list scheduling (the schedule is already at the
+graph's critical-path depth — measured, not argued)**, and **folding the
+router's softmax into the top-k kernel (C19 — bitwise, but +0.64% at 128
+ctx / +0.19% at 8K, and it pins far more MLX internals than it is
+worth)**.
 
 ## Banked meta-lessons (use them)
 
@@ -208,6 +236,20 @@ sound; the +1.7% first reading was a dropped-hazard race)**.
   pipeline** (measured by appending N serial no-op kernels to the decode
   step). A 1% decode win needs ~105 dispatches removed. Size any
   "fewer kernels" idea against this *before* building it.
+- **The marginal barrier is ~1.4 µs, not the ~4.14 µs the all-barriers-off
+  measurement suggests** (C19 removed one barrier + one dispatch per MoE
+  layer and bought 0.058 ms/token). Averages from switching a whole class
+  off do not decompose into per-instance prices.
+- **A barrier can be load-bearing for a consumer other than the one it is
+  counted against.** C18 deleted the router's `sum`/`divide` barriers and
+  `GatherQMM`'s barrier count doubled — those barriers had been
+  publishing `inds` to the expert matmuls for free. Price a fusion by
+  what the *consumer* still has to wait for.
+- **The barrier census is reusable** —
+  `scratchpad/apply-census.py apply|revert` patches the mlx checkout to
+  attribute every dispatch and barrier to its primitive and to compute the
+  DAG's critical-path depth. `TESS_CENSUS=1 TESS_CENSUS_OUT=<path>`, and
+  run the app binary directly (`open` does not forward env).
 - **Independent kernels overlap; dependent ones do not.** Fusing
   independent dispatches buys ~2–3.5 µs each; the expensive thing is a
   *serial* link. Optimize graph depth, not graph width.
