@@ -31,3 +31,12 @@ in `/tmp/gather-sweep` does not survive reboots.
 
 Nothing here runs in CI; it is lab equipment. Logs from the original
 sessions stay in the ledger, not in the repo.
+
+- `main.swift.c19-softmax-backup` — C19 gate: the router kernel with
+  `softmax_single_row` replicated inside it (AccT=float, N_READS=4, masked
+  to E/4 threads, MLX's simd_max/simd_sum tree). Bitwise identical;
+  rejected on speed. Keep as the reference for reproducing an MLX
+  reduction kernel exactly.
+- `main.swift.prefill-anchor-backup` — gather_qmm vs dense-qmm anchor at
+  production MoE prefill dims, swept over gathered-row counts. Answers
+  "is the gather kernel behind the anchor?" (it is only at small shapes).
