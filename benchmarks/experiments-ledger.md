@@ -1626,3 +1626,73 @@ New lesson: **a barrier can be load-bearing for a consumer other than the
 one it was counted against.** Removing a serial link only pays if the
 link it exposes was not already going to need one. Price a fusion by what
 the *consumer* still has to wait for, not by the dispatch count alone.
+
+### C19 — fold the router's softmax into the same kernel — REJECTED (+0.64% / +0.19%)
+
+The obvious follow-on to C18: `Softmax` is 39.6 barriers and 40.3
+dispatches per token (census above), it feeds nothing but the router, and
+folding it into the C18 kernel removes a genuine serial link — the
+matmul→softmax→router chain becomes matmul→router.
+
+**It is fully replicable and it was bitwise.** `softmax_single_row` was
+reproduced verbatim inside the router kernel: `AccT = float` (the
+`precise` instantiation), `N_READS = 4`, `SIMD_SIZE = 32`, so axis 256
+runs on 64 threads; our threadgroup is 256 wide, so the softmax phase is
+masked to the first 64 with every `threadgroup_barrier` outside the mask,
+`local_max`/`local_normalizer` initialised by simdgroup 0 exactly as MLX
+does (entries 2..31 left at `Limits<float>::min = -INFINITY`, with
+`finite_min = -FLT_MAX` as the per-thread seed) so the final
+`simd_max`/`simd_sum` sees the same 32 lanes, and `fast::exp` called
+explicitly. Ranking then runs on the **`T`-rounded** probabilities, since
+that is what the sort it replaces saw. Gate: **IDENTICAL** over
+float16/bfloat16 × {normal logits, ×8-wide logits, 0.5-step ties,
+4-level ties, all-equal rows, one dominant logit}, 11 776 rows each.
+
+In-model against `e10e52f`, 10 pairs, both contexts: MoE **128 decode
++0.64% (9/10)**, MoE **8K decode +0.19% (6/10)**, peaks flat, **20/20
+token-identical**. A first attempt read +0.87%/+0.46% but its *prefill*
+legs moved −1.64%/+2.16% on a code path C19 provably does not touch, so
+that run was discarded as noise; the accepted run's prefill sentinel is
+−0.07%/−0.06%. **Reverted completely; vendor back at `e10e52f`.**
+
+Rejected on the bar, and the risk profile agrees: C18's bitwise contract
+rests on two broad properties (the sort is stable; the reduce accumulates
+sequentially in the output dtype), while C19 additionally pins `N_READS`,
+`AccT`, the exact simd reduction tree and the threadgroup padding rule —
+much more brittle, for a fifth of the gain.
+
+### The conversion constant was wrong, and that closes the class
+
+C19 is the cleanest possible calibration point: it removed **exactly one
+dispatch and one barrier per MoE layer** — 40 of each per token — and
+nothing else changed. It bought **0.058 ms/token** (+0.64% of a 9.11 ms
+token).
+
+That is **~1.4 µs per barrier+dispatch removed, not the ~5.1 µs**
+(4.14 barrier + 1.00 dispatch) the previous session's constants imply.
+The 4.14 µs came from turning *all* 972 barriers off at once, which also
+lets every kernel in the token overlap — a super-linear effect that does
+not decompose. **The marginal barrier is worth roughly a third of the
+average one.**
+
+Re-pricing every remaining decode candidate at 1.4 µs:
+
+| candidate | barriers/token | ms/token | % at 128 ctx |
+|---|---|---|---|
+| RMSNorm absorbing the residual add | ~40 | 0.056 | 0.6% |
+| the second residual (already compiled) into the next norm | ~39 | 0.055 | 0.6% |
+| `CompiledBroadcastMultiply` sites | ~64 | 0.090 | 1.0% |
+| everything else in the table | ≤40 each | ≤0.056 | ≤0.6% |
+
+**No remaining barrier-removal candidate clears 1% on its own.** Combined
+with the two facts already banked — the dispatch schedule is at the
+graph's critical-path depth, and ~5.3 ms of the token is irreducible
+weight streaming — the fusion class is exhausted under the zero-loss
+constraint. C18's win was not really a barrier win either: it was
+deleting a 256-element block sort's *compute*.
+
+The other calibration from this session: **rig savings convert to
+production at roughly 40%.** C18's rig number was 0.397 ms/token and it
+delivered 0.174 ms; C19's rig number was 0.054 ms and it delivered
+0.058 ms. Price a candidate in the rig, then halve it before deciding
+whether it is worth an in-model round.
