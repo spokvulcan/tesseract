@@ -1696,3 +1696,50 @@ production at roughly 40%.** C18's rig number was 0.397 ms/token and it
 delivered 0.174 ms; C19's rig number was 0.054 ms and it delivered
 0.058 ms. Price a candidate in the rig, then halve it before deciding
 whether it is worth an in-model round.
+
+### Item 5 (gather_qmm round 2) — CLOSED at the probe, and the C1 ambiguity resolved
+
+`docs/mlx-core-future-work.md` item 5 asked for one thing first:
+re-establish the gather_qmm-vs-dense-anchor ratio *at the production
+shape*, because the C1 entry recorded both "~40–50% of the anchor" and
+"the winner reaches 96% of the anchor" without pinning the B/E of either.
+
+Probe (rig, production MoE dims — hidden 2048, intermediate 512, 256
+experts top-8, 4-bit group 64; anchor = `quantizedMatmul` over the same
+MACs with the same quantization, no gather):
+
+| gathered rows | S | up/gate | down | anchor GMAC/s | gather GMAC/s |
+|---|---|---|---|---|---|
+| 4 096 | 512 | 52.5% | 58.0% | 3690 | 1938 |
+| 16 384 | 2048 | 63.8% | 69.8% | 5735 | 3657 |
+| 65 536 | 8192 | **87.4%** | **91.4%** | 6069 | 5303 |
+
+**The ratio is shape-dependent and both C1 readings were right** — 40–50%
+is the small-shape end, ~90%+ is the large end. Prefill runs at the large
+end: at 8K the kernel is already at 87–91% of a gather-free dense qmm of
+the same arithmetic.
+
+So the headroom is ~9–13% of the expert matmuls only. Those are ~1.5 s of
+a ~5.6 s 8K prefill, so a *perfect* gather kernel would be worth ~2–3%
+prefill — and C1's sweep already searched the legal geometry space (same
+per-element K-accumulation order; split-K changes rounding and is dead).
+**Not worth an implementation round.** Item 5 closed.
+
+## Where this leaves the decode/prefill program
+
+Every lever that was priced this session came back sub-1% or already
+spent. The three budgets are now each accounted for:
+
+- **Decode streaming** — ~5.3 ms of a 10.5 ms 8K token, at ~95% of peak
+  bandwidth. Irreducible without changing quantization.
+- **Decode serialization** — the dispatch schedule is *at* the graph's
+  critical-path depth, and the marginal barrier is ~1.4 µs, so the
+  remaining fusions are ~0.6–1.0% each.
+- **Prefill** — GEMM-bound, and the GEMM is at 87–91% of a gather-free
+  anchor of the same arithmetic.
+
+What is left is not kernel work. The only remaining ≥10% ideas change
+what runs, not how fast it runs: speculative decoding for the dense model
+(greedy-verified, so output-identical by construction — blocked on a
+compatible PARO draft model), or a quantization change (out of the
+zero-loss scope by definition).
