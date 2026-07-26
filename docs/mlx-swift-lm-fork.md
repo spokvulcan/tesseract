@@ -19,24 +19,41 @@ plus the carried commits cherry-picked on top. The fork's `main` mirrors
 upstream `main` exactly and carries nothing.
 
 Old pin branches (`feat/paro-moe-220`, `pin-2026-07-15-upstream-f1573a9`,
-`pin-gemma4-12b-358`, …) are kept so historical tesseract commits' gitlinks
-stay reachable — never delete them, and never force-push a branch an old
-gitlink points into without checking reachability. `pin-gemma4-12b-358` is
+`pin-2026-07-23-upstream-eaefe75`, `pin-gemma4-12b-358`, …) are kept so
+historical tesseract commits' gitlinks stay reachable — never delete them, and
+never force-push a branch an old gitlink points into without checking
+reachability. `pin-gemma4-12b-358` is
 the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
-## Current pin (2026-07-23)
+## Current pin (2026-07-27)
 
-Base: upstream `main` @ `eaefe75` (adds Qwen3.5 interleaved M-RoPE
-optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
-#232, Gemma 4 MTP speculative decoding #415, tool-schema `$defs` hoisting
-#434). Carried on top, in order:
+Base: upstream `main` @ `3cbf928` — the 2026-07-23 re-pin's base (`eaefe75`:
+Qwen3.5 interleaved M-RoPE #442, Qwen3VL per-image fused SDPA #455, TurboQuant
+KV cache #232, Gemma 4 MTP speculative decoding #415, tool-schema `$defs`
+hoisting #434) plus seven newer commits: end-to-end video input for Gemma 4
+#391, Hunyuan dense V1 #347, DeepSeek-V2 #379, a DeepSeek-V3 kvHeads / KV-cache
+fix #457, multi-round tool calling in MLXFoundationModels #456, and two CI
+changes (#458, #464).
+
+The previous tip (`8519cf3`) is preserved as
+`pin-2026-07-23-upstream-eaefe75`.
+
+This re-pin also **collapses the eleven per-experiment `chore: pin mlx-swift to
+<rev>` bookkeeping commits into the single pin declaration** below — they were
+lockstep noise, and the pin is a single fact.
+
+mlx-core stays at v0.31.1: the move to upstream mlx main is built and green on
+`pin-tesseract-2026-07-27` in both mlx forks, but is blocked on thread-local
+command encoders. Full diagnosis and re-attempt checklist:
+`docs/mlx-core-fork.md`.
+
+Carried on top, in order:
 
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
-| `fix: pin upstream ml-explore/mlx-swift at 0.31.6; drop retained-CB fork` | Exact-revision mlx-swift pin, matching mlx-audio-swift — SwiftPM cannot mix revision and version requirements for one package | Permanent local; never upstream |
-| `fix: pin mlx-swift to the spokvulcan fork (Cmlx experiment loop)` | mlx-swift pin moves to `spokvulcan/mlx-swift` @ `54ca1ec` (upstream 0bb916c + .gitmodules provenance only) so Cmlx is writable via `spokvulcan/mlx` — scheme: `docs/mlx-core-fork.md` | Permanent local; never upstream |
+| `fix: pin mlx-swift to the spokvulcan fork at 457a0d6d` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + .gitmodules provenance + the Cmlx gitlink bumps carrying C1/C4–C9/C13). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
 | `fix(paroquant): convert every AWQ prefix and cast scales to f16` | AWQ→PARO conversion correctness | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) (2026-07-26) |
 | `refactor(paroquant): extract PairwiseRotation from RotateQuantizedLinear` | Shared rotation core for the MoE path | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) (2026-07-26) |
 | `feat(paroquant): MoE PARO path — RotateSwitchGLU + loader passes` | PARO quantization for MoE models (Qwen3.6-35B-A3B) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) (2026-07-26) |
@@ -54,9 +71,10 @@ optimization #442, Qwen3VL per-image fused SDPA #455, TurboQuant KV cache
 | `perf(qwen35): C18 — fused router top-k kernel` | `ArgPartition::eval_gpu` delegates to `gpu_merge_sort`, so the router fully sorted 256 experts to name 8; one custom kernel replaces the sort and the gather/sum/divide tail. Bit-identical by construction (the sort is stable, so the selection order is reproducible; the 8-wide reduce accumulates sequentially in the output dtype). Decode only — prefill keeps the block sort. +1.91% MoE 128 decode (ledger C18) | Filed as [#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) (2026-07-26; MLXVLM copy flagged in the PR) |
 | `fix(qwen35): PR #427 review round — uint32 router indices, dead C12 wrapper, bitwise-contract tests` | C18 kernel emits `uint32` indices (argPartition's dtype); removes the C12 wrapper C14 obsoleted; adds `Qwen35BitwiseContractTests` (C16 conv contract + C18 router contract, NaN ordering included) and a quantized-cache lifecycle variant; MLXLLM gains the missing MLXFast product dep (strict SwiftPM builds were broken since C18) | Filed 2026-07-26, split across [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467)/[#468](https://github.com/ml-explore/mlx-swift-lm/pull/468)/[#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) |
 
-The pin-branch history also carries one `chore: pin mlx-swift to <rev>`
-commit per accepted Cmlx experiment (C4–C13 and the 2026-07-24 review
-round) — lockstep bookkeeping, never upstream.
+Earlier pin branches carried one `chore: pin mlx-swift to <rev>` commit per
+accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round). That
+lockstep bookkeeping is collapsed into the single pin commit above as of the
+2026-07-27 re-pin; `pin-2026-07-23-upstream-eaefe75` still has the long form.
 
 ## Upstream filing queue (2026-07-25)
 
@@ -153,6 +171,15 @@ on v0.31.1, and upstream has since merged DeviceStream into CommandEncoder
 with thread-local encoders, so the port is a re-implementation that needs a
 re-measure first. C6 is half-superseded by upstream mlx#3869.
 
+- **Thread-unsafe stream binding** (mlx-c + mlx-swift, not mlx). mlx made
+  command encoders thread-local (mlx#3281, #3348, both in v0.32.0), so
+  mlx-swift's process-wide default `Stream` throws the moment a
+  Swift-concurrency thread hop evaluates on it. The escape hatch,
+  `new_thread_unsafe_stream`, has no mlx-c binding — and mlx-c#121 ("Bump to
+  MLX 0.32.0") does not add one. Two small contributions: the mlx-c binding,
+  then mlx-swift adopting it for `Device.defaultStream`. **This is what blocks
+  the whole Swift stack from moving past mlx v0.31.1** — see
+  `docs/mlx-core-fork.md`. Not filed.
 - **M1** — `gather_qmm_rhs` tile geometry at small rows-per-expert:
   occupancy loss, not a bandwidth roofline (tesseract #256, ledger E4);
   worth ~12–15% of 35B MoE prefill. Not filed.
