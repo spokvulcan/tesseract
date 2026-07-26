@@ -1794,3 +1794,104 @@ executed-graph change is the index dtype, whose two variants are both
 already parity-proven above; the contract tests hold the fused outputs
 bit-identical to the chain including dtype. Dead-code removal and the
 Package.swift dep do not change the executed graph.
+
+---
+
+## Session 2026-07-27 — Cmlx loop, second campaign (branch `perf/inference-loop-2026-07-27`)
+
+Same rules and measurement discipline as the prior sessions (the binding
+section at the top of this file). Base: main `383ef0f2` (pins mlx-swift
+`457a0d6d` ← mlx `a3673067`, mlx-swift-lm `97c0308`). All work on the new
+branch `perf/inference-loop-2026-07-27`.
+
+### Infrastructure: fork/pin scheme re-verified (the assigned prerequisite task)
+
+The kickoff asked to "establish a buildable mlx-core fork/pin scheme and
+record it in the ledger". That scheme has existed since 2026-07-23
+(`docs/mlx-core-fork.md`); the honest task this session is to **re-verify
+it end-to-end**, which was done:
+
+- Pin chain lockstep: `Vendor/mlx-swift-lm/Package.swift`,
+  `Vendor/mlx-audio-swift/Package.swift`,
+  `Vendor/tesseract-speech/Package.swift` all pin `spokvulcan/mlx-swift`
+  @ `457a0d6df3a20c92341a6e7b7fa853d63d8549f9`; tesseract gitlink →
+  mlx-swift-lm `97c0308`.
+- Fork clones: `~/projects/mlx` @ `a3673067` (`pin-tesseract`, clean, in
+  sync with origin), `~/projects/mlx-swift` @ `457a0d6` (`pin-tesseract`,
+  clean). The `Source/Cmlx/mlx` submodule checkout there is clean at
+  `a3673067` (no probe hooks left over).
+- Live build checkout
+  (`~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
+  — now the only tesseract DerivedData dir): mlx-swift @ `457a0d6`,
+  Cmlx/mlx @ `a3673067`, mlx-c @ `0726ca9` (upstream, untouched), tree
+  clean. Full carry chain present in `git log ce45c525..HEAD`:
+  `fbf2fb86` (C1 tiles), `404070e2` (C4), `8d11dd1d` (C5), `3ec72a24`
+  (C6), `6ab29e36` (C7), `595a3fe1` (C8), `625f2aea` (C9),
+  `ed107a94`+`5ca82d9f` (C13), `90ec2bb9`+`a3673067` (review hardening).
+- Release build of `383ef0f2` **succeeds** from this tree; session
+  baseline binary saved at `/tmp/tesseract-2026-07-27-base.app`. No
+  `Tesseract Agent` process was running during any of this (GPU
+  serialization rule).
+
+**Verdict: scheme VALID — no re-establishment needed; recorded per the
+kickoff.**
+
+### M1 reconciliation — already banked as C1; do not re-run
+
+The kickoff's "start with M1 (gather_qmm_rhs tile geometry)" reflects the
+stale roadmap, not the ledger. Ledger state: **C1 (rows-per-expert-aware
+`gather_qmm_rhs` tiles, `fbf2fb86`) was ACCEPTED 2026-07-23** (+6.2% MoE
+32K prefill, 34/34 pairs token-identical), is carried by the current pins,
+and is filed upstream as ml-explore/mlx#3918. The residual headroom was
+priced and closed 2026-07-25 ("Item 5 — gather_qmm round 2 — CLOSED at the
+probe"): the post-C1 kernel sits at 87–91% of the gather-free dense anchor
+at production prefill shapes (C1's own sweep evidence: 96% of the anchor
+at B/E=32), and C1's sweep already searched the legal (same-per-element-
+K-accumulation-order) geometry space — split-K is dead under the bitwise
+rule. E4's "~12–15% of prefill" estimate was calibrated on the old
+harness; C1 recorded the true app win at ~6% at 32K. **Re-running M1
+would repeat a logged result, which the rules forbid.** The roadmap doc is
+stale (written after E1–E11, never updated post-C1); this entry is the
+correction of record.
+
+Also closed by later measurement, for the same reason: the roadmap's **M2
+"attack the cost per boundary" residual**. Decode is GPU-paced (C14
+attribution: the generation thread sits in `Scheduler::wait_for_one`
+33–37%), and AGX utilization is 98–100% during decode (session 2026-07-25
+(b)). CPU-side per-boundary cost lands in the CPU slack and cannot convert
+(C10 lesson); GPU-side drain has no idle left to recover at the current
+~20–27 boundaries/token.
+
+### Queue for this campaign (derived from the ledger end-state, not the stale roadmap)
+
+1. **Stock `qmm_t` tile geometry at PARO shapes (probe first).** The dense
+   anchor every gather kernel is measured against is itself untuned on
+   this machine: `qmm()` hard-codes bm=bn=32, bk=32, wm=wn=2
+   (`backend/metal/quantized.cpp:715-719`; template defaults in
+   `kernels/quantized.h`), measured 9.5–10.1 TFLOP/s ≈ 75–80% of the
+   12.69 peak at PARO shapes (C1 anchor; E9's lm_head 10.4 ≈ 82%). The
+   nax sibling ships bm=bn=64 — but nax is unavailable on M3 Max (gen 15
+   < 17, verified 2026-07-23). Same bitwise-safe axis as C1 (per-element
+   K-accumulation order is tile-geometry-independent). If the anchor
+   rises, every prefill projection on both models rises with it.
+   Production stock-qmm shapes (from the two `config.json`s this session):
+   MoE — q [1024×8192×2048], k/v [1024×512×2048], o [1024×2048×4096],
+   GDN in_proj_qkv [1024×8192×2048], in_proj_z [1024×4096×2048],
+   out_proj [1024×2048×4096], lm_head [1024×248320×2048]; dense — q
+   [1024×8192×2560], k/v [1024×1024×2560], o [1024×2560×4096], GDN same
+   at 2560, MLP gate/up [1024×9216×2560], down [1024×2560×9216], lm_head
+   [1024×248320×2560]; 4-bit gs=128, f16 (both checkpoints store F16).
+   Also M=128 (the ctx-128 single-chunk case).
+2. **M6 tokenizer encode path (TTFT).** ~0.29 s at 32K on the parity
+   bench; seconds at 100K+ in production server/agent use. Profile the
+   Jinja-render vs BPE-encode split first. CPU-only, zero numerics risk,
+   shows on the bench's tokenize metric.
+3. C6 hit-path string copies (future-work #8; ≲1% expected, CPU slack —
+   hold, likely sub-bar).
+4. C13-extension to kL ≤ 4096 (future-work #4; +0.3–0.5% 8K prefill —
+   sub-bar alone; dead unless bundled with a larger attention change).
+
+Dead / do-not-retry (in addition to the top table and the C15–C19
+lessons): item-5 gather geometry, M2 boundary-cost residual (above), tape
+reordering/list scheduling, resource-scoped barriers, serial dispatch,
+rotation batching, router-softmax folding.
