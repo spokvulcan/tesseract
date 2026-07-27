@@ -32,6 +32,30 @@
 //  covered twice. Images and vision-family models never reach here — both
 //  integration seams bypass upstream of this type.
 //
+//  Experiment C27 — the **truncated resolve**: `PrefillPlanner` re-renders
+//  every cache-aware request truncated at the last user message (with
+//  `add_generation_prompt: false` merged into the context) to find the
+//  last-user boundary — a second full-size encode right after the Request
+//  Keying phase cached the FULL render+tokens of the same conversation.
+//  `resolveTruncated` recovers that token list as a TRIM of the stored one:
+//  when the truncated render is a byte prefix of the stored render (the
+//  common case — the conversation's last message is its last user message —
+//  and verified empirically per call), the truncated tokens are the stored
+//  tokens minus the k tail tokens covering the tail text (the generation
+//  prompt). The exactness arbiter is the **cut verification**: a standalone
+//  re-encode of the truncated render's trailing ≥256 characters (enlarged ×4
+//  up to 16,384 on failure) must reproduce `candidateTokens.suffix(a)` for
+//  the `a` covering the same text — this catches right-context effects at
+//  the cut (the stored encode saw the tail following; the standalone encode
+//  sees end-of-text, e.g. the `\s+(?!\S)` pretoken alternative). Left of the
+//  window the tokenizations coincide by construction: byte-level BPE splits
+//  text into pretokens by regex (bounded, context-free) and merges only
+//  within a pretoken, so with the same merge table and identical text the
+//  only place the two encodes can disagree is a pretoken touching the cut —
+//  and every such pretoken lies inside the verified window. Any failure
+//  degrades to the caller's `applyChatTemplate`; correctness never hinges on
+//  the cache.
+//
 
 import CryptoKit
 import Foundation
@@ -87,6 +111,10 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         var junctionFailures = 0
         /// Times the junction window had to grow past 256 characters.
         var windowEnlargements = 0
+        /// C27: truncated resolves served as a verified trim of the entry.
+        var truncatedHits = 0
+        /// C27: truncated resolves that fell back to `applyChatTemplate`.
+        var truncatedFallbacks = 0
     }
 
     /// Tokenize one request through the cache. Returns `nil` when the
@@ -192,6 +220,126 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         return Resolution(tokens: fullTokens, path: .miss(finalReason))
     }
 
+    /// C27 truncated resolve: recover the token list of a render TRUNCATED at
+    /// the conversation's last user message as a verified trim of the stored
+    /// full-conversation entry. Returns exactly the tokens
+    /// `applyChatTemplate(messages, tools, mergedAdditionalContext)` would
+    /// produce, or `nil` — the caller falls back to that call.
+    ///
+    /// Chain of exactness (each step's failure is a `nil`, never a guess):
+    /// 1. Candidate: the stored entry's fingerprint, template hash, tools
+    ///    digest, and context digest all match — the context digest compared
+    ///    on the UNMERGED `baseAdditionalContext`, because the entry was
+    ///    rendered with it while the truncated render uses the merged one —
+    ///    and the entry's per-message digest chain head-matches the truncated
+    ///    messages' chain.
+    /// 2. Empirical arbiter: the truncated render (made here with the merged
+    ///    context) is a byte prefix of the stored render. The tail text must
+    ///    be short — a generation prompt, not dropped content
+    ///    (`maxTruncatedTailBytes`); a long tail means the conversation's last
+    ///    message is not its last user message, the case this path does not
+    ///    exist for.
+    /// 3. The trim k: tokens stripped from the tail of the stored list (one
+    ///    at a time, each decode checked against the remaining tail text)
+    ///    must consume the tail exactly; a token whose decoded text is not a
+    ///    suffix of the remainder spans the cut — not trimmable.
+    /// 4. Cut verification (`verifyCut`): the right-context arbiter; see the
+    ///    file header.
+    ///
+    /// The stored entry is left untouched: the truncated list must never
+    /// poison the full-conversation entry the next request resolves against.
+    func resolveTruncated(
+        tokenizer: any Tokenizer,
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?,
+        baseAdditionalContext: [String: any Sendable]?,
+        mergedAdditionalContext: [String: any Sendable]?,
+        modelFingerprint: String
+    ) throws -> [Int]? {
+        guard let rendering = tokenizer as? any ChatTemplateRendering else {
+            return nil
+        }
+
+        func fallback() -> [Int]? {
+            lock.withLock { stats.truncatedFallbacks += 1 }
+            return nil
+        }
+
+        // 1. Keyed candidate selection (cheap digests before any render).
+        guard let entry = lock.withLock({ entry }),
+            entry.modelFingerprint == modelFingerprint
+        else {
+            return fallback()
+        }
+        let toolsDigest = Self.sha256Hex(Self.canonicalForm(optional: tools))
+        let baseContextDigest = Self.sha256Hex(Self.canonicalForm(optional: baseAdditionalContext))
+        guard entry.toolsDigest == toolsDigest, entry.contextDigest == baseContextDigest
+        else {
+            return fallback()
+        }
+        let chain = Self.digestChain(messages)
+        guard entry.messageDigests.count >= chain.count,
+            zip(entry.messageDigests, chain).allSatisfy(==)
+        else {
+            return fallback()
+        }
+        let templateHash = try templateHash(for: modelFingerprint, rendering: rendering)
+        guard entry.templateHash == templateHash else {
+            return fallback()
+        }
+
+        // 2. The truncated render must be a byte prefix of the stored render
+        //    — the empirical arbiter that the two contexts render the same
+        //    head regardless of what the digests claim.
+        let truncatedRender = try rendering.renderChatTemplate(
+            messages: messages, tools: tools, additionalContext: mergedAdditionalContext)
+        guard entry.renderedText.hasPrefix(truncatedRender) else {
+            return fallback()
+        }
+        let tail = String(entry.renderedText.dropFirst(truncatedRender.count))
+        guard !tail.isEmpty, tail.utf8.count <= Self.maxTruncatedTailBytes else {
+            return fallback()
+        }
+
+        // 3. Find the trim k: strip each tail token's decoded text off the
+        //    tail, one token at a time (decode is per-token concatenation,
+        //    so stripping reproduces exactly `decode(tailTokens)` — a
+        //    doubling probe can jump over the exact k when token lengths
+        //    vary). A token whose text is not a suffix of the remaining
+        //    tail spans the cut — not trimmable. Tails are capped at
+        //    `maxTruncatedTailBytes`, so the walk is a handful of tokens.
+        var remaining = tail
+        var k = 0
+        while !remaining.isEmpty {
+            guard k < entry.tokens.count else {
+                return fallback()
+            }
+            let token = entry.tokens[entry.tokens.count - 1 - k]
+            let decoded = tokenizer.decode(tokenIds: [token], skipSpecialTokens: false)
+            guard !decoded.isEmpty, remaining.hasSuffix(decoded) else {
+                return fallback()
+            }
+            remaining = String(remaining.dropLast(decoded.count))
+            k += 1
+        }
+        guard k < entry.tokens.count else {
+            return fallback()
+        }
+        let candidateTokens = Array(entry.tokens.dropLast(k))
+
+        // 4. Cut verification — the right-context arbiter.
+        guard
+            verifyCut(
+                candidateTokens: candidateTokens, truncatedRender: truncatedRender,
+                tokenizer: tokenizer
+            )
+        else {
+            return fallback()
+        }
+        lock.withLock { stats.truncatedHits += 1 }
+        return candidateTokens
+    }
+
     func statsSnapshot() -> Stats {
         lock.withLock { stats }
     }
@@ -231,6 +379,13 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
 
     /// Largest trim-back count tried after the exact cut (k = 0...4 total).
     private static let maxTrimBack = 4
+
+    /// C27: the longest tail text a truncated resolve will trim — a
+    /// generation prompt (`<|im_start|>assistant\n<think>\n` is 28 bytes),
+    /// never dropped conversation content. A longer tail means the
+    /// conversation's last message is not its last user message; that case
+    /// falls back to `applyChatTemplate`.
+    private static let maxTruncatedTailBytes = 128
 
     private enum HitOutcome {
         case resolved(Resolution)
@@ -329,6 +484,43 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
                 if windowTokens == span { return true }
             }
             let canGrow = a < prefixTokens.count || b < suffixTokens.count
+            guard canGrow, target < 16_384 else { return false }
+            target = min(target * 4, 16_384)
+            lock.withLock { stats.windowEnlargements += 1 }
+        }
+    }
+
+    /// C27: the truncated resolve's exactness arbiter — the right-context
+    /// counterpart to `verifyJunction`. The candidate tokens were encoded
+    /// with the tail text following them; the standalone encode this result
+    /// is substituted for sees end-of-text at the cut. Re-encodes the
+    /// truncated render's trailing ≥C characters (C = 256 enlarged ×4 up to
+    /// 16,384 on failure) and requires the exact token slice back: the span
+    /// `candidateTokens.suffix(a)` covering the window must equal the
+    /// standalone encode of its own decoded text. Any right-context effect
+    /// at the cut (a pretoken alternative like `\s+(?!\S)` matching
+    /// differently at end-of-text) changes the window's tokenization and is
+    /// detected here. Left of the window the two encodes coincide by
+    /// construction (see the file header for the pretoken argument).
+    private func verifyCut(
+        candidateTokens: [Int],
+        truncatedRender: String,
+        tokenizer: any Tokenizer
+    ) -> Bool {
+        var target = 256
+        while true {
+            let a = trailingTokenCount(
+                of: candidateTokens, coveringCharacters: target, tokenizer: tokenizer)
+            if a >= 1 {
+                let span = Array(candidateTokens.suffix(a))
+                let windowText = tokenizer.decode(tokenIds: span, skipSpecialTokens: false)
+                // The span's text must be the render's own tail: anything
+                // else is a decode/trim inconsistency no enlargement fixes.
+                guard truncatedRender.hasSuffix(windowText) else { return false }
+                let windowTokens = tokenizer.encode(text: windowText, addSpecialTokens: false)
+                if windowTokens == span { return true }
+            }
+            let canGrow = a < candidateTokens.count
             guard canGrow, target < 16_384 else { return false }
             target = min(target * 4, 16_384)
             lock.withLock { stats.windowEnlargements += 1 }

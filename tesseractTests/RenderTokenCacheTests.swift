@@ -104,7 +104,11 @@ private struct GreedyTokenizer: ChatTemplateRendering {
             let content = message["content"] as? String ?? ""
             rendered += "<|im_start|>\(role)\n\(content)<|im_end|>\n"
         }
-        rendered += Self.generationPrompt
+        // The one context flag the fake honors, mirroring the production
+        // template: `add_generation_prompt: false` suppresses the tail.
+        if (additionalContext?["add_generation_prompt"] as? Bool) != false {
+            rendered += Self.generationPrompt
+        }
         return rendered
     }
 
@@ -265,6 +269,192 @@ struct RenderTokenCacheFakeTests {
         let ordered: [String: Any] = ["a": "x", "b": 1]
         #expect(
             RenderTokenCache.canonicalForm(reordered) == RenderTokenCache.canonicalForm(ordered))
+    }
+}
+
+// MARK: - C27 truncated resolve (fake tokenizer)
+
+/// Gate for experiment C27's `resolveTruncated` on the fake greedy
+/// tokenizer: the truncated-at-last-user render's tokens are recovered as a
+/// verified trim of the stored full entry — or the call falls back, never
+/// returning an inexact list.
+struct RenderTokenCacheTruncatedFakeTests {
+
+    private static let fingerprint = "fake-model"
+    private static let noGenPrompt: [String: any Sendable] = ["add_generation_prompt": false]
+
+    private static func tokenizer(extraPieces: [String] = []) -> GreedyTokenizer {
+        GreedyTokenizer(
+            pieces: [
+                "<|im_start|>", "<|im_end|>", "assistant", "user", "system",
+                "\nThe", "\n", "The", " ", ".", "end", "Again", "start",
+            ] + extraPieces)
+    }
+
+    private func user(_ content: String) -> [String: any Sendable] {
+        ["role": "user", "content": content]
+    }
+
+    private func assistant(_ content: String) -> [String: any Sendable] {
+        ["role": "assistant", "content": content]
+    }
+
+    private func system(_ content: String) -> [String: any Sendable] {
+        ["role": "system", "content": content]
+    }
+
+    private func resolveTruncated(
+        _ cache: RenderTokenCache,
+        tokenizer: GreedyTokenizer,
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]? = nil,
+        baseContext: [String: any Sendable]? = nil,
+        fingerprint: String = RenderTokenCacheTruncatedFakeTests.fingerprint
+    ) throws -> [Int]? {
+        try cache.resolveTruncated(
+            tokenizer: tokenizer, messages: messages, tools: tools,
+            baseAdditionalContext: baseContext,
+            mergedAdditionalContext: Self.noGenPrompt,
+            modelFingerprint: fingerprint)
+    }
+
+    /// The common case: the conversation's last message is its last user
+    /// message, so the truncated render is the stored render minus the
+    /// generation prompt. The trim must reproduce the standalone
+    /// `applyChatTemplate` exactly.
+    @Test func truncatedHitTrimsGenerationPromptExactly() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let messages = [user("The start."), assistant("The end."), user("Again.")]
+
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+        let truncated = try #require(
+            try resolveTruncated(cache, tokenizer: tokenizer, messages: messages))
+
+        let truth = try tokenizer.applyChatTemplate(
+            messages: messages, tools: nil, additionalContext: Self.noGenPrompt)
+        #expect(truncated == truth)
+        #expect(cache.statsSnapshot().truncatedHits == 1)
+    }
+
+    /// Turn over turn of a growing conversation: every truncated resolve is
+    /// exact against the standalone encode.
+    @Test func truncatedHitsExactAcrossTurns() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        var messages = [user("The start.")]
+        for turn in 0..<3 {
+            _ = try cache.resolve(
+                tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+                modelFingerprint: Self.fingerprint)
+            let truncated = try #require(
+                try resolveTruncated(cache, tokenizer: tokenizer, messages: messages))
+            #expect(
+                truncated
+                    == (try tokenizer.applyChatTemplate(
+                        messages: messages, tools: nil, additionalContext: Self.noGenPrompt)),
+                "turn \(turn) truncated token mismatch")
+            messages.append(assistant("The end."))
+            messages.append(user("Again."))
+        }
+        #expect(cache.statsSnapshot().truncatedHits == 3)
+    }
+
+    /// The tail must be a generation prompt, not dropped content: with an
+    /// assistant message after the last user message the tail is long, and
+    /// the resolve falls back (the caller's `applyChatTemplate` stays exact
+    /// by construction).
+    @Test func assistantTailFallsBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let longAssistant = assistant(String(repeating: "The end. ", count: 40))
+        let messages = [user("The start."), longAssistant]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+
+        let truncated = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: [user("The start.")])
+        #expect(truncated == nil)
+        #expect(cache.statsSnapshot().truncatedFallbacks == 1)
+    }
+
+    /// A conversation with no user message at all keys nothing like the
+    /// stored entry — digest-chain mismatch, fallback.
+    @Test func systemTailFallsBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: [user("The start.")], tools: nil,
+            additionalContext: nil, modelFingerprint: Self.fingerprint)
+
+        let truncated = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: [system("A different head.")])
+        #expect(truncated == nil)
+    }
+
+    /// No stored entry: cold cache falls back.
+    @Test func coldCacheFallsBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let truncated = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: [user("The start.")])
+        #expect(truncated == nil)
+        #expect(cache.statsSnapshot().truncatedFallbacks == 1)
+    }
+
+    /// The context digest compares on the UNMERGED base context: a drifted
+    /// base cannot borrow an entry stored under another context.
+    @Test func wrongBaseContextFallsBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let messages = [user("The start.")]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+
+        let truncated = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: messages, baseContext: ["x": "y"])
+        #expect(truncated == nil)
+    }
+
+    /// Tools digest mismatch falls back, fingerprint mismatch falls back.
+    @Test func toolsAndFingerprintMismatchFallBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let messages = [user("The start.")]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+
+        let tool: [String: any Sendable] = [
+            "type": "function",
+            "function": ["name": "f", "parameters": [:] as [String: any Sendable]]
+                as [String: any Sendable],
+        ]
+        let toolsDrift = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: messages, tools: [tool])
+        #expect(toolsDrift == nil)
+        let fingerprintDrift = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: messages, fingerprint: "other-model")
+        #expect(fingerprintDrift == nil)
+    }
+
+    /// A token spanning the cut cannot be trimmed: the piece
+    /// `<|im_end|>\n<|im_start|>` merges across the boundary, so the tail
+    /// probe overshoots and the resolve falls back.
+    @Test func spanningTokenAtCutFallsBack() throws {
+        let tokenizer = Self.tokenizer(extraPieces: ["<|im_end|>\n<|im_start|>"])
+        let cache = RenderTokenCache()
+        let messages = [user("The start.")]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+
+        let truncated = try resolveTruncated(cache, tokenizer: tokenizer, messages: messages)
+        #expect(truncated == nil)
     }
 }
 
@@ -494,5 +684,178 @@ struct RenderTokenCacheRealTests {
             messages.append(["role": "assistant", "content": content])
             messages.append(["role": "user", "content": "Acknowledged \(index). Go on."])
         }
+    }
+}
+
+// MARK: - C27 truncated resolve (real tokenizer)
+
+/// C27 on the real PARO tokenizer/template: the truncated-at-last-user
+/// render's tokens must be a verified trim of the stored full entry — exact
+/// against `applyChatTemplate(..., add_generation_prompt: false)` — or the
+/// resolve falls back. Covers the end-of-text right-context classes at the
+/// cut (whitespace runs, letter, CRLF, emoji, digits, `<|im_end|>\n`).
+struct RenderTokenCacheTruncatedRealTests {
+
+    private nonisolated static var modelDirectory: URL {
+        let path =
+            ProcessInfo.processInfo.environment["TESSERACT_TOKENIZE_CACHE_MODEL"]
+            ?? "~/Library/Application Support/models/z-lab_Qwen3.5-4B-PARO"
+        return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    }
+
+    private nonisolated static var modelAvailable: Bool {
+        FileManager.default.fileExists(
+            atPath: modelDirectory.appendingPathComponent("tokenizer_config.json").path)
+    }
+
+    private static let fingerprint = "test-fingerprint"
+    private static let noGenPrompt: [String: any Sendable] = ["add_generation_prompt": false]
+
+    private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
+        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+    }
+
+    private static func resolveTruncated(
+        _ cache: RenderTokenCache,
+        tokenizer: any MLXLMCommon.Tokenizer,
+        messages: [[String: any Sendable]],
+        baseContext: [String: any Sendable]? = nil
+    ) throws -> [Int]? {
+        try cache.resolveTruncated(
+            tokenizer: tokenizer, messages: messages, tools: nil,
+            baseAdditionalContext: baseContext,
+            mergedAdditionalContext: Self.noGenPrompt,
+            modelFingerprint: Self.fingerprint)
+    }
+
+    /// The production shape: a growing conversation whose last message is its
+    /// last user message. Every turn's truncated resolve must reproduce the
+    /// standalone truncated encode exactly — and hit, never fall back.
+    @Test(.enabled(if: modelAvailable))
+    func growingConversationTruncatedHitsExactly() async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let cache = RenderTokenCache()
+        var messages: [[String: any Sendable]] = [
+            ["role": "system", "content": "You are a careful assistant."],
+            ["role": "user", "content": "Start the investigation."],
+        ]
+
+        for turn in 0..<4 {
+            _ = try #require(
+                try cache.resolve(
+                    tokenizer: tokenizer, messages: messages, tools: nil,
+                    additionalContext: nil, modelFingerprint: Self.fingerprint))
+            let truncated = try #require(
+                try Self.resolveTruncated(cache, tokenizer: tokenizer, messages: messages),
+                "turn \(turn) truncated resolve fell back")
+            let truth = try tokenizer.applyChatTemplate(
+                messages: messages, tools: nil, additionalContext: Self.noGenPrompt)
+            #expect(truncated == truth, "turn \(turn) truncated token mismatch")
+
+            messages.append([
+                "role": "assistant",
+                "content": "Turn \(turn) findings: everything checks out so far.",
+            ])
+            messages.append(["role": "user", "content": "Continue to step \(turn + 1)."])
+        }
+        #expect(cache.statsSnapshot().truncatedHits == 4)
+    }
+
+    /// End-of-text right-context classes: the truncated render ends in
+    /// `<|im_end|>\n`, but the last user content's ending shapes the pretokens
+    /// inside the cut window — whitespace runs, a letter, CRLF, emoji,
+    /// digits, and the plain template trailer itself. Each truncated resolve
+    /// must verify and reproduce the standalone encode.
+    @Test(
+        .enabled(if: modelAvailable),
+        arguments: [
+            "Done with trailing whitespace   ",
+            "Done with a letter",
+            "Done with CRLF\r\n",
+            "Done with emoji 🙂",
+            "Done with digits 42",
+            "Done plain.",
+        ])
+    func endOfTextRightContextClasses(content: String) async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let cache = RenderTokenCache()
+        let messages: [[String: any Sendable]] = [
+            ["role": "system", "content": "You are a careful assistant."],
+            ["role": "user", "content": content],
+        ]
+        _ = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+                modelFingerprint: Self.fingerprint))
+        let truncated = try #require(
+            try Self.resolveTruncated(cache, tokenizer: tokenizer, messages: messages),
+            "class \(content.debugDescription) truncated resolve fell back")
+        let truth = try tokenizer.applyChatTemplate(
+            messages: messages, tools: nil, additionalContext: Self.noGenPrompt)
+        #expect(truncated == truth, "class \(content.debugDescription) token mismatch")
+    }
+
+    /// The context digest compares on the UNMERGED base context: a drifted
+    /// base cannot borrow an entry stored under another context — fallback,
+    /// exact by construction.
+    @Test(.enabled(if: modelAvailable))
+    func wrongContextDigestFallsBack() async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let cache = RenderTokenCache()
+        let messages: [[String: any Sendable]] = [
+            ["role": "system", "content": "You are a careful assistant."],
+            ["role": "user", "content": "Begin."],
+        ]
+        _ = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+                modelFingerprint: Self.fingerprint))
+        let truncated = try Self.resolveTruncated(
+            cache, tokenizer: tokenizer, messages: messages, baseContext: ["x": "y"])
+        #expect(truncated == nil)
+    }
+
+    /// Assistant tail: the tail past the last user message is dropped
+    /// content, not a generation prompt — fallback. System-only against a
+    /// stored user conversation: digest-chain mismatch — fallback.
+    @Test(.enabled(if: modelAvailable))
+    func assistantAndSystemTailFallBack() async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let cache = RenderTokenCache()
+        let assistantTail: [[String: any Sendable]] = [
+            ["role": "system", "content": "You are a careful assistant."],
+            ["role": "user", "content": "Begin."],
+            [
+                "role": "assistant",
+                "content": String(repeating: "A full answer with detail. ", count: 30),
+            ],
+        ]
+        _ = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: assistantTail, tools: nil,
+                additionalContext: nil, modelFingerprint: Self.fingerprint))
+        let truncatedToLastUser = Array(assistantTail.dropLast())
+        let assistantFallback = try Self.resolveTruncated(
+            cache, tokenizer: tokenizer, messages: truncatedToLastUser)
+        #expect(assistantFallback == nil)
+
+        let systemOnly: [[String: any Sendable]] = [
+            ["role": "system", "content": "An entirely different system prompt."]
+        ]
+        let systemFallback = try Self.resolveTruncated(
+            cache, tokenizer: tokenizer, messages: systemOnly)
+        #expect(systemFallback == nil)
+    }
+
+    /// Cold cache: no stored entry — fallback.
+    @Test(.enabled(if: modelAvailable))
+    func noStoredEntryFallsBack() async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let cache = RenderTokenCache()
+        let truncated = try Self.resolveTruncated(
+            cache,
+            tokenizer: tokenizer,
+            messages: [["role": "user", "content": "Begin."]])
+        #expect(truncated == nil)
     }
 }

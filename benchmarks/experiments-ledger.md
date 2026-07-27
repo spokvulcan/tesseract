@@ -2099,3 +2099,42 @@ mismatches, 0 junction failures. **Verdict: ACCEPTED.** App-only change
 path is now render(≈4 ms)+digests+suffix-encode ≈ 10–12 ms vs the
 ~126 ms full encode (−91%); the remaining hit cost is the mandatory
 render + the suffix encode itself.
+
+### C27 — PrefillPlanner last-user re-render as a verified trim of the cached entry — ACCEPTED
+
+The third full-size encode on the steady-state server path (after the
+RequestKeyingPhase prepare and the C25/C26 suffix encode):
+`PrefillPlanner.detectBoundaries` re-renders every cache-aware request
+**truncated at the last user message** (`add_generation_prompt: false`)
+to find the last-user boundary — ~40 ms at 11K, ~126 ms at 32K, right
+after the prepare cached the SAME conversation's full render+tokens.
+C27 recovers the truncated token list as a **verified trim** of the
+stored entry (`RenderTokenCache.resolveTruncated`): digests/fingerprint/
+template candidate (context digest compared on the unmerged context),
+the truncated render must be a byte prefix of the stored render with a
+≤128-byte tail (a generation prompt, not dropped content — longer means
+the last message is not the last user message → fallback), a per-token
+strip finds the trim k (a token spanning the cut → fallback), and the
+**cut verification** arbitrates exactness: a standalone re-encode of the
+truncated render's trailing ≥256 chars (×4 to 16 KB) must reproduce the
+candidate token suffix — catching right-context effects at the cut
+(end-of-text vs mid-text, e.g. the `\s+(?!\S)` pretoken alternative);
+left of the window the encodes coincide by construction (pretokens are
+bounded and context-free, merges stay inside pretokens — documented in
+the file header). Any failure → today's `applyChatTemplate`; the stored
+entry is never mutated. Integration: `PrefillPlanner.detectBoundaries`
+gained `modelFingerprint:` (threaded one line from `ServerCompletion`),
+engaged only in the text key space (`keySpace.isIdentity` — image
+spaces keep the full render for placeholder translation). Gates: new
+`RenderTokenCacheTruncated{Fake,Real}Tests` (13 tests — hit exactness,
+six end-of-text right-context classes, assistant/system tail, wrong
+context, spanning-token-at-cut, cold), C25/C26 suites unchanged-green,
+`PrefillPlannerTests`, `--prefix-cache-e2e` PASS, runner both models
+(parent-verified rerun): **truncated leg 40.19 → 2.87 ms (4B,
+−92.9%)**, 40.60 → 2.90 ms (MoE), 0 mismatches; the two engineered
+fallback turns fall back exactly. **Verdict: ACCEPTED.** Steady-state
+agent/server turn tokenize cost at 11K tokens is now ~8.4 ms
+(render+suffix 5.5 + truncated 2.9) vs ~82 ms pre-C25 (−90%). App-only
+change; no pins moved. Remaining on this path: the post-generation
+leaf-store/admission encodes (up to 3 full renders serialized on
+`container.perform` per turn) — C28.
