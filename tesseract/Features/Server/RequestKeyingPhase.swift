@@ -76,14 +76,34 @@ nonisolated enum RequestKeyingPhase {
             }
             return .ciImage(decoded)
         }
-        let fullInput = try await session.prepare(
-            UserInput(
+        let fullInput: LMInput
+        if userInputImages.isEmpty, imageKeying == nil,
+            let resolution = try? RenderTokenCache.shared.resolve(
+                tokenizer: session.tokenizer,
                 messages: conversation.promptMessages,
-                images: userInputImages,
                 tools: canonicalTools,
-                additionalContext: renderContext.additionalContext()
+                additionalContext: renderContext.additionalContext(),
+                modelFingerprint: modelFingerprint ?? "unfingerprinted"
             )
-        )
+        {
+            // C25 Render+Token Cache: text-only requests on text-family
+            // models tokenize through the cache — the `.messages` prompt
+            // reaches every processor's `generate(from:)` unchanged, so the
+            // cache renders exactly what `prepare` would. Images and
+            // vision-family models (whose text-only `prepare` emits 2D
+            // tokens) fall back to the processor, as do non-rendering
+            // tokenizers and any render/encode failure.
+            fullInput = LMInput(tokens: MLXArray(resolution.tokens))
+        } else {
+            fullInput = try await session.prepare(
+                UserInput(
+                    messages: conversation.promptMessages,
+                    images: userInputImages,
+                    tools: canonicalTools,
+                    additionalContext: renderContext.additionalContext()
+                )
+            )
+        }
         // Sequence length is always the LAST dim. For LLM models tokens are
         // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
         let fullTokenCount = fullInput.text.tokens.dim(-1)

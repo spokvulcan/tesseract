@@ -28,6 +28,9 @@ for arg in "$@"; do
     elif [ "$arg" = "--prefix-detect-bench" ]; then
         LOG_FILE="$BENCH_DIR/prefix-detect-bench/latest.log"
         break
+    elif [ "$arg" = "--tokenize-cache-bench" ]; then
+        LOG_FILE="$BENCH_DIR/tokenize-cache-bench/latest.log"
+        break
     elif [ "$arg" = "--prefix-cache-e2e" ]; then
         LOG_FILE="$BENCH_DIR/prefix-cache-e2e/latest.log"
         break

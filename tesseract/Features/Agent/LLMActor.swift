@@ -60,6 +60,10 @@ actor LLMActor {
 
     private var modelContainer: ModelContainer?
     private(set) var agentTokenizer: AgentTokenizer?
+    /// The loaded model's weight/config/template fingerprint
+    /// (`ModelFingerprint.computeFingerprint`), keyed on by the C25
+    /// Render+Token Cache. Set at load, cleared at unload.
+    private var activeModelFingerprint: String?
 
     /// The **Server Completion** module — actor-confined, non-`Sendable`,
     /// owning the cache-aware HTTP completion execution, the prefix cache,
@@ -130,6 +134,7 @@ actor LLMActor {
         // real-path unit test even when no MLX container can be loaded.
         let fingerprint = try ModelFingerprint.computeFingerprint(modelDir: directory)
         let isParoModel = isParoQuantModel(directory: directory)
+        activeModelFingerprint = fingerprint
 
         installLoadTimeState(
             modelIdentity: identity,
@@ -214,6 +219,9 @@ actor LLMActor {
         await preemptServerSpeculativePrefill()
 
         let genParams = Self.makeGenerateParameters(from: parameters)
+        // Read once on the actor so the `@Sendable` perform-closure below
+        // captures a value, not actor state.
+        let modelFingerprint = activeModelFingerprint
         // Canonicalize once so the loop-handler sees the same dict iteration
         // order the tokenizer uses for the prompt. Type-aware tool-call
         // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
@@ -221,7 +229,18 @@ actor LLMActor {
         return try await container.perform(nonSendable: input) { context, input in
             await progressHandler?(.cacheLookupStarted)
             let lookupStarted = Date.timeIntervalSinceReferenceDate
-            let prepared = try await context.processor.prepare(input: input)
+            // C25 Render+Token Cache: text-only inputs on LLM-family models
+            // tokenize through the cache (render + verified suffix encode,
+            // exactly the processor's token list); anything else falls back
+            // to the processor's `prepare`.
+            let prepared: LMInput
+            if let cached = Self.prepareViaRenderTokenCache(
+                context: context, input: input, modelFingerprint: modelFingerprint
+            ) {
+                prepared = cached
+            } else {
+                prepared = try await context.processor.prepare(input: input)
+            }
             let lookupMs = (Date.timeIntervalSinceReferenceDate - lookupStarted) * 1000
             let promptTokenCount = prepared.text.tokens.size
             await progressHandler?(
@@ -268,6 +287,43 @@ actor LLMActor {
                 tools: canonicalTools
             )
         }
+    }
+
+    /// C25 Render+Token Cache seam for `startRawGeneration`: reproduce
+    /// `context.processor.prepare`'s token list through `RenderTokenCache`
+    /// for text-only inputs on LLM-family models. Returns `nil` — the caller
+    /// falls back to the processor — for media inputs, VLM-family models
+    /// (their text-only `prepare` emits 2D `[batch, seq]` tokens and
+    /// parts-shaped message content), non-rendering tokenizers, and any
+    /// render/encode failure.
+    ///
+    /// The message conversion uses the model's own `messageGenerator` — the
+    /// exact expression the installed processors (`LLMUserInputProcessor` in
+    /// MLXLLM, the app-side ParoQuant processor) captured at load — so the
+    /// dicts rendered here are the dicts the processor would render.
+    private static func prepareViaRenderTokenCache(
+        context: ModelContext,
+        input: UserInput,
+        modelFingerprint: String?
+    ) -> LMInput? {
+        guard input.images.isEmpty, input.videos.isEmpty, input.audios.isEmpty,
+            let llmModel = context.model as? any LLMModel
+        else {
+            return nil
+        }
+        let messages = llmModel.messageGenerator(tokenizer: context.tokenizer).generate(from: input)
+        guard
+            let resolution = try? RenderTokenCache.shared.resolve(
+                tokenizer: context.tokenizer,
+                messages: messages,
+                tools: input.tools,
+                additionalContext: input.additionalContext,
+                modelFingerprint: modelFingerprint ?? "unfingerprinted"
+            )
+        else {
+            return nil
+        }
+        return LMInput(tokens: MLXArray(resolution.tokens))
     }
 
     /// Thinking-loop safeguard continuation for the HTTP prefix-cache path.
@@ -520,6 +576,7 @@ actor LLMActor {
         modelContainer = nil
         agentTokenizer = nil
         serverCompletion = nil
+        activeModelFingerprint = nil
         // No model resident — restore the balanced commit policy so later
         // MLX work (TTS bursts, the next load's warmup) doesn't inherit a
         // MoE-tuned leg. Scheduling-only either way; this keeps the global
@@ -639,7 +696,8 @@ actor LLMActor {
     }
 
     private nonisolated static func sendableJSONValue(from value: Any) -> (any Sendable)? {
-        if value is NSNull { return "" as String }  // JSON null → empty string (closest Sendable equivalent)
+        // JSON null → empty string (closest Sendable equivalent)
+        if value is NSNull { return "" as String }
         if let v = value as? String { return v }
         if let v = value as? Bool { return v }
         if let v = value as? Int { return v }

@@ -2008,3 +2008,74 @@ as well. A binary cache of the parsed structures would move no bench
 metric and no production load time on this machine. **Verdict: REJECTED,
 no code written.** (If weight loading ever gets ~5× faster than the
 tokenizer — e.g. a much faster `eval(model)` — this re-opens.)
+
+### C25 — render+token cache for prefix-stable request tokenization (M6, app-side) — ACCEPTED
+
+Hypothesis: on prefix-stable request sequences (agent multi-turn, growing
+conversations), the fused render+encode `applyChatTemplate` re-tokenizes a
+mostly byte-identical prompt every request (~126 ms at 32K; two full
+encodes per server request — the `RequestKeyingPhase` prepare plus
+`PrefillPlanner`'s last-user re-render — plus post-generation encodes).
+Caching the previous (render, tokens, digests) and tokenizing only a
+verified suffix reproduces the EXACT token list at a fraction of the
+cost. Exactness contract: the miss path is `renderChatTemplate` +
+`encode(rendered)` (byte-exact with `applyChatTemplate` — the fused call
+was split, not changed); the hit path is empirical — byte-prefix check
+per trim attempt (k = 0…4 tokens), suffix encode, and a junction-window
+re-encode (≥256 chars a side, ×4 to 16 KB) that must return the exact
+token slice (BPE merges spanning the cut are detected, never assumed
+away); any failure degrades to the miss path. Identical repeat renders
+return cached tokens outright (deterministic encode).
+
+Implementation (three layers): swift-transformers `renderChatTemplate`
+(pure refactor — `applyChatTemplate` now calls it; new protocol
+requirement with a public throwing default) → MLXLMCommon
+`ChatTemplateRendering` protocol + macro-bridge forwarding → app
+`RenderTokenCache` (single-entry, NSLock-guarded, keyed on
+modelFingerprint + template probe hash + tools/context digests +
+per-message SHA-256 chain), engaged at two seams
+(`RequestKeyingPhase.run` — bypasses images/vision-family;
+`LLMActor.startRawGeneration` — bypasses media/non-LLMModel), both
+falling back to the processor's `prepare` on any failure. Design
+finding: the generation-prompt tail (`<|im_start|>assistant\n<think>\n`)
+means a full-text byte-prefix gate would never hit — the trim loop
+re-discovers the shared prefix in token space instead (every growing
+turn hits at trim=2).
+
+Gates (all PASS): `RenderChatTemplateParityTests` (8-case battery,
+through the macro adaptor and direct), `RenderTokenCacheTests` (forced
+dirty junctions, 6 junction classes, digest mismatches, repeats — all
+exact), regression suites (StablePrefixDetector, HTTPPrefixCacheSpike,
+ServerCompletionDrain, AgentEngineToolSpec, AgentEngineManagedGeneration,
+PrefixCacheIntegration), `--prefix-cache-e2e` PASS (incl. image warm
+output equivalence), and the new `--tokenize-cache-bench` runner with a
+per-turn intrinsic exactness assertion against `applyChatTemplate`.
+Runner (12-turn agent trajectory + repeat + edited + unrelated, real
+tokenizer, Release): **4B −38.9% prepare ms per hit turn (40.71 →
+24.87 ms; parent-verified rerun), MoE template −48.8% (41.07 →
+21.03 ms), repeat −97% (48.7 → 1.4 ms), misses +0.4–1.0 ms**
+(digest+render overhead; ≪0.1% of TTFT); **0 token mismatches, 0
+junction failures, 0 window enlargements across both models**.
+Parity A/B (3-pair, both models, all contexts): **9/9 + 9/9
+token-identical**, peaks byte-flat; perf deltas are the documented
+thermal noise (MoE +34%/30% and dense −16.5% in the same session —
+impossible both directions for a tokenize-path change; the parity bench
+provably never engages the cache — `runOnce` calls
+`context.processor.prepare` directly). **Verdict: ACCEPTED** — the win
+metric is production-path tokenize time on prefix-stable sequences
+(−39–49% per hit turn, −97% on repeats), E11-shaped; no
+mechanistically-possible regression channel on any bench metric; miss
+cost +~1 ms documented.
+
+Ports and pins: `spokvulcan/swift-transformers` **new fork**,
+`pin-tesseract` @ `63edf42` (scheme: `docs/swift-transformers-fork.md`);
+Vendor/mlx-swift-lm `pin-upstream-mlx-swift` @ `47aa83a` (pushed);
+`Vendor/mlx-audio-swift/Package.swift` pins the fork at `63edf42f…`
+(the package's only declarer in the graph). Follow-ups queued: **C26**
+(hit path is prefix-decode-bound — ~15–18 ms of the ~25 ms at 11K
+tokens; derive `prefixText` from the entry's stored render instead of
+decoding the whole prefix per attempt), C27 (PrefillPlanner's last-user
+re-render through the same cache — the second full encode on the server
+TTFT path), C28 (post-generation leaf-store/admission encodes), and the
+upstream filings (mlx-swift-lm + swift-transformers PRs — owner
+go-ahead).

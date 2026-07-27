@@ -62,7 +62,12 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "457a0d6df3a20c92341a6e7b7fa853d63d8549f9"),
         .package(path: "../mlx-swift-lm"),
-        .package(url: "https://github.com/huggingface/swift-transformers.git", .upToNextMajor(from: "1.1.6")),
+        // swift-transformers pinned to the spokvulcan fork (renderChatTemplate
+        // carry, tesseract experiments-ledger C25). Exact-revision pin: SwiftPM
+        // cannot mix revision and version requirements for one package; this is
+        // the package's only declarer in the graph. Scheme:
+        // tesseract docs/swift-transformers-fork.md.
+        .package(url: "https://github.com/spokvulcan/swift-transformers", revision: "63edf42f85f4f13818d4e5a080482b3930a9618f"),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.8.1"))
     ],
     targets: [
