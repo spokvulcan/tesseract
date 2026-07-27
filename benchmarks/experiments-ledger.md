@@ -2218,3 +2218,43 @@ render+digests (~5.5 ms) + ~12 ms of cached legs, vs ~205 ms pre-C25.
 summary extraction + the RenderTokenCache test file split into
 `RenderTokenCacheTests` / `RenderTokenCacheRealTests` /
 `RenderTokenCacheTestSupport` for the pre-commit lint limits.)
+
+### C24 — byte-native serial BPE inner loop + byte-keyed lookup tables — ACCEPTED
+
+The last encoder lever from the C21 profile: ~34% of the 126 ms 32K
+encode was the serial BPE inner loop + token→id conversion — one String
+allocation per Unicode scalar on entry (`BPETokenizer.bpe`), a String
+concat per merge, and String-keyed dictionary probes (NFC-walking
+hashes, NSString bridging) for every pair rank and token id. The
+rewrite keeps the SAME serial algorithm with the SAME merge order:
+initial symbols are byte ranges into one UTF-8 buffer (identical
+boundaries to `unicodeScalars.map { String($0) }`), merges extend a
+range instead of concatenating, and ranks/ids resolve through
+open-addressed byte-keyed tables derived 1:1 from `bpeRanks` /
+`tokensToIds` (FNV-1a over raw bytes + split point, full byte-compare
+verification; `(rank, left)` heap tie-break and stale-entry re-check
+unchanged; lazy build-once behind a lock, ~20 MB resident). Rig gates
+(coder subagent): **88/88 corpus items byte-identical final ids** (the
+26-class tokdiff corpus + 18 merge-stress adversarial items — long
+runs, tie-heavy segments, combining runs, ZWJ/keycap, all scalars
+singly+doubled — 6.7M tokens, both model tokenizers); 50/50 repeat
+encodes identical; ABBA **1.22× at 32K (130.05 → 106.68 ms), 1.21× at
+8K, 1.20× at 128** — no short-input guard needed (the byte-keyed id
+lookup wins even at 129 tokens). App A/B (same binary, `C24_OLD=1`
+env-gated legacy arm, 3-pair both models): **gates 9/9 + 9/9
+token-identical**, peaks exactly flat; tokenize deltas consistent with
+the rig on 5/6 legs (dense 8K/32K −15.3%/−21.4%, MoE 32K −13.6%,
+MoE 8K −1.2% — the session was thermally distressed; prefill/decode
+deltas were both-directions-impossible across the two tables, the
+documented environmental signature, and the mechanism provably cannot
+touch them — CPU-only, pre-model, gates prove the inputs identical).
+**Verdict: ACCEPTED** on rig exactness + rig timing + app gates.
+Ported STRIPPED of the probe scaffolding (env toggle and the verbatim
+legacy path dropped — the fork carries upstreamable product, not
+measurement harness; the benched default path is byte-for-byte what
+shipped): `spokvulcan/swift-transformers` `pin-tesseract` @ **a524093**
+(`swift build` green pre-push), `Vendor/mlx-audio-swift` pin moved,
+checkout re-resolve verified `diff 1.3.3 == fork diff`, clean-build
+confirmation rebuilt + parity smoke leg vs the pre-C24 binary **2/2
+token-identical**. `docs/swift-transformers-fork.md` carry table
+updated. Upstream filing queued (owner go-ahead).

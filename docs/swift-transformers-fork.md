@@ -25,6 +25,7 @@ tesseract.xcodeproj
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
 | `63edf42` `feat(tokenizers): expose renderChatTemplate` | Splits the render half of `applyChatTemplate` into a public `renderChatTemplate` (pure refactor, byte-identical output; public default impl keeps third-party conformers compiling). Enables the C25 render+token cache | Not filed (queued — owner go-ahead) |
+| `a524093` `perf(tokenizers): byte-native BPE inner loop + byte-keyed lookup tables` | Same serial algorithm, same merge order, byte-identical output: byte-range symbols in one UTF-8 buffer instead of per-scalar Strings and per-merge concats; open-addressed byte-keyed rank/id tables (FNV-1a + full byte-compare) instead of String-keyed dictionary probes. 1.22×/1.21×/1.20× encode at 32K/8K/128; 88/88 corpus items byte-identical (experiments-ledger C24) | Not filed (queued — owner go-ahead) |
 
 ## Per-iteration workflow
 
