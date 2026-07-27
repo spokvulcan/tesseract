@@ -249,12 +249,25 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         /// discriminator between "the new render does not extend the old one"
         /// and "the seam is there but the junction never verified".
         var sawTextualPrefix = false
+        // C26: `prefixText` is derived from the entry's stored render by
+        // stripping each trimmed token's decoded text from the tail — decode
+        // is per-token concatenation, so stripping reproduces exactly
+        // `decode(prefixTokens)` — instead of decoding the whole prefix per
+        // attempt (that decode dominated the hit path at long prefixes). The
+        // `hasSuffix` guard keeps any decode/strip inconsistency honest, and
+        // the per-attempt `hasPrefix` check is unchanged.
+        var prefixText = candidate.renderedText
         for k in 0...Self.maxTrimBack {
             guard candidate.tokens.count - k > 0 else { break }
+            if k > 0 {
+                let dropped = candidate.tokens[candidate.tokens.count - k]
+                let droppedText = tokenizer.decode(tokenIds: [dropped], skipSpecialTokens: false)
+                guard prefixText.hasSuffix(droppedText) else {
+                    return .failed(.renderNotExtended)
+                }
+                prefixText = String(prefixText.dropLast(droppedText.count))
+            }
             let prefixTokens = Array(candidate.tokens.dropLast(k))
-            // Byte-level BPE decode is byte-exact in practice; the hasPrefix
-            // check per attempt is what makes it safe to rely on.
-            let prefixText = tokenizer.decode(tokenIds: prefixTokens, skipSpecialTokens: false)
             guard rendered.hasPrefix(prefixText) else { continue }
             sawTextualPrefix = true
             let suffix = String(rendered.dropFirst(prefixText.count))

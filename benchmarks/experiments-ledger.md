@@ -2079,3 +2079,23 @@ re-render through the same cache — the second full encode on the server
 TTFT path), C28 (post-generation leaf-store/admission encodes), and the
 upstream filings (mlx-swift-lm + swift-transformers PRs — owner
 go-ahead).
+
+### C26 — hit-path prefix-decode elimination — ACCEPTED
+
+Direct follow-up to C25 (queued in its entry): the hit path decoded the
+whole cached prefix per trim attempt — ~15–18 ms of the ~25 ms at 11K
+tokens. Decode is per-token concatenation, so stripping each trimmed
+token's decoded text from the stored render's tail reproduces
+`decode(prefixTokens)` exactly; `prefixText` is now derived from the
+entry's stored render (a `hasSuffix` guard keeps any decode/strip
+inconsistency honest — it degrades to the miss path; the per-attempt
+`hasPrefix` and junction-window checks are unchanged). Same tokens
+produced; the exactness contract is untouched. Gates: the C25 suites
+(TEST SUCCEEDED), runner both models — hit turns 41.41 → **5.54 ms**
+(4B, **−86.6%**, vs C25's −38.9%), 42.50 → **5.56 ms** (MoE,
+**−86.9%**), repeats −97% unchanged, misses unchanged; 0 token
+mismatches, 0 junction failures. **Verdict: ACCEPTED.** App-only change
+(`RenderTokenCache.swift`); no vendor/fork pins moved. At 32K the hit
+path is now render(≈4 ms)+digests+suffix-encode ≈ 10–12 ms vs the
+~126 ms full encode (−91%); the remaining hit cost is the mandatory
+render + the suffix encode itself.
