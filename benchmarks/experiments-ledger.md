@@ -1895,3 +1895,30 @@ Dead / do-not-retry (in addition to the top table and the C15–C19
 lessons): item-5 gather geometry, M2 boundary-cost residual (above), tape
 reordering/list scheduling, resource-scoped barriers, serial dispatch,
 rotation batching, router-softmax folding.
+
+### C20 — stock `qmm_t` tile-geometry sweep at PARO shapes — REJECTED at probe (stock is at the envelope)
+
+Hypothesis: the stock `qmm_t` kernel's hard-coded bm=bn=32/bk=32 (wm=wn=2)
+leaves ≥5% on the table at production prefill shapes; a wider legal tile
+(the nax sibling ships bm=bn=64) lifts it bitwise-safely. Probe in
+`/tmp/gather-sweep` (coder subagent, `qmmtiles` mode — now durable in
+`benchmarks/gather-sweep/`): uncommitted `MLX_QMM_TILES` env hook in the
+rig's mlx checkout substituting non-default BM/BK/BN template args
+(kernel body untouched — params already exist on `affine_qmm_t`), 16
+production shapes (M ∈ {128, 512, 1024} × both models' projection and
+lm_head N/K sets, 4-bit gs=128 f16 transpose), configs (32,32,32) stock
+vs (64,32,64) / (64,64,64) / (32,32,64) / (16,32,32), ABBA-interleaved
+process launches, one lazy graph per launch cycling 8 disjoint weight
+sets. **Bitwise IDENTICAL in all 64 shape×config cells** (the C1-class
+per-element-K-order invariance confirmed once more, now for the dense
+kernel). Speed: **every candidate within ±2% of stock at every shape**
+(mean ratios 0.992–0.997) — nothing clears +5% anywhere, including the
+lm_head shapes (2.2 GB footprint, true DRAM streaming). Anchor correction
+of record: stock `qmm_t` measures **11.6–12.4 TFLOP/s cool (~95% of the
+12.69 bf16 peak)**, decaying to 9.5–10.1 under sustained load — so the
+"75–80% of peak" premise (C1 anchor / E9) was a *throttled-regime*
+reading, not headroom. C1's verdicts are unaffected (within-run ABBA).
+**Verdict: REJECTED, no app run.** Hook reverted, rig submodule clean.
+Consequence: with item 5 (gather geometry) and C20 (dense geometry) both
+closed, **the GEMM tile-geometry axis is exhausted on this machine** —
+prefill-side wins must come from fusion/overlap/dequant cost, not tiles.
