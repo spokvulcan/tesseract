@@ -1922,3 +1922,41 @@ reading, not headroom. C1's verdicts are unaffected (within-run ABBA).
 Consequence: with item 5 (gather geometry) and C20 (dense geometry) both
 closed, **the GEMM tile-geometry axis is exhausted on this machine** —
 prefill-side wins must come from fusion/overlap/dequant cost, not tiles.
+
+### C21 — pretokenizer regex single-pass (M6) — REJECTED at probe (cannot preserve byte-identical ids)
+
+Hypothesis: replace the pre-tokenizer Split step's per-match
+`String.range(of:.regularExpression)` loop with one NSRegularExpression
+(ICU) pass — measured 12.2× on the phase (76.2 → 6.2 ms at 32K), worth
+~2.2× on the whole tokenize metric. Profile first (this session,
+`tokprofile` rig mode; all findings measured): **chat-template render is
+0.03% of tokenize** (E11-class work — nothing left); encode = 99.7%;
+split loop 76.9 ms of the 126 ms 32K encode, BPE merge loop ~27%,
+token→id ~7%; encode scales linearly (~250K tok/s, no O(n²)); tokenizer
+one-time load ~800 ms (12.8 MB tokenizer.json + 247,587-merge rank-dict).
+Differential harness (`tokdiff` rig mode; production pipeline replicated
+exactly — P′ == P on all items): 26 text classes, **3,000,356 tokens**,
+production vs two ICU arms (original pattern; quirk-mutated pattern
+folding in the verified Swift-Regex `\r\n`-negation bug). **Both ICU arms
+diverge from production in the same 3 classes** (crlf, emoji,
+whitespace-runs). Root cause below the pattern level: **Swift Regex
+matches at grapheme-cluster (UAX#29) granularity, ICU at code-point
+granularity** — two final-id-changing classes: CRLF clusters
+(`"!\r\n\r\n!"` → production `[0,317,317,0]` vs ICU `[0,845,0]`) and
+VS16/keycap emoji adjacent to symbols (`"🤖❤️!"` diverges). No pattern
+mutation re-expresses cluster semantics in ICU; a same-engine precompiled
+Swift `Regex` pass measures **0.8× (slower)**; and one production
+behavior (`[\r\n]*` at CRLF clusters) is not derivable from source at all
+— near-identical inputs yield different piece structure — so a
+hand-rolled exact matcher is a research project with an unbounded
+differential tail. **Verdict: REJECTED, no app run.** The replacement
+code is preserved marked DO NOT SHIP (`benchmarks/gather-sweep/
+tokdiff-replacement.swift`) with the corpus harness as the reusable gate.
+Findings of record: (a) **production tokenization itself diverges from
+the HuggingFace reference tokenizer on the CRLF/emoji classes** — the
+parity baseline this loop defends is non-canonical there (upstream-report
+material for swift-transformers; not actionable in-loop — the gate
+anchors to the unmodified baseline, bugs included); (b) the profile's
+parallel per-pre-token BPE candidate is unaffected by this verdict and
+proceeds as C22; (c) tokenizer one-time load ~800 ms noted as a possible
+load-time item.
