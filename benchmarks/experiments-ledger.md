@@ -1960,3 +1960,33 @@ anchors to the unmodified baseline, bugs included); (b) the profile's
 parallel per-pre-token BPE candidate is unaffected by this verdict and
 proceeds as C22; (c) tokenizer one-time load ~800 ms noted as a possible
 load-time item.
+
+### C22 — parallel per-pre-token BPE — REJECTED at probe (in-process contention, 3× SLOWER)
+
+Hypothesis: an order-preserving concurrent map over the per-pre-token
+BPE work (provably byte-identical: `bpeRanks`/`tokensToIds` read-only
+`let`s, per-call `MinHeap`, merges local to one pre-token, `fuseUnk`
+false) wins ~25–30% of the 32K encode. Rig implementation (patched
+swift-transformers 1.3.3 checkout, threshold-gated `concurrentPerform`
+map) + full gates: corpus identity **PASS** (52/52 items, 3,000,356
+tokens × both model dirs — the models' `tokenizer.json` files are
+byte-identical; chat templates differ in 2 jinja lines but render
+identically for the corpus shapes), determinism **PASS** (50/50 repeat
+encodes identical), thread-safety review clean (no hidden mutable state;
+canonical `concurrentPerform` idiom). Timing **FAIL: 0.31×/0.33× at
+8K/32K — 3× SLOWER, not 30% faster.** Contention curve, not dispatch
+overhead: bisect chunk2 ≈ serial → chunk16/full ≈ 3×; whole-encode
+scaling n=2 → 1.41×, n=4 → 1.48×, n=8 → 1.06×, n=16 → 0.25×; two
+instances 1.51×; **four concurrent PROCESSES scale fine (137–140 ms vs
+129 solo)** — the pathology is in-process: workers sit inside
+`BPETokenizer.bpe` dominated by `swift_retain`/`swift_release`,
+`__RawDictionaryStorage.find`, and String `_normalizedHash` (NFC), whose
+per-op cost inflates with thread count. **Verdict: REJECTED; rig checkout
+reverted, baseline re-measured intact.** Do not retry parallel BPE
+without attacking the contention itself (per-thread merge-rank replicas
+or a scale-stable lookup structure — a different, much deeper change).
+Patch preserved for the record (`/tmp/gather-sweep/c22-patch.diff`); gate
+code lives on in the rig's `c22` modes. Threading lesson of record for
+this machine: shared read-only Swift dictionaries + refcounted Strings do
+NOT scale read-only across cores in-process — profile before assuming
+"embarrassingly parallel".
