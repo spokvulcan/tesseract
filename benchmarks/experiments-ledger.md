@@ -2519,6 +2519,11 @@ window enlargements on both tokenizers means the F8 window constants
 templates; the enlargement counters exist to catch the day that changes.
 
 The one gate deliberately substituted: no local `dev.sh clean` before these
-timings. A full DerivedData wipe + rebuild is ~40 min of sustained load, and this
-ledger's own thermal-distress note says timing runs after one are unreliable. CI's
-`build-release` on a pristine runner is the clean-build confirmation instead.
+timings. A full DerivedData wipe + rebuild is ~40 min of sustained load, which is
+exactly the condition trap 2 (Thermals) warns about — the M3 Max throttles under
+it, and absolute timings are not comparable across a thermal transition. Running
+the bench immediately after a clean would have disadvantaged it against the
+baselines it is measured against. CI's `build-release` on a pristine runner is the
+clean-build confirmation instead; the exactness assertions (0 mismatches, 0 parity
+failures, 0 path failures) are thermally invariant either way, so the substitution
+costs nothing on the correctness gate — only on the timing gate, where it helps.
