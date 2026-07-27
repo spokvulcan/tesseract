@@ -1,5 +1,6 @@
 import Foundation
 import MLX
+import MLXLLM
 import MLXLMCommon
 import MLXVLM
 
@@ -37,6 +38,16 @@ nonisolated protocol ModelSession {
     /// wired the state-threaded windowed path (`nil` otherwise). The
     /// feature-detect `as?` cast, as a queryable fact.
     var anchoredVisionPrepare: AnchoredVisionPrepare? { get }
+
+    /// Whether this model's processor emits a flat 1-D `[seq]` token list from
+    /// a text-only `prepare` — true for the LLM families, false for the vision
+    /// containers, whose text-only `prepare` still emits 2D `[batch, seq]`.
+    ///
+    /// The same feature-detect-as-a-fact shape as `anchoredVisionPrepare`, and
+    /// the precondition for the C25 **Render+Token Cache** on the request path:
+    /// building `LMInput(tokens:)` from the cache's token list must reproduce
+    /// what the processor would have built.
+    var producesFlatTextTokens: Bool { get }
 
     /// Run the model's input processor: `UserInput` (messages, images,
     /// tools) → tokenized `LMInput`.
@@ -126,6 +137,14 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         return { input, cache, state, windowSize in
             try model.prepare(input, cache: cache, state: state, windowSize: windowSize)
         }
+    }
+    var producesFlatTextTokens: Bool {
+        // The same marker protocol both installed processors branch on
+        // (`LLMUserInputProcessor` in MLXLLM, the app's
+        // `ParoQuantInputProcessor`): an `LLMModel` gets the text-only
+        // processor that returns `LMInput(tokens: MLXArray(promptTokens))`.
+        // `VLMModel` is a disjoint marker, so a vision container answers false.
+        context.model is any LLMModel
     }
 
     func prepare(_ input: UserInput) async throws -> LMInput {

@@ -124,13 +124,21 @@ nonisolated enum PrefillPlanner {
     /// The MLXLMCommon `Tokenizer` protocol doesn't expose `addGenerationPrompt`,
     /// so the last-message boundary is found by encoding the known generation
     /// prompt string and subtracting it from the full token suffix.
+    ///
+    /// `modelFingerprint` engages the C27 truncated resolve for the last-user
+    /// re-render (text key space only): the Request Keying phase just cached
+    /// the full render+tokens of this same conversation under that
+    /// fingerprint, so the truncated token list is recovered as a verified
+    /// trim of the stored entry. `nil` — or any inexactness — runs today's
+    /// `applyChatTemplate`.
     static func detectBoundaries(
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         promptStartsThinking: Bool,
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext = .canonical
+        renderContext: TemplateRenderContext = .canonical,
+        modelFingerprint: String? = nil
     ) throws -> PrefillBoundaries {
         let fullTokens = keySpace.keyPath
         let stablePrefixOffset = try StablePrefixDetector.detect(
@@ -169,13 +177,43 @@ nonisolated enum PrefillPlanner {
                 toolDefinitionsDigest: conversation.toolDefinitionsDigest,
                 templateContextDigest: conversation.templateContextDigest
             )
-            let renderTokens = try tokenizer.applyChatTemplate(
-                messages: userPrefixConversation.promptMessages,
-                tools: toolSpecs,
-                additionalContext: renderContext.additionalContext(
-                    merging: ["add_generation_prompt": false]
+            let mergedContext = renderContext.additionalContext(
+                merging: ["add_generation_prompt": false])
+            let renderTokens: [Int]
+            let source = RenderTokenSource.forIdentityKeySpace(
+                keySpace, modelFingerprint: modelFingerprint)
+            if let cacheFingerprint = source.cacheFingerprint,
+                let truncated = try? RenderTokenCache.shared.resolveTruncated(
+                    tokenizer: tokenizer,
+                    messages: userPrefixConversation.promptMessages,
+                    tools: toolSpecs,
+                    baseAdditionalContext: renderContext.additionalContext(),
+                    mergedAdditionalContext: mergedContext,
+                    modelFingerprint: cacheFingerprint,
+                    // C31: when this request's Request Keying phase resolved
+                    // through the cache it resolved the same `conversation`
+                    // value, and the truncation above is a message prefix of
+                    // it — so the entry's stored digest chain head IS the
+                    // truncated chain (cumulative hashing). A bypassed or
+                    // fallen-back Request Keying leaves an older entry, which
+                    // the render arbiters then reject; the assertion is a cost
+                    // hint, never a correctness input.
+                    messagesAreEntryPrefix: true
                 )
-            )
+            {
+                // C27: text-space requests recover the truncated render's
+                // tokens as a verified trim of the entry the Request Keying
+                // phase cached for this same conversation. Image-bearing
+                // (non-identity) key spaces keep the full render below —
+                // their placeholder runs need the real token list.
+                renderTokens = truncated
+            } else {
+                renderTokens = try tokenizer.applyChatTemplate(
+                    messages: userPrefixConversation.promptMessages,
+                    tools: toolSpecs,
+                    additionalContext: mergedContext
+                )
+            }
             switch keySpace.translatedLength(renderTokens: renderTokens) {
             case .success(let keyLength):
                 lastUserOffset = keyLength

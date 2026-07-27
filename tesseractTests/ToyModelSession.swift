@@ -244,6 +244,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         recorder.record(.visionContinuationQuery)
         return base.anchoredVisionPrepare
     }
+    var producesFlatTextTokens: Bool { base.producesFlatTextTokens }
 
     func prepare(_ input: UserInput) async throws -> LMInput {
         recorder.record(.prepare)

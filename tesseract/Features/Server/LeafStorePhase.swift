@@ -103,12 +103,19 @@ nonisolated enum LeafStorePhase {
         // path is what every capture offset and admission below keys on —
         // length-equal to the prepared sequence, so key index == KV offset
         // holds.
+        // C25–C31: one eligibility decision for every render this phase and
+        // the admission builder below make.
+        let renderTokenSource = RenderTokenSource.forIdentityKeySpace(
+            mlxStart.keySpace,
+            modelFingerprint: mlxStart.partitionKey.modelFingerprint
+        )
         guard
             let storedRenderTokens = await measureStoredTokenSequence(
                 sessions: sessions,
                 conversation: storedConversation,
                 toolSpecs: canonicalTools,
-                renderContext: renderContext
+                renderContext: renderContext,
+                renderTokens: renderTokenSource
             )
         else {
             diagnosticsContext.logSkip(
@@ -172,6 +179,11 @@ nonisolated enum LeafStorePhase {
                 tokenizer: leafTokenizer,
                 keySpace: mlxStart.keySpace,
                 renderContext: renderContext,
+                // C31: the base render the builder's probe would re-run is
+                // the identical computation `measureStoredTokenSequence`
+                // just performed for this request (verified in C28) — hand
+                // it in so the base render runs once per request.
+                renderTokens: renderTokenSource.withBaseRenderTokens(storedRenderTokens),
                 resolveBoundary: { tokens in
                     // Drive Snapshot Resolution inside the Model Session so
                     // the SSD `loadSync` stays off-MainActor (ADR-0001).
@@ -592,20 +604,42 @@ nonisolated enum LeafStorePhase {
     /// so assistant `reasoning_content` and `tool_calls` survive template rendering.
     /// Used for storing the leaf snapshot under the correct radix path.
     /// Returns `nil` on tokenization failure.
+    ///
+    /// C28: when `renderTokens` is eligible (text-only identity key space,
+    /// known model fingerprint) the tail-replacement resolve recovers the
+    /// sequence as a verified trim+extension of the entry the **Request
+    /// Keying** phase cached for this request — one suffix encode instead of a
+    /// full re-encode. A bypass or any inexactness falls back to today's full
+    /// `applyChatTemplate`; the guard/nil behavior for diagnostics is
+    /// unchanged.
     private static func measureStoredTokenSequence(
         sessions: any ModelSessionProviding,
         conversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
-        renderContext: TemplateRenderContext = .canonical
+        renderContext: TemplateRenderContext = .canonical,
+        renderTokens: RenderTokenSource
     ) async -> [Int]? {
         do {
             return try await sessions.withSession { session in
-                try session.tokenizer.applyChatTemplate(
+                let mergedContext = renderContext.additionalContext(
+                    merging: ["add_generation_prompt": false]
+                )
+                if let cacheFingerprint = renderTokens.cacheFingerprint,
+                    let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
+                        tokenizer: session.tokenizer,
+                        messages: conversation.promptMessages,
+                        tools: toolSpecs,
+                        baseAdditionalContext: renderContext.additionalContext(),
+                        mergedAdditionalContext: mergedContext,
+                        modelFingerprint: cacheFingerprint
+                    )
+                {
+                    return resolved
+                }
+                return try session.tokenizer.applyChatTemplate(
                     messages: conversation.promptMessages,
                     tools: toolSpecs,
-                    additionalContext: renderContext.additionalContext(
-                        merging: ["add_generation_prompt": false]
-                    )
+                    additionalContext: mergedContext
                 )
             }
         } catch {

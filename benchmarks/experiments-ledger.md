@@ -1794,3 +1794,736 @@ executed-graph change is the index dtype, whose two variants are both
 already parity-proven above; the contract tests hold the fused outputs
 bit-identical to the chain including dtype. Dead-code removal and the
 Package.swift dep do not change the executed graph.
+
+---
+
+## Session 2026-07-27 — Cmlx loop, second campaign (branch `perf/inference-loop-2026-07-27`)
+
+Same rules and measurement discipline as the prior sessions (the binding
+section at the top of this file). Base: main `383ef0f2` (pins mlx-swift
+`457a0d6d` ← mlx `a3673067`, mlx-swift-lm `97c0308`). All work on the new
+branch `perf/inference-loop-2026-07-27`.
+
+### Infrastructure: fork/pin scheme re-verified (the assigned prerequisite task)
+
+The kickoff asked to "establish a buildable mlx-core fork/pin scheme and
+record it in the ledger". That scheme has existed since 2026-07-23
+(`docs/mlx-core-fork.md`); the honest task this session is to **re-verify
+it end-to-end**, which was done:
+
+- Pin chain lockstep: `Vendor/mlx-swift-lm/Package.swift`,
+  `Vendor/mlx-audio-swift/Package.swift`,
+  `Vendor/tesseract-speech/Package.swift` all pin `spokvulcan/mlx-swift`
+  @ `457a0d6df3a20c92341a6e7b7fa853d63d8549f9`; tesseract gitlink →
+  mlx-swift-lm `97c0308`.
+- Fork clones: `~/projects/mlx` @ `a3673067` (`pin-tesseract`, clean, in
+  sync with origin), `~/projects/mlx-swift` @ `457a0d6` (`pin-tesseract`,
+  clean). The `Source/Cmlx/mlx` submodule checkout there is clean at
+  `a3673067` (no probe hooks left over).
+- Live build checkout
+  (`~/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv`
+  — now the only tesseract DerivedData dir): mlx-swift @ `457a0d6`,
+  Cmlx/mlx @ `a3673067`, mlx-c @ `0726ca9` (upstream, untouched), tree
+  clean. Full carry chain present in `git log ce45c525..HEAD`:
+  `fbf2fb86` (C1 tiles), `404070e2` (C4), `8d11dd1d` (C5), `3ec72a24`
+  (C6), `6ab29e36` (C7), `595a3fe1` (C8), `625f2aea` (C9),
+  `ed107a94`+`5ca82d9f` (C13), `90ec2bb9`+`a3673067` (review hardening).
+- Release build of `383ef0f2` **succeeds** from this tree; session
+  baseline binary saved at `/tmp/tesseract-2026-07-27-base.app`. No
+  `Tesseract Agent` process was running during any of this (GPU
+  serialization rule).
+
+**Verdict: scheme VALID — no re-establishment needed; recorded per the
+kickoff.**
+
+### M1 reconciliation — already banked as C1; do not re-run
+
+The kickoff's "start with M1 (gather_qmm_rhs tile geometry)" reflects the
+stale roadmap, not the ledger. Ledger state: **C1 (rows-per-expert-aware
+`gather_qmm_rhs` tiles, `fbf2fb86`) was ACCEPTED 2026-07-23** (+6.2% MoE
+32K prefill, 34/34 pairs token-identical), is carried by the current pins,
+and is filed upstream as ml-explore/mlx#3918. The residual headroom was
+priced and closed 2026-07-25 ("Item 5 — gather_qmm round 2 — CLOSED at the
+probe"): the post-C1 kernel sits at 87–91% of the gather-free dense anchor
+at production prefill shapes (C1's own sweep evidence: 96% of the anchor
+at B/E=32), and C1's sweep already searched the legal (same-per-element-
+K-accumulation-order) geometry space — split-K is dead under the bitwise
+rule. E4's "~12–15% of prefill" estimate was calibrated on the old
+harness; C1 recorded the true app win at ~6% at 32K. **Re-running M1
+would repeat a logged result, which the rules forbid.** The roadmap doc is
+stale (written after E1–E11, never updated post-C1); this entry is the
+correction of record.
+
+Also closed by later measurement, for the same reason: the roadmap's **M2
+"attack the cost per boundary" residual**. Decode is GPU-paced (C14
+attribution: the generation thread sits in `Scheduler::wait_for_one`
+33–37%), and AGX utilization is 98–100% during decode (session 2026-07-25
+(b)). CPU-side per-boundary cost lands in the CPU slack and cannot convert
+(C10 lesson); GPU-side drain has no idle left to recover at the current
+~20–27 boundaries/token.
+
+### Queue for this campaign (derived from the ledger end-state, not the stale roadmap)
+
+1. **Stock `qmm_t` tile geometry at PARO shapes (probe first).** The dense
+   anchor every gather kernel is measured against is itself untuned on
+   this machine: `qmm()` hard-codes bm=bn=32, bk=32, wm=wn=2
+   (`backend/metal/quantized.cpp:715-719`; template defaults in
+   `kernels/quantized.h`), measured 9.5–10.1 TFLOP/s ≈ 75–80% of the
+   12.69 peak at PARO shapes (C1 anchor; E9's lm_head 10.4 ≈ 82%). The
+   nax sibling ships bm=bn=64 — but nax is unavailable on M3 Max (gen 15
+   < 17, verified 2026-07-23). Same bitwise-safe axis as C1 (per-element
+   K-accumulation order is tile-geometry-independent). If the anchor
+   rises, every prefill projection on both models rises with it.
+   Production stock-qmm shapes (from the two `config.json`s this session):
+   MoE — q [1024×8192×2048], k/v [1024×512×2048], o [1024×2048×4096],
+   GDN in_proj_qkv [1024×8192×2048], in_proj_z [1024×4096×2048],
+   out_proj [1024×2048×4096], lm_head [1024×248320×2048]; dense — q
+   [1024×8192×2560], k/v [1024×1024×2560], o [1024×2560×4096], GDN same
+   at 2560, MLP gate/up [1024×9216×2560], down [1024×2560×9216], lm_head
+   [1024×248320×2560]; 4-bit gs=128, f16 (both checkpoints store F16).
+   Also M=128 (the ctx-128 single-chunk case).
+2. **M6 tokenizer encode path (TTFT).** ~0.29 s at 32K on the parity
+   bench; seconds at 100K+ in production server/agent use. Profile the
+   Jinja-render vs BPE-encode split first. CPU-only, zero numerics risk,
+   shows on the bench's tokenize metric.
+3. C6 hit-path string copies (future-work #8; ≲1% expected, CPU slack —
+   hold, likely sub-bar).
+4. C13-extension to kL ≤ 4096 (future-work #4; +0.3–0.5% 8K prefill —
+   sub-bar alone; dead unless bundled with a larger attention change).
+
+Dead / do-not-retry (in addition to the top table and the C15–C19
+lessons): item-5 gather geometry, M2 boundary-cost residual (above), tape
+reordering/list scheduling, resource-scoped barriers, serial dispatch,
+rotation batching, router-softmax folding.
+
+### C20 — stock `qmm_t` tile-geometry sweep at PARO shapes — REJECTED at probe (stock is at the envelope)
+
+Hypothesis: the stock `qmm_t` kernel's hard-coded bm=bn=32/bk=32 (wm=wn=2)
+leaves ≥5% on the table at production prefill shapes; a wider legal tile
+(the nax sibling ships bm=bn=64) lifts it bitwise-safely. Probe in
+`/tmp/gather-sweep` (coder subagent, `qmmtiles` mode — now durable in
+`benchmarks/gather-sweep/`): uncommitted `MLX_QMM_TILES` env hook in the
+rig's mlx checkout substituting non-default BM/BK/BN template args
+(kernel body untouched — params already exist on `affine_qmm_t`), 16
+production shapes (M ∈ {128, 512, 1024} × both models' projection and
+lm_head N/K sets, 4-bit gs=128 f16 transpose), configs (32,32,32) stock
+vs (64,32,64) / (64,64,64) / (32,32,64) / (16,32,32), ABBA-interleaved
+process launches, one lazy graph per launch cycling 8 disjoint weight
+sets. **Bitwise IDENTICAL in all 64 shape×config cells** (the C1-class
+per-element-K-order invariance confirmed once more, now for the dense
+kernel). Speed: **every candidate within ±2% of stock at every shape**
+(mean ratios 0.992–0.997) — nothing clears +5% anywhere, including the
+lm_head shapes (2.2 GB footprint, true DRAM streaming). Anchor correction
+of record: stock `qmm_t` measures **11.6–12.4 TFLOP/s cool (~95% of the
+12.69 bf16 peak)**, decaying to 9.5–10.1 under sustained load — so the
+"75–80% of peak" premise (C1 anchor / E9) was a *throttled-regime*
+reading, not headroom. C1's verdicts are unaffected (within-run ABBA).
+**Verdict: REJECTED, no app run.** Hook reverted, rig submodule clean.
+Consequence: with item 5 (gather geometry) and C20 (dense geometry) both
+closed, **the GEMM tile-geometry axis is exhausted on this machine** —
+prefill-side wins must come from fusion/overlap/dequant cost, not tiles.
+
+### C21 — pretokenizer regex single-pass (M6) — REJECTED at probe (cannot preserve byte-identical ids)
+
+Hypothesis: replace the pre-tokenizer Split step's per-match
+`String.range(of:.regularExpression)` loop with one NSRegularExpression
+(ICU) pass — measured 12.2× on the phase (76.2 → 6.2 ms at 32K), worth
+~2.2× on the whole tokenize metric. Profile first (this session,
+`tokprofile` rig mode; all findings measured): **chat-template render is
+0.03% of tokenize** (E11-class work — nothing left); encode = 99.7%;
+split loop 76.9 ms of the 126 ms 32K encode, BPE merge loop ~27%,
+token→id ~7%; encode scales linearly (~250K tok/s, no O(n²)); tokenizer
+one-time load ~800 ms (12.8 MB tokenizer.json + 247,587-merge rank-dict).
+Differential harness (`tokdiff` rig mode; production pipeline replicated
+exactly — P′ == P on all items): 26 text classes, **3,000,356 tokens**,
+production vs two ICU arms (original pattern; quirk-mutated pattern
+folding in the verified Swift-Regex `\r\n`-negation bug). **Both ICU arms
+diverge from production in the same 3 classes** (crlf, emoji,
+whitespace-runs). Root cause below the pattern level: **Swift Regex
+matches at grapheme-cluster (UAX#29) granularity, ICU at code-point
+granularity** — two final-id-changing classes: CRLF clusters
+(`"!\r\n\r\n!"` → production `[0,317,317,0]` vs ICU `[0,845,0]`) and
+VS16/keycap emoji adjacent to symbols (`"🤖❤️!"` diverges). No pattern
+mutation re-expresses cluster semantics in ICU; a same-engine precompiled
+Swift `Regex` pass measures **0.8× (slower)**; and one production
+behavior (`[\r\n]*` at CRLF clusters) is not derivable from source at all
+— near-identical inputs yield different piece structure — so a
+hand-rolled exact matcher is a research project with an unbounded
+differential tail. **Verdict: REJECTED, no app run.** The replacement
+code is preserved marked DO NOT SHIP (`benchmarks/gather-sweep/
+tokdiff-replacement.swift`) with the corpus harness as the reusable gate.
+Findings of record: (a) **production tokenization itself diverges from
+the HuggingFace reference tokenizer on the CRLF/emoji classes** — the
+parity baseline this loop defends is non-canonical there (upstream-report
+material for swift-transformers; not actionable in-loop — the gate
+anchors to the unmodified baseline, bugs included); (b) the profile's
+parallel per-pre-token BPE candidate is unaffected by this verdict and
+proceeds as C22; (c) tokenizer one-time load ~800 ms noted as a possible
+load-time item.
+
+### C22 — parallel per-pre-token BPE — REJECTED at probe (in-process contention, 3× SLOWER)
+
+Hypothesis: an order-preserving concurrent map over the per-pre-token
+BPE work (provably byte-identical: `bpeRanks`/`tokensToIds` read-only
+`let`s, per-call `MinHeap`, merges local to one pre-token, `fuseUnk`
+false) wins ~25–30% of the 32K encode. Rig implementation (patched
+swift-transformers 1.3.3 checkout, threshold-gated `concurrentPerform`
+map) + full gates: corpus identity **PASS** (52/52 items, 3,000,356
+tokens × both model dirs — the models' `tokenizer.json` files are
+byte-identical; chat templates differ in 2 jinja lines but render
+identically for the corpus shapes), determinism **PASS** (50/50 repeat
+encodes identical), thread-safety review clean (no hidden mutable state;
+canonical `concurrentPerform` idiom). Timing **FAIL: 0.31×/0.33× at
+8K/32K — 3× SLOWER, not 30% faster.** Contention curve, not dispatch
+overhead: bisect chunk2 ≈ serial → chunk16/full ≈ 3×; whole-encode
+scaling n=2 → 1.41×, n=4 → 1.48×, n=8 → 1.06×, n=16 → 0.25×; two
+instances 1.51×; **four concurrent PROCESSES scale fine (137–140 ms vs
+129 solo)** — the pathology is in-process: workers sit inside
+`BPETokenizer.bpe` dominated by `swift_retain`/`swift_release`,
+`__RawDictionaryStorage.find`, and String `_normalizedHash` (NFC), whose
+per-op cost inflates with thread count. **Verdict: REJECTED; rig checkout
+reverted, baseline re-measured intact.** Do not retry parallel BPE
+without attacking the contention itself (per-thread merge-rank replicas
+or a scale-stable lookup structure — a different, much deeper change).
+Patch preserved for the record (`/tmp/gather-sweep/c22-patch.diff`); gate
+code lives on in the rig's `c22` modes. Threading lesson of record for
+this machine: shared read-only Swift dictionaries + refcounted Strings do
+NOT scale read-only across cores in-process — profile before assuming
+"embarrassingly parallel".
+
+### C23 — tokenizer-load binary cache — REJECTED by attribution (off the critical path)
+
+Candidate from the C21 profile (tokenizer one-time load ~800 ms: 12.8 MB
+tokenizer.json parse + 247,587-merge rank-dict). Measured in-app this
+session (sample on a MoE parity-bench load, pid 3658): `AutoTokenizer.from`
+→ `PreTrainedTokenizer.init` ≈ 300 ms + `YYJSONParser.parseToConfig`
+≈ 230 ms ≈ **0.53 s**. But `LLMModelFactory._load`
+(`Vendor/mlx-swift-lm/Libraries/MLXLLM/LLMModelFactory.swift:631-639`)
+loads the tokenizer via **`async let`, overlapped with weight loading**,
+and the PARO phase log from the same run shows the weight side at
+**4.14 s** (`eval=3.92s`; `log show` subsystem `mlx-swift-lm:paroquant`).
+max(4.14, 0.53) — the tokenizer is fully hidden on the MoE; on the dense
+model (1.4 s load, ~0.9 s weight side vs ~0.53 s tokenizer) it is hidden
+as well. A binary cache of the parsed structures would move no bench
+metric and no production load time on this machine. **Verdict: REJECTED,
+no code written.** (If weight loading ever gets ~5× faster than the
+tokenizer — e.g. a much faster `eval(model)` — this re-opens.)
+
+### C25 — render+token cache for prefix-stable request tokenization (M6, app-side) — ACCEPTED
+
+Hypothesis: on prefix-stable request sequences (agent multi-turn, growing
+conversations), the fused render+encode `applyChatTemplate` re-tokenizes a
+mostly byte-identical prompt every request (~126 ms at 32K; two full
+encodes per server request — the `RequestKeyingPhase` prepare plus
+`PrefillPlanner`'s last-user re-render — plus post-generation encodes).
+Caching the previous (render, tokens, digests) and tokenizing only a
+verified suffix reproduces the EXACT token list at a fraction of the
+cost. Exactness contract: the miss path is `renderChatTemplate` +
+`encode(rendered)` (byte-exact with `applyChatTemplate` — the fused call
+was split, not changed); the hit path is empirical — byte-prefix check
+per trim attempt (k = 0…4 tokens), suffix encode, and a junction-window
+re-encode (≥256 chars a side, ×4 to 16 KB) that must return the exact
+token slice (BPE merges spanning the cut are detected, never assumed
+away); any failure degrades to the miss path. Identical repeat renders
+return cached tokens outright (deterministic encode).
+
+Implementation (three layers): swift-transformers `renderChatTemplate`
+(pure refactor — `applyChatTemplate` now calls it; new protocol
+requirement with a public throwing default) → MLXLMCommon
+`ChatTemplateRendering` protocol + macro-bridge forwarding → app
+`RenderTokenCache` (single-entry, NSLock-guarded, keyed on
+modelFingerprint + template probe hash + tools/context digests +
+per-message SHA-256 chain), engaged at two seams
+(`RequestKeyingPhase.run` — bypasses images/vision-family;
+`LLMActor.startRawGeneration` — bypasses media/non-LLMModel), both
+falling back to the processor's `prepare` on any failure. Design
+finding: the generation-prompt tail (`<|im_start|>assistant\n<think>\n`)
+means a full-text byte-prefix gate would never hit — the trim loop
+re-discovers the shared prefix in token space instead (every growing
+turn hits at trim=2).
+
+Gates (all PASS): `RenderChatTemplateParityTests` (8-case battery,
+through the macro adaptor and direct), `RenderTokenCacheTests` (forced
+dirty junctions, 6 junction classes, digest mismatches, repeats — all
+exact), regression suites (StablePrefixDetector, HTTPPrefixCacheSpike,
+ServerCompletionDrain, AgentEngineToolSpec, AgentEngineManagedGeneration,
+PrefixCacheIntegration), `--prefix-cache-e2e` PASS (incl. image warm
+output equivalence), and the new `--tokenize-cache-bench` runner with a
+per-turn intrinsic exactness assertion against `applyChatTemplate`.
+Runner (12-turn agent trajectory + repeat + edited + unrelated, real
+tokenizer, Release): **4B −38.9% prepare ms per hit turn (40.71 →
+24.87 ms; parent-verified rerun), MoE template −48.8% (41.07 →
+21.03 ms), repeat −97% (48.7 → 1.4 ms), misses +0.4–1.0 ms**
+(digest+render overhead; ≪0.1% of TTFT); **0 token mismatches, 0
+junction failures, 0 window enlargements across both models**.
+Parity A/B (3-pair, both models, all contexts): **9/9 + 9/9
+token-identical**, peaks byte-flat; perf deltas are the documented
+thermal noise (MoE +34%/30% and dense −16.5% in the same session —
+impossible both directions for a tokenize-path change; the parity bench
+provably never engages the cache — `runOnce` calls
+`context.processor.prepare` directly). **Verdict: ACCEPTED** — the win
+metric is production-path tokenize time on prefix-stable sequences
+(−39–49% per hit turn, −97% on repeats), E11-shaped; no
+mechanistically-possible regression channel on any bench metric; miss
+cost +~1 ms documented.
+
+Ports and pins: `spokvulcan/swift-transformers` **new fork**,
+`pin-tesseract` @ `63edf42` (scheme: `docs/swift-transformers-fork.md`);
+Vendor/mlx-swift-lm `pin-upstream-mlx-swift` @ `47aa83a` (pushed);
+`Vendor/mlx-audio-swift/Package.swift` pins the fork at `63edf42f…`
+(the package's only declarer in the graph). Follow-ups queued: **C26**
+(hit path is prefix-decode-bound — ~15–18 ms of the ~25 ms at 11K
+tokens; derive `prefixText` from the entry's stored render instead of
+decoding the whole prefix per attempt), C27 (PrefillPlanner's last-user
+re-render through the same cache — the second full encode on the server
+TTFT path), C28 (post-generation leaf-store/admission encodes), and the
+upstream filings (mlx-swift-lm + swift-transformers PRs — owner
+go-ahead).
+
+### C26 — hit-path prefix-decode elimination — ACCEPTED
+
+Direct follow-up to C25 (queued in its entry): the hit path decoded the
+whole cached prefix per trim attempt — ~15–18 ms of the ~25 ms at 11K
+tokens. Decode is per-token concatenation, so stripping each trimmed
+token's decoded text from the stored render's tail reproduces
+`decode(prefixTokens)` exactly; `prefixText` is now derived from the
+entry's stored render (a `hasSuffix` guard keeps any decode/strip
+inconsistency honest — it degrades to the miss path; the per-attempt
+`hasPrefix` and junction-window checks are unchanged). Same tokens
+produced; the exactness contract is untouched. Gates: the C25 suites
+(TEST SUCCEEDED), runner both models — hit turns 41.41 → **5.54 ms**
+(4B, **−86.6%**, vs C25's −38.9%), 42.50 → **5.56 ms** (MoE,
+**−86.9%**), repeats −97% unchanged, misses unchanged; 0 token
+mismatches, 0 junction failures. **Verdict: ACCEPTED.** App-only change
+(`RenderTokenCache.swift`); no vendor/fork pins moved. At 32K the hit
+path is now render(≈4 ms)+digests+suffix-encode ≈ 10–12 ms vs the
+~126 ms full encode (−91%); the remaining hit cost is the mandatory
+render + the suffix encode itself.
+
+### C27 — PrefillPlanner last-user re-render as a verified trim of the cached entry — ACCEPTED
+
+The third full-size encode on the steady-state server path (after the
+RequestKeyingPhase prepare and the C25/C26 suffix encode):
+`PrefillPlanner.detectBoundaries` re-renders every cache-aware request
+**truncated at the last user message** (`add_generation_prompt: false`)
+to find the last-user boundary — ~40 ms at 11K, ~126 ms at 32K, right
+after the prepare cached the SAME conversation's full render+tokens.
+C27 recovers the truncated token list as a **verified trim** of the
+stored entry (`RenderTokenCache.resolveTruncated`): digests/fingerprint/
+template candidate (context digest compared on the unmerged context),
+the truncated render must be a byte prefix of the stored render with a
+≤128-byte tail (a generation prompt, not dropped content — longer means
+the last message is not the last user message → fallback), a per-token
+strip finds the trim k (a token spanning the cut → fallback), and the
+**cut verification** arbitrates exactness: a standalone re-encode of the
+truncated render's trailing ≥256 chars (×4 to 16 KB) must reproduce the
+candidate token suffix — catching right-context effects at the cut
+(end-of-text vs mid-text, e.g. the `\s+(?!\S)` pretoken alternative);
+left of the window the encodes coincide by construction (pretokens are
+bounded and context-free, merges stay inside pretokens — documented in
+the file header). Any failure → today's `applyChatTemplate`; the stored
+entry is never mutated. Integration: `PrefillPlanner.detectBoundaries`
+gained `modelFingerprint:` (threaded one line from `ServerCompletion`),
+engaged only in the text key space (`keySpace.isIdentity` — image
+spaces keep the full render for placeholder translation). Gates: new
+`RenderTokenCacheTruncated{Fake,Real}Tests` (13 tests — hit exactness,
+six end-of-text right-context classes, assistant/system tail, wrong
+context, spanning-token-at-cut, cold), C25/C26 suites unchanged-green,
+`PrefillPlannerTests`, `--prefix-cache-e2e` PASS, runner both models
+(parent-verified rerun): **truncated leg 40.19 → 2.87 ms (4B,
+−92.9%)**, 40.60 → 2.90 ms (MoE), 0 mismatches; the two engineered
+fallback turns fall back exactly. **Verdict: ACCEPTED.** Steady-state
+agent/server turn tokenize cost at 11K tokens is now ~8.4 ms
+(render+suffix 5.5 + truncated 2.9) vs ~82 ms pre-C25 (−90%). App-only
+change; no pins moved. Remaining on this path: the post-generation
+leaf-store/admission encodes (up to 3 full renders serialized on
+`container.perform` per turn) — C28.
+
+### C28 — post-generation leaf-store/admission encodes through the cache — ACCEPTED
+
+The last full-size encodes on the steady-state server turn: after each
+response, inside `container.perform` (serialized against the next
+request), `LeafStorePhase.measureStoredTokenSequence` re-tokenizes
+prompt+assistant-turn (~40 ms at 11K), and `LeafAdmissionBuilder.
+reusablePrefix` renders twice more (base + probe, `add_generation_prompt:
+false`) when a boundary leaf mode is selected. All three go through the
+cache via one composed resolve — `resolveReplacingTail`: keyed candidate
+(base-context digest, strict-extension chain, fingerprint, template),
+the C25 trim-back walk to the byte seam (per-token strip, k = 0…4),
+suffix-encode the extension, `verifyJunction` as the arbiter; entry
+never mutated. (Evidence-based deviation from the planned
+resolve/resolveTruncated decomposition: the leaf-store render uses the
+merged gen-prompt-off context and its content sits where the entry's
+gen-prompt tail is, so all three seams are the same trim+extend shape;
+`verifyCut` is not needed — the cut is always followed by the fresh
+suffix, which is exactly the junction window's case.) A 1+1-token seam
+pre-check per trim attempt skips the futile 256→16384 enlargement
+ladder when the seam pair provably merges (the empty think scaffold
+made every k=0 attempt pay it; `verifyJunction` stays the authority
+whenever the pre-check passes — exactness unchanged). Gates: three new
+suites (composed trim+extend exactness, reply-starter classes,
+probe continuation, wrong context/fingerprint/tools/edited base,
+spanning-merge past trim budget, entry-never-mutated) +
+`LeafAdmissionCachePathTests`; RenderTokenCache suites, PrefillPlanner,
+LeafAdmissionBuilder, HTTPPrefixCacheSpike, PrefixCacheIntegration all
+green; `--prefix-cache-e2e` PASS (incl. the direct-tool-leaf and
+canonical-user-leaf paths). Runner both models (parent-verified rerun):
+**leaf-store 40.35 → 6.14 ms, admission 40.34 → 6.11 ms, probe 40.41 →
+5.38 ms (−85…−87%)**, `replacedFallbacks=0`, 0 mismatches; MoE 41.2 →
+5.3–6.1 ms. **Verdict: ACCEPTED.** ~120 ms → ~18 ms of serialized
+post-generation encode per turn at 11K tokens (~3× more at 32K),
+directly off next-turn TTFT. App-only change; no pins moved. The
+tokenize line is now: cold turn ≈ one full encode (C24 attacks that
+encoder itself), warm turn ≈ render+digests (~5.5 ms) + ~12 ms of
+cached legs, vs ~205 ms pre-C25.
+
+### C28 — post-generation leaf-store/admission encodes through the cache — ACCEPTED
+
+The last full-size encodes on the steady-state server turn: after each
+response, inside `container.perform` (serialized against the next
+request), `LeafStorePhase.measureStoredTokenSequence` re-tokenizes
+prompt+assistant-turn (~40 ms at 11K), and `LeafAdmissionBuilder.
+reusablePrefix` renders twice more (base + probe, `add_generation_prompt:
+false`) when a boundary leaf mode is selected. All three go through the
+cache via one composed resolve — `resolveReplacingTail`: keyed candidate
+(base-context digest, strict-extension chain, fingerprint, template),
+the C25 trim-back walk to the byte seam (per-token strip, k = 0…4),
+suffix-encode the extension, `verifyJunction` as the arbiter; entry
+never mutated. (Evidence-based deviation from the planned
+resolve/resolveTruncated decomposition: the leaf-store render uses the
+merged gen-prompt-off context and its content sits where the entry's
+gen-prompt tail is, so all three seams are the same trim+extend shape;
+`verifyCut` is not needed — the cut is always followed by the fresh
+suffix, which is exactly the junction window's case.) A 1+1-token seam
+pre-check per trim attempt skips the futile 256→16384 enlargement
+ladder when the seam pair provably merges (the empty think scaffold
+made every k=0 attempt pay it; `verifyJunction` stays the authority
+whenever the pre-check passes — exactness unchanged). Gates: three new
+suites (composed trim+extend exactness, reply-starter classes,
+probe continuation, wrong context/fingerprint/tools/edited base,
+spanning-merge past trim budget, entry-never-mutated) +
+`LeafAdmissionCachePathTests`; RenderTokenCache suites, PrefillPlanner,
+LeafAdmissionBuilder, HTTPPrefixCacheSpike, PrefixCacheIntegration all
+green; `--prefix-cache-e2e` PASS (incl. the direct-tool-leaf and
+canonical-user-leaf paths). Runner both models (parent-verified rerun,
+and again after a lint-only file split): **leaf-store 40.35 → 6.14 ms,
+admission 40.34 → 6.11 ms, probe 40.41 → 5.38 ms (−85…−87%)**,
+`replacedFallbacks=0`, 0 mismatches; MoE 41.2 → 5.3–6.1 ms. **Verdict:
+ACCEPTED.** ~120 ms → ~18 ms of serialized post-generation encode per
+turn at 11K tokens (~3× more at 32K), directly off next-turn TTFT.
+App-only change; no pins moved. The tokenize line is now: cold turn ≈
+one full encode (C24 attacks that encoder itself), warm turn ≈
+render+digests (~5.5 ms) + ~12 ms of cached legs, vs ~205 ms pre-C25.
+(Housekeeping folded into this commit: `TokenizeCacheBenchRunner`
+summary extraction + the RenderTokenCache test file split into
+`RenderTokenCacheTests` / `RenderTokenCacheRealTests` /
+`RenderTokenCacheTestSupport` for the pre-commit lint limits.)
+
+### C24 — byte-native serial BPE inner loop + byte-keyed lookup tables — ACCEPTED
+
+The last encoder lever from the C21 profile: ~34% of the 126 ms 32K
+encode was the serial BPE inner loop + token→id conversion — one String
+allocation per Unicode scalar on entry (`BPETokenizer.bpe`), a String
+concat per merge, and String-keyed dictionary probes (NFC-walking
+hashes, NSString bridging) for every pair rank and token id. The
+rewrite keeps the SAME serial algorithm with the SAME merge order:
+initial symbols are byte ranges into one UTF-8 buffer (identical
+boundaries to `unicodeScalars.map { String($0) }`), merges extend a
+range instead of concatenating, and ranks/ids resolve through
+open-addressed byte-keyed tables derived 1:1 from `bpeRanks` /
+`tokensToIds` (FNV-1a over raw bytes + split point, full byte-compare
+verification; `(rank, left)` heap tie-break and stale-entry re-check
+unchanged; lazy build-once behind a lock, ~20 MB resident). Rig gates
+(coder subagent): **88/88 corpus items byte-identical final ids** (the
+26-class tokdiff corpus + 18 merge-stress adversarial items — long
+runs, tie-heavy segments, combining runs, ZWJ/keycap, all scalars
+singly+doubled — 6.7M tokens, both model tokenizers); 50/50 repeat
+encodes identical; ABBA **1.22× at 32K (130.05 → 106.68 ms), 1.21× at
+8K, 1.20× at 128** — no short-input guard needed (the byte-keyed id
+lookup wins even at 129 tokens). App A/B (same binary, `C24_OLD=1`
+env-gated legacy arm, 3-pair both models): **gates 9/9 + 9/9
+token-identical**, peaks exactly flat; tokenize deltas consistent with
+the rig on 5/6 legs (dense 8K/32K −15.3%/−21.4%, MoE 32K −13.6%,
+MoE 8K −1.2% — the session was thermally distressed; prefill/decode
+deltas were both-directions-impossible across the two tables, the
+documented environmental signature, and the mechanism provably cannot
+touch them — CPU-only, pre-model, gates prove the inputs identical).
+**Verdict: ACCEPTED** on rig exactness + rig timing + app gates.
+Ported STRIPPED of the probe scaffolding (env toggle and the verbatim
+legacy path dropped — the fork carries upstreamable product, not
+measurement harness; the benched default path is byte-for-byte what
+shipped): `spokvulcan/swift-transformers` `pin-tesseract` @ **a524093**
+(`swift build` green pre-push), `Vendor/mlx-audio-swift` pin moved,
+checkout re-resolve verified `diff 1.3.3 == fork diff`, clean-build
+confirmation rebuilt + parity smoke leg vs the pre-C24 binary **2/2
+token-identical**. `docs/swift-transformers-fork.md` carry table
+updated. Upstream filing queued (owner go-ahead).
+
+### C30 — attribution: non-tokenize CPU per agent/server turn (measurement, no verdict)
+
+New `--agent-cpu-bench` runner (12-turn trajectory, real tokenizer, 5
+interleaved reps/phase, quiet machine) timing the per-turn CPU OUTSIDE
+tokenize/prefill/decode. Findings at 11.4K-token conversations:
+
+- **Total accounted ≈ 20 ms/turn, but only ≈ 4.8 ms on the TTFT path.**
+- **p4 boundary detection (memo-warm `PrefillPlanner.detectBoundaries`)
+  = 4.1 ms/turn, TTFT-path, growing with history** (2.56 → 4.10 ms over
+  turns 1→12). Composition (not yet sub-attributed): the memo-hit
+  StablePrefixDetector detect (SHA-256 of the 33 KB system prompt +
+  JSONSerialization of 40 tool specs + token-hash verify over the
+  7,805-token prefix) + gen-prompt encode + the C27 `resolveTruncated`
+  hit (full-conversation render + second digest chain + trim +
+  cut-verify) + translatedLength. Incidental control measurement: with
+  C27 forced to fall back, detectBoundaries costs 34–43 ms/turn —
+  independent confirmation of C27's ~30–39 ms/turn win at this scale.
+- **p5 detok 15.2 ms/turn but amortized across the GPU-bound stream —
+  NOT a TTFT or tok/s lever** (≈0.15% of a core steady-state; even the
+  newline-free worst case — the O(segment²)
+  `NaiveStreamingDetokenizer.next()` re-decoding the whole segment per
+  token, 288 µs/token — is ~3% of a core at production decode rates).
+  Logged as an efficiency note, not a loop target; the O(n²) would only
+  matter for very long newline-free generations, and even then stays
+  off the critical path.
+- **p1 conv-build 0.33 ms, p2 canonicalize 0.34 ms, p3 keying ~0 ms,
+  p7 radix 0.02 ms — all flat, all closed.** But note the redundancy:
+  the same 40 tool specs are JSONSerialized+SHA-256'd **4× per turn**
+  (AgentConversationBuilder, MessageConverter, RenderTokenCache,
+  StablePrefixDetector key), the digest chain runs 2×, and the
+  leaf-store and admission-stored renders are **the identical render
+  computed twice** (verified in the C28 implementation notes).
+- SKIPPED (uncallable without GPU/SSD fixtures): snapshot
+  capture/restore and SSD manifest bookkeeping.
+
+**Aim for C31:** per-request render/digest consolidation — a memo
+scoped to ONE request (zero staleness surface by construction) sharing
+the tools digest, the system-prompt hash, and the identical renders
+across the six consumers. Expected ~2–3 ms/turn at 11K, ~30+ ms/turn
+at 131K (5 full-conversation renders per turn today). Sub-attribute p4
+(memo-detect vs C27-render vs chains) as part of the implementation.
+
+### C31 — compute-once-and-plumb in the request flow — ACCEPTED (small)
+
+Aimed by the C30 attribution (p4 boundary detection = 4.1 ms/turn, the
+only TTFT-path non-tokenize CPU). Sub-attribution first (new
+`--agent-cpu-bench` sub-phases, kept in the runner): at turn 12 (11.4K
+tokens) p4 = memo-detect 0.59 + truncated Jinja render 1.53 + digest
+chain 0.62 + tools/ctx digests 0.38 + trim/cut-verify 1.24 +
+gen-prompt encode 0.02. Three sites changed, all compute-once-plumb
+(zero behavior change — byte-identical values by construction): (1)
+`resolveTruncated` reuses the entry's stored chain head under a
+caller-asserted `messagesAreEntryPrefix` (PrefillPlanner's truncation
+is a prompt-message prefix of the conversation RequestKeyingPhase just
+resolved; cumulative hashing — the same values, not recomputed; the
+head-match guard still runs, the render arbiters remain the exactness
+authority); (2) `LeafStorePhase` hands its already-computed
+`storedRenderTokens` to `LeafAdmissionBuilder.plan` (the admission
+base render was the identical computation — one full render+resolve
+eliminated per boundary-mode turn, ~5–6 ms of serialized
+post-generation work; verified by construction + e2e, no gate times
+it); (3) the StablePrefixDetector memo-key audit: LEFT — the tools
+recipes differ by design across components (canonicalized vs raw vs
+wire-type serializations), unification would be a key-recipe change
+with radix/SSD migration surface. Gates: 13 cache/parity suites (313
+tests incl. 7 new), `--tokenize-cache-bench` both models PASS (0
+mismatches; truncated leg 2.87 → 2.51 ms), `--prefix-cache-e2e` PASS,
+`--agent-cpu-bench` p4 **4.21 → 3.50 ms/turn at 11.4K** (measured
+−0.71 ms, growing with history; honest miss of the −1.5–3 ms estimate —
+the render and the cut-verify are the exactness arbiters and stay).
+**Verdict: ACCEPTED** — ≥1% on the agent-cpu p4 metric, no regression
+anywhere, exactness contract untouched.
+
+### C29 — incremental digest chain on the resolve paths — ACCEPTED (small)
+
+The per-request digest chain (per-message cumulative SHA-256) was
+recomputed in full on every resolve — 0.62–0.93 ms at 11.4K tokens per
+call (C31 sub-attribution), three calls per turn on the hit path
+(`resolve`, and the two C28 `resolveReplacingTail` legs). C29 reuses the
+stored entry's chain head and hashes only the tail messages: the chain
+is cumulative, so a conversation extending the stored one has identical
+head values by construction. **Exactness analysis (the load-bearing
+part):** the chain is a candidate-selection pre-filter, never an
+exactness arbiter — the arbiters are the byte-prefix render check and
+the junction/cut verifications, which are untouched. A head that does
+not match (edited history) vacuously passes the reused guard and is
+rejected by the render instead: same miss, same full-encode fallback,
+same tokens — only the miss REASON changes (`.digestMismatch` →
+`.renderNotExtended`; the fake-suite expectation and its comment were
+updated to say so). Gates: all 13 cache/parity suites TEST SUCCEEDED;
+`--tokenize-cache-bench` 4B PASS (0 mismatches; hit turns 5.05 ms,
+truncated 2.57 ms, C28 legs 5.2–5.5 ms — also reflecting C24's encoder
+win; the edited-history turn misses via the new reason and stays exact);
+`--agent-cpu-bench` p4 flat at 3.47 ms (C29's resolves live outside p4 —
+correct). Eliminates ~1.5–2 ms/turn of chain recomputation at 11.4K
+tokens, growing linearly with history (~20 ms/turn at 131K). **Verdict:
+ACCEPTED** — mechanism is construction-identical, gates all green, no
+regression channel. Committed with C31 (one compute-once commit).
+
+## Review round 2026-07-27 — PR #429 full-diff review fixes
+
+Ten findings from the full-diff review of the C24–C31 session, fixed on the
+same branch. Six are hardening, three are real defects, one is a
+claims-vs-evidence correction. No experiment verdict changes; no measured
+number in this session's entries is affected (all fixes are on the same CPU
+paths, none touches an arbiter).
+
+**F1 — `String` canonical equivalence where the contract said "byte prefix"
+(real defect, medium).** Every prefix/suffix/equality test in
+`RenderTokenCache` was a Swift `String` operation, and `String`'s `==`,
+`hasPrefix` and `hasSuffix` compare under Unicode **canonical equivalence** —
+so an NFC render and an NFD render of the same text were `==` while their bytes,
+and therefore their token lists, differed. The junction and cut arbiters cannot
+catch this class: they decode the cached tokens and re-encode that decode, which
+is self-consistent by construction and never re-examines the new render's bytes.
+A normalization-shifting client (JSON clients that normalize string payloads do
+exist) could therefore be served the *other* byte string's tokens from the
+repeat path — the one resolve with no empirical arbiter behind it — and those
+tokens then key the radix cache. Fixed by moving the whole type into byte space:
+`Entry.renderedBytes: [UInt8]`, and prefix/suffix/trim arithmetic through
+explicit byte helpers (`RenderTokenCache+Keys.swift`). The trim walks now carry
+a `suffixString` round-trip guard so a cut landing mid-scalar degrades to a miss
+instead of encoding U+FFFD. Regression test:
+`normalizationShiftedRepeatDoesNotServeCachedTokens` — under the old code it
+returned `.hitRepeat` with the wrong list; it now misses via
+`.renderNotExtended` and re-encodes exactly. The fake `GreedyTokenizer` was
+itself normalization-insensitive (`String.hasPrefix` matching) and had to be
+made byte-faithful first, or the test could not have failed.
+
+**F2 — C24 narrowed the merge-table match semantics, and the comment claimed
+otherwise (real, upstream-blocking).** `BytePairTables.rank(in:...)` matches
+merge pairs by raw bytes; the `bpeRanks[BytePair(l, r)]` probe it replaced
+matched under canonical equivalence, because `BytePair` holds Swift `String`s.
+The doc comment asserted equivalence and cited `BinaryDistinctString`, which is
+not involved in `BytePair` at all. Unobservable on byte-level BPE vocabs (hence
+88/88 over 6.7M tokens), potentially output-changing on a non-byte-level vocab
+with mixed normalization — where it is a *fix*, not a regression. Comment
+rewritten to state the narrowing and why byte-exact is intended;
+`docs/swift-transformers-fork.md` gains a semantics note that the upstream PR
+must carry. Upstream has already fixed two Unicode bugs in this code (#352 Bugs
+3 and 4), so the question will be asked.
+
+**F3 — `byteTables()` double-checked locking raced (real defect, medium).** The
+fast-path read of `byteTablesCache` was unsynchronized against the write inside
+the lock. Tearing was not the issue; ordering was — a plain store publishing the
+pointer has no release semantics, so a reader on another core could observe a
+non-nil cache before the eight array buffers it points at were visible.
+`BPETokenizer` is `@unchecked Sendable` and shared. Fixed by building the tables
+eagerly in `init` into a `let`: both source dictionaries are `let`s complete by
+the end of `init`, so there was nothing to defer, and C23 already measured
+tokenizer load as fully hidden behind the weight load.
+
+**F4 — `?? "unfingerprinted"` collapsed distinct models onto one key
+(hardening).** Two of the five seams engaged the cache under a synthetic shared
+key when the model fingerprint was unknown; the other three bypassed. Under the
+synthetic key two models would share both the entry and the memoized
+`templateHashes` slot, making the template-mismatch check pass vacuously — and
+the repeat path would then trust (bytes, fingerprint) alone. Believed
+unreachable today (`installLoadTimeState` always receives a non-nil `String`),
+but it inverted the safe default in the one place with no arbiter. All five
+seams now bypass on `nil`.
+
+**F5 — `entry` was read three times per `resolve` (hardening).** An entry
+changing between the chain build and the candidate select would store a chain
+whose head does not derive from those messages, permanently vacuating the
+head-match pre-filter for the singleton (exactness would hold on the render
+arbiters; a documented guard would be silently dead). One snapshot per resolve.
+
+**F6 — no observability on a subsystem whose safety mechanism is silent
+degradation (hardening).** Zero `Log` calls, `statsSnapshot()` with no
+production consumer, `reset()` with no production call site, and five `try?`
+seams swallowing throws. `Stats` gains typed reason histograms
+(`missReasons`, `truncatedFallbackReasons`, `replacedFallbackReasons`),
+`junctionFailures`/`windowEnlargements` are split per path (C25 vs C27 vs C28 —
+conflated counters hide which path regressed), a summary lands in `Log.server`
+every 256 resolves, a throwing render is logged before it propagates, and
+`LLMActor.unloadModel` now logs the session summary and calls `reset()` (the
+entry held a whole render's bytes plus its token list — megabytes at long
+context — with no model resident).
+
+**F7 — the cache-eligibility predicate was spelled five different ways
+(design).** New `RenderTokenSource` is its single home, and carries the C31
+plumbed base render with it, so the pair travels together instead of as two
+independent optional parameters (`LeafAdmissionBuilder.plan` 10 → 9 params,
+`reusablePrefix` 8 → 7, and its two near-identical 20-line resolve ladders
+collapse to one local helper). The request-path seam also stops using
+`imageKeying == nil` — "does the app RECOGNIZE a vision container" — as a proxy
+for the property it actually needs, "does this model's processor emit flat 1-D
+tokens". Those coincide only because `qwen3_5` + `vision_config` is today's sole
+recognized family; a future VLM family added without an image-keying rule would
+have silently received 1-D tokens where its processor emits 2-D. `ModelSession`
+now exposes `producesFlatTextTokens` (`context.model is any LLMModel`) — the
+same marker protocol both installed processors branch on, and the same
+feature-detect-as-a-fact shape as `anchoredVisionPrepare`.
+
+**F8 — nits.** `trailingTokenCount`/`leadingTokenCount` documented a "smallest"
+count they never returned (the doubling probe overshoots) and named their
+parameter `coveringCharacters` while measuring UTF-8 bytes — both corrected, and
+the 256/16384 literals are now named constants. `canonicalForm` checked `Bool`
+before the integer cases, and `NSNumber(1) as? Bool` succeeds — so JSON-decoded
+`1` and `true` canonicalized identically; an `NSNumber`/`CFBooleanGetTypeID`
+case now runs first (test: `canonicalFormSeparatesBooleansFromNumbers`). The
+C24 leading-byte scalar-width walk is bounded against a malformed buffer. The
+C31 `messagesAreEntryPrefix` doc claimed the assertion always holds; it holds
+only when Request Keying resolved through the cache, so it is now documented as
+a cost hint, never a correctness input.
+
+**F9 — claims vs evidence in the PR body (correction).** "Zero effect on
+prefill/decode/peak by construction" and "peaks byte-flat" are MLX/GPU peak;
+C24's byte tables add **~20 MB resident per loaded tokenizer** (recorded in the
+C24 entry above, absent from the PR body — now stated in both, and in the fork
+carry table). The single-entry global is also shared by the agent path and the
+server path, so interleaved agent+server traffic thrashes it toward a 0% hit
+rate; the measured wins are single-stream and the PR body now says so.
+
+**F10 — model-gated coverage (disclosure).** The real-tokenizer exactness suites
+and the Gate-1 parity suite are `.enabled(if: modelAvailable)`, so on a machine
+without `z-lab_Qwen3.5-4B-PARO` the "313 tests" figure is mostly the
+fake-tokenizer half. There is no CI running these; stated in the PR body rather
+than papered over. New tests this round: the normalization regression, a
+byte-identical-repeat guard, `reset()`, miss-reason counting, the
+boolean/number canonicalization, and four `RenderTokenSource` eligibility cases.
+
+**Gates for this round:** app build clean (Debug + Release,
+`xcodebuild build` / `dev.sh dev-release`), test target clean
+(`build-for-testing`), **157 tests in 18 suites PASS with 0 skipped** — the
+real-tokenizer suites ran against the on-disk PARO model, so the byte-space
+rewrite is exercised against the actual Qwen3.5 tokenizer/template and not only
+the fake — swiftlint + swift-format clean on every changed file (the three
+residual swiftlint warnings reproduce on the `HEAD` versions), `check-docs.sh`
+green, and `swift build` green in `~/projects/swift-transformers` with F2/F3/F8.
+
+**Re-run after the fork pin moved to `0033bc7` (2026-07-27).** F1 rewrote the
+exactness-critical inner logic of all three resolves (String → byte space), and
+the per-turn intrinsic assertions in the tokenize runner are this program's
+binding exactness gate — the unit suites are necessary, not sufficient, by this
+ledger's own rules. So the full bench leg was re-run against the built tree with
+F2/F3/F8 in it (`Vendor/mlx-audio-swift` Package.swift + Package.resolved moved
+`a524093` → `0033bc7`; the DerivedData checkout's `1.3.3..HEAD` diff verified
+byte-identical to the accepted fork diff):
+
+| Leg | Model | Result |
+| --- | --- | --- |
+| `--tokenize-cache-bench` | Qwen3.5-4B-PARO | **PASS** — 11 hit turns 36.05 → 3.68 ms (−89.8%); C27 15 turns 34.64 → 2.06 ms (−94.1%); C28 leaf-store 35.64 → 4.35 (−87.8%), admission 35.60 → 4.33 (−87.8%), probe 35.60 → 3.47 (−90.3%). **0 token mismatches, 0 parity failures, 0 path failures** |
+| `--tokenize-cache-bench` | Qwen3.6-35B-A3B-PARO | **PASS** — 11 hit turns 35.91 → 3.68 ms (−89.7%); C27 34.57 → 2.11 ms (−93.9%); C28 leaf-store −87.7%, admission −87.7%, probe −90.1%. **0 token mismatches, 0 parity failures, 0 path failures** |
+| `--prefix-cache-e2e` | Qwen3.5-4B-PARO | **PASS** — 32/32 assertions, including `greedy_output_equivalence`, `image_warm_output_equivalence` and `agent_image_output_matches_http_path` all "fully identical" |
+
+Both models report the same F6 histogram shape, which is itself the observability
+finding paying off — the byte-space rewrite is legible in the stats line rather
+than inferred: `hits=11 repeats=1 misses=5 trimHistogram=[k2:11]
+missReasons=[cold:1,digestMismatch:2,renderNotExtended:2] junctionFailures=0
+replacedJunctionFailures=0 junctionWindowEnlargements=0 cutWindowEnlargements=0
+truncatedHits=15 truncatedFallbacks=2
+truncatedFallbackReasons=[renderNotPrefix:1,tailTooLong:1] replacedHits=45
+replacedFallbacks=0 replacedFallbackReasons=[]`. Zero junction failures and zero
+window enlargements on both tokenizers means the F8 window constants
+(`initialWindowBytes` 256, `maxWindowBytes` 16384) are not being stressed by real
+templates; the enlargement counters exist to catch the day that changes.
+
+The one gate deliberately substituted: no local `dev.sh clean` before these
+timings. A full DerivedData wipe + rebuild is ~40 min of sustained load, which is
+exactly the condition trap 2 (Thermals) warns about — the M3 Max throttles under
+it, and absolute timings are not comparable across a thermal transition. Running
+the bench immediately after a clean would have disadvantaged it against the
+baselines it is measured against. CI's `build-release` on a pristine runner is the
+clean-build confirmation instead; the exactness assertions (0 mismatches, 0 parity
+failures, 0 path failures) are thermally invariant either way, so the substitution
+costs nothing on the correctness gate — only on the timing gate, where it helps.

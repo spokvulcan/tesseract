@@ -1129,7 +1129,8 @@ nonisolated final class ServerCompletion {
                 promptStartsThinking: promptStartsThinking,
                 tokenizer: session.tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext
+                renderContext: renderContext,
+                modelFingerprint: modelFingerprint
             )
             if let failure = boundaries.lastUserTranslationFailure {
                 diagnosticsContext.logSkip(

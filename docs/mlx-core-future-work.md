@@ -217,10 +217,13 @@ fused replay assumptions from outside the E2-bitwise class,
 **resource-scoped hazard barriers (−7% once the bookkeeping is made
 sound; the +1.7% first reading was a dropped-hazard race)**,
 **tape reordering / list scheduling (the schedule is already at the
-graph's critical-path depth — measured, not argued)**, and **folding the
+graph's critical-path depth — measured, not argued)**, **folding the
 router's softmax into the top-k kernel (C19 — bitwise, but +0.64% at 128
 ctx / +0.19% at 8K, and it pins far more MLX internals than it is
-worth)**.
+worth)**, and **stock `qmm_t` tile geometry (C20 — bitwise-safe but
+performance-neutral at every production PARO shape; the kernel is at
+~95% of bf16 peak cool / ~78% sustained, i.e. at the machine's envelope;
+the GEMM tile axis is exhausted for gather *and* dense)**.
 
 ## Banked meta-lessons (use them)
 

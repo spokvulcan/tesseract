@@ -76,14 +76,41 @@ nonisolated enum RequestKeyingPhase {
             }
             return .ciImage(decoded)
         }
-        let fullInput = try await session.prepare(
-            UserInput(
-                messages: conversation.promptMessages,
-                images: userInputImages,
-                tools: canonicalTools,
-                additionalContext: renderContext.additionalContext()
-            )
+        // C25 Render+Token Cache: text-only requests on flat-token (LLM-family)
+        // models tokenize through the cache — the `.messages` prompt reaches
+        // every processor's `generate(from:)` unchanged, so the cache renders
+        // exactly what `prepare` would, and `LMInput(tokens:)` is exactly what
+        // the text-only processor builds. Media, vision containers (whose
+        // text-only `prepare` emits 2D tokens), an unknown model fingerprint,
+        // non-rendering tokenizers, and any render/encode failure all fall back
+        // to the processor. The eligibility decision lives in
+        // `RenderTokenSource`, shared with the other four seams.
+        let renderTokens = RenderTokenSource.forTextOnlyRequest(
+            hasMedia: !userInputImages.isEmpty,
+            producesFlatTextTokens: session.producesFlatTextTokens,
+            modelFingerprint: modelFingerprint
         )
+        let fullInput: LMInput
+        if let cacheFingerprint = renderTokens.cacheFingerprint,
+            let resolution = try? RenderTokenCache.shared.resolve(
+                tokenizer: session.tokenizer,
+                messages: conversation.promptMessages,
+                tools: canonicalTools,
+                additionalContext: renderContext.additionalContext(),
+                modelFingerprint: cacheFingerprint
+            )
+        {
+            fullInput = LMInput(tokens: MLXArray(resolution.tokens))
+        } else {
+            fullInput = try await session.prepare(
+                UserInput(
+                    messages: conversation.promptMessages,
+                    images: userInputImages,
+                    tools: canonicalTools,
+                    additionalContext: renderContext.additionalContext()
+                )
+            )
+        }
         // Sequence length is always the LAST dim. For LLM models tokens are
         // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
         let fullTokenCount = fullInput.text.tokens.dim(-1)

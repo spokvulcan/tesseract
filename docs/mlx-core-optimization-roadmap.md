@@ -1,5 +1,13 @@
 # mlx-core (Cmlx) optimization roadmap
 
+> **STALE — read the ledger instead.** Written after the 2026-07-23 E1–E11
+> session, before the C-loop ran. As of 2026-07-27: **M1 is DONE (C1,
+> ACCEPTED, upstream mlx#3918)**, M3/M4/M7/M8 are rejected at probe, M5
+> shipped as C13, the M2 residual is dead by later measurement (decode is
+> GPU-paced, AGX 98–100% busy), and the dense qmm tile-geometry axis is
+> closed (ledger C20). `benchmarks/experiments-ledger.md` (session
+> 2026-07-27 bootstrap) is the correction of record.
+
 What is left after the 2026-07-23 experiment-loop session (E1–E11). Every
 entry is grounded in a measurement made that session — no priors. The
 session's full record: `benchmarks/experiments-ledger.md`. The mlx-core

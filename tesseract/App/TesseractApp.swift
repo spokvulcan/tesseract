@@ -70,6 +70,14 @@ struct TesseractApp: App {
             Self.runHarness("Prefix detect bench") {
                 try await PrefixDetectBenchRunner(runner: BenchmarkRunner()).run()
             }
+        } else if args.contains("--tokenize-cache-bench") {
+            Self.runHarness("Tokenize cache bench") {
+                try await TokenizeCacheBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--agent-cpu-bench") {
+            Self.runHarness("Agent CPU bench") {
+                try await AgentCpuBenchRunner(runner: BenchmarkRunner()).run()
+            }
         } else if args.contains("--prefix-cache-e2e") {
             Self.runHarness("Prefix cache E2E") {
                 try await PrefixCacheE2ERunner(runner: BenchmarkRunner()).run()
