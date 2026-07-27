@@ -1990,3 +1990,21 @@ code lives on in the rig's `c22` modes. Threading lesson of record for
 this machine: shared read-only Swift dictionaries + refcounted Strings do
 NOT scale read-only across cores in-process — profile before assuming
 "embarrassingly parallel".
+
+### C23 — tokenizer-load binary cache — REJECTED by attribution (off the critical path)
+
+Candidate from the C21 profile (tokenizer one-time load ~800 ms: 12.8 MB
+tokenizer.json parse + 247,587-merge rank-dict). Measured in-app this
+session (sample on a MoE parity-bench load, pid 3658): `AutoTokenizer.from`
+→ `PreTrainedTokenizer.init` ≈ 300 ms + `YYJSONParser.parseToConfig`
+≈ 230 ms ≈ **0.53 s**. But `LLMModelFactory._load`
+(`Vendor/mlx-swift-lm/Libraries/MLXLLM/LLMModelFactory.swift:631-639`)
+loads the tokenizer via **`async let`, overlapped with weight loading**,
+and the PARO phase log from the same run shows the weight side at
+**4.14 s** (`eval=3.92s`; `log show` subsystem `mlx-swift-lm:paroquant`).
+max(4.14, 0.53) — the tokenizer is fully hidden on the MoE; on the dense
+model (1.4 s load, ~0.9 s weight side vs ~0.53 s tokenizer) it is hidden
+as well. A binary cache of the parsed structures would move no bench
+metric and no production load time on this machine. **Verdict: REJECTED,
+no code written.** (If weight loading ever gets ~5× faster than the
+tokenizer — e.g. a much faster `eval(model)` — this re-opens.)
