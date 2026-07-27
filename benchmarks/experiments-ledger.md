@@ -2300,3 +2300,60 @@ the tools digest, the system-prompt hash, and the identical renders
 across the six consumers. Expected ~2–3 ms/turn at 11K, ~30+ ms/turn
 at 131K (5 full-conversation renders per turn today). Sub-attribute p4
 (memo-detect vs C27-render vs chains) as part of the implementation.
+
+### C31 — compute-once-and-plumb in the request flow — ACCEPTED (small)
+
+Aimed by the C30 attribution (p4 boundary detection = 4.1 ms/turn, the
+only TTFT-path non-tokenize CPU). Sub-attribution first (new
+`--agent-cpu-bench` sub-phases, kept in the runner): at turn 12 (11.4K
+tokens) p4 = memo-detect 0.59 + truncated Jinja render 1.53 + digest
+chain 0.62 + tools/ctx digests 0.38 + trim/cut-verify 1.24 +
+gen-prompt encode 0.02. Three sites changed, all compute-once-plumb
+(zero behavior change — byte-identical values by construction): (1)
+`resolveTruncated` reuses the entry's stored chain head under a
+caller-asserted `messagesAreEntryPrefix` (PrefillPlanner's truncation
+is a prompt-message prefix of the conversation RequestKeyingPhase just
+resolved; cumulative hashing — the same values, not recomputed; the
+head-match guard still runs, the render arbiters remain the exactness
+authority); (2) `LeafStorePhase` hands its already-computed
+`storedRenderTokens` to `LeafAdmissionBuilder.plan` (the admission
+base render was the identical computation — one full render+resolve
+eliminated per boundary-mode turn, ~5–6 ms of serialized
+post-generation work; verified by construction + e2e, no gate times
+it); (3) the StablePrefixDetector memo-key audit: LEFT — the tools
+recipes differ by design across components (canonicalized vs raw vs
+wire-type serializations), unification would be a key-recipe change
+with radix/SSD migration surface. Gates: 13 cache/parity suites (313
+tests incl. 7 new), `--tokenize-cache-bench` both models PASS (0
+mismatches; truncated leg 2.87 → 2.51 ms), `--prefix-cache-e2e` PASS,
+`--agent-cpu-bench` p4 **4.21 → 3.50 ms/turn at 11.4K** (measured
+−0.71 ms, growing with history; honest miss of the −1.5–3 ms estimate —
+the render and the cut-verify are the exactness arbiters and stay).
+**Verdict: ACCEPTED** — ≥1% on the agent-cpu p4 metric, no regression
+anywhere, exactness contract untouched.
+
+### C29 — incremental digest chain on the resolve paths — ACCEPTED (small)
+
+The per-request digest chain (per-message cumulative SHA-256) was
+recomputed in full on every resolve — 0.62–0.93 ms at 11.4K tokens per
+call (C31 sub-attribution), three calls per turn on the hit path
+(`resolve`, and the two C28 `resolveReplacingTail` legs). C29 reuses the
+stored entry's chain head and hashes only the tail messages: the chain
+is cumulative, so a conversation extending the stored one has identical
+head values by construction. **Exactness analysis (the load-bearing
+part):** the chain is a candidate-selection pre-filter, never an
+exactness arbiter — the arbiters are the byte-prefix render check and
+the junction/cut verifications, which are untouched. A head that does
+not match (edited history) vacuously passes the reused guard and is
+rejected by the render instead: same miss, same full-encode fallback,
+same tokens — only the miss REASON changes (`.digestMismatch` →
+`.renderNotExtended`; the fake-suite expectation and its comment were
+updated to say so). Gates: all 13 cache/parity suites TEST SUCCEEDED;
+`--tokenize-cache-bench` 4B PASS (0 mismatches; hit turns 5.05 ms,
+truncated 2.57 ms, C28 legs 5.2–5.5 ms — also reflecting C24's encoder
+win; the edited-history turn misses via the new reason and stays exact);
+`--agent-cpu-bench` p4 flat at 3.47 ms (C29's resolves live outside p4 —
+correct). Eliminates ~1.5–2 ms/turn of chain recomputation at 11.4K
+tokens, growing linearly with history (~20 ms/turn at 131K). **Verdict:
+ACCEPTED** — mechanism is construction-identical, gates all green, no
+regression channel. Committed with C31 (one compute-once commit).

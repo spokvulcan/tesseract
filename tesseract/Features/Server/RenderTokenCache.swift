@@ -84,6 +84,15 @@
 //  never poison it. Any failure degrades to the caller's
 //  `applyChatTemplate`; correctness never hinges on the cache.
 //
+//  Experiment C31 — compute-once-and-plumb on the truncated resolve:
+//  `PrefillPlanner`'s truncated conversation is a message prefix of the
+//  conversation the Request Keying phase just resolved for the same
+//  request, and the digest chain is cumulative, so the truncated chain is
+//  the entry's stored head — the same values, reused under the caller's
+//  `messagesAreEntryPrefix` assertion instead of recomputed per request.
+//  The head-match guard still runs; exactness still rests on the
+//  byte-prefix/trim/cut-verify arbiters.
+//
 
 import CryptoKit
 import Foundation
@@ -183,10 +192,19 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
             return Resolution(tokens: repeatEntry.tokens, path: .hitRepeat)
         }
 
-        // 3. Digest chain + template probe hash.
+        // 3. Digest chain + template probe hash. C29: the chain reuses the
+        //    entry's stored head when it is short enough — cumulative hashing
+        //    makes the extending chain's head the same values, so only the
+        //    tail messages are hashed. A head that does NOT match (edited
+        //    history) then vacuously passes the head-match guard below — and
+        //    the render arbiters (byte-prefix + trim + junction verification)
+        //    reject the candidate instead, so the miss lands on
+        //    `.renderNotExtended` rather than `.digestMismatch`, never on a
+        //    wrong token list.
+        let entrySnapshot = lock.withLock { entry }
         let toolsDigest = Self.sha256Hex(Self.canonicalForm(optional: tools))
         let contextDigest = Self.sha256Hex(Self.canonicalForm(optional: additionalContext))
-        let chain = Self.digestChain(messages)
+        let chain = Self.digestChain(messages, reusingHeadOf: entrySnapshot)
         let templateHash = try templateHash(for: modelFingerprint, rendering: rendering)
 
         // 4. Candidate lookup: fingerprint, template, tools/context, and the
@@ -281,13 +299,28 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
     ///
     /// The stored entry is left untouched: the truncated list must never
     /// poison the full-conversation entry the next request resolves against.
+    ///
+    /// C31: `messagesAreEntryPrefix` asserts `messages` are a prefix of the
+    /// conversation whose FULL digest chain the stored entry already holds —
+    /// true for `PrefillPlanner`'s last-user truncation of the very
+    /// conversation the Request Keying phase resolved this request (the same
+    /// conversation value flows to both, and `promptMessages` maps
+    /// per-message, so a message-level truncation is a prompt-message prefix).
+    /// The chain is cumulative (`chain[i]` covers messages `0...i`), so the
+    /// truncated chain IS the entry's stored head — the same values, reused
+    /// instead of recomputed. The head-match guard below still runs (against
+    /// the entry's own head when this is set); exactness continues to rest on
+    /// the empirical arbiters (byte-prefix render, trim walk, cut
+    /// verification), so a false assertion costs a render before those
+    /// arbiters reject the candidate — never a wrong token list.
     func resolveTruncated(
         tokenizer: any Tokenizer,
         messages: [[String: any Sendable]],
         tools: [ToolSpec]?,
         baseAdditionalContext: [String: any Sendable]?,
         mergedAdditionalContext: [String: any Sendable]?,
-        modelFingerprint: String
+        modelFingerprint: String,
+        messagesAreEntryPrefix: Bool = false
     ) throws -> [Int]? {
         guard let rendering = tokenizer as? any ChatTemplateRendering else {
             return nil
@@ -310,7 +343,18 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         else {
             return fallback()
         }
-        let chain = Self.digestChain(messages)
+        // C31: under the caller's entry-prefix assertion the truncated chain
+        // is the entry's stored head (cumulative hashing — the same values,
+        // computed once by the Request Keying resolve); the head-match guard
+        // below then checks the entry against its own head. Without the
+        // assertion the chain is computed and the guard does its historical
+        // job (edited-history detection before paying for the render).
+        let chain: [String]
+        if messagesAreEntryPrefix, messages.count <= entry.messageDigests.count {
+            chain = Array(entry.messageDigests.prefix(messages.count))
+        } else {
+            chain = Self.digestChain(messages)
+        }
         guard entry.messageDigests.count >= chain.count,
             zip(entry.messageDigests, chain).allSatisfy(==)
         else {
@@ -434,7 +478,11 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         else {
             return fallback()
         }
-        let chain = Self.digestChain(messages)
+        // C29: reuse the entry's stored chain head (same values for an
+        // extending conversation) — only the new tail messages are hashed;
+        // an edited base vacuously passes the head match and is rejected by
+        // the render arbiters below instead.
+        let chain = Self.digestChain(messages, reusingHeadOf: entry)
         guard entry.messageDigests.count < chain.count,
             zip(entry.messageDigests, chain).allSatisfy(==)
         else {
@@ -762,6 +810,30 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         chain.reserveCapacity(messages.count)
         var previous = "rtc1"
         for message in messages {
+            previous = sha256Hex(previous + "|" + canonicalForm(message))
+            chain.append(previous)
+        }
+        return chain
+    }
+
+    /// C29: the digest chain for `messages`, reusing `entry`'s stored head
+    /// when it is short enough — the chain is cumulative, so a conversation
+    /// extending the stored one has the same head values and only the tail
+    /// messages need hashing. A head that does NOT match (edited history)
+    /// vacuously passes the caller's head-match guard; the render arbiters
+    /// downstream (byte-prefix + trim + junction/cut verification) reject
+    /// the candidate instead, so exactness is unchanged and the miss simply
+    /// lands on a different reason (`.renderNotExtended`, not
+    /// `.digestMismatch`).
+    static func digestChain(
+        _ messages: [[String: any Sendable]], reusingHeadOf entry: Entry?
+    ) -> [String] {
+        guard let entry, entry.messageDigests.count <= messages.count else {
+            return digestChain(messages)
+        }
+        var chain = entry.messageDigests
+        var previous = chain.last ?? "rtc1"
+        for message in messages[chain.count...] {
             previous = sha256Hex(previous + "|" + canonicalForm(message))
             chain.append(previous)
         }

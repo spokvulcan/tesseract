@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MLXHuggingFace
 import MLXLMCommon
@@ -26,8 +27,9 @@ import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expans
 ///    system prompt + canonical tools JSON, then a prefix token-hash
 ///    verification that scales with the stable-prefix length), the
 ///    generation-prompt encode, the C27 `resolveTruncated` re-render
-///    (Jinja + digest chain + trim walk + cut verification — the full BPE
-///    encode is what C27 eliminates), and the identity `translatedLength`.
+///    (Jinja + trim walk + cut verification — the full BPE encode is what
+///    C27 eliminates, and the digest chain is the entry's stored head since
+///    C31), and the identity `translatedLength`.
 /// 5. `p5 detok`        — the production streaming detokenizer
 ///    (`NaiveStreamingDetokenizer`, the same one `TokenGenerationLoop` drives
 ///    per generated token) over a ~700-token assistant reply; reported as
@@ -74,9 +76,26 @@ final class AgentCpuBenchRunner {
         var conversation: HTTPPrefixCacheConversation?
     }
 
+    /// C31 Step 1 (temporary instrumentation): the p4 sub-phases, timed
+    /// directly against the same cache/memo state p4 sees. `resolveTotal`
+    /// minus render/chain/digests derives the trim+cut-verify share (the
+    /// memoized templateHash is ~0 after the warm pass).
+    private enum P4SubID: String, CaseIterable {
+        case detectMemoHit = "a detect (memo hit)"
+        case memoKeyRecipe = "a' memoKey recipe"
+        case prefixVerify = "a'' prefix tokenHash"
+        case truncatedRender = "b truncated render"
+        case digestChain = "c digest chain"
+        case toolsContextDigests = "c' tools+ctx digests"
+        case resolveTotal = "resolveTruncated total"
+        case genPromptEncode = "e gen-prompt encode"
+        case trimCutVerify = "d trim+cut-verify (derived)"
+    }
+
     /// One turn's per-phase samples plus the radix-op breakdown.
     private struct TurnSamples {
         var phases: [PhaseID: [Double]] = [:]
+        var p4Sub: [P4SubID: [Double]] = [:]
         var radixLookup: [Double] = []
         var radixInsert: [Double] = []
         var radixStore: [Double] = []
@@ -84,6 +103,14 @@ final class AgentCpuBenchRunner {
 
         mutating func append(_ phase: PhaseID, _ ms: Double) {
             phases[phase, default: []].append(ms)
+        }
+
+        mutating func appendSub(_ phase: P4SubID, _ ms: Double) {
+            p4Sub[phase, default: []].append(ms)
+        }
+
+        func medianSub(_ phase: P4SubID) -> Double {
+            Self.median(p4Sub[phase] ?? [])
         }
 
         func median(_ phase: PhaseID) -> Double {
@@ -337,6 +364,21 @@ final class AgentCpuBenchRunner {
         )
         p4 = Self.ms(since: p4Start)
 
+        // C31 Step 1 (temporary): sub-attribute p4 against the identical
+        // cache/memo state. Every piece re-runs a pure or non-mutating call
+        // (detect memo-hit, resolveTruncated, render, digests), so re-running
+        // per rep is state-safe.
+        try runP4SubPhases(
+            conversation: conversation,
+            fullTokens: fixture.fullTokens,
+            stablePrefixOffset: stablePrefixOffset,
+            tokenizer: tokenizer,
+            canonicalTools: canonicalTools,
+            fingerprint: fingerprint,
+            samples: &samples,
+            record: record
+        )
+
         // p5 — per-token streaming detokenization of the assistant reply.
         let p5 = Self.timeDetok(tokens: replyTokens, tokenizer: tokenizer)
 
@@ -580,6 +622,7 @@ final class AgentCpuBenchRunner {
                 + "the radix phase above covers the tree's CPU bookkeeping with "
                 + "empty-layer snapshots."
         )
+        lines.append(contentsOf: buildP4SubReport(columns: columns, allSamples: allSamples))
         return lines
     }
 
@@ -606,5 +649,190 @@ final class AgentCpuBenchRunner {
         if let data = (message + "\n").data(using: .utf8) {
             logFileHandle?.write(data)
         }
+    }
+}
+
+// MARK: - C31 Step 1: p4 sub-attribution (temporary instrumentation)
+
+/// The p4 sub-phase timing and reporting, kept out of the main class body
+/// (type-body-length lint). Everything here re-runs pure or non-mutating
+/// calls (detect memo-hit, resolveTruncated, render, digests) against the
+/// cache/memo state p4 just saw, so per-rep repetition is state-safe.
+extension AgentCpuBenchRunner {
+
+    /// Time the pieces `PrefillPlanner.detectBoundaries` is composed of, per
+    /// rep:
+    /// (a) the StablePrefixDetector memo-hit detect — plus its two recipe
+    ///     halves replicated inline (memo-key build; prefix token-hash
+    ///     verify), labeled as replicas;
+    /// (b) the C27 leg's truncated Jinja render;
+    /// (c) its per-message digest chain, and (c') the tools/context digests;
+    /// the whole `resolveTruncated` call, from which (d) the trim+cut-verify
+    /// share is derived by subtraction (templateHash is memoized, ~0);
+    /// (e) the generation-prompt encode (the identity `translatedLength` is
+    /// a count return — free).
+    private func runP4SubPhases(
+        conversation: HTTPPrefixCacheConversation,
+        fullTokens: [Int],
+        stablePrefixOffset: Int,
+        tokenizer: any MLXLMCommon.Tokenizer,
+        canonicalTools: [ToolSpec]?,
+        fingerprint: String,
+        samples: inout TurnSamples,
+        record: Bool
+    ) throws {
+        // The truncated conversation exactly as detectBoundaries builds it.
+        guard let lastUserIndex = conversation.messages.lastIndex(where: { $0.role == .user })
+        else { return }
+        let truncatedMessages = HTTPPrefixCacheConversation(
+            systemPrompt: conversation.systemPrompt,
+            messages: Array(conversation.messages[...lastUserIndex]),
+            toolDefinitionsDigest: conversation.toolDefinitionsDigest,
+            templateContextDigest: conversation.templateContextDigest
+        ).promptMessages
+        let mergedContext: [String: any Sendable] = ["add_generation_prompt": false]
+
+        // (a) — the memo-hit detect, whole.
+        let detectMs = try Self.ms {
+            _ = try StablePrefixDetector.detect(
+                systemPrompt: conversation.systemPrompt,
+                toolSpecs: canonicalTools,
+                additionalContext: nil,
+                fullTokens: fullTokens,
+                tokenizer: tokenizer
+            )
+        }
+
+        // (a') — replica of StablePrefixDetector.memoKey's recipe (SHA-256 of
+        // the system prompt + JSONSerialization.sortedKeys of the tools +
+        // SHA-256). A replica, not the private function: labeled here so a
+        // recipe drift in production is caught by eye, not silently trusted.
+        let memoKeyMs = Self.ms {
+            var parts: [String] = []
+            if let systemPrompt = conversation.systemPrompt {
+                parts.append(Self.subSHA256Hex(Data(systemPrompt.utf8)))
+            }
+            if let canonicalTools,
+                JSONSerialization.isValidJSONObject(canonicalTools),
+                let data = try? JSONSerialization.data(
+                    withJSONObject: canonicalTools, options: [.sortedKeys])
+            {
+                parts.append(Self.subSHA256Hex(data))
+            }
+            _ = parts.joined(separator: "|")
+        }
+
+        // (a'') — replica of the memo-hit prefix verification: Int32-LE bytes
+        // of fullTokens[0..<commonLength] + SHA-256.
+        let verifyMs = Self.ms {
+            let prefix = fullTokens[0..<min(stablePrefixOffset, fullTokens.count)]
+            var data = Data(capacity: prefix.count * 4)
+            for token in prefix {
+                var v = Int32(token)
+                data.append(Data(bytes: &v, count: 4))
+            }
+            _ = Self.subSHA256Hex(data)
+        }
+
+        // (b) — the truncated render (Jinja), the C27 leg's dominant piece.
+        var renderMs = 0.0
+        if let rendering = tokenizer as? any ChatTemplateRendering {
+            renderMs = try Self.ms {
+                _ = try rendering.renderChatTemplate(
+                    messages: truncatedMessages,
+                    tools: canonicalTools,
+                    additionalContext: mergedContext
+                )
+            }
+        }
+
+        // (c) — the truncated conversation's per-message digest chain.
+        let chainMs = Self.ms {
+            _ = RenderTokenCache.digestChain(truncatedMessages)
+        }
+
+        // (c') — the tools + base-context digests resolveTruncated recomputes.
+        let digestsMs = Self.ms {
+            _ = RenderTokenCache.sha256Hex(
+                RenderTokenCache.canonicalForm(optional: canonicalTools))
+            _ = RenderTokenCache.sha256Hex(
+                RenderTokenCache.canonicalForm(optional: nil as Any?))
+        }
+
+        // The whole resolveTruncated (hit path) — (d) falls out by
+        // subtraction. Mirrors production: the same entry-prefix assertion
+        // PrefillPlanner passes (prepareTurn resolved this conversation).
+        var resolveMs = 0.0
+        let resolveStart = ContinuousClock.now
+        _ = try RenderTokenCache.shared.resolveTruncated(
+            tokenizer: tokenizer,
+            messages: truncatedMessages,
+            tools: canonicalTools,
+            baseAdditionalContext: nil,
+            mergedAdditionalContext: mergedContext,
+            modelFingerprint: fingerprint,
+            messagesAreEntryPrefix: true
+        )
+        resolveMs = Self.ms(since: resolveStart)
+
+        // (e) — the generation-prompt encode.
+        let genPromptMs = Self.ms {
+            _ = tokenizer.encode(
+                text: "<|im_start|>assistant\n<think>\n", addSpecialTokens: false)
+        }
+
+        guard record else { return }
+        samples.appendSub(.detectMemoHit, detectMs)
+        samples.appendSub(.memoKeyRecipe, memoKeyMs)
+        samples.appendSub(.prefixVerify, verifyMs)
+        samples.appendSub(.truncatedRender, renderMs)
+        samples.appendSub(.digestChain, chainMs)
+        samples.appendSub(.toolsContextDigests, digestsMs)
+        samples.appendSub(.resolveTotal, resolveMs)
+        samples.appendSub(.genPromptEncode, genPromptMs)
+        samples.appendSub(.trimCutVerify, resolveMs - renderMs - chainMs - digestsMs)
+    }
+
+    /// SHA-256 hex for the recipe replicas above (same recipe as the
+    /// production sites: `String(format:)` per byte).
+    private static func subSHA256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The p4 sub-attribution table — each sub-phase at the table turns, the
+    /// accounting identity (p4 ≈ a + resolve + e), and the resolve
+    /// decomposition (resolve ≈ b + c + c' + d).
+    private func buildP4SubReport(columns: [Int], allSamples: [TurnSamples]) -> [String] {
+        var lines: [String] = []
+        lines.append("")
+        lines.append("## p4 sub-attribution (C31 Step 1)")
+        lines.append("")
+        var header = Self.pad("sub-phase", 26)
+        for turn in columns {
+            header += Self.pad("turn \(turn)", 12)
+        }
+        lines.append(header)
+        lines.append(String(repeating: "-", count: header.count))
+        for sub in P4SubID.allCases {
+            var row = Self.pad(sub.rawValue, 26)
+            for turn in columns {
+                row += Self.pad(String(format: "%.3f", allSamples[turn - 1].medianSub(sub)), 12)
+            }
+            lines.append(row)
+        }
+        lines.append(String(repeating: "-", count: header.count))
+        var accounted = Self.pad("a + resolve + e", 26)
+        var p4Row = Self.pad("p4 (measured)", 26)
+        for turn in columns {
+            let samples = allSamples[turn - 1]
+            let sum =
+                samples.medianSub(.detectMemoHit) + samples.medianSub(.resolveTotal)
+                + samples.medianSub(.genPromptEncode)
+            accounted += Self.pad(String(format: "%.3f", sum), 12)
+            p4Row += Self.pad(String(format: "%.3f", samples.median(.boundaryDetect)), 12)
+        }
+        lines.append(accounted)
+        lines.append(p4Row)
+        return lines
     }
 }

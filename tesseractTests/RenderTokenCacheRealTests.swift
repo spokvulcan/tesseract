@@ -320,6 +320,39 @@ struct RenderTokenCacheTruncatedRealTests {
         #expect(cache.statsSnapshot().truncatedHits == 4)
     }
 
+    /// C31: the entry-prefix assertion (the production PrefillPlanner shape)
+    /// reuses the stored chain head — byte-identical to the chain-computing
+    /// resolve and to the standalone truncated encode.
+    @Test(.enabled(if: modelAvailable))
+    func entryPrefixAssertionHitsExactly() async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let cache = RenderTokenCache()
+        let messages: [[String: any Sendable]] = [
+            ["role": "system", "content": "You are a careful assistant."],
+            ["role": "user", "content": "Start the investigation."],
+            ["role": "assistant", "content": "First findings: everything checks out."],
+            ["role": "user", "content": "Continue to step 2."],
+        ]
+        _ = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: messages, tools: nil,
+                additionalContext: nil, modelFingerprint: Self.fingerprint))
+        let asserted = try #require(
+            try cache.resolveTruncated(
+                tokenizer: tokenizer, messages: messages, tools: nil,
+                baseAdditionalContext: nil,
+                mergedAdditionalContext: Self.noGenPrompt,
+                modelFingerprint: Self.fingerprint,
+                messagesAreEntryPrefix: true),
+            "entry-prefix assertion fell back")
+        let computed = try #require(
+            try Self.resolveTruncated(cache, tokenizer: tokenizer, messages: messages))
+        #expect(asserted == computed)
+        let truth = try tokenizer.applyChatTemplate(
+            messages: messages, tools: nil, additionalContext: Self.noGenPrompt)
+        #expect(asserted == truth)
+    }
+
     /// End-of-text right-context classes: the truncated render ends in
     /// `<|im_end|>\n`, but the last user content's ending shapes the pretokens
     /// inside the cut window — whitespace runs, a letter, CRLF, emoji,

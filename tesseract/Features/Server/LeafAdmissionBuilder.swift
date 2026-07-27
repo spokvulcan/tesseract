@@ -112,6 +112,15 @@ nonisolated enum LeafAdmissionBuilder {
     /// trim+extension of that entry — one suffix encode instead of two full
     /// re-encodes. `nil` — or any inexactness — runs today's
     /// `applyChatTemplate`.
+    ///
+    /// C31: `baseRenderTokens` is the base render's token list, already
+    /// computed this request by the **Leaf Store** phase's
+    /// `measureStoredTokenSequence` — the IDENTICAL computation (same
+    /// messages, tools, contexts, fingerprint, tokenizer, key-space guard;
+    /// verified in C28) — handed in so the base render runs once per
+    /// request. `nil` computes it here, exactly as before. Only the base
+    /// render is plumbed; the continuation render is a different
+    /// conversation and is always computed.
     static func reusablePrefix(
         continuation: Continuation,
         storedConversation: HTTPPrefixCacheConversation,
@@ -119,7 +128,8 @@ nonisolated enum LeafAdmissionBuilder {
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext = .canonical,
-        modelFingerprint: String? = nil
+        modelFingerprint: String? = nil,
+        baseRenderTokens: [Int]? = nil
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         let baseMessages = storedConversation.promptMessages
         let probeContext = renderContext.additionalContext(
@@ -131,7 +141,9 @@ nonisolated enum LeafAdmissionBuilder {
         // the other seams do.
         let cacheFingerprint = keySpace.isIdentity ? modelFingerprint : nil
         let storedTokens: [Int]
-        if let cacheFingerprint,
+        if let baseRenderTokens {
+            storedTokens = baseRenderTokens
+        } else if let cacheFingerprint,
             let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
                 tokenizer: tokenizer,
                 messages: baseMessages,
@@ -261,7 +273,8 @@ nonisolated enum LeafAdmissionBuilder {
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext,
-        modelFingerprint: String?
+        modelFingerprint: String?,
+        baseRenderTokens: [Int]?
     ) -> Probe {
         let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
         do {
@@ -272,7 +285,8 @@ nonisolated enum LeafAdmissionBuilder {
                 tokenizer: tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext,
-                modelFingerprint: modelFingerprint
+                modelFingerprint: modelFingerprint,
+                baseRenderTokens: baseRenderTokens
             )
         } catch {
             return .skip(.tokenizationFailed(error: error.localizedDescription))
@@ -297,6 +311,11 @@ nonisolated enum LeafAdmissionBuilder {
     /// reusable-prefix probe, chooses the boundary source, applies the
     /// offset-guard arithmetic, and emits a `LeafCapturePlan`. No live KV cache,
     /// no Metal — the actor executes the capture/`admit` from the decision.
+    ///
+    /// C31: `baseRenderTokens` is the stored conversation's render-space token
+    /// list the **Leaf Store** phase already computed this request (the
+    /// identical computation the reusable-prefix probe's base render would
+    /// run) — plumbed through so the base render runs once per request.
     static func plan(
         mode: BoundaryLeafMode,
         storedConversation: HTTPPrefixCacheConversation,
@@ -307,6 +326,7 @@ nonisolated enum LeafAdmissionBuilder {
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext = .canonical,
         modelFingerprint: String? = nil,
+        baseRenderTokens: [Int]? = nil,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
         switch mode {
@@ -325,7 +345,8 @@ nonisolated enum LeafAdmissionBuilder {
                 tokenizer: tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext,
-                modelFingerprint: modelFingerprint
+                modelFingerprint: modelFingerprint,
+                baseRenderTokens: baseRenderTokens
             ) {
             case .tokens(let translated): toolTokens = translated
             case .skip(let reason): return .skip(reason: reason)
@@ -361,7 +382,8 @@ nonisolated enum LeafAdmissionBuilder {
                 tokenizer: tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext,
-                modelFingerprint: modelFingerprint
+                modelFingerprint: modelFingerprint,
+                baseRenderTokens: baseRenderTokens
             ) {
             case .tokens(let translated): canonicalTokens = translated
             case .skip(let reason): return .skip(reason: reason)

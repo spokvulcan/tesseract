@@ -217,7 +217,10 @@ final class TokenizeCacheBenchRunner {
 
         /// The C27 leg: resolve the planner's truncated-at-last-user render
         /// through the cache, time it against the standalone truncated
-        /// `applyChatTemplate`, and assert exact equality on a hit.
+        /// `applyChatTemplate`, and assert exact equality on a hit. C31: the
+        /// leg passes the same `messagesAreEntryPrefix` assertion
+        /// `PrefillPlanner` passes in production — the turn's truncated
+        /// messages are a prefix of the messages the prepare leg resolved.
         func runTruncatedLeg(_ turn: Turn) throws -> String {
             let mergedContext: [String: any Sendable] = ["add_generation_prompt": false]
             let truncStart = ContinuousClock.now
@@ -227,7 +230,8 @@ final class TokenizeCacheBenchRunner {
                 tools: toolSpecs,
                 baseAdditionalContext: nil,
                 mergedAdditionalContext: mergedContext,
-                modelFingerprint: fingerprint
+                modelFingerprint: fingerprint,
+                messagesAreEntryPrefix: true
             )
             let truncMs = Self.ms(since: truncStart)
             let standaloneStart = ContinuousClock.now

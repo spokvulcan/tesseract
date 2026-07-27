@@ -175,6 +175,11 @@ nonisolated enum LeafStorePhase {
                 keySpace: mlxStart.keySpace,
                 renderContext: renderContext,
                 modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                // C31: the base render the builder's probe would re-run is
+                // the identical computation `measureStoredTokenSequence`
+                // just performed for this request (verified in C28) — hand
+                // it in so the base render runs once per request.
+                baseRenderTokens: storedRenderTokens,
                 resolveBoundary: { tokens in
                     // Drive Snapshot Resolution inside the Model Session so
                     // the SSD `loadSync` stays off-MainActor (ADR-0001).

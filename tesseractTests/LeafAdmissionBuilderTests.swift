@@ -98,6 +98,65 @@ import MLXLMCommon
         #expect(prefix == nil)
     }
 
+    // MARK: - C31 plumbed base render
+
+    /// C31: the base render tokens plumbed from the Leaf Store phase (the
+    /// identical computation the probe's base render would run) produce the
+    /// byte-identical probe result, for both continuations.
+    @Test func plumbedBaseRenderTokensMatchComputedProbe() throws {
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(role: .assistant, content: "answer"),
+        ])
+        for continuation in [LeafAdmissionBuilder.Continuation.userTurn, .toolResult] {
+            let computed = try LeafAdmissionBuilder.reusablePrefix(
+                continuation: continuation,
+                storedConversation: stored,
+                toolSpecs: nil,
+                tokenizer: tokenizer,
+                keySpace: .identity()
+            )
+            let plumbed = try LeafAdmissionBuilder.reusablePrefix(
+                continuation: continuation,
+                storedConversation: stored,
+                toolSpecs: nil,
+                tokenizer: tokenizer,
+                keySpace: .identity(),
+                baseRenderTokens: render(stored)
+            )
+            #expect(try plumbed?.get() == (try computed?.get()))
+            #expect(try plumbed?.get() == (try render(stored)))
+        }
+    }
+
+    /// C31: the routing decision is unchanged when the base render is
+    /// plumbed rather than recomputed inside the probe.
+    @Test func planWithPlumbedBaseRenderTokensMatchesUnplumbed() async throws {
+        let stored = toolTurn()
+        let baseRender = try render(stored)
+        let toolTokens = try LeafAdmissionBuilder.reusablePrefix(
+            continuation: .toolResult, storedConversation: stored, toolSpecs: nil,
+            tokenizer: tokenizer, keySpace: .identity()
+        )!.get()
+        let plumbed = await LeafAdmissionBuilder.plan(
+            mode: .directTool,
+            storedConversation: stored,
+            storedTokens: toolTokens,
+            toolSpecs: nil,
+            transientBoundary: boundary(offset: 5),
+            tokenizer: tokenizer,
+            keySpace: .identity(),
+            baseRenderTokens: baseRender,
+            resolveBoundary: noResolvedBoundary
+        )
+        guard case .fromBoundary(let b, let tokens) = plumbed else {
+            Issue.record("expected .fromBoundary, got \(plumbed)")
+            return
+        }
+        #expect(b.tokenOffset == 5)
+        #expect(tokens == toolTokens)
+    }
+
     // MARK: - futureSharedPrefix — the speculative canonical target path
 
     @Test func futureSharedPrefixEndsAtTheNextUserTurnHeader() throws {

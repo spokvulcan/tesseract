@@ -187,7 +187,12 @@ nonisolated enum PrefillPlanner {
                     tools: toolSpecs,
                     baseAdditionalContext: renderContext.additionalContext(),
                     mergedAdditionalContext: mergedContext,
-                    modelFingerprint: modelFingerprint
+                    modelFingerprint: modelFingerprint,
+                    // C31: this request's Request Keying phase resolved the
+                    // same `conversation` value, and the truncation above is
+                    // a message prefix of it — so the entry's stored digest
+                    // chain head IS the truncated chain (cumulative hashing).
+                    messagesAreEntryPrefix: true
                 )
             {
                 // C27: text-space requests recover the truncated render's

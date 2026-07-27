@@ -150,7 +150,11 @@ struct RenderTokenCacheFakeTests {
             Issue.record("expected edited-middle miss, got \(editedResolution.path)")
             return
         }
-        #expect(reason == .digestMismatch)
+        // C29: the reused chain head vacuously passes the digest guard, so
+        // edited history is now rejected by the render arbiters — the miss
+        // reason is `.renderNotExtended`, and the produced tokens stay exactly
+        // the standalone encode.
+        #expect(reason == .renderNotExtended)
         #expect(try editedResolution.tokens == tokenizer.applyChatTemplate(messages: edited))
     }
 
@@ -257,6 +261,99 @@ struct RenderTokenCacheTruncatedFakeTests {
             messages.append(user("Again."))
         }
         #expect(cache.statsSnapshot().truncatedHits == 3)
+    }
+
+    /// C31: under the caller's entry-prefix assertion the truncated chain is
+    /// the entry's stored head — the result is byte-identical to the
+    /// chain-computing resolve and to the standalone `applyChatTemplate`.
+    @Test func entryPrefixAssertionHitsExactly() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let messages = [user("The start."), assistant("The end."), user("Again.")]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+
+        let asserted = try #require(
+            try cache.resolveTruncated(
+                tokenizer: tokenizer, messages: messages, tools: nil,
+                baseAdditionalContext: nil,
+                mergedAdditionalContext: Self.noGenPrompt,
+                modelFingerprint: Self.fingerprint,
+                messagesAreEntryPrefix: true))
+        let computed = try #require(
+            try resolveTruncated(cache, tokenizer: tokenizer, messages: messages))
+        #expect(asserted == computed)
+        #expect(
+            asserted
+                == (try tokenizer.applyChatTemplate(
+                    messages: messages, tools: nil, additionalContext: Self.noGenPrompt)))
+    }
+
+    /// C31: the assertion with a strict prefix (fewer messages than the
+    /// entry holds) reuses the chain head and stays exact.
+    @Test func entryPrefixAssertionStrictPrefixHitsExactly() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let messages = [user("The start."), assistant("The end."), user("Again.")]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+
+        let prefixMessages = Array(messages.dropLast())
+        let asserted = try #require(
+            try cache.resolveTruncated(
+                tokenizer: tokenizer, messages: prefixMessages, tools: nil,
+                baseAdditionalContext: nil,
+                mergedAdditionalContext: Self.noGenPrompt,
+                modelFingerprint: Self.fingerprint,
+                messagesAreEntryPrefix: true))
+        #expect(
+            asserted
+                == (try tokenizer.applyChatTemplate(
+                    messages: prefixMessages, tools: nil, additionalContext: Self.noGenPrompt)))
+    }
+
+    /// C31: a false entry-prefix assertion never produces wrong tokens — the
+    /// byte-prefix render check rejects the candidate and the resolve falls
+    /// back, exactly as the honest digest-mismatch path does.
+    @Test func falseEntryPrefixAssertionFallsBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: [user("The start.")], tools: nil,
+            additionalContext: nil, modelFingerprint: Self.fingerprint)
+
+        let asserted = try cache.resolveTruncated(
+            tokenizer: tokenizer, messages: [user("The EDITED start.")], tools: nil,
+            baseAdditionalContext: nil,
+            mergedAdditionalContext: Self.noGenPrompt,
+            modelFingerprint: Self.fingerprint,
+            messagesAreEntryPrefix: true)
+        #expect(asserted == nil)
+        let honest = try resolveTruncated(
+            cache, tokenizer: tokenizer, messages: [user("The EDITED start.")])
+        #expect(honest == nil)
+    }
+
+    /// C31: the assertion with more messages than the entry holds cannot
+    /// reuse the head — the chain is computed and the head-match guard
+    /// fails, same as the unasserted path.
+    @Test func entryPrefixAssertionLongerThanEntryFallsBack() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: [user("The start.")], tools: nil,
+            additionalContext: nil, modelFingerprint: Self.fingerprint)
+
+        let longer = [user("The start."), assistant("The end."), user("Again.")]
+        let asserted = try cache.resolveTruncated(
+            tokenizer: tokenizer, messages: longer, tools: nil,
+            baseAdditionalContext: nil,
+            mergedAdditionalContext: Self.noGenPrompt,
+            modelFingerprint: Self.fingerprint,
+            messagesAreEntryPrefix: true)
+        #expect(asserted == nil)
     }
 
     /// The tail must be a generation prompt, not dropped content: with an
