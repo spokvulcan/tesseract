@@ -67,7 +67,7 @@ let package = Package(
         // cannot mix revision and version requirements for one package; this is
         // the package's only declarer in the graph. Scheme:
         // tesseract docs/swift-transformers-fork.md.
-        .package(url: "https://github.com/spokvulcan/swift-transformers", revision: "a524093de5b9930bbf4885a921d06a9e76197df3"),
+        .package(url: "https://github.com/spokvulcan/swift-transformers", revision: "0033bc79ed8dbff2ff5dff83807d83c7d1352b05"),
         .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.8.1"))
     ],
     targets: [

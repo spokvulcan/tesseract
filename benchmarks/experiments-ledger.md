@@ -2491,11 +2491,34 @@ the fake — swiftlint + swift-format clean on every changed file (the three
 residual swiftlint warnings reproduce on the `HEAD` versions), `check-docs.sh`
 green, and `swift build` green in `~/projects/swift-transformers` with F2/F3/F8.
 
-**NOT re-run for this round, and required before merge:**
-`--tokenize-cache-bench` on both models and `--prefix-cache-e2e`. F1 rewrote the
+**Re-run after the fork pin moved to `0033bc7` (2026-07-27).** F1 rewrote the
 exactness-critical inner logic of all three resolves (String → byte space), and
 the per-turn intrinsic assertions in the tokenize runner are this program's
 binding exactness gate — the unit suites are necessary, not sufficient, by this
-ledger's own rules. Also outstanding: the fork commit `0033bc7` is pushed to
-`pin-tesseract`, but `Vendor/mlx-audio-swift` still pins `a524093`, so F2/F3/F8
-are not in the built tree (`docs/swift-transformers-fork.md` → Pending).
+ledger's own rules. So the full bench leg was re-run against the built tree with
+F2/F3/F8 in it (`Vendor/mlx-audio-swift` Package.swift + Package.resolved moved
+`a524093` → `0033bc7`; the DerivedData checkout's `1.3.3..HEAD` diff verified
+byte-identical to the accepted fork diff):
+
+| Leg | Model | Result |
+| --- | --- | --- |
+| `--tokenize-cache-bench` | Qwen3.5-4B-PARO | **PASS** — 11 hit turns 36.05 → 3.68 ms (−89.8%); C27 15 turns 34.64 → 2.06 ms (−94.1%); C28 leaf-store 35.64 → 4.35 (−87.8%), admission 35.60 → 4.33 (−87.8%), probe 35.60 → 3.47 (−90.3%). **0 token mismatches, 0 parity failures, 0 path failures** |
+| `--tokenize-cache-bench` | Qwen3.6-35B-A3B-PARO | **PASS** — 11 hit turns 35.91 → 3.68 ms (−89.7%); C27 34.57 → 2.11 ms (−93.9%); C28 leaf-store −87.7%, admission −87.7%, probe −90.1%. **0 token mismatches, 0 parity failures, 0 path failures** |
+| `--prefix-cache-e2e` | Qwen3.5-4B-PARO | **PASS** — 32/32 assertions, including `greedy_output_equivalence`, `image_warm_output_equivalence` and `agent_image_output_matches_http_path` all "fully identical" |
+
+Both models report the same F6 histogram shape, which is itself the observability
+finding paying off — the byte-space rewrite is legible in the stats line rather
+than inferred: `hits=11 repeats=1 misses=5 trimHistogram=[k2:11]
+missReasons=[cold:1,digestMismatch:2,renderNotExtended:2] junctionFailures=0
+replacedJunctionFailures=0 junctionWindowEnlargements=0 cutWindowEnlargements=0
+truncatedHits=15 truncatedFallbacks=2
+truncatedFallbackReasons=[renderNotPrefix:1,tailTooLong:1] replacedHits=45
+replacedFallbacks=0 replacedFallbackReasons=[]`. Zero junction failures and zero
+window enlargements on both tokenizers means the F8 window constants
+(`initialWindowBytes` 256, `maxWindowBytes` 16384) are not being stressed by real
+templates; the enlargement counters exist to catch the day that changes.
+
+The one gate deliberately substituted: no local `dev.sh clean` before these
+timings. A full DerivedData wipe + rebuild is ~40 min of sustained load, and this
+ledger's own thermal-distress note says timing runs after one are unreliable. CI's
+`build-release` on a pristine runner is the clean-build confirmation instead.

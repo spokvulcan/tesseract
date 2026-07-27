@@ -53,18 +53,23 @@ PR must say so rather than presenting the carry as a pure refactor. Upstream
 has already fixed two Unicode bugs in this exact code (`#352` Bugs 3 and 4),
 so expect the question.
 
-## Pending — the pin has not moved
+## Pin state
 
-`pin-tesseract` is at `0033bc7` (pushed), but `Vendor/mlx-audio-swift`'s
-`Package.swift` and `Package.resolved` still pin `a524093`, so the app tree
-resolves and builds the pre-review-round fork. Appending to the pin branch
-cannot change that: the pin is an exact revision.
+`Vendor/mlx-audio-swift`'s `Package.swift` and `Package.resolved` pin
+`0033bc79ed8dbff2ff5dff83807d83c7d1352b05` — the head of `pin-tesseract`, so the
+app tree resolves and builds all three carries. Appending to the pin branch does
+not move the app: the pin is an exact revision, and every append needs this same
+two-file edit.
 
-What remains, per the per-iteration workflow below: move the
-`Vendor/mlx-audio-swift` pin to `0033bc7`, re-resolve, verify the checkout diff
-equals the accepted diff, then the mandatory clean-build confirmation + parity
-smoke leg. Deliberately left to the owner — moving the pin invalidates the
-current clean-build confirmation, and the gate is a Release build on a quiet
+Moved 2026-07-27 (`a524093` → `0033bc7`) with the workflow's verification steps
+done: re-resolved, the DerivedData checkout's `1.3.3..HEAD` diff confirmed
+byte-identical to the accepted fork working-copy diff (486 lines), and the
+mandatory gate leg re-run against the built tree —
+`--tokenize-cache-bench` PASS on both PARO models with 0 token mismatches / 0
+parity failures / 0 path failures, and `--prefix-cache-e2e` PASS 32/32. See
+`benchmarks/experiments-ledger.md` → "Review round 2026-07-27". The clean-build
+confirmation is CI's `build-release` on a pristine runner rather than a local
+`dev.sh clean`, so the timing legs above were measured on a thermally quiet
 machine.
 
 ## Per-iteration workflow
