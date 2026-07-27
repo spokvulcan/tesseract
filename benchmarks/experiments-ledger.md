@@ -2138,3 +2138,83 @@ agent/server turn tokenize cost at 11K tokens is now ~8.4 ms
 change; no pins moved. Remaining on this path: the post-generation
 leaf-store/admission encodes (up to 3 full renders serialized on
 `container.perform` per turn) — C28.
+
+### C28 — post-generation leaf-store/admission encodes through the cache — ACCEPTED
+
+The last full-size encodes on the steady-state server turn: after each
+response, inside `container.perform` (serialized against the next
+request), `LeafStorePhase.measureStoredTokenSequence` re-tokenizes
+prompt+assistant-turn (~40 ms at 11K), and `LeafAdmissionBuilder.
+reusablePrefix` renders twice more (base + probe, `add_generation_prompt:
+false`) when a boundary leaf mode is selected. All three go through the
+cache via one composed resolve — `resolveReplacingTail`: keyed candidate
+(base-context digest, strict-extension chain, fingerprint, template),
+the C25 trim-back walk to the byte seam (per-token strip, k = 0…4),
+suffix-encode the extension, `verifyJunction` as the arbiter; entry
+never mutated. (Evidence-based deviation from the planned
+resolve/resolveTruncated decomposition: the leaf-store render uses the
+merged gen-prompt-off context and its content sits where the entry's
+gen-prompt tail is, so all three seams are the same trim+extend shape;
+`verifyCut` is not needed — the cut is always followed by the fresh
+suffix, which is exactly the junction window's case.) A 1+1-token seam
+pre-check per trim attempt skips the futile 256→16384 enlargement
+ladder when the seam pair provably merges (the empty think scaffold
+made every k=0 attempt pay it; `verifyJunction` stays the authority
+whenever the pre-check passes — exactness unchanged). Gates: three new
+suites (composed trim+extend exactness, reply-starter classes,
+probe continuation, wrong context/fingerprint/tools/edited base,
+spanning-merge past trim budget, entry-never-mutated) +
+`LeafAdmissionCachePathTests`; RenderTokenCache suites, PrefillPlanner,
+LeafAdmissionBuilder, HTTPPrefixCacheSpike, PrefixCacheIntegration all
+green; `--prefix-cache-e2e` PASS (incl. the direct-tool-leaf and
+canonical-user-leaf paths). Runner both models (parent-verified rerun):
+**leaf-store 40.35 → 6.14 ms, admission 40.34 → 6.11 ms, probe 40.41 →
+5.38 ms (−85…−87%)**, `replacedFallbacks=0`, 0 mismatches; MoE 41.2 →
+5.3–6.1 ms. **Verdict: ACCEPTED.** ~120 ms → ~18 ms of serialized
+post-generation encode per turn at 11K tokens (~3× more at 32K),
+directly off next-turn TTFT. App-only change; no pins moved. The
+tokenize line is now: cold turn ≈ one full encode (C24 attacks that
+encoder itself), warm turn ≈ render+digests (~5.5 ms) + ~12 ms of
+cached legs, vs ~205 ms pre-C25.
+
+### C28 — post-generation leaf-store/admission encodes through the cache — ACCEPTED
+
+The last full-size encodes on the steady-state server turn: after each
+response, inside `container.perform` (serialized against the next
+request), `LeafStorePhase.measureStoredTokenSequence` re-tokenizes
+prompt+assistant-turn (~40 ms at 11K), and `LeafAdmissionBuilder.
+reusablePrefix` renders twice more (base + probe, `add_generation_prompt:
+false`) when a boundary leaf mode is selected. All three go through the
+cache via one composed resolve — `resolveReplacingTail`: keyed candidate
+(base-context digest, strict-extension chain, fingerprint, template),
+the C25 trim-back walk to the byte seam (per-token strip, k = 0…4),
+suffix-encode the extension, `verifyJunction` as the arbiter; entry
+never mutated. (Evidence-based deviation from the planned
+resolve/resolveTruncated decomposition: the leaf-store render uses the
+merged gen-prompt-off context and its content sits where the entry's
+gen-prompt tail is, so all three seams are the same trim+extend shape;
+`verifyCut` is not needed — the cut is always followed by the fresh
+suffix, which is exactly the junction window's case.) A 1+1-token seam
+pre-check per trim attempt skips the futile 256→16384 enlargement
+ladder when the seam pair provably merges (the empty think scaffold
+made every k=0 attempt pay it; `verifyJunction` stays the authority
+whenever the pre-check passes — exactness unchanged). Gates: three new
+suites (composed trim+extend exactness, reply-starter classes,
+probe continuation, wrong context/fingerprint/tools/edited base,
+spanning-merge past trim budget, entry-never-mutated) +
+`LeafAdmissionCachePathTests`; RenderTokenCache suites, PrefillPlanner,
+LeafAdmissionBuilder, HTTPPrefixCacheSpike, PrefixCacheIntegration all
+green; `--prefix-cache-e2e` PASS (incl. the direct-tool-leaf and
+canonical-user-leaf paths). Runner both models (parent-verified rerun,
+and again after a lint-only file split): **leaf-store 40.35 → 6.14 ms,
+admission 40.34 → 6.11 ms, probe 40.41 → 5.38 ms (−85…−87%)**,
+`replacedFallbacks=0`, 0 mismatches; MoE 41.2 → 5.3–6.1 ms. **Verdict:
+ACCEPTED.** ~120 ms → ~18 ms of serialized post-generation encode per
+turn at 11K tokens (~3× more at 32K), directly off next-turn TTFT.
+App-only change; no pins moved. The tokenize line is now: cold turn ≈
+one full encode (C24 attacks that encoder itself), warm turn ≈
+render+digests (~5.5 ms) + ~12 ms of cached legs, vs ~205 ms pre-C25.
+(Housekeeping folded into this commit: `TokenizeCacheBenchRunner`
+summary extraction + the RenderTokenCache test file split into
+`RenderTokenCacheTests` / `RenderTokenCacheRealTests` /
+`RenderTokenCacheTestSupport` for the pre-commit lint limits.)

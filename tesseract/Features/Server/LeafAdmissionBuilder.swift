@@ -104,28 +104,70 @@ nonisolated enum LeafAdmissionBuilder {
     /// Returns `nil` when the probe diverges — no common prefix, or the prefix
     /// is not strictly shorter than the continuation (the appended turn added
     /// no tokens, so there is no distinct boundary to align to).
+    ///
+    /// `modelFingerprint` engages the C28 tail-replacement resolve for both
+    /// renders (identity key space only): post-generation, the **Request
+    /// Keying** phase's entry still holds this request's full render, so each
+    /// of these generation-prompt-OFF renders is recovered as a verified
+    /// trim+extension of that entry — one suffix encode instead of two full
+    /// re-encodes. `nil` — or any inexactness — runs today's
+    /// `applyChatTemplate`.
     static func reusablePrefix(
         continuation: Continuation,
         storedConversation: HTTPPrefixCacheConversation,
         toolSpecs: [ToolSpec]?,
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext = .canonical
+        renderContext: TemplateRenderContext = .canonical,
+        modelFingerprint: String? = nil
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         let baseMessages = storedConversation.promptMessages
         let probeContext = renderContext.additionalContext(
             merging: ["add_generation_prompt": false]
         )
-        let storedTokens = try tokenizer.applyChatTemplate(
-            messages: baseMessages,
-            tools: toolSpecs,
-            additionalContext: probeContext
-        )
-        let continuationTokens = try tokenizer.applyChatTemplate(
-            messages: baseMessages + [continuation.probeMessage],
-            tools: toolSpecs,
-            additionalContext: probeContext
-        )
+        // C28: the cached resolve is keyed on the base (unmerged) context the
+        // Request Keying phase stored the entry under; image-bearing
+        // (non-identity) key spaces and nil fingerprints skip it, exactly as
+        // the other seams do.
+        let cacheFingerprint = keySpace.isIdentity ? modelFingerprint : nil
+        let storedTokens: [Int]
+        if let cacheFingerprint,
+            let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
+                tokenizer: tokenizer,
+                messages: baseMessages,
+                tools: toolSpecs,
+                baseAdditionalContext: renderContext.additionalContext(),
+                mergedAdditionalContext: probeContext,
+                modelFingerprint: cacheFingerprint
+            )
+        {
+            storedTokens = resolved
+        } else {
+            storedTokens = try tokenizer.applyChatTemplate(
+                messages: baseMessages,
+                tools: toolSpecs,
+                additionalContext: probeContext
+            )
+        }
+        let continuationTokens: [Int]
+        if let cacheFingerprint,
+            let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
+                tokenizer: tokenizer,
+                messages: baseMessages + [continuation.probeMessage],
+                tools: toolSpecs,
+                baseAdditionalContext: renderContext.additionalContext(),
+                mergedAdditionalContext: probeContext,
+                modelFingerprint: cacheFingerprint
+            )
+        {
+            continuationTokens = resolved
+        } else {
+            continuationTokens = try tokenizer.applyChatTemplate(
+                messages: baseMessages + [continuation.probeMessage],
+                tools: toolSpecs,
+                additionalContext: probeContext
+            )
+        }
 
         let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
         guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
@@ -218,7 +260,8 @@ nonisolated enum LeafAdmissionBuilder {
         toolSpecs: [ToolSpec]?,
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext
+        renderContext: TemplateRenderContext,
+        modelFingerprint: String?
     ) -> Probe {
         let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
         do {
@@ -228,7 +271,8 @@ nonisolated enum LeafAdmissionBuilder {
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext
+                renderContext: renderContext,
+                modelFingerprint: modelFingerprint
             )
         } catch {
             return .skip(.tokenizationFailed(error: error.localizedDescription))
@@ -262,6 +306,7 @@ nonisolated enum LeafAdmissionBuilder {
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext = .canonical,
+        modelFingerprint: String? = nil,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
         switch mode {
@@ -279,7 +324,8 @@ nonisolated enum LeafAdmissionBuilder {
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext
+                renderContext: renderContext,
+                modelFingerprint: modelFingerprint
             ) {
             case .tokens(let translated): toolTokens = translated
             case .skip(let reason): return .skip(reason: reason)
@@ -314,7 +360,8 @@ nonisolated enum LeafAdmissionBuilder {
                 toolSpecs: toolSpecs,
                 tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext
+                renderContext: renderContext,
+                modelFingerprint: modelFingerprint
             ) {
             case .tokens(let translated): canonicalTokens = translated
             case .skip(let reason): return .skip(reason: reason)

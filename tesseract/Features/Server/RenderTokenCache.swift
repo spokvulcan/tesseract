@@ -56,6 +56,34 @@
 //  degrades to the caller's `applyChatTemplate`; correctness never hinges on
 //  the cache.
 //
+//  Experiment C28 — the **tail-replacement resolve**: post-generation, the
+//  Leaf Store phase re-tokenizes the stored conversation (the request plus
+//  the appended assistant turn, `add_generation_prompt: false`) and the Leaf
+//  Admission Builder renders that conversation twice more (alone and with a
+//  synthetic continuation appended) — up to three more full-size encodes per
+//  turn, serialized against the next request. Each target render shares the
+//  stored entry's head and diverges exactly where the entry's generation-
+//  prompt tail sits, so `resolveReplacingTail` COMPOSES the two verified
+//  primitives: trim the tail (C27 machinery — strip one tail token at a
+//  time, each decode checked against the remaining prefix text; a token
+//  whose text is not a suffix spans the cut and falls back), then suffix-
+//  encode the extension and junction-verify (C25 machinery — the window
+//  re-encode bracketing the cut must reproduce the exact token slice). The
+//  two verification windows make the composition exact by the same
+//  arguments: the trim walk detects any token spanning the cut from the
+//  entry's side, and the junction window arbitrates the right-context
+//  effects the extension introduces at the cut (a pretoken like `\s+(?!\S)`
+//  matching differently with the extension following than it did with the
+//  generation prompt following) — the trim-back retries absorb those into
+//  the suffix until the window verifies. `verifyCut` is NOT needed here:
+//  that arbiter exists for the end-of-text right context of a pure trim;
+//  the tail-replacement's cut is always followed by the freshly encoded
+//  suffix, which is precisely the case the junction window covers. The
+//  stored entry is left untouched — the next request's C25 resolve still
+//  finds this request's full render cached, and the replaced lists must
+//  never poison it. Any failure degrades to the caller's
+//  `applyChatTemplate`; correctness never hinges on the cache.
+//
 
 import CryptoKit
 import Foundation
@@ -115,6 +143,11 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         var truncatedHits = 0
         /// C27: truncated resolves that fell back to `applyChatTemplate`.
         var truncatedFallbacks = 0
+        /// C28: tail-replacement resolves served as a verified trim+extension
+        /// of the entry.
+        var replacedHits = 0
+        /// C28: tail-replacement resolves that fell back to `applyChatTemplate`.
+        var replacedFallbacks = 0
     }
 
     /// Tokenize one request through the cache. Returns `nil` when the
@@ -338,6 +371,135 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         }
         lock.withLock { stats.truncatedHits += 1 }
         return candidateTokens
+    }
+
+    /// C28 tail-replacement resolve: recover the token list of a render that
+    /// EXTENDS the stored entry's conversation past its generation-prompt
+    /// tail — the post-generation shapes (the stored conversation with the
+    /// assistant turn appended, and that conversation plus a synthetic
+    /// continuation). Returns exactly the tokens
+    /// `applyChatTemplate(messages, tools, mergedAdditionalContext)` would
+    /// produce, or `nil` — the caller falls back to that call.
+    ///
+    /// Chain of exactness (each step's failure is a `nil`, never a guess):
+    /// 1. Candidate: same keyed selection as `resolveTruncated` — fingerprint,
+    ///    tools digest, context digest compared on the UNMERGED
+    ///    `baseAdditionalContext`, template probe hash — except the digest
+    ///    chain must head-match with the entry's chain STRICTLY shorter: the
+    ///    target conversation extends the entry's (an equal-length chain is
+    ///    the trim case `resolveTruncated` owns).
+    /// 2. Empirical arbiter: the target render (made here with the merged
+    ///    context) must extend the entry's render past its tail — found by
+    ///    the trim-back walk (3), never assumed.
+    /// 3. Trim-back walk: strip one tail token at a time (decode is per-token
+    ///    concatenation, so stripping reproduces `decode(prefixTokens)`
+    ///    exactly), until the remaining prefix text is a byte prefix of the
+    ///    target render. A token whose decoded text is not a suffix of the
+    ///    remaining prefix spans the cut — not trimmable. The k budget is
+    ///    `maxTrimBack`, the same junction the C25 hit path crosses on every
+    ///    growing turn.
+    /// 4. Junction verification (`verifyJunction`): the freshly encoded
+    ///    suffix's seam against the trimmed prefix — the right-context
+    ///    arbiter; see the file header for why `verifyCut` does not apply.
+    ///
+    /// The stored entry is left untouched, exactly as `resolveTruncated`
+    /// leaves it: the next request's C25 resolve must still find this
+    /// request's full render cached.
+    func resolveReplacingTail(
+        tokenizer: any Tokenizer,
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?,
+        baseAdditionalContext: [String: any Sendable]?,
+        mergedAdditionalContext: [String: any Sendable]?,
+        modelFingerprint: String
+    ) throws -> [Int]? {
+        guard let rendering = tokenizer as? any ChatTemplateRendering else {
+            return nil
+        }
+
+        func fallback() -> [Int]? {
+            lock.withLock { stats.replacedFallbacks += 1 }
+            return nil
+        }
+
+        // 1. Keyed candidate selection (cheap digests before any render).
+        guard let entry = lock.withLock({ entry }),
+            entry.modelFingerprint == modelFingerprint
+        else {
+            return fallback()
+        }
+        let toolsDigest = Self.sha256Hex(Self.canonicalForm(optional: tools))
+        let baseContextDigest = Self.sha256Hex(Self.canonicalForm(optional: baseAdditionalContext))
+        guard entry.toolsDigest == toolsDigest, entry.contextDigest == baseContextDigest
+        else {
+            return fallback()
+        }
+        let chain = Self.digestChain(messages)
+        guard entry.messageDigests.count < chain.count,
+            zip(entry.messageDigests, chain).allSatisfy(==)
+        else {
+            return fallback()
+        }
+        let templateHash = try templateHash(for: modelFingerprint, rendering: rendering)
+        guard entry.templateHash == templateHash else {
+            return fallback()
+        }
+
+        // 2–4. Render the target (the Jinja pass is ~0.03% of the fused
+        // call), then the trim-back walk: k = 0 is the direct extension (the
+        // non-thinking template, whose generation prompt is a pure prefix);
+        // deeper k cross the generation-prompt tail and any merges spanning
+        // the cut. Each k's candidate is junction-verified; the first
+        // verified k wins, anything else falls back.
+        let rendered = try rendering.renderChatTemplate(
+            messages: messages, tools: tools, additionalContext: mergedAdditionalContext)
+        var prefixText = entry.renderedText
+        for k in 0...Self.maxTrimBack {
+            guard entry.tokens.count - k > 0 else { break }
+            if k > 0 {
+                let dropped = entry.tokens[entry.tokens.count - k]
+                let droppedText = tokenizer.decode(tokenIds: [dropped], skipSpecialTokens: false)
+                guard prefixText.hasSuffix(droppedText) else {
+                    return fallback()
+                }
+                prefixText = String(prefixText.dropLast(droppedText.count))
+            }
+            let prefixTokens = Array(entry.tokens.dropLast(k))
+            guard rendered.hasPrefix(prefixText) else { continue }
+            let suffix = String(rendered.dropFirst(prefixText.count))
+            // An empty suffix at k>0 would mean the trimmed tokens decoded to
+            // nothing — not trustworthy as `encode(rendered)`; keep trimming.
+            // At k=0 it means the target does not extend the entry at all.
+            guard !suffix.isEmpty else { continue }
+            let suffixTokens = tokenizer.encode(text: suffix, addSpecialTokens: false)
+            // Cheap seam pre-check: if the tokens adjacent to the cut merge
+            // across it, the full window can only fail — skip to the next
+            // trim WITHOUT paying the junction ladder (a futile 256→16384
+            // enlargement costs a full encode's time; e.g. the empty think
+            // scaffold a thinking template gives the latest turn makes the
+            // suffix start with `\n`, merging the prefix's trailing `\n`
+            // run). A skipped k just trims deeper; `verifyJunction` remains
+            // the authority whenever the pre-check passes, so exactness is
+            // unchanged.
+            if let lastPrefix = prefixTokens.last, let firstSuffix = suffixTokens.first {
+                let seamText =
+                    tokenizer.decode(tokenIds: [lastPrefix], skipSpecialTokens: false)
+                    + tokenizer.decode(tokenIds: [firstSuffix], skipSpecialTokens: false)
+                if tokenizer.encode(text: seamText, addSpecialTokens: false)
+                    != [lastPrefix, firstSuffix]
+                {
+                    continue
+                }
+            }
+            if verifyJunction(
+                prefixTokens: prefixTokens, suffixTokens: suffixTokens, tokenizer: tokenizer)
+            {
+                lock.withLock { stats.replacedHits += 1 }
+                return prefixTokens + suffixTokens
+            }
+            lock.withLock { stats.junctionFailures += 1 }
+        }
+        return fallback()
     }
 
     func statsSnapshot() -> Stats {
