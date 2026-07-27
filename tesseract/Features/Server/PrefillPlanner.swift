@@ -180,18 +180,24 @@ nonisolated enum PrefillPlanner {
             let mergedContext = renderContext.additionalContext(
                 merging: ["add_generation_prompt": false])
             let renderTokens: [Int]
-            if keySpace.isIdentity, let modelFingerprint,
+            let source = RenderTokenSource.forIdentityKeySpace(
+                keySpace, modelFingerprint: modelFingerprint)
+            if let cacheFingerprint = source.cacheFingerprint,
                 let truncated = try? RenderTokenCache.shared.resolveTruncated(
                     tokenizer: tokenizer,
                     messages: userPrefixConversation.promptMessages,
                     tools: toolSpecs,
                     baseAdditionalContext: renderContext.additionalContext(),
                     mergedAdditionalContext: mergedContext,
-                    modelFingerprint: modelFingerprint,
-                    // C31: this request's Request Keying phase resolved the
-                    // same `conversation` value, and the truncation above is
-                    // a message prefix of it — so the entry's stored digest
-                    // chain head IS the truncated chain (cumulative hashing).
+                    modelFingerprint: cacheFingerprint,
+                    // C31: when this request's Request Keying phase resolved
+                    // through the cache it resolved the same `conversation`
+                    // value, and the truncation above is a message prefix of
+                    // it — so the entry's stored digest chain head IS the
+                    // truncated chain (cumulative hashing). A bypassed or
+                    // fallen-back Request Keying leaves an older entry, which
+                    // the render arbiters then reject; the assertion is a cost
+                    // hint, never a correctness input.
                     messagesAreEntryPrefix: true
                 )
             {

@@ -105,22 +105,22 @@ nonisolated enum LeafAdmissionBuilder {
     /// is not strictly shorter than the continuation (the appended turn added
     /// no tokens, so there is no distinct boundary to align to).
     ///
-    /// `modelFingerprint` engages the C28 tail-replacement resolve for both
-    /// renders (identity key space only): post-generation, the **Request
-    /// Keying** phase's entry still holds this request's full render, so each
-    /// of these generation-prompt-OFF renders is recovered as a verified
-    /// trim+extension of that entry — one suffix encode instead of two full
-    /// re-encodes. `nil` — or any inexactness — runs today's
-    /// `applyChatTemplate`.
-    ///
-    /// C31: `baseRenderTokens` is the base render's token list, already
-    /// computed this request by the **Leaf Store** phase's
-    /// `measureStoredTokenSequence` — the IDENTICAL computation (same
-    /// messages, tools, contexts, fingerprint, tokenizer, key-space guard;
-    /// verified in C28) — handed in so the base render runs once per
-    /// request. `nil` computes it here, exactly as before. Only the base
-    /// render is plumbed; the continuation render is a different
-    /// conversation and is always computed.
+    /// `renderTokens` carries both the C28 and the C31 plumbing:
+    /// - Its `cacheFingerprint` engages the C28 tail-replacement resolve for
+    ///   both renders (identity key space, known fingerprint): post-generation,
+    ///   the **Request Keying** phase's entry still holds this request's full
+    ///   render, so each of these generation-prompt-OFF renders is recovered as
+    ///   a verified trim+extension of that entry — one suffix encode instead of
+    ///   two full re-encodes. A bypass, or any inexactness, runs today's
+    ///   `applyChatTemplate`.
+    /// - Its `baseRenderTokens` is the base render's token list, already
+    ///   computed this request by the **Leaf Store** phase's
+    ///   `measureStoredTokenSequence` — the IDENTICAL computation (same
+    ///   messages, tools, contexts, fingerprint, tokenizer, key-space guard;
+    ///   verified in C28) — so the base render runs once per request. `nil`
+    ///   computes it here, exactly as before. Only the base render is plumbed;
+    ///   the continuation render is a different conversation and is always
+    ///   computed.
     static func reusablePrefix(
         continuation: Continuation,
         storedConversation: HTTPPrefixCacheConversation,
@@ -128,58 +128,37 @@ nonisolated enum LeafAdmissionBuilder {
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext = .canonical,
-        modelFingerprint: String? = nil,
-        baseRenderTokens: [Int]? = nil
+        renderTokens: RenderTokenSource = .uncached
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         let baseMessages = storedConversation.promptMessages
         let probeContext = renderContext.additionalContext(
             merging: ["add_generation_prompt": false]
         )
-        // C28: the cached resolve is keyed on the base (unmerged) context the
-        // Request Keying phase stored the entry under; image-bearing
-        // (non-identity) key spaces and nil fingerprints skip it, exactly as
-        // the other seams do.
-        let cacheFingerprint = keySpace.isIdentity ? modelFingerprint : nil
-        let storedTokens: [Int]
-        if let baseRenderTokens {
-            storedTokens = baseRenderTokens
-        } else if let cacheFingerprint,
-            let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
-                tokenizer: tokenizer,
-                messages: baseMessages,
-                tools: toolSpecs,
-                baseAdditionalContext: renderContext.additionalContext(),
-                mergedAdditionalContext: probeContext,
-                modelFingerprint: cacheFingerprint
-            )
-        {
-            storedTokens = resolved
-        } else {
-            storedTokens = try tokenizer.applyChatTemplate(
-                messages: baseMessages,
+        // One ladder for both renders: cache-resolve if eligible, else render
+        // in full. The cached resolve is keyed on the base (unmerged) context
+        // the Request Keying phase stored the entry under.
+        func tokens(for messages: [[String: any Sendable]]) throws -> [Int] {
+            if let cacheFingerprint = renderTokens.cacheFingerprint,
+                let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
+                    tokenizer: tokenizer,
+                    messages: messages,
+                    tools: toolSpecs,
+                    baseAdditionalContext: renderContext.additionalContext(),
+                    mergedAdditionalContext: probeContext,
+                    modelFingerprint: cacheFingerprint
+                )
+            {
+                return resolved
+            }
+            return try tokenizer.applyChatTemplate(
+                messages: messages,
                 tools: toolSpecs,
                 additionalContext: probeContext
             )
         }
-        let continuationTokens: [Int]
-        if let cacheFingerprint,
-            let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
-                tokenizer: tokenizer,
-                messages: baseMessages + [continuation.probeMessage],
-                tools: toolSpecs,
-                baseAdditionalContext: renderContext.additionalContext(),
-                mergedAdditionalContext: probeContext,
-                modelFingerprint: cacheFingerprint
-            )
-        {
-            continuationTokens = resolved
-        } else {
-            continuationTokens = try tokenizer.applyChatTemplate(
-                messages: baseMessages + [continuation.probeMessage],
-                tools: toolSpecs,
-                additionalContext: probeContext
-            )
-        }
+
+        let storedTokens = try renderTokens.baseRenderTokens ?? tokens(for: baseMessages)
+        let continuationTokens = try tokens(for: baseMessages + [continuation.probeMessage])
 
         let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
         guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
@@ -273,8 +252,7 @@ nonisolated enum LeafAdmissionBuilder {
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext,
-        modelFingerprint: String?,
-        baseRenderTokens: [Int]?
+        renderTokens: RenderTokenSource
     ) -> Probe {
         let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
         do {
@@ -285,8 +263,7 @@ nonisolated enum LeafAdmissionBuilder {
                 tokenizer: tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext,
-                modelFingerprint: modelFingerprint,
-                baseRenderTokens: baseRenderTokens
+                renderTokens: renderTokens
             )
         } catch {
             return .skip(.tokenizationFailed(error: error.localizedDescription))
@@ -312,10 +289,11 @@ nonisolated enum LeafAdmissionBuilder {
     /// offset-guard arithmetic, and emits a `LeafCapturePlan`. No live KV cache,
     /// no Metal — the actor executes the capture/`admit` from the decision.
     ///
-    /// C31: `baseRenderTokens` is the stored conversation's render-space token
-    /// list the **Leaf Store** phase already computed this request (the
-    /// identical computation the reusable-prefix probe's base render would
-    /// run) — plumbed through so the base render runs once per request.
+    /// `renderTokens` carries the cache eligibility and the C31 plumbing down
+    /// to the reusable-prefix probe: its `baseRenderTokens` is the stored
+    /// conversation's render-space token list the **Leaf Store** phase already
+    /// computed this request (the identical computation the probe's base render
+    /// would run), so the base render runs once per request.
     static func plan(
         mode: BoundaryLeafMode,
         storedConversation: HTTPPrefixCacheConversation,
@@ -325,8 +303,7 @@ nonisolated enum LeafAdmissionBuilder {
         tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
         renderContext: TemplateRenderContext = .canonical,
-        modelFingerprint: String? = nil,
-        baseRenderTokens: [Int]? = nil,
+        renderTokens: RenderTokenSource = .uncached,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
         switch mode {
@@ -345,8 +322,7 @@ nonisolated enum LeafAdmissionBuilder {
                 tokenizer: tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext,
-                modelFingerprint: modelFingerprint,
-                baseRenderTokens: baseRenderTokens
+                renderTokens: renderTokens
             ) {
             case .tokens(let translated): toolTokens = translated
             case .skip(let reason): return .skip(reason: reason)
@@ -382,8 +358,7 @@ nonisolated enum LeafAdmissionBuilder {
                 tokenizer: tokenizer,
                 keySpace: keySpace,
                 renderContext: renderContext,
-                modelFingerprint: modelFingerprint,
-                baseRenderTokens: baseRenderTokens
+                renderTokens: renderTokens
             ) {
             case .tokens(let translated): canonicalTokens = translated
             case .skip(let reason): return .skip(reason: reason)

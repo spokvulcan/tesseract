@@ -122,7 +122,8 @@ import MLXLMCommon
                 toolSpecs: nil,
                 tokenizer: tokenizer,
                 keySpace: .identity(),
-                baseRenderTokens: render(stored)
+                renderTokens: RenderTokenSource(
+                    cacheFingerprint: nil, baseRenderTokens: render(stored))
             )
             #expect(try plumbed?.get() == (try computed?.get()))
             #expect(try plumbed?.get() == (try render(stored)))
@@ -146,7 +147,8 @@ import MLXLMCommon
             transientBoundary: boundary(offset: 5),
             tokenizer: tokenizer,
             keySpace: .identity(),
-            baseRenderTokens: baseRender,
+            renderTokens: RenderTokenSource(
+                cacheFingerprint: nil, baseRenderTokens: baseRender),
             resolveBoundary: noResolvedBoundary
         )
         guard case .fromBoundary(let b, let tokens) = plumbed else {

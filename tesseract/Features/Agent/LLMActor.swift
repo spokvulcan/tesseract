@@ -294,21 +294,30 @@ actor LLMActor {
     /// for text-only inputs on LLM-family models. Returns `nil` — the caller
     /// falls back to the processor — for media inputs, VLM-family models
     /// (their text-only `prepare` emits 2D `[batch, seq]` tokens and
-    /// parts-shaped message content), non-rendering tokenizers, and any
-    /// render/encode failure.
+    /// parts-shaped message content), an unknown model fingerprint,
+    /// non-rendering tokenizers, and any render/encode failure.
     ///
     /// The message conversion uses the model's own `messageGenerator` — the
     /// exact expression the installed processors (`LLMUserInputProcessor` in
     /// MLXLLM, the app-side ParoQuant processor) captured at load — so the
     /// dicts rendered here are the dicts the processor would render.
+    ///
+    /// The eligibility decision goes through `RenderTokenSource`, the shared
+    /// home for the predicate: notably, a `nil` fingerprint BYPASSES rather
+    /// than resolving under a synthetic key, because the cache's repeat path
+    /// trusts (bytes, fingerprint) with no arbiter behind it.
     private static func prepareViaRenderTokenCache(
         context: ModelContext,
         input: UserInput,
         modelFingerprint: String?
     ) -> LMInput? {
-        guard input.images.isEmpty, input.videos.isEmpty, input.audios.isEmpty,
-            let llmModel = context.model as? any LLMModel
-        else {
+        let llmModel = context.model as? any LLMModel
+        let source = RenderTokenSource.forTextOnlyRequest(
+            hasMedia: !(input.images.isEmpty && input.videos.isEmpty && input.audios.isEmpty),
+            producesFlatTextTokens: llmModel != nil,
+            modelFingerprint: modelFingerprint
+        )
+        guard let cacheFingerprint = source.cacheFingerprint, let llmModel else {
             return nil
         }
         let messages = llmModel.messageGenerator(tokenizer: context.tokenizer).generate(from: input)
@@ -318,7 +327,7 @@ actor LLMActor {
                 messages: messages,
                 tools: input.tools,
                 additionalContext: input.additionalContext,
-                modelFingerprint: modelFingerprint ?? "unfingerprinted"
+                modelFingerprint: cacheFingerprint
             )
         else {
             return nil
@@ -577,6 +586,12 @@ actor LLMActor {
         agentTokenizer = nil
         serverCompletion = nil
         activeModelFingerprint = nil
+        // C25: the Render+Token Cache entry holds a whole render's bytes plus
+        // its token list — megabytes at long context — and none of it is valid
+        // for the next model. Log the session's hit rate before dropping it;
+        // the periodic summary only lands on a 256-resolve boundary.
+        RenderTokenCache.shared.logSummary(context: "unload")
+        RenderTokenCache.shared.reset()
         // No model resident — restore the balanced commit policy so later
         // MLX work (TTS bursts, the next load's warmup) doesn't inherit a
         // MoE-tuned leg. Scheduling-only either way; this keeps the global

@@ -76,23 +76,30 @@ nonisolated enum RequestKeyingPhase {
             }
             return .ciImage(decoded)
         }
+        // C25 Render+Token Cache: text-only requests on flat-token (LLM-family)
+        // models tokenize through the cache — the `.messages` prompt reaches
+        // every processor's `generate(from:)` unchanged, so the cache renders
+        // exactly what `prepare` would, and `LMInput(tokens:)` is exactly what
+        // the text-only processor builds. Media, vision containers (whose
+        // text-only `prepare` emits 2D tokens), an unknown model fingerprint,
+        // non-rendering tokenizers, and any render/encode failure all fall back
+        // to the processor. The eligibility decision lives in
+        // `RenderTokenSource`, shared with the other four seams.
+        let renderTokens = RenderTokenSource.forTextOnlyRequest(
+            hasMedia: !userInputImages.isEmpty,
+            producesFlatTextTokens: session.producesFlatTextTokens,
+            modelFingerprint: modelFingerprint
+        )
         let fullInput: LMInput
-        if userInputImages.isEmpty, imageKeying == nil,
+        if let cacheFingerprint = renderTokens.cacheFingerprint,
             let resolution = try? RenderTokenCache.shared.resolve(
                 tokenizer: session.tokenizer,
                 messages: conversation.promptMessages,
                 tools: canonicalTools,
                 additionalContext: renderContext.additionalContext(),
-                modelFingerprint: modelFingerprint ?? "unfingerprinted"
+                modelFingerprint: cacheFingerprint
             )
         {
-            // C25 Render+Token Cache: text-only requests on text-family
-            // models tokenize through the cache — the `.messages` prompt
-            // reaches every processor's `generate(from:)` unchanged, so the
-            // cache renders exactly what `prepare` would. Images and
-            // vision-family models (whose text-only `prepare` emits 2D
-            // tokens) fall back to the processor, as do non-rendering
-            // tokenizers and any render/encode failure.
             fullInput = LMInput(tokens: MLXArray(resolution.tokens))
         } else {
             fullInput = try await session.prepare(

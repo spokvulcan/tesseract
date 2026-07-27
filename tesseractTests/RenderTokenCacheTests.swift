@@ -171,6 +171,173 @@ struct RenderTokenCacheFakeTests {
         #expect(
             RenderTokenCache.canonicalForm(reordered) == RenderTokenCache.canonicalForm(ordered))
     }
+
+    /// JSON-decoded numbers arrive as `NSNumber`, and `NSNumber(1) as? Bool`
+    /// succeeds — so a naive `case let bool as Bool` first would serialize the
+    /// integer `1` and the boolean `true` identically. Both spellings of a
+    /// boolean must agree with each other and differ from the integers.
+    @Test func canonicalFormSeparatesBooleansFromNumbers() {
+        let boolTrue = RenderTokenCache.canonicalForm(true)
+        let boolFalse = RenderTokenCache.canonicalForm(false)
+        #expect(boolTrue == RenderTokenCache.canonicalForm(NSNumber(value: true)))
+        #expect(boolFalse == RenderTokenCache.canonicalForm(NSNumber(value: false)))
+        #expect(boolTrue != RenderTokenCache.canonicalForm(NSNumber(value: 1)))
+        #expect(boolFalse != RenderTokenCache.canonicalForm(NSNumber(value: 0)))
+        #expect(RenderTokenCache.canonicalForm(1) != RenderTokenCache.canonicalForm(true))
+
+        // The collision this ordering closes, at dictionary level.
+        let flagged: [String: Any] = ["stream": true]
+        let counted: [String: Any] = ["stream": NSNumber(value: 1)]
+        #expect(RenderTokenCache.canonicalForm(flagged) != RenderTokenCache.canonicalForm(counted))
+    }
+
+    /// Swift `String` `==` / `hasPrefix` compare under Unicode canonical
+    /// equivalence, so an NFC render and an NFD render of the same text are
+    /// EQUAL as `String`s while their bytes — and therefore their token lists —
+    /// differ. The junction/cut arbiters cannot catch that (they re-encode
+    /// their own decode, which is self-consistent), so the cache must compare
+    /// bytes. Both requests must produce exactly `applyChatTemplate`'s list.
+    @Test func normalizationShiftedRepeatDoesNotServeCachedTokens() throws {
+        // "é" precomposed (U+00E9) vs decomposed (U+0065 U+0301): `==` true,
+        // bytes different.
+        let composed = "caf\u{00E9}"
+        let decomposed = "cafe\u{0301}"
+        #expect(composed == decomposed)
+        #expect(Array(composed.utf8) != Array(decomposed.utf8))
+
+        let tokenizer = Self.tokenizer(extraPieces: [composed, decomposed, "caf", "e"])
+        let cache = RenderTokenCache()
+
+        let first = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: [user(composed)], tools: nil,
+                additionalContext: nil, modelFingerprint: Self.fingerprint))
+        #expect(first.path == .miss(.cold))
+        #expect(
+            first.tokens
+                == (try tokenizer.applyChatTemplate(
+                    messages: [user(composed)], tools: nil, additionalContext: nil)))
+
+        // The canonically-equal-but-byte-different render must NOT be served
+        // the first render's tokens.
+        let second = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: [user(decomposed)], tools: nil,
+                additionalContext: nil, modelFingerprint: Self.fingerprint))
+        #expect(second.path != .hitRepeat)
+        #expect(
+            second.tokens
+                == (try tokenizer.applyChatTemplate(
+                    messages: [user(decomposed)], tools: nil, additionalContext: nil)))
+        #expect(second.tokens != first.tokens)
+    }
+
+    /// A byte-identical repeat still returns the cached tokens outright — the
+    /// byte comparison must not have cost the repeat path.
+    @Test func byteIdenticalRepeatStillHitsOutright() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        let messages = [user("The start.")]
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+            modelFingerprint: Self.fingerprint)
+        let repeated = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: messages, tools: nil, additionalContext: nil,
+                modelFingerprint: Self.fingerprint))
+        #expect(repeated.path == .hitRepeat)
+    }
+
+    /// `reset()` is the model-unload hook, not just a test affordance: it must
+    /// drop the entry (so the next resolve is `.cold`, never a cross-model
+    /// hit), the memoized template hashes, and the counters.
+    @Test func resetDropsEntryAndStats() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: [user("The start.")], tools: nil,
+            additionalContext: nil, modelFingerprint: Self.fingerprint)
+        #expect(cache.statsSnapshot() != RenderTokenCache.Stats())
+
+        cache.reset()
+        #expect(cache.statsSnapshot() == RenderTokenCache.Stats())
+
+        let afterReset = try #require(
+            try cache.resolve(
+                tokenizer: tokenizer, messages: [user("The start.")], tools: nil,
+                additionalContext: nil, modelFingerprint: Self.fingerprint))
+        #expect(afterReset.path == .miss(.cold))
+    }
+
+    /// Every miss carries a typed reason into the counters — the only
+    /// production signal that the cache is degrading.
+    @Test func missReasonsAreCounted() throws {
+        let tokenizer = Self.tokenizer()
+        let cache = RenderTokenCache()
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: [user("The start.")], tools: nil,
+            additionalContext: nil, modelFingerprint: Self.fingerprint)
+        _ = try cache.resolve(
+            tokenizer: tokenizer, messages: [user("Again.")], tools: nil,
+            additionalContext: nil, modelFingerprint: "a-different-model")
+        let stats = cache.statsSnapshot()
+        #expect(stats.missReasons[RenderTokenCache.MissReason.cold.rawValue] == 1)
+        #expect(stats.missReasons[RenderTokenCache.MissReason.modelMismatch.rawValue] == 1)
+    }
+}
+
+// MARK: - Cache eligibility
+
+/// `RenderTokenSource` is the single home for "may this render tokenize
+/// through the cache" — the predicate five seams used to spell five ways, two
+/// of which disagreed on the unknown-fingerprint case.
+struct RenderTokenSourceTests {
+
+    /// An unknown fingerprint must BYPASS, never resolve under a synthetic
+    /// shared key: the repeat path trusts (bytes, fingerprint) with no
+    /// empirical arbiter behind it, so two models sharing a key could return
+    /// each other's tokens.
+    @Test func unknownFingerprintBypassesEverySeam() {
+        #expect(
+            RenderTokenSource.forTextOnlyRequest(
+                hasMedia: false, producesFlatTextTokens: true, modelFingerprint: nil
+            ).cacheFingerprint == nil)
+        #expect(
+            RenderTokenSource.forIdentityKeySpace(.identity(), modelFingerprint: nil)
+                .cacheFingerprint == nil)
+    }
+
+    @Test func mediaAndNonFlatTokenModelsBypass() {
+        #expect(
+            RenderTokenSource.forTextOnlyRequest(
+                hasMedia: true, producesFlatTextTokens: true, modelFingerprint: "m"
+            ).cacheFingerprint == nil)
+        #expect(
+            RenderTokenSource.forTextOnlyRequest(
+                hasMedia: false, producesFlatTextTokens: false, modelFingerprint: "m"
+            ).cacheFingerprint == nil)
+    }
+
+    @Test func eligibleTextOnlyRequestCarriesTheFingerprint() {
+        #expect(
+            RenderTokenSource.forTextOnlyRequest(
+                hasMedia: false, producesFlatTextTokens: true, modelFingerprint: "m"
+            ).cacheFingerprint == "m")
+        #expect(
+            RenderTokenSource.forIdentityKeySpace(.identity(), modelFingerprint: "m")
+                .cacheFingerprint == "m")
+    }
+
+    /// The plumbed base render travels with the eligibility decision and does
+    /// not alter it.
+    @Test func baseRenderTokensRideAlongWithoutChangingEligibility() {
+        let source = RenderTokenSource.forIdentityKeySpace(.identity(), modelFingerprint: "m")
+            .withBaseRenderTokens([1, 2, 3])
+        #expect(source.cacheFingerprint == "m")
+        #expect(source.baseRenderTokens == [1, 2, 3])
+        #expect(RenderTokenSource.uncached.cacheFingerprint == nil)
+        #expect(RenderTokenSource.uncached.baseRenderTokens == nil)
+    }
 }
 
 // MARK: - C27 truncated resolve (fake tokenizer)

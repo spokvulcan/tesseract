@@ -18,16 +18,45 @@ import Tokenizers
 // MARK: - Fake greedy tokenizer
 
 /// Deterministic tokenizer with a fixed piece vocab: encode is greedy
-/// longest-match (unknown characters become per-character tokens), decode is
-/// concatenation — so decode(encode(x)) == x always. Pieces like `"\nThe"`
-/// create BPE-style merges spanning any cut the tests choose.
+/// longest-match (unknown scalars become per-scalar tokens), decode is
+/// concatenation — so decode(encode(x)) == x always, BYTE-wise. Pieces like
+/// `"\nThe"` create BPE-style merges spanning any cut the tests choose.
+///
+/// Matching runs over UTF-8 bytes, not `Character`s, deliberately: a
+/// `String.hasPrefix`-based matcher compares under Unicode canonical
+/// equivalence and would encode NFC and NFD spellings of the same text to the
+/// SAME ids — which would make it impossible to test that the cache compares
+/// bytes (a normalization-insensitive tokenizer has nothing to get wrong).
+/// Real byte-level BPE is byte-exact; so is this.
 struct GreedyTokenizer: ChatTemplateRendering {
-    /// Longest first at encode time.
+    /// Longest first at encode time. A token's id is its index here.
     let pieces: [String]
+    /// `pieces` as UTF-8, parallel by index.
+    private let pieceBytes: [[UInt8]]
 
     init(pieces: [String]) {
-        // Longest-match first; stable order otherwise.
-        self.pieces = pieces.sorted { $0.count > $1.count }
+        // Longest-match first, by BYTE length; lexicographic byte order breaks
+        // ties so ids are stable regardless of the caller's argument order.
+        let sorted = pieces.sorted { lhs, rhs in
+            let (a, b) = (Array(lhs.utf8), Array(rhs.utf8))
+            if a.count != b.count { return a.count > b.count }
+            return a.lexicographicallyPrecedes(b)
+        }
+        self.pieces = sorted
+        self.pieceBytes = sorted.map { Array($0.utf8) }
+    }
+
+    /// UTF-8 sequence width from a leading byte.
+    private static func scalarWidth(leadingByte byte: UInt8) -> Int {
+        byte < 0x80 ? 1 : (byte < 0xE0 ? 2 : (byte < 0xF0 ? 3 : 4))
+    }
+
+    /// Index of the longest vocab piece matching `bytes` at `offset`.
+    private func matchIndex(in bytes: [UInt8], at offset: Int) -> Int? {
+        pieceBytes.firstIndex { piece in
+            !piece.isEmpty && piece.count <= bytes.count - offset
+                && bytes[offset..<(offset + piece.count)].elementsEqual(piece)
+        }
     }
 
     /// ChatML-ish template with a generation prompt tail, mirroring the shape
@@ -38,22 +67,23 @@ struct GreedyTokenizer: ChatTemplateRendering {
     let eosToken: String? = "<|im_end|>"
     let unknownToken: String? = nil
 
-    private var idByPiece: [String: Int] {
-        Dictionary(uniqueKeysWithValues: pieces.enumerated().map { ($1, $0) })
-    }
-
     func encode(text: String, addSpecialTokens: Bool) -> [Int] {
         var ids: [Int] = []
-        var rest = Substring(text)
-        while !rest.isEmpty {
-            if let piece = pieces.first(where: { rest.hasPrefix($0) }) {
-                ids.append(idByPiece[piece]!)
-                rest = rest.dropFirst(piece.count)
-            } else {
-                let scalar = rest.unicodeScalars.first!
-                ids.append(10_000 + Int(scalar.value))
-                rest = rest.dropFirst()
+        let bytes = Array(text.utf8)
+        var offset = 0
+        while offset < bytes.count {
+            if let index = matchIndex(in: bytes, at: offset) {
+                ids.append(index)
+                offset += pieceBytes[index].count
+                continue
             }
+            // No vocab match: emit one Unicode scalar, byte-faithfully.
+            let width = min(Self.scalarWidth(leadingByte: bytes[offset]), bytes.count - offset)
+            let scalarBytes = bytes[offset..<(offset + width)]
+            let scalar =
+                String(bytes: scalarBytes, encoding: .utf8)?.unicodeScalars.first ?? "\u{FFFD}"
+            ids.append(10_000 + Int(scalar.value))
+            offset += width
         }
         return ids
     }
@@ -63,12 +93,13 @@ struct GreedyTokenizer: ChatTemplateRendering {
             if id >= 10_000, let scalar = UnicodeScalar(id - 10_000) {
                 return String(scalar)
             }
-            return pieces[id]
+            return pieces[safe: id] ?? ""
         }.joined()
     }
 
     func convertTokenToId(_ token: String) -> Int? {
-        idByPiece[token]
+        let needle = Array(token.utf8)
+        return pieceBytes.firstIndex { $0.elementsEqual(needle) }
     }
 
     func convertIdToToken(_ id: Int) -> String? {

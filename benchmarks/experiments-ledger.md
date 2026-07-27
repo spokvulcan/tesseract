@@ -2357,3 +2357,145 @@ correct). Eliminates ~1.5–2 ms/turn of chain recomputation at 11.4K
 tokens, growing linearly with history (~20 ms/turn at 131K). **Verdict:
 ACCEPTED** — mechanism is construction-identical, gates all green, no
 regression channel. Committed with C31 (one compute-once commit).
+
+## Review round 2026-07-27 — PR #429 full-diff review fixes
+
+Ten findings from the full-diff review of the C24–C31 session, fixed on the
+same branch. Six are hardening, three are real defects, one is a
+claims-vs-evidence correction. No experiment verdict changes; no measured
+number in this session's entries is affected (all fixes are on the same CPU
+paths, none touches an arbiter).
+
+**F1 — `String` canonical equivalence where the contract said "byte prefix"
+(real defect, medium).** Every prefix/suffix/equality test in
+`RenderTokenCache` was a Swift `String` operation, and `String`'s `==`,
+`hasPrefix` and `hasSuffix` compare under Unicode **canonical equivalence** —
+so an NFC render and an NFD render of the same text were `==` while their bytes,
+and therefore their token lists, differed. The junction and cut arbiters cannot
+catch this class: they decode the cached tokens and re-encode that decode, which
+is self-consistent by construction and never re-examines the new render's bytes.
+A normalization-shifting client (JSON clients that normalize string payloads do
+exist) could therefore be served the *other* byte string's tokens from the
+repeat path — the one resolve with no empirical arbiter behind it — and those
+tokens then key the radix cache. Fixed by moving the whole type into byte space:
+`Entry.renderedBytes: [UInt8]`, and prefix/suffix/trim arithmetic through
+explicit byte helpers (`RenderTokenCache+Keys.swift`). The trim walks now carry
+a `suffixString` round-trip guard so a cut landing mid-scalar degrades to a miss
+instead of encoding U+FFFD. Regression test:
+`normalizationShiftedRepeatDoesNotServeCachedTokens` — under the old code it
+returned `.hitRepeat` with the wrong list; it now misses via
+`.renderNotExtended` and re-encodes exactly. The fake `GreedyTokenizer` was
+itself normalization-insensitive (`String.hasPrefix` matching) and had to be
+made byte-faithful first, or the test could not have failed.
+
+**F2 — C24 narrowed the merge-table match semantics, and the comment claimed
+otherwise (real, upstream-blocking).** `BytePairTables.rank(in:...)` matches
+merge pairs by raw bytes; the `bpeRanks[BytePair(l, r)]` probe it replaced
+matched under canonical equivalence, because `BytePair` holds Swift `String`s.
+The doc comment asserted equivalence and cited `BinaryDistinctString`, which is
+not involved in `BytePair` at all. Unobservable on byte-level BPE vocabs (hence
+88/88 over 6.7M tokens), potentially output-changing on a non-byte-level vocab
+with mixed normalization — where it is a *fix*, not a regression. Comment
+rewritten to state the narrowing and why byte-exact is intended;
+`docs/swift-transformers-fork.md` gains a semantics note that the upstream PR
+must carry. Upstream has already fixed two Unicode bugs in this code (#352 Bugs
+3 and 4), so the question will be asked.
+
+**F3 — `byteTables()` double-checked locking raced (real defect, medium).** The
+fast-path read of `byteTablesCache` was unsynchronized against the write inside
+the lock. Tearing was not the issue; ordering was — a plain store publishing the
+pointer has no release semantics, so a reader on another core could observe a
+non-nil cache before the eight array buffers it points at were visible.
+`BPETokenizer` is `@unchecked Sendable` and shared. Fixed by building the tables
+eagerly in `init` into a `let`: both source dictionaries are `let`s complete by
+the end of `init`, so there was nothing to defer, and C23 already measured
+tokenizer load as fully hidden behind the weight load.
+
+**F4 — `?? "unfingerprinted"` collapsed distinct models onto one key
+(hardening).** Two of the five seams engaged the cache under a synthetic shared
+key when the model fingerprint was unknown; the other three bypassed. Under the
+synthetic key two models would share both the entry and the memoized
+`templateHashes` slot, making the template-mismatch check pass vacuously — and
+the repeat path would then trust (bytes, fingerprint) alone. Believed
+unreachable today (`installLoadTimeState` always receives a non-nil `String`),
+but it inverted the safe default in the one place with no arbiter. All five
+seams now bypass on `nil`.
+
+**F5 — `entry` was read three times per `resolve` (hardening).** An entry
+changing between the chain build and the candidate select would store a chain
+whose head does not derive from those messages, permanently vacuating the
+head-match pre-filter for the singleton (exactness would hold on the render
+arbiters; a documented guard would be silently dead). One snapshot per resolve.
+
+**F6 — no observability on a subsystem whose safety mechanism is silent
+degradation (hardening).** Zero `Log` calls, `statsSnapshot()` with no
+production consumer, `reset()` with no production call site, and five `try?`
+seams swallowing throws. `Stats` gains typed reason histograms
+(`missReasons`, `truncatedFallbackReasons`, `replacedFallbackReasons`),
+`junctionFailures`/`windowEnlargements` are split per path (C25 vs C27 vs C28 —
+conflated counters hide which path regressed), a summary lands in `Log.server`
+every 256 resolves, a throwing render is logged before it propagates, and
+`LLMActor.unloadModel` now logs the session summary and calls `reset()` (the
+entry held a whole render's bytes plus its token list — megabytes at long
+context — with no model resident).
+
+**F7 — the cache-eligibility predicate was spelled five different ways
+(design).** New `RenderTokenSource` is its single home, and carries the C31
+plumbed base render with it, so the pair travels together instead of as two
+independent optional parameters (`LeafAdmissionBuilder.plan` 10 → 9 params,
+`reusablePrefix` 8 → 7, and its two near-identical 20-line resolve ladders
+collapse to one local helper). The request-path seam also stops using
+`imageKeying == nil` — "does the app RECOGNIZE a vision container" — as a proxy
+for the property it actually needs, "does this model's processor emit flat 1-D
+tokens". Those coincide only because `qwen3_5` + `vision_config` is today's sole
+recognized family; a future VLM family added without an image-keying rule would
+have silently received 1-D tokens where its processor emits 2-D. `ModelSession`
+now exposes `producesFlatTextTokens` (`context.model is any LLMModel`) — the
+same marker protocol both installed processors branch on, and the same
+feature-detect-as-a-fact shape as `anchoredVisionPrepare`.
+
+**F8 — nits.** `trailingTokenCount`/`leadingTokenCount` documented a "smallest"
+count they never returned (the doubling probe overshoots) and named their
+parameter `coveringCharacters` while measuring UTF-8 bytes — both corrected, and
+the 256/16384 literals are now named constants. `canonicalForm` checked `Bool`
+before the integer cases, and `NSNumber(1) as? Bool` succeeds — so JSON-decoded
+`1` and `true` canonicalized identically; an `NSNumber`/`CFBooleanGetTypeID`
+case now runs first (test: `canonicalFormSeparatesBooleansFromNumbers`). The
+C24 leading-byte scalar-width walk is bounded against a malformed buffer. The
+C31 `messagesAreEntryPrefix` doc claimed the assertion always holds; it holds
+only when Request Keying resolved through the cache, so it is now documented as
+a cost hint, never a correctness input.
+
+**F9 — claims vs evidence in the PR body (correction).** "Zero effect on
+prefill/decode/peak by construction" and "peaks byte-flat" are MLX/GPU peak;
+C24's byte tables add **~20 MB resident per loaded tokenizer** (recorded in the
+C24 entry above, absent from the PR body — now stated in both, and in the fork
+carry table). The single-entry global is also shared by the agent path and the
+server path, so interleaved agent+server traffic thrashes it toward a 0% hit
+rate; the measured wins are single-stream and the PR body now says so.
+
+**F10 — model-gated coverage (disclosure).** The real-tokenizer exactness suites
+and the Gate-1 parity suite are `.enabled(if: modelAvailable)`, so on a machine
+without `z-lab_Qwen3.5-4B-PARO` the "313 tests" figure is mostly the
+fake-tokenizer half. There is no CI running these; stated in the PR body rather
+than papered over. New tests this round: the normalization regression, a
+byte-identical-repeat guard, `reset()`, miss-reason counting, the
+boolean/number canonicalization, and four `RenderTokenSource` eligibility cases.
+
+**Gates for this round:** app build clean (Debug + Release,
+`xcodebuild build` / `dev.sh dev-release`), test target clean
+(`build-for-testing`), **157 tests in 18 suites PASS with 0 skipped** — the
+real-tokenizer suites ran against the on-disk PARO model, so the byte-space
+rewrite is exercised against the actual Qwen3.5 tokenizer/template and not only
+the fake — swiftlint + swift-format clean on every changed file (the three
+residual swiftlint warnings reproduce on the `HEAD` versions), `check-docs.sh`
+green, and `swift build` green in `~/projects/swift-transformers` with F2/F3/F8.
+
+**NOT re-run for this round, and required before merge:**
+`--tokenize-cache-bench` on both models and `--prefix-cache-e2e`. F1 rewrote the
+exactness-critical inner logic of all three resolves (String → byte space), and
+the per-turn intrinsic assertions in the tokenize runner are this program's
+binding exactness gate — the unit suites are necessary, not sufficient, by this
+ledger's own rules. Also outstanding: the fork commit `0033bc7` is pushed to
+`pin-tesseract`, but `Vendor/mlx-audio-swift` still pins `a524093`, so F2/F3/F8
+are not in the built tree (`docs/swift-transformers-fork.md` → Pending).

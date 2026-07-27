@@ -720,7 +720,7 @@ struct LeafAdmissionCachePathTests {
                 toolSpecs: nil,
                 tokenizer: tokenizer,
                 keySpace: .identity(),
-                modelFingerprint: Self.fingerprint
+                renderTokens: RenderTokenSource(cacheFingerprint: Self.fingerprint)
             )?.get())
         let uncached = try #require(
             try LeafAdmissionBuilder.reusablePrefix(
@@ -756,7 +756,7 @@ struct LeafAdmissionCachePathTests {
             toolSpecs: nil,
             tokenizer: tokenizer,
             keySpace: .identity(),
-            modelFingerprint: "never-stored"
+            renderTokens: RenderTokenSource(cacheFingerprint: "never-stored")
         )?.get()
         #expect(cache.statsSnapshot().replacedHits == 0)
         #expect(cache.statsSnapshot().replacedFallbacks == 2)

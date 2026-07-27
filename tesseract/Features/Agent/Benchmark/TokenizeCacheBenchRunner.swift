@@ -423,16 +423,25 @@ final class TokenizeCacheBenchRunner {
     ) -> Bool {
         let trimSummary = stats.trimHistogram.sorted(by: { $0.key < $1.key })
             .map { "k\($0.key):\($0.value)" }.joined(separator: ",")
+        func reasons(_ counts: [String: Int]) -> String {
+            counts.sorted(by: { $0.key < $1.key })
+                .map { "\($0.key):\($0.value)" }.joined(separator: ",")
+        }
         log("")
         log(
             "stats: hits=\(stats.hits) repeats=\(stats.repeats) misses=\(stats.misses) "
                 + "trimHistogram=[\(trimSummary)] "
+                + "missReasons=[\(reasons(stats.missReasons))] "
                 + "junctionFailures=\(stats.junctionFailures) "
-                + "windowEnlargements=\(stats.windowEnlargements) "
+                + "replacedJunctionFailures=\(stats.replacedJunctionFailures) "
+                + "junctionWindowEnlargements=\(stats.junctionWindowEnlargements) "
+                + "cutWindowEnlargements=\(stats.cutWindowEnlargements) "
                 + "truncatedHits=\(stats.truncatedHits) "
                 + "truncatedFallbacks=\(stats.truncatedFallbacks) "
+                + "truncatedFallbackReasons=[\(reasons(stats.truncatedFallbackReasons))] "
                 + "replacedHits=\(stats.replacedHits) "
-                + "replacedFallbacks=\(stats.replacedFallbacks)"
+                + "replacedFallbacks=\(stats.replacedFallbacks) "
+                + "replacedFallbackReasons=[\(reasons(stats.replacedFallbackReasons))]"
         )
         log(
             String(
