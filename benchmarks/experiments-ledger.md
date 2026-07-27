@@ -2258,3 +2258,45 @@ checkout re-resolve verified `diff 1.3.3 == fork diff`, clean-build
 confirmation rebuilt + parity smoke leg vs the pre-C24 binary **2/2
 token-identical**. `docs/swift-transformers-fork.md` carry table
 updated. Upstream filing queued (owner go-ahead).
+
+### C30 — attribution: non-tokenize CPU per agent/server turn (measurement, no verdict)
+
+New `--agent-cpu-bench` runner (12-turn trajectory, real tokenizer, 5
+interleaved reps/phase, quiet machine) timing the per-turn CPU OUTSIDE
+tokenize/prefill/decode. Findings at 11.4K-token conversations:
+
+- **Total accounted ≈ 20 ms/turn, but only ≈ 4.8 ms on the TTFT path.**
+- **p4 boundary detection (memo-warm `PrefillPlanner.detectBoundaries`)
+  = 4.1 ms/turn, TTFT-path, growing with history** (2.56 → 4.10 ms over
+  turns 1→12). Composition (not yet sub-attributed): the memo-hit
+  StablePrefixDetector detect (SHA-256 of the 33 KB system prompt +
+  JSONSerialization of 40 tool specs + token-hash verify over the
+  7,805-token prefix) + gen-prompt encode + the C27 `resolveTruncated`
+  hit (full-conversation render + second digest chain + trim +
+  cut-verify) + translatedLength. Incidental control measurement: with
+  C27 forced to fall back, detectBoundaries costs 34–43 ms/turn —
+  independent confirmation of C27's ~30–39 ms/turn win at this scale.
+- **p5 detok 15.2 ms/turn but amortized across the GPU-bound stream —
+  NOT a TTFT or tok/s lever** (≈0.15% of a core steady-state; even the
+  newline-free worst case — the O(segment²)
+  `NaiveStreamingDetokenizer.next()` re-decoding the whole segment per
+  token, 288 µs/token — is ~3% of a core at production decode rates).
+  Logged as an efficiency note, not a loop target; the O(n²) would only
+  matter for very long newline-free generations, and even then stays
+  off the critical path.
+- **p1 conv-build 0.33 ms, p2 canonicalize 0.34 ms, p3 keying ~0 ms,
+  p7 radix 0.02 ms — all flat, all closed.** But note the redundancy:
+  the same 40 tool specs are JSONSerialized+SHA-256'd **4× per turn**
+  (AgentConversationBuilder, MessageConverter, RenderTokenCache,
+  StablePrefixDetector key), the digest chain runs 2×, and the
+  leaf-store and admission-stored renders are **the identical render
+  computed twice** (verified in the C28 implementation notes).
+- SKIPPED (uncallable without GPU/SSD fixtures): snapshot
+  capture/restore and SSD manifest bookkeeping.
+
+**Aim for C31:** per-request render/digest consolidation — a memo
+scoped to ONE request (zero staleness surface by construction) sharing
+the tools digest, the system-prompt hash, and the identical renders
+across the six consumers. Expected ~2–3 ms/turn at 11K, ~30+ ms/turn
+at 131K (5 full-conversation renders per turn today). Sub-attribute p4
+(memo-detect vs C27-render vs chains) as part of the implementation.

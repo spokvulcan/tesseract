@@ -54,7 +54,8 @@ final class TokenizeCacheBenchRunner {
     }
 
     /// Which cache outcome a turn must produce.
-    private enum Expectation {
+    /// Internal (not private) so `--agent-cpu-bench` can reuse the trajectory.
+    enum Expectation {
         case missCold
         case hit
         case hitRepeat
@@ -62,13 +63,14 @@ final class TokenizeCacheBenchRunner {
     }
 
     /// Which outcome a turn's C27 truncated leg must produce.
-    private enum TruncExpectation {
+    enum TruncExpectation {
         case hit
         case fallback
     }
 
     /// One simulated request: the C25 prepare leg plus the C27 truncated leg.
-    private struct Turn {
+    /// Internal (not private) so `--agent-cpu-bench` reuses the same trajectory.
+    struct Turn {
         let label: String
         let messages: [[String: any Sendable]]
         let expect: Expectation
@@ -494,7 +496,8 @@ final class TokenizeCacheBenchRunner {
     }
 
     /// Production-scale stable head: 40 tool specs.
-    private static func makeToolSpecs() -> [ToolSpec] {
+    /// Internal (not private) so `--agent-cpu-bench` reuses the same specs.
+    static func makeToolSpecs() -> [ToolSpec] {
         (0..<40).map { i in
             [
                 "type": "function",
@@ -527,7 +530,8 @@ final class TokenizeCacheBenchRunner {
     /// (A system-tail conversation is unrenderable on the loaded template —
     /// "System message must be at the beginning" — so that fallback shape
     /// lives in the unit tests, not here.)
-    private static func buildTrajectory() -> [Turn] {
+    /// Internal (not private) so `--agent-cpu-bench` runs the same trajectory.
+    static func buildTrajectory() -> [Turn] {
         let systemFiller =
             "You are a careful, methodical assistant working on the user's Mac. "
             + "You plan before acting, read files before editing them, and keep "

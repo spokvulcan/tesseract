@@ -755,7 +755,9 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         return hash
     }
 
-    private static func digestChain(_ messages: [[String: any Sendable]]) -> [String] {
+    /// Internal (not private) so `--agent-cpu-bench` can time the digest chain
+    /// directly (its per-turn cost inside the request-keying resolve).
+    static func digestChain(_ messages: [[String: any Sendable]]) -> [String] {
         var chain: [String] = []
         chain.reserveCapacity(messages.count)
         var previous = "rtc1"
