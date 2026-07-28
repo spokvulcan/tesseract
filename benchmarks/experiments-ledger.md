@@ -2527,3 +2527,132 @@ baselines it is measured against. CI's `build-release` on a pristine runner is t
 clean-build confirmation instead; the exactness assertions (0 mismatches, 0 parity
 failures, 0 path failures) are thermally invariant either way, so the substitution
 costs nothing on the correctness gate — only on the timing gate, where it helps.
+
+---
+
+## Session 2026-07-28 — chunked gated-delta scan
+
+Git HEAD at session start: `a73a7aa5`. Prompted by MoonshotAI's **FlashKDA**
+release (CUTLASS Kimi Delta Attention kernels, announced at 1.72×–2.22× prefill
+speedup over flash-linear-attention on H20).
+
+Built, measured, rejected, and **reverted completely per rule `:22`** — no code
+from this experiment survives on any branch. This entry is the whole record, so
+it carries enough detail to stop the question being reopened from scratch.
+
+### E12 — chunked (blocked-matmul) gated-delta scan — REJECTED
+
+**Hypothesis.** E8 measured the GDN scan as sequential-latency-bound: ~0.5 µs
+serial per step per CTA over a T-deep chain, explicitly not bandwidth. The
+chunked delta rule — the form every CUDA implementation uses, stated readably in
+FlashKDA's `tests/torch_ref.py:180-245` — shortens that chain to one step per
+C-token block and turns the rest into batched matmuls, which this stack runs at
+82–88% of peak (#251, E9). E8b closed this line on *legality*, never on
+measurement: nobody had ever measured what chunking buys on Metal.
+
+**Two corrections to the premise, found by reading before building.** Both
+shrink the prize and are worth keeping:
+
+- **FlashKDA implements KDA, not GDN.** KDA gates per channel
+  (`g:[B,T,H,K]`); Qwen3.5/3.6 hybrids use gated-delta's scalar per-head gate.
+  The headline 1.72–2.22× is over FLA's *KDA* Triton kernel. Over FLA's *GDN*
+  kernel — the comparable one — FlashKDA's own `BENCHMARK_H20.md:16-26` shows
+  **1.17×–1.43×**.
+- **The scan is ~5.5% of a 32K prefill** (E8 `:326`), ~8% at 8K, and chunking
+  helps prefill only — T=1 decode has no chunks. Even a 2× scan is under 3%
+  end-to-end.
+
+**Change (since reverted).** A chunked scan in plain MLX ops, specialized from
+KDA's per-channel gate to the scalar per-head gate, behind a per-call/per-process
+backend switch defaulting to the existing recurrent Metal kernel. Followed
+FlashKDA's two-stage split (deep-dive §2): decays, the `L`/`M` Gram matrices and
+the Neumann inverse computed for *all* blocks in one batched pass, with only the
+state recurrence looping.
+
+**Two numerics findings, both real, both cost a debugging round.** These are the
+part most worth keeping, because they will bite any future attempt:
+
+- **Form pairwise decays as `exp(cumsum_t - cumsum_j)`, never as `Γ_t × 1/Γ_j`.**
+  FlashKDA builds `k_decayed` and `k_inv` separately (`torch_ref.py:205-212`),
+  which it can afford only because KDA bounds its gate at `lower_bound = -5` and
+  fixes C=16. Gated-delta's gate is `exp(-exp(A_log) · softplus(a + dt_bias))`,
+  unbounded below, so the separated form overflows on the reciprocal. This is a
+  **deviation from** FlashKDA, not a borrowing from it.
+- **bf16 cannot carry the Neumann series — promote to f16, not f32.** Drift
+  against the recurrent form runs 0.005–0.009 in bf16 versus 0.0007–0.0012 in
+  f16. The tell that the bf16 residual was *output quantization* rather than
+  blocking error: it did not move with C at all, sitting at exactly
+  `0.0068965508` for every block size, and the ratio to f16 is the 8× mantissa
+  ratio (2⁻⁸ vs 2⁻¹¹). Same finding and same fix as FlashKDA deep-dive §3.
+
+**Correctness reached, so the timings compare like with like.** At production
+dtype (f16) and head geometry, `max_rtol` vs the recurrent form was
+**0.0005–0.0011** on outputs and **0.0005–0.0009** on state, across
+C ∈ {16,32,64} and T ∈ {64,128,256}. Masked calls, spans below one block
+(including T=1 decode) and unsupported block sizes fell back **bitwise**.
+
+Note this required relaxing rule `:17`: a chunked scan cannot be
+token-identical to a recurrent one, so it was held to a tolerance bar against
+the recurrent form instead. That relaxation was scoped to this experiment and
+died with it — **rule `:17` stands unchanged for every other line.**
+
+**Measurement.** Purpose-built harness timing the scan directly with no model
+load (its cost is shape-driven, so synthetic tensors at production dims
+reproduce it exactly). Release, ABBA within round, 5 rounds × 10 iterations,
+quiet machine verified. Shapes per E8: q/k `[1,T,16,128]`, v `[1,T,32,128]`,
+f16 in, f32 state.
+
+Harness cross-check against E8: recurrent measured 1.03 ms at T=512, 1.83 ms at
+T=1024, 3.72 ms at T=2048 — against E8's 1.2 / 2.0 / 3.8 ms. Consistent, so the
+baseline arm is not sandbagged.
+
+Speedup vs recurrent (>1 would be a win):
+
+| T | C=16 | C=32 | C=64 | C=128 | C=256 |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 0.37× | 0.53× | **0.58×** | 0.48× | — |
+| 512 | 0.31× | 0.47× | **0.64×** | 0.49× | 0.23× |
+| 1024 | 0.30× | 0.49× | **0.62×** | 0.51× | 0.22× |
+| 2048 | 0.30× | 0.50× | **0.67×** | 0.51× | 0.22× |
+
+**Verdict: REJECTED.** 1.5–3.4× *slower* than the recurrent kernel at every
+configuration. Round-to-round spread ±0.02, so this is not noise. Rejected on
+speed alone — the numerics gate passed with 5–10× margin.
+
+**Why, and why the result is well-bounded.** The optimum in C is **interior** —
+0.67× at C=64, falling to 0.51× at C=128 and 0.22× at C=256 — so this is not "we
+did not try a large enough block". Two costs squeeze from both sides: below C=64
+the sequential block count dominates, above it the Neumann inverse does, growing
+as C³ (`log2(C) - 1` doubling rounds of C×C matmuls).
+
+The chunked form is not slow because it is inefficient. At C=64 it does ~3.7×
+the arithmetic of the recurrent form (~16 GFLOP vs ~4.3 GFLOP per layer at
+T=2048) at ~2.5× the recurrent kernel's effective rate — roughly 2.8 TFLOP/s
+against 1.1. It loses because 2.5× does not pay for 3.7×. And 2.8 TFLOP/s is far
+below the ~10–12 this stack reaches on large GEMMs, for a reason specific to the
+ops level: the GEMMs are small (M=C, batched over 32 heads) and **every
+intermediate round-trips through global memory** — seven materialized tensors per
+block step. That is precisely the cost FlashKDA's fused K2 stage removes with
+register-file transposes (deep-dive §4), and it is not reachable from MLX's op
+graph.
+
+**What this closes, and the one door left ajar.** It closes the **ops-level**
+chunked scan. It does not prove a *fused Metal* chunked kernel loses — but that
+kernel would have to overcome a 1.5× deficit while doing 3.7× the arithmetic,
+i.e. reach roughly 5.5× the recurrent kernel's FLOP rate (~6 TFLOP/s at these
+small-M shapes) merely to break even, and then earn back its cost against a scan
+worth 5.5% of prefill. Given #251 already found the fused-attention equivalent
+slower than unfused, and #256 measured small-M GEMM efficiency at 43% of peak,
+that is not a promising bet. If anyone does try it: `MLXFast.metalKernel` takes a
+`header:` parameter (`MLXFastKernel.swift:176`), so `#include
+<metal_simdgroup_matrix>` inside a JIT kernel is expressible.
+
+**Reference material.** FlashKDA cloned at `~/projects/FlashKDA`. The kernels are
+CUTLASS/SM90+ PTX (`MOVM_T`, `tanh.approx.f32`, `ex2.approx.ftz.f32`) and are not
+portable; the portable artifact is the 65-line reference at
+`tests/torch_ref.py:180-245`, plus `docs/20260420-flashkda-v1-deep-dive.md`.
+
+**Untouched by this result.** The **bf16 recurrent-state switch** (FlashKDA §3 —
+fp32 FMA with bf16 storage, halving the 63 MB MambaCache snapshot) was scoped
+into this round and never built. It targets decode bandwidth and snapshot size,
+neither of which chunking touches, so nothing here argues against it.
