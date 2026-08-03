@@ -96,7 +96,8 @@ final class BenchmarkRunner {
                     promptProfile: config.promptProfile,
                     contextLimit: 0,  // No fixed limit — managed by compaction
                     maxToolRounds: 0,  // No cap — loop runs until no more tool calls
-                    sweepLabel: paramLabel
+                    sweepLabel: paramLabel,
+                    sourceRevision: config.sourceRevision
                 ),
                 scenarios: scenarioResults,
                 aggregate: aggregate

@@ -125,8 +125,19 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 
+# Git provenance of the tree we just built, recorded into the report so a result
+# can be attributed to a commit. The app cannot derive this itself — a launched
+# .app has no reliable path back to the repo — so it travels as a launch arg.
+# `-dirty` matters: an uncommitted tree is not reproducible, and a comparison
+# against one is not evidence about any commit.
+SOURCE_REV="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)" ]; then
+    SOURCE_REV="${SOURCE_REV}-dirty"
+fi
+
 echo "Running benchmark (sweep: $SWEEP)..."
 echo "App: $APP"
+echo "Source: $SOURCE_REV"
 
 # Kill any existing tesseract instance (process is named "Tesseract Agent" after the rename)
 killall "Tesseract Agent" 2>/dev/null || true
@@ -138,7 +149,7 @@ mkdir -p "$BENCH_DIR"
 rm -f "$LOG_FILE"
 
 # Launch with -W (wait for app to exit), backgrounded so we can tail
-open -W "$APP" --args --benchmark --bench-sweep "$SWEEP" "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" "${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"}" "$@" &
+open -W "$APP" --args --benchmark --bench-sweep "$SWEEP" --bench-source-revision "$SOURCE_REV" "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" "${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"}" "$@" &
 OPEN_PID=$!
 
 # Wait for log file to appear (up to 30s for model loading)

@@ -67,9 +67,9 @@ Carried on top, in order:
 | `perf(qwen35): compile the GDN decode step with explicit state (C12)` | Compiled GDN decode step, conv/recurrent state as explicit I/O; +1.75% dense 128 decode, +0.94% MoE (ledger C12). The module-local compiled wrapper was subsumed by C14 and removed in the PR #427 review round; the compiled body (`decodeForward`) is the surviving artifact | Filed in [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467) (2026-07-26) |
 | `fix(qwen35): unowned captures for the compiled decode closures` | Breaks the module→closure→module retain cycle C11/C12 shipped — the cycle leaked each block, its weights, and the compiled mlx tape on every model release; + `Qwen35CompiledDecodeLifecycleTests` red/green regression test (2026-07-24 review round, tesseract PR #425 follow-up) | Filed in [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467) (2026-07-26) |
 | `perf(qwen35): whole-step compiled decode schedule (C14)` | The whole decode step as traced segments (11 MoE / 9 dense), split only where the KV cache is written, rather than one compiled closure per block; +1.33% MoE 128 decode, +0.67% MoE 8K, +1.73% dense 8K (ledger C14) | Filed in [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467) (2026-07-26) |
-| `perf(qwen35): C16 — decode conv1d as fused multiply-adds` | At S==1 the GDN depthwise conv is a fixed 4-term dot per channel; written as elementwise multiply-adds it folds into the surrounding compiled segment, deleting a dispatch *and* a hazard barrier per GDN layer. Bitwise only with **f32 accumulation** — native-dtype accumulation differs in ~47% of channels. +1.77% median MoE 8K decode (ledger C16) | Filed as [#468](https://github.com/ml-explore/mlx-swift-lm/pull/468) (2026-07-26, stacked on #467) |
+| `perf(qwen35): C16 — decode conv1d as fused multiply-adds` | At S==1 the GDN depthwise conv is a fixed 4-term dot per channel; written as elementwise multiply-adds it folds into the surrounding compiled segment, deleting a dispatch *and* a hazard barrier per GDN layer. Bitwise only with **f32 accumulation** — native-dtype accumulation differs in ~47% of channels. 2026-07-29 addendum: for **f32 input** the FMA does NOT match the kernel either (102/256 channels — its f32 path accumulates in a different order); upstream #468 gates the fused branch to f16/bf16, this Vendor form is ungated. +1.77% median MoE 8K decode (ledger C16) | Filed as [#468](https://github.com/ml-explore/mlx-swift-lm/pull/468) (2026-07-26, stacked on #467); **merged 2026-07-30** (0321f28) in the f16/bf16-gated form — drop this cherry-pick at the next re-pin |
 | `perf(qwen35): C18 — fused router top-k kernel` | `ArgPartition::eval_gpu` delegates to `gpu_merge_sort`, so the router fully sorted 256 experts to name 8; one custom kernel replaces the sort and the gather/sum/divide tail. Bit-identical by construction (the sort is stable, so the selection order is reproducible; the 8-wide reduce accumulates sequentially in the output dtype). Decode only — prefill keeps the block sort. +1.91% MoE 128 decode (ledger C18) | Filed as [#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) (2026-07-26; MLXVLM copy flagged in the PR) |
-| `fix(qwen35): PR #427 review round — uint32 router indices, dead C12 wrapper, bitwise-contract tests` | C18 kernel emits `uint32` indices (argPartition's dtype); removes the C12 wrapper C14 obsoleted; adds `Qwen35BitwiseContractTests` (C16 conv contract + C18 router contract, NaN ordering included) and a quantized-cache lifecycle variant; MLXLLM gains the missing MLXFast product dep (strict SwiftPM builds were broken since C18) | Filed 2026-07-26, split across [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467)/[#468](https://github.com/ml-explore/mlx-swift-lm/pull/468)/[#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) |
+| `fix(qwen35): PR #427 review round — uint32 router indices, dead C12 wrapper, bitwise-contract tests` | C18 kernel emits `uint32` indices (argPartition's dtype); removes the C12 wrapper C14 obsoleted; adds `Qwen35BitwiseContractTests` (C16 conv contract + C18 router contract, NaN ordering included) and a quantized-cache lifecycle variant; also carried an MLXFast product dep — self-inflicted by C18's `import MLXFast` and removed in the #469 review round 2026-07-29 (the `MLXFast` enum in MLX covers the symbols; the standalone module is a deprecated shim) | Filed 2026-07-26, split across [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467)/[#468](https://github.com/ml-explore/mlx-swift-lm/pull/468)/[#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) |
 | `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer (new `ChatTemplateRendering` protocol; the macro-generated bridge forwards, same `missingChatTemplate` mapping). Enables tesseract's render+token cache (experiments-ledger C25 — tokenize only a verified suffix of a previously rendered prompt). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract` @ `63edf42` (scheme: `docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
 
 Earlier pin branches carried one `chore: pin mlx-swift to <rev>` commit per
@@ -94,6 +94,22 @@ C8+C9 = mlx#3920; C4/C5/C7 deferred (upstream restructured the Metal
 command-buffer machinery — DeviceStream merged into CommandEncoder,
 thread-local encoders — so the port needs a rebase + re-measure), C6
 half-superseded by mlx#3869 (regex removal), re-measure before filing.
+
+**Status 2026-07-29** — #460/#467/#469 merged upstream; the three open
+PRs (#468, #470, #471) were each rebased onto the fresh main (861649b),
+full CI replica green per branch, force-pushed — all three MERGEABLE,
+awaiting review. #470's merge commit was linearized away in the rebase.
+
+**Status 2026-07-31** — #468 merged upstream 2026-07-30 (0321f28). #470
+rebased onto the fresh main (a2736d4): the #448 Qwen2/2.5-VL windowed
+prefill collided with the PrefillParameters reshape, so those models'
+new `prepareContinuation` loops adopt `resolvedStepSize()` +
+`forEachChunk` with the reserved tail position (mirroring the Qwen35
+treatment), and upstream's new ChatSession/Nanbeige/Qwen25VLContinuation
+tests migrated to `prepare(prefill:)`. The standalone lint-fixup commit
+folded into the signature commit; full CI replica green, force-pushed —
+MERGEABLE, awaiting review. #471 unaffected by the new main, still
+MERGEABLE.
 
 1. **Compiled decode schedule for Qwen3.5/3.6** — C11 + C12 + the unowned-
    captures fix + C14 + the PR #427 review-round commit, squashed into one
@@ -142,12 +158,12 @@ below — different upstream, different queue.
 | [#399](https://github.com/ml-explore/mlx-swift-lm/pull/399) | Qwen3.5/3.6 windowed prefill + state-threaded warm continuation (multi-turn M-RoPE drift fix) | Merged 2026-07-14 |
 | [#398](https://github.com/ml-explore/mlx-swift-lm/pull/398) | Qwen3VL default per-image 1,280 vision-token budget | Merged 2026-07-15 |
 | [issue #420](https://github.com/ml-explore/mlx-swift-lm/issues/420) | Qwen2/2.5/3-VL drop cross-turn state (same class as #399) | Filed; follow-up PR offered |
-| [#460](https://github.com/ml-explore/mlx-swift-lm/pull/460) | Nanbeige4.2 looped-transformer model support | Filed 2026-07-23 |
+| [#460](https://github.com/ml-explore/mlx-swift-lm/pull/460) | Nanbeige4.2 looped-transformer model support | **Merged 2026-07-29** (3697686) |
 | [issue #466](https://github.com/ml-explore/mlx-swift-lm/issues/466) | Umbrella: July 2026 inference-perf batch (map + totals) | Filed 2026-07-26 |
-| [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467) | Qwen3.5/3.6 compiled decode step (C11+C12+leak fix+C14+review round, lifecycle tests) | Filed 2026-07-26 |
-| [#468](https://github.com/ml-explore/mlx-swift-lm/pull/468) | GDN decode conv1d as fused multiply-adds (C16 + contract test; stacked on #467) | Filed 2026-07-26 |
-| [#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) | Fused router top-k kernel (C18, uint32 indices, contract test, MLXFast dep) | Filed 2026-07-26 |
-| [#470](https://github.com/ml-explore/mlx-swift-lm/pull/470) | Balanced prompt chunking (~9% prefill) | Filed 2026-07-26 |
+| [#467](https://github.com/ml-explore/mlx-swift-lm/pull/467) | Qwen3.5/3.6 compiled decode step (C11+C12+leak fix+C14+review round, lifecycle tests) | **Merged 2026-07-29** (0bd3da4); 2026-07-29 simplify pass (51882f9, traced bodies deduped into shared `forward`) + review fix 5304b23 — NSLock around every lazy `compile` assignment (davidkoski: class properties are only thread-safe settable at init, weights not loaded yet) |
+| [#468](https://github.com/ml-explore/mlx-swift-lm/pull/468) | GDN decode conv1d as fused multiply-adds (C16 + contract test) | Filed 2026-07-26; 2026-07-29 rebased onto deduped #467 (2ba11d5): fused conv extracted as `decodeConv` vs `generalConv`, test pins one against the other. **f32-input discovery: FMA ≠ Convolution kernel for f32 (102/256 channels) — fused branch gated to unmasked f16/bf16 S==1**; Vendor copy still carries the ungated C16 form (fine in practice: models run f16/bf16) — align at next re-pin. After #460/#467/#469 merged, re-rebased onto main (ee026ba, 2 own commits). **Merged 2026-07-30** (0321f28) |
+| [#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) | Fused router top-k kernel (C18, uint32 indices, contract test) | **Merged 2026-07-29** (861649b); review round 2026-07-29 — MLXFast import/dep removed (deprecated, lives in MLX) |
+| [#470](https://github.com/ml-explore/mlx-swift-lm/pull/470) | Balanced prompt chunking (~9% prefill) | Filed 2026-07-26; 2026-07-31 rebased over the #448 Qwen2/2.5-VL windowed prefill (their continuations adopt PrefillParameters/forEachChunk) — MERGEABLE, awaiting review |
 | [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) | ParoQuant MoE batch: MoE path, Prepared Checkpoint, E1/E2/E6b (#164 follow-up) | Filed 2026-07-26 |
 
 Earlier fork-era contributions (#167 ToolCallProcessor schema plumbing, #168

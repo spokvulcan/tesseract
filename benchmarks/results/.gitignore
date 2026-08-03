@@ -1,2 +1,6 @@
 *
 !.gitignore
+# The result JSONs stay local, but the rules for reading them must not —
+# a run that measured the wrong thing is only harmless if the warning
+# travels with the repo.
+!README.md

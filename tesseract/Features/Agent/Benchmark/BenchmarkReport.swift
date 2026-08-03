@@ -71,6 +71,9 @@ struct BenchmarkReport: Codable {
     let metadata: BenchmarkMetadata
     let scenarios: [BenchmarkScenarioResult]
     let aggregate: BenchmarkAggregate
+    /// Present only on results annotated after the fact — see `BenchmarkValidity`.
+    /// The runner never sets this; a fresh report is valid by construction.
+    var validity: BenchmarkValidity?
 }
 
 struct BenchmarkMetadata: Codable {
@@ -82,6 +85,31 @@ struct BenchmarkMetadata: Codable {
     let contextLimit: Int
     let maxToolRounds: Int
     let sweepLabel: String
+
+    /// Git revision of the tree this build came from (`a73a7aa5`, or
+    /// `a73a7aa5-dirty` when the working copy had uncommitted changes).
+    /// Supplied by `scripts/bench.sh` via `--bench-source-revision`.
+    ///
+    /// Optional because every report written before 2026-07-27 predates the
+    /// field, and because a hand-launched run has no revision to record. When
+    /// it is nil, a result cannot be attributed to a commit — treat any
+    /// before/after comparison involving it as correlational only.
+    var sourceRevision: String?
+}
+
+/// Post-hoc annotation marking a stored result as not-comparable.
+///
+/// Results are immutable records of what the machine did, so a run is never
+/// deleted or edited when it turns out to have measured the wrong thing —
+/// it is annotated, and analyses filter on this. Written by hand (or by a
+/// migration), never by the runner.
+struct BenchmarkValidity: Codable {
+    /// `invalid` = do not include in any comparison or trend.
+    let status: String
+    /// Why, in one line.
+    let reason: String
+    /// Where the full story lives — an issue, PR, commit, or doc.
+    let reference: String
 }
 
 // MARK: - Report Writing
@@ -102,6 +130,10 @@ extension BenchmarkReport {
         lines.append("  Model: \(metadata.modelName) | \(metadata.hardware)")
         lines.append("  Params: \(metadata.sweepLabel)")
         lines.append("  Prompt: \(metadata.promptProfile.rawValue)")
+        // Surfaced in the log, not just the JSON: an unattributable run should be
+        // obvious while you are still looking at it.
+        let revision = metadata.sourceRevision ?? "UNKNOWN (not launched via bench.sh)"
+        lines.append("  Source: \(revision)")
         lines.append("═══════════════════════════════════════════════════════")
         lines.append("")
 

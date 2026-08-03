@@ -35,6 +35,17 @@ struct BenchmarkConfig {
     /// `--bench-prefill-steps "2048,4096"`. nil = the runner's default sweep.
     let prefillStepSizesOverride: [Int]?
 
+    /// Git provenance of the tree this build came from, e.g. `a73a7aa5` or
+    /// `a73a7aa5-dirty`. Parsed from `--bench-source-revision`, which
+    /// `scripts/bench.sh` fills in from the working copy — the app itself cannot
+    /// derive it, since a launched `.app` has no reliable path back to the repo.
+    ///
+    /// nil when the benchmark was launched by hand rather than through
+    /// `bench.sh`. Recorded in the report so a result can be attributed to a
+    /// commit; without it, comparing two runs can establish *that* something
+    /// changed but never *what* (see `benchmarks/results/README.md`).
+    let sourceRevision: String?
+
     /// Parameter configurations to sweep over, seeded from the model's recommended defaults.
     var parameterConfigs: [AgentGenerateParameters] {
         let base = AgentGenerateParameters.forModel(resolvedModelID)
@@ -155,6 +166,14 @@ struct BenchmarkConfig {
 
         let visionMode = args.contains("--bench-vision")
 
+        let sourceRevision: String? = {
+            if let idx = args.firstIndex(of: "--bench-source-revision"), idx + 1 < args.count {
+                let value = args[idx + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+                return value.isEmpty ? nil : value
+            }
+            return nil
+        }()
+
         let prefillStepSizesOverride: [Int]? = {
             if let idx = args.firstIndex(of: "--bench-prefill-steps"), idx + 1 < args.count {
                 let parsed = args[idx + 1].split(separator: ",").compactMap { Int($0) }
@@ -172,7 +191,8 @@ struct BenchmarkConfig {
             promptProfile: promptProfile,
             maxTokensPerRound: maxTokensPerRound,
             visionMode: visionMode,
-            prefillStepSizesOverride: prefillStepSizesOverride
+            prefillStepSizesOverride: prefillStepSizesOverride,
+            sourceRevision: sourceRevision
         )
     }
 }
