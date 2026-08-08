@@ -375,6 +375,15 @@ final class SettingsManager {
         didSet { SettingsCatalogue.playSounds.write(playSounds, to: store) }
     }
 
+    // MARK: - The Whip
+
+    /// The Whip (`Features/Whip`): a simulated whip hanging over every app,
+    /// grabbable with ⌥ and audible when you swing it. Default off; Reduce
+    /// Motion overrides it to off regardless, in the controller.
+    var whipEnabled: Bool {
+        didSet { SettingsCatalogue.whipEnabled.write(whipEnabled, to: store) }
+    }
+
     // MARK: - Agent Web Access
 
     var webAccessEnabled: Bool {
@@ -603,6 +612,7 @@ final class SettingsManager {
             from: store)
         self.maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.load(from: store)
         self.playSounds = SettingsCatalogue.playSounds.load(from: store)
+        self.whipEnabled = SettingsCatalogue.whipEnabled.load(from: store)
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
         self.agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.load(from: store)
         self.useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.load(from: store)
@@ -703,6 +713,7 @@ final class SettingsManager {
         hotkeyModifiers = SettingsCatalogue.hotkeyModifiers.default
         maxRecordingDuration = SettingsCatalogue.maxRecordingDuration.default
         playSounds = SettingsCatalogue.playSounds.default
+        whipEnabled = SettingsCatalogue.whipEnabled.default
         ttsHotkeyKeyCode = SettingsCatalogue.ttsHotkeyKeyCode.default
         ttsHotkeyModifiers = SettingsCatalogue.ttsHotkeyModifiers.default
         agentHotkeyKeyCode = SettingsCatalogue.agentHotkeyKeyCode.default

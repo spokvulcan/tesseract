@@ -866,6 +866,10 @@ final class DependencyContainer: ObservableObject {
     lazy var dictationFeed = DictationFeed()
     lazy var pillOverlay = OverlayPanel(placement: .pill)
 
+    // The Whip (`Features/Whip`) — a self-contained toy that owns its own panel
+    // and tears everything down when its setting is off, which is the default.
+    lazy var whipController = WhipController()
+
     // Menu bar — constructed here so App Bindings can wire its dictation-state
     // effect before the app delegate attaches the window-management callbacks.
     lazy var menuBarManager: MenuBarManager = {
@@ -1033,6 +1037,7 @@ final class DependencyContainer: ObservableObject {
         case startCompanionPerception
         case materializeAgent
         case startMCPClient
+        case startWhip
     }
 
     /// Declared step names in launch order — reachable without a container so the
@@ -1167,6 +1172,13 @@ final class DependencyContainer: ObservableObject {
                 // Connect the configured servers (the built-in Browser server plus
                 // any user-added ones) and keep them reconciled with settings.
                 mcpClientManager.start()
+            }
+        case .startWhip:
+            return { [self] in
+                // Last, and deliberately order-free: the toy depends on nothing
+                // and nothing depends on it. Off by default, so on a normal
+                // launch this binds an observer and returns.
+                whipController.bind(to: settingsManager)
             }
         }
     }
