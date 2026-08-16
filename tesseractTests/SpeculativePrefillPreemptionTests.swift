@@ -63,7 +63,7 @@ import Testing
         // admitted as a leaf.
         let boundaryTokens = Array(admitPath[0..<1024])
         let boundaryLeaf = try await provider.withSession { session -> HybridCacheSnapshot? in
-            let cache = session.newCache(parameters: GenerateParameters(temperature: 0))
+            let cache = try session.newCache(parameters: GenerateParameters(temperature: 0))
             _ = try session.prefill(
                 text: .init(tokens: MLXArray(boundaryTokens.map(Int32.init)), mask: nil),
                 cache: cache,

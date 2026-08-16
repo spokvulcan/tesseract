@@ -278,9 +278,9 @@ final class ParoParityBenchRunner {
         var appDriverPrefillSeconds = 0.0
         let iterator: TokenIterator
         if case .chunked(let prefillStep) = PrefillStrategy.decide(
-            for: prepared, prefillStepSize: parameters.prefillStepSize
+            for: prepared, prefillStepSize: parameters.prefill.stepSize
         ) {
-            var cache = context.model.newCache(parameters: parameters)
+            var cache = try context.model.newCache(parameters: parameters)
             let prefillStart = ContinuousClock.now
             let warmed = try PrefillExecutor.run(
                 model: context.model,

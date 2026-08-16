@@ -63,7 +63,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
     /// return the `.logits` the decode iterator samples its first token from.
     /// The toy keeps no positional state, so `state` is ignored.
     func prepare(
-        _ input: LMInput, cache: [KVCache], state _: LMOutput.State?, windowSize: Int?
+        _ input: LMInput, cache: [KVCache], state _: LMOutput.State?, prefill _: PrefillParameters
     ) throws -> PrepareResult {
         let tokens = input.text.tokens
         let batched = tokens.ndim >= 2 ? tokens : tokens[.newAxis]
@@ -251,9 +251,9 @@ nonisolated struct RecordingModelSession: ModelSession {
         return try await base.prepare(input)
     }
 
-    func newCache(parameters: GenerateParameters) -> [any KVCache] {
+    func newCache(parameters: GenerateParameters) throws -> [any KVCache] {
         recorder.record(.newCache)
-        return base.newCache(parameters: parameters)
+        return try base.newCache(parameters: parameters)
     }
 
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache] {

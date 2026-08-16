@@ -161,7 +161,6 @@ struct ModelDefinitionCatalogTests {
         let identity = ModelIdentity(directory: root)
         #expect(identity.isQwen35 == true)
         #expect(identity.isMoE == true)
-        #expect(identity.toolCallFormat == .xmlFunction)
 
         let profile = identity.flopProfile
         #expect(profile.hiddenSize == 4096)

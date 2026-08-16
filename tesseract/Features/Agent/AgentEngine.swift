@@ -75,7 +75,7 @@ final class AgentEngine {
     /// it is canonical — byte-identical renders to before.
     private(set) var agentRenderContext: TemplateRenderContext = .canonical
 
-    /// The loaded model's tool-call format (`ModelIdentity.toolCallFormat`) —
+    /// The loaded model's tool-call format as the vendor resolved it at load time —
     /// cached at load like `declaredTemplateFlags` so the server's Argument
     /// Transcoder keys off the same identity the parser uses. `nil` when
     /// unloaded or when the model has no override (vendor JSON default).

@@ -1418,7 +1418,7 @@ nonisolated final class ServerCompletion {
                             // bounded to `[heads, window, executionBaseOffset]`,
                             // not the single-shot `[heads, L, L]`.
                             try Self.checkChunkedVisionBackstop(
-                                windowSize: genParams.prefillStepSize ?? 512,
+                                windowSize: genParams.prefill.stepSize ?? 512,
                                 contextTokens: executionBaseOffset,
                                 profile: fullAttentionScratchProfile,
                                 diagnosticsContext: diagnosticsContext
@@ -1444,7 +1444,7 @@ nonisolated final class ServerCompletion {
                                     imagePrefixInput,
                                     liveCache,
                                     imageContinuationAnchor,
-                                    genParams.prefillStepSize
+                                    genParams.prefill.stepSize
                                 )
                             else {
                                 throw AgentEngineError.generationFailed(
@@ -1482,7 +1482,7 @@ nonisolated final class ServerCompletion {
                                 cache: liveCache,
                                 checkpoints: allCheckpoints,
                                 checkpointBaseOffset: executionBaseOffset,
-                                prefillStepSize: genParams.prefillStepSize ?? 512,
+                                prefillStepSize: genParams.prefill.stepSize ?? 512,
                                 consumeAll: false,
                                 initialState: initialState,
                                 evalPolicy: imagePrefixInput == nil
@@ -1631,7 +1631,7 @@ nonisolated final class ServerCompletion {
                 partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                prefillStepSize: parameters.prefillStepSize ?? 512,
+                prefillStepSize: parameters.prefill.stepSize ?? 512,
                 tokenNDim: tokenNDim
             )
         }
@@ -1699,7 +1699,7 @@ nonisolated final class ServerCompletion {
                 throw AgentEngineError.generationFailed(rejection.message)
             }
         }
-        let cache = restoredCache ?? session.newCache(parameters: parameters)
+        let cache = try restoredCache ?? session.newCache(parameters: parameters)
         return (cache: cache, startedAt: Date.timeIntervalSinceReferenceDate)
     }
 
@@ -1838,7 +1838,7 @@ nonisolated final class ServerCompletion {
             // continuation runs under a scoped MLX error handler so a runtime
             // failure surfaces as a throw, not a process-fatal dispatch.
             try checkChunkedVisionBackstop(
-                windowSize: parameters.prefillStepSize ?? 512,
+                windowSize: parameters.prefill.stepSize ?? 512,
                 contextTokens: fullTokenCount,
                 profile: fullAttentionScratchProfile,
                 diagnosticsContext: diagnosticsContext
@@ -1904,7 +1904,7 @@ nonisolated final class ServerCompletion {
             partitionKey: partitionKey,
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
-            prefillStepSize: parameters.prefillStepSize ?? 512,
+            prefillStepSize: parameters.prefill.stepSize ?? 512,
             tokenNDim: fullInput.text.tokens.ndim
         )
     }

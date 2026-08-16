@@ -68,11 +68,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         }
     }
 
-    /// Chat-template tool-call format. `nil` means "no override — use the
-    /// vendor JSON default." Qwen3.5 uses XML function syntax
-    /// (`<function=name>…</function>` inside `<tool_call>`).
-    let toolCallFormat: ToolCallFormat?
-
     /// `true` when the top-level `model_type` has the `qwen3_5` prefix — the
     /// Qwen3.5 family (dense, MoE, text, and VLM variants all share it).
     let isQwen35: Bool
@@ -147,7 +142,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         let modelType = configJSON?["model_type"] as? String
         self.isQwen35 = modelType?.hasPrefix("qwen3_5") ?? false
         self.isMoE = modelType == "qwen3_5_moe"
-        self.toolCallFormat = Self.interpretToolCallFormat(modelType: modelType)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
         let declaredFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
         self.declaredTemplateFlags = declaredFlags
@@ -174,14 +168,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
-    }
-
-    /// Defers to the vendor's `model_type` inference, which already maps the
-    /// Qwen3.5 family to `.xmlFunction`. A `nil` `model_type` ⇒ `nil` (no
-    /// override — use the vendor JSON default).
-    private static func interpretToolCallFormat(modelType: String?) -> ToolCallFormat? {
-        guard let modelType else { return nil }
-        return ToolCallFormat.infer(from: modelType)
     }
 
     /// All known thinking templates put `<think>` right after

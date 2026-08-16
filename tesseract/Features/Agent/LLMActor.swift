@@ -65,6 +65,12 @@ actor LLMActor {
     /// Render+Token Cache. Set at load, cleared at unload.
     private var activeModelFingerprint: String?
 
+    /// The loaded model's tool-call format as the vendor resolved it at load
+    /// time (caller override → conventions registry → the model's own
+    /// declaration). Captured from the container's configuration in
+    /// `verifyAndStore`; `nil` while no model is loaded.
+    private var resolvedToolCallFormat: ToolCallFormat?
+
     /// The **Server Completion** module — actor-confined, non-`Sendable`,
     /// owning the cache-aware HTTP completion execution, the prefix cache,
     /// and the load-time snapshot facts. Created lazily (pre-load admin
@@ -108,11 +114,7 @@ actor LLMActor {
         let loadClock = ContinuousClock()
         let loadStart = loadClock.now
         let identity = ModelIdentity(directory: directory)
-        let format = identity.toolCallFormat
-        Log.agent.info(
-            "Loading model — visionMode=\(visionMode) "
-                + "format=\(format.map { "\($0)" } ?? "json (default)")"
-        )
+        Log.agent.info("Loading model — visionMode=\(visionMode)")
 
         if let ssdConfig {
             Log.agent.info(
@@ -147,8 +149,8 @@ actor LLMActor {
             Log.agent.info("Detected ParoQuant model — using \(visionMode ? "VLM" : "LLM") path")
             let container: ModelContainer =
                 visionMode
-                ? try await loadParoQuantVLMContainer(from: directory, toolCallFormat: format)
-                : try await loadParoQuantLLMContainer(from: directory, toolCallFormat: format)
+                ? try await loadParoQuantVLMContainer(from: directory)
+                : try await loadParoQuantLLMContainer(from: directory)
             let result = try await verifyAndStore(container: container, identity: identity)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
@@ -174,11 +176,6 @@ actor LLMActor {
                 from: directory,
                 using: #huggingFaceTokenizerLoader()
             )
-        }
-        if let format {
-            await container.update { context in
-                context.configuration.toolCallFormat = format
-            }
         }
         let result = try await verifyAndStore(container: container, identity: identity)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
@@ -264,7 +261,7 @@ actor LLMActor {
                     )))
             let prefillStarted = Date.timeIntervalSinceReferenceDate
             let strategy = PrefillStrategy.decide(
-                for: prepared, prefillStepSize: genParams.prefillStepSize
+                for: prepared, prefillStepSize: genParams.prefill.stepSize
             )
             let iterator = try strategy.makeIterator(
                 input: prepared,
@@ -438,7 +435,7 @@ actor LLMActor {
         let continuedInput = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
 
         let strategy = PrefillStrategy.decide(
-            for: continuedInput, prefillStepSize: parameters.prefillStepSize
+            for: continuedInput, prefillStepSize: parameters.prefill.stepSize
         )
         let iterator = try strategy.makeIterator(
             input: continuedInput,
@@ -525,7 +522,7 @@ actor LLMActor {
     /// same value `loadModel` writes into the container configuration, so
     /// the server-side Argument Transcoder and the parser always agree.
     func loadedToolCallFormat() -> ToolCallFormat? {
-        serverCompletion?.modelIdentity?.toolCallFormat
+        resolvedToolCallFormat
     }
 
     /// Renders messages and tools through the Jinja chat template, returning the exact
@@ -586,6 +583,7 @@ actor LLMActor {
         agentTokenizer = nil
         serverCompletion = nil
         activeModelFingerprint = nil
+        resolvedToolCallFormat = nil
         // C25: the Render+Token Cache entry holds a whole render's bytes plus
         // its token list — megabytes at long context — and none of it is valid
         // for the next model. Log the session's hit rate before dropping it;
@@ -774,6 +772,13 @@ actor LLMActor {
         }
 
         let tokenizer = try await AgentTokenizer(container: container)
+        resolvedToolCallFormat = await container.perform { context in
+            context.configuration.toolCallFormat
+        }
+        Log.agent.info(
+            "Tool-call format resolved — "
+                + "\(resolvedToolCallFormat.map { "\($0)" } ?? "json (default)")"
+        )
         let startsThinking = identity.promptStartsThinking
         let profile = identity.flopProfile
         let modelWeightBytes = await container.perform { context in
@@ -868,7 +873,7 @@ actor LLMActor {
     nonisolated static func makeGenerateParameters(
         from parameters: AgentGenerateParameters
     ) -> GenerateParameters {
-        return GenerateParameters(
+        var generateParameters = GenerateParameters(
             maxTokens: parameters.maxTokens,
             kvBits: parameters.kvBits,
             kvGroupSize: parameters.kvGroupSize,
@@ -881,9 +886,10 @@ actor LLMActor {
             presencePenalty: parameters.presencePenalty,
             presenceContextSize: parameters.presenceContextSize,
             frequencyPenalty: parameters.frequencyPenalty,
-            frequencyContextSize: parameters.frequencyContextSize,
-            prefillStepSize: parameters.prefillStepSize
+            frequencyContextSize: parameters.frequencyContextSize
         )
+        generateParameters.prefill = PrefillParameters(stepSize: parameters.prefillStepSize)
+        return generateParameters
     }
 
 }

@@ -187,7 +187,7 @@ nonisolated enum PrefillExecutor {
                 fullPrompt: fullText.tokens
             ),
             sampler: parameters.sampler(),
-            prefillStepSize: parameters.prefillStepSize,
+            prefill: parameters.prefill,
             maxTokens: parameters.maxTokens
         )
     }

@@ -42,6 +42,11 @@ nonisolated struct ArgumentTranscoder {
     private static func dialect(for format: ToolCallFormat) -> Dialect? {
         switch format {
         case .xmlFunction: return .xmlFunction
+        // Qwen3.5's format identity: the XML function dialect with a vendor-side
+        // JSON fallback parser. The wire dialect the model is prompted to emit
+        // is still XML, so the transcoder streams it; a JSON-fallback emission
+        // simply never engages the machine and stays on the atomic path.
+        case .qwen35: return .xmlFunction
         case .json: return .jsonWrapper
         default: return nil
         }

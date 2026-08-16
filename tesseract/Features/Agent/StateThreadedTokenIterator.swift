@@ -18,7 +18,7 @@ import MLXLMCommon
 nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
     private let model: any LanguageModel
     private var cache: [any KVCache]
-    private var state: LMOutput.State?
+    private(set) var state: LMOutput.State?
     /// Resolved once through the ``GenerationLogitProcessor`` seam; exposed
     /// read-only so wiring tests can assert this path attached the app
     /// processor rather than a vendor default.
@@ -93,9 +93,10 @@ nonisolated struct StateThreadedTokenIterator: TokenIteratorProtocol {
         let started = Date.timeIntervalSinceReferenceDate
         let runPrepare =
             prepare ?? { input, cache, windowSize in
-                try model.prepare(input, cache: cache, state: nil, windowSize: windowSize)
+                try model.prepare(
+                    input, cache: cache, state: nil, prefill: .init(stepSize: windowSize))
             }
-        switch try runPrepare(input, cache, parameters.prefillStepSize) {
+        switch try runPrepare(input, cache, parameters.prefill.stepSize) {
         case .tokens(let tail):
             y = tail
             let token = step(previous: y)

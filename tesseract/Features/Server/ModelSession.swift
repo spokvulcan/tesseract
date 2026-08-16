@@ -54,7 +54,7 @@ nonisolated protocol ModelSession {
     func prepare(_ input: UserInput) async throws -> LMInput
 
     /// Create the model-shaped empty KV cache array.
-    func newCache(parameters: GenerateParameters) -> [any KVCache]
+    func newCache(parameters: GenerateParameters) throws -> [any KVCache]
 
     /// Materialize a captured snapshot back into a live KV cache array.
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache]
@@ -135,7 +135,8 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         // so only the class that anchors qualifies.
         guard let model = context.model as? Qwen35 else { return nil }
         return { input, cache, state, windowSize in
-            try model.prepare(input, cache: cache, state: state, windowSize: windowSize)
+            try model.prepare(
+                input, cache: cache, state: state, prefill: .init(stepSize: windowSize))
         }
     }
     var producesFlatTextTokens: Bool {
@@ -151,8 +152,8 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         try await context.processor.prepare(input: input)
     }
 
-    func newCache(parameters: GenerateParameters) -> [any KVCache] {
-        context.model.newCache(parameters: parameters)
+    func newCache(parameters: GenerateParameters) throws -> [any KVCache] {
+        try context.model.newCache(parameters: parameters)
     }
 
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache] {
