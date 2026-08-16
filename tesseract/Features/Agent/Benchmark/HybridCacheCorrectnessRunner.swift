@@ -217,7 +217,7 @@ final class HybridCacheCorrectnessRunner {
         // Single full prefill of all N tokens, capture at offset N, then
         // forward the sentinel from both the live and the restored cache.
         // Doing it in this order means only one prefill is needed.
-        let liveCache = context.model.newCache(parameters: nil)
+        let liveCache = try context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: tokens, checkpoints: [:], cache: liveCache)
         guard
             let snap = HybridCacheSnapshot.capture(
@@ -249,7 +249,7 @@ final class HybridCacheCorrectnessRunner {
         let n = tokens.count
         let k = n / 2
 
-        let prefillCache = context.model.newCache(parameters: nil)
+        let prefillCache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.prefix(k)),
@@ -294,7 +294,7 @@ final class HybridCacheCorrectnessRunner {
         checkOffset: Bool = false
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
         let k = tokens.count / 2
-        let cacheA = context.model.newCache(parameters: nil)
+        let cacheA = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.prefix(k)),
@@ -328,7 +328,7 @@ final class HybridCacheCorrectnessRunner {
         context: ModelContext,
         tokens: [Int]
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
-        var cacheA: [any KVCache] = context.model.newCache(parameters: nil)
+        var cacheA: [any KVCache] = try context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: tokens, checkpoints: [:], cache: cacheA)
         maybeQuantizeKVCache(cache: &cacheA, kvBits: 8, kvGroupSize: 64, quantizedKVStart: 0)
 
@@ -374,7 +374,7 @@ final class HybridCacheCorrectnessRunner {
         tokens: [Int]
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
         let k = tokens.count / 2
-        let setupCache = context.model.newCache(parameters: nil)
+        let setupCache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.prefix(k)),
@@ -438,7 +438,7 @@ final class HybridCacheCorrectnessRunner {
         tokens: [Int],
         fullLogits: MLXArray
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
-        let setupCache = context.model.newCache(parameters: nil)
+        let setupCache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.dropLast()),
@@ -474,7 +474,7 @@ final class HybridCacheCorrectnessRunner {
         let k = n / 4
         let m = n / 2
 
-        let setupCache = context.model.newCache(parameters: nil)
+        let setupCache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.prefix(k)),
@@ -553,7 +553,7 @@ final class HybridCacheCorrectnessRunner {
             let leafOffset = n - 1 - trimAmount
             let coldTokens = Array(tokens.prefix(leafOffset + 1))
 
-            let liveCache = context.model.newCache(parameters: nil)
+            let liveCache = try context.model.newCache(parameters: nil)
             try prefill(
                 context: context,
                 tokens: Array(tokens.dropLast()),
@@ -649,7 +649,7 @@ final class HybridCacheCorrectnessRunner {
         context: ModelContext,
         tokens: [Int]
     ) throws -> MLXArray {
-        let cache = context.model.newCache(parameters: nil)
+        let cache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.dropLast()),
@@ -666,7 +666,7 @@ final class HybridCacheCorrectnessRunner {
         tokens: [Int],
         restoreAt k: Int
     ) throws -> MLXArray {
-        let setupCache = context.model.newCache(parameters: nil)
+        let setupCache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.prefix(k)),

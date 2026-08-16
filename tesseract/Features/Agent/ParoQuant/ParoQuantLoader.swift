@@ -124,7 +124,7 @@ nonisolated private func installTextOnlyProcessor(on container: ModelContainer) 
 /// dense + MoE — `Qwen35MoEModel` subclasses `Qwen35Model`), so a small
 /// registry mirroring the factory entries is passed instead.
 nonisolated func loadParoQuantLLMContainer(
-    from directory: URL, toolCallFormat: ToolCallFormat?
+    from directory: URL
 ) async throws -> ModelContainer {
     let typeRegistry = ModelTypeRegistry<MLXLLM.Qwen35Model>(creators: [
         "qwen3_5": { data in
@@ -139,8 +139,7 @@ nonisolated func loadParoQuantLLMContainer(
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
         typeRegistry: typeRegistry,
-        tokenizerLoader: #huggingFaceTokenizerLoader(),
-        toolCallFormat: toolCallFormat
+        tokenizerLoader: #huggingFaceTokenizerLoader()
     )
     await installTextOnlyProcessor(on: container)
     return container
@@ -155,7 +154,7 @@ nonisolated func loadParoQuantLLMContainer(
 /// Loaded eagerly for vision-capable models (ADR-0013); text-only models and the
 /// vision-opted-out path use `loadParoQuantLLMContainer`.
 nonisolated func loadParoQuantVLMContainer(
-    from directory: URL, toolCallFormat: ToolCallFormat?
+    from directory: URL
 ) async throws -> ModelContainer {
     let typeRegistry = ModelTypeRegistry<MLXVLM.Qwen35>(creators: [
         "qwen3_5": { data in
@@ -170,8 +169,7 @@ nonisolated func loadParoQuantVLMContainer(
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
         typeRegistry: typeRegistry,
-        tokenizerLoader: #huggingFaceTokenizerLoader(),
-        toolCallFormat: toolCallFormat
+        tokenizerLoader: #huggingFaceTokenizerLoader()
     )
 
     if let vlmProcessor = await loadVLMProcessor(from: directory, container: container) {

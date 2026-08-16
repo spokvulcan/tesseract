@@ -17,16 +17,14 @@ struct ModelIdentityTests {
     // MARK: - Family & variant (directory surface)
 
     /// Tracer bullet: a Qwen3.5 model directory yields the family fact and the
-    /// XML-function tool-call format, read through the directory-based
-    /// interface.
-    @Test func qwen35DirectoryYieldsFamilyAndXMLFunctionFormat() throws {
+    /// Qwen3.5 family detection, read through the directory-based interface.
+    @Test func qwen35DirectoryYieldsFamily() throws {
         let dir = try makeModelDir(config: #"{ "model_type": "qwen3_5" }"#)
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let identity = ModelIdentity(directory: dir)
 
         #expect(identity.isQwen35 == true)
-        #expect(identity.toolCallFormat == .xmlFunction)
     }
 
     /// The MoE variant sets both `isQwen35` and `isMoE`.
@@ -139,7 +137,6 @@ struct ModelIdentityTests {
         let identity = ModelIdentity(directory: dir)
         #expect(identity.flopProfile == .qwen35_4B_PARO)
         #expect(identity.isQwen35 == false)
-        #expect(identity.toolCallFormat == nil)
     }
 
     /// A directory with no `config.json` and no `chat_template.jinja` yields the
@@ -179,16 +176,6 @@ struct ModelIdentityTests {
 
     // MARK: - No-disk interpretation seam
 
-    /// Non-Qwen `model_type` defers to the vendor's format inference.
-    @Test func toolCallFormatInfersForNonQwenFamilies() {
-        #expect(
-            ModelIdentity(configJSON: ["model_type": "glm4"], chatTemplate: nil).toolCallFormat
-                == .glm4)
-        #expect(
-            ModelIdentity(configJSON: ["model_type": "llama"], chatTemplate: nil).toolCallFormat
-                == nil)
-    }
-
     /// The seam interprets config + template together with no disk access.
     @Test func seamInterpretsConfigAndTemplate() {
         let identity = ModelIdentity(
@@ -197,7 +184,6 @@ struct ModelIdentityTests {
         )
         #expect(identity.isQwen35 == true)
         #expect(identity.isMoE == true)
-        #expect(identity.toolCallFormat == .xmlFunction)
         #expect(identity.promptStartsThinking == true)
     }
 
@@ -207,7 +193,6 @@ struct ModelIdentityTests {
         let identity = ModelIdentity(configJSON: nil, chatTemplate: nil)
         #expect(identity.isQwen35 == false)
         #expect(identity.isMoE == false)
-        #expect(identity.toolCallFormat == nil)
         #expect(identity.promptStartsThinking == false)
         #expect(identity.flopProfile == .qwen35_4B_PARO)
         #expect(identity.fullAttentionScratchProfile == nil)

@@ -129,7 +129,7 @@ actor ProofreadModel {
                 temperature: 0.0
             )
             if cache.isEmpty {
-                cache = context.model.newCache(parameters: parameters)
+                cache = try context.model.newCache(parameters: parameters)
                 commonCount = 0
             }
 

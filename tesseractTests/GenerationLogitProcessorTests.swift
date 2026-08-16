@@ -98,7 +98,7 @@ import Testing
             let iterator = session.makeDecodeIterator(
                 remainder: LMInput.Text(tokens: MLXArray([Int32(5)])),
                 fullText: LMInput.Text(tokens: MLXArray([Int32(1), 2, 3, 4])),
-                cache: session.newCache(parameters: params),
+                cache: try session.newCache(parameters: params),
                 state: nil,
                 parameters: params
             )
@@ -111,7 +111,7 @@ import Testing
             let iterator = session.makeDecodeIterator(
                 remainder: LMInput.Text(tokens: MLXArray([Int32(5)])),
                 fullText: LMInput.Text(tokens: MLXArray([Int32(1), 2, 3, 4])),
-                cache: session.newCache(parameters: params),
+                cache: try session.newCache(parameters: params),
                 state: nil,
                 parameters: params
             )
@@ -129,7 +129,7 @@ import Testing
             let params = GenerateParameters(temperature: 0, presencePenalty: 1.5)
             let iterator = try session.makePreparingDecodeIterator(
                 LMInput(tokens: MLXArray([Int32(1), 2, 3])),
-                cache: session.newCache(parameters: params),
+                cache: try session.newCache(parameters: params),
                 parameters: params,
                 prepare: nil
             )
@@ -141,7 +141,7 @@ import Testing
             let params = GenerateParameters(temperature: 0)
             let iterator = try session.makePreparingDecodeIterator(
                 LMInput(tokens: MLXArray([Int32(1), 2, 3])),
-                cache: session.newCache(parameters: params),
+                cache: try session.newCache(parameters: params),
                 parameters: params,
                 prepare: nil
             )

@@ -219,8 +219,9 @@ final class ParoQuantVLMSmokeRunner {
         vlm: Qwen35,
         input: LMInput
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
-        let cache = context.model.newCache(parameters: nil)
-        let result = try context.model.prepare(input, cache: cache, state: nil, windowSize: nil)
+        let cache = try context.model.newCache(parameters: nil)
+        let result = try context.model.prepare(
+            input, cache: cache, state: nil, prefill: .init(stepSize: nil))
         guard case .logits(let output) = result else {
             return (false, "prepare returned .tokens — unexpected for the VLM container", [])
         }
@@ -262,7 +263,7 @@ final class ParoQuantVLMSmokeRunner {
 
         // Same computation, but the final single-token forward drops state —
         // exactly what TokenIterator's `.logits` path does today.
-        let cache = context.model.newCache(parameters: nil)
+        let cache = try context.model.newCache(parameters: nil)
         let tokens = LLMActor.extractTokenSequence(input.text.tokens)
         let prefix = sliced2D(input.text.tokens, to: tokens.count - 1)
         let prefixInput = LMInput(
@@ -271,7 +272,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits = try context.model.prepare(
-                prefixInput, cache: cache, state: nil, windowSize: nil)
+                prefixInput, cache: cache, state: nil, prefill: .init(stepSize: nil))
         else {
             return (false, "prepare returned .tokens", [])
         }
@@ -296,13 +297,13 @@ final class ParoQuantVLMSmokeRunner {
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
         let split = 768  // deliberately not a multiple of the 512 prefill step
 
-        let cacheA = context.model.newCache(parameters: nil)
+        let cacheA = try context.model.newCache(parameters: nil)
         let outA = try prefill(context: context, tokens: Array(tokens.dropLast()), cache: cacheA)
         let (logitsA, _) = lastTokenLogits(
             model: context.model, token: tokens[tokens.count - 1], cache: cacheA, state: outA.state
         )
 
-        let cacheB = context.model.newCache(parameters: nil)
+        let cacheB = try context.model.newCache(parameters: nil)
         let outB1 = try prefill(
             context: context, tokens: Array(tokens.prefix(split)), cache: cacheB)
         let outB2 = try prefill(
@@ -339,7 +340,7 @@ final class ParoQuantVLMSmokeRunner {
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
         let k = 512  // chunk-aligned: cold and warm chunk boundaries coincide
 
-        let coldCache = context.model.newCache(parameters: nil)
+        let coldCache = try context.model.newCache(parameters: nil)
         let coldOut = try prefill(
             context: context, tokens: Array(tokens.dropLast()), cache: coldCache
         )
@@ -348,7 +349,7 @@ final class ParoQuantVLMSmokeRunner {
             cache: coldCache, state: coldOut.state
         )
 
-        let setupCache = context.model.newCache(parameters: nil)
+        let setupCache = try context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: Array(tokens.prefix(k)), cache: setupCache)
         guard let snap = HybridCacheSnapshot.capture(cache: setupCache, offset: k, type: .system)
         else {
@@ -413,10 +414,10 @@ final class ParoQuantVLMSmokeRunner {
 
         // Shape-matched cold chain: prepare(turn 1) → threaded-state suffix
         // prefill → sentinel forward. One cache, no restore.
-        let coldCache = context.model.newCache(parameters: nil)
+        let coldCache = try context.model.newCache(parameters: nil)
         guard
             case .logits(let coldTurn1) = try context.model.prepare(
-                input, cache: coldCache, state: nil, windowSize: nil
+                input, cache: coldCache, state: nil, prefill: .init(stepSize: nil)
             )
         else {
             return (false, "cold turn-1 prepare returned .tokens", [])
@@ -434,7 +435,7 @@ final class ParoQuantVLMSmokeRunner {
 
         // Informational: true single-shot cold prepare over the full
         // two-turn sequence (production cold shape for a turn-2 request).
-        let singleCache = context.model.newCache(parameters: nil)
+        let singleCache = try context.model.newCache(parameters: nil)
         let singlePrefix = MLXArray(full.dropLast().map { Int32($0) }).expandedDimensions(axis: 0)
         let singleInput = LMInput(
             text: .init(tokens: singlePrefix, mask: ones(like: singlePrefix).asType(.int8)),
@@ -442,7 +443,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let singleOut) = try context.model.prepare(
-                singleInput, cache: singleCache, state: nil, windowSize: nil
+                singleInput, cache: singleCache, state: nil, prefill: .init(stepSize: nil)
             )
         else {
             return (false, "single-shot cold prepare returned .tokens", [])
@@ -456,10 +457,10 @@ final class ParoQuantVLMSmokeRunner {
         // Warm path: image turn prefilled cold (full turn-1 prompt), leaf
         // captured at its end, restored, then the text continuation prefills
         // with the harvested delta seeded into fresh state.
-        let warmSetup = context.model.newCache(parameters: nil)
+        let warmSetup = try context.model.newCache(parameters: nil)
         guard
             case .logits(let turn1Out) = try context.model.prepare(
-                input, cache: warmSetup, state: nil, windowSize: nil
+                input, cache: warmSetup, state: nil, prefill: .init(stepSize: nil)
             )
         else {
             return (false, "turn-1 prepare returned .tokens", [])
@@ -534,7 +535,7 @@ final class ParoQuantVLMSmokeRunner {
         }
         let k = visionStart - 8
 
-        let coldCache = context.model.newCache(parameters: nil)
+        let coldCache = try context.model.newCache(parameters: nil)
         let coldPrefixArr = sliced2D(prepared.text.tokens, to: tokens.count - 1)
         let coldInput = LMInput(
             text: .init(tokens: coldPrefixArr, mask: ones(like: coldPrefixArr).asType(.int8)),
@@ -542,7 +543,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let coldOut) = try context.model.prepare(
-                coldInput, cache: coldCache, state: nil, windowSize: nil
+                coldInput, cache: coldCache, state: nil, prefill: .init(stepSize: nil)
             )
         else {
             return (false, "cold prepare returned .tokens", [])
@@ -555,7 +556,7 @@ final class ParoQuantVLMSmokeRunner {
 
         // Warm-naive: prefill the text prefix, capture/restore at K, then
         // vendor prepare over the image-bearing remainder.
-        let setupCache = context.model.newCache(parameters: nil)
+        let setupCache = try context.model.newCache(parameters: nil)
         try prefill(context: context, tokens: Array(tokens.prefix(k)), cache: setupCache)
         guard let snap = HybridCacheSnapshot.capture(cache: setupCache, offset: k, type: .system)
         else {
@@ -571,7 +572,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let warmOut) = try context.model.prepare(
-                remainderInput, cache: restored, state: nil, windowSize: nil
+                remainderInput, cache: restored, state: nil, prefill: .init(stepSize: nil)
             )
         else {
             return (false, "remainder prepare returned .tokens", [])
@@ -649,7 +650,7 @@ final class ParoQuantVLMSmokeRunner {
         // shape, chunk shape, and anchor are otherwise identical, so the two
         // runs can differ only by restore fidelity.
         func continueRemainder(restore: Bool) throws -> (logits: MLXArray, state: LMOutput.State?) {
-            let cache = context.model.newCache(parameters: nil)
+            let cache = try context.model.newCache(parameters: nil)
             try prefill(context: context, tokens: Array(tokens.prefix(k)), cache: cache)
 
             let working: [any KVCache]
@@ -675,7 +676,7 @@ final class ParoQuantVLMSmokeRunner {
             )
             guard
                 case .logits(let out) = try vlm.prepare(
-                    remainderInput, cache: working, state: anchor, windowSize: 512
+                    remainderInput, cache: working, state: anchor, prefill: .init(stepSize: 512)
                 )
             else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
@@ -794,7 +795,7 @@ final class ParoQuantVLMSmokeRunner {
         // continue [k, last) through image 2 with image 1's anchor seeded and
         // only image 2's pixels fed.
         func continueStacked(restore: Bool) throws -> (logits: MLXArray, state: LMOutput.State?) {
-            let cache = context.model.newCache(parameters: nil)
+            let cache = try context.model.newCache(parameters: nil)
             let prefixTokens = sliced2D(prepared.text.tokens, to: k)
             let prefixInput = LMInput(
                 text: .init(tokens: prefixTokens, mask: ones(like: prefixTokens).asType(.int8)),
@@ -803,7 +804,7 @@ final class ParoQuantVLMSmokeRunner {
             )
             guard
                 case .logits = try context.model.prepare(
-                    prefixInput, cache: cache, state: nil, windowSize: nil)
+                    prefixInput, cache: cache, state: nil, prefill: .init(stepSize: nil))
             else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
             }
@@ -833,7 +834,7 @@ final class ParoQuantVLMSmokeRunner {
             )
             guard
                 case .logits(let out) = try vlm.prepare(
-                    remainderInput, cache: working, state: anchor, windowSize: 512
+                    remainderInput, cache: working, state: anchor, prefill: .init(stepSize: 512)
                 )
             else {
                 throw ParoQuantVLMSmokeError.unexpectedPrepareResult
@@ -905,7 +906,7 @@ final class ParoQuantVLMSmokeRunner {
         // continuation on a fresh cache, anchored at zero — the first generated
         // token is sampled from the final position's logits, exactly as the
         // iterator's `.logits` branch does.
-        let cache = context.model.newCache(parameters: nil)
+        let cache = try context.model.newCache(parameters: nil)
         let wholeTokens = sliced2D(input.text.tokens, to: tokens.count)
         let wholeInput = LMInput(
             text: .init(tokens: wholeTokens, mask: ones(like: wholeTokens).asType(.int8)),
@@ -913,7 +914,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let out) = try vlm.prepare(
-                wholeInput, cache: cache, state: nil, windowSize: 512
+                wholeInput, cache: cache, state: nil, prefill: .init(stepSize: 512)
             )
         else {
             return (false, "prepareContinuation returned .tokens", [])
@@ -942,7 +943,7 @@ final class ParoQuantVLMSmokeRunner {
         input: LMInput
     ) throws -> (MLXArray, LMOutput.State?) {
         let tokens = LLMActor.extractTokenSequence(input.text.tokens)
-        let cache = context.model.newCache(parameters: nil)
+        let cache = try context.model.newCache(parameters: nil)
         let prefix = sliced2D(input.text.tokens, to: tokens.count - 1)
         let prefixInput = LMInput(
             text: .init(tokens: prefix, mask: ones(like: prefix).asType(.int8)),
@@ -950,7 +951,7 @@ final class ParoQuantVLMSmokeRunner {
         )
         guard
             case .logits(let out) = try context.model.prepare(
-                prefixInput, cache: cache, state: nil, windowSize: nil
+                prefixInput, cache: cache, state: nil, prefill: .init(stepSize: nil)
             )
         else {
             throw ParoQuantVLMSmokeError.unexpectedPrepareResult

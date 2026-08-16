@@ -45,7 +45,7 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     /// emit a render kwarg only where the desired state differs from what
     /// the template renders anyway, in either polarity.
     let templateFlagDefaults: [TemplateRenderFlag: Bool]
-    /// The loaded model's tool-call format (`ModelIdentity.toolCallFormat`) —
+    /// The loaded model's tool-call format as the vendor resolved it at load time —
     /// what the completion handler's Argument Transcoder keys off. `nil`
     /// means "no override": the parser then falls back to the vendor JSON
     /// default, and the transcoder mirrors that with `?? .json`.

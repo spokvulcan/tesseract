@@ -79,7 +79,7 @@ nonisolated enum PrefillStrategy: Equatable, Sendable {
     ) throws -> TokenIterator {
         switch self {
         case .chunked(let stepSize):
-            var cache = model.newCache(parameters: parameters)
+            var cache = try model.newCache(parameters: parameters)
             let warmed = try PrefillExecutor.run(
                 model: model,
                 text: input.text,
@@ -105,10 +105,10 @@ nonisolated enum PrefillStrategy: Equatable, Sendable {
                 return try TokenIterator(
                     input: input,
                     model: model,
-                    cache: model.newCache(parameters: parameters),
+                    cache: try model.newCache(parameters: parameters),
                     processor: processor,
                     sampler: parameters.sampler(),
-                    prefillStepSize: parameters.prefillStepSize,
+                    prefill: parameters.prefill,
                     maxTokens: parameters.maxTokens
                 )
             }
