@@ -35,6 +35,20 @@ struct AgentGenerateParametersTests {
     }
 
     @MainActor
+    @Test func qwen38_27BIdMapsToQwen38ThinkingPreset() {
+        // Qwen3.8's card recommends temp 1.0 / top_p 0.95 / top_k 20 with
+        // presence_penalty 0.0 in thinking mode — must not fall through to
+        // the generic `qwen3` instruct profile (temp 0.7, presence 1.5).
+        let params = AgentGenerateParameters.forModel("qwen3.8-27b")
+        #expect(params.temperature == 1.0)
+        #expect(params.topP == 0.95)
+        #expect(params.topK == 20)
+        #expect(params.presencePenalty == nil)
+        #expect(params.repetitionPenalty == nil)
+        #expect(params.thinkingSafeguard.enabled == true)
+    }
+
+    @MainActor
     @Test func ornith9bIdMapsToOrnith9bPreset() {
         let params = AgentGenerateParameters.forModel("ornith-9b")
         #expect(params.temperature == AgentGenerateParameters.ornith9b.temperature)

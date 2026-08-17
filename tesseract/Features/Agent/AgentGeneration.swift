@@ -140,6 +140,17 @@ struct AgentGenerateParameters: Sendable, Codable {
         topK: 20
     )
 
+    /// Qwen3.8 thinking-mode defaults, taken from the model card (temp 1.0,
+    /// top_p 0.95, top_k 20, no penalties). Same no-presencePenalty rationale
+    /// as ``qwen36Thinking``: the card recommends `presence_penalty=0.0` in
+    /// thinking mode.
+    /// See: https://huggingface.co/Qwen/Qwen3.8-27B
+    static let qwen38Thinking = AgentGenerateParameters(
+        temperature: 1.0,
+        topP: 0.95,
+        topK: 20
+    )
+
     /// Ornith 1.0 9B (DeepReinforce; Qwen3.5-dense `qwen3_5`, text-only).
     /// Vendor-recommended sampling. Values coincide with `.qwen36Thinking`;
     /// kept as its own preset so Ornith is isolated from future Qwen-preset
@@ -187,6 +198,7 @@ struct AgentGenerateParameters: Sendable, Codable {
         if modelID.hasPrefix("ornith-35b") { return .ornith35b }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
         if modelID.hasPrefix("qwen3.6") { return .qwen36Thinking }
+        if modelID.hasPrefix("qwen3.8") { return .qwen38Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }

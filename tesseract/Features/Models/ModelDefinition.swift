@@ -238,6 +238,19 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
+            id: "qwen3.8-27b",
+            displayName: "Qwen3.8-27B (MLX 4bit)",
+            description:
+                "Dense 27B agent from the Qwen3.8 generation (uniform 4-bit MLX, vision-capable). Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "mlx-community/Qwen3.8-27B-4bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~16 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "qwen3.5-2b",
             displayName: "Qwen3.5-2B (bf16)",
             description:

@@ -152,9 +152,10 @@ rm -f "$LOG_FILE"
 open -W "$APP" --args --benchmark --bench-sweep "$SWEEP" --bench-source-revision "$SOURCE_REV" "${MODEL_ARGS[@]+"${MODEL_ARGS[@]}"}" "${PROMPT_ARGS[@]+"${PROMPT_ARGS[@]}"}" "$@" &
 OPEN_PID=$!
 
-# Wait for log file to appear (up to 30s for model loading)
+# Wait for log file to appear (up to 180s for model loading — a 16 GB
+# checkpoint like Qwen3.8-27B takes well over 30s to load)
 echo "Waiting for benchmark to start..."
-for i in $(seq 1 60); do
+for i in $(seq 1 360); do
     if [ -f "$LOG_FILE" ]; then
         break
     fi
@@ -162,7 +163,7 @@ for i in $(seq 1 60); do
 done
 
 if [ ! -f "$LOG_FILE" ]; then
-    echo "Error: Log file not created after 30s. Check Console.app for errors."
+    echo "Error: Log file not created after 180s. Check Console.app for errors."
     echo "Expected: $LOG_FILE"
     exit 1
 fi
