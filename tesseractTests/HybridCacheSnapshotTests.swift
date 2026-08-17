@@ -426,6 +426,54 @@ struct HybridCacheSnapshotTests {
         }
     }
 
+    @Test func restoreAcceptsLegacyFiveElementRotatingMetaState() throws {
+        // Snapshots persisted before the 2026-08 vendor pin carry the
+        // 5-element RotatingKVCache metaState (no capacity-origin tag); the
+        // setter defaults the origin, so they must keep restoring.
+        let legacy = HybridCacheSnapshot(
+            tokenOffset: 10,
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "RotatingKVCache",
+                    state: [],
+                    metaState: ["0", "512", "256", "0", "0"],
+                    offset: 10
+                )
+            ],
+            checkpointType: .leaf,
+            memoryBytes: 0,
+            createdAt: .now
+        )
+
+        let restored = try legacy.restore()
+        #expect(restored[0] is RotatingKVCache)
+        #expect(restored[0].maxSize == 512)
+    }
+
+    @Test func restoreThrowsOnUnknownRotatingCapacityOrigin() {
+        // The upstream setter `fatalError`s on an unrecognized 6th
+        // (capacity-origin) value — corrupt data must be a thrown
+        // RestoreError, never reach that setter.
+        let corrupt = HybridCacheSnapshot(
+            tokenOffset: 10,
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "RotatingKVCache",
+                    state: [],
+                    metaState: ["0", "512", "256", "0", "0", "sideways"],
+                    offset: 10
+                )
+            ],
+            checkpointType: .leaf,
+            memoryBytes: 0,
+            createdAt: .now
+        )
+
+        #expect(throws: HybridCacheSnapshot.RestoreError.self) {
+            _ = try corrupt.restore()
+        }
+    }
+
     @Test func restoreThrowsOnUnknownCacheClassName() {
         let corrupt = HybridCacheSnapshot(
             tokenOffset: 4,
