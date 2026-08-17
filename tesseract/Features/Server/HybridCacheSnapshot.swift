@@ -395,8 +395,14 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 && Int(metaState[2]) != nil
                 && Int(metaState[3]) != nil
         case "RotatingKVCache":
-            // [keep, maxCacheSize, step, offset, idx]; maxSize must be numeric.
-            return metaState.count == 5
+            // [keep, maxCacheSize, step, offset, idx] plus an optional
+            // capacity-origin tag (6th) since the 2026-08 vendor pin; the
+            // setter accepts both shapes but fatalErrors on an unknown
+            // origin string, so mirror its full precondition here.
+            return
+                (metaState.count == 5
+                || (metaState.count == 6
+                    && ["modelNative", "requested"].contains(metaState[5])))
                 && Int(metaState[0]) != nil
                 && metaState[1] != "None" && Int(metaState[1]) != nil
                 && Int(metaState[2]) != nil
