@@ -135,9 +135,14 @@ struct MTPDrafterUnavailableError: Error {}
 extension ModelSession {
     /// Sessions without speculative decoding (the test peers, and any future
     /// adapter that never loads a drafter) inherit the disabled state.
-    var mtpDrafter: (any MTPDrafterModel)? { nil }
+    ///
+    /// `nonisolated` is load-bearing: the protocol is nonisolated, but under
+    /// the project's MainActor default isolation an unannotated extension
+    /// member becomes a MainActor-isolated witness for a nonisolated
+    /// requirement, and the runtime isolation check traps off the main actor.
+    nonisolated var mtpDrafter: (any MTPDrafterModel)? { nil }
 
-    func makeMTPDecodeIterator(
+    nonisolated func makeMTPDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
         parameters: GenerateParameters
