@@ -238,6 +238,14 @@ struct AgentSettingsPane: View {
             }
 
             Section {
+                Toggle("Speculative Decoding (MTP)", isOn: $settings.mtpSpeculationEnabled)
+            } footer: {
+                Text(
+                    "Speeds up greedy (temperature 0) generation on models that ship a multi-token-prediction head by drafting several tokens per step. Takes effect on the next model load."
+                )
+            }
+
+            Section {
                 Toggle("Show Skill Button", isOn: $settings.showSkillPills)
                 Picker("Translate To", selection: $settings.translateTargetLanguage) {
                     ForEach(translateLanguageOptions, id: \.self) { language in

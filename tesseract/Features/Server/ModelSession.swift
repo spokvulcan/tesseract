@@ -49,6 +49,11 @@ nonisolated protocol ModelSession {
     /// what the processor would have built.
     var producesFlatTextTokens: Bool { get }
 
+    /// The MTP speculative-decoding drafter paired with the loaded model,
+    /// when one was loaded beside it (`mtp.*` head weights present and the
+    /// setting on). `nil` disables the speculative arm — the common case.
+    var mtpDrafter: (any MTPDrafterModel)? { get }
+
     /// Run the model's input processor: `UserInput` (messages, images,
     /// tools) → tokenized `LMInput`.
     func prepare(_ input: UserInput) async throws -> LMInput
@@ -94,6 +99,20 @@ nonisolated protocol ModelSession {
         prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)?
     ) throws -> StateThreadedTokenIterator
 
+    /// Construct the MTP speculative decode iterator over the whole prompt
+    /// (its init runs the vendor `prepare` — whole-prompt and unchunked when
+    /// the drafter requires prompt prefill, which is why callers gate on a
+    /// scratch-size budget first). Only callable when ``mtpDrafter`` is
+    /// non-nil. Penalties are stripped from the iterator's parameters inside
+    /// the implementation and re-attached as the app logit processor
+    /// (ADR-0053), so the vendor's parameter-built penalty processor never
+    /// doubles them.
+    func makeMTPDecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> MTPSpeculativeTokenIterator
+
     /// Quantize the cache in place per the parameters' `kvBits`/`kvGroupSize`
     /// (no-op when unset) — once, before the iterator, so the array the
     /// module retains stays the live final cache.
@@ -106,6 +125,25 @@ nonisolated protocol ModelSession {
         offset: Int,
         type: HybridCacheSnapshot.CheckpointType
     ) -> HybridCacheSnapshot?
+}
+
+/// Thrown by the default ``ModelSession/makeMTPDecodeIterator(_:cache:parameters:)``
+/// when a session has no drafter — reaching it means an engagement-policy bug,
+/// since callers gate on ``ModelSession/mtpDrafter`` first.
+struct MTPDrafterUnavailableError: Error {}
+
+extension ModelSession {
+    /// Sessions without speculative decoding (the test peers, and any future
+    /// adapter that never loads a drafter) inherit the disabled state.
+    var mtpDrafter: (any MTPDrafterModel)? { nil }
+
+    func makeMTPDecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> MTPSpeculativeTokenIterator {
+        throw MTPDrafterUnavailableError()
+    }
 }
 
 /// The **Model Session** port: how the Server Completion enters a session.
@@ -124,6 +162,9 @@ nonisolated protocol ModelSessionProviding: Sendable {
 /// peer, so only the model varies across the seam.
 nonisolated struct ContextBackedModelSession: ModelSession {
     let context: ModelContext
+    /// The drafter loaded beside this model, threaded in by the production
+    /// provider; `nil` on sessions without speculative decoding.
+    var mtpDrafter: (any MTPDrafterModel)?
 
     var configuration: ModelConfiguration { context.configuration }
     var tokenizer: any Tokenizer { context.tokenizer }
@@ -216,6 +257,43 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         )
     }
 
+    func makeMTPDecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> MTPSpeculativeTokenIterator {
+        guard let drafter = mtpDrafter else {
+            throw MTPDrafterUnavailableError()
+        }
+        // Penalties ride the app processor (ADR-0053), injected through
+        // `GenerationComponents`; strip them from the iterator's parameters
+        // so `components.logitProcessor(parameters:)` doesn't also build the
+        // vendor's parameter-driven penalty processor on top.
+        var iteratorParams = parameters
+        iteratorParams.repetitionPenalty = nil
+        iteratorParams.presencePenalty = nil
+        iteratorParams.frequencyPenalty = nil
+        var components = GenerationComponents()
+        if let processor = GenerationLogitProcessor.resolve(
+            for: parameters, pathQuantizesKVUpFront: true)
+        {
+            // One iterator = one generation, so handing the factory a single
+            // resolved instance preserves the fresh-state contract; the box
+            // routes the non-Sendable processor into the @Sendable factory.
+            let box = UnsafeSendableBox(processor)
+            components = components.appendingLogitProcessor { box.value }
+        }
+        return try MTPSpeculativeTokenIterator(
+            input: input,
+            mainModel: context.model,
+            drafter: drafter,
+            mainCache: cache,
+            parameters: iteratorParams,
+            blockSize: MTPDrafterSupport.blockSize,
+            components: components
+        )
+    }
+
     func quantizeKVCache(_ cache: inout [any KVCache], parameters: GenerateParameters) {
         maybeQuantizeKVCache(
             cache: &cache,
@@ -239,12 +317,16 @@ nonisolated struct ContextBackedModelSession: ModelSession {
 /// coexist mid-migration with identical Metal-affine batching.
 nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
     let container: ModelContainer
+    /// Boxed drafter handed through to every session; see the `LLMActor`
+    /// field for the sharing rationale.
+    var mtpDrafter: UnsafeSendableBox<any MTPDrafterModel>?
 
     func withSession<R: Sendable>(
         _ body: @Sendable (any ModelSession) async throws -> R
     ) async throws -> R {
         try await container.perform { context in
-            try await body(ContextBackedModelSession(context: context))
+            try await body(
+                ContextBackedModelSession(context: context, mtpDrafter: mtpDrafter?.value))
         }
     }
 }

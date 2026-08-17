@@ -1326,6 +1326,39 @@ nonisolated final class ServerCompletion {
                 restoreMs = 0
                 executionBaseOffset = prefixEnd
             case .cold:
+                // MTP speculative arm (v1): a text-only cold prompt at greedy
+                // sampling with a loaded drafter decodes through the vendor
+                // MTP iterator instead of the chunked-prefill path. Mid-prefill
+                // checkpoints are forfeited (the MTP prompt prefill is
+                // unchunked), but the post-generation leaf capture still runs
+                // off `finalCache`, so the next turn restores warm and takes
+                // the ordinary path — MTP engages on cold turns only.
+                if MTPDrafterSupport.shouldEngage(
+                    hasDrafter: session.mtpDrafter != nil,
+                    temperature: parameters.temperature,
+                    textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
+                    promptTokens: fullTokenCount,
+                    scratchProfile: fullAttentionScratchProfile
+                ) {
+                    return try await Self.makeMTPGeneration(
+                        session: session,
+                        fullInput: fullInput,
+                        fullTokens: fullTokens,
+                        fullTokenCount: fullTokenCount,
+                        tokenNDim: tokenNDim,
+                        keySpace: keySpace,
+                        parameters: parameters,
+                        toolSpecs: canonicalTools,
+                        partitionKey: partitionKey,
+                        lookupReason: lookupResult.reason,
+                        lookupMs: lookupMs,
+                        ssdEnabled: ssdEnabled,
+                        seedsPositionAnchor: seedsPositionAnchor,
+                        visionAttentionScratchProfile: visionAttentionScratchProfile,
+                        diagnosticsContext: diagnosticsContext,
+                        progressHandler: progressHandler
+                    )
+                }
                 inputForGeneration = fullInput
                 cacheToUse = nil
                 restoreMs = 0
@@ -1906,6 +1939,111 @@ nonisolated final class ServerCompletion {
             transientLastUserBoundarySnapshot: nil,
             prefillStepSize: parameters.prefill.stepSize ?? 512,
             tokenNDim: fullInput.text.tokens.ndim
+        )
+    }
+
+    /// The MTP speculative arm of the keyed cold path (v1): whole-prompt
+    /// vendor prepare (the drafter's private cache needs one target hidden
+    /// row per prompt token, so the prefill is unchunked — engagement is
+    /// scratch-budget-gated upstream in `MTPDrafterSupport.shouldEngage`),
+    /// then speculative decode through `MTPSpeculativeTokenIterator`.
+    ///
+    /// Mid-prefill checkpoints are forfeited, but the returned record keeps
+    /// the request's real key space and `finalCache`, so the post-generation
+    /// leaf capture admits the whole run and the next turn restores warm.
+    // swiftlint:disable:next function_parameter_count
+    static func makeMTPGeneration(
+        session: any ModelSession,
+        fullInput: LMInput,
+        fullTokens: [Int],
+        fullTokenCount: Int,
+        tokenNDim: Int,
+        keySpace: CacheKeySpace,
+        parameters: GenerateParameters,
+        toolSpecs: [ToolSpec]?,
+        partitionKey: CachePartitionKey,
+        lookupReason: PrefixCacheManager.LookupReason,
+        lookupMs: TimeInterval,
+        ssdEnabled: Bool,
+        seedsPositionAnchor: Bool,
+        visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> HTTPPrefixCacheGeneration {
+        diagnosticsContext.logSkip(
+            stage: "prefill",
+            reason: "mtp-speculative-arm",
+            extraFields: [("promptTokens", "\(fullTokenCount)")]
+        )
+
+        var iteratorParams = parameters
+        iteratorParams.kvBits = nil
+        let begin = try await beginPrefill(
+            session: session,
+            restoredCache: nil,
+            parameters: parameters,
+            promptTokens: fullTokenCount,
+            cachedTokens: 0,
+            pricedImage: nil,
+            visionAttentionScratchProfile: visionAttentionScratchProfile,
+            guardLabel: "mtp",
+            diagnosticsContext: diagnosticsContext,
+            progressHandler: progressHandler
+        )
+        let cache = begin.cache
+
+        let iterator = try MLXCheckedEvaluation.withErrors { error in
+            let built = try session.makeMTPDecodeIterator(
+                fullInput,
+                cache: cache,
+                parameters: iteratorParams
+            )
+            try error.check()
+            return built
+        }
+        let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+        await progressHandler?(
+            .prefillFinished(
+                .init(
+                    promptTokens: fullTokenCount,
+                    cachedTokens: 0,
+                    newTokensToPrefill: fullTokenCount,
+                    prefillMs: prefillMs * 1000
+                )))
+
+        let (stream, task) = TokenGenerationLoop.start(
+            promptTokenCount: fullTokenCount,
+            modelConfiguration: session.configuration,
+            tokenizer: session.tokenizer,
+            iterator: iterator,
+            tools: toolSpecs
+        )
+
+        return HTTPPrefixCacheGeneration(
+            stream: stream,
+            completion: task,
+            finalCache: cache,
+            diagnosticsContext: diagnosticsContext,
+            lookupMs: lookupMs,
+            restoreMs: 0,
+            prefillMs: prefillMs,
+            hydrationSeconds: 0,
+            restoredFromSSD: false,
+            promptTokenCount: fullTokenCount,
+            skippedPrefillTokens: 0,
+            lookupReason: lookupReason,
+            sharedPrefixLength: 0,
+            fullTokens: fullTokens,
+            keySpace: keySpace,
+            unkeyedReason: nil,
+            seedsPositionAnchor: seedsPositionAnchor,
+            snapshotAdmission: nil,
+            ssdEnabled: ssdEnabled,
+            partitionKey: partitionKey,
+            transientLastMessageBoundarySnapshot: nil,
+            transientLastUserBoundarySnapshot: nil,
+            prefillStepSize: parameters.prefill.stepSize ?? 512,
+            tokenNDim: tokenNDim
         )
     }
 

@@ -154,6 +154,7 @@ enum SettingsCatalogue {
     /// `.fromSettings`, which gates vision on this opt-out (→ text-only). The
     /// HTTP server ignores this (ADR-0008).
     static let useVisionWhenAvailable = Setting.bool("useVisionWhenAvailable", default: true)
+    static let mtpSpeculationEnabled = Setting.bool("mtpSpeculationEnabled", default: true)
 
     /// Render assistant prose as Markdown. Surfaced only by the agent
     /// toolbar's in-context toggle — a mid-conversation mode switch, never

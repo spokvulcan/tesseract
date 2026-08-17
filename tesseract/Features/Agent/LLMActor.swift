@@ -59,6 +59,13 @@ actor LLMActor {
     }
 
     private var modelContainer: ModelContainer?
+    /// The MTP speculative-decoding drafter loaded from the same checkpoint
+    /// as the model — present only when the checkpoint ships `mtp.*` head
+    /// weights and the setting is on. Boxed rather than container-wrapped:
+    /// drafters are vendor-documented stateless and safe to share across
+    /// iterators, and every use is confined to generation work inside
+    /// `ModelContainer.perform`.
+    private var mtpDrafter: UnsafeSendableBox<any MTPDrafterModel>?
     private(set) var agentTokenizer: AgentTokenizer?
     /// The loaded model's weight/config/template fingerprint
     /// (`ModelFingerprint.computeFingerprint`), keyed on by the C25
@@ -109,7 +116,8 @@ actor LLMActor {
         from directory: URL,
         visionMode: Bool,
         ssdConfig: SSDPrefixCacheConfig? = nil,
-        ramBudgetCapBytes: Int? = nil
+        ramBudgetCapBytes: Int? = nil,
+        mtpEnabled: Bool = true
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let loadClock = ContinuousClock()
         let loadStart = loadClock.now
@@ -152,6 +160,8 @@ actor LLMActor {
                 ? try await loadParoQuantVLMContainer(from: directory)
                 : try await loadParoQuantLLMContainer(from: directory)
             let result = try await verifyAndStore(container: container, identity: identity)
+            await loadMTPDrafterIfPresent(
+                directory: directory, container: container, enabled: mtpEnabled)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
         }
@@ -178,6 +188,8 @@ actor LLMActor {
             )
         }
         let result = try await verifyAndStore(container: container, identity: identity)
+        await loadMTPDrafterIfPresent(
+            directory: directory, container: container, enabled: mtpEnabled)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
     }
@@ -493,7 +505,7 @@ actor LLMActor {
         }
         return try await ensureServerCompletion().start(
             on: self,
-            sessions: ContainerModelSessionProvider(container: container),
+            sessions: ContainerModelSessionProvider(container: container, mtpDrafter: mtpDrafter),
             modelID: modelID,
             conversation: conversation,
             toolSpecs: toolSpecs,
@@ -580,6 +592,7 @@ actor LLMActor {
             return
         }
         modelContainer = nil
+        mtpDrafter = nil
         agentTokenizer = nil
         serverCompletion = nil
         activeModelFingerprint = nil
@@ -895,3 +908,47 @@ actor LLMActor {
 }
 
 extension LLMActor: ServerCompletionStarting {}
+
+// MARK: - MTP drafter loading
+
+extension LLMActor {
+    /// Load the MTP drafter beside the model when the checkpoint ships the
+    /// `mtp.*` head and the setting allows it. Never fails the model load:
+    /// a drafter problem degrades to ordinary (non-speculative) decoding
+    /// with a warning. The drafter family is derived from the class of the
+    /// model instance in `container` — never from the vision *intent*: the
+    /// generic loader falls back VLM → LLM on legacy-layout checkpoints, so
+    /// intent and outcome can diverge (see `MTPDrafterSupport.drafterPairing`).
+    private func loadMTPDrafterIfPresent(
+        directory: URL, container: ModelContainer, enabled: Bool
+    ) async {
+        mtpDrafter = nil
+        guard enabled else {
+            Log.agent.info("MTP drafter: disabled by setting — speculation off")
+            return
+        }
+        guard MTPDrafterSupport.checkpointShipsMTPHead(directory: directory) else {
+            Log.agent.info("MTP drafter: checkpoint ships no mtp.* weights — speculation off")
+            return
+        }
+        let pairing = await container.perform { context in
+            MTPDrafterSupport.drafterPairing(for: context.model)
+        }
+        guard let pairing else {
+            Log.agent.info(
+                "MTP drafter: no drafter pairs with the loaded target class — speculation off")
+            return
+        }
+        do {
+            let context = try await MTPDrafterSupport.loadDrafter(
+                directory: directory, pairing: pairing)
+            mtpDrafter = UnsafeSendableBox(context.model)
+            Log.agent.notice(
+                "MTP drafter loaded — pairing=\(pairing.rawValue) "
+                    + "blockSize=\(MTPDrafterSupport.blockSize)")
+        } catch {
+            Log.agent.warning(
+                "MTP drafter load failed — continuing without speculation: \(error)")
+        }
+    }
+}

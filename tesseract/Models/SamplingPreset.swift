@@ -25,6 +25,10 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
     case qwenInstructGeneral
     /// Qwen3.5/3.6 instruct (non-thinking) mode — reasoning tasks.
     case qwenInstructReasoning
+    /// Greedy decoding (temp 0) — the mode MTP speculative decoding
+    /// requires. Keeps a presence penalty as the temp-0 repetition-loop
+    /// backstop (output-only semantics, ADR-0053).
+    case greedySpeculative
     /// Nanbeige4.2 agentic/tool-use profile (the model's default here).
     case nanbeigeAgentic
     /// Nanbeige4.2 chat/reasoning profile (the model's generation_config).
@@ -39,6 +43,7 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
         case .qwenThinkingCoding: "Thinking – Coding (WebDev)"
         case .qwenInstructGeneral: "Instruct – General"
         case .qwenInstructReasoning: "Instruct – Reasoning"
+        case .greedySpeculative: "Greedy (Speculative)"
         case .nanbeigeAgentic: "Nanbeige – Agentic"
         case .nanbeigeChatReasoning: "Nanbeige – Chat/Reasoning"
         }
@@ -56,6 +61,8 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
             "temp 0.7, top_p 0.80, top_k 20, presence 1.5 — general chat in non-thinking mode."
         case .qwenInstructReasoning:
             "temp 1.0, top_p 0.95, top_k 20, presence 1.5 — reasoning tasks in non-thinking mode."
+        case .greedySpeculative:
+            "temp 0 (greedy), presence 1.5 — enables MTP speculative decoding on models that ship the drafter head."
         case .nanbeigeAgentic:
             "temp 1.0, top_p 0.95, top_k 20, no penalties — Nanbeige4.2 recommendation for agentic tool use."
         case .nanbeigeChatReasoning:
@@ -111,6 +118,11 @@ enum SamplingPreset: String, CaseIterable, Identifiable, Sendable {
         case .qwenInstructReasoning:
             return Overrides(
                 temperature: 1.0, topP: 0.95, topK: 20, minP: 0.0,
+                presencePenalty: 1.5, repetitionPenalty: nil
+            )
+        case .greedySpeculative:
+            return Overrides(
+                temperature: 0.0, topP: 1.0, topK: 0, minP: 0.0,
                 presencePenalty: 1.5, repetitionPenalty: nil
             )
         case .nanbeigeAgentic:
