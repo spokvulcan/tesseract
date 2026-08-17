@@ -169,7 +169,8 @@ final class AgentEngine {
                 ssdConfig: resolveSSDConfig(),
                 // RAM cap (ADR-0018): same snapshot-at-load semantics as
                 // the SSD config; nil (no settings source) = Automatic.
-                ramBudgetCapBytes: settingsManager?.prefixCacheRAMBudgetCapBytes
+                ramBudgetCapBytes: settingsManager?.prefixCacheRAMBudgetCapBytes,
+                mtpEnabled: settingsManager?.mtpSpeculationEnabled ?? true
             )
 
             let st = tokenizer.specialTokens

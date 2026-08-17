@@ -251,6 +251,19 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
+            id: "qwen3.5-2b",
+            displayName: "Qwen3.5-2B (bf16)",
+            description:
+                "Tiny official Qwen3.5 agent at full bf16 precision. The only small checkpoint that ships the MTP head, so greedy decoding can run speculatively.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "Qwen/Qwen3.5-2B",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~4.6 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "nanbeige4.2-3b-8bit",
             displayName: "Nanbeige4.2-3B (MLX 8-bit)",
             description:

@@ -75,11 +75,15 @@ nonisolated enum TokenGenerationLoop {
 
     /// Cache-aware overload: same event mapping, driven by the state-threaded
     /// decode loop instead of upstream's concrete-`TokenIterator` task.
+    /// Generic over the app's decode iterators (``StateThreadedTokenIterator``
+    /// and the vendor `MTPSpeculativeTokenIterator`); the concrete
+    /// `TokenIterator` overload above still wins resolution for the vendor
+    /// prepare path.
     static func start(
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
-        iterator: consuming StateThreadedTokenIterator,
+        iterator: consuming some TokenIteratorProtocol,
         tools: [ToolSpec]? = nil
     ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
         let (tokens, generationTask) = rawTokenTask(
@@ -108,7 +112,7 @@ nonisolated enum TokenGenerationLoop {
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
-        iterator: consuming StateThreadedTokenIterator
+        iterator: consuming some TokenIteratorProtocol
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
 
@@ -171,6 +175,17 @@ nonisolated enum TokenGenerationLoop {
                 stopReason: resolvedStopReason
             )
             _ = continuation.yield(.info(info))
+
+            if let telemetry = iterator.speculativeDecodingTelemetry {
+                Log.agent.notice(
+                    "MTP speculation — rounds=\(telemetry.roundCount) "
+                        + "proposed=\(telemetry.draftTokenCount) "
+                        + "accepted=\(telemetry.acceptedDraftTokenCount) "
+                        + "acceptance=\(String(format: "%.1f%%", telemetry.acceptanceRate * 100)) "
+                        + "targetCalls=\(telemetry.targetModelCallCount) "
+                        + "emitted=\(telemetry.emittedTokenCount)"
+                )
+            }
 
             // Match upstream: ensure pending MLX work is complete before the
             // caller's "task done ⇒ model/cache untouched" contract kicks in.

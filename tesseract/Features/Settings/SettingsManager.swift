@@ -407,6 +407,14 @@ final class SettingsManager {
         didSet { SettingsCatalogue.useVisionWhenAvailable.write(useVisionWhenAvailable, to: store) }
     }
 
+    /// MTP speculative decoding kill switch. Gates *drafter loading*, so
+    /// flipping it takes effect on the next model (re)load — matching the
+    /// vision toggle's semantics above. Inert on checkpoints without the
+    /// `mtp.*` head (the common case).
+    var mtpSpeculationEnabled: Bool {
+        didSet { SettingsCatalogue.mtpSpeculationEnabled.write(mtpSpeculationEnabled, to: store) }
+    }
+
     // MARK: - Preserve-Thinking Render (issue #98)
 
     /// Per-model **Preserve-Thinking Render** opt-in. Method-based rather
@@ -606,6 +614,7 @@ final class SettingsManager {
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
         self.agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.load(from: store)
         self.useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.load(from: store)
+        self.mtpSpeculationEnabled = SettingsCatalogue.mtpSpeculationEnabled.load(from: store)
         self.showSkillPills = SettingsCatalogue.showSkillPills.load(from: store)
         self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
@@ -735,6 +744,7 @@ final class SettingsManager {
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
         agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.default
         useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
+        mtpSpeculationEnabled = SettingsCatalogue.mtpSpeculationEnabled.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
         overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default
