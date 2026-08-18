@@ -117,3 +117,25 @@ pure engagement policy, with the drafter loaded eagerly beside the target.
 - PARO checkpoints (today's default agents) ship no head and are unaffected;
   the feature lights up only for checkpoints that carry `mtp.*`, official or
   grafted.
+
+## Amendment (2026-08-18): engagement narrowed to leaf modes that store from `finalCache`
+
+"The speculative arm still seeds the cache" above holds only for the
+`directLeaf` mode. The unchunked MTP prompt prefill forfeits the transient
+boundary snapshots (`makeMTPGeneration` returns nil for both), and two leaf
+modes are *synthesized from those boundaries*: a thinking template's
+canonical leaf and a tool-call turn's direct-tool leaf. On those modes the
+post-generation store skips (`no-canonical-restore-boundary`), the partition
+never seeds, MTP re-engages on the next cold turn, and the conversation
+prefills the whole prompt every turn forever — the ~2× decode lift silently
+costs 100% of the prefix cache (observed live on qwen3.8-27b OpenCode
+sessions, 60s+ prefill per turn).
+
+`shouldEngage` therefore also requires the predicted
+`HTTPLeafStoreMode` — from the same `selectHTTPLeafStoreMode` classification
+the leaf store itself uses, with defined tools conservatively standing in
+for emission (tool *emission* is unknowable at engagement time) — to be
+`directLeaf`. In practice this parks the MTP arm for the thinking-template Qwen3.5+
+checkpoints over agent traffic until a boundary-preserving MTP prefill
+exists — the cache is the product's first priority and beats a 2× decode
+lift on any multi-turn workload.

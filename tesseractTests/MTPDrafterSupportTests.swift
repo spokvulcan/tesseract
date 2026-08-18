@@ -8,53 +8,45 @@ struct MTPDrafterSupportTests {
     // MARK: - Engagement policy
 
     /// The 27B profile: 24 attention heads, bf16 scores.
-    private let scratchProfile = ModelIdentity.FullAttentionScratchProfile(
+    private static let scratchProfile27B = ModelIdentity.FullAttentionScratchProfile(
         attentionHeads: 24, bytesPerElement: 2)
 
+    /// `shouldEngage` with the engaging happy path as defaults, so each test
+    /// names only the axis it varies.
+    private func engages(
+        hasDrafter: Bool = true,
+        temperature: Float = 0,
+        textOnlyIdentityKeySpace: Bool = true,
+        predictedLeafStoreMode: HTTPLeafStoreMode = .directLeaf,
+        promptTokens: Int = 2048,
+        scratchProfile: ModelIdentity.FullAttentionScratchProfile? = Self.scratchProfile27B
+    ) -> Bool {
+        MTPDrafterSupport.shouldEngage(
+            hasDrafter: hasDrafter,
+            temperature: temperature,
+            textOnlyIdentityKeySpace: textOnlyIdentityKeySpace,
+            predictedLeafStoreMode: predictedLeafStoreMode,
+            promptTokens: promptTokens,
+            scratchProfile: scratchProfile
+        )
+    }
+
     @Test func engagesOnGreedyTextOnlyColdPromptWithinBudget() {
-        #expect(
-            MTPDrafterSupport.shouldEngage(
-                hasDrafter: true,
-                temperature: 0,
-                textOnlyIdentityKeySpace: true,
-                promptTokens: 2048,
-                scratchProfile: scratchProfile
-            ))
+        #expect(engages())
     }
 
     @Test func refusesWithoutDrafter() {
-        #expect(
-            !MTPDrafterSupport.shouldEngage(
-                hasDrafter: false,
-                temperature: 0,
-                textOnlyIdentityKeySpace: true,
-                promptTokens: 2048,
-                scratchProfile: scratchProfile
-            ))
+        #expect(!engages(hasDrafter: false))
     }
 
     @Test func refusesNonGreedySampling() {
         // The Qwen drafters are greedy-only; engaging at temp > 0 would make
         // the vendor iterator passthrough after paying the drafter prefill.
-        #expect(
-            !MTPDrafterSupport.shouldEngage(
-                hasDrafter: true,
-                temperature: 0.6,
-                textOnlyIdentityKeySpace: true,
-                promptTokens: 2048,
-                scratchProfile: scratchProfile
-            ))
+        #expect(!engages(temperature: 0.6))
     }
 
     @Test func refusesImageBearingRequests() {
-        #expect(
-            !MTPDrafterSupport.shouldEngage(
-                hasDrafter: true,
-                temperature: 0,
-                textOnlyIdentityKeySpace: false,
-                promptTokens: 2048,
-                scratchProfile: scratchProfile
-            ))
+        #expect(!engages(textOnlyIdentityKeySpace: false))
     }
 
     @Test func refusesPromptsPastTheScratchBudget() {
@@ -63,35 +55,29 @@ struct MTPDrafterSupportTests {
         let boundary = Int(
             (Double(MTPDrafterSupport.singleShotScratchBudgetBytes) / (24 * 2))
                 .squareRoot())
-        #expect(
-            MTPDrafterSupport.shouldEngage(
-                hasDrafter: true,
-                temperature: 0,
-                textOnlyIdentityKeySpace: true,
-                promptTokens: boundary,
-                scratchProfile: scratchProfile
-            ))
-        #expect(
-            !MTPDrafterSupport.shouldEngage(
-                hasDrafter: true,
-                temperature: 0,
-                textOnlyIdentityKeySpace: true,
-                promptTokens: boundary + 1,
-                scratchProfile: scratchProfile
-            ))
+        #expect(engages(promptTokens: boundary))
+        #expect(!engages(promptTokens: boundary + 1))
+    }
+
+    @Test func refusesThinkingTemplates() {
+        // The MTP prompt prefill forfeits the transient boundary snapshots a
+        // thinking template's canonical leaf is synthesized from — engaging
+        // would skip every leaf store and keep the whole conversation cold
+        // forever (the 2026-08-18 qwen3.8-27b incident).
+        #expect(!engages(predictedLeafStoreMode: .canonicalUserLeaf))
+    }
+
+    @Test func refusesToolBearingRequests() {
+        // A tool-call turn's direct-tool leaf needs the last-message boundary
+        // snapshot the MTP arm forfeits; emission is unknowable up front, so
+        // defined tools predict as tool turns and refuse engagement.
+        #expect(!engages(predictedLeafStoreMode: .directToolLeaf))
     }
 
     @Test func refusesWithoutAScratchProfile() {
         // No profile means the single-shot prepare cannot be priced — never
         // engage unpriced.
-        #expect(
-            !MTPDrafterSupport.shouldEngage(
-                hasDrafter: true,
-                temperature: 0,
-                textOnlyIdentityKeySpace: true,
-                promptTokens: 128,
-                scratchProfile: nil
-            ))
+        #expect(!engages(promptTokens: 128, scratchProfile: nil))
     }
 
     // MARK: - Drafter pairing

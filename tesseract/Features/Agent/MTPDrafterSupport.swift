@@ -66,16 +66,23 @@ nonisolated enum MTPDrafterSupport {
     /// when a drafter is loaded, sampling is greedy (the Qwen drafters are
     /// greedy-only — the vendor iterator would silently passthrough
     /// otherwise, wasting the drafter prefill), the request is text-only
-    /// (identity key space), and the whole-prompt single-shot prepare fits
-    /// the scratch budget.
+    /// (identity key space), the leaf store will run off `finalCache` alone
+    /// (`.directLeaf` — the unchunked MTP prompt prefill forfeits the
+    /// boundary snapshots every other mode synthesizes its leaf from, which
+    /// starves the partition and re-colds every turn; ADR-0056, amendment
+    /// 2026-08-18), and the whole-prompt single-shot prepare fits the
+    /// scratch budget.
     static func shouldEngage(
         hasDrafter: Bool,
         temperature: Float,
         textOnlyIdentityKeySpace: Bool,
+        predictedLeafStoreMode: HTTPLeafStoreMode,
         promptTokens: Int,
         scratchProfile: ModelIdentity.FullAttentionScratchProfile?
     ) -> Bool {
-        guard hasDrafter, temperature == 0, textOnlyIdentityKeySpace else { return false }
+        guard hasDrafter, temperature == 0, textOnlyIdentityKeySpace,
+            predictedLeafStoreMode == .directLeaf
+        else { return false }
         guard let scratchProfile,
             let scratchBytes = scratchProfile.scoreMatrixBytes(sequenceLength: promptTokens)
         else { return false }
