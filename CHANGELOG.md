@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.11.0](https://github.com/spokvulcan/tesseract/compare/v1.10.0...v1.11.0) (2026-08-18)
+
+
+### Features
+
+* add Qwen3.8-27B (MLX 4bit) as an agent model ([#432](https://github.com/spokvulcan/tesseract/issues/432)) ([1a5fb21](https://github.com/spokvulcan/tesseract/commit/1a5fb2146082add520337f0275ed26a0ffa628a4))
+* **agent:** MTP speculative decoding for Qwen3.5+ (ADR-0056) ([#436](https://github.com/spokvulcan/tesseract/issues/436)) ([73adfb4](https://github.com/spokvulcan/tesseract/commit/73adfb4445d74239e2c47fece92c8f18eff04d72))
+* **bench:** record run provenance + post-hoc validity annotations ([0bf7d25](https://github.com/spokvulcan/tesseract/commit/0bf7d25d875bf0fd1ad6f9068a494acb338efa06))
+
+
+### Bug Fixes
+
+* prompt cache was permanently cold on qwen3.8-27b ([#440](https://github.com/spokvulcan/tesseract/issues/440)) ([eb61521](https://github.com/spokvulcan/tesseract/commit/eb615212df938cbb983244b62c5c6e3978fe7f9a))
+* **server:** accept the 6-element RotatingKVCache metaState from the re-pinned vendor ([#435](https://github.com/spokvulcan/tesseract/issues/435)) ([50232b9](https://github.com/spokvulcan/tesseract/commit/50232b9a3427492d95d08a1710a3d25e830e3ab7))
+
+
+### Performance Improvements
+
+* inference-optimization loop 2026-07-27 — request tokenize path (−90% warm-turn) + byte-native BPE (1.22×) ([#429](https://github.com/spokvulcan/tesseract/issues/429)) ([a73a7aa](https://github.com/spokvulcan/tesseract/commit/a73a7aa5b0f49f03716851479c5795799d3ae58a))
+
+
+### Documentation
+
+* **bench:** log E12 — chunked gated-delta scan REJECTED (0.67× best), reverted ([b903105](https://github.com/spokvulcan/tesseract/commit/b903105a3e0b777b6f9b81b997b6afab103466f7))
+
+
+### Miscellaneous Chores
+
+* **deps:** re-pin mlx-swift-lm to latest upstream main ([#431](https://github.com/spokvulcan/tesseract/issues/431)) ([0dbbfab](https://github.com/spokvulcan/tesseract/commit/0dbbfab18a9f01a974db3f70ea3f95e281dfefed))
+* **deps:** refresh the LLM/VLM inference-stack pins ([383ef0f](https://github.com/spokvulcan/tesseract/commit/383ef0f23dc2dc50f62fceec83cf5c72458b674a))
+
 ## [1.10.0](https://github.com/spokvulcan/tesseract/compare/v1.9.0...v1.10.0) (2026-07-25)
 
 
