@@ -1328,15 +1328,20 @@ nonisolated final class ServerCompletion {
             case .cold:
                 // MTP speculative arm (v1): a text-only cold prompt at greedy
                 // sampling with a loaded drafter decodes through the vendor
-                // MTP iterator instead of the chunked-prefill path. Mid-prefill
-                // checkpoints are forfeited (the MTP prompt prefill is
-                // unchunked), but the post-generation leaf capture still runs
-                // off `finalCache`, so the next turn restores warm and takes
-                // the ordinary path — MTP engages on cold turns only.
+                // MTP iterator instead of the chunked-prefill path. The full
+                // engagement policy — including why only `.directLeaf`
+                // traffic qualifies — lives on `MTPDrafterSupport.shouldEngage`.
                 if MTPDrafterSupport.shouldEngage(
                     hasDrafter: session.mtpDrafter != nil,
                     temperature: parameters.temperature,
                     textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
+                    predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
+                        promptStartsThinking: promptStartsThinking,
+                        // Conservative stand-in: tool *emission* is unknowable
+                        // at engagement time, so defined tools predict as if
+                        // they will be called.
+                        emittedToolCalls: canonicalTools?.isEmpty == false
+                    ),
                     promptTokens: fullTokenCount,
                     scratchProfile: fullAttentionScratchProfile
                 ) {

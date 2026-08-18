@@ -237,6 +237,12 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
 nonisolated struct RecordingModelSession: ModelSession {
     let base: any ModelSession
     let recorder: ModelVerbRecorder
+    /// Forces the LLM-class `producesFlatTextTokens` answer over the toy
+    /// context — the shape of a vision-family checkpoint the VLM factory
+    /// rejected, silently loaded as a text-only instance. No toy model class
+    /// can express it directly: `ContextBackedModelSession` derives the fact
+    /// from `model is any LLMModel`, and the toy is neither marker.
+    var producesFlatTextTokensOverride: Bool?
 
     var configuration: ModelConfiguration { base.configuration }
     var tokenizer: any Tokenizer { base.tokenizer }
@@ -244,7 +250,9 @@ nonisolated struct RecordingModelSession: ModelSession {
         recorder.record(.visionContinuationQuery)
         return base.anchoredVisionPrepare
     }
-    var producesFlatTextTokens: Bool { base.producesFlatTextTokens }
+    var producesFlatTextTokens: Bool {
+        producesFlatTextTokensOverride ?? base.producesFlatTextTokens
+    }
 
     func prepare(_ input: UserInput) async throws -> LMInput {
         recorder.record(.prepare)
@@ -261,7 +269,6 @@ nonisolated struct RecordingModelSession: ModelSession {
         return try base.restore(snapshot)
     }
 
-    // swiftlint:disable:next function_parameter_count
     func prefill(
         text: LMInput.Text,
         cache: [any KVCache],
@@ -339,13 +346,18 @@ nonisolated struct RecordingModelSession: ModelSession {
 nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     let container: ModelContainer
     let recorder = ModelVerbRecorder()
+    /// When true, sessions report the LLM-class `producesFlatTextTokens` —
+    /// the text-only-fallback shape the instance-truth keying suites model.
+    let reportsFlatTextTokens: Bool
 
     init(
         model: ToyLanguageModel,
         tokenizer: any Tokenizer = FakeChatMLTokenizer(),
         configuration: ModelConfiguration = ToyVocabulary.configuration(),
-        vision: ToyUserInputProcessor.VisionStub? = nil
+        vision: ToyUserInputProcessor.VisionStub? = nil,
+        reportsFlatTextTokens: Bool = false
     ) {
+        self.reportsFlatTextTokens = reportsFlatTextTokens
         self.container = ModelContainer(
             context: ModelContext(
                 configuration: configuration,
@@ -360,11 +372,13 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         _ body: @Sendable (any ModelSession) async throws -> R
     ) async throws -> R {
         let recorder = self.recorder
+        let reportsFlatTextTokens = self.reportsFlatTextTokens
         return try await container.perform { context in
-            try await body(
+            return try await body(
                 RecordingModelSession(
                     base: ContextBackedModelSession(context: context),
-                    recorder: recorder
+                    recorder: recorder,
+                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil
                 )
             )
         }

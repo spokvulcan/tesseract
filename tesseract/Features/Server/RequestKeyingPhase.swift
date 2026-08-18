@@ -35,8 +35,10 @@ nonisolated enum RequestKeyingPhase {
         let keySpace: CacheKeySpace
         /// The recognized vision container mis-positions M-RoPE on any
         /// nil-state warm forward — text-only restores included — so the
-        /// Position Anchor is seeded whenever the family is recognized,
-        /// not just when this request carries images.
+        /// Position Anchor is seeded whenever the family is recognized AND
+        /// the loaded instance is that container, not just when this
+        /// request carries images. A text-class instance of a vision family
+        /// never reads the seeded state and gets `false`.
         let seedsPositionAnchor: Bool
     }
 
@@ -67,8 +69,37 @@ nonisolated enum RequestKeyingPhase {
         // ride along positionally: the renderer emits one `"image"` part
         // per attachment and the processor matches them in order.
         // `MessageConverter` already proved each payload `CIImage`-decodable.
+        //
+        // Instance truth over family intent: only a vision-container
+        // instance routes images through a tower into the KV. An
+        // `LLMModel`-class load — e.g. a vision-family checkpoint whose
+        // weight layout the VLM factory rejects, silently falling back to
+        // text (the mlx-community Qwen3.8-27B-4bit shape) — gets the
+        // text-only processor, which ignores `UserInput.images` entirely:
+        // image parts render as bare template placeholders and the bytes
+        // never reach the model. Keying such a request on its images could
+        // only degrade it to Unkeyed (`prepare` can never return grids),
+        // zeroing cache participation for every turn of an image-bearing
+        // conversation — so it keys text-only, matching what the model
+        // actually sees, and the drop is logged as the served-degraded
+        // fact it is.
         let requestImages = conversation.images
-        let userInputImages: [UserInput.Image] = try requestImages.map { image in
+        let producesFlatTextTokens = session.producesFlatTextTokens
+        let instanceProcessesImages = !producesFlatTextTokens
+        if !requestImages.isEmpty, !instanceProcessesImages {
+            Log.image.warning(
+                "\(requestImages.count) image attachment(s) ignored — "
+                    + "\(modelID) loaded as a text-only instance; serving and "
+                    + "keying the request text-only")
+        }
+        let keyedImages = instanceProcessesImages ? requestImages : []
+        // The family's vision claim, corrected once against the instance: a
+        // text-class load never routes images or reads vision keying, so
+        // every keying consumer below (key space, grid log, anchor) reads
+        // this value, never the raw config-intent `imageKeying`.
+        let effectiveImageKeying: ModelIdentity.ImageKeying? =
+            instanceProcessesImages ? imageKeying : nil
+        let userInputImages: [UserInput.Image] = try keyedImages.map { image in
             guard let decoded = CIImage(data: image.data) else {
                 throw AgentEngineError.generationFailed(
                     "image attachment no longer decodes (digest \(image.digest.hexString.prefix(8)))"
@@ -85,9 +116,14 @@ nonisolated enum RequestKeyingPhase {
         // non-rendering tokenizers, and any render/encode failure all fall back
         // to the processor. The eligibility decision lives in
         // `RenderTokenSource`, shared with the other four seams.
+        // `hasMedia` deliberately keys on the conversation's images, not the
+        // instance-filtered list: a dropped-image request could render
+        // identically through the cache, but extending C25 eligibility is a
+        // separate, separately-tested change — media requests stay on the
+        // processor path.
         let renderTokens = RenderTokenSource.forTextOnlyRequest(
-            hasMedia: !userInputImages.isEmpty,
-            producesFlatTextTokens: session.producesFlatTextTokens,
+            hasMedia: !requestImages.isEmpty,
+            producesFlatTextTokens: producesFlatTextTokens,
             modelFingerprint: modelFingerprint
         )
         let fullInput: LMInput
@@ -141,12 +177,12 @@ nonisolated enum RequestKeyingPhase {
         let keySpace: CacheKeySpace
         switch CacheKeySpace.make(
             preparedTokens: fullTokens,
-            imageDigests: requestImages.map(\.digest),
+            imageDigests: keyedImages.map(\.digest),
             imageGrids: (fullInput.image?.frames ?? []).map { frame in
                 let (t, h, w) = frame.values
                 return (t: t, height: h, width: w)
             },
-            imageKeying: imageKeying
+            imageKeying: effectiveImageKeying
         ) {
         case .success(let space):
             keySpace = space
@@ -165,7 +201,7 @@ nonisolated enum RequestKeyingPhase {
         // it recurs — the chunked continuation already makes such an image
         // non-fatal, so this is observe-only, not a gate.
         if let frames = fullInput.image?.frames, !frames.isEmpty {
-            let merge = imageKeying?.spatialMergeSize ?? 1
+            let merge = effectiveImageKeying?.spatialMergeSize ?? 1
             let mergeArea = max(1, merge * merge)
             for (index, frame) in frames.enumerated() {
                 let (t, h, w) = frame.values
@@ -185,7 +221,7 @@ nonisolated enum RequestKeyingPhase {
                 tokenNDim: tokenNDim,
                 partitionKey: partitionKey,
                 keySpace: keySpace,
-                seedsPositionAnchor: imageKeying != nil
+                seedsPositionAnchor: effectiveImageKeying != nil
             ))
     }
 }
