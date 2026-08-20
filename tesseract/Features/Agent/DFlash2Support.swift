@@ -31,15 +31,15 @@ nonisolated enum DFlash2Support {
     /// test target pins the two together.
     static let draftCacheSubdirectory = "incoai_Qwen3.8-27B-DFlash2"
 
-    /// Round width (1 anchor + `blockSize - 1` drafts per verify pass). The
-    /// checkpoint was distilled at block size 8, but measured acceptance
-    /// decays per draft position (59% → 22% from bs3 to bs8) while the verify
-    /// pass's quantized GEMMs scale superlinearly in M (qmv_wide tiles: M ≤ 5
-    /// streams weights once, M = 8 needs two tiles) — block 3 is the measured
-    /// optimum on M3 Max (1.43× over AR decode vs 0.80× at block 8, ABBA
-    /// Release bench, 6K-token prompt). The iterator clamps narrower near
-    /// `maxTokens`.
-    static let blockSize = 3
+    /// Round-width cap (1 anchor + `blockSize - 1` drafts per verify pass at
+    /// the widest). The checkpoint was distilled at block size 8 and the mma8
+    /// verify kernel (ADR-0058) makes wide blocks near-flat in cost, so the
+    /// iterator runs its adaptive-width policy under this cap: it narrows on
+    /// acceptance (measured per-position acceptance decays with width on
+    /// high-entropy content — 59% → 22% from bs3 to bs8 on the docs-summary
+    /// bench — while width is free money on predictable content) instead of
+    /// pinning one width for everything.
+    static let blockSize = 8
 
     // MARK: - Detection
 

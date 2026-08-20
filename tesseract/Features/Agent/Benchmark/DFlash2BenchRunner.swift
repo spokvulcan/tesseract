@@ -19,6 +19,10 @@ nonisolated struct DFlash2BenchRunner {
         let tokens: Int
         let accepted: Int
         let proposed: Int
+        /// First 8 generated token ids — the greedy output-identity gate:
+        /// every arm decodes the same prompt, so the fingerprints must match.
+        /// (A prefix, not a hash: a hash would hide WHERE arms diverge.)
+        let fingerprint: [Int]
         var tokPerSec: Double { Double(tokens) / decodeSeconds }
     }
 
@@ -62,7 +66,11 @@ nonisolated struct DFlash2BenchRunner {
 
         // Summary: median tok/s per arm.
         emit("[dflash2-bench] === summary ===")
-        let arms = ["ar"] + Self.blockSizes().map { "dflash2-bs\($0)" }
+        let arms =
+            ["ar"]
+            + Self.blockSizes().map {
+                "dflash2-bs\($0.block)\($0.adaptive ? "" : "f")"
+            }
         var medians: [String: Double] = [:]
         for arm in arms {
             let rates = results.filter { $0.arm == arm }.map(\.tokPerSec).sorted()
@@ -80,6 +88,21 @@ nonisolated struct DFlash2BenchRunner {
             emit(
                 "[dflash2-bench] \(arm.paddedToColumn) median \(String(format: "%6.1f", median)) tok/s\(accStr)"
             )
+        }
+        // Greedy output-identity gate: every arm's first-8 fingerprint must
+        // equal the AR arm's (same prompt, same greedy distribution).
+        if let arFingerprint = results.first(where: { $0.arm == "ar" })?.fingerprint {
+            for arm in arms where arm != "ar" {
+                guard let fp = results.first(where: { $0.arm == arm })?.fingerprint else {
+                    continue
+                }
+                let diverge = zip(fp, arFingerprint).enumerated().first(where: {
+                    $0.element.0 != $0.element.1
+                })?.offset
+                emit(
+                    "[dflash2-bench] \(arm.paddedToColumn) output-identity: \(fp == arFingerprint ? "MATCH" : "DIVERGED at +\(diverge.map(String.init) ?? "?") (\(fp) vs \(arFingerprint))")"
+                )
+            }
         }
         if let base = medians["ar"] {
             for arm in arms where arm != "ar" {
@@ -113,23 +136,32 @@ nonisolated struct DFlash2BenchRunner {
                 parameters: parameters)
             let start = ContinuousClock.now
             var tokens = 0
-            while iterator.next() != nil { tokens += 1 }
+            var fingerprint: [Int] = []
+            while let token = iterator.next() {
+                if fingerprint.count < 8 { fingerprint.append(token) }
+                tokens += 1
+            }
             let seconds = elapsedSeconds(since: start)
             return ArmResult(
                 arm: "ar", runIndex: runIndex, decodeSeconds: seconds,
-                tokens: tokens, accepted: 0, proposed: 0)
+                tokens: tokens, accepted: 0, proposed: 0, fingerprint: fingerprint)
         }
 
-        func runDFlash2(_ runIndex: Int, blockSize: Int) throws -> ArmResult {
+        func runDFlash2(_ runIndex: Int, blockSize: Int, adaptive: Bool) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
             parameters.temperature = 0
             let cache = try context.model.newCache(parameters: parameters)
             var iterator = try DFlash2SpeculativeTokenIterator(
                 input: prepared, mainModel: context.model, drafter: draft,
-                mainCache: cache, parameters: parameters, blockSize: blockSize)
+                mainCache: cache, parameters: parameters, blockSize: blockSize,
+                adaptiveWidth: adaptive)
             let start = ContinuousClock.now
             var tokens = 0
-            while iterator.next() != nil { tokens += 1 }
+            var fingerprint: [Int] = []
+            while let token = iterator.next() {
+                if fingerprint.count < 8 { fingerprint.append(token) }
+                tokens += 1
+            }
             let seconds = elapsedSeconds(since: start)
             if iterator.profileRoundCount > 0 {
                 let rounds = Double(iterator.profileRoundCount)
@@ -142,9 +174,10 @@ nonisolated struct DFlash2BenchRunner {
                         + "(\(iterator.profileRoundCount) rounds)")
             }
             return ArmResult(
-                arm: "dflash2-bs\(blockSize)", runIndex: runIndex,
+                arm: "dflash2-bs\(blockSize)\(adaptive ? "" : "f")", runIndex: runIndex,
                 decodeSeconds: seconds, tokens: tokens,
-                accepted: iterator.acceptedCount, proposed: iterator.proposedCount)
+                accepted: iterator.acceptedCount, proposed: iterator.proposedCount,
+                fingerprint: fingerprint)
         }
 
         func report(_ result: ArmResult) {
@@ -170,8 +203,8 @@ nonisolated struct DFlash2BenchRunner {
             let a = try runAR(round * 2)
             results.append(a)
             report(a)
-            for blockSize in blocks {
-                let b = try runDFlash2(round, blockSize: blockSize)
+            for (blockSize, adaptive) in blocks {
+                let b = try runDFlash2(round, blockSize: blockSize, adaptive: adaptive)
                 results.append(b)
                 report(b)
             }
@@ -182,14 +215,23 @@ nonisolated struct DFlash2BenchRunner {
         return results
     }
 
-    /// `--bench-blocks 3,4,5,8` overrides the default [8, 5] scan.
-    private static func blockSizes() -> [Int] {
+    /// `--bench-blocks 3,4,5,8` overrides the default [8, 5] scan. A suffix
+    /// `f` (e.g. `8f`) pins the width (policy off); plain numbers run the
+    /// adaptive-width policy under that cap.
+    private static func blockSizes() -> [(block: Int, adaptive: Bool)] {
+        func parse(_ raw: String) -> [(block: Int, adaptive: Bool)] {
+            raw.split(separator: ",").compactMap { token in
+                let fixed = token.hasSuffix("f")
+                guard let b = Int(fixed ? token.dropLast() : token) else { return nil }
+                return (b, !fixed)
+            }
+        }
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "--bench-blocks"), i + 1 < args.count else {
-            return [8, 5]
+            return parse("8,5")
         }
-        let parsed = args[i + 1].split(separator: ",").compactMap { Int($0) }
-        return parsed.isEmpty ? [8, 5] : parsed
+        let parsed = parse(args[i + 1])
+        return parsed.isEmpty ? parse("8,5") : parsed
     }
 
     private static func elapsedSeconds(since start: ContinuousClock.Instant) -> Double {

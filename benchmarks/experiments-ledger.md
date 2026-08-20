@@ -2758,3 +2758,77 @@ ALU hurts. **Verdict: a real win here needs an MMA-based small-M affine kernel
 attempted this session.** NAX (`qmm_nax`) is gated to GPU gen ≥ 17 + macOS
 26.2, so it never runs on this M3 Max; the M5 Max in the reference post runs
 it, which is part of why their small-M numbers beat this chip's.
+
+## Session 2026-08-21 — DFlash2 round 2: mma8 verify kernel, single-sync pipeline, adaptive width (issue #441)
+
+Context: ADR-0057 shipped blockSize=3 because verify re-streamed weights per
+5-row qmv_wide tile (bs8 = 2.4 streams, net-negative). The reference stacks
+(oMLX, mlx-dspark) run width 8 behind an MMA-tile kernel that is flat in M.
+
+### R1 — affine_qmm_mma8 — ACCEPTED (mlx 756fd8f7 + 691e42a1, mlx-swift 9f48e3f)
+
+One 8x8 simdgroup_matrix tile per 8 output columns; weight group read+dequant
+once per threadgroup, reused across all M<=8 rows; split-K over 8 simdgroups;
+register-prefetch pipeline hides streaming loads behind the MMA chain. Port of
+avlp12's qmm_mma4 (MIT) via jundot/omlx small_m_qmm.py; A tile read from
+device with per-lane fragment row-clamping (Metal 8x8 fragment layout per
+conv.metal winograd), 10 KB threadgroup memory. Gate: affine, gs64, 4/8-bit,
+N>=4096, K%512==0, non-batched, bf16, M in [5,8].
+
+qmvprobe (M3 Max; numerics rel-Linf 0.008 at every M, same class as qmv_wide):
+
+| shape | M=8 qmv_wide | M=8 mma8 | x |
+| --- | --- | --- | --- |
+| gdn_in_proj 5120x16384 | 0.564 ms | 0.381 ms | 1.48 |
+| mlp_gate_up 5120x34816 | 0.965 | 0.586 | 1.65 |
+| mlp_down 17408x5120 | 0.634 | 0.404 | 1.57 |
+| lm_head 5120x248320 | 5.422 | 2.940 | 1.84 |
+
+Flat across M in {5,6,8}; mma8 at M=5 beats qmv_wide at M=5 on every shape
+(gate lowered to [5,8] after measuring the crossover). REJECTED variants:
+qmv_wide tile cap 8 (register spill, 0.5-1.7x slower than mma8 at M=8);
+128-K staging chunk (18 KB threadgroup, occupancy loss, slower than prefetch).
+
+### R2 — single-sync pipeline — ACCEPTED (mlx-swift-lm 53e52f8)
+
+Anchor tracked host-side + draft ids and target argmax ship in ONE packed D2H
+per round (3 syncs -> 1). bs3: verify 61.1 -> 54.4 ms, accept 0.9 -> 0.5,
+reconcile 1.0 -> 0.7. bs3 31.3 -> 33.3 tok/s cool-machine ABBA (1.58x over AR
+21.1). Unit gates: 13 DFlash2Tests incl. iterator rollback test.
+
+### R3 — adaptive width bandit — ACCEPTED
+
+blockSize is now a cap (app ships 8); tok/s bandit over {3, 4, cap}, 8-round
+windows, 3% hysteresis, drift re-sweep every 24 windows. The reference's
+acceptance-threshold policy can't express this stack's per-width cost curve
+(verify near-flat 5..8 via mma8; the draft pass prices width) — the objective
+is measured decode tok/s, not acceptance. Mock-harness tests: narrows to the
+floor on zero-acceptance content; adaptiveWidth:false never adapts.
+
+### R4 — verify-pass fat attribution (verifyprobe, real target, 2K ctx)
+
+Capture-state forward: S=1 47-48 ms, S=8 82-90 ms (+35 where flat is ~+4).
+Decomposition: ~2/3 mma8 bandwidth (75-80% of M=1 GEMV per byte — MMA tile
+staging/barrier economics); ~1/3 eager inter-segment glue (16 attention
+rope+KV+SDPA steps outside the compiled segments); SDPA vector->fallback at
+S>=6 (gqa=6: S*gqa>32) measured <= 0.3 ms/layer — real but small; GDN
+recurrence negligible (state in registers across the T loop).
+
+### R5 — benches + gates
+
+Cool machine ABBA, 6K docs prompt, 192 tokens: AR 21.1 | bs3 33.3 (1.58x) |
+bs8f 23.8 (1.13x) | bs8-adaptive 23.1 (1.09x). Validation of the shipping
+tok/s bandit (cap 8): AR 21.5 | bs3 31.4 (1.46x) | bs8f 25.2 (1.17x) |
+bs8-adaptive 28.7 (1.34x) — bandit settles mid-width here and beats fixed-8
+by 14%. Output-identity gate (first-8 fingerprint vs AR arm, new in the bench
+runner): MATCH on all arms in both runs. 65K+
+context remains beyond 48 GB (rule :33). Thermal note: repeated runs within
+the hour degrade all arms ~20% mid-run (AR 22 -> 17); numbers above are the
+cool-machine set — treat warm reruns as drift, not regression.
+
+### R6 — SandboxMigration harness skip
+
+Headless harness launches (--benchmark, --dflash2-bench, ...) now skip the
+models migration (same rule as the test-run guard): a wedged retired-container
+directory hung every bench launch post-reboot (contentsOfDirectory blocked on
+the main thread). Interactive launches still migrate.
