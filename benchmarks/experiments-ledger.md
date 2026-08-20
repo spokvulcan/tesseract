@@ -2656,3 +2656,105 @@ portable; the portable artifact is the 65-line reference at
 fp32 FMA with bf16 storage, halving the 63 MB MambaCache snapshot) was scoped
 into this round and never built. It targets decode bandwidth and snapshot size,
 neither of which chunking touches, so nothing here argues against it.
+
+## Session 2026-08-20 — DFlash2 speculative decoding: verify-pass kernel fix
+
+Context: ADR-0057 (DFlash2 port for Qwen3.8-27B + `incoai/Qwen3.8-27B-DFlash2`
+draft). First app benches showed DFlash2 *slower* than AR decode (bs8 16.2 vs
+AR 20.6 tok/s) despite acceptance matching the Python reference (32–36%).
+Per-phase profiling (`DFLASH2_PROFILE=1`, phase timers in the speculative
+iterator) isolated it: verify = 166.6 ms of a ~200 ms bs8 round, ~17 ms/row,
+and the Python reference (mlx 0.32) showed the same ~150 ms verify at S = 9 —
+an MLX-level kernel issue, not a port bug.
+
+### K1 — verify GEMM M-scaling diagnosis (probe: /tmp/qmvprobe)
+
+`QuantizedMatmul::eval_gpu` (Cmlx `quantized.cpp`) routes transpose GEMMs with
+M < `get_qmv_batch_limit` (= 12 for K,N > 4096 on gen-15 'd') to `qmv`, whose
+grid is `(M, N/8, B)` — **weights are re-streamed once per row**. A DFlash2
+verify pass at block size bs runs M = bs, so bs8 re-read the 11.9 GB of 4-bit
+weights ~8×. Measured per-shape M-scaling (Swift probe against the live
+DerivedData Cmlx checkout, per-iteration `eval`): qmv cost grows ~linearly in
+M; lm_head (5120×248320) M=1 2.08 ms → M=8 4.93 ms even *with* reuse (below).
+
+### K2 — qmv_wide backport — ACCEPTED
+
+Upstream `mlx#3764` (548dd80e8, "small-batch quantized matvec", landed after
+our v0.31.1 pin) adds `qmv_wide`: each weight group decoded once, reused
+across ≤ 5 input rows (tile cap 5, k_lanes 8 for affine). Backported verbatim
+(affine half) onto the `pin-tesseract` Cmlx: kernels/quantized.h +163,
+quantized.metal +24, host quantized.cpp +96 (encoder API adapted to
+`d.get_command_encoder(s.index)`); JIT string mirror in
+`mlx-generated/quantized.cpp` kept byte-identical (verified by region diff
+against the upstream commit). Gates: 11 synthetic + rollback + round-0 parity
++ draft parity + 2 e2e trace tests green on the final tree; numerics probe
+(batched M vs per-row reference) rel-L∞ ≈ 1% at every M — uniform bf16
+reduction-order noise, no M-specific defect.
+
+Measured (app ABBA, 192 new tokens, 6K prompt, Release):
+bs5 verify 116 → 82–97 ms; bs5 18.3 → 26.4–27.9 tok/s (1.20–1.30×);
+bs8 flat (2 tiles at cap 5 ≈ 2.4 streams; ALU-bound, not bandwidth).
+
+### K3 — tile cap 5 → 8 — REJECTED
+
+One-stream-per-verify idea: bs8 in a single tile. Probe + app bench: slower
+(verify 150 → 162 ms) — register pressure/occupancy at nv=8 beats the
+bandwidth saving. Reverted to upstream cap 5.
+
+### K4 — qmm_t / k_lanes 16 / caps 2,3 at M ∈ 2..16 — REJECTED
+
+Forced-`qmm_t` (env `QMV_FORCE_QMM`, probe-only hook, stripped after): flat in
+M (streams W once) but 91 GB/s on lm_head ≈ 3.5 streams — the tiled kernel is
+not competitive at small M on this part. `QMV_KL=16`, caps 2/3: all lose or
+tie stock. Upstream's cap-5/kl-8 tuning stands on M3 Max.
+
+### K5 — block-size scan + verify mode
+
+bs ∈ {3,4,5,6,8} scan (acceptance per draft position: 59/50/41/36/22%):
+verify M = bs, so bs ≤ 5 rides a single qmv_wide tile; bs3 is the optimum.
+Eager vs compiled verify (env `DFLASH2_VERIFY=eager`): within noise at bs5,
+compiled ahead at bs3 — compiled stays default. **Production default changed
+to block 3** (`DFlash2Support.blockSize`; cool-machine ABBA: 31.0–31.3 tok/s,
+1.42–1.43× over AR 21.8–22.1; hot-machine repeat: 1.20×, thermals per rule
+:32). Final round anatomy at bs3: propose 10.2 (draft body 9.3 dispatch-bound
+vs 2.4 ms bandwidth floor — compiled draft body is the known next lever),
+verify 58–62, accept+reconcile ~1.5.
+
+### K5b — reference cross-check at bs3/bs5
+
+`research/bench_dflash.py --blocks 3,5` (Python reference, mlx 0.32 with
+native qmv_wide, same 6K prompt): AR 17.0, bs3 31.5 (1.85×), bs5 23.0 (1.35×).
+The reference peaks at block 3 too — the optimum is algorithmic. Absolute
+DFlash2 decode is cross-stack identical (31.5 vs 31.3 tok/s); our speedup
+ratio is smaller because the app's AR baseline is 26% faster (21.4–22.1 vs
+17.0), leaving speculation less headroom. (Watchdog footnote: the footprint
+parser misfired on a "K"-suffixed reading after the run completed — harmless,
+but parse `vmmap` units before comparing.)
+
+### K6 — long-context attempt at 65K — machine limit, aborted
+
+`--bench-context-mult 4` (23.7K prompt, swap-watched): AR 17.6 tok/s,
+bs3 22.8 tok/s — **1.29×** (acceptance 65.5%). The speculative ratio holds up
+as decode enters the KV-stream regime.
+
+`--bench-context-mult 11` (65K prompt): AR run0 12.7 tok/s, but swap climbed
+to 13.5/14.3 GB and AR run1 decayed to 5.9 — process killed to protect the
+machine (per the 2026-08-19 crash discipline). The 65K+ regime exceeds a
+48 GB machine's envelope for this stack; needs more RAM or KV paging. Open
+follow-up, not a port defect.
+
+### K7 — why qmv_wide stops scaling: x-side ALU, not W decode — diagnostics
+
+Probing the ported kernel with pieces ablated (probe-only, all reverted):
+removing the per-row x work entirely (kill-x, wrong results) flattens M ≤ 8 to
+~1.05 streams (lm_head M=8: 4.93 → 2.30 ms); replacing the 4-bit decode with a
+cast (kill-deq) changes nothing. So the M-scaling cost is the per-element
+x load + convert + FMA chain, which grows with the row tile — exactly what a
+simdgroup-MMA kernel would erase. Two vectorized-x-load variants (uint4
+bit-unpack; native `vec<T,8>`) both measured *slower* than stock (lm_head M=8
+6.46 / 5.16 vs 4.93 ms) — the scalar 2-byte loads already coalesce; the added
+ALU hurts. **Verdict: a real win here needs an MMA-based small-M affine kernel
+(bm=8 tiles), i.e. new kernel engineering — logged as future work, not
+attempted this session.** NAX (`qmm_nax`) is gated to GPU gen ≥ 17 + macOS
+26.2, so it never runs on this M3 Max; the M5 Max in the reference post runs
+it, which is part of why their small-M numbers beat this chip's.

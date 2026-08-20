@@ -54,6 +54,12 @@ nonisolated protocol ModelSession {
     /// setting on). `nil` disables the speculative arm — the common case.
     var mtpDrafter: (any MTPDrafterModel)? { get }
 
+    /// The DFlash2 block-parallel drafter paired with the loaded model, when
+    /// the separate draft checkpoint was downloaded and the setting allows
+    /// it. Preferred over ``mtpDrafter`` when both are present: deeper blocks
+    /// (8 vs 2 effective), and it speculates under sampling presets too.
+    var dflash2Drafter: (any DFlash2DrafterModel)? { get }
+
     /// Run the model's input processor: `UserInput` (messages, images,
     /// tools) → tokenized `LMInput`.
     func prepare(_ input: UserInput) async throws -> LMInput
@@ -113,6 +119,17 @@ nonisolated protocol ModelSession {
         parameters: GenerateParameters
     ) throws -> MTPSpeculativeTokenIterator
 
+    /// Construct the DFlash2 speculative decode iterator over the whole prompt
+    /// (its init runs the capture-emitting chunked prefill itself, building
+    /// the drafter's sliding hidden-state window). Only callable when
+    /// ``dflash2Drafter`` is non-nil. Penalties are stripped and re-attached
+    /// as the app logit processor, exactly like the MTP variant.
+    func makeDFlash2DecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> DFlash2SpeculativeTokenIterator
+
     /// Quantize the cache in place per the parameters' `kvBits`/`kvGroupSize`
     /// (no-op when unset) — once, before the iterator, so the array the
     /// module retains stays the live final cache.
@@ -132,6 +149,9 @@ nonisolated protocol ModelSession {
 /// since callers gate on ``ModelSession/mtpDrafter`` first.
 struct MTPDrafterUnavailableError: Error {}
 
+/// The DFlash2 arm's twin of ``MTPDrafterUnavailableError``.
+struct DFlash2DrafterUnavailableError: Error {}
+
 extension ModelSession {
     /// Sessions without speculative decoding (the test peers, and any future
     /// adapter that never loads a drafter) inherit the disabled state.
@@ -142,12 +162,22 @@ extension ModelSession {
     /// requirement, and the runtime isolation check traps off the main actor.
     nonisolated var mtpDrafter: (any MTPDrafterModel)? { nil }
 
+    nonisolated var dflash2Drafter: (any DFlash2DrafterModel)? { nil }
+
     nonisolated func makeMTPDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
         parameters: GenerateParameters
     ) throws -> MTPSpeculativeTokenIterator {
         throw MTPDrafterUnavailableError()
+    }
+
+    nonisolated func makeDFlash2DecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> DFlash2SpeculativeTokenIterator {
+        throw DFlash2DrafterUnavailableError()
     }
 }
 
@@ -170,6 +200,9 @@ nonisolated struct ContextBackedModelSession: ModelSession {
     /// The drafter loaded beside this model, threaded in by the production
     /// provider; `nil` on sessions without speculative decoding.
     var mtpDrafter: (any MTPDrafterModel)?
+    /// The DFlash2 draft loaded beside this model (separate checkpoint);
+    /// `nil` unless the draft folder exists and the setting is on.
+    var dflash2Drafter: (any DFlash2DrafterModel)?
 
     var configuration: ModelConfiguration { context.configuration }
     var tokenizer: any Tokenizer { context.tokenizer }
@@ -299,6 +332,23 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         )
     }
 
+    func makeDFlash2DecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        parameters: GenerateParameters
+    ) throws -> DFlash2SpeculativeTokenIterator {
+        guard let drafter = dflash2Drafter else {
+            throw DFlash2DrafterUnavailableError()
+        }
+        return try DFlash2Support.makeIterator(
+            input: input,
+            model: context.model,
+            drafter: drafter,
+            cache: cache,
+            parameters: parameters
+        )
+    }
+
     func quantizeKVCache(_ cache: inout [any KVCache], parameters: GenerateParameters) {
         maybeQuantizeKVCache(
             cache: &cache,
@@ -325,13 +375,17 @@ nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
     /// Boxed drafter handed through to every session; see the `LLMActor`
     /// field for the sharing rationale.
     var mtpDrafter: UnsafeSendableBox<any MTPDrafterModel>?
+    /// Boxed DFlash2 draft handed through to every session.
+    var dflash2Drafter: UnsafeSendableBox<any DFlash2DrafterModel>?
 
     func withSession<R: Sendable>(
         _ body: @Sendable (any ModelSession) async throws -> R
     ) async throws -> R {
         try await container.perform { context in
             try await body(
-                ContextBackedModelSession(context: context, mtpDrafter: mtpDrafter?.value))
+                ContextBackedModelSession(
+                    context: context, mtpDrafter: mtpDrafter?.value,
+                    dflash2Drafter: dflash2Drafter?.value))
         }
     }
 }

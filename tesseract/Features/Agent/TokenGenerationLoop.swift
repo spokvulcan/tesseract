@@ -167,6 +167,19 @@ nonisolated enum TokenGenerationLoop {
                     return .cancelled
                 }()
 
+            // Speculative iterators verify several candidates at once. A stop
+            // token, consumer termination, or token limit can leave verified
+            // but unreturned candidates in their caches — rewind that
+            // lookahead before the caller treats the final cache as holding
+            // exactly the emitted tokens (upstream `generateLoopTask` does
+            // the same; this loop's MTP/DFlash2 arms depend on it).
+            if var finalizing = iterator as? any GenerationFinalizingTokenIterator {
+                finalizing.finalizeGeneration()
+                // NB: no write-back — the rewind lands on the reference-typed
+                // caches (which is what later readers observe), and nothing
+                // below reads the inline iterator fields the rewind touches.
+            }
+
             let info = GenerateCompletionInfo(
                 promptTokenCount: promptTokenCount,
                 generationTokenCount: tokenCount,

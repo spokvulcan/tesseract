@@ -40,6 +40,18 @@ gitlinks point into them.
 | `pin-tesseract` | mlx v0.31.1 `ce45c525` / mlx-swift 0.31.6 `0bb916c` | **current** |
 | `pin-tesseract-2026-07-27` | mlx main `973e27f8` / mlx-swift main `09051ed` | built, blocked — see below |
 
+### Carried since 2026-08-20: qmv_wide backport (DFlash2)
+
+`pin-tesseract` now carries a verbatim backport of upstream
+`ml-explore/mlx#3764` (`548dd80e8`, small-batch `qmv_wide` kernel) — the
+DFlash2 verify-pass fix (ledger K1–K7): mlx `452aecadd`, mlx-swift `21103804`
+(gitlink bump + `mlx-generated` JIT string mirror). The only adaptation vs
+upstream is `d.get_command_encoder(s.index)` for this base's pre-thread-local
+encoder API. Verified after re-resolution: the DerivedData checkout's diff
+from the pre-backport tips is byte-identical to the text that was benched
+(clean-build confirmation + bs3 smoke leg). The carry drops for free when the
+pin rebases to ≥ v0.32.0 (the commit is already upstream).
+
 Scheme creation started from `54ca1ec` (provenance-only) on the original
 `pin-tesseract` branch.
 

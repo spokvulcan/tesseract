@@ -173,3 +173,11 @@ the report to `benchmark/trace-replay/latest.log`.
   `manifestDirty` under the lock but writes the manifest file after unlocking,
   so the test's `flushManifestForTesting` can no-op while the debounce task's
   write is still in flight and the `fileExists` check lands first.
+- Heavyweight model-loading tests (27B-class) on a 48 GB machine: run them
+  **one test per process** (or at most the proven pairs). Packing several into
+  one `swift test` process accumulates fixtures across tests —
+  `swiftpm-testing-helper` peaked at 64.5 GB physical footprint on 2026-08-20
+  and had to be killed to avoid repeating the 2026-08-19 crash. Two metric
+  traps: `memory_pressure` free-% lags the helper's real footprint, and `ps`
+  RSS misses IOSurface/shared GPU memory. If you must guard, watch
+  `vmmap -summary <pid>` "Physical footprint" of the testing helper itself.

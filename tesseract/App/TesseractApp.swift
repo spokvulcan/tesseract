@@ -52,6 +52,20 @@ struct TesseractApp: App {
     @StateObject private var container = DependencyContainer()
     @State private var selectedNavigation: NavigationItem? = .agent
 
+    /// Launch arguments that select a headless harness run (dispatched in
+    /// `init`). Harness instances are exempt from the single-instance guard
+    /// so a bench can run while an interactive instance is open.
+    static let harnessFlags: Set<String> = [
+        "--paro-parity-bench", "--snapshot-bench", "--prefix-detect-bench",
+        "--tokenize-cache-bench", "--agent-cpu-bench", "--dflash2-bench",
+        "--prefix-cache-e2e", "--benchmark", "--hybrid-cache-correctness",
+        "--prefill-step-benchmark", "--paroquant-vlm-smoke",
+        "--prepared-checkpoint-parity", "--trace-replay",
+    ]
+    static var isHarnessLaunch: Bool {
+        CommandLine.arguments.contains { harnessFlags.contains($0) }
+    }
+
     init() {
         let args = CommandLine.arguments
         // `--paro-parity-bench` precedes `--benchmark`: scripts/bench.sh always
@@ -77,6 +91,10 @@ struct TesseractApp: App {
         } else if args.contains("--agent-cpu-bench") {
             Self.runHarness("Agent CPU bench") {
                 try await AgentCpuBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--dflash2-bench") {
+            Self.runHarness("DFlash2 bench") {
+                try await DFlash2BenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--prefix-cache-e2e") {
             Self.runHarness("Prefix cache E2E") {

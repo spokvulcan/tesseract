@@ -198,6 +198,10 @@ struct ModelsPageView: View {
         case .embedding:
             return model.id == ModelDefinition.defaultEmbeddingModelID
                 && container.memoryEngine.isEmbedderLoaded
+        case .draft:
+            // Drafts are never loaded standalone — they co-reside with their
+            // target agent model.
+            return container.inferenceArbiter.loadedLLMModelID == "qwen3.8-27b"
         }
     }
 }

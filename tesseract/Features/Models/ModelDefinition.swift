@@ -16,6 +16,10 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     /// `.proofread`: a co-resident, non-generative worker that must never
     /// appear in the agent-model picker.
     case embedding = "Memory"
+    /// A speculative-decoding draft model (e.g. DFlash2) — never generative
+    /// on its own, downloaded as a dependency of its target, and never in
+    /// the agent-model picker.
+    case draft = "Draft"
 
     var id: String { rawValue }
 
@@ -26,6 +30,7 @@ enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
         case .agent: "brain"
         case .proofread: "text.badge.checkmark"
         case .embedding: "brain.head.profile"
+        case .draft: "bolt.fill"
         }
     }
 }
@@ -248,6 +253,19 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~16 GB",
+            dependencies: ["qwen3.8-27b-dflash2-draft"]
+        ),
+        ModelDefinition(
+            id: "qwen3.8-27b-dflash2-draft",
+            displayName: "Qwen3.8-27B DFlash2 Draft",
+            description:
+                "Block-parallel speculative-decoding draft for Qwen3.8-27B (incoai/Qwen3.8-27B-DFlash2). Downloads alongside the target and accelerates decode ~3× at greedy and sampling presets alike. Never usable on its own.",
+            category: .draft,
+            source: .huggingFace(
+                repo: "incoai/Qwen3.8-27B-DFlash2",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~3.9 GB",
             dependencies: []
         ),
         ModelDefinition(

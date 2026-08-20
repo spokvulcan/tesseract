@@ -66,6 +66,11 @@ actor LLMActor {
     /// iterators, and every use is confined to generation work inside
     /// `ModelContainer.perform`.
     private var mtpDrafter: UnsafeSendableBox<any MTPDrafterModel>?
+    /// The DFlash2 block-parallel drafter loaded from its own checkpoint
+    /// (separate download from the target model). Same boxing rationale as
+    /// `mtpDrafter`. Preferred over MTP when both are present: deeper blocks
+    /// and sampling-preset support.
+    private var dflash2Drafter: UnsafeSendableBox<any DFlash2DrafterModel>?
     private(set) var agentTokenizer: AgentTokenizer?
     /// The loaded model's weight/config/template fingerprint
     /// (`ModelFingerprint.computeFingerprint`), keyed on by the C25
@@ -162,6 +167,7 @@ actor LLMActor {
             let result = try await verifyAndStore(container: container, identity: identity)
             await loadMTPDrafterIfPresent(
                 directory: directory, container: container, enabled: mtpEnabled)
+            await loadDFlash2DrafterIfPresent(container: container, enabled: mtpEnabled)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
         }
@@ -190,6 +196,7 @@ actor LLMActor {
         let result = try await verifyAndStore(container: container, identity: identity)
         await loadMTPDrafterIfPresent(
             directory: directory, container: container, enabled: mtpEnabled)
+        await loadDFlash2DrafterIfPresent(container: container, enabled: mtpEnabled)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
     }
@@ -231,6 +238,7 @@ actor LLMActor {
         // Read once on the actor so the `@Sendable` perform-closure below
         // captures a value, not actor state.
         let modelFingerprint = activeModelFingerprint
+        let dflash2 = dflash2Drafter
         // Canonicalize once so the loop-handler sees the same dict iteration
         // order the tokenizer uses for the prompt. Type-aware tool-call
         // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
@@ -272,6 +280,38 @@ actor LLMActor {
                         prefillMs: nil
                     )))
             let prefillStarted = Date.timeIntervalSinceReferenceDate
+            // DFlash2 speculative arm: a text-only prompt on a pairing target
+            // with the draft loaded decodes through the block-parallel
+            // speculative iterator (its init runs the capture-emitting chunked
+            // prefill itself). Sampling presets speculate identically —
+            // unlike the greedy-only MTP head, the draft carries a selector
+            // for rejection sampling.
+            if let drafter = dflash2?.value,
+                DFlash2Support.shouldEngageRawArm(hasDrafter: true, input: prepared),
+                DFlash2Support.pairsWithTarget(context.model)
+            {
+                var specParams = genParams
+                specParams.kvBits = nil  // speculation needs trimmable caches
+                let cache = try context.model.newCache(parameters: specParams)
+                let iterator = try DFlash2Support.makeIterator(
+                    input: prepared, model: context.model, drafter: drafter,
+                    cache: cache, parameters: specParams)
+                let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
+                await progressHandler?(
+                    .prefillFinished(
+                        .init(
+                            promptTokens: promptTokenCount,
+                            cachedTokens: 0,
+                            newTokensToPrefill: promptTokenCount,
+                            prefillMs: prefillMs
+                        )))
+                return Self.makeRawGenerationStart(
+                    iterator: iterator,
+                    promptTokenCount: promptTokenCount,
+                    context: context,
+                    tools: canonicalTools
+                )
+            }
             let strategy = PrefillStrategy.decide(
                 for: prepared, prefillStepSize: genParams.prefill.stepSize
             )
@@ -485,6 +525,28 @@ actor LLMActor {
         )
     }
 
+    /// The speculative-iterator twin of ``makeRawGenerationStart`` (the loop's
+    /// `some TokenIteratorProtocol` overload covers DFlash2 and MTP arms).
+    private static func makeRawGenerationStart(
+        iterator: consuming some TokenIteratorProtocol,
+        promptTokenCount: Int,
+        context: ModelContext,
+        tools: [ToolSpec]?
+    ) -> HTTPServerRawGenerationStart {
+        let (stream, completion) = TokenGenerationLoop.start(
+            promptTokenCount: promptTokenCount,
+            modelConfiguration: context.configuration,
+            tokenizer: context.tokenizer,
+            iterator: iterator,
+            tools: tools
+        )
+        return HTTPServerRawGenerationStart(
+            stream: stream,
+            cancel: { completion.cancel() },
+            waitForCompletion: { await completion.value }
+        )
+    }
+
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions` —
     /// the **Server Completion** entry (the dispatcher's cache-aware arm).
     /// Execution lives in the actor-confined ``ServerCompletion`` module.
@@ -505,7 +567,8 @@ actor LLMActor {
         }
         return try await ensureServerCompletion().start(
             on: self,
-            sessions: ContainerModelSessionProvider(container: container, mtpDrafter: mtpDrafter),
+            sessions: ContainerModelSessionProvider(
+                container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter),
             modelID: modelID,
             conversation: conversation,
             toolSpecs: toolSpecs,
@@ -593,6 +656,7 @@ actor LLMActor {
         }
         modelContainer = nil
         mtpDrafter = nil
+        dflash2Drafter = nil
         agentTokenizer = nil
         serverCompletion = nil
         activeModelFingerprint = nil
@@ -949,6 +1013,38 @@ extension LLMActor {
         } catch {
             Log.agent.warning(
                 "MTP drafter load failed — continuing without speculation: \(error)")
+        }
+    }
+
+    /// Load the DFlash2 draft from its own folder when it exists on disk, the
+    /// loaded target pairs with it, and the setting allows it. Same degrade-
+    /// to-plain-decoding discipline as the MTP drafter: a draft problem warns,
+    /// never fails the model load.
+    private func loadDFlash2DrafterIfPresent(
+        container: ModelContainer, enabled: Bool
+    ) async {
+        dflash2Drafter = nil
+        guard enabled else { return }
+        let storageRoot = await MainActor.run { ModelDownloadManager.modelStorageURL }
+        guard let directory = DFlash2Support.draftDirectory(storageRoot: storageRoot) else {
+            return  // draft not downloaded — the common case, stay silent
+        }
+        let pairs = await container.perform { context in
+            DFlash2Support.pairsWithTarget(context.model)
+        }
+        guard pairs else {
+            Log.agent.info(
+                "DFlash2 draft: loaded target class pairs with no DFlash2 draft — off")
+            return
+        }
+        do {
+            let draft = try DFlash2Support.loadDrafter(directory: directory)
+            dflash2Drafter = UnsafeSendableBox(draft)
+            Log.agent.notice(
+                "DFlash2 draft loaded (4-bit) — blockSize=\(DFlash2Support.blockSize)")
+        } catch {
+            Log.agent.warning(
+                "DFlash2 draft load failed — continuing without it: \(error)")
         }
     }
 }

@@ -238,10 +238,11 @@ struct AgentSettingsPane: View {
             }
 
             Section {
-                Toggle("Speculative Decoding (MTP)", isOn: $settings.mtpSpeculationEnabled)
+                Toggle(
+                    "Speculative Decoding (MTP / DFlash2)", isOn: $settings.mtpSpeculationEnabled)
             } footer: {
                 Text(
-                    "Speeds up greedy (temperature 0) generation on models that ship a multi-token-prediction head by drafting several tokens per step. Takes effect on the next model load."
+                    "Speeds up generation by drafting several tokens per step: MTP (greedy, models that ship the head) or DFlash2 (greedy and sampled, Qwen3.8-27B with its draft downloaded). Takes effect on the next model load."
                 )
             }
 

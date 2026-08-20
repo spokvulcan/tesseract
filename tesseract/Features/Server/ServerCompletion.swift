@@ -1326,6 +1326,41 @@ nonisolated final class ServerCompletion {
                 restoreMs = 0
                 executionBaseOffset = prefixEnd
             case .cold:
+                // DFlash2 speculative arm: a text-only cold prompt with the
+                // draft loaded decodes through the block-parallel speculative
+                // iterator. Preferred over MTP when both are present: deeper
+                // blocks (8 vs 2 effective) and it engages under sampling
+                // presets too. The policy lives on `DFlash2Support.shouldEngage`.
+                if DFlash2Support.shouldEngage(
+                    hasDrafter: session.dflash2Drafter != nil,
+                    textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
+                    predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
+                        promptStartsThinking: promptStartsThinking,
+                        // Conservative stand-in: tool *emission* is unknowable
+                        // at engagement time, so defined tools predict as if
+                        // they will be called.
+                        emittedToolCalls: canonicalTools?.isEmpty == false
+                    )
+                ) {
+                    return try await Self.makeDFlash2Generation(
+                        session: session,
+                        fullInput: fullInput,
+                        fullTokens: fullTokens,
+                        fullTokenCount: fullTokenCount,
+                        tokenNDim: tokenNDim,
+                        keySpace: keySpace,
+                        parameters: parameters,
+                        toolSpecs: canonicalTools,
+                        partitionKey: partitionKey,
+                        lookupReason: lookupResult.reason,
+                        lookupMs: lookupMs,
+                        ssdEnabled: ssdEnabled,
+                        seedsPositionAnchor: seedsPositionAnchor,
+                        visionAttentionScratchProfile: visionAttentionScratchProfile,
+                        diagnosticsContext: diagnosticsContext,
+                        progressHandler: progressHandler
+                    )
+                }
                 // MTP speculative arm (v1): a text-only cold prompt at greedy
                 // sampling with a loaded drafter decodes through the vendor
                 // MTP iterator instead of the chunked-prefill path. The full
@@ -1975,9 +2010,111 @@ nonisolated final class ServerCompletion {
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
+        try await makeSpeculativeGeneration(
+            arm: "mtp",
+            session: session,
+            fullInput: fullInput,
+            fullTokens: fullTokens,
+            fullTokenCount: fullTokenCount,
+            tokenNDim: tokenNDim,
+            keySpace: keySpace,
+            parameters: parameters,
+            toolSpecs: toolSpecs,
+            partitionKey: partitionKey,
+            lookupReason: lookupReason,
+            lookupMs: lookupMs,
+            ssdEnabled: ssdEnabled,
+            seedsPositionAnchor: seedsPositionAnchor,
+            visionAttentionScratchProfile: visionAttentionScratchProfile,
+            diagnosticsContext: diagnosticsContext,
+            progressHandler: progressHandler
+        ) { session, input, cache, iteratorParams in
+            try session.makeMTPDecodeIterator(
+                input,
+                cache: cache,
+                parameters: iteratorParams
+            )
+        }
+    }
+
+    /// The DFlash2 block-parallel speculative arm of the keyed cold path.
+    /// Same shape as the MTP arm, but the iterator runs its own chunked
+    /// capture prefill (no scratch-budget gate — the draft's context window
+    /// is fixed at 2047 rows regardless of prompt length) and rejection-
+    /// samples, so sampling presets engage too.
+    // swiftlint:disable:next function_parameter_count
+    static func makeDFlash2Generation(
+        session: any ModelSession,
+        fullInput: LMInput,
+        fullTokens: [Int],
+        fullTokenCount: Int,
+        tokenNDim: Int,
+        keySpace: CacheKeySpace,
+        parameters: GenerateParameters,
+        toolSpecs: [ToolSpec]?,
+        partitionKey: CachePartitionKey,
+        lookupReason: PrefixCacheManager.LookupReason,
+        lookupMs: TimeInterval,
+        ssdEnabled: Bool,
+        seedsPositionAnchor: Bool,
+        visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        progressHandler: ServerInferenceProgressHandler?
+    ) async throws -> HTTPPrefixCacheGeneration {
+        try await makeSpeculativeGeneration(
+            arm: "dflash2",
+            session: session,
+            fullInput: fullInput,
+            fullTokens: fullTokens,
+            fullTokenCount: fullTokenCount,
+            tokenNDim: tokenNDim,
+            keySpace: keySpace,
+            parameters: parameters,
+            toolSpecs: toolSpecs,
+            partitionKey: partitionKey,
+            lookupReason: lookupReason,
+            lookupMs: lookupMs,
+            ssdEnabled: ssdEnabled,
+            seedsPositionAnchor: seedsPositionAnchor,
+            visionAttentionScratchProfile: visionAttentionScratchProfile,
+            diagnosticsContext: diagnosticsContext,
+            progressHandler: progressHandler
+        ) { session, input, cache, iteratorParams in
+            try session.makeDFlash2DecodeIterator(
+                input,
+                cache: cache,
+                parameters: iteratorParams
+            )
+        }
+    }
+
+    /// The shared body of the speculative cold-path arms: cold prefill into a
+    /// fresh cache, iterator construction under checked evaluation, then the
+    /// token loop. Only the iterator differs between arms.
+    // swiftlint:disable:next function_parameter_count
+    private static func makeSpeculativeGeneration<I: TokenIteratorProtocol>(
+        arm: String,
+        session: any ModelSession,
+        fullInput: LMInput,
+        fullTokens: [Int],
+        fullTokenCount: Int,
+        tokenNDim: Int,
+        keySpace: CacheKeySpace,
+        parameters: GenerateParameters,
+        toolSpecs: [ToolSpec]?,
+        partitionKey: CachePartitionKey,
+        lookupReason: PrefixCacheManager.LookupReason,
+        lookupMs: TimeInterval,
+        ssdEnabled: Bool,
+        seedsPositionAnchor: Bool,
+        visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
+        diagnosticsContext: PrefixCacheDiagnostics.Context,
+        progressHandler: ServerInferenceProgressHandler?,
+        makeIterator: (any ModelSession, LMInput, [any KVCache], GenerateParameters) throws -> I
+    ) async throws -> HTTPPrefixCacheGeneration {
         diagnosticsContext.logSkip(
             stage: "prefill",
-            reason: "mtp-speculative-arm",
+            reason: "\(arm)-speculative-arm",
             extraFields: [("promptTokens", "\(fullTokenCount)")]
         )
 
@@ -1991,17 +2128,18 @@ nonisolated final class ServerCompletion {
             cachedTokens: 0,
             pricedImage: nil,
             visionAttentionScratchProfile: visionAttentionScratchProfile,
-            guardLabel: "mtp",
+            guardLabel: arm,
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
         )
         let cache = begin.cache
 
         let iterator = try MLXCheckedEvaluation.withErrors { error in
-            let built = try session.makeMTPDecodeIterator(
+            let built = try makeIterator(
+                session,
                 fullInput,
-                cache: cache,
-                parameters: iteratorParams
+                cache,
+                iteratorParams
             )
             try error.check()
             return built

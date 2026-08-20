@@ -22,8 +22,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Ensure only one instance of the app runs at a time
-        ensureSingleInstance()
+        // Ensure only one instance of the app runs at a time. Headless
+        // harness runs (`--dflash2-bench` etc.) are exempt: a bench must be
+        // able to run next to an interactive instance.
+        if !TesseractApp.isHarnessLaunch {
+            ensureSingleInstance()
+        }
 
         // Un-sandbox cutover (#381, ADR-0047): carry the downloaded models over
         // from the retired container before anything reads the model path.
