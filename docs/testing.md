@@ -173,6 +173,10 @@ the report to `benchmark/trace-replay/latest.log`.
   `manifestDirty` under the lock but writes the manifest file after unlocking,
   so the test's `flushManifestForTesting` can no-op while the debounce task's
   write is still in flight and the `fileExists` check lands first.
+- Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
+  run with `--no-parallel`. Two of the parity tests load the 27B target each;
+  in parallel they contend the single GPU until a Metal command buffer hits
+  the watchdog (`kIOGPUCommandBufferCallbackErrorTimeout`). Serial: 18/18 green.
 - Heavyweight model-loading tests (27B-class) on a 48 GB machine: run them
   **one test per process** (or at most the proven pairs). Packing several into
   one `swift test` process accumulates fixtures across tests —

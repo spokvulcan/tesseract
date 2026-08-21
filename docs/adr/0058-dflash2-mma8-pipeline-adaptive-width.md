@@ -73,8 +73,11 @@ this adversarial prompt and beats fixed-8 by 14%. Pre-round-2 baseline: bs3
 
 - The docs-summary bench prompt is acceptance-capped by content (59%→22%
   per-position decay, cross-stack identical with the Python reference): on it,
-  narrow wins. On predictable content (code, JSON, tool calls) the bandit
-  stays wide. The bandit exists because both regimes ship to users.
+  narrow wins. On predictable content the bandit rides the cap — measured on
+  the repeat-style prompt (`DFLASH2_BENCH_PROMPT=repeat`, 9.1K tokens): bs3
+  acceptance 74% vs the docs prompt's decay, and the arms invert: bs8-adaptive
+  32.8 tok/s > bs8-fixed 31.3 > bs3 26.5 (warm machine; ledger R7). The
+  bandit exists because both regimes ship to users.
 - Verify at S=8 still costs ~1.7× the S=1 forward (probe: 82-90 vs 47-48 ms):
   ~2/3 mma8 bandwidth economics, ~1/3 eager inter-segment glue (16 attention
   rope+KV+SDPA steps sit outside the compiled segments). Tracing the attention
@@ -82,3 +85,33 @@ this adversarial prompt and beats fixed-8 by 14%. Pre-round-2 baseline: bs3
   lever if more width-8 headroom is needed.
 - 70 tok/s is M5 Max physics (614 GB/s, 1.54× this machine's 400); on M3 Max
   the realistic envelope for this workload is ~35-50 depending on content.
+
+## Deferred (recorded, not built in round 2)
+
+- Async draft prefetch behind the verify pass (spec story 13): the draft for
+  round N+1 depends on round N's accepted hidden states, so only host-side
+  bookkeeping/detok overlap is available — est. 2-5 ms/round, not the 15-20
+  of a full hide.
+- Start-reduced policy for >= 32K prompts (spec story 4): verify cost grows
+  with context (KV reads + SDPA partials); the oMLX/ollama stacks gate wide
+  blocks off at long context. Needs long-context bench arms first.
+- Content-suite benching (code/JSON/prose arms) and 24K+ prompt arms: the
+  two-prompt harness (docs adversarial / repeat predictable) brackets the
+  regimes but does not sample between.
+- Kernel parity gate as a standing test: the qmvprobe `check`/`sdpacheck`
+  numerics live in the probe harness, not in a test suite.
+- Width-8 fixture extension of the mock-drafter tests (they cap at block 4).
+- Draft-forward compilation: the propose pass is ~150 eager dispatches
+  (18-22 ms/round measured at bs8, 9K ctx); tracing the layer stack per
+  block width is the remaining structural lever, blocked on trace keys for
+  the variable-length context attention.
+
+## Round 3 addendum (2026-08-21 evening)
+
+SDPA query-axis tiling (kills the S>=6 fallback cliff: -15.5 ms at S=8) and
+the direct-fragment mma8 (4-bit) shipped in mlx 84b99c29d / mlx-swift
+4bcdf8b; buffered draft context cache + mask memo in mlx-swift-lm d0d40a5.
+Bench (repeat prompt, warm): bs8-fixed 35.2 tok/s, 1.75x over AR 20.1;
+output identity MATCH. The end-to-end parity gate moved to the seam-tie
+invariant after the token-10 divergence measured as a dead tie
+(20.7500 == 20.7500; ledger R12).

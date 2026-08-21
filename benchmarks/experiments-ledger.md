@@ -2792,7 +2792,8 @@ qmv_wide tile cap 8 (register spill, 0.5-1.7x slower than mma8 at M=8);
 ### R2 — single-sync pipeline — ACCEPTED (mlx-swift-lm 53e52f8)
 
 Anchor tracked host-side + draft ids and target argmax ship in ONE packed D2H
-per round (3 syncs -> 1). bs3: verify 61.1 -> 54.4 ms, accept 0.9 -> 0.5,
+per round (3 syncs -> 1 on the greedy path the bench measures; sampled rounds
+still pay the sampler's own reads). bs3: verify 61.1 -> 54.4 ms, accept 0.9 -> 0.5,
 reconcile 1.0 -> 0.7. bs3 31.3 -> 33.3 tok/s cool-machine ABBA (1.58x over AR
 21.1). Unit gates: 13 DFlash2Tests incl. iterator rollback test.
 
@@ -2832,3 +2833,172 @@ Headless harness launches (--benchmark, --dflash2-bench, ...) now skip the
 models migration (same rule as the test-run guard): a wedged retired-container
 directory hung every bench launch post-reboot (contentsOfDirectory blocked on
 the main thread). Interactive launches still migrate.
+
+### R7 — easy-content regime (repeat prompt) — the width optimum flips
+
+`DFLASH2_BENCH_PROMPT=repeat` (tiled fibonacci one-liner, 9099-token prompt,
+"rewrite iteratively" question) — the agent-typical high-acceptance regime.
+192 tokens, ABBA, machine cooling after the docs-prompt set (AR legs read
+21.1 -> 18.6/19.2/19.9, so treat absolute tok/s as warm-drifted; run0 legs
+additionally pay page-in):
+
+| arm | run0 | run1 | median | acceptance |
+| --- | --- | --- | --- | --- |
+| ar | 21.1 | 19.9 | 19.9 | — |
+| bs3 | 26.5 | 24.4 | 26.5 | 74.0% (228/308) |
+| bs8f | 23.9 | 31.3 | 31.3 | 46.8% (294/628) |
+| bs8-adaptive | 28.3 | 32.8 | 32.8 | 54.8% (288/526) |
+
+Output-identity: MATCH on all arms.
+
+Findings:
+1. Acceptance IS content-bound at narrow width: bs3 74% here vs the docs
+   prompt's 59% -> 22% decay. Per-position acceptance decays with block
+   depth (bs8f 46.8%), as expected — later block positions are harder.
+2. The width optimum FLIPS on easy content: bs8-adaptive (32.8) beats bs3
+   (26.5) — the reverse of the docs prompt (33.3 vs 28.7). The bandit's job
+   is exactly this regime split; on easy content it rides the cap.
+3. verify dominates the wide round and scales with BOTH S and context:
+   bs3 verify 74-81 ms at 9K ctx (vs 54-58 at 6K docs); bs8f verify
+   118-155 ms. Weight-read floor is ~34 ms (13.5 GB @ 400 GB/s) — the gap
+   is the optimization surface: mma8 tile economics + eager attention glue
+   (R4 decomposition) + a page-in penalty on first runs.
+4. Steady-state (run1) round anatomy: bs3 = propose 20.1 + verify 81.2 +
+   accept 0.4 + reconcile 0.6 (2.49 tok/round); bs8f = 16.7 + 118.3 +
+   0.4 + 0.9 (4.27 tok/round).
+5. Ceiling math for this machine: 60 tok/s needs ~3.5 tok/round at <=58 ms
+   — verify at ~85% of the bandwidth floor INCLUDING attention, above what
+   the AR step itself achieves (73%). ~50 tok/s on easy content is the
+   realistic target: verify ~50 ms (AR-step efficiency) + propose ~17 +
+   glue ~3 at bs4-ish acceptance. Levers, in order: (a) eager attention
+   glue in verify (~25-35 ms at S=3, worse at S=8), (b) propose/verify
+   overlap (~15-20 ms), (c) mma8 bandwidth efficiency (28-54% of peak in
+   the probe), (d) then width policy retune.
+
+### R8 — verifyprobe at 9K ctx: the verify cost curve is measured, not theorized
+
+verifyprobe (real target, capture-state forward, median of 30) at 9000-token
+prefill, machine warm-ish:
+
+| S | no-capture ms | capture ms |
+| --- | --- | --- |
+| 1 | 47.72 | 50.88 |
+| 2 | 52.81 | 51.05 |
+| 3 | 60.21 | 57.24 |
+| 4 | 72.53 | 70.10 |
+| 5 | 81.24 | 80.38 |
+| 6 | 100.02 | 99.06 |
+| 7 | 101.58 | 100.98 |
+| 8 | 102.89 | 102.09 |
+
+Decomposition (per-delta attribution, cross-checked against kernel gates):
+
+- S=1 -> 2: +5 — qmv_wide M=2 ramp begins (per-row compute grows, weights
+  re-streamed per tile).
+- S=2 -> 5: +28.5 — qmv_wide M=3..4 then mma8 at M=5; the small-M QMM
+  bandwidth gap is the dominant verify cost at every width (mma8 probe:
+  27-54% of the 400 GB/s floor depending on shape).
+- S=5 -> 6: **+18.7 — the SDPA fallback cliff** (gqa*S = 36 > 32 gates out
+  sdpa_vector_2pass; 16 attention layers x unfused 4-5 dispatch chain).
+  ~10x agent-7's source-based estimate; measured beats derived.
+- S=6 -> 8: +2.9 total — mma8 is M-flat as designed; residual is attention
+  growth. Confirms width 6..8 costs nothing extra in the QMMs once the
+  cliff is gone.
+- Capture plumbing: +0..3 ms per forward (hidden-state + GDN capture).
+
+The 9K-vs-2K S=8 delta (82-90 -> 102) is mostly the cliff scaling with kL
+(fallback matmuls/partials grow with context), not KV reads (~1.5 ms).
+
+Lever ranking from measurement: (A) kill the S>=6 SDPA fallback (tile the
+qL axis in sdpa_vector_2pass) ~19 ms at S=6-8; (B) small-M QMM bandwidth
+(mma8 double-buffer/wider tile; qmv_wide M=2..4 ramp) ~20-25 ms at all
+widths; (C) rope-in-trace glue ~1-3 ms; (D) propose overlap ~5-15 ms of
+round time. Projection after A+B at bs8: verify ~62 ms -> ~50+ tok/s easy
+content; bs3 docs verify ~40 ms -> ~39 tok/s.
+
+### R9 — SDPA qL-tiling: the S>=6 cliff is dead — ACCEPTED (probe-validated)
+
+Change: `sdpa_vector_2pass_1` tiles the query axis — threadgroup z capped at
+32/gqa, balanced qL chunks packed into grid.y with the batch; full q_seq_len
+rides buffer 19 for chunk-independent causal alignment/output stride; tail
+threads early-return. Gate in `use_fallback` relaxes `qL*gqa <= 32` only
+where the 2-pass path will actually serve (gqa <= 32, kL >= 1024 on d/s).
+Fork-checkout edit, AOT metallib rebuilt via `xcrun metal` CLI for the
+probe loop.
+
+Numerics (qmvprobe sdpacheck, tiled-2pass vs eager fp32 reference, causal,
+ctx 9216): max|diff| <= 4.6e-4 for S = 1..8 — PASS.
+
+Timing (qmvprobe sdpa, ctx 9216, per-call): S=6 0.968 / S=7 0.869 /
+S=8 0.916 ms — the fallback chain (was ~2.2 ms/call at S=6 by the R8
+delta) is gone; wide S now costs like S=5.
+
+Model level (verifyprobe, 9K ctx, capture=yes, median of 30):
+S=5 77.7 | S=6 80.8 | S=7 84.1 | S=8 86.6 ms. The S=5->6 step is +3.2 ms
+(was +18.7). S=8 verify: 102.1 -> 86.6 ms (-15%).
+
+### R10 — mma8 direct-fragment variant — ACCEPTED (modest but real)
+
+Restructure: each lane dequantizes exactly its two 8x8-B-fragment elements
+(no threadgroup staging, no barriers, uint4 weight loads, packed A
+preloads); 4-bit only, 8-bit keeps the staged path. Numerics: rel-Linf
+0.007-0.011 vs per-row reference (staged class). Probe M=8 vs staged mma8:
+gdn_in_proj 0.381 -> 0.364 (+4.5%), mlp_gate_up 0.586 -> 0.533 (+10%),
+mlp_down 0.404 -> 0.378 (+6.9%), lm_head 2.940 -> 2.911 (+1%). Per-byte
+efficiency at M=8 is 73-85% of the M=1 GEMV rate on the same shapes.
+Verdict: keep (strictly better per shape, numerics identical), but the
+verify excess is NOT per-byte QMM economics alone — the residual S-scaling
+after R9 lives in the eager attention glue/dispatch path and needs a real
+trace, not more probe arithmetic.
+
+### R11 — where the remaining round time lives (estimate, to be traced)
+
+Post-R9/R10 projection for the repeat-prompt bs8f arm: verify 118 -> ~90 ms
+in-bench, round ~110 ms, ~4.3 tok/round -> ~39-42 tok/s cool. Short of 50.
+Two residual pools, both need measurement beyond probe arithmetic:
+(a) verify's eager attention glue + dispatch at S=8 (~25 ms unaccounted by
+    QMM per-byte rates; sdpa 2-pass reduction traffic + rope/KV launches);
+(b) propose (draft) 15-22 ms/round for a 5-layer drafter — ~10x its weight
+    bandwidth (lm_head over 248k vocab ~3 ms + selector + per-layer launch
+    overhead). Candidate fixes: rope-in-trace (array-offset RoPE overloads
+    exist), draft-pass dispatch consolidation, propose/verify host-gap
+    overlap. Decision gate: if the A+B bench lands < 45 easy-content, spend
+    a Metal trace / eager-vs-compiled A/B on (a) before more kernel work.
+
+### R12 — parity-test re-baseline: the token-10 divergence is a DEAD TIE
+
+`testDFlash2EndToEndParityWithPythonTrace{,4BitDraft}` were failing at
+commonPrefix 10 (< the historical 40 gate). Stash A/B proved it pre-existing
+(identical produced sequence with and without the session's Swift changes) —
+the move from the documented token-45 divergence to token 10 dates to the
+round-2 kernel set (mma8 verify-width QMM; the draft's lm_head rides it at
+M=7). Seam probe (verifyprobe `seam` mode, real target, shared-prefix
+forward): the two candidates at the seam are bit-tied — ids 279 vs 1092,
+logits 20.7500 == 20.7500. Sub-ULP argmax order picks the winner; both are
+legitimate greedy outputs. The test now gates on the actual invariant: a
+sanity prefix floor (>= 8) plus a seam gate (the two candidates' target
+logits within 0.25 = 2 bf16 ULPs at that scale), keeping count equality and
+the acceptance floor (passed: 35/70, 35/68). In-stack exactness (AR vs
+speculative on the same kernels) remains gated by the bench runner's
+output-identity fingerprint.
+
+Also from the test runs: parallel `swift test --filter DFlash2` on one GPU
+hits Metal command-buffer watchdog timeouts (two 27B parity tests
+concurrently) — run serially (`--no-parallel`).
+
+### R13 — draft-side round (buffered context cache + mask memo) — ACCEPTED for health, bench-neutral
+
+Two changes: (1) DFlash2ContextCache is now a padded slice-updated buffer
+with lazy front-trim compaction (one copy per ~256 rows) instead of a
+full-cache concat every round — kills the allocator churn oMLX documented
+as a progressive ~5x wall at ~7000 cycles; (2) the sliding-attention mask
+is memoized across the all-sliding layer stack per round. Attention-visible
+semantics identical (distance mask windows exactly); unit coverage updated
+(trim timing is an implementation detail) + a new compaction test; 18/18
+serial. Bench (repeat prompt, warm): bs8f 34.2 / bs8-adaptive 34.2 — flat
+vs R11's 35.2/33.6 within thermal noise. The per-round concat copies were
+~0.2-0.5 ms of bandwidth, not the propose bottleneck; the win is
+long-session heap health, not bench tok/s. The 18-22 ms propose phase is
+the eager draft forward's dispatch mass — needs the sub-phase decomposition
+(instrumentation now in dflashPropose under DFLASH2_PROFILE=1) and likely
+a compiled layer stack.

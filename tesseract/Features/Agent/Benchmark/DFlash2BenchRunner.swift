@@ -246,7 +246,17 @@ nonisolated struct DFlash2BenchRunner {
 
     /// Long-context workload: the tesseract repo's own docs plus a question
     /// (mirrors research/bench_dflash.py for cross-stack comparability).
+    /// `DFLASH2_BENCH_PROMPT=repeat` swaps in a tiled predictable paragraph —
+    /// the agent-typical high-acceptance regime the adaptive width exists for
+    /// (the docs prompt is the adversarial low-acceptance one).
     private static func buildPromptText() -> String {
+        if ProcessInfo.processInfo.environment["DFLASH2_BENCH_PROMPT"] == "repeat" {
+            let sentence =
+                "func fibonacci(_ n: Int) -> Int { n <= 1 ? n : fibonacci(n - 1) + fibonacci(n - 2) }\n"
+            let tiled = String(repeating: sentence, count: 400)
+            return String(tiled.prefix(24_000))
+                + "\n\nQuestion: rewrite the function with an iterative loop.\nAnswer:"
+        }
         var parts: [String] = []
         let repo = "/Users/owl/projects/tesseract"
         for rel in ["ARCHITECTURE.md", "CONTEXT.md", "AGENTS.md"] {
