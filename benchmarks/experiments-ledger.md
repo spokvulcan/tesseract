@@ -3002,3 +3002,33 @@ long-session heap health, not bench tok/s. The 18-22 ms propose phase is
 the eager draft forward's dispatch mass — needs the sub-phase decomposition
 (instrumentation now in dflashPropose under DFLASH2_PROFILE=1) and likely
 a compiled layer stack.
+
+### R14 — canonical cooled set (repeat prompt, no profile drains)
+
+20-min GPU cool-down, then ABBA, production-faithful (DFLASH2_PROFILE unset
+— no per-phase drain overhead). Repeat prompt (9.1K): AR 20.6 | bs3 29.1
+(1.42x) | bs8f 37.6 (1.83x) | bs8-adaptive 36.7 (1.78x). Identity MATCH all
+arms. Session delta on easy content: 32.8 -> 37.6 tok/s (+15%); vs plain AR:
+1.83x.
+
+Docs-prompt anomaly (investigated below): bs3 landed 28.6 (1.32x) vs the
+round-2 canonical 33.3 (1.58x) at identical acceptance (59.1%) and cool AR
+(21.6). verifyprobe isolates the raw S=3 forward at ~59 ms (6K, capture) —
+within the historical 57-60 band — so the regression is per-round plumbing,
+not the target kernels. Bisect (vendor cache+mask stashed vs not) decides
+which side.
+
+### R15 — the docs-prompt "regression" was environment drift — verdict: NO REGRESSION
+
+The canonical docs bs3 landed at 28.6 (1.32x) vs R5's 33.3 (1.58x) at
+identical acceptance and cool AR. Controlled bisects in this session's
+environment: (a) new kernels + old vendor (53e52f8): bs3 25.9-26.8; (b) new
+kernels + new vendor: 25.8-28.6; (c) EXACT R5 config (kernels 9f48e3f +
+vendor 53e52f8): bs3 22.2-23.1, verify 71.5-74.6 — the slowest of the
+three. R5's 33.3 is not reproducible tonight on ANY configuration; the
+machine's thermal/power envelope drifted over the day (the in-run AR decay
+pattern is stronger than this morning). New kernels are equal-or-faster
+than old on identical vendor code. Canonical floor for tonight's
+environment: repeat 37.6 (1.83x), docs bs3 ~26-28.6 (1.32x). Lesson
+recorded: cross-session absolute comparisons need the same-day cool
+baseline; the ABBA discipline holds within a run only.
