@@ -1394,4 +1394,39 @@ struct SSDSnapshotStoreTests {
         #expect(deleteLines.first?.contains("bytes=4096") == true)
         #expect(deleteLines.first?.contains("reason=hydrationFailure") == true)
     }
+
+    /// Regression (issue #441 smoke): a leaf payload past 2 GiB must commit,
+    /// not die on write(2)'s INT_MAX EINVAL. Drives the real store end-to-end
+    /// — one 2.1 GB temp file on disk for a few seconds.
+    @Test
+    func writerCommitsPayloadPastIntMaxBytes() async throws {
+        let twoGiBPlus = (2 << 30) + (8 << 20)
+        let (config, root) = makeConfig(
+            budgetBytes: twoGiBPlus * 2, maxPendingBytes: twoGiBPlus * 2)
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        let payload = makePayload(bytes: twoGiBPlus)
+        let descriptor = makeDescriptor(bytes: twoGiBPlus)
+
+        let result = store.tryEnqueue(payload: payload, descriptor: descriptor)
+        guard case .accepted = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+
+        let committed = await waitUntil(timeout: .seconds(60)) {
+            !tracker.committed.isEmpty || !tracker.dropped.isEmpty
+        }
+        #expect(committed)
+        #expect(
+            tracker.dropped.isEmpty,
+            "payload past 2 GiB must commit, got drop: \(tracker.dropped)")
+        #expect(tracker.committed.count == 1)
+    }
 }

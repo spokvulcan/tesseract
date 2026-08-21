@@ -218,6 +218,11 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
 
     private let wakeupStream: AsyncStream<Void>
     private let wakeupContinuation: AsyncStream<Void>.Continuation
+    /// Upper bound for a single FileHandle.write — write(2) returns EINVAL
+    /// past INT_MAX. The regression test exercises the chunk loop with a
+    /// real >2 GiB payload (SSDSnapshotStoreTests.writerCommitsPayloadPastIntMaxBytes).
+    static let maxWriteChunkBytes = 1 << 30
+
     private var writerTask: Task<Void, Never>?
 
     // MARK: - Callbacks (immutable after init)
@@ -1165,7 +1170,23 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         }
 
         do {
-            try handle.write(contentsOf: data)
+            // write(2) rejects a single call past INT_MAX with EINVAL —
+            // observed live on a 2.5 GB leaf (35K-context KV, issue #441
+            // smoke). Chunk at 1 GiB; Data(bytesNoCopy:) keeps it zero-copy.
+            try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                guard let baseAddress = buffer.baseAddress else { return }
+                var remaining = buffer.count
+                var base = baseAddress
+                while remaining > 0 {
+                    let n = min(remaining, Self.maxWriteChunkBytes)
+                    try handle.write(
+                        Data(
+                            bytesNoCopy: UnsafeMutableRawPointer(mutating: base),
+                            count: n, deallocator: .none))
+                    base += n
+                    remaining -= n
+                }
+            }
             try handle.synchronize()
             try handle.close()
         } catch {
