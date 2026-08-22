@@ -33,7 +33,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/spokvulcan/mlx-swift",
       "state" : {
-        "revision" : "4bcdf8b064ed40fd9ae73c2f562daa2bf5f27663"
+        "revision" : "362e41efdc4ae9b4492fe531ec992e90a77d4f11"
       }
     },
     {

@@ -115,3 +115,31 @@ Bench (repeat prompt, warm): bs8-fixed 35.2 tok/s, 1.75x over AR 20.1;
 output identity MATCH. The end-to-end parity gate moved to the seam-tie
 invariant after the token-10 divergence measured as a dead tie
 (20.7500 == 20.7500; ledger R12).
+
+## Round 4 addendum (2026-08-22)
+
+SDPA multi-query kernel `sdpa_vector_2pass_1_mq` (QPS=2: one simdgroup
+carries two consecutive queries, halving K/V access issue count; per-query
+accumulation order unchanged, so per-query numerics match the single-query
+kernel exactly): SDPA verify pass 10.9 -> 9.6-9.8 ms at S=8/9216. The
+bracket around it (ledger R16) refuted QPS=4 (register collapse, 2.4x
+worse), a threadgroup-staged cooperative variant (Apple maps threadgroup
+memory onto the same L1 the re-streams already hit; barriers make it 2x
+worse), and a blocks x2 dispatch tweak — establishing that this kernel
+family is instruction-issue-bound, not bandwidth-bound, at these shapes.
+qL=1 (AR) keeps the original kernel.
+
+Lever pricing before building (ledger R17): projection fusion is worth
+only 0.47 ms/pass at M=8 (dead); the round-3 verify-compile is confirmed
+engaged and worth 10.8 ms/pass. Draft-forward compilation (deferred item
+above) was built with keyed per-segment traces and measured bench-neutral
+— kept for parity/scaffolding, the propose cost is real GPU small-GEMM
+time, not host dispatch.
+
+Warm bench: bs8f 43.5 tok/s, identity MATCH, 2.09x over AR (ledger R18;
+cooled canonical in R19). Ceiling: with every remaining measured pool
+(QMM M=8 gap 12.5 ms, SDPA-above-floor ~7, post-compile glue ~10)
+recovered in full, S=8 chain verification lands ~53 tok/s — the 60 tok/s
+target requires more tokens per round (tree verification; S=16 needs an
+mma16-class QMM kernel first — M=16 is a 148 ms/pass hole today) or
+propose/verify overlap.

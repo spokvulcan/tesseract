@@ -3032,3 +3032,95 @@ than old on identical vendor code. Canonical floor for tonight's
 environment: repeat 37.6 (1.83x), docs bs3 ~26-28.6 (1.32x). Lesson
 recorded: cross-session absolute comparisons need the same-day cool
 baseline; the ABBA discipline holds within a run only.
+
+## Session 2026-08-22 — DFlash2 round 4: SDPA multi-query kernel, lever pricing
+
+Context: continuing toward the 60 tok/s target from R14's canonical 37.6
+(bs8f, repeat prompt, cooled). This session's method: price every lever
+with a cold-stream probe BEFORE building it. Two of the three planned
+levers died at the pricing stage; the one that shipped is a kernel.
+
+### R16 — SDPA multi-query kernel (mq, QPS=2) — ACCEPTED; the KV-restream premise measured down
+
+Four-design bracket on `sdpa_vector_2pass_1` at the verify shape (D=256,
+gqa=6, ctx 9216; cold-stream 16-layer probe, ms per 16-layer pass at S=8):
+
+| design | S=8 ms/pass | verdict |
+| --- | --- | --- |
+| original (one query per simdgroup) | 10.88 | baseline |
+| mq QPS=4 (4 queries per simdgroup) | 26.14 | REFUTED — register collapse |
+| mq QPS=2 | 9.62–9.78 | ACCEPTED |
+| mq QPS=2 + blocks x2 | 11.78 | REFUTED |
+| coop (threadgroup K/V staging, TK=8) | 19.54 | REFUTED — barriers, same L1 |
+
+Finding: the per-query KV re-streams that round 3 priced as an ~8 ms
+lever were already L1/SLC-served — the original kernel's effective
+bandwidth at S=8 is ~2.6 TB/s, far above DRAM; this kernel family is
+instruction-issue/latency-bound, not bandwidth-bound. QPS=4 quadruples
+per-thread register state (~90 floats) and serializes four query-updates
+per key: occupancy collapse. Threadgroup staging routes through the same
+L1 hardware Apple maps threadgroup memory onto, and adds barriers —
+strictly worse. QPS=2 halves K/V access issue count at tolerable register
+cost: SDPA pass 10.88 -> 9.6-9.8 ms (-10%). Numerics: per-query
+accumulation order identical to the single-query kernel by construction;
+`qmvprobe sdpacheck` worst 3.0e-4 (R9's class); qL=1 (AR arm) untouched.
+Host routes qL >= 2 to `sdpa_vector_2pass_1_mq_`; z-extent groups QPS
+queries per slice; instantiated for all (3 dtypes x 4 head dims). Vendor
+DFlash2 suite 19/19 serial on the new kernels; bench identity MATCH.
+
+### R17 — lever pricing: projection fusion REFUTED, verify-compile already engaged
+
+(a) Projection fusion (the round-3 "lever B", 497 QMM dispatches/pass)
+priced BEFORE building: cold-stream fused-vs-separate groups
+(mlp gate+up x64, gdn qkv+z+b+a x48, fa qgate+k+v x16 — row-concat along
+N is bitwise-lossless per row) come to **0.47 ms/pass at M=8, 0.33 at
+M=1**. The QMM dispatch + tile economics at these shapes are already
+efficient; fusion is dead. The sanitize/module surgery was skipped.
+
+(b) The committed verify-compile path (`verifyStep` /
+`compiledVerifySegments`, escape hatch `DFLASH2_VERIFY=eager`) ENGAGES
+and is worth 10.8 ms at S=8/9216/capture: verifyprobe 76.7 ms compiled
+vs 87.5 eager. The "eager attention glue" pool R11 flagged is already
+harvested; the residual ~10 ms of non-QMM/SDPA time is 16 eager segment
+boundaries (rope, KV append, SDPA) + compiled small-kernel floor +
+capture copies.
+
+### R18 — warm bench: bs8f 43.5 tok/s, MATCH; round anatomy
+
+Repeat prompt 9.1K, 192 new, runner ABBA, warm machine with healthy AR
+legs (20.2-21.6 vs R14's cool 20.6). bs8f 43.5 / 41.1 unprofiled
+(median 43.5), identity MATCH, speedup 2.09x. Profiled round: propose
+14.3 (draft-hidden 8.0 + logits 3.3 + select 1.4) + verify 86.0
+(drain-inflated; verifyprobe puts the true pass at ~77) + accept 0.4 +
+reconcile 0.7 — 45 rounds, 4.27 tok/round. The uplift over R14 exceeds
+what mq alone predicts; R19's cooled set is the honest cross-session
+number (R15's environment-drift lesson applies).
+
+Ceiling restated from this session's measurements: pools left inside the
+S=8 chain-verify architecture are the QMM M=8 gap (54.4 vs 41.9 ms at
+M=1 — mma8 tile economics), ~7 ms of SDPA above the S=1 floor
+(issue-bound; the R16 bracket exhausted the vector-kernel family), and
+~10 ms post-compile glue. Full recovery of all three lands ~53 tok/s.
+**60 tok/s requires more tokens per round** — tree verification (bool-
+mask tree at S=8, or S=16 which first needs an mma16-class QMM kernel;
+M=16 today is a 148 ms/pass kernel hole) — or propose/verify overlap.
+
+### R19 — canonical cooled set (repeat prompt, no profile drains)
+
+20-min GPU cool-down, runner ABBA, production-faithful. AR legs 20.2-20.9
+(median 20.7) — same thermal envelope as R14's 20.6, so the cross-session
+comparison is honest:
+
+| arm | R14 | R19 | speedup | acceptance |
+| --- | --- | --- | --- | --- |
+| ar | 20.6 | 20.7 | — | — |
+| bs3f | 29.1 | 29.4 | 1.42x | 74.0% (228/308) |
+| bs8f | 37.6 | **40.0** | **1.93x** | 46.8% (294/628) |
+| bs8 adaptive | 36.7 | 38.5 | 1.86x | 53.0% (286/540) |
+
+Output-identity: MATCH on all arms. Session delta on easy content:
+bs8f +2.4 tok/s (+6.4%) at identical AR — the R18 warm 43.5 was
+thermal-flattered (R15's lesson holds; warm runs overstate). Round math
+closes: 40.0 tok/s = 106.8 ms/round vs R14's 113.6, consistent with the
+mq kernel's -1.1 ms verify + draft-side SDPA savings. Acceptance
+unchanged per arm (identical tokens — the identity gate at work).
