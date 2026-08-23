@@ -3946,3 +3946,50 @@ inflated + ~106 mid encoders). The 578 MB trace is kept in the
 scratchpad (r51-metal.trace) — Instruments GUI with a Shader
 Timeline template on a fresh launch is the tool that would answer
 the per-kernel question, if the glue pool ever needs exact pricing.
+
+### R52 — post-ship gate screen (committed tree, rebuilt from pushed pins): PASS
+
+The round-5 series shipped (both mlx forks + vendor pushed, tesseract
+d11f9cc1/38823cf0), the app rebuilt through a full SwiftPM re-resolve
+against the GitHub pins, and the gate screen re-run on the fresh
+binary: bs8f accepted 147/322 on every run, bs3f 114/154, identity
+MATCH both arms, warm 41.7/2.48x (3f 31.5/1.87x). The bench's own
+target stacking now reports 0 blocks — expected: production stacking
+(LLMActor, R49c) already stacked the target at engine load (app log
+"target=128 draft=10 blocks"), and the walker is idempotent. The
+checkout-loss risk is retired; trajectory bit-identity survived the
+ship end-to-end.
+
+### R53 — draft precision (4/8/bf16-bit drafter): axis CLOSED, 4-bit stands
+
+The one lever the R44 trajectory trap does not bind: the draft only
+proposes, the target verifies, so draft precision is identity-safe by
+construction and can only move acceptance. The draft ships bf16 on
+disk and is 4-bit quantized at load (reference parity) — so 8-bit and
+bf16 are pure load-config probes. New env lever `DFLASH2_DRAFT_BITS`
+(app DFlash2Support.loadDrafter; default 4 bit-identical — control leg
+reproduced 147/322 + MATCH exactly).
+
+Same-binary warm legs, repeat prompt, 8f (acceptance is deterministic
+per config; one leg reads it exactly):
+- 4-bit (control): 147/322 = 45.7%, warm 46.2
+- 8-bit: 148/315 = 47.0%, warm 45.4
+- bf16: 148/315 = 47.0% — IDENTICAL proposals to 8-bit — warm 40.3
+  (drafter unstacked at bf16: plain Linear fails the QuantizedLinear
+  casts, as designed)
+
+Verdict: the entire draft-precision axis is worth +1.3 acceptance
+points at its ceiling, and the extra draft weight stream eats it
+(8-bit nets ~-0.8 warm). 8-bit is already proposal-equivalent to bf16
+on this prompt — the whole quantization loss lives in 4→8, and it is
+tiny. The drafter-quality gap vs paper tau is content/architecture,
+not precision — R30's verdict (only *training* moves draft quality)
+now confirmed at the measured ceiling. MATCH held on every leg, as
+predicted. Default stays 4-bit; the lever stays as a probe.
+
+60-verdict status: every axis — round time (R38 perfect-glue 56.2),
+tokens/round via width/trees (R28/R37), drafter precision (R53),
+drafter training (R30, priced), hardware (M5-class ~62 projected) —
+is now measured, built, or priced. 60 on M3 Max under strict
+losslessness needs new hardware or a trained deeper drafter; the
+stack leads all known public numbers bandwidth-normalized (R28).
