@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
+import MLXNN
 
 /// The DFlash2 perf ruler: autoregressive baseline vs the DFlash2 speculative
 /// arm on the same long-context prompt, ABBA-interleaved against thermal
@@ -28,6 +29,16 @@ nonisolated struct DFlash2BenchRunner {
 
     @MainActor
     func run() async throws {
+        // Stage-2 pipelined-verify defaults (ledger R36). Must precede the
+        // first MLX eval: the command-buffer cap is latched on first use.
+        // `overwrite: 0` keeps explicit overrides from the command line.
+        // - MLX_MAX_ACTIVE_TASKS=40: the 10-buffer cap re-throttles the
+        //   round seam once the next verify schedules a round ahead.
+        // - MLX_DYNSLICE_INPLACE=1: rolling-KV dynamic writes update rows
+        //   in place (safe under the verify masks) instead of copying the
+        //   full store per boundary.
+        setenv("MLX_MAX_ACTIVE_TASKS", "40", 0)
+        setenv("MLX_DYNSLICE_INPLACE", "1", 0)
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
         Self.log("[dflash2-bench] loading model: \(modelDir.path)")
@@ -122,11 +133,29 @@ nonisolated struct DFlash2BenchRunner {
         context: ModelContext, draftDir: URL, emit: (String) -> Void
     ) async throws -> [ArmResult] {
         let maxNewTokens = 192
+
+        // Stack same-input gate+up MLP projections into one QMM each
+        // (bitwise-neutral, applies to both arms via the shared model).
+        if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0" {
+            let stacked = dflash2StackGateUpProjections(model: context.model)
+            // The stacking transiently duplicated the MLP weights; the freed
+            // originals sit in the buffer cache and crowd GPU residency —
+            // release them before the runs.
+            GPU.clearCache()
+            emit("[dflash2-bench] same-input projections stacked in \(stacked) blocks")
+        }
+
         let prepared = try await context.processor.prepare(
             input: UserInput(chat: [.user(buildPromptText())]))
         let promptTokens = prepared.text.tokens.dim(-1)
 
         let draft = try DFlash2Support.loadDrafter(directory: draftDir)
+        if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0",
+            let draftModule = draft as? Module
+        {
+            let stackedDraft = dflash2StackGateUpProjections(model: draftModule)
+            emit("[dflash2-bench] drafter projections stacked in \(stackedDraft) blocks")
+        }
 
         func runAR(_ runIndex: Int) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
@@ -137,11 +166,23 @@ nonisolated struct DFlash2BenchRunner {
             let start = ContinuousClock.now
             var tokens = 0
             var fingerprint: [Int] = []
+            var allTokens: [Int] = []
             while let token = iterator.next() {
                 if fingerprint.count < 8 { fingerprint.append(token) }
+                allTokens.append(token)
                 tokens += 1
             }
             let seconds = elapsedSeconds(since: start)
+            // DFLASH2_DUMP_TEXT=1: decode the AR output for quality
+            // eyeballing (a trajectory shift is only acceptable if the
+            // content stays coherent).
+            if runIndex == 0,
+                ProcessInfo.processInfo.environment["DFLASH2_DUMP_TEXT"] == "1"
+            {
+                emit(
+                    "[dflash2-bench] ar-text run0: \(context.tokenizer.decode(tokenIds: allTokens))"
+                )
+            }
             return ArmResult(
                 arm: "ar", runIndex: runIndex, decodeSeconds: seconds,
                 tokens: tokens, accepted: 0, proposed: 0, fingerprint: fingerprint)

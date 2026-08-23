@@ -1039,6 +1039,24 @@ extension LLMActor {
         }
         do {
             let draft = try DFlash2Support.loadDrafter(directory: directory)
+            // Same-input QMM stacking (bitwise-exact, ledger R40/R47) on both
+            // sides of the speculative pair. Non-matching layer classes
+            // (PARO quant, VLM) fail the QuantizedLinear casts and no-op.
+            if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0" {
+                let stackedTarget = await container.perform { context in
+                    let n = dflash2StackGateUpProjections(model: context.model)
+                    if n > 0 { MLX.GPU.clearCache() }
+                    return n
+                }
+                var stackedDraft = 0
+                if let draftModule = draft as? Module {
+                    stackedDraft = dflash2StackGateUpProjections(model: draftModule)
+                    if stackedDraft > 0 { MLX.GPU.clearCache() }
+                }
+                Log.agent.notice(
+                    "DFlash2 same-input stacking: target=\(stackedTarget) draft=\(stackedDraft) blocks"
+                )
+            }
             dflash2Drafter = UnsafeSendableBox(draft)
             Log.agent.notice(
                 "DFlash2 draft loaded (4-bit) — blockSize=\(DFlash2Support.blockSize)")
