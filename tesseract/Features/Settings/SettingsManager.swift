@@ -407,12 +407,19 @@ final class SettingsManager {
         didSet { SettingsCatalogue.useVisionWhenAvailable.write(useVisionWhenAvailable, to: store) }
     }
 
-    /// MTP speculative decoding kill switch. Gates *drafter loading*, so
-    /// flipping it takes effect on the next model (re)load — matching the
-    /// vision toggle's semantics above. Inert on checkpoints without the
-    /// `mtp.*` head (the common case).
-    var mtpSpeculationEnabled: Bool {
-        didSet { SettingsCatalogue.mtpSpeculationEnabled.write(mtpSpeculationEnabled, to: store) }
+    /// Speculative-decoding drafter policy (``SpeculationMode``). Gates
+    /// *drafter loading*, so changing it takes effect on the next model
+    /// (re)load — matching the vision toggle's semantics above. Inert on
+    /// checkpoints with no pairing drafter (the common case). Stored raw so
+    /// an unrecognized persisted value degrades to `.automatic` instead of
+    /// crashing the facade load.
+    var speculationModeRaw: String {
+        didSet { SettingsCatalogue.speculationModeRaw.write(speculationModeRaw, to: store) }
+    }
+
+    var speculationMode: SpeculationMode {
+        get { SpeculationMode(rawValue: speculationModeRaw) ?? .automatic }
+        set { speculationModeRaw = newValue.rawValue }
     }
 
     // MARK: - Preserve-Thinking Render (issue #98)
@@ -614,7 +621,17 @@ final class SettingsManager {
         self.webAccessEnabled = SettingsCatalogue.webAccessEnabled.load(from: store)
         self.agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.load(from: store)
         self.useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.load(from: store)
-        self.mtpSpeculationEnabled = SettingsCatalogue.mtpSpeculationEnabled.load(from: store)
+        // One-time migration from the retired `mtpSpeculationEnabled` bool:
+        // a persisted opt-out carries over as `.off`; anything else falls
+        // through to the catalogue default (`.automatic`). Writes only when
+        // the new key has never been written, so an explicit later choice
+        // always wins.
+        if store.optionalString(for: SettingsCatalogue.speculationModeRaw.key) == nil,
+            SettingsCatalogue.legacyMTPSpeculationEnabled.load(from: store) == false
+        {
+            SettingsCatalogue.speculationModeRaw.write(SpeculationMode.off.rawValue, to: store)
+        }
+        self.speculationModeRaw = SettingsCatalogue.speculationModeRaw.load(from: store)
         self.showSkillPills = SettingsCatalogue.showSkillPills.load(from: store)
         self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
@@ -744,7 +761,7 @@ final class SettingsManager {
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default
         agentUseMarkdown = SettingsCatalogue.agentUseMarkdown.default
         useVisionWhenAvailable = SettingsCatalogue.useVisionWhenAvailable.default
-        mtpSpeculationEnabled = SettingsCatalogue.mtpSpeculationEnabled.default
+        speculationModeRaw = SettingsCatalogue.speculationModeRaw.default
         showSkillPills = SettingsCatalogue.showSkillPills.default
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
         overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default

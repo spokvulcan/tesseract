@@ -238,11 +238,14 @@ struct AgentSettingsPane: View {
             }
 
             Section {
-                Toggle(
-                    "Speculative Decoding (MTP / DFlash2)", isOn: $settings.mtpSpeculationEnabled)
+                Picker("Speculative Decoding", selection: $settings.speculationMode) {
+                    ForEach(SpeculationMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
             } footer: {
                 Text(
-                    "Speeds up generation by drafting several tokens per step: MTP (greedy, models that ship the head) or DFlash2 (greedy and sampled, Qwen3.8-27B with its draft downloaded). Takes effect on the next model load."
+                    "Speeds up generation by drafting several tokens per step. Automatic loads every drafter the model supports and prefers DFlash2 (greedy and sampled, Qwen3.8-27B with its draft downloaded) over MTP (greedy, models that ship the head). Takes effect on the next model load; the Server activity page shows which algorithm served each request."
                 )
             }
 

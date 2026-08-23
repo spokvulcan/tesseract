@@ -122,7 +122,7 @@ actor LLMActor {
         visionMode: Bool,
         ssdConfig: SSDPrefixCacheConfig? = nil,
         ramBudgetCapBytes: Int? = nil,
-        mtpEnabled: Bool = true
+        speculation: SpeculationMode = .automatic
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         let loadClock = ContinuousClock()
         let loadStart = loadClock.now
@@ -166,8 +166,9 @@ actor LLMActor {
                 : try await loadParoQuantLLMContainer(from: directory)
             let result = try await verifyAndStore(container: container, identity: identity)
             await loadMTPDrafterIfPresent(
-                directory: directory, container: container, enabled: mtpEnabled)
-            await loadDFlash2DrafterIfPresent(container: container, enabled: mtpEnabled)
+                directory: directory, container: container, enabled: speculation.allowsMTP)
+            await loadDFlash2DrafterIfPresent(
+                container: container, enabled: speculation.allowsDFlash2)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
         }
@@ -195,8 +196,8 @@ actor LLMActor {
         }
         let result = try await verifyAndStore(container: container, identity: identity)
         await loadMTPDrafterIfPresent(
-            directory: directory, container: container, enabled: mtpEnabled)
-        await loadDFlash2DrafterIfPresent(container: container, enabled: mtpEnabled)
+            directory: directory, container: container, enabled: speculation.allowsMTP)
+        await loadDFlash2DrafterIfPresent(container: container, enabled: speculation.allowsDFlash2)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
     }
@@ -297,6 +298,7 @@ actor LLMActor {
                     input: prepared, model: context.model, drafter: drafter,
                     cache: cache, parameters: specParams)
                 let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
+                await progressHandler?(.speculationEngaged(.dflash2))
                 await progressHandler?(
                     .prefillFinished(
                         .init(

@@ -275,7 +275,9 @@ nonisolated struct GenerationStreamLoop {
                             generationTokenCount: vinfo.generationTokenCount,
                             promptTime: vinfo.promptTime,
                             generateTime: vinfo.generateTime,
-                            stopReason: vinfo.stopReason
+                            stopReason: vinfo.stopReason,
+                            draftTokensProposed: vinfo.proposedDraftTokens,
+                            draftTokensAccepted: vinfo.acceptedDraftTokens
                         )
                     }
 

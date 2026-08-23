@@ -257,6 +257,16 @@ private struct ActivityRequestHeader: View {
         } else if let live = trace.liveTokensPerSecond(at: now) {
             parts.append(String(format: "%.0f tok/s live", live))
         }
+        // Which speculative algorithm is decoding — set at iterator
+        // construction, so it shows live; acceptance joins it once the
+        // terminal `.info` lands. Absent for plain autoregressive requests.
+        if let arm = trace.speculativeArm {
+            if let rate = trace.draftAcceptanceRate {
+                parts.append(String(format: "%@ accept %.0f%%", arm.displayName, rate * 100))
+            } else {
+                parts.append(arm.displayName)
+            }
+        }
         if trace.displayOutputTokens > 0 {
             parts.append("\(trace.displayOutputTokens.formatted()) out")
         }

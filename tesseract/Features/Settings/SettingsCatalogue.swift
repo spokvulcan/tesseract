@@ -154,7 +154,16 @@ enum SettingsCatalogue {
     /// `.fromSettings`, which gates vision on this opt-out (→ text-only). The
     /// HTTP server ignores this (ADR-0008).
     static let useVisionWhenAvailable = Setting.bool("useVisionWhenAvailable", default: true)
-    static let mtpSpeculationEnabled = Setting.bool("mtpSpeculationEnabled", default: true)
+
+    /// Which speculative-decoding drafters a model load may attach
+    /// (``SpeculationMode``). Replaces the retired `mtpSpeculationEnabled`
+    /// bool; `SettingsManager.init` migrates a stored `false` to `.off` once.
+    static let speculationModeRaw = Setting.string(
+        "speculationMode", default: SpeculationMode.automatic.rawValue)
+
+    /// Retired predecessor of ``speculationModeRaw`` — read only by the
+    /// one-time migration, never surfaced.
+    static let legacyMTPSpeculationEnabled = Setting.bool("mtpSpeculationEnabled", default: true)
 
     /// Render assistant prose as Markdown. Surfaced only by the agent
     /// toolbar's in-context toggle — a mid-conversation mode switch, never

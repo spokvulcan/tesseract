@@ -535,6 +535,10 @@ private struct RecentRequestRow: View {
         } else if trace.displayOutputTokens > 0 {
             parts.append("\(trace.displayOutputTokens) out")
         }
+        // Speculative-arm badge, live from iterator construction.
+        if let arm = trace.speculativeArm {
+            parts.append(arm.displayName)
+        }
         if parts.isEmpty {
             parts.append(trace.model.isEmpty ? "—" : trace.model)
         }

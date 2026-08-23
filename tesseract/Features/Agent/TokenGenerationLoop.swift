@@ -180,16 +180,20 @@ nonisolated enum TokenGenerationLoop {
                 // below reads the inline iterator fields the rewind touches.
             }
 
+            let telemetry = iterator.speculativeDecodingTelemetry
             let info = GenerateCompletionInfo(
                 promptTokenCount: promptTokenCount,
                 generationTokenCount: tokenCount,
                 promptTime: promptTime + iterator.promptPrefillTime,
                 generationTime: Date.timeIntervalSinceReferenceDate - start,
-                stopReason: resolvedStopReason
+                stopReason: resolvedStopReason,
+                proposedDraftTokens: telemetry?.draftTokenCount,
+                acceptedDraftTokens: telemetry?.acceptedDraftTokenCount,
+                speculativeDecodingTelemetry: telemetry
             )
             _ = continuation.yield(.info(info))
 
-            if let telemetry = iterator.speculativeDecodingTelemetry {
+            if let telemetry {
                 Log.agent.notice(
                     "MTP speculation — rounds=\(telemetry.roundCount) "
                         + "proposed=\(telemetry.draftTokenCount) "

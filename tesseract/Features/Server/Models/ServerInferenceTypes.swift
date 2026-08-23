@@ -9,6 +9,11 @@ nonisolated enum ServerInferenceProgressEvent: Sendable, Equatable {
     case cacheLookupFinished(CacheLookupInfo)
     case prefillStarted(PrefillInfo)
     case prefillFinished(PrefillInfo)
+    /// A speculative iterator was constructed for this request — fired before
+    /// the first decoded token so the activity surfaces can badge the
+    /// algorithm live, not just after completion. Requests that decode
+    /// plainly never emit this.
+    case speculationEngaged(SpeculativeArm)
 
     nonisolated struct CacheLookupInfo: Sendable, Equatable {
         let reason: String

@@ -2011,7 +2011,7 @@ nonisolated final class ServerCompletion {
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
         try await makeSpeculativeGeneration(
-            arm: "mtp",
+            arm: .mtp,
             session: session,
             fullInput: fullInput,
             fullTokens: fullTokens,
@@ -2062,7 +2062,7 @@ nonisolated final class ServerCompletion {
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
         try await makeSpeculativeGeneration(
-            arm: "dflash2",
+            arm: .dflash2,
             session: session,
             fullInput: fullInput,
             fullTokens: fullTokens,
@@ -2093,7 +2093,7 @@ nonisolated final class ServerCompletion {
     /// token loop. Only the iterator differs between arms.
     // swiftlint:disable:next function_parameter_count
     private static func makeSpeculativeGeneration<I: TokenIteratorProtocol>(
-        arm: String,
+        arm: SpeculativeArm,
         session: any ModelSession,
         fullInput: LMInput,
         fullTokens: [Int],
@@ -2114,7 +2114,7 @@ nonisolated final class ServerCompletion {
     ) async throws -> HTTPPrefixCacheGeneration {
         diagnosticsContext.logSkip(
             stage: "prefill",
-            reason: "\(arm)-speculative-arm",
+            reason: "\(arm.rawValue)-speculative-arm",
             extraFields: [("promptTokens", "\(fullTokenCount)")]
         )
 
@@ -2128,7 +2128,7 @@ nonisolated final class ServerCompletion {
             cachedTokens: 0,
             pricedImage: nil,
             visionAttentionScratchProfile: visionAttentionScratchProfile,
-            guardLabel: arm,
+            guardLabel: arm.rawValue,
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
         )
@@ -2145,6 +2145,9 @@ nonisolated final class ServerCompletion {
             return built
         }
         let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+        // The iterator exists — the request will decode speculatively. Fired
+        // before the token loop so the activity surfaces badge the arm live.
+        await progressHandler?(.speculationEngaged(arm))
         await progressHandler?(
             .prefillFinished(
                 .init(

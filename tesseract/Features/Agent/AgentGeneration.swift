@@ -268,6 +268,31 @@ nonisolated enum AgentGeneration: Sendable {
         let promptTime: TimeInterval
         let generateTime: TimeInterval
         let stopReason: GenerateStopReason
+        /// Draft-token totals when the stream decoded speculatively (either
+        /// arm), nil for plain autoregressive streams. The algorithm identity
+        /// travels separately — `ServerInferenceProgressEvent
+        /// .speculationEngaged` — because it is known before the first token,
+        /// while these totals only exist at stream end.
+        let draftTokensProposed: Int?
+        let draftTokensAccepted: Int?
+
+        init(
+            promptTokenCount: Int,
+            generationTokenCount: Int,
+            promptTime: TimeInterval,
+            generateTime: TimeInterval,
+            stopReason: GenerateStopReason,
+            draftTokensProposed: Int? = nil,
+            draftTokensAccepted: Int? = nil
+        ) {
+            self.promptTokenCount = promptTokenCount
+            self.generationTokenCount = generationTokenCount
+            self.promptTime = promptTime
+            self.generateTime = generateTime
+            self.stopReason = stopReason
+            self.draftTokensProposed = draftTokensProposed
+            self.draftTokensAccepted = draftTokensAccepted
+        }
 
         var tokensPerSecond: Double {
             guard generateTime > 0 else { return 0 }

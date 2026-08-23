@@ -833,6 +833,8 @@ struct CompletionHandler: Sendable {
                 cachedTokens: info.cachedTokens,
                 newTokensToPrefill: info.newTokensToPrefill
             )
+        case .speculationEngaged(let arm):
+            activityLog.markSpeculationEngaged(handle: logHandle, arm: arm)
         }
     }
 

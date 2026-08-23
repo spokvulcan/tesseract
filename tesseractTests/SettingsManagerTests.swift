@@ -68,6 +68,49 @@ struct SettingsManagerTests {
         #expect(second.agentUseMarkdown == true)
     }
 
+    /// The speculation-mode picker replaced the `mtpSpeculationEnabled` bool.
+    /// A fresh install reads `.automatic`; a persisted legacy opt-out
+    /// migrates to `.off` once; an explicit later choice survives a relaunch
+    /// even with the legacy opt-out still in the store.
+    @Test
+    func speculationModeDefaultsAutomaticAndMigratesLegacyOptOut() {
+        let fresh = SettingsManager(store: InMemorySettingsStore())
+        #expect(fresh.speculationMode == .automatic)
+
+        let store = InMemorySettingsStore()
+        store.set(false, for: "mtpSpeculationEnabled")
+        let migrated = SettingsManager(store: store)
+        #expect(migrated.speculationMode == .off)
+
+        migrated.speculationMode = .dflash2
+        let relaunched = SettingsManager(store: store)
+        #expect(relaunched.speculationMode == .dflash2)
+
+        relaunched.resetToDefaults()
+        #expect(relaunched.speculationMode == .automatic)
+    }
+
+    /// A legacy `true` (or an absent legacy key) must NOT write the new key —
+    /// the catalogue default stays live so a future default change reaches
+    /// users who never chose explicitly.
+    @Test
+    func speculationModeLegacyOnDoesNotPinTheNewKey() {
+        let store = InMemorySettingsStore()
+        store.set(true, for: "mtpSpeculationEnabled")
+        _ = SettingsManager(store: store)
+        #expect(store.optionalString(for: "speculationMode") == nil)
+    }
+
+    /// An unrecognized persisted raw value degrades to `.automatic` instead
+    /// of crashing the facade load.
+    @Test
+    func speculationModeUnknownRawValueDegradesToAutomatic() {
+        let store = InMemorySettingsStore()
+        store.set("warp-drive", for: "speculationMode")
+        let settings = SettingsManager(store: store)
+        #expect(settings.speculationMode == .automatic)
+    }
+
     // MARK: - Persistence across a simulated relaunch
 
     @Test

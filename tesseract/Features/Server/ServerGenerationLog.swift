@@ -198,6 +198,14 @@ final class ServerGenerationLog {
         }
     }
 
+    /// A speculative iterator was constructed for this request — badge the
+    /// arm from the first decoded token, not just after completion.
+    func markSpeculationEngaged(handle: TraceHandle, arm: SpeculativeArm) {
+        update(handle) { trace in
+            trace.speculativeArm = arm
+        }
+    }
+
     func ingest(handle: TraceHandle, event: AgentGeneration) {
         switch event {
         case .text(let chunk):
@@ -235,6 +243,10 @@ final class ServerGenerationLog {
                 trace.promptTokens = info.promptTokenCount
                 trace.generationTokens = info.generationTokenCount
                 trace.tokensPerSecond = info.tokensPerSecond
+                if let proposed = info.draftTokensProposed {
+                    trace.draftTokensProposed = proposed
+                    trace.draftTokensAccepted = info.draftTokensAccepted
+                }
             }
             throttledStreamingVersionBump()
         case .thinkTruncate(let safePrefix):
@@ -542,6 +554,24 @@ struct RequestTrace: Identifiable, Equatable {
     var promptTokens: Int?
     var generationTokens: Int = 0
     var tokensPerSecond: Double = 0
+
+    /// The speculative algorithm decoding this request, set at iterator
+    /// construction (before the first token). Nil = plain autoregressive
+    /// decoding — the common case even with drafters loaded, since the
+    /// speculative arms only engage on cold text-only prompts.
+    var speculativeArm: SpeculativeArm?
+    /// Draft-token totals from the terminal `.info` event; nil until then
+    /// (and always nil for plain decoding).
+    var draftTokensProposed: Int?
+    var draftTokensAccepted: Int?
+
+    /// Acceptance across the whole stream, once the terminal `.info` landed.
+    var draftAcceptanceRate: Double? {
+        guard let draftTokensProposed, draftTokensProposed > 0,
+            let draftTokensAccepted
+        else { return nil }
+        return Double(draftTokensAccepted) / Double(draftTokensProposed)
+    }
 
     /// Streamed-chunk count during decode — a live estimate of output tokens
     /// (one chunk ≈ one token on the MLX detokenizer path). Superseded by
