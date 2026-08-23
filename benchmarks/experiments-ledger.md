@@ -3124,3 +3124,825 @@ thermal-flattered (R15's lesson holds; warm runs overstate). Round math
 closes: 40.0 tok/s = 106.8 ms/round vs R14's 113.6, consistent with the
 mq kernel's -1.1 ms verify + draft-side SDPA savings. Acceptance
 unchanged per arm (identical tokens — the identity gate at work).
+
+### R20 — acceptance anatomy via zero-perturbation accept-log
+
+Env-gated instrumentation (`DFLASH2_ACCEPT_LOG`, candidates ride the
+existing packed D2H — no added evals): accept histogram over 45 rounds is
+bimodal 0:4 1:14 2:7 3:2 4:2 5:2 6:3 7:11 — rounds either die in the
+first two positions or run the chain out. cover16 0.84-1.00, cover2
+0.73-0.80; at the first miss the target token was in the candidate set
+29/33 times, rank r1:15 r2:6 (64% within top-2). Host timeline: 98.2
+ms/round = GPU sync 92.6 + propose-build 3.5 + verify-build 1.6 +
+reconcile 0.5 + accept 0.03 — the round is GPU-bound; host trimming is
+a ~5 ms pool, not the prize.
+
+### R21 — tokens-per-round levers re-litigated: all REFUTED
+
+(a) Out-of-width chains: width 10 -> 4.09 tok/round, width 12 -> 4.47
+vs 4.27 at width 8 — the block degrades holistically; no free tokens.
+(b) S>8 verify: mma16 fixes the M in [9,16] QMM hole (85.8 ms/pass vs
+148) but rows 9-16 still cost +31 ms/round; breakeven needs +1.65
+tok/round and tree shapes cap at ~+0.9. Single-sibling conversion nets
+only +1 because the bonus token already delivers the correction.
+(c) Selector walk policies (offline replay over dumped lattices, exact
+first-divergence rule): Viterbi/beam/lookahead/softmax all <= greedy —
+the drafter's scores are miscalibrated deep in the block; oracle-gap is
+real but unreachable from these scores.
+(d) Online n-gram forced selection (order>=4, share>=0.6): acceptance
+46.8% -> 45.5%. Mechanism: phase-shift absorption — converting an early
+death shifts the round boundary and the deep chain dies earlier;
+per-position wins don't compose across round phases.
+The S=8 chain stays at ~4.3 tok/round; 60 tok/s is a round-time program
+(target ~76 ms/round from R20's 98.2).
+
+### R22 — banked: mma16 kernel, mma8 N-gate 2048, compiled selector walk
+
+mma16 (two stacked A fragments per B fragment, 4-bit direct-fragment)
+closes the M in [9,16] dispatch hole: census full-pop M=16 148 -> 85.8
+ms/pass, numerics <= 0.0107 (same class as mma8). mma8 N-gate lowered
+4096 -> 2048 (draft_kv 5120x2048 M=8 was 1.14x M=1 on qmv_wide). The
+propose selector walk compiled per width (compiledGreedySelects).
+Production bench with all three: identity MATCH, acceptance byte-stable
+46.8% (throttled machine, 33.2 median — non-canonical; AR leg sagged to
+16.8).
+
+### R23 — rope-in-trace: eager attention boundary halved
+
+Rope moved inside the compiled decode/verify segments — the offset rides
+in as a `[1]` array trace input (`mlx_fast_rope_dynamic`, the drafter's
+own device since round 1); the eager boundary between segments is now
+just KV-append + SDPA. Same-thermal A/B (AR 20.1 vs 20.0): bs8f 33.2 ->
+38.1 median, identity MATCH, acceptance identical. 1.90x.
+
+### R24 — mma8n16: 16-wide-N tile, the M=8 QMM gap halved
+
+One threadgroup covers two adjacent 8-column tiles sharing the A
+fragments (`affine_qmm_mma8n16`, 4-bit direct-fragment, env
+`MLX_QMM_MMA8_N16`): twice the loads in flight per lane in a
+latency-bound family, half the threadgroups and per-output A traffic.
+Census: full-pop M=8 59.59 -> 54.68 ms/pass, S-delta (M=8 over M=1)
+18.97 -> 13.85; every routed shape improved (mlp_gate|up -12.5%,
+mlp_down -6.8%, gdn_qkv -5.5%, fa_qgate -8.5%), M=1 untouched. Numerics
+0.0078-0.0087 (mma8 class). Live: bs8f 43.7 median, identity MATCH, AR
+21.1, 2.07x. (Run0 7.6s was the one-time JIT compile of the grown
+quantized library — quantized is JIT in the app; SDPA is AOT.)
+
+### R25 — SDPA gqa-packed MMA pass 1: 9.84 -> 6.37 ms/pass in-probe
+
+First, the ceiling: raw cold-stream of the exact verify KV arrays
+(`kvstream`) runs 247 GB/s — the vector kernels, the mma v1, AND the
+eager S=16 GEMM fallback all sit at ~62 GB/s, so the 9.6 ms SDPA pool
+was kernel-bound, not bandwidth-bound, with a ~2.5 ms floor.
+`sdpa_vector_2pass_1_mma` (env `MLX_SDPA_MMA`): all 48 q-rows sharing a
+KV head (6 gqa x 8 qL) in one threadgroup — (32, 2, gqa) = 384 threads,
+per-stripe 8-row MMA tiles, D split in halves per simdgroup with the
+partial scores exchanged through threadgroup memory, online softmax,
+contiguous 32-key blocks over 64 partitions, merged by the unmodified
+sdpa_vector_2pass_2. The path that mattered: K/V must be STAGED through
+threadgroup memory with 16-byte uint4 lines — transposed (v1: 0.99
+ms/layer) or even plain (v5: 0.76) fragment gathers straight from
+device, and 2-byte staging loads (v2: 0.615), all leave the stream
+issue-bound. v4: **0.398 ms/layer, 6.37 ms/pass vs mq's 9.84**, 1.53x,
+numerics PASS (0.00027 vs eager fp32, baseline-class). Refuted en
+route: BK=16 (0.66 — more barriers beat the residency win), partition
+sweep 32/96/128 (64 best), V register prefetch (0.4156 — the mma8
+prefetch lesson repeats). qL == 8 / D == 256 / no-mask-or-causal / no
+sinks / 2-byte dtypes only; everything else keeps the vector route.
+
+Live coda — the probe's concurrent regime lies about the serial one:
+same-binary same-thermal A/B put mma-at-blocks=64 at ratio parity with
+the mq kernel (probe promised -3.4 ms/pass). The probe times 16
+INDEPENDENT ops that overlap; the live verify runs its 16 SDPAs
+serially between dependent segments, so each kernel must fill the
+machine alone and 256 threadgroups can't (mq launches 2048). At
+blocks=256 (1024 threadgroups): bs8f 43.4 @ AR 21.5 vs 42.6 @ 21.4
+with the kernel off — +0.8 tok/s live, identity MATCH. 256 is now the
+kernel's default; MLX_SDPA_MMA=0 and MLX_QMM_MMA8_N16=0 are the
+kill-switches (both kernels default on). Also learned en route:
+`DFLASH2_ACCEPT_LOG` now disables the compiled selector walk (the rank
+instrumentation needs eager select), so it is no longer
+zero-perturbation for timeline readings; and the acceptance PATTERN is
+numerics-sensitive (46.8% <-> 45.5% across kernels that reorder
+reductions) while output identity holds — the gate is the output, not
+the acceptance rate. 16-sg split-K n16 probed and refuted (55.51 vs
+54.68 census).
+
+### R26 — canonical cooled set: round time -2.2%, headline eaten by near-tie luck
+
+20-min cool-down, runner ABBA, defaults only (both kernels default-on,
+no env). AR legs 20.8-21.6 (median 21.0, vs R19's 20.7 — rope-in-trace
+also serves plain decode):
+
+| arm | R19 | R26 | speedup | acceptance |
+| --- | --- | --- | --- | --- |
+| ar | 20.7 | 21.0 | — | — |
+| bs3f | 29.4 | 29.5 | 1.40x | 74.0% (228/308) |
+| bs8f | 40.0 | 39.9 | 1.90x | 45.5% (292/642) |
+| bs8 adaptive | 38.5 | **40.2** | **1.91x** | 54.8% (288/526) |
+
+Output-identity MATCH on all arms. The bs8f flat is two real effects
+cancelling: round time 106.8 -> 104.5 ms (the kernel program's -2.2%),
+tokens/round 4.27 -> 4.17 (the SDPA-MMA reduction order flips near-tie
+drafts; this prompt drew one extra round per run). Adaptive drew the
+flips the other way and is now the best arm. The near-tie direction is
+prompt luck, not a quality signal — the identity gate holds either way.
+
+Honest ceiling after this session: the S=8 chain at ~104.5 ms/round and
+content-capped ~4.3 tok/round sits at 40-43.5 (cooled-warm). The
+remaining measured pools (QMM S-delta 13.9, SDPA ~3.9 above stream
+floor, draft-hidden 8, glue) total ~53 tok/s at FULL recovery — R18's
+statement stands. 60 tok/s on this hardware needs tokens/round, and
+R20-R21 closed every selector-side route: what remains is drafter
+QUALITY (deeper/better-calibrated draft heads — a training project),
+not inference engineering.
+
+### R27 — round 5b: draft decomposition, M-gate crossover re-measured, cross-stack survey
+
+Continuation of the 60 tok/s directive after R26. Three measurements, all
+narrowing the remaining space; no canonical change.
+
+**Draft pool decomposed** (DFLASH2_PROFILE=1, 8f arm, warm; eval-synced —
+absolute values inflated, the split is the signal): propose =
+**draft-hidden ~10.5 ms** + draft-logits ~2.9 + draft-select ~1.8
+(profiled round: propose 27.8, verify 96.1, accept 0.7, reconcile 3.7;
+46 rounds; identity MATCH, acceptance byte-stable 146/321). The
+compiled draft route is engaged (`draft route: compiled` announced).
+draft-logits is already near its lm_head stream floor (~2.0 ms).
+draft-hidden's floor: ~850 MB draft weights ~2.7 ms + tiny 2048-window
+SDPA + mma economics ≈ 4.5-5 ms — recoverable ≤~3 ms, spread across 5
+layers of compiled segments + 10 eager KV/SDPA boundaries.
+
+**mma8 M-gate floor re-measured post-n16** (new `qmvprobe mcross`, big
+shapes, cold-stream, M∈[2,5]; route via new `MLX_QMM_MMA8_MMIN` env):
+qmv_wide total/pass M=2 40.05, M=3 41.84, M=4 52.10 vs mma8n16 flat
+~53.2-54.3. Verdict: the pre-n16 crossover STANDS — qmv_wide wins
+M≤4 (nearly M-flat through M=3 at ~1.03× the M=1 stream), mma from
+M=5. The adaptive arm's narrow rounds already ride the best kernel;
+gate-widening REFUTED. (qmv_wide has a step at M=4: 41.8 → 52.1.)
+
+**Cross-stack survey** (dflash-mlx by bstnxbt, mlx-dspark by ARahim3 —
+the reference stacks behind ADR-0058's context): dflash-mlx's
+`verify_qmm` family is BM=16/BN=16-32 threadgroup-staged simdgroup-MMA
+with split-K — one generation BEHIND mma8n16 (no direct-fragment A, no
+shared-A wide-N); mlx-dspark's small_m_qmm is our mma8 shape (8
+cols/tg, split-K, tg staging) and its "flat in M" is literal padding of
+M<8 to 8. Neither carries a QMM technique we lack. Their headline
+numbers decompose into content + hardware: dflash-mlx Qwen3.5-27B-4bit
+at 8192 tok on M5 Max (614 GB/s + NAX) = 45.29 tok/s ≈ **29.5
+bandwidth-normalized to our 400 GB/s — we are AHEAD at 40.2**. Their
+acceptance 84-90% is short MATH-prompt content; official DFlash2 card:
+acceptance length 4.10 (MT-Bench) - 5.46 (GSM8K) — our repeat-prompt
+4.17-4.27 is AT the checkpoint's spec, no selector headroom lost. Also:
+dflash-mlx explicitly disclaims strict AR output identity; our gate is
+tighter. No better public drafter exists for this target (DSpark mean
+acceptance 3.39 < DFlash2).
+
+**S=16 two-chain tree re-priced under a hypothetical mma16n16** (R21
+used the banked mma16's +31 ms): break-even Δ = 104.5×(5.07/4.17−1) ≈
+22.5 ms; full bill ≈ QMM +5-8 (mma16n16, unbuilt) + SDPA ×2 +6.4 +
+GDN ×2 +4 + KV-fixup/second-walk/glue +2.5 ≈ **+18-21 ms for ≤+0.9
+tok/round (R21's offline bound)** → ≤+0.8 tok/s at the optimistic edge
+of every estimate. Wash; tree stays dead on this content even with a
+better M=16 kernel. Portable dflash-mlx ideas still open: innovation-
+tape reconcile (~−1 ms vs our full delta-rule replay), priced small.
+
+### R28 — verify sub-phase decomposition: the round is fully attributed
+
+New `DFLASH2_VERIFY_PROFILE=1` gate (Qwen35.swift): eval-synced split of
+the verify pass into compiled segments vs eager attention boundaries
+(16 forced drains inflate the absolutes; the split is the signal). 8f
+arm, repeat prompt, warm; identity MATCH, acceptance byte-stable.
+
+verify-seg ~85-90 ms profiled, verify-attn ~17-18 ms profiled.
+Deflating by the drain overhead (unprofiled verify ≈ 85): segments
+≈ 70-75, boundaries ≈ 10-12. Inside segments: QMM 54.7 (census) + GDN
+scan ~4 (state traffic ≈ 1.2 GB/round) leaves **~12-16 ms of in-segment
+glue** — norm/rope/elementwise kernels the MLX compile cannot fuse
+further (hundreds of ~10-20 µs kernels over [8, 5120] tensors).
+Boundaries ≈ SDPA 6.4 + KV slice-appends + dispatch.
+
+Full round attribution (unprofiled, ~104.5 ms): QMM 54.7 | in-segment
+glue+GDN 16-20 | attention boundaries 10-12 | propose 13-15 (hidden
+8-10.5, logits 2.9 ≈ floor, select 1.8) | host+accept+reconcile ~7.
+Raw unavoidable memory traffic per round ≈ 50 ms (QMM stream 40.7 +
+SDPA 2.5 + draft 2.7 + GDN state ~4). 60 tok/s at 4.17 tok/round means
+71.2 ms/round = 1.43× that traffic floor with zero glue/host margin —
+beyond realistic MLX-dispatch engineering (~84-90 ms is the everything-
+lands estimate → 46-50; everything-perfect ≈ 53). The same stack on
+M5-class bandwidth (614 GB/s) scales to ~62 on this very bench — the
+target is a hardware generation away, not a kernel away.
+
+### R29 — SDPA narrow-qL padded mma: built, measured, gated to [7,8]
+
+Built the qL<8 extension of `sdpa_vector_2pass_1_mma`: host pads narrow
+query tiles into a zeroed contiguous 8-row buffer (fill_gpu + strided
+copy_gpu_inplace, conv.cpp's pattern) and the kernel writeout switched
+from simdgroup_store to per-sg threadgroup staging + row-guarded scalar
+stores with real-qL strides (bitwise-identical at qL=8; sums/maxs
+guarded). Parity (`sdpacheck` 9216): S=1..8 all 0.0002-0.0003 vs fp32
+eager — same class as the S=8 kernel.
+
+Bug worth remembering: the pad copy was first inserted AFTER
+`set_compute_pipeline_state` — `copy_gpu_inplace` re-binds the
+encoder's pipeline, so the SDPA dispatch launched the COPY kernel with
+the SDPA grid (clean-zero outputs, all-masked-row symptom). Any helper
+that dispatches through the stream's encoder must fully precede
+pipeline binding.
+
+Cold A/B (`sdpacold` 9216, per pass): padded-mma 6.93/7.24/7.50/7.63 at
+S=2/4/5/6 vs old vector path 3.15/5.40/7.11/7.69 — the padded kernel
+does full 8-row work, so the old path WINS at S<=4 (the adaptive
+bandit's actual widths) and ties at 5-6. Gate set to qL in [7,8];
+production behavior at the bandit's {3,4} widths unchanged by design.
+Identity re-gate (all arms, warm): 3f 29.1 / 8f 39.3 / adaptive 39.9,
+acceptance byte-identical to R26, output-identity MATCH everywhere —
+the writeout restructure is production-safe.
+
+Also priced this iteration, both REFUTED:
+- Tape-replay reconcile (dflash-mlx's innovation tape): our reconcile's
+  cost is dominated by the state read+write stream (~302 MB/round) plus
+  48 dispatches, which the tape variant pays identically — it only
+  skips the q-dot and delta recompute, ~0.3-0.5 ms, against iterator
+  surgery and a bitwise-replay matching risk. Dead.
+- GDN-scan fusion: already fused. The verify traces route to the
+  single-dispatch `gated_delta_step` kernel (t-loop in-kernel, state in
+  registers, Kahan) — Dk=128 %32==0 confirmed from the model config; 48
+  launches and ~0.9 ms/round. The 12-16 ms in-segment glue is the
+  norm/rope/elementwise spine (~800 tiny kernels), not the scan;
+  recovery would need custom micro-fusion of the layer spine — weeks-
+  class, identity-risk per op, not a session lever.
+
+Canonical record stands at R26: bs8-adaptive 40.2 (1.91x).
+
+### R30 — the drafter path priced: b16 training scoped, does not reach 60 on M3 Max
+
+The last standing lever (drafter capacity) converted from a hand-wave
+into numbers. z-lab's DFlash training code is public; the paper's own
+block-size ablation gives b8 -> b16 = tau 5.21 -> 6.33 (+21%, Math500),
+and b16 drafters generalize down to narrower inference widths. **No b16
+checkpoint exists for Qwen3.8-27B** (only Qwen3-4B/8B) — it would have
+to be trained.
+
+Costs computed from the paper recipe (800K target-generated samples,
+6 epochs, seq 3072, ~1.8e20 training FLOPs): on-device M3 Max full-spec
+~9 months (dead); cloud 8xH100 ~2 days / ~$600-1,200 (feasible).
+Honest EV on the canonical bench: content-discounted tau ~5.1 at S=16,
+round 104.5 + (mma16n16 +5-8, SDPA qL16 +2-4, 16-mask propose +3-4)
+~ 118 ms -> **~43-47 tok/s. The b16 drafter does NOT reach 60 on M3
+Max either.** 60-crossings: today's stack on M5-class bandwidth (~62),
+or b16 on M4-class (~59-64). Main technical risk: public code is
+DFlash v1 — the shipped checkpoint's DFlash2 additions (selector
+lattice, dynamic conv) are not in it.
+
+Full scoping doc: research/dflash2-drafter-b16-scope.md. With this,
+every route to 60 on this hardware is measured, built, or priced:
+none lands. The program's terminal state on M3 Max is ~40-42 today,
+~45-47 with b16 + S=16 kernels, 60+ only with the next hardware
+generation.
+
+### R31 — mma8n32 (32-wide-N tile) built and REFUTED: occupancy collapse, -58%
+
+The one kernel idea previously dismissed without measurement ("register
+pressure risk") is now measured. Built `affine_qmm_mma8n32`: one
+threadgroup -> 32 output columns, four C fragments sharing a single A
+fragment per k-tile, 8 weight/scale/bias streams per lane, split-K via
+`red[8*256]` threadgroup reduction; JIT-mirrored byte-identical
+(quantized.h <-> mlx-generated/quantized.cpp), instantiated for
+float16/bfloat16 gs=64 bits=4, host route opt-in via
+`MLX_QMM_MMA8_N32=1` (takes precedence over n16, grid (N+31)/32).
+
+Numeric parity: PASS, rel-Linf 0.0067-0.0103 across M=2..16 — same
+class as mma8/n16 (fp16 accumulate).
+
+Census A/B (fresh paired runs, cool machine, logs census-n16-r31.log /
+census-n32-r31.log):
+
+| route | M=1 | M=8 | M=16 |
+|---|---|---|---|
+| n16 (default) | 40.49 | **53.83** | 85.67 |
+| n32 (opt-in)  | 40.72 | **85.10** | 85.55 |
+
+n32 loses M=8 by +58%. Diagnosis is unambiguous: n32's M=8 column
+equals its own M=16 column shape-by-shape (mlp_gate|up 0.2906 vs
+0.2919; lm_head 4.097 vs 4.094) — the 4-fragment + 8-stream register
+load halves occupancy, and the amortized A-fragment reloads were never
+the cost (these shapes are weight-traffic-bound). M=1 and M=16 columns
+match across runs (neither routes to the mma8 family) — internal
+consistency check passes. The old dismissal was right; now it is
+evidence, not a prior.
+
+Disposition: kernel stays in the working tree as opt-in-off (dead
+unless `MLX_QMM_MMA8_N32=1`); recommend stripping it from the JIT
+source before the fork commit, same as the refuted env-gated selector
+paths. No identity bench needed (never default-on).
+
+With R31, every kernel idea in the program is either shipped or refuted
+by measurement — nothing remains dismissed untested. Canonical record
+stands at R26: bs8-adaptive 40.2 (1.91x).
+
+### R32 — zero-perturbation host timeline: the "7 ms host pool" was really ~18 ms
+
+New `DFLASH2_HOST_PROFILE=1` (iterator): the accept-log wall-clock
+timeline without the candidate instrumentation, so the compiled selector
+walk stays engaged — pure clock reads, zero added evals. Proven
+non-perturbing: 39.6-40.1 tok/s with it on vs 39.9 canonical. Warm 8f
+round decomposed (ms/round, n=46): gap 0.02 | propose 11.7 | build 6.8 |
+sync 88.4 | accept 0.04 | reconcile 2.9 — sums to the round wall.
+
+The reattribution: R28's "host+accept+reconcile ~7 ms" (derived by
+subtraction) was wrong by 2.5x. `DFLASH2_PROFILE`'s propose 13-15 ms is
+NOT GPU draft work — splitting propose into p-splice 3.75 (lazy graph
+build) + p-sched 7.9 (asyncEval scheduling/encoding) shows ~11.7 ms of
+HOST-side work with the GPU idle; the draft's actual GPU compute is
+~3 ms (consistent with the 4-bit drafter's ~1 GB weight stream; the
+app already quantizes the drafter at load — DFlash2Support.swift:84 —
+so drafter quantization was correctly priced dead). True GPU-idle host
+pool ≈ 18 ms/round: propose 11.7 + exposed build ~4 + reconcile ~2.9.
+
+Also priced while here: target re-quantization (the one axis never in
+the ledger). QMM 54.7 ms scales with weight bits: 3-bit → round ~89 →
+~47 tok/s; 2-bit → ~80 → ~52. NO quant level reaches 60 (needs ~1.75
+effective bits, quality fiction at 27B), and re-quantizing changes the
+product's target — not the same lossless product. Dead for 60.
+
+### R33 — pipelined round construction: propose leaves the critical path. NEW RECORD 43.4 (2.07x)
+
+The R32 pool attacked at its root. The round's host serial time exists
+because propose N+1 waits for accept N; the sync window (~88 ms of
+blocked host) exists right before it. Fix: make the propose graph
+ACCEPT-INVARIANT so ONE prebuilt graph is correct for every accept
+outcome, and build it during the sync window:
+
+- Accept computed lazily on GPU: accepted = sum(cumprod(draft == target
+  argmax)), bonus anchor via lazy take — spliced BEFORE eval(packed).
+- ALL verify rows (gamma+1) append to STAGING CLONES of the draft
+  context caches with explicit host-known RoPE positions (round N's
+  verify positions are fixed regardless of acceptance); rows past the
+  accept count are excluded by a lazy validity mask. Valid rows'
+  K/V are bitwise the synchronous route's (row-wise ops).
+- Block ids = [lazy bonus, MASK...]; block RoPE offset = lazy
+  anchor+accepted+1. Compiled segment traces are shared with the
+  synchronous route (they always took offsets as inputs — rope-in-trace).
+- Round order: asyncEval(packed) starts verify on GPU -> prebuild
+  propose N+1 (host, overlapped) -> asyncEval(prebuilt) queues the
+  draft behind the verify -> eval(packed) -> accept/adopt. On adopt the
+  staged caches commit and the appended rows' validity resolves from
+  the now-known accept count. Cache compaction became valid-aware
+  (placeholders dropped, newest maxSize committed rows kept) — fired
+  live every ~32 rounds in the gate runs.
+- Bandit width switches take effect one round late (prebuilt width
+  governs); measurement modes (accept-log, lattice dump, advised
+  selector) and T>0 fall back to the synchronous round.
+
+Timeline after (warm 8f): propose 1.84 (adopt only) | build 7.0 |
+prebuild 88.8 (contains the verify wait) | sync 0.01 | reconcile 2.9 —
+round 112 -> 100.7 ms warm, the full ~11.5 ms propose pool gone.
+
+**Canonical R33** (cooled ABBA, defaults, identity MATCH all arms):
+ar 21.0 | bs3f 31.9 (1.52x, was 29.5) | **bs8f 43.4 (2.07x, was 39.9)**
+| bs8-adaptive 41.1 (1.96x, was 40.2). **New record bs8f 43.4 — the
+first 2x+, and fixed-8 overtakes adaptive** (width-8 rounds gained the
+most, shifting the bandit's trade). Acceptance pattern moved one
+near-tie (294/644 vs 292/642) — masked-SDPA reduction order, identity
+unaffected. Default ON; kill switch `DFLASH2_PIPELINE=0`.
+
+Remaining in this direction (stage 2, unbuilt): the verify build
+(~6.8 ms) and reconcile (~2.9 ms) could pipeline the same way, but
+need the TARGET cache rollback made accept-invariant (GDN capture
+replay + KV trims as lazy ops) — days-class, projected floor ~88-90 ms
+round ≈ 46-47 tok/s. 60 still requires tokens/round (drafter training)
+on top: unchanged conclusion, better base.
+
+### R34 — verify-build streaming built + REFUTED; canonical re-run banks 44.0 (2.11x)
+
+The last exposed host pool after R33 is the verify graph build (~7 ms
+with the GPU idle at round start). Built incremental scheduling
+(`DFLASH2_VERIFY_STREAM=<stride>` in Qwen35 verifyStep): every Nth
+attention boundary is asyncEval'd so the GPU chases the host through
+the verify graph. Warm probes looked strongly positive (stride 3:
+46.7 vs 41.5 "same-thermal") — but a bare same-process A/B refuted it:
+**stream OFF 47.7 vs stride-3 45.0 (ar 21.9/21.7)**. Once the
+pipelined round exists, command-buffer fragmentation (extra
+commit/fence per asyncEval) costs more than the overlap buys. Stride 1
+is worst (16 buffers, -9%), stride 3-4 still net-negative. Also
+refuted: deferring the prebuilt draft's schedule into the next build
+stream (40.8 — the schedule cost lands on the chase path and the
+packed sync reopens). Streaming stays in the tree probe-only,
+default OFF.
+
+**Measurement lesson (the reason the probes lied):** AR-ratio
+normalization is NOT valid across thermal states — AR decode is purely
+bandwidth-bound while the speculative round is mixed host/GPU-bound,
+so thermal throttling moves the ratio itself. All conclusions must
+come from same-process A/Bs or the cooled canonical; the warm probe
+sequence (all run with DFLASH2_HOST_PROFILE=1 on an hours-hot machine)
+manufactured a +13% phantom.
+
+**Canonical R34b** (cooled ABBA, defaults = pipeline ON / streaming
+OFF, identity MATCH all arms): ar 20.9 | bs3f 32.0 | **bs8f 44.0
+(2.11x) — NEW RECORD** | bs8-adaptive 41.3 (1.98x). R33 vs R34b
+(same effective config) shows canonical run-to-run variance ~±0.5.
+
+Exposed host after R34: adopt ~1 + verify splice ~7 + reconcile ~2.9
+(mostly draft-overlapped). The remaining engineered route is stage-2
+(accept-invariant TARGET rollback so the verify build itself pipelines)
+~ 46-48; beyond that, tokens/round (b16 drafter) or bandwidth.
+
+### R35 — stage-2a accept-invariant reconcile + the MAX_ACTIVE_TASKS discovery
+
+Built stage-2a: the GDN rollback replay is now built as an
+accept-invariant masked graph in the sync window
+(`prebuildSpeculativeRollback` in DFlash2Support.swift). The fused
+`gated_delta_step` kernel's mask branch is an exact identity step
+(masked steps leave the state registers untouched), so a full-S replay
+with a lazy `pos < validCount` mask equals the accepted-prefix replay
+bitwise for every accept outcome; conv state comes from a lazy
+`takeAlong` at `validCount + arange(K-1)`. Applied only when
+`rejected > 0` (all-accepted rounds keep the verify-committed states,
+exactly the synchronous semantics). Default ON,
+`DFLASH2_ROLLBACK_PREBUILD=0` kills. Reconcile stamp 2.9 -> 0.27
+ms/round; identity MATCH, acceptance bit-identical (147/322 per run).
+Standalone effect: ABAB warm A/B = wash (thermal ramp dominates); ABBA
+(trend-cancelling) = +2.05 inflated by convex cool-start decay, last
+adjacent pair +0.8 (ON 43.3 vs OFF 42.5). Net: neutral-to-slightly
+positive standalone — kept ON as the enabling piece for stage-2 (the
+next verify graph can consume the reconciled GDN state lazily).
+
+**Where the pipelined round's time actually goes** (new prebuild
+sub-stamps, `DFLASH2_HOST_PROFILE=1`): prebuild 76.4 = pb-vsched 63.6
++ pb-graph 4.9 + pb-dsched 7.8. The 63.6 is NOT host work: mlx-core
+throttles the encode thread at `MAX_ACTIVE_TASKS = 10` in-flight
+command buffers (transforms.cpp:424 wait_for_one after every op past
+the cap), so `asyncEval(packed)` paces to the GPU and the wall time
+inside it is mostly throttled waiting. The genuinely GPU-idle host
+strip per round is the post-sync inter-round gap: verify graph build
+~6.0 + prebuilt-adopt ~1.7 + gap/accept/reconcile ~0.7 ≈ **8.4
+ms/round of GPU idle**. Round ≈ GPU work (~76 warm) + that strip.
+
+**Stage-2 scoped and de-risked** (the remaining engineered route):
+build round N+1's verify graph inside round N's window so the GPU
+never drains. All accept-dependent inputs can be lazy: tokens =
+prebuilt draft outputs; rope offsets = arrays (rope-in-trace); GDN
+initial states = stage-2a's replay arrays; **KV append offset = lazy
+via `mlx_slice_update_dynamic`** (in the C API, unwrapped in Swift —
+small checkout wrapper, C7 precedent). Lazy-offset writes overwrite
+stale rejected rows naturally: no dead-row growth, no compaction,
+attention trims become host bookkeeping. Verify SDPA then needs one
+lazy bool row mask `arange(worstLen) < off + S` ([1,1,1,kL]): the
+sdpa_vector/mq kernels support bool masks via function constants;
+our mma kernel currently bails on any mask (falls back to mq,
+~+3.4 ms/round) -> add a mask variant (function constants specialize
+from the metallib; no new AOT instantiations needed). Projected:
+round -> GPU-bound ~86-88 ms cooled ≈ 46-48 tok/s.
+
+### R36 — stage-2 verify prebuild LANDS: bs8f 46.7 (2.34x) NEW RECORD
+
+Built the full stage-2: the NEXT round's verify pass is constructed and
+scheduled inside the current round's sync window, entirely from lazy
+accept-dependent inputs, so the GPU never drains between rounds. The
+machinery: verify tokens = prebuilt draft outputs + lazy bonus anchor;
+RoPE offsets as lazy `[1]` arrays (rope-in-trace); GDN initial states =
+stage-2a's masked replay (applied unconditionally in the window — the
+replay is bitwise the committed state on full acceptance); KV rows
+written at the lazy true offset via `mlx_slice_update_dynamic` (new
+checkout wrapper `Ops+DynamicSlice.swift`, C8) — rejected rows are
+simply overwritten by the next round's write, so attention trims become
+pure host bookkeeping (`commitPipelined`); SDPA visibility = ONE lazy
+bool mask `col < start + row + 1` ([S, worstLen]) encoding in-block
+causality, history visibility, and stale-row exclusion; the packed
+accept transfer for the next round prescheduled behind it. Escape
+hatches mirror the R33 pipeline (greedy, `processor == nil`,
+chain-break -> synchronous round; `DFLASH2_VERIFY_PREBUILD=0` kills).
+`finalizeGeneration` rewinds from a per-round capture context.
+
+**Identity MATCH with BIT-IDENTICAL acceptance (147/322) on the very
+first build** — and after every subsequent fix. The masked-mq, the
+masked-mma, and the dynamic-write paths all reproduce the R34b
+acceptance patterns exactly (114/154, 147/322, 143/278).
+
+Three GPU/scheduling costs found and fixed (as-built was 39.2 vs 48.2
+same-window):
+1. **Round-seam scheduling bubble (the big one):** mlx-core's
+   MAX_ACTIVE_TASKS=10 re-throttles the deep pipeline — the encode
+   thread leaves the window only when the GPU is most of the way
+   through the NEXT verify, and the GPU then drains before the
+   following round's first commit. Made the cap env-tunable
+   (`MLX_MAX_ACTIVE_TASKS`, C10, lazily latched so the app can setenv);
+   =40 flipped stage-2 from -6 to +3.5 same-window. =100 no better.
+2. **Full KV-store copy per boundary:** DynamicSliceUpdate donates via
+   copy_gpu, but in-flight readers always hold buffer refs at encode
+   time under deep pipelining -> ~2.5 GB/round of copies. Added
+   `MLX_DYNSLICE_INPLACE=1` (C9): output aliases the input buffer,
+   only updated rows written — safe here because stream FIFO order plus
+   the visibility masks make the written region invisible to every
+   earlier-encoded read. (Measured ~neutral at cap 10 — the bubble
+   masked it — kept as part of the default set.)
+3. **Masked SDPA fell off the mma kernel to mq (+3.5 ms/round):**
+   added bool-mask support to `sdpa_vector_2pass_1_mma` (buffers
+   13/15/16/17, function constants — no new AOT instantiations; the
+   mlx-generated mirror updated byte-identical) and relaxed the
+   use_mma gate to bool masks.
+
+Bench harness now setenvs the two mlx knobs (`DFlash2BenchRunner.run`,
+overwrite: 0) so the canonical config is defaults-only.
+
+**Canonical R36b** (cooled ABBA, display asleep — an aerial-wallpaper
+video decode contaminated the first attempt (ar arms 15.9-19.6; bs3f
+26.3 was contention, not code) — identity MATCH all arms): ar 20.0 |
+bs3f 32.2 | **bs8f 46.7 (2.34x) — NEW RECORD** (+2.7 over R34b's
+44.0) | bs8-adaptive 40.5. 8f runs 46.7/42.5 (wider spread than
+R34b's 44.0/43.1; reported median = same convention as all records).
+3f flat vs R34b (32.2 vs 32.0): the width-independent encode cost
+sits inside a shorter GPU round at S=3, so stage-2 neither wins nor
+loses there. The stage-2 projection (~46-48) is REACHED. Remaining
+on-device levers are thin: replay cost (~2 ms, could prebuild into
+the window's dep graph differently), adaptive-arm bandit retune for
+the new round shape, encode-cost reduction (mlx-core). 60 verdict
+unchanged: M5-class bandwidth or drafter training.
+
+### R37 — compiled GDN replay + S=16 tree re-priced under the pipelined round
+
+Two follow-ups from R36's "remaining levers" list.
+
+**S=16 two-chain tree re-derived under the new 89.4 ms round (paper
+re-pricing, no build):** break-even shrinks with the round — 89.4 x
+(5.07/4.17 - 1) ~ 19.3 ms (was 22.5 at 104.5 ms). The pipeline hides
+only the ~2.5 ms host glue from R28's bill; the GPU items survive:
+QMM +5-8 (mma16n16 still unbuilt — the banked mma16 is a +31 ms
+hole), SDPA qL16 +2-4, GDN x2 ~+3 (with the compiled replay below),
+16-mask propose +3-4 => +13-19 ms for <= +0.9 tok/round (R21's
+offline bound) => net 0 to +0.5 tok/s at the optimistic edge of every
+estimate, and it still requires building a new QMM tile (dual AOT
+instantiate-list dance). The pipelined round does NOT resurrect the
+tree; wash confirmed a second time, now under stage-2 economics.
+
+**Compiled GDN replay:** the accept-invariant replay
+(`prebuildSpeculativeRollback`) ran ~9 eager launches per GDN layer
+per round (sigmoid(b), decay-gate chain, posMask compare, conv gather
+indices, contiguous) — round-critical-path cost since stage-2 replays
+EVERY round. Folded into one `compile` trace shared by all layers
+(`compiledReplayCapture`, DFlash2Support.swift; mask-free captures
+only, eager fallback kept; kill: `DFLASH2_COMPILED_REPLAY=0`).
+Nested-compile inlines (`is_tracer` early-out in mlx compile.cpp) and
+the custom scan kernel traces as an ordinary primitive. Identity:
+MATCH, acceptance bit-identical 147/322.
+
+Measurement traps hit (both banked classes): a post-overnight-idle
+screen showed 29.1/39.0 — post-idle clock ramp (ar arms rose 19.0 ->
+20.0 monotone) plus fresh-binary Metal JIT in run0, not the change. A
+warm eager/compiled/eager BAB was thermally confounded (middle arm
+hottest: ar 18.5 vs 19.7/19.6 brackets); at matched position
+(run0 vs run0) compiled ~ eager (38.5 vs 39.0). Warm A/Bs cannot
+resolve a +-1 effect on this machine; cooled canonical is the only
+arbiter.
+
+**Canonical R37** (cooled ABBA, display asleep, identity MATCH all
+arms, ar 20.1 — clean): bs3f 29.2 | **bs8f 47.2 (2.35x) — NEW
+RECORD** (+0.5 over R36b) | bs8-adaptive 42.4 (+1.9 over R36b). Both
+8f runs improved (47.2/42.9 vs 46.7/42.5) and both adaptive runs
+(41.9/42.4 vs 40.5/40.3) — coherent, not slot luck. 3f pairs overlap
+across sessions (28.7/29.2 vs 29.1/32.2 — R36b's 32.2 was the lucky
+run; run0s equal), so no 3f regression. Compiled replay stays
+default-ON. The adaptive arm's +1.9 says launch overhead weighs more
+in mixed-width rounds; still below fixed 8f, retune still pending.
+
+**R38 — sync-mode vprofile on the R37 build closes the glue question.**
+Steady state (91 rounds): verify-seg 87.0 / verify-attn 17.1 profiled
+— bit-for-bit the R28 composition (85-90 / 17-18), so the segment
+interior is unchanged: QMM ~55 + GDN scan ~4 + **glue ~12-16 ms**
+(hundreds of 10-20 us norm/rope/elementwise launches, ~24 MB of
+actual traffic ~= 0.06 ms — pure launch cost). The kill: even PERFECT
+glue elimination lands the round at ~76 ms = 56.2 tok/s < 60, and
+perfection is not on offer (conv, scan pre/post, and boundary copies
+are real work). The realistic program — rmsnorm folded into the mma8
+prologue (each output tile already streams the full [8,5120] row) +
+rope as qkv epilogue — absorbs ~100-150 launches ~= 3-5 ms => ~49-50,
+days of fork-kernel surgery, bitwise-identity risk. Every branch of
+the 60 decision tree now terminates in a measured number: tokens/round
+needs drafter training (R30), round-time bottoms out ~76 ms
+theoretical / ~84 ms realistic on M3 Max. Cap/blocks env retunes
+skipped deliberately: warm A/Bs cannot resolve +-1 here (R37 traps)
+and a canonical per knob value costs 50 min for a coin flip.
+
+**R39 — AGX utilization counter on the record build: scheduling is
+CLOSED.** Live driver sampling (ioreg AGXAccelerator, 50 ms cadence)
+across a full 8f bench: loaded-sample mean 99.0, 95.7% of samples
+>= 98%; per-second means through every decode window ~99-100 with
+only isolated 1-second dips at run/phase boundaries. A residual
+per-round seam (the pre-stage-2 8.4 ms strip would read ~91%
+sustained over a 8f decode) does NOT exist anywhere in the timeline.
+The GPU is pegged; every remaining millisecond is GPU work, priced in
+R38. On-device program state: record 47.2, theoretical ceiling ~56,
+realistic ~49-50 via the glue kernel program; 60 = bandwidth or
+drafter training.
+
+### R40 — op census (2,663 dispatches/pass) + same-input QMM stacking: the glue map was wrong
+
+**Op census probe (C11, mlx checkout):** env-gated primitive-dispatch
+counter in transforms.cpp (`MLX_OP_CENSUS=1`, recording windowed by
+`MLX_OP_CENSUS_ACTIVE` which verifyStep toggles in vprofile mode;
+dumped at exit). The verify pass dispatches **2,663 primitives** —
+an order of magnitude past every prior estimate. Per pass: QMM 496
+(q/k/v, gate/up, and the GDN's FOUR in-projections all launch
+separately), RMSNorm 304 (6.3/layer — 48 GDN x 5 + 16 attn x 4
+exactly; the model is 64 layers, 48 GDN + 16 attention), compiled
+elementwise ~350, Contiguous+Concatenate ~180, Add 128, CustomKernel
+84 (48 scans + rotations), Convolution 48, RoPE 32, SDPA 16.
+
+**Same-input QMM stacking (bitwise-exact):** projections sharing an
+input concatenate along the output axis — each output row keeps its
+own K-accumulation and quant groups, so outputs are bit-identical
+(MATCH + bit-identical acceptance on every run, both phases).
+Phase 1: gate+up in all 64 MLP blocks (Qwen3NextMLP.stackGateUp,
+post-load, originals released via update(modules:) — direct
+@ModuleInfo assignment trips the metaState assert). Phase 2: the GDN
+4-way in-proj (48) and attention q/k/v (16) — 128 groups total, QMM
+launches 496 -> ~256/pass. Kill: DFLASH2_STACK_GATEUP=0.
+Warm same-sequence A/B (control vs diag, control COOLER): unstacked
+39.8/44.8 vs stacked (phase 1) **48.0/50.8** — the merge effect far
+exceeds launch arithmetic (fewer encode boundaries + single-grid
+streaming). Canonical pending.
+
+**Two measurement traps found (both cost a day):** (1) the FIRST
+LAUNCH of a freshly built binary fights an MTLCompilerService
+pipeline-compilation storm for minutes (ar arms 5-13 tok/s, erratic,
+recovering; second launch of the same binary clean) — never measure a
+fresh binary's first launch; the bench protocol now includes a
+throwaway warm-up invocation. (2) the owner using the machine wakes
+the display (aerial-wallpaper decode + compositing) and runs other
+agents — the R41 canonical attempt is INVALID (ar 14.6-20.2 erratic,
+8f 45.5 under contamination). The canonical protocol is now
+quiet-gated: 8 consecutive minutes of WindowServer < 2% CPU before
+the cool-down starts, with a top-CPU sampler riding the bench for
+post-hoc validation, and an ar-arm health check (all arms 19.5-20.5)
+as the validity criterion.
+
+**Canonical R42b — stacked build: bs8f 47.9 NEW RECORD (floor), all
+arms at all-time highs under active-use contention.** The owner was at
+the machine (sampler: Activity Monitor 13-28% sustained — its GPU
+history polling is the likely AR suppressant — plus corespotlightd
+32.9 burst, loginwindow, GlobalProtect; ar arms flat 13.8-14.3, so
+the speedup ratio is unusable). Contention only ever slows a run, and
+identity is bitwise MATCH (AR tokens are speed-independent), so the
+spec-arm numbers stand as LOWER BOUNDS: **bs8f 47.9** (vs 47.2), bs3f
+34.2 (vs 32.2 — stacking finally moved the launch-bound short-round
+arm, +2.0), bs8-adaptive 43.5 (vs 42.4). Vs the historical clean ar
+20.0: >=2.40x. Warm same-thermal evidence (48.0/50.8 diag) says a
+clean canonical lands ~49-51; rerun when the machine is idle. Earlier
+attempts: r41 and r42 invalid (user-active + maintenance-burst
+contamination; the displaysleepnow-triggers-maintenance trap is why
+immediate-start benches sicken — the historical 20-min cooldown
+absorbed it).
+
+### R43 — census on the stacked build: QMM 256 confirmed; RMSNorm is the next class
+
+Re-ran the op census (C11) on the stacked build: **QMM 256/pass
+exactly** (496 -> 256, matching the 128-group arithmetic), Contiguous
+UNCHANGED (the strided slice views added zero materialized copies),
+profiled verify-seg 87.0 -> 79.3 ms. Largest remaining non-QMM launch
+classes: RMSNorm 304/pass (96 = GDN q/k weightless norms + their
+scale muls; 32 = attention q/k norms; the rest input/post norms),
+compiled elementwise ~350, Contiguous+Concatenate ~180.
+
+### R44 — fused GDN q/k norm in the scan kernel: REJECTED — the trajectory-sensitivity trap
+
+Folded the weightless q/k RMS norms + scale factors into
+`gated_delta_step`'s load path (4 kernel variants, `_qknorm` suffix;
+capture/replay plumbed via `GDNCapture.qkNorm` incl. a compiled-replay
+twin with the flag baked in, since a kernel choice cannot be a trace
+input). Both decode arms share the kernel, so spec==AR held by
+construction: **output-identity MATCH on every run.** The math is
+exactly eager's formulas — but computed in f32 without eager's bf16
+intermediate roundings (eager rounds the rmsNorm output AND the
+bf16-cast scale constant). More precise, not bit-identical.
+
+Result (screen, ar arms healthy 19.4-19.8): the greedy trajectory
+forked and the new content drafts far worse — acceptance **45.7% ->
+33.6%** (147/322 -> 134/399, bit-identical across 3 runs and 2
+launches = deterministic), rounds 45 -> 58 for 192 tokens, bs8f
+median 47.9-record -> **34.3**. Kill-switch A/B on the same binary
+(DFLASH2_FUSED_QKNORM=0) restored 147/322 and 45.8 exactly ->
+attribution clean, eager path untouched. Default flipped to OFF
+(opt-in DFLASH2_FUSED_QKNORM=1); code kept as a banked variant.
+
+**Trap (program-wide, binding):** any numerics change that perturbs
+the AR token stream even by one ulp re-rolls the draft-acceptance dice
+on the canonical prompt, and the swing (±12 points of acceptance,
+~±13 tok/s) dwarfs any per-round launch saving (~1 ms here). The
+record's 45.7% acceptance is a property of the exact bitwise
+trajectory, not of the model. Every future lever must either preserve
+the AR stream bit-for-bit (as QMM stacking did) or be priced against
+an acceptance re-roll. This indicts the planned
+layernorm-into-mma8-prologue fusion unless it emulates eager rounding
+bitwise (knife-edge: even reduction-order ulps can flip a greedy
+token over a 9k-token recurrence).
+
+### R45 — clean canonical: 47.3; the ~49-51 projection REFUTED; plateau ~47.5
+
+Clean cooled canonical on the R44 build's default path (bit-identical
+to the record: stacking on, fusion off; binary pre-warmed, 20-min
+cooldown): ar median 19.9 (runs 1-3 all 19.8-19.9 = healthy; run0
+14.7 is the per-launch first-run ramp seen on every launch today),
+**bs8f 47.3 (2.38x)**, bs3f 34.5 (1.74x), bs8-adaptive 43.7 (2.20x);
+identity MATCH all arms; acceptance bit-stable (147/322, 114/154,
+143/278). Sampler: Activity Monitor open with intermittent 28-30%
+spikes but ar-health in band -> valid. Verdict: **the r42b 47.9 floor
+stands as the record** (contention only slows, so it was real);
+canonical-to-canonical spread is 47.2/47.9/47.3 -> the plateau is
+~47.5 +/- 0.5. The warm-diag ~49-51 projection is REFUTED —
+**measurement lesson: warm same-sequence A/B LEVELS do not transfer
+to cooled canonicals (clock/thermal state differs); warm A/Bs rank
+variants, only canonicals set records.**
+
+### R46 — MLX_MAX_ACTIVE_TASKS sweep: a cliff between 40 and 48
+
+Warm 4-leg sweep on the record path (order 64,24,48,32 to decorrelate
+drift): cap 24 -> 46.8, 32 -> 46.8, 48 -> 44.1, 64 -> 44.7 (bs8f
+median; acceptance bit-identical everywhere — pure scheduling).
+Caps <= 32 beat >= 48 by ~2.3, past warm noise. The current default 40
+sits at the cliff edge and was not in-sweep; 24-vs-40 ABBA follows
+(r48).
+
+### R47 — drafter same-input stacking: bitwise-exact, speed read pending
+
+The R40 stacking treatment applied to the 5-layer drafter, which runs
+an 8-step launch-bound sequential chain per round: DFlash2Attention
+gains block-side q|k|v and context-side k|v stacks (k/v weights
+duplicated across the two — negligible at 4-bit), all three call paths
+(eager, draftContextKV trace, draftPreBody chain) routed through them;
+DFlash2MLP gains gate|up; the walker + bench stack the drafter after
+load (10 blocks). **Gate PASSED: accepted=147/322 bit-identical in
+every run of every launch, identity MATCH.** The speed A/B leg was
+contaminated (ar 13.2 mid-leg); stacking kept on the bitwise gate +
+R40 priors (launch removal only), canonical to confirm.
+
+**R46 addendum — 24-vs-40 ABBA (r48, stacked-drafter binary): no
+difference.** Legs 40/24/24/40 -> 51.8, 48.7, 47.9, 47.3 (ar healthy
+19.2-21.1 everywhere, acceptance bit-stable). cap40 mean 49.6 vs
+cap24 48.3, inside the warm spread — the cliff is only above 40; the
+default stays 40. REFUTED as a lever. Note: leg1 run1 hit **51.8**,
+an all-time-high single run, with the drafter stacking in — all four
+leg medians sit at/above the 47.5 canonical plateau; canonical r48
+follows.
+
+### R48 — canonical on the stacked-drafter build: 3f 35.0 NEW BEST; 8f within plateau
+
+Cooled canonical (drafter stacked, cap 40): ar 19.7 healthy, **bs3f
+35.0 (1.78x) — new best 3f** (34.2 r42b, 34.5 r45; both runs 33.9/
+35.0 solid — the launch-bound short-round arm is where drafter launch
+removal shows), bs8f 46.5 (run1 hit by a kernel_task 13.7% burst mid-
+leg, fell to 30.0 — the run0 half is the clean read), bs8-adaptive
+43.1. Identity MATCH all arms; fixed-width acceptance bit-stable
+(adaptive's 143/278 vs 130/241 across runs is the bandit reacting to
+the disturbed timings, not numerics). Verdict: drafter stacking
+ACCEPTED (bitwise gate + 3f gain); bs8f record stands at 47.9,
+plateau ~47.5.
+
+### R49 — elementwise verify conv: bitwise-PASS but REFUTED for speed; concat reuse kept
+
+The S>1 generalization of `decodeConv` for the verify path (in-trace
+f32 tap chain, compile-fused into the segment): **bitwise gate PASSED
+at S=3 and S=8** (114/154 + 147/322 exact, MATCH) — but same-binary
+A/B says the specialized Convolution kernel is FASTER than the fused
+elementwise chain: off 43.3/33.1 vs on 42.1/31.6 (8f/3f, ar 19.5
+both legs). Default flipped OFF (opt-in DFLASH2_ELEMENTWISE_CONV=1).
+KEPT from the same change: verifyForward now builds `convInput` ONCE
+(generalConv used to build its own duplicate — the census's ~99
+Concatenate/pass was 2x48 + boundary bits), removing ~48 concat
+launches/pass, bitwise-neutral by construction. Also of note: the
+whole evening warm band drifted down (42-43 vs 45-52 earlier on
+identical configs, ar healthy in both) — cross-binary warm compares
+remain meaningless; only same-binary pairs and canonicals count.
+
+**R49b screen (concat-reuse baseline binary):** gate PASSED (both
+arms bit-stable + MATCH), 42.8/31.9 in the evening's drifted band —
+no regression. This binary is the new baseline (target + drafter
+stacking, single convInput concat, fused-norm and elementwise-conv
+banked default-off). Canonical record attempt deferred to a cool
+machine phase.
+
+**R49c — production stacking wired.** LLMActor's
+`loadDFlash2DrafterIfPresent` now stacks BOTH sides of the speculative
+pair at engine load (gated on a paired drafter; PARO/VLM classes
+no-op via the QuantizedLinear casts; kill DFLASH2_STACK_GATEUP=0).
+Verified live: app log "target=128 draft=10 blocks", bench-side calls
+idempotent (0), gate 147/322 + MATCH, 46.3 at plateau. The real agent
+decode now benefits from the round's wins, not just the bench.
+
+### R51 — Metal System Trace attribution attempt: NEGATIVE (method, not target)
+
+Tried per-kernel GPU-time attribution via `xctrace` Metal System
+Trace attached to a live bench. Three blockers: (1) the shader
+timeline table needs a launch-time profiler instrument — attach
+leaves it empty; (2) MLX encoders are unlabeled, so encoder-level
+intervals cannot be mapped to kernels; (3) tracing overhead starves
+the GPU (37% busy vs the real 99-100%) AND inflates measured GPU
+time ~2.7x (240 ms/round of "GPU busy" vs the real 89), biased
+toward small encoders — glue quantification from this data would
+overstate glue. The encoder-duration histogram is consistent with
+known attribution (~3 large QMM-segment encoders/round at ~24 ms
+inflated + ~106 mid encoders). The 578 MB trace is kept in the
+scratchpad (r51-metal.trace) — Instruments GUI with a Shader
+Timeline template on a fresh launch is the tool that would answer
+the per-kernel question, if the glue pool ever needs exact pricing.
