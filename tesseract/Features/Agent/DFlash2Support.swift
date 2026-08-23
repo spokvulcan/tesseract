@@ -78,11 +78,21 @@ nonisolated enum DFlash2Support {
     /// a value the actor can box without a `perform` hop. Callers must have
     /// checked ``pairsWithTarget(_:)`` — a wrong-family target traps in
     /// `bindDFlashTarget` by design.
+    ///
+    /// `DFLASH2_DRAFT_BITS` (probe lever, ledger R53): 8 loads an 8-bit
+    /// draft, ≥16 keeps the checkpoint's bf16. Draft precision is
+    /// identity-safe by construction — the target verifies every proposal,
+    /// so it moves acceptance, never output — making it the one lever the
+    /// R44 trajectory trap does not bind. Default 4 is the reference path.
     static func loadDrafter(
         directory: URL
     ) throws -> any DFlash2DrafterModel {
-        try loadDFlash2Draft(
-            from: directory, quantization: (groupSize: 64, bits: 4))
+        let bits =
+            ProcessInfo.processInfo.environment["DFLASH2_DRAFT_BITS"]
+            .flatMap(Int.init) ?? 4
+        return try loadDFlash2Draft(
+            from: directory,
+            quantization: bits >= 16 ? nil : (groupSize: 64, bits: bits))
     }
 
     // MARK: - Engagement policy
