@@ -194,8 +194,10 @@ nonisolated enum TokenGenerationLoop {
             _ = continuation.yield(.info(info))
 
             if let telemetry {
+                let algorithm =
+                    iterator is DFlash2SpeculativeTokenIterator ? "DFlash2" : "MTP"
                 Log.agent.notice(
-                    "MTP speculation — rounds=\(telemetry.roundCount) "
+                    "\(algorithm) speculation — rounds=\(telemetry.roundCount) "
                         + "proposed=\(telemetry.draftTokenCount) "
                         + "accepted=\(telemetry.acceptedDraftTokenCount) "
                         + "acceptance=\(String(format: "%.1f%%", telemetry.acceptanceRate * 100)) "

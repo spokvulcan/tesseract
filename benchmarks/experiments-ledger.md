@@ -3993,3 +3993,29 @@ drafter training (R30, priced), hardware (M5-class ~62 projected) —
 is now measured, built, or priced. 60 on M3 Max under strict
 losslessness needs new hardware or a trained deeper drafter; the
 stack leads all known public numbers bandwidth-normalized (R28).
+
+### R54 — keyed-path warm-start integration (ADR-0059): identity PASS, env re-roll documented
+
+The prefix-cache × DFlash2 integration (app `PrefillExecutor` stays the
+single prefill authority, vendor iterator gains `prefilledPrefixTokens`
+warm start) gated two ways on 2026-08-24:
+
+Cold gate, bs8f, same session A/B — parent binary (both repos stashed
+to parent) vs integrated binary: **both** accepted=125/469, **both**
+output-identity MATCH, each bit-stable across repeat runs. The vendor
+change is bitwise-neutral at prefix 0, as designed. The banked 147/322
+(R52/R53) did **not** reproduce on *either* binary: an environmental
+acceptance re-roll of the R44 trajectory class (suspects: plist
+speculationMode now `dflash2` vs `automatic` during R52/R53, which
+loaded the MTP drafter beside it; machine contended, ar median 16.8).
+Identity MATCH is the invariant that matters and it held everywhere;
+125/469 + MATCH is the current-environment cold reference. A quiet
+canonical re-bank is optional hygiene, not a blocker.
+
+Live warm gate (the point of the exercise — server, tools + thinking,
+temp 0): turn 1 `lookup=hit(branchPoint at 40/328)` → acceptance 62.3%
+(43/69, 11 rounds), `directToolLeaf captured — offset=383`; turn 2
+`cached_tokens 383/428`, `restoreMs=6.2`, acceptance 50.6%,
+`canonicalLeaf captured — offset=490`, 2.35s total. Speculation and
+the radix cache compound on the exact traffic ADR-0056's amendment had
+parked — the #437 acceptance criterion.
