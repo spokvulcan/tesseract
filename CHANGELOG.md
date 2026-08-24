@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.11.0](https://github.com/spokvulcan/tesseract/compare/v1.10.0...v1.11.0) (2026-08-24)
+
+
+### Features
+
+* add Qwen3.8-27B (MLX 4bit) as an agent model ([#432](https://github.com/spokvulcan/tesseract/issues/432)) ([1a5fb21](https://github.com/spokvulcan/tesseract/commit/1a5fb2146082add520337f0275ed26a0ffa628a4))
+* **agent:** DFlash2 speculative decoding for Qwen3.8-27B (ADR-0057) ([39be78d](https://github.com/spokvulcan/tesseract/commit/39be78ddf6ff7de653046aafe9db63e0afe5506a))
+* **agent:** MTP speculative decoding for Qwen3.5+ (ADR-0056) ([#436](https://github.com/spokvulcan/tesseract/issues/436)) ([73adfb4](https://github.com/spokvulcan/tesseract/commit/73adfb4445d74239e2c47fece92c8f18eff04d72))
+* **agent:** speculative decoding mode picker + per-request algorithm badge ([3ec5e86](https://github.com/spokvulcan/tesseract/commit/3ec5e861d7c063fdeededc9862bd4b7ce20ac431))
+* **bench:** record run provenance + post-hoc validity annotations ([0bf7d25](https://github.com/spokvulcan/tesseract/commit/0bf7d25d875bf0fd1ad6f9068a494acb338efa06))
+
+
+### Bug Fixes
+
+* prompt cache was permanently cold on qwen3.8-27b ([#440](https://github.com/spokvulcan/tesseract/issues/440)) ([eb61521](https://github.com/spokvulcan/tesseract/commit/eb615212df938cbb983244b62c5c6e3978fe7f9a))
+* **server:** accept the 6-element RotatingKVCache metaState from the re-pinned vendor ([#435](https://github.com/spokvulcan/tesseract/issues/435)) ([50232b9](https://github.com/spokvulcan/tesseract/commit/50232b9a3427492d95d08a1710a3d25e830e3ab7))
+* **server:** chunk SSD snapshot writes past 2 GiB (write(2) INT_MAX EINVAL) ([752b580](https://github.com/spokvulcan/tesseract/commit/752b58096e34199d1b66fd7209dcdf3e9d642b05))
+
+
+### Performance Improvements
+
+* **agent:** DFlash2 round 2 — mma8 verify kernel, single-sync pipeline, adaptive width (ADR-0058) ([4af8af7](https://github.com/spokvulcan/tesseract/commit/4af8af775f8c2f2d83956d75f975c9219b4103c6))
+* **agent:** DFlash2 round 3 — SDPA qL-tiling, direct-fragment mma8, buffered draft cache ([862c28c](https://github.com/spokvulcan/tesseract/commit/862c28c9c8c4565e4965c21560333b70c15a2183))
+* **agent:** DFlash2 round 4 — multi-query SDPA kernel, lever pricing (R16-R19) ([3061298](https://github.com/spokvulcan/tesseract/commit/30612982bf77f4f5b26a6cbf4f09688756b6786e))
+* **agent:** DFlash2 round 5 — QMM stacking in production, stage-2 bench defaults ([d11f9cc](https://github.com/spokvulcan/tesseract/commit/d11f9cc18876939a8638a8f7efe31a18bd420095))
+* **agent:** DFLASH2_DRAFT_BITS draft-precision probe lever ([2a4f16e](https://github.com/spokvulcan/tesseract/commit/2a4f16e3a0207960fbd6f91b86a379367d3bd505))
+* inference-optimization loop 2026-07-27 — request tokenize path (−90% warm-turn) + byte-native BPE (1.22×) ([#429](https://github.com/spokvulcan/tesseract/issues/429)) ([a73a7aa](https://github.com/spokvulcan/tesseract/commit/a73a7aa5b0f49f03716851479c5795799d3ae58a))
+
+
+### Documentation
+
+* **bench:** ledger R14-R15 — canonical cooled set + no-regression verdict ([4fd61dc](https://github.com/spokvulcan/tesseract/commit/4fd61dc96f98af6f0fd91c6a6fe44a05f4c6ecd0))
+* **bench:** ledger R27-R51 + ADR-0058 round-5 addenda ([38823cf](https://github.com/spokvulcan/tesseract/commit/38823cf06033a9a2f4e5f282ea162fabe8c0ecb1))
+* **bench:** ledger R52 post-ship gate + R53 draft-precision axis ([68e5e68](https://github.com/spokvulcan/tesseract/commit/68e5e68377bd92587ec1a6646a8d7abd0a02e931))
+* **bench:** log E12 — chunked gated-delta scan REJECTED (0.67× best), reverted ([b903105](https://github.com/spokvulcan/tesseract/commit/b903105a3e0b777b6f9b81b997b6afab103466f7))
+
+
+### Miscellaneous Chores
+
+* bump mlx-swift pin to 24779d5 (lockstep with mlx-swift-lm) ([e2b01bc](https://github.com/spokvulcan/tesseract/commit/e2b01bcbad046cd039a13780429d555e825f194b))
+* bump mlx-swift pin to 24779d5 (lockstep with mlx-swift-lm) ([004c8ee](https://github.com/spokvulcan/tesseract/commit/004c8ee51e7a0f4646b60147d563d68a8995cd32))
+* bump mlx-swift-lm to e8727a8 (propose sub-phase timing tool) ([f558832](https://github.com/spokvulcan/tesseract/commit/f558832a92ec9ffe7d24a3d4effc42356b54513f))
+* **deps:** re-pin mlx-swift-lm to latest upstream main ([#431](https://github.com/spokvulcan/tesseract/issues/431)) ([0dbbfab](https://github.com/spokvulcan/tesseract/commit/0dbbfab18a9f01a974db3f70ea3f95e281dfefed))
+* **deps:** refresh the LLM/VLM inference-stack pins ([383ef0f](https://github.com/spokvulcan/tesseract/commit/383ef0f23dc2dc50f62fceec83cf5c72458b674a))
+* Package.resolved after the round-5 pin bump ([fa24662](https://github.com/spokvulcan/tesseract/commit/fa246620333b2e6377a23f82cbbe39e0455fe3ef))
+
 ## [1.10.0](https://github.com/spokvulcan/tesseract/compare/v1.9.0...v1.10.0) (2026-07-25)
 
 
