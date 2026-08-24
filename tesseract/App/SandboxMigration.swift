@@ -34,6 +34,17 @@ enum SandboxMigration {
     private static let containerRelativeModels =
         "Library/Containers/app.tesseract.agent/Data/Library/Application Support/\(modelsDirName)"
 
+    /// Set once the migration reaches a terminal state (moved, merged, or the
+    /// old container holds nothing), so later launches never touch the
+    /// container path again. Load-bearing on macOS 26: the mere existence
+    /// probe of another app's container data raises the system "access data
+    /// from other apps" consent dialog and blocks the calling thread in
+    /// `open()` until the user answers — and the consent is bound to the code
+    /// signature, so every dev rebuild re-prompts. Stored in standard
+    /// defaults (`~/Library/Preferences`, outside any container), which
+    /// survives rebuilds.
+    static let completionDefaultsKey = "sandboxModelsMigrationComplete"
+
     /// Carry the downloaded models across, once. Must run before anything reads
     /// the model storage path (called from `applicationDidFinishLaunching`,
     /// ahead of `container.setup`).
@@ -44,7 +55,10 @@ enum SandboxMigration {
     /// model already present at the destination is always kept — the migration
     /// never clobbers or deletes anything the new path already has. Idempotent:
     /// a second run finds every model present and moves nothing.
-    static func migrateModelsIfNeeded(fileManager: FileManager = .default) {
+    static func migrateModelsIfNeeded(
+        fileManager: FileManager = .default,
+        defaults: UserDefaults = .standard
+    ) {
         // Never move the owner's models during a test run — test hosts share
         // the real container (issue #360), and a non-sandboxed test host would
         // otherwise relocate live data mid-suite. Headless harness launches
@@ -54,15 +68,25 @@ enum SandboxMigration {
         guard !ProcessEnvironment.isRunningTests else { return }
         guard !TesseractApp.isHarnessLaunch else { return }
 
+        // Terminal on a previous launch: stay away from the container path —
+        // probing it re-raises the per-launch consent dialog (doc on
+        // `completionDefaultsKey`) and stalls launch until it is answered.
+        guard !defaults.bool(forKey: completionDefaultsKey) else { return }
+
         let newModels = URL.applicationSupportDirectory.appendingPathComponent(modelsDirName)
         let oldModels = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(containerRelativeModels)
 
-        // Same location (still sandboxed, or the paths coincide): nothing to do.
+        // Same location (still sandboxed, or the paths coincide): nothing to
+        // do — and not terminal: an un-sandboxed successor still migrates.
         guard oldModels.standardizedFileURL != newModels.standardizedFileURL else { return }
 
-        // The source must exist and hold something.
-        guard hasContents(oldModels, fileManager) else { return }
+        // The source must exist and hold something. Holding nothing is
+        // terminal: there will never be anything to carry over.
+        guard hasContents(oldModels, fileManager) else {
+            defaults.set(true, forKey: completionDefaultsKey)
+            return
+        }
 
         do {
             // Clean destination: one atomic, same-volume directory rename.
@@ -73,6 +97,7 @@ enum SandboxMigration {
                 try fileManager.moveItem(at: oldModels, to: newModels)
                 Log.general.info(
                     "SandboxMigration: moved models dir → \(newModels.path)")
+                defaults.set(true, forKey: completionDefaultsKey)
                 return
             }
 
@@ -94,7 +119,11 @@ enum SandboxMigration {
             Log.general.info(
                 "SandboxMigration: merged models — moved \(moved), kept \(kept) already present"
                     + " → \(newModels.path)")
+            defaults.set(true, forKey: completionDefaultsKey)
         } catch {
+            // Not terminal: leave the flag unset so the next launch retries
+            // (and may prompt again — a genuine pending migration is the one
+            // case the consent dialog is worth its cost).
             Log.general.error(
                 "SandboxMigration: models migration failed, starting fresh: "
                     + error.localizedDescription)

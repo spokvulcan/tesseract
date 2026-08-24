@@ -807,7 +807,8 @@ _Avoid_: throttling, playhead clock (rejected design), lookahead buffer.
 **Generation Accumulator**:
 The one value that folds an `AgentGeneration` event stream into a single assistant
 turn's accumulated state — text, optional thinking, finalized tool calls, the raw
-malformed-tool-call buffer, the safeguard's safe-prefix length. A pure value with no
+malformed-tool-call buffer, the safeguard's safe-prefix length and the streamed-wire
+reasoning (`streamedThinking` — what a streaming client assembled). A pure value with no
 side effects and no output type; each caller supplies its own loop and its own
 **Generation Projection**. (`thinking == nil` means no `<think>` block ever opened;
 `""` means one opened but is empty so far — never collapse the optionality.) Its

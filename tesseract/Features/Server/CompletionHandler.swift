@@ -350,7 +350,8 @@ struct CompletionHandler: Sendable {
                         progressHandler: Self.makeProgressHandler(
                             activityLog: activityLog,
                             logHandle: logHandle
-                        )
+                        ),
+                        clientStreams: request.stream == true
                     )),
                 parameters: params,
                 route: .serverCompatible

@@ -287,16 +287,10 @@ actor LLMActor {
             // prefill itself). Sampling presets speculate identically —
             // unlike the greedy-only MTP head, the draft carries a selector
             // for rejection sampling.
-            if let drafter = dflash2?.value,
-                DFlash2Support.shouldEngageRawArm(hasDrafter: true, input: prepared),
-                DFlash2Support.pairsWithTarget(context.model)
+            if let iterator = try DFlash2Support.rawArmIterator(
+                input: prepared, model: context.model,
+                drafter: dflash2?.value, parameters: genParams)
             {
-                var specParams = genParams
-                specParams.kvBits = nil  // speculation needs trimmable caches
-                let cache = try context.model.newCache(parameters: specParams)
-                let iterator = try DFlash2Support.makeIterator(
-                    input: prepared, model: context.model, drafter: drafter,
-                    cache: cache, parameters: specParams)
                 let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
                 await progressHandler?(.speculationEngaged(.dflash2))
                 await progressHandler?(
@@ -408,6 +402,8 @@ actor LLMActor {
         let genParams = Self.makeGenerateParameters(from: parameters)
         let handoff = safeThinkingPrefix + injection
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
+        // Read once on the actor so the perform-closure captures a value.
+        let dflash2 = dflash2Drafter
 
         return try await container.perform { context in
             try Self.buildThinkingContinuationStart(
@@ -416,6 +412,7 @@ actor LLMActor {
                 tokenNDim: tokenNDim,
                 handoffText: handoff,
                 tools: canonicalTools,
+                drafter: dflash2?.value,
                 parameters: genParams
             )
         }
@@ -450,6 +447,8 @@ actor LLMActor {
         let genParams = Self.makeGenerateParameters(from: parameters)
         let handoff = safeThinkingPrefix + injection
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
+        // Read once on the actor so the perform-closure captures a value.
+        let dflash2 = dflash2Drafter
 
         return try await container.perform(nonSendable: originalInput) { context, input in
             let basePrepared = try await context.processor.prepare(input: input)
@@ -459,6 +458,7 @@ actor LLMActor {
                 tokenNDim: basePrepared.text.tokens.ndim,
                 handoffText: handoff,
                 tools: canonicalTools,
+                drafter: dflash2?.value,
                 parameters: genParams
             )
         }
@@ -474,6 +474,7 @@ actor LLMActor {
         tokenNDim: Int,
         handoffText: String,
         tools: [ToolSpec]?,
+        drafter: (any DFlash2DrafterModel)?,
         parameters: GenerateParameters
     ) throws -> HTTPServerRawGenerationStart {
         let appendedIDs = try context.tokenizer.encode(
@@ -487,6 +488,23 @@ actor LLMActor {
             ? flatArr.expandedDimensions(axis: 0)
             : flatArr
         let continuedInput = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
+
+        // DFlash2 speculative arm, as in `startRawGeneration`: the
+        // continuation re-prefills a text-only token sequence, exactly the
+        // raw-arm shape. Without it an intervened turn's continuation decodes
+        // autoregressively while the drafter sits loaded (~19 vs ~33 tok/s
+        // observed on the 27B).
+        if let iterator = try DFlash2Support.rawArmIterator(
+            input: continuedInput, model: context.model,
+            drafter: drafter, parameters: parameters)
+        {
+            return makeRawGenerationStart(
+                iterator: iterator,
+                promptTokenCount: combined.count,
+                context: context,
+                tools: tools
+            )
+        }
 
         let strategy = PrefillStrategy.decide(
             for: continuedInput, prefillStepSize: parameters.prefill.stepSize
@@ -562,7 +580,8 @@ actor LLMActor {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler? = nil
+        progressHandler: ServerInferenceProgressHandler? = nil,
+        clientStreams: Bool
     ) async throws -> HTTPServerGenerationStart {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded
@@ -576,7 +595,8 @@ actor LLMActor {
             toolSpecs: toolSpecs,
             parameters: parameters,
             renderContext: renderContext,
-            progressHandler: progressHandler
+            progressHandler: progressHandler,
+            clientStreams: clientStreams
         )
     }
 

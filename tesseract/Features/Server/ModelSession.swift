@@ -119,14 +119,18 @@ nonisolated protocol ModelSession {
         parameters: GenerateParameters
     ) throws -> MTPSpeculativeTokenIterator
 
-    /// Construct the DFlash2 speculative decode iterator over the whole prompt
-    /// (its init runs the capture-emitting chunked prefill itself, building
-    /// the drafter's sliding hidden-state window). Only callable when
-    /// ``dflash2Drafter`` is non-nil. Penalties are stripped and re-attached
-    /// as the app logit processor, exactly like the MTP variant.
+    /// Construct the DFlash2 speculative decode iterator. Its init runs the
+    /// capture-emitting chunked prefill (building the drafter's sliding
+    /// hidden-state window) over the prompt positions past
+    /// `prefilledPrefixTokens` — the leading positions `cache` already holds
+    /// from a warm restore plus the app driver's checkpoint-capturing
+    /// prefill. Only callable when ``dflash2Drafter`` is non-nil. Penalties
+    /// are stripped and re-attached as the app logit processor, exactly like
+    /// the MTP variant.
     func makeDFlash2DecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
+        prefilledPrefixTokens: Int,
         parameters: GenerateParameters
     ) throws -> DFlash2SpeculativeTokenIterator
 
@@ -175,6 +179,7 @@ extension ModelSession {
     nonisolated func makeDFlash2DecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
+        prefilledPrefixTokens: Int,
         parameters: GenerateParameters
     ) throws -> DFlash2SpeculativeTokenIterator {
         throw DFlash2DrafterUnavailableError()
@@ -335,6 +340,7 @@ nonisolated struct ContextBackedModelSession: ModelSession {
     func makeDFlash2DecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
+        prefilledPrefixTokens: Int,
         parameters: GenerateParameters
     ) throws -> DFlash2SpeculativeTokenIterator {
         guard let drafter = dflash2Drafter else {
@@ -345,6 +351,7 @@ nonisolated struct ContextBackedModelSession: ModelSession {
             model: context.model,
             drafter: drafter,
             cache: cache,
+            prefilledPrefixTokens: prefilledPrefixTokens,
             parameters: parameters
         )
     }

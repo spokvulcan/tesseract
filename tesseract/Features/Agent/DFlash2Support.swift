@@ -97,24 +97,36 @@ nonisolated enum DFlash2Support {
 
     // MARK: - Engagement policy
 
-    /// The server cold-path engagement decision (pure, unit-tested).
+    /// The server keyed-path engagement decision (pure, unit-tested).
     /// Speculate when a drafter is loaded, the request is text-only on the
-    /// identity key space, and the leaf store will run off `finalCache` alone
-    /// (`.directLeaf` — the DFlash2 iterator runs its own chunked prefill, so
-    /// the mid-prefill boundary snapshots every other mode synthesizes its
-    /// leaf from never exist; same constraint as MTP, ADR-0056).
+    /// identity key space, and the partition's KV is unquantized.
     ///
-    /// Unlike MTP there is no greedy gate (the DFlash2 iterator rejection-
-    /// samples against the selector's candidate distribution, so sampling
-    /// presets speculate identically) and no scratch gate (the prefill is
-    /// chunked and the draft's context window is fixed at 2047 rows — prompt
-    /// length does not change the memory shape).
+    /// Unlike MTP there is no cold-path or leaf-mode gate: the app driver
+    /// runs the same restore + checkpoint-capturing chunked prefill as the
+    /// ordinary path up to the deepest planned capture, then hands the warm
+    /// cache to the iterator (`prefilledPrefixTokens`), whose capture
+    /// prefill covers only the tail. The transient boundary snapshots — what
+    /// a thinking template's canonical leaf and a tool turn's direct-tool
+    /// leaf are synthesized from (ADR-0056 amendment) — are therefore
+    /// captured exactly as on the ordinary path, and warm restores speculate
+    /// too: the cache stays first, speculation rides on top.
+    ///
+    /// The `kvBits == nil` gate exists because speculation rewinds verify
+    /// rows in place: the round machinery trims and (on pipelined rounds)
+    /// commits plain `KVCacheSimple` rows, so a quantized-KV partition keeps
+    /// the ordinary decode path.
+    ///
+    /// No greedy gate (the iterator rejection-samples against the selector's
+    /// candidate distribution, so sampling presets speculate identically)
+    /// and no scratch gate (the prefill is chunked and the draft's context
+    /// window is fixed at 2047 rows — prompt length does not change the
+    /// memory shape), as before.
     static func shouldEngage(
         hasDrafter: Bool,
         textOnlyIdentityKeySpace: Bool,
-        predictedLeafStoreMode: HTTPLeafStoreMode
+        kvBits: Int?
     ) -> Bool {
-        hasDrafter && textOnlyIdentityKeySpace && predictedLeafStoreMode == .directLeaf
+        hasDrafter && textOnlyIdentityKeySpace && kvBits == nil
     }
 
     /// The agent raw-arm engagement decision: text-only input on a pairing
@@ -126,16 +138,46 @@ nonisolated enum DFlash2Support {
         hasDrafter && input.image == nil && input.video == nil && input.audio == nil
     }
 
+    /// The raw arms' engage-and-build step, shared by `startRawGeneration`
+    /// and the thinking-safeguard continuation so the engagement contract has
+    /// one home: gate (loaded drafter, text-only input, pairing target),
+    /// clear `kvBits` (speculation needs trimmable caches), build the fresh
+    /// cache and the iterator. Returns `nil` when the arm doesn't engage —
+    /// the caller falls back to the ordinary `PrefillStrategy` path.
+    static func rawArmIterator(
+        input: LMInput,
+        model: any LanguageModel,
+        drafter: (any DFlash2DrafterModel)?,
+        parameters: GenerateParameters
+    ) throws -> DFlash2SpeculativeTokenIterator? {
+        guard let drafter,
+            shouldEngageRawArm(hasDrafter: true, input: input),
+            pairsWithTarget(model)
+        else { return nil }
+        var specParams = parameters
+        specParams.kvBits = nil  // speculation needs trimmable caches
+        let cache = try model.newCache(parameters: specParams)
+        return try makeIterator(
+            input: input, model: model, drafter: drafter,
+            cache: cache, parameters: specParams)
+    }
+
     /// Build the DFlash2 iterator with the app's penalty discipline (ADR-0053):
     /// penalties are stripped from the iterator parameters and re-attached as
     /// the app logit processor through `GenerationComponents`, so the vendor's
     /// parameter-built penalty processor never doubles them. `kvBits` is
     /// cleared by the caller (speculation needs trimmable caches).
+    ///
+    /// `prefilledPrefixTokens` is the number of leading `input` positions
+    /// `cache` already holds (a warm prefix-cache restore plus the app
+    /// driver's checkpoint-capturing prefill); the iterator capture-prefills
+    /// only the remainder.
     static func makeIterator(
         input: LMInput,
         model: any LanguageModel,
         drafter: any DFlash2DrafterModel,
         cache: [any KVCache],
+        prefilledPrefixTokens: Int = 0,
         parameters: GenerateParameters
     ) throws -> DFlash2SpeculativeTokenIterator {
         var iteratorParams = parameters
@@ -157,6 +199,7 @@ nonisolated enum DFlash2Support {
             mainModel: model,
             drafter: drafter,
             mainCache: cache,
+            prefilledPrefixTokens: prefilledPrefixTokens,
             parameters: iteratorParams,
             blockSize: blockSize,
             components: components

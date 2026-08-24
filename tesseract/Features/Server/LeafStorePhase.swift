@@ -42,6 +42,11 @@ nonisolated enum LeafStorePhase {
     // parameter list is the phase's honest input set (the drive's request
     // context); bundling it into a struct would just rename the coupling.
     // swiftlint:disable function_body_length function_parameter_count
+    /// `assistantReasoning` must be the wire-truth reasoning — what THIS
+    /// client will echo back (the drive passes the streamed form for
+    /// streaming clients). Intervened turns store like any other: the
+    /// boundary capture never reuses the raw continuation's live KV — it
+    /// restores the boundary snapshot and re-prefills the canonical render.
     static func run(
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
@@ -51,7 +56,6 @@ nonisolated enum LeafStorePhase {
         prefixCache: PrefixCacheManager,
         renderContext: TemplateRenderContext,
         promptStartsThinking: Bool,
-        intervened: Bool,
         assistantText: String,
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
@@ -61,23 +65,6 @@ nonisolated enum LeafStorePhase {
         // swiftlint:enable function_body_length function_parameter_count
         let mlxStart = mlxStartBox.value
         var result = Result()
-
-        // Skip leaf-store when a thinking-safeguard intervention fired: the
-        // continuation ran through the raw path, so the on-device KV cache no
-        // longer matches the radix-tree logical snapshot we'd compute from
-        // `textContent + thinkingContent + toolCalls`. Storing anything here
-        // would corrupt future prefix-cache hits for requests sharing this
-        // prefix. The stable-prefix snapshot captured pre-generation is still
-        // stored unconditionally by the drive, so future requests still
-        // benefit from partial cache reuse; only the leaf is lost for this
-        // one turn.
-        if intervened {
-            diagnosticsContext.logSkip(
-                stage: "leafStore",
-                reason: "thinking-safeguard-intervention"
-            )
-            return result
-        }
 
         // An Unkeyed Completion never touches the radix tree — construction
         // failed, so no token path of this request can be trusted as a key.

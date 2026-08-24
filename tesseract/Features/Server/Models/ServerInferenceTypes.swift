@@ -155,6 +155,14 @@ nonisolated struct ServerInferenceRequest: Sendable {
         /// rendering a vision model's think blocks stripped against the request.
         let templateRenderContext: TemplateRenderContext
         let progressHandler: ServerInferenceProgressHandler?
+        /// Whether the client consumes this completion as an SSE stream. The
+        /// leaf store keys the radix tree on what the client will echo back,
+        /// and after a thinking-safeguard truncation the streamed reasoning
+        /// and the final-message reasoning differ (see
+        /// `GenerationAccumulator.streamedThinking`) — the wire form follows
+        /// this flag. No default: every construction site states its client's
+        /// shape, because a silently inherited value keys the leaf wrong.
+        let clientStreams: Bool
 
         var prefixCacheConversation: HTTPPrefixCacheConversation? {
             prefixCacheInput?.conversation
@@ -166,7 +174,8 @@ nonisolated struct ServerInferenceRequest: Sendable {
             toolSpecs: [ToolSpec]?,
             prefixCacheConversation: HTTPPrefixCacheConversation?,
             templateRenderContext: TemplateRenderContext = .canonical,
-            progressHandler: ServerInferenceProgressHandler? = nil
+            progressHandler: ServerInferenceProgressHandler? = nil,
+            clientStreams: Bool
         ) {
             self.systemPrompt = systemPrompt
             self.messages = messages
@@ -176,6 +185,7 @@ nonisolated struct ServerInferenceRequest: Sendable {
                 PrefixCacheInput(conversation: $0, renderContext: templateRenderContext)
             }
             self.progressHandler = progressHandler
+            self.clientStreams = clientStreams
         }
     }
 
@@ -206,7 +216,8 @@ nonisolated protocol ServerCompletionStarting: AnyObject, Sendable {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext,
-        progressHandler: ServerInferenceProgressHandler?
+        progressHandler: ServerInferenceProgressHandler?,
+        clientStreams: Bool
     ) async throws -> HTTPServerGenerationStart
 }
 

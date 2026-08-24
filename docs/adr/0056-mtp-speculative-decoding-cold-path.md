@@ -139,3 +139,8 @@ for emission (tool *emission* is unknowable at engagement time) — to be
 checkpoints over agent traffic until a boundary-preserving MTP prefill
 exists — the cache is the product's first priority and beats a 2× decode
 lift on any multi-turn workload.
+
+(2026-08-24: superseded for the DFlash2 arm by ADR-0059 — the app-owned
+prefill keeps every boundary snapshot and the DFlash2 iterator warm-starts
+behind it, so that arm engages on all keyed leaf modes, warm or cold. This
+amendment continues to govern the MTP arm.)

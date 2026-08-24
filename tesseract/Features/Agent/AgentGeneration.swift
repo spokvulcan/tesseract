@@ -294,9 +294,53 @@ nonisolated enum AgentGeneration: Sendable {
             self.draftTokensAccepted = draftTokensAccepted
         }
 
+        /// Bridge from the vendor's terminal completion record.
+        init(_ vendor: GenerateCompletionInfo) {
+            self.init(
+                promptTokenCount: vendor.promptTokenCount,
+                generationTokenCount: vendor.generationTokenCount,
+                promptTime: vendor.promptTime,
+                generateTime: vendor.generateTime,
+                stopReason: vendor.stopReason,
+                draftTokensProposed: vendor.proposedDraftTokens,
+                draftTokensAccepted: vendor.acceptedDraftTokens
+            )
+        }
+
         var tokensPerSecond: Double {
             guard generateTime > 0 else { return 0 }
             return Double(generationTokenCount) / generateTime
+        }
+
+        /// Usage across a thinking-safeguard continuation swap: one
+        /// client-visible completion, two vendor generations. The original
+        /// request's prompt is the only client-billable prompt — the
+        /// continuation's prompt re-prefills context the client never sent,
+        /// so its prompt time folds into generation latency instead.
+        /// Generated tokens and draft totals span both phases; the stop
+        /// reason is the continuation's, the one the turn finished with.
+        static func mergedAcrossContinuation(prior: Info, continuation: Info) -> Info {
+            Info(
+                promptTokenCount: prior.promptTokenCount,
+                generationTokenCount: prior.generationTokenCount
+                    + continuation.generationTokenCount,
+                promptTime: prior.promptTime,
+                generateTime: prior.generateTime + continuation.promptTime
+                    + continuation.generateTime,
+                stopReason: continuation.stopReason,
+                draftTokensProposed: mergedDraftCount(
+                    prior.draftTokensProposed, continuation.draftTokensProposed),
+                draftTokensAccepted: mergedDraftCount(
+                    prior.draftTokensAccepted, continuation.draftTokensAccepted)
+            )
+        }
+
+        /// Sum that preserves "never speculated" as `nil`: only two plain
+        /// autoregressive phases merge to `nil`; one speculated phase makes
+        /// the total real.
+        private static func mergedDraftCount(_ a: Int?, _ b: Int?) -> Int? {
+            if a == nil && b == nil { return nil }
+            return (a ?? 0) + (b ?? 0)
         }
     }
 

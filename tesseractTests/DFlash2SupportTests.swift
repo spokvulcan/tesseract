@@ -7,23 +7,26 @@ import Testing
 
 struct DFlash2SupportTests {
 
-    // MARK: - Server cold-path engagement policy
+    // MARK: - Server keyed-path engagement policy
 
     /// `shouldEngage` with the engaging happy path as defaults, so each test
     /// names only the axis it varies.
     private func engages(
         hasDrafter: Bool = true,
         textOnlyIdentityKeySpace: Bool = true,
-        predictedLeafStoreMode: HTTPLeafStoreMode = .directLeaf
+        kvBits: Int? = nil
     ) -> Bool {
         DFlash2Support.shouldEngage(
             hasDrafter: hasDrafter,
             textOnlyIdentityKeySpace: textOnlyIdentityKeySpace,
-            predictedLeafStoreMode: predictedLeafStoreMode
+            kvBits: kvBits
         )
     }
 
-    @Test func engagesOnTextOnlyColdPromptWithDirectLeaf() {
+    @Test func engagesOnTextOnlyIdentityRequests() {
+        // No leaf-mode or cold-path axis anymore: the arm rides the keyed
+        // path's own restore + checkpoint-capturing prefill, so thinking and
+        // tool traffic (and warm restores) engage too.
         #expect(engages())
     }
 
@@ -35,12 +38,11 @@ struct DFlash2SupportTests {
         #expect(!engages(textOnlyIdentityKeySpace: false))
     }
 
-    @Test func refusesNonDirectLeafStoreModes() {
-        // The DFlash2 iterator runs its own chunked capture prefill, so the
-        // mid-prefill boundary snapshots other leaf modes synthesize from
-        // never exist — same constraint as MTP (ADR-0056).
-        #expect(!engages(predictedLeafStoreMode: .canonicalUserLeaf))
-        #expect(!engages(predictedLeafStoreMode: .directToolLeaf))
+    @Test func refusesQuantizedKVPartitions() {
+        // Speculation rewinds verify rows in place through the plain
+        // `KVCacheSimple` machinery; quantized-KV partitions keep the
+        // ordinary decode path.
+        #expect(!engages(kvBits: 8))
     }
 
     // MARK: - Agent raw-arm engagement policy
