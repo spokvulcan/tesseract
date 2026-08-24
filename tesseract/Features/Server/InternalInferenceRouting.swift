@@ -23,8 +23,7 @@ private nonisolated func makeInternalInferenceStream(
             // `nil` state (defensive) keeps the non-native base.
             let modelState = inferenceService.currentModelState()
             if modelState?.declaresReasoningEffort == true {
-                parameters.thinkingSafeguard.maxThinkingChars =
-                    ThinkingRepetitionDetector.Config.nativeReasoningEffortBudgetChars
+                parameters.thinkingSafeguard.applyNativeReasoningEffortCeiling()
             }
             start = try await inferenceService.start(requestBuilder(parameters, modelState))
 

@@ -128,11 +128,11 @@ struct AgentSettingsPane: View {
                 }
 
                 if selectedAgentModelDeclaresReasoningEffort {
-                    Picker("Reasoning Effort", selection: $settings.agentReasoningEffortRaw) {
-                        Text("Automatic (model default)").tag("automatic")
-                        Text("Low").tag(ReasoningEffort.low.rawValue)
-                        Text("Medium").tag(ReasoningEffort.medium.rawValue)
-                        Text("Extra High").tag(ReasoningEffort.xhigh.rawValue)
+                    Picker("Reasoning Effort", selection: $settings.agentReasoningEffort) {
+                        Text("Automatic (model default)").tag(ReasoningEffort?.none)
+                        Text("Low").tag(ReasoningEffort?.some(.low))
+                        Text("Medium").tag(ReasoningEffort?.some(.medium))
+                        Text("Extra High").tag(ReasoningEffort?.some(.xhigh))
                     }
                 }
             }
@@ -352,10 +352,11 @@ struct AgentSettingsPane: View {
         }
     }
 
-    /// `ModelIdentity.declares` runs the disk-reading probe off the MainActor
-    /// (ADR-0001) so opening or switching the pane can't stutter. Publish back
-    /// only while the same model is still selected, so a slow read for a
-    /// since-deselected model can't clobber a newer answer.
+    /// One disk-reading `ModelIdentity` construction off the MainActor
+    /// (ADR-0001) yields every template capability the pane shows, so opening
+    /// or switching the pane can't stutter and the template is parsed once.
+    /// Publish back only while the same model is still selected, so a slow
+    /// read for a since-deselected model can't clobber a newer answer.
     private func refreshSelectedAgentModelCapabilities() {
         guard case .downloaded = selectedAgentModelStatus,
             let directory = container.modelDownloadManager.modelPath(
@@ -368,14 +369,15 @@ struct AgentSettingsPane: View {
         }
         let modelID = settings.selectedAgentModelID
         Task {
-            let declares = await ModelIdentity.declares(
-                .preserveThinking, atDirectory: directory
-            )
-            let declaresEffort = await ModelIdentity.declaresReasoningEffort(
-                atDirectory: directory
-            )
+            let (declaresPreserve, declaresEffort) = await Task.detached {
+                let identity = ModelIdentity(directory: directory)
+                return (
+                    identity.declaredTemplateFlags.contains(.preserveThinking),
+                    identity.declaresReasoningEffort
+                )
+            }.value
             guard settings.selectedAgentModelID == modelID else { return }
-            selectedAgentModelDeclaresPreserveThinking = declares
+            selectedAgentModelDeclaresPreserveThinking = declaresPreserve
             selectedAgentModelDeclaresReasoningEffort = declaresEffort
         }
     }

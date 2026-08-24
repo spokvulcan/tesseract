@@ -99,10 +99,7 @@ nonisolated enum OpenAI {
                 return
             }
             self.booleanFlags = values.compactMapValues(\.boolValue)
-            self.stringValues = values.compactMapValues {
-                if case .string(let string) = $0 { return string }
-                return nil
-            }
+            self.stringValues = values.compactMapValues(\.stringValue)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -114,24 +111,31 @@ nonisolated enum OpenAI {
         }
     }
 
-    /// Map one wire `reasoning_effort` string to the model's native level
-    /// (ADR-0060). The wire accepts the union of the OpenAI vocabulary
-    /// (`minimal`/`low`/`medium`/`high`) and the Qwen one
-    /// (`low`/`medium`/`xhigh`): both top levels map to the native top,
-    /// `minimal` to the native floor. `nil` means unsupported — the request
-    /// 400s (including `"none"`: thinking-off is the separate
-    /// `enable_thinking: false` template kwarg, not an effort level).
+    /// The wire→native `reasoning_effort` vocabulary (ADR-0060): the union of
+    /// the OpenAI levels (`minimal`/`low`/`medium`/`high`) and the Qwen ones
+    /// (`low`/`medium`/`xhigh`) — both top levels map to the native top,
+    /// `minimal` to the native floor. The single source for both the lookup
+    /// and the 400 message's accepted-values list, so they can never
+    /// disagree. Absence means unsupported — the request 400s (including
+    /// `"none"`: thinking-off is the separate `enable_thinking: false`
+    /// template kwarg, not an effort level).
+    static let wireReasoningEffortLevels: [(wire: String, native: ReasoningEffort)] = [
+        ("minimal", .low),
+        ("low", .low),
+        ("medium", .medium),
+        ("high", .xhigh),
+        ("xhigh", .xhigh),
+    ]
+
+    /// Map one wire `reasoning_effort` string to the model's native level;
+    /// `nil` is the 400 case. See ``wireReasoningEffortLevels``.
     static func nativeReasoningEffort(fromWire raw: String) -> ReasoningEffort? {
-        switch raw {
-        case "minimal", "low": return .low
-        case "medium": return .medium
-        case "high", "xhigh": return .xhigh
-        default: return nil
-        }
+        wireReasoningEffortLevels.first { $0.wire == raw }?.native
     }
 
     /// The accepted `reasoning_effort` wire values, for the 400 message.
-    static let supportedReasoningEffortWireValues = "minimal, low, medium, high, xhigh"
+    static let supportedReasoningEffortWireValues =
+        wireReasoningEffortLevels.map { $0.wire }.joined(separator: ", ")
 
     enum StopSequence: Codable, Sendable {
         case single(String)

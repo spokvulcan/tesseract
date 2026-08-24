@@ -88,11 +88,19 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
 
     /// Whether this render turns the model's thinking off entirely: an emitted
     /// `enable_thinking: false` also swaps the template's generation prompt to
-    /// a closed, empty think block, so the stream parser must NOT start inside
-    /// `<think>` — the stream-loop's `startsInsideThinkBlock` derives from
-    /// `promptStartsThinking && !disablesThinking`.
+    /// a closed, empty think block — see ``startsInsideThinkBlock(promptStartsThinking:)``.
     var disablesThinking: Bool {
         kwargs[.enableThinking] == false
+    }
+
+    /// Whether the stream parser starts inside an open `<think>` block under
+    /// this render: the template's generation prompt opens one and this render
+    /// doesn't swap it for the closed, empty block an emitted
+    /// `enable_thinking: false` produces. The one home for the derivation —
+    /// stream-loop drivers must take their `startsInsideThinkBlock` from here,
+    /// never from `promptStartsThinking` alone.
+    func startsInsideThinkBlock(promptStartsThinking: Bool) -> Bool {
+        promptStartsThinking && !disablesThinking
     }
 
     /// Strip-by-default convenience (the Qwen3.6 polarity): the historical
@@ -117,7 +125,7 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
         // precondition, which runs in release). Its digest is the compile-time
         // constant `digest of "{}"`, so skip the dict-build + JSON-encode +
         // SHA256 entirely.
-        guard !kwargs.isEmpty || reasoningEffort != nil else {
+        if emitsNoKwargs {
             return HTTPPrefixCacheConversation.defaultTemplateContextDigest
         }
         var object = Dictionary(
@@ -137,12 +145,19 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
     /// `chat_template_kwargs`) and in the Jinja template.
     static let reasoningEffortKwargName = "reasoning_effort"
 
+    /// Nothing to emit — the render and its digest are canonical. The one
+    /// emptiness predicate `digest` and `additionalContext(merging:)` share,
+    /// so the two can never disagree about canonicality.
+    private var emitsNoKwargs: Bool {
+        kwargs.isEmpty && reasoningEffort == nil
+    }
+
     /// The kwargs merged over a render's `additionalContext`. Identity for the
     /// canonical context — callers keep passing exactly what they pass today.
     func additionalContext(
         merging base: [String: any Sendable]? = nil
     ) -> [String: any Sendable]? {
-        guard !kwargs.isEmpty || reasoningEffort != nil else { return base }
+        if emitsNoKwargs { return base }
         var merged = base ?? [:]
         for (flag, value) in kwargs {
             merged[flag.rawValue] = value

@@ -299,8 +299,8 @@ private struct ServerPreserveThinkingSection: View {
 
 /// The legacy thinking-length cutoff (ADR-0060): the safeguard's budget
 /// trigger, settings-configurable for models *without* native
-/// reasoning-effort support. Effort-native models (Qwen3.8) ignore these
-/// controls — their thinking length is shaped by the `reasoning_effort`
+/// reasoning-effort support. Effort-native models (Qwen3.8 first) ignore
+/// these controls — their thinking length is shaped by the `reasoning_effort`
 /// kwarg, backed by a fixed anti-runaway ceiling — and the safeguard's
 /// repetition triggers stay armed for every model regardless.
 private struct ServerThinkingCutoffSection: View {
@@ -336,7 +336,7 @@ private struct ServerThinkingCutoffSection: View {
             Text("Thinking Cutoff")
         } footer: {
             Text(
-                "When a model without native reasoning-effort support thinks past this length, the server closes the thinking and asks it to answer. Models with native support (Qwen3.8) ignore this — set their depth with reasoning_effort or the agent's Reasoning Effort setting instead. Loop detection stays on for every model either way."
+                "When a model without native reasoning-effort support thinks past this length, the server closes the thinking and asks it to answer. Models with native support, such as Qwen3.8, ignore this — set their depth with reasoning_effort or the agent's Reasoning Effort setting instead. Loop detection stays on for every model either way."
             )
         }
     }

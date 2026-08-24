@@ -664,10 +664,8 @@ nonisolated final class ServerCompletion {
 
         let driver = ManagedGenerationDriver(
             parameters: parameters,
-            // An emitted `enable_thinking: false` swaps the generation prompt
-            // to a closed, empty think block — the stream then starts in the
-            // answer phase, whatever the template does by default.
-            startsInsideThinkBlock: promptStartsThinking && !renderContext.disablesThinking,
+            startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
+                promptStartsThinking: promptStartsThinking),
             logContext: "request_id=\(requestID.uuidString)"
         )
         let fullTokensForContinuation = mlxStart.fullTokens

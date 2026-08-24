@@ -164,14 +164,17 @@ nonisolated final class ThinkingRepetitionDetector {
     func ingest(chunk: String) -> Decision {
         guard config.enabled, !chunk.isEmpty else { return .continue }
 
+        // Post-chunk buffer size, computed once at the top: the grace gate
+        // reads it so a pattern already repeating during grace can fire on
+        // the same ingest that crosses the boundary, and the budget check
+        // screens on it cheaply.
+        let totalAfterChunk =
+            completedLines.count + pendingLine.count + chunk.count
+
         // Grace gate: state still updates during grace, but no trigger fires
         // until the accumulated buffer (including this chunk) clears the
-        // threshold. Computed once at the top using post-chunk size so a
-        // pattern already repeating during grace can fire on the same ingest
-        // that crosses the boundary.
-        let graceGate =
-            completedLines.count + pendingLine.count + chunk.count
-            >= config.minCharsBeforeIntervention
+        // threshold.
+        let graceGate = totalAfterChunk >= config.minCharsBeforeIntervention
 
         for char in chunk {
             if char == "\n" {
@@ -188,18 +191,21 @@ nonisolated final class ThinkingRepetitionDetector {
         // checked, so a loop that crosses both thresholds in one chunk keeps
         // the repetition rewind's tighter safe prefix.
         guard graceGate else {
-            return budgetDecision() ?? .continue
+            return budgetDecision(upperBound: totalAfterChunk) ?? .continue
         }
 
         if let decision = processNgrams() { return decision }
 
-        return budgetDecision() ?? .continue
+        return budgetDecision(upperBound: totalAfterChunk) ?? .continue
     }
 
     /// The budget trigger's check, shared by both sides of the grace gate:
     /// intervene once the accumulated thinking crosses `maxThinkingChars`.
-    private func budgetDecision() -> Decision? {
-        guard let limit = config.maxThinkingChars else { return nil }
+    /// `upperBound` is the caller's post-chunk size sum — appending can merge
+    /// graphemes but never split them, so while it stays below the limit the
+    /// real count does too and the O(n) recount is skipped.
+    private func budgetDecision(upperBound: Int) -> Decision? {
+        guard let limit = config.maxThinkingChars, upperBound >= limit else { return nil }
         let total = completedLines.count + pendingLine.count
         guard total >= limit else { return nil }
         let full = completedLines + pendingLine
@@ -370,23 +376,20 @@ extension ThinkingRepetitionDetector.Config {
     /// user-configurable; the repetition triggers stay armed regardless.
     static let nativeReasoningEffortBudgetChars = 65_536
 
-    /// The ADR-0060 split of the safeguard's budget trigger: an effort-native
-    /// model gets the fixed hidden ceiling (its thinking length is shaped by
-    /// the native `reasoning_effort` kwarg, not the cutoff); a non-native
-    /// model gets the user-configured legacy cutoff, or no budget at all when
-    /// the setting is off. The three repetition triggers are untouched —
-    /// loop pathology detection applies to every model. Callers apply this
-    /// *before* per-request `thinking_safeguard` overrides, which stay
-    /// authoritative.
-    mutating func applyThinkingBudgetPolicy(
-        nativeReasoningEffort: Bool,
-        cutoffEnabled: Bool,
-        cutoffChars: Int
-    ) {
-        if nativeReasoningEffort {
-            maxThinkingChars = Self.nativeReasoningEffortBudgetChars
-        } else {
-            maxThinkingChars = cutoffEnabled ? cutoffChars : nil
-        }
+    /// The legacy arm of the ADR-0060 budget split: a model *without* native
+    /// reasoning-effort support gets the user-configured cutoff, or no budget
+    /// at all when the setting is off. The three repetition triggers are
+    /// untouched — loop pathology detection applies to every model. Callers
+    /// apply either arm *before* per-request `thinking_safeguard` overrides,
+    /// which stay authoritative.
+    mutating func applyLegacyThinkingCutoff(enabled: Bool, chars: Int) {
+        maxThinkingChars = enabled ? chars : nil
+    }
+
+    /// The native arm of the ADR-0060 budget split: an effort-native model's
+    /// thinking length is shaped by the `reasoning_effort` kwarg, not the
+    /// cutoff, so its budget is only the fixed hidden anti-runaway ceiling.
+    mutating func applyNativeReasoningEffortCeiling() {
+        maxThinkingChars = Self.nativeReasoningEffortBudgetChars
     }
 }

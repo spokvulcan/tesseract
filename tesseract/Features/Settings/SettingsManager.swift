@@ -436,7 +436,10 @@ final class SettingsManager {
     /// kwarg is injected and the model template's own default applies.
     var agentReasoningEffort: ReasoningEffort? {
         get { ReasoningEffort(rawValue: agentReasoningEffortRaw) }
-        set { agentReasoningEffortRaw = newValue?.rawValue ?? "automatic" }
+        set {
+            agentReasoningEffortRaw =
+                newValue?.rawValue ?? SettingsCatalogue.agentReasoningEffortRaw.default
+        }
     }
 
     /// The legacy thinking-length cutoff switch (ADR-0060) — non-effort-native
@@ -722,10 +725,9 @@ final class SettingsManager {
         // ceiling for effort-declaring templates and resolves whether the
         // effort kwarg is emitted at all.
         parameters.reasoningEffort = agentReasoningEffort
-        parameters.thinkingSafeguard.applyThinkingBudgetPolicy(
-            nativeReasoningEffort: false,
-            cutoffEnabled: thinkingBudgetCutoffEnabled,
-            cutoffChars: thinkingBudgetCutoffChars
+        parameters.thinkingSafeguard.applyLegacyThinkingCutoff(
+            enabled: thinkingBudgetCutoffEnabled,
+            chars: thinkingBudgetCutoffChars
         )
         return parameters
     }

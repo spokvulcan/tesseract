@@ -438,18 +438,19 @@ struct CompletionHandler: Sendable {
         from request: OpenAI.ChatCompletionRequest,
         modelState: ServerInferenceModelState,
         userPreset: SamplingPreset = .automatic,
-        thinkingCutoffEnabled: Bool = true,
-        thinkingCutoffChars: Int = 16_384
+        thinkingCutoffEnabled: Bool = SettingsCatalogue.thinkingBudgetCutoffEnabled.default,
+        thinkingCutoffChars: Int = SettingsCatalogue.thinkingBudgetCutoffChars.default
     ) -> AgentGenerateParameters {
         var params = AgentGenerateParameters.forModel(modelState.modelID)
         params = userPreset.apply(to: params)
         // ADR-0060 budget split — before the vendor extension below, so an
         // explicit per-request `thinking_safeguard` stays authoritative.
-        params.thinkingSafeguard.applyThinkingBudgetPolicy(
-            nativeReasoningEffort: modelState.declaresReasoningEffort,
-            cutoffEnabled: thinkingCutoffEnabled,
-            cutoffChars: thinkingCutoffChars
-        )
+        if modelState.declaresReasoningEffort {
+            params.thinkingSafeguard.applyNativeReasoningEffortCeiling()
+        } else {
+            params.thinkingSafeguard.applyLegacyThinkingCutoff(
+                enabled: thinkingCutoffEnabled, chars: thinkingCutoffChars)
+        }
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
         if let topP = request.top_p { params.topP = Float(topP) }

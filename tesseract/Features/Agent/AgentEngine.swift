@@ -575,7 +575,8 @@ extension AgentEngine: ManagedInferenceStarting {
             input: input,
             toolSpecs: toolSpecs,
             parameters: parameters,
-            startsInsideThinkBlock: promptStartsThinking && !renderContext.disablesThinking,
+            startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
+                promptStartsThinking: promptStartsThinking),
             progressHandler: progressHandler
         )
     }

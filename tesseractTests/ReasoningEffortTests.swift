@@ -274,18 +274,15 @@ struct ReasoningEffortTests {
     @Test func budgetPolicySplitsNativeFromLegacy() {
         var config = ThinkingRepetitionDetector.Config()
 
-        config.applyThinkingBudgetPolicy(
-            nativeReasoningEffort: true, cutoffEnabled: true, cutoffChars: 4_096)
+        config.applyNativeReasoningEffortCeiling()
         #expect(
             config.maxThinkingChars
                 == ThinkingRepetitionDetector.Config.nativeReasoningEffortBudgetChars)
 
-        config.applyThinkingBudgetPolicy(
-            nativeReasoningEffort: false, cutoffEnabled: true, cutoffChars: 4_096)
+        config.applyLegacyThinkingCutoff(enabled: true, chars: 4_096)
         #expect(config.maxThinkingChars == 4_096)
 
-        config.applyThinkingBudgetPolicy(
-            nativeReasoningEffort: false, cutoffEnabled: false, cutoffChars: 4_096)
+        config.applyLegacyThinkingCutoff(enabled: false, chars: 4_096)
         #expect(config.maxThinkingChars == nil)
         // The repetition triggers are not the budget's business.
         #expect(config.enabled)
