@@ -147,6 +147,23 @@ struct CompletionHandler: Sendable {
             return
         }
 
+        // Vocabulary check before the lease (ADR-0060): an unknown
+        // `reasoning_effort` is a client error regardless of which model is
+        // loaded — on *either* channel, even the one precedence would ignore.
+        // Whether the loaded model honors the value is decided later,
+        // post-lease, from its template.
+        if let raw = Self.requestedReasoningEffortRawValues(completionRequest)
+            .first(where: { OpenAI.nativeReasoningEffort(fromWire: $0) == nil })
+        {
+            try await writer.send(
+                .badRequest(
+                    "Unsupported reasoning_effort '\(raw)'. Supported values: "
+                        + "\(OpenAI.supportedReasoningEffortWireValues). To disable "
+                        + "thinking, send chat_template_kwargs {\"enable_thinking\": false} instead."
+                ))
+            return
+        }
+
         // Pre-lease validation of `request.model`. If the client asked for a
         // model we can't serve, return 404 `model_not_found` immediately
         // without touching the arbiter queue. Downloaded + in-catalog models
@@ -299,14 +316,27 @@ struct CompletionHandler: Sendable {
         // the per-model setting is the fallback, and only template-declared
         // flags participate. The conversation digest and the render kwargs
         // both derive from this one value, so they can never disagree.
-        let appEnabledFlags: Set<TemplateRenderFlag> =
-            settings.preserveThinkingRender(modelID: modelState.modelID)
-            ? [.preserveThinking] : []
+        // `enable_thinking` has no app setting — absent from `appDesired`, it
+        // follows the template default and is emitted only on an explicit
+        // request value.
+        let requestedEffort = Self.requestedReasoningEffortRaw(request)
+            .flatMap(OpenAI.nativeReasoningEffort(fromWire:))
+        if requestedEffort != nil, !modelState.declaresReasoningEffort {
+            Log.server.info(
+                "reasoning_effort ignored — model=\(modelState.modelID) "
+                    + "template does not declare the kwarg"
+            )
+        }
         let renderContext = TemplateRenderContext.resolve(
             requestKwargs: request.chat_template_kwargs?.booleanFlags,
-            appEnabledFlags: appEnabledFlags,
+            appDesired: [
+                .preserveThinking: settings.preserveThinkingRender(modelID: modelState.modelID)
+            ],
             declaredFlags: modelState.declaredTemplateFlags,
-            templateDefaults: modelState.templateFlagDefaults
+            templateDefaults: modelState.templateFlagDefaults,
+            requestedReasoningEffort: requestedEffort,
+            declaresReasoningEffort: modelState.declaresReasoningEffort,
+            reasoningEffortTemplateDefault: modelState.reasoningEffortTemplateDefault
         )
         let normalized = MessageConverter.normalizeRequest(
             repairedRequest.messages,
@@ -320,7 +350,9 @@ struct CompletionHandler: Sendable {
         let params = Self.makeGenerateParameters(
             from: request,
             modelState: modelState,
-            userPreset: settings.samplingPreset
+            userPreset: settings.samplingPreset,
+            thinkingCutoffEnabled: settings.thinkingBudgetCutoffEnabled,
+            thinkingCutoffChars: settings.thinkingBudgetCutoffChars
         )
 
         Log.server.info(
@@ -379,14 +411,46 @@ struct CompletionHandler: Sendable {
         }
     }
 
+    /// The wire `reasoning_effort` for one request: the native
+    /// `chat_template_kwargs` channel wins over the OpenAI top-level field
+    /// (the same request-kwargs-first precedence the boolean flags use).
+    nonisolated static func requestedReasoningEffortRaw(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> String? {
+        requestedReasoningEffortRawValues(request).first
+    }
+
+    /// Every `reasoning_effort` value present on the wire, kwargs channel
+    /// first. Precedence uses the first; validation rejects an unknown value
+    /// on either channel, including the one precedence would ignore.
+    nonisolated static func requestedReasoningEffortRawValues(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> [String] {
+        [
+            request.chat_template_kwargs?
+                .stringValues[TemplateRenderContext.reasoningEffortKwargName],
+            request.reasoning_effort,
+        ].compactMap(\.self)
+    }
+
     @MainActor
     static func makeGenerateParameters(
         from request: OpenAI.ChatCompletionRequest,
         modelState: ServerInferenceModelState,
-        userPreset: SamplingPreset = .automatic
+        userPreset: SamplingPreset = .automatic,
+        thinkingCutoffEnabled: Bool = SettingsCatalogue.thinkingBudgetCutoffEnabled.default,
+        thinkingCutoffChars: Int = SettingsCatalogue.thinkingBudgetCutoffChars.default
     ) -> AgentGenerateParameters {
         var params = AgentGenerateParameters.forModel(modelState.modelID)
         params = userPreset.apply(to: params)
+        // ADR-0060 budget split — before the vendor extension below, so an
+        // explicit per-request `thinking_safeguard` stays authoritative.
+        if modelState.declaresReasoningEffort {
+            params.thinkingSafeguard.applyNativeReasoningEffortCeiling()
+        } else {
+            params.thinkingSafeguard.applyLegacyThinkingCutoff(
+                enabled: thinkingCutoffEnabled, chars: thinkingCutoffChars)
+        }
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
         if let topP = request.top_p { params.topP = Float(topP) }

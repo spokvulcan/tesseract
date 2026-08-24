@@ -193,6 +193,31 @@ enum SettingsCatalogue {
         Setting.bool(preserveThinkingRenderKeyPrefix + modelID, default: true)
     }
 
+    // MARK: - Reasoning Effort & Thinking Cutoff (ADR-0060)
+
+    /// The agent's **Reasoning Effort** level, as the raw picker value:
+    /// `"automatic"` (inject nothing — the model template's own default
+    /// applies) or a native level (`low`/`medium`/`xhigh`). Applies only to
+    /// models whose template declares the kwarg; changing it re-renders the
+    /// first system block, so the next turn re-prefills from token 0.
+    static let agentReasoningEffortRaw = Setting.string(
+        "agentReasoningEffort", default: "automatic")
+
+    /// The legacy thinking-length cutoff (the safeguard's budget trigger,
+    /// ADR-0060): applies only to models *without* native reasoning-effort
+    /// support. Effort-native models use a fixed anti-runaway ceiling
+    /// instead, and the safeguard's repetition triggers stay armed for every
+    /// model regardless of this switch.
+    static let thinkingBudgetCutoffEnabled = Setting.bool(
+        "thinkingBudgetCutoffEnabled", default: true)
+
+    /// The cutoff length in **characters** of accumulated thinking (the
+    /// detector measures decoded text, not tokens — see
+    /// `ThinkingRepetitionDetector`). Default 16_384 ≈ 4.5K tokens, the
+    /// long-standing safeguard default.
+    static let thinkingBudgetCutoffChars = Setting.int(
+        "thinkingBudgetCutoffChars", default: 16_384)
+
     // MARK: - Skill Pills (PRD #174)
 
     /// The "Show skill button" opt-out for the Skill Cluster above the agent

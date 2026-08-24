@@ -77,6 +77,16 @@ final class InferenceArbiter: InferenceArbitrating {
     /// Empty when nothing is loaded.
     var loadedTemplateFlagDefaults: [TemplateRenderFlag: Bool] { agentEngine.templateFlagDefaults }
 
+    /// Whether the loaded `.llm` model's template declares the **Reasoning
+    /// Effort** kwarg (ADR-0060). `false` when nothing is loaded.
+    var loadedDeclaresReasoningEffort: Bool { agentEngine.declaresReasoningEffort }
+
+    /// The loaded `.llm` model template's own default effort level. `nil`
+    /// when nothing is loaded.
+    var loadedReasoningEffortTemplateDefault: ReasoningEffort? {
+        agentEngine.reasoningEffortTemplateDefault
+    }
+
     /// Tool-call format of the loaded `.llm` model — the identity the server's
     /// Argument Transcoder keys off. `nil` when nothing is loaded or the model
     /// has no override (vendor JSON default).

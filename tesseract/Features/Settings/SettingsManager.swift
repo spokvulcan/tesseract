@@ -422,6 +422,43 @@ final class SettingsManager {
         set { speculationModeRaw = newValue.rawValue }
     }
 
+    // MARK: - Reasoning Effort & Thinking Cutoff (ADR-0060)
+
+    /// Raw picker value for the agent's **Reasoning Effort** —
+    /// `"automatic"` or a native level. See `agentReasoningEffort`.
+    var agentReasoningEffortRaw: String {
+        didSet {
+            SettingsCatalogue.agentReasoningEffortRaw.write(agentReasoningEffortRaw, to: store)
+        }
+    }
+
+    /// Typed view of `agentReasoningEffortRaw`: `nil` means Automatic — no
+    /// kwarg is injected and the model template's own default applies.
+    var agentReasoningEffort: ReasoningEffort? {
+        get { ReasoningEffort(rawValue: agentReasoningEffortRaw) }
+        set {
+            agentReasoningEffortRaw =
+                newValue?.rawValue ?? SettingsCatalogue.agentReasoningEffortRaw.default
+        }
+    }
+
+    /// The legacy thinking-length cutoff switch (ADR-0060) — non-effort-native
+    /// models only; repetition triggers stay armed regardless.
+    var thinkingBudgetCutoffEnabled: Bool {
+        didSet {
+            SettingsCatalogue.thinkingBudgetCutoffEnabled.write(
+                thinkingBudgetCutoffEnabled, to: store)
+        }
+    }
+
+    /// The cutoff length in characters of accumulated thinking.
+    var thinkingBudgetCutoffChars: Int {
+        didSet {
+            SettingsCatalogue.thinkingBudgetCutoffChars.write(
+                thinkingBudgetCutoffChars, to: store)
+        }
+    }
+
     // MARK: - Preserve-Thinking Render (issue #98)
 
     /// Per-model **Preserve-Thinking Render** opt-in. Method-based rather
@@ -633,6 +670,11 @@ final class SettingsManager {
         }
         self.speculationModeRaw = SettingsCatalogue.speculationModeRaw.load(from: store)
         self.showSkillPills = SettingsCatalogue.showSkillPills.load(from: store)
+        self.agentReasoningEffortRaw = SettingsCatalogue.agentReasoningEffortRaw.load(from: store)
+        self.thinkingBudgetCutoffEnabled = SettingsCatalogue.thinkingBudgetCutoffEnabled.load(
+            from: store)
+        self.thinkingBudgetCutoffChars = SettingsCatalogue.thinkingBudgetCutoffChars.load(
+            from: store)
         self.translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.load(from: store)
         self.isServerEnabled = SettingsCatalogue.isServerEnabled.load(from: store)
         self.serverPort = SettingsCatalogue.serverPort.load(from: store)
@@ -677,6 +719,16 @@ final class SettingsManager {
     func makeAgentGenerateParameters() -> AgentGenerateParameters {
         var parameters = AgentGenerateParameters.forModel(selectedAgentModelID)
         parameters = samplingPreset.apply(to: parameters)
+        // ADR-0060: the effort desire and the *non-native* budget base ride
+        // the parameters; the internal routing edge — where the loaded
+        // model's identity is known — raises the budget to the fixed native
+        // ceiling for effort-declaring templates and resolves whether the
+        // effort kwarg is emitted at all.
+        parameters.reasoningEffort = agentReasoningEffort
+        parameters.thinkingSafeguard.applyLegacyThinkingCutoff(
+            enabled: thinkingBudgetCutoffEnabled,
+            chars: thinkingBudgetCutoffChars
+        )
         return parameters
     }
 
@@ -766,6 +818,9 @@ final class SettingsManager {
         translateTargetLanguage = SettingsCatalogue.translateTargetLanguage.default
         overlayVariantRaw = SettingsCatalogue.overlayVariantRaw.default
         samplingPresetRaw = SettingsCatalogue.samplingPresetRaw.default
+        agentReasoningEffortRaw = SettingsCatalogue.agentReasoningEffortRaw.default
+        thinkingBudgetCutoffEnabled = SettingsCatalogue.thinkingBudgetCutoffEnabled.default
+        thinkingBudgetCutoffChars = SettingsCatalogue.thinkingBudgetCutoffChars.default
         isServerEnabled = SettingsCatalogue.isServerEnabled.default
         serverPort = SettingsCatalogue.serverPort.default
         browserMCPServerEnabled = SettingsCatalogue.browserMCPServerEnabled.default

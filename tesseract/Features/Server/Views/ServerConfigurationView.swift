@@ -127,6 +127,8 @@ struct ServerConfigurationView: View {
             ServerPromptCacheBudgetSection()
 
             ServerPreserveThinkingSection()
+
+            ServerThinkingCutoffSection()
         }
         .formStyle(.grouped)
         .navigationTitle("Configuration")
@@ -292,5 +294,59 @@ private struct ServerPreserveThinkingSection: View {
         }
         guard !Task.isCancelled else { return }
         supportingModelIDs = supporting
+    }
+}
+
+/// The legacy thinking-length cutoff (ADR-0060): the safeguard's budget
+/// trigger, settings-configurable for models *without* native
+/// reasoning-effort support. Effort-native models (Qwen3.8 first) ignore
+/// these controls — their thinking length is shaped by the `reasoning_effort`
+/// kwarg, backed by a fixed anti-runaway ceiling — and the safeguard's
+/// repetition triggers stay armed for every model regardless.
+private struct ServerThinkingCutoffSection: View {
+    @Environment(SettingsManager.self) private var settings
+
+    /// Cutoff choices in characters (the detector measures decoded text, not
+    /// tokens), labeled with the ≈token size at Qwen's ~3.6 chars/token.
+    private static let cutoffChoices: [(chars: Int, label: String)] = [
+        (4_096, "4,096 characters (≈1K tokens)"),
+        (8_192, "8,192 characters (≈2K tokens)"),
+        (16_384, "16,384 characters (≈4.5K tokens)"),
+        (32_768, "32,768 characters (≈9K tokens)"),
+        (65_536, "65,536 characters (≈18K tokens)"),
+    ]
+
+    var body: some View {
+        @Bindable var settings = settings
+        Section {
+            Toggle("Limit Thinking Length", isOn: $settings.thinkingBudgetCutoffEnabled)
+            if settings.thinkingBudgetCutoffEnabled {
+                Picker("Maximum Thinking", selection: $settings.thinkingBudgetCutoffChars) {
+                    // A persisted custom value outside the preset list still
+                    // renders (and stays selected) rather than blanking the
+                    // picker — same rule as the prompt-cache cap pickers.
+                    let choices = Self.resolvedChoices(
+                        current: settings.thinkingBudgetCutoffChars)
+                    ForEach(choices, id: \.chars) { choice in
+                        Text(choice.label).tag(choice.chars)
+                    }
+                }
+            }
+        } header: {
+            Text("Thinking Cutoff")
+        } footer: {
+            Text(
+                "When a model without native reasoning-effort support thinks past this length, the server closes the thinking and asks it to answer. Models with native support, such as Qwen3.8, ignore this — set their depth with reasoning_effort or the agent's Reasoning Effort setting instead. Loop detection stays on for every model either way."
+            )
+        }
+    }
+
+    private static func resolvedChoices(current: Int) -> [(chars: Int, label: String)] {
+        var choices = cutoffChoices
+        if !choices.contains(where: { $0.chars == current }) {
+            choices.append((current, "\(current) characters"))
+            choices.sort { $0.chars < $1.chars }
+        }
+        return choices
     }
 }

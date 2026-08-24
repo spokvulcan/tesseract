@@ -5,7 +5,8 @@ private nonisolated func makeInternalInferenceStream(
     inferenceService: ServerInferenceService,
     parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters,
     requestBuilder:
-        @escaping @MainActor @Sendable (AgentGenerateParameters) -> ServerInferenceRequest
+        @escaping @MainActor @Sendable (AgentGenerateParameters, ServerInferenceModelState?)
+        -> ServerInferenceRequest
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
     let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
     let cancelHandle = OSAllocatedUnfairLock<@Sendable () -> Void>(initialState: {})
@@ -13,8 +14,18 @@ private nonisolated func makeInternalInferenceStream(
     let task = Task { @MainActor in
         var start: ServerInferenceStart?
         do {
-            let parameters = parametersProvider()
-            start = try await inferenceService.start(requestBuilder(parameters))
+            var parameters = parametersProvider()
+            // The internal edge's half of the ADR-0060 budget split: the
+            // provider set the non-native base from settings; an
+            // effort-native loaded model gets the fixed anti-runaway
+            // ceiling instead. The agent's own runs execute inside the GPU
+            // lease with the model loaded, so the state is present here; a
+            // `nil` state (defensive) keeps the non-native base.
+            let modelState = inferenceService.currentModelState()
+            if modelState?.declaresReasoningEffort == true {
+                parameters.thinkingSafeguard.applyNativeReasoningEffortCeiling()
+            }
+            start = try await inferenceService.start(requestBuilder(parameters, modelState))
 
             if let cancel = start?.cancel {
                 cancelHandle.withLock { $0 = cancel }
@@ -65,8 +76,21 @@ nonisolated func makeServerInferenceGenerateClosure(
         makeInternalInferenceStream(
             inferenceService: inferenceService,
             parametersProvider: parametersProvider,
-            requestBuilder: { parameters in
+            requestBuilder: { parameters, modelState in
                 let toolSpecs = tools?.map(\.toolSpec)
+                // The agent path's render context is canonical plus the
+                // **Reasoning Effort** desire (ADR-0060): no boolean-flag
+                // kwargs (today's exact renders), the effort emitted only
+                // when the loaded template declares the kwarg and the
+                // desired level differs from its default.
+                let renderContext = TemplateRenderContext.resolve(
+                    requestKwargs: nil,
+                    appDesired: [:],
+                    declaredFlags: [],
+                    requestedReasoningEffort: parameters.reasoningEffort,
+                    declaresReasoningEffort: modelState?.declaresReasoningEffort ?? false,
+                    reasoningEffortTemplateDefault: modelState?.reasoningEffortTemplateDefault
+                )
                 return ServerInferenceRequest(
                     input: .chat(
                         .init(
@@ -76,8 +100,10 @@ nonisolated func makeServerInferenceGenerateClosure(
                             prefixCacheConversation: AgentConversationBuilder.conversation(
                                 systemPrompt: systemPrompt,
                                 messages: messages,
-                                toolSpecs: toolSpecs
+                                toolSpecs: toolSpecs,
+                                templateContextDigest: renderContext.digest
                             ),
+                            templateRenderContext: renderContext,
                             // The agent's own history keeps the safeguard's
                             // truncated reasoning (`AssistantPartsBuilder`), so
                             // its echo is the final-message form, not the
@@ -103,7 +129,7 @@ nonisolated func makeSummarizeClosure(
         let stream = makeInternalInferenceStream(
             inferenceService: inferenceService,
             parametersProvider: parametersProvider,
-            requestBuilder: { parameters in
+            requestBuilder: { parameters, _ in
                 ServerInferenceRequest(
                     input: .prompt(prompt),
                     parameters: parameters

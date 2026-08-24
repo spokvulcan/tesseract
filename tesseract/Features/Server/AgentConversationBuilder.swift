@@ -21,7 +21,8 @@ nonisolated enum AgentConversationBuilder {
     static func conversation(
         systemPrompt: String,
         messages: [LLMMessage],
-        toolSpecs: [ToolSpec]?
+        toolSpecs: [ToolSpec]?,
+        templateContextDigest: String = HTTPPrefixCacheConversation.defaultTemplateContextDigest
     ) -> HTTPPrefixCacheConversation? {
         var converted: [HTTPPrefixCacheMessage] = []
         converted.reserveCapacity(messages.count)
@@ -69,7 +70,8 @@ nonisolated enum AgentConversationBuilder {
         return HTTPPrefixCacheConversation(
             systemPrompt: systemPrompt,
             messages: converted,
-            toolDefinitionsDigest: toolSpecsDigest(toolSpecs)
+            toolDefinitionsDigest: toolSpecsDigest(toolSpecs),
+            templateContextDigest: templateContextDigest
         )
     }
 

@@ -31,6 +31,13 @@ nonisolated enum OpenAI {
         /// context. Plumbs directly through to MLX `GenerateParameters`.
         var frequency_penalty: Double?
         var repetition_penalty: Double?
+        /// OpenAI-standard reasoning-effort level (ADR-0060). Accepts the
+        /// union of the OpenAI and Qwen vocabularies — see
+        /// ``OpenAI/nativeReasoningEffort(fromWire:)`` — mapped to the
+        /// model's native levels; unknown values 400 before the lease. A
+        /// `reasoning_effort` inside `chat_template_kwargs` (the native
+        /// channel) wins over this field. Ignored, with a log line, for
+        /// models whose template does not declare the kwarg.
         var reasoning_effort: String?
         var stream_options: StreamOptions?
         var stop: StopSequence?
@@ -67,15 +74,18 @@ nonisolated enum OpenAI {
     }
 
     /// Lenient carrier for `chat_template_kwargs`: keeps the boolean flags
-    /// and silently drops values of any other JSON type, so a client sending
-    /// kwargs we don't model (strings, numbers, objects) never 400s the
-    /// request. The allowlisting against template-declared flags happens
-    /// later, in `TemplateRenderContext.resolve`.
+    /// and string values, and silently drops values of any other JSON type,
+    /// so a client sending kwargs we don't model (numbers, objects) never
+    /// 400s the request. The allowlisting against template-declared flags
+    /// happens later, in `TemplateRenderContext.resolve`; the one modeled
+    /// string kwarg is `reasoning_effort` (ADR-0060).
     struct ChatTemplateKwargs: Codable, Sendable, Equatable {
         let booleanFlags: [String: Bool]
+        let stringValues: [String: String]
 
-        init(booleanFlags: [String: Bool]) {
+        init(booleanFlags: [String: Bool], stringValues: [String: String] = [:]) {
             self.booleanFlags = booleanFlags
+            self.stringValues = stringValues
         }
 
         init(from decoder: Decoder) throws {
@@ -85,15 +95,47 @@ nonisolated enum OpenAI {
             // (see the type doc above: a value we don't model never 400s).
             guard let values = try? [String: AnyCodableValue](from: decoder) else {
                 self.booleanFlags = [:]
+                self.stringValues = [:]
                 return
             }
             self.booleanFlags = values.compactMapValues(\.boolValue)
+            self.stringValues = values.compactMapValues(\.stringValue)
         }
 
         func encode(to encoder: Encoder) throws {
-            try booleanFlags.encode(to: encoder)
+            var merged = booleanFlags.mapValues(AnyCodableValue.bool)
+            for (key, value) in stringValues {
+                merged[key] = .string(value)
+            }
+            try merged.encode(to: encoder)
         }
     }
+
+    /// The wire→native `reasoning_effort` vocabulary (ADR-0060): the union of
+    /// the OpenAI levels (`minimal`/`low`/`medium`/`high`) and the Qwen ones
+    /// (`low`/`medium`/`xhigh`) — both top levels map to the native top,
+    /// `minimal` to the native floor. The single source for both the lookup
+    /// and the 400 message's accepted-values list, so they can never
+    /// disagree. Absence means unsupported — the request 400s (including
+    /// `"none"`: thinking-off is the separate `enable_thinking: false`
+    /// template kwarg, not an effort level).
+    static let wireReasoningEffortLevels: [(wire: String, native: ReasoningEffort)] = [
+        ("minimal", .low),
+        ("low", .low),
+        ("medium", .medium),
+        ("high", .xhigh),
+        ("xhigh", .xhigh),
+    ]
+
+    /// Map one wire `reasoning_effort` string to the model's native level;
+    /// `nil` is the 400 case. See ``wireReasoningEffortLevels``.
+    static func nativeReasoningEffort(fromWire raw: String) -> ReasoningEffort? {
+        wireReasoningEffortLevels.first { $0.wire == raw }?.native
+    }
+
+    /// The accepted `reasoning_effort` wire values, for the 400 message.
+    static let supportedReasoningEffortWireValues =
+        wireReasoningEffortLevels.map { $0.wire }.joined(separator: ", ")
 
     enum StopSequence: Codable, Sendable {
         case single(String)

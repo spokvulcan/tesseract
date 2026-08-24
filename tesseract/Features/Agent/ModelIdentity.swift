@@ -91,11 +91,26 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// The template-default value of each declared render flag — the state the
     /// template renders when the kwarg is absent. Qwen3.6 strips prior think
     /// blocks unless `preserve_thinking is true` (default `false`); Nanbeige4.2
-    /// preserves them unless `preserve_thinking is false` (default `true`).
-    /// `TemplateRenderContext.resolve` emits a kwarg only where the desired
-    /// state differs from this default, so neither polarity fragments the
-    /// cache partition for a render the template would produce anyway.
+    /// preserves them unless `preserve_thinking is false` (default `true`);
+    /// Qwen3.8 preserves them when `preserve_thinking is undefined or … is
+    /// true` (default `true`). `TemplateRenderContext.resolve` emits a kwarg
+    /// only where the desired state differs from this default, so neither
+    /// polarity fragments the cache partition for a render the template would
+    /// produce anyway.
     let templateFlagDefaults: [TemplateRenderFlag: Bool]
+
+    /// Whether the chat template declares the string-valued **Reasoning
+    /// Effort** kwarg (`reasoning_effort`, ADR-0060) — the capability gate for
+    /// native reasoning-effort support, by template introspection exactly like
+    /// `declaredTemplateFlags`. Qwen3.8 declares it; earlier templates do not.
+    let declaresReasoningEffort: Bool
+
+    /// The effort level the template renders when the kwarg is absent, parsed
+    /// from its `reasoning_effort|default('…')` expression (`xhigh` for
+    /// Qwen3.8). `nil` when the template does not declare the kwarg or the
+    /// default is unparseable — resolution then emits any requested level
+    /// explicitly rather than assuming a default.
+    let reasoningEffortTemplateDefault: ReasoningEffort?
 
     /// FLOP/state-size profile the eviction policy scores against. **Total**:
     /// a non-Qwen3.5 or unparseable config yields `ModelFlopProfile.fallback`,
@@ -143,11 +158,24 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.isQwen35 = modelType?.hasPrefix("qwen3_5") ?? false
         self.isMoE = modelType == "qwen3_5_moe"
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
-        let declaredFlags = Self.interpretDeclaredTemplateFlags(chatTemplate: chatTemplate)
+        // Comment-strip once; every declaration/default interpreter scans the
+        // same stripped text (a flag named only in `{# … #}` never counts).
+        let scannableTemplate = chatTemplate.map(Self.stripJinjaComments)
+        let declaredFlags = Self.interpretDeclaredTemplateFlags(
+            scannableTemplate: scannableTemplate
+        )
         self.declaredTemplateFlags = declaredFlags
         self.templateFlagDefaults = Self.interpretTemplateFlagDefaults(
-            chatTemplate: chatTemplate, declaredFlags: declaredFlags
+            scannableTemplate: scannableTemplate, declaredFlags: declaredFlags
         )
+        let declaresEffort = Self.interpretDeclaresReasoningEffort(
+            scannableTemplate: scannableTemplate
+        )
+        self.declaresReasoningEffort = declaresEffort
+        self.reasoningEffortTemplateDefault =
+            declaresEffort
+            ? Self.interpretReasoningEffortTemplateDefault(scannableTemplate: scannableTemplate)
+            : nil
         self.flopProfile = Self.interpretFlopProfile(configJSON: configJSON)
         self.fullAttentionScratchProfile = Self.interpretFullAttentionScratchProfile(
             configJSON: configJSON
@@ -185,50 +213,86 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// cannot change the render. Only known flags are probed; arbitrary
     /// kwargs never become capabilities.
     private static func interpretDeclaredTemplateFlags(
-        chatTemplate: String?
+        scannableTemplate: String?
     ) -> Set<TemplateRenderFlag> {
-        guard let chatTemplate else { return [] }
+        guard let scannableTemplate else { return [] }
         // A flag is declared only when the template *references the variable*,
-        // not merely mentions the string. Strip Jinja comments so a flag named
-        // only in `{# … #}` doesn't count, then require an identifier-boundary
-        // match so a longer name (`preserve_thinking_default`) isn't a false
-        // positive. A bare `contains` over-declares the capability and forks a
-        // zero-reuse cache partition for a render the template never branches on.
-        let scannable = stripJinjaComments(chatTemplate)
+        // not merely mentions the string: an identifier-boundary match so a
+        // longer name (`preserve_thinking_default`) isn't a false positive. A
+        // bare `contains` over-declares the capability and forks a zero-reuse
+        // cache partition for a render the template never branches on.
         return Set(
             TemplateRenderFlag.allCases.filter {
-                referencesIdentifier($0.rawValue, in: scannable)
+                referencesIdentifier($0.rawValue, in: scannableTemplate)
             })
     }
 
     /// Interpret each declared flag's template-default value from the shape of
-    /// the template's own test. A template that branches on
-    /// `preserve_thinking is false` only changes its render when handed an
-    /// explicit `false` — so its default is to preserve (`true`). The Qwen3.6
-    /// shape (`preserve_thinking is true`) defaults to strip (`false`), as
-    /// does a bare truthiness test, where an absent kwarg is falsy.
+    /// the template's own test. Two shapes read as default-`true`:
+    /// - `<flag> is false` (Nanbeige4.2) — the branch only changes the render
+    ///   on an explicit `false`, so an absent kwarg means enabled.
+    /// - `<flag> is undefined or <flag> is true` (Qwen3.8) — the enabling
+    ///   branch fires when the kwarg is absent.
+    /// The Qwen3.6 shape (`<flag> is defined and <flag> is true`) defaults to
+    /// `false`, as does a bare truthiness test, where an absent kwarg is falsy.
     private static func interpretTemplateFlagDefaults(
-        chatTemplate: String?,
+        scannableTemplate: String?,
         declaredFlags: Set<TemplateRenderFlag>
     ) -> [TemplateRenderFlag: Bool] {
-        guard let chatTemplate, !declaredFlags.isEmpty else { return [:] }
-        let scannable = stripJinjaComments(chatTemplate)
+        guard let scannable = scannableTemplate, !declaredFlags.isEmpty else { return [:] }
         return Dictionary(
             uniqueKeysWithValues: declaredFlags.map { flag in
-                let pattern =
-                    "(?<![A-Za-z0-9_])"
-                    + NSRegularExpression.escapedPattern(for: flag.rawValue)
-                    + "\\s+is\\s+false(?![A-Za-z0-9_])"
-                let matchesIsFalse =
-                    (try? NSRegularExpression(pattern: pattern))
-                    .map {
-                        $0.firstMatch(
-                            in: scannable,
-                            range: NSRange(scannable.startIndex..., in: scannable)
-                        ) != nil
-                    } ?? false
-                return (flag, matchesIsFalse)
+                let name = NSRegularExpression.escapedPattern(for: flag.rawValue)
+                let isFalsePattern =
+                    "(?<![A-Za-z0-9_])" + name + "\\s+is\\s+false(?![A-Za-z0-9_])"
+                let undefinedOrTruePattern =
+                    "(?<![A-Za-z0-9_])" + name + "\\s+is\\s+undefined\\s+or\\s+"
+                    + name + "\\s+is\\s+true(?![A-Za-z0-9_])"
+                let defaultsTrue =
+                    matches(pattern: isFalsePattern, in: scannable)
+                    || matches(pattern: undefinedOrTruePattern, in: scannable)
+                return (flag, defaultsTrue)
             })
+    }
+
+    private static func matches(pattern: String, in text: String) -> Bool {
+        (try? NSRegularExpression(pattern: pattern))
+            .map {
+                $0.firstMatch(
+                    in: text,
+                    range: NSRange(text.startIndex..., in: text)
+                ) != nil
+            } ?? false
+    }
+
+    /// The **Reasoning Effort** capability (ADR-0060): declared when the
+    /// comment-stripped template references the `reasoning_effort` identifier —
+    /// the same introspection rule as `interpretDeclaredTemplateFlags`.
+    private static func interpretDeclaresReasoningEffort(scannableTemplate: String?) -> Bool {
+        guard let scannableTemplate else { return false }
+        return referencesIdentifier(
+            TemplateRenderContext.reasoningEffortKwargName,
+            in: scannableTemplate
+        )
+    }
+
+    /// Parse the template's own default effort level from its
+    /// `reasoning_effort|default('xhigh')` expression. `nil` when the shape is
+    /// unrecognized — callers then emit any requested level explicitly.
+    private static func interpretReasoningEffortTemplateDefault(
+        scannableTemplate: String?
+    ) -> ReasoningEffort? {
+        guard let scannable = scannableTemplate else { return nil }
+        let pattern =
+            "(?<![A-Za-z0-9_])" + TemplateRenderContext.reasoningEffortKwargName
+            + "\\s*\\|\\s*default\\(\\s*'([a-z]+)'\\s*\\)"
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+            let match = regex.firstMatch(
+                in: scannable, range: NSRange(scannable.startIndex..., in: scannable)
+            ),
+            let range = Range(match.range(at: 1), in: scannable)
+        else { return nil }
+        return ReasoningEffort(rawValue: String(scannable[range]))
     }
 
     /// Remove `{# … #}` Jinja comment blocks (non-greedy, spanning newlines)
@@ -387,8 +451,8 @@ extension ModelIdentity {
     /// `init(directory:)` reads `chat_template.jinja` + `config.json` from disk,
     /// so the probe runs off the MainActor (ADR-0001) — a view can `await` it
     /// without stuttering while opening or switching a settings pane. The single
-    /// home for the template-flag capability probe shared by the agent-preferences
-    /// and server-configuration **Preserve-Thinking Render** toggles (issue #98).
+    /// home for the single-flag capability probe (issue #98); a view that needs
+    /// several capabilities for one model constructs the identity once instead.
     static func declares(
         _ flag: TemplateRenderFlag,
         atDirectory directory: URL

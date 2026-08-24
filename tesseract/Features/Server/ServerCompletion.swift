@@ -664,7 +664,8 @@ nonisolated final class ServerCompletion {
 
         let driver = ManagedGenerationDriver(
             parameters: parameters,
-            startsInsideThinkBlock: promptStartsThinking,
+            startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
+                promptStartsThinking: promptStartsThinking),
             logContext: "request_id=\(requestID.uuidString)"
         )
         let fullTokensForContinuation = mlxStart.fullTokens

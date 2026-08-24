@@ -15,6 +15,7 @@ struct AgentSettingsPane: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var container: DependencyContainer
     @State private var selectedAgentModelDeclaresPreserveThinking = false
+    @State private var selectedAgentModelDeclaresReasoningEffort = false
     /// The one-time launch-at-login ask (ADR-0040 §3), raised on first enable.
     @State private var showingLaunchAtLoginAsk = false
 
@@ -125,6 +126,15 @@ struct AgentSettingsPane: View {
                             }
                         ))
                 }
+
+                if selectedAgentModelDeclaresReasoningEffort {
+                    Picker("Reasoning Effort", selection: $settings.agentReasoningEffort) {
+                        Text("Automatic (model default)").tag(ReasoningEffort?.none)
+                        Text("Low").tag(ReasoningEffort?.some(.low))
+                        Text("Medium").tag(ReasoningEffort?.some(.medium))
+                        Text("Extra High").tag(ReasoningEffort?.some(.xhigh))
+                    }
+                }
             }
 
             Button("Manage Models…") {
@@ -141,10 +151,17 @@ struct AgentSettingsPane: View {
         } header: {
             Text("Model")
         } footer: {
-            if selectedAgentModelDeclaresPreserveThinking {
-                Text(
-                    "Preserve Thinking keeps each turn's thinking in the prompt so follow-up requests reuse the cache instead of re-reading the conversation. Uses more context window. Applies to new conversations."
-                )
+            VStack(alignment: .leading, spacing: 4) {
+                if selectedAgentModelDeclaresPreserveThinking {
+                    Text(
+                        "Preserve Thinking keeps each turn's thinking in the prompt so follow-up requests reuse the cache instead of re-reading the conversation. Uses more context window. Applies to new conversations."
+                    )
+                }
+                if selectedAgentModelDeclaresReasoningEffort {
+                    Text(
+                        "Reasoning Effort sets how deeply the model thinks before answering. Automatic uses the model's own default (Extra High for Qwen3.8). Changing it rewrites the start of the prompt, so the next turn re-reads the conversation once."
+                    )
+                }
             }
         }
     }
@@ -335,10 +352,11 @@ struct AgentSettingsPane: View {
         }
     }
 
-    /// `ModelIdentity.declares` runs the disk-reading probe off the MainActor
-    /// (ADR-0001) so opening or switching the pane can't stutter. Publish back
-    /// only while the same model is still selected, so a slow read for a
-    /// since-deselected model can't clobber a newer answer.
+    /// One disk-reading `ModelIdentity` construction off the MainActor
+    /// (ADR-0001) yields every template capability the pane shows, so opening
+    /// or switching the pane can't stutter and the template is parsed once.
+    /// Publish back only while the same model is still selected, so a slow
+    /// read for a since-deselected model can't clobber a newer answer.
     private func refreshSelectedAgentModelCapabilities() {
         guard case .downloaded = selectedAgentModelStatus,
             let directory = container.modelDownloadManager.modelPath(
@@ -346,15 +364,21 @@ struct AgentSettingsPane: View {
             )
         else {
             selectedAgentModelDeclaresPreserveThinking = false
+            selectedAgentModelDeclaresReasoningEffort = false
             return
         }
         let modelID = settings.selectedAgentModelID
         Task {
-            let declares = await ModelIdentity.declares(
-                .preserveThinking, atDirectory: directory
-            )
+            let (declaresPreserve, declaresEffort) = await Task.detached {
+                let identity = ModelIdentity(directory: directory)
+                return (
+                    identity.declaredTemplateFlags.contains(.preserveThinking),
+                    identity.declaresReasoningEffort
+                )
+            }.value
             guard settings.selectedAgentModelID == modelID else { return }
-            selectedAgentModelDeclaresPreserveThinking = declares
+            selectedAgentModelDeclaresPreserveThinking = declaresPreserve
+            selectedAgentModelDeclaresReasoningEffort = declaresEffort
         }
     }
 }

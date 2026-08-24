@@ -57,11 +57,12 @@ nonisolated final class ThinkingRepetitionDetector {
         /// Raise or set to `nil` for tasks that legitimately need longer
         /// reasoning; lower for tighter worst-case latency.
         var maxThinkingChars: Int? = 16_384
-        /// Minimum accumulated thinking-content chars before ANY repetition
-        /// signal (line-repeat, n-gram, budget) is allowed to fire. Detector
-        /// state still updates during the grace period — only the trigger
-        /// decision is gated — so a pattern that was already repeating can
-        /// fire on the first post-grace ingest.
+        /// Minimum accumulated thinking-content chars before any *repetition*
+        /// signal (line-repeat, starter, n-gram) is allowed to fire — the
+        /// budget trigger is its own absolute threshold and ignores this
+        /// grace (ADR-0060). Detector state still updates during the grace
+        /// period — only the trigger decision is gated — so a pattern that
+        /// was already repeating can fire on the first post-grace ingest.
         ///
         /// Default `8_192` (~2K tokens at Qwen3.5's ~3.6 chars/token).
         /// Structured reasoning on multi-field extraction tasks routinely
@@ -163,14 +164,17 @@ nonisolated final class ThinkingRepetitionDetector {
     func ingest(chunk: String) -> Decision {
         guard config.enabled, !chunk.isEmpty else { return .continue }
 
+        // Post-chunk buffer size, computed once at the top: the grace gate
+        // reads it so a pattern already repeating during grace can fire on
+        // the same ingest that crosses the boundary, and the budget check
+        // screens on it cheaply.
+        let totalAfterChunk =
+            completedLines.count + pendingLine.count + chunk.count
+
         // Grace gate: state still updates during grace, but no trigger fires
         // until the accumulated buffer (including this chunk) clears the
-        // threshold. Computed once at the top using post-chunk size so a
-        // pattern already repeating during grace can fire on the same ingest
-        // that crosses the boundary.
-        let graceGate =
-            completedLines.count + pendingLine.count + chunk.count
-            >= config.minCharsBeforeIntervention
+        // threshold.
+        let graceGate = totalAfterChunk >= config.minCharsBeforeIntervention
 
         for char in chunk {
             if char == "\n" {
@@ -180,23 +184,35 @@ nonisolated final class ThinkingRepetitionDetector {
             }
         }
 
-        guard graceGate else { return .continue }
+        // The budget trigger is its own absolute threshold, deliberately
+        // outside the repetition heuristics' grace period (ADR-0060): a
+        // cutoff configured below `minCharsBeforeIntervention` still cuts at
+        // the configured length. Past the grace it stays the *last* trigger
+        // checked, so a loop that crosses both thresholds in one chunk keeps
+        // the repetition rewind's tighter safe prefix.
+        guard graceGate else {
+            return budgetDecision(upperBound: totalAfterChunk) ?? .continue
+        }
 
         if let decision = processNgrams() { return decision }
 
-        if let limit = config.maxThinkingChars {
-            let total = completedLines.count + pendingLine.count
-            if total >= limit {
-                let full = completedLines + pendingLine
-                return .intervene(
-                    reason: .budgetExceeded,
-                    safePrefix: Self.backtrackToLineBoundary(
-                        String(full.prefix(limit)))
-                )
-            }
-        }
+        return budgetDecision(upperBound: totalAfterChunk) ?? .continue
+    }
 
-        return .continue
+    /// The budget trigger's check, shared by both sides of the grace gate:
+    /// intervene once the accumulated thinking crosses `maxThinkingChars`.
+    /// `upperBound` is the caller's post-chunk size sum — appending can merge
+    /// graphemes but never split them, so while it stays below the limit the
+    /// real count does too and the O(n) recount is skipped.
+    private func budgetDecision(upperBound: Int) -> Decision? {
+        guard let limit = config.maxThinkingChars, upperBound >= limit else { return nil }
+        let total = completedLines.count + pendingLine.count
+        guard total >= limit else { return nil }
+        let full = completedLines + pendingLine
+        return .intervene(
+            reason: .budgetExceeded,
+            safePrefix: Self.backtrackToLineBoundary(String(full.prefix(limit)))
+        )
     }
 
     func reset() {
@@ -349,5 +365,31 @@ nonisolated final class ThinkingRepetitionDetector {
             i = window.index(after: i)
         }
         return nil
+    }
+}
+
+extension ThinkingRepetitionDetector.Config {
+    /// The fixed anti-runaway ceiling for models with native reasoning-effort
+    /// support (ADR-0060): ≈18K thinking tokens at Qwen's ~3.6 chars/token —
+    /// roughly 4× the legacy cutoff, far above anything a native `xhigh`
+    /// think produces on purpose, so it only ever catches pathology. Not
+    /// user-configurable; the repetition triggers stay armed regardless.
+    static let nativeReasoningEffortBudgetChars = 65_536
+
+    /// The legacy arm of the ADR-0060 budget split: a model *without* native
+    /// reasoning-effort support gets the user-configured cutoff, or no budget
+    /// at all when the setting is off. The three repetition triggers are
+    /// untouched — loop pathology detection applies to every model. Callers
+    /// apply either arm *before* per-request `thinking_safeguard` overrides,
+    /// which stay authoritative.
+    mutating func applyLegacyThinkingCutoff(enabled: Bool, chars: Int) {
+        maxThinkingChars = enabled ? chars : nil
+    }
+
+    /// The native arm of the ADR-0060 budget split: an effort-native model's
+    /// thinking length is shaped by the `reasoning_effort` kwarg, not the
+    /// cutoff, so its budget is only the fixed hidden anti-runaway ceiling.
+    mutating func applyNativeReasoningEffortCeiling() {
+        maxThinkingChars = Self.nativeReasoningEffortBudgetChars
     }
 }
