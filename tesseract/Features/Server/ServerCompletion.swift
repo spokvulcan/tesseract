@@ -600,7 +600,7 @@ nonisolated final class ServerCompletion {
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler? = nil,
-        clientStreams: Bool = true
+        clientStreams: Bool
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
 
@@ -924,11 +924,8 @@ nonisolated final class ServerCompletion {
             // falls through to the request-end recordRequest call below — the
             // alpha tuner needs to see every request, not just the ones whose
             // leaf store completed.
-            // The leaf must match what THIS client will echo back: a streaming
-            // client assembled its reasoning from forwarded deltas (which a
-            // thinking-safeguard truncate cannot retract), a non-streaming
-            // client reads the final message built from the accumulator. The
-            // two differ only on intervened turns.
+            // The leaf keys on what THIS client will echo back — see
+            // `GenerationAccumulator.streamedThinking`.
             let leafResult = try await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,

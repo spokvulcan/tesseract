@@ -167,7 +167,6 @@ nonisolated struct GenerationStreamLoopTests {
             !recorder.events.contains { if case .info = $0 { return true } else { return false } })
 
         #expect(outcome.completionInfo?.generationTokenCount == 7)
-        #expect(outcome.intervened == false)
         #expect(outcome.cancelled == false)
     }
 
@@ -294,7 +293,6 @@ nonisolated struct GenerationStreamLoopTests {
         #expect(recorder.events[i].asThinkTruncate == interventionPrelude)
         #expect(recorder.events[i + 1].asThinking == trippingSafeguard.injectionMessage)
         #expect(recorder.events[i + 2].isThinkEnd)
-        #expect(outcome.intervened == true)
         #expect(outcome.cancelled == false)
     }
 
@@ -350,7 +348,6 @@ nonisolated struct GenerationStreamLoopTests {
         #expect(recordedPrefix.withLock { $0 } == interventionPrelude)
         // The continuation picks up after `</think>`, so its output is text.
         #expect(recorder.events.compactMap(\.asText).contains("the answer"))
-        #expect(outcome.intervened == true)
         #expect(outcome.cancelled == false)
         // The terminal `.info` comes from the continuation stream.
         #expect(outcome.completionInfo?.generationTokenCount == 5)
@@ -393,11 +390,8 @@ nonisolated struct GenerationStreamLoopTests {
     @Test
     func mergedAcrossContinuationSumsDraftTotalsNilPreserving() {
         func makeInfo(proposed: Int?, accepted: Int?) -> AgentGeneration.Info {
-            AgentGeneration.Info(
-                promptTokenCount: 1, generationTokenCount: 1, promptTime: 0,
-                generateTime: 0, stopReason: .stop,
-                draftTokensProposed: proposed, draftTokensAccepted: accepted
-            )
+            GenerationFixtures.info(
+                draftTokensProposed: proposed, draftTokensAccepted: accepted)
         }
 
         // Two plain autoregressive phases stay "never speculated".
@@ -439,7 +433,6 @@ nonisolated struct GenerationStreamLoopTests {
         let outcome = try await loop.run(continuation: starter, sink: recorder.sink)
 
         #expect(recorder.events.contains { $0.asThinkTruncate != nil })
-        #expect(outcome.intervened == true)
         #expect(outcome.cancelled == false)
     }
 

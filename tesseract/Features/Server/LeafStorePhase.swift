@@ -42,6 +42,11 @@ nonisolated enum LeafStorePhase {
     // parameter list is the phase's honest input set (the drive's request
     // context); bundling it into a struct would just rename the coupling.
     // swiftlint:disable function_body_length function_parameter_count
+    /// `assistantReasoning` must be the wire-truth reasoning — what THIS
+    /// client will echo back (the drive passes the streamed form for
+    /// streaming clients). Intervened turns store like any other: the
+    /// boundary capture never reuses the raw continuation's live KV — it
+    /// restores the boundary snapshot and re-prefills the canonical render.
     static func run(
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
@@ -60,14 +65,6 @@ nonisolated enum LeafStorePhase {
         // swiftlint:enable function_body_length function_parameter_count
         let mlxStart = mlxStartBox.value
         var result = Result()
-
-        // Intervened turns store a leaf like any other: the boundary capture
-        // below never reuses the live KV cache — it restores the boundary
-        // snapshot and re-prefills the canonical render — so the raw-path
-        // continuation's on-device state is irrelevant. What matters is that
-        // `assistantReasoning` is the wire-truth reasoning (the drive passes
-        // the streamed form for streaming clients), because that is what the
-        // client echoes back and what the radix lookup must match.
 
         // An Unkeyed Completion never touches the radix tree — construction
         // failed, so no token path of this request can be trusted as a key.

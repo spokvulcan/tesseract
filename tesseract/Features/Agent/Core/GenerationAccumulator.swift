@@ -28,12 +28,10 @@ nonisolated struct GenerationAccumulator: Sendable {
     /// vendor sidecar without re-deriving the length.
     private(set) var safeguardSafePrefixChars: Int?
 
-    /// The thinking buffered when `.thinkTruncate` replaced it with the
-    /// safeguard's safe prefix (`nil` when no truncate fired). A truncate
-    /// cannot retract deltas a streaming client already received, so the
-    /// reasoning that client assembled is this buffer — not the safe prefix.
-    /// Kept so `streamedThinking` can reconstruct the wire form.
-    private(set) var thinkingBeforeTruncate: String?
+    /// The streamed-wire reasoning, maintained only once `.thinkTruncate`
+    /// fired (`nil` before, so ordinary turns pay nothing): seeded with the
+    /// pre-truncate buffer and appended to alongside `thinking` afterward.
+    private var streamedThinkingAfterTruncate: String?
 
     /// Whether the thinking-loop safeguard intervened on this turn.
     var safeguardTriggered: Bool { safeguardSafePrefixChars != nil }
@@ -41,14 +39,11 @@ nonisolated struct GenerationAccumulator: Sendable {
     /// The reasoning a *streaming* client assembled from forwarded deltas:
     /// identical to `thinking` on an ordinary turn; on an intervened turn,
     /// the pre-truncate buffer plus everything emitted after the truncate
-    /// (the safeguard's injection hand-off). Non-streaming clients read the
+    /// (the safeguard's injection hand-off) — a truncate cannot retract
+    /// deltas the stream already forwarded. Non-streaming clients read the
     /// final message, which is built from `thinking` — this is only the
-    /// streamed-wire form. `dropFirst` and `safeguardSafePrefixChars` both
-    /// count `Character`s, so the arithmetic is unit-consistent.
-    var streamedThinking: String? {
-        guard let before = thinkingBeforeTruncate, let thinking else { return thinking }
-        return before + thinking.dropFirst(safeguardSafePrefixChars ?? 0)
-    }
+    /// streamed-wire form.
+    var streamedThinking: String? { streamedThinkingAfterTruncate ?? thinking }
 
     /// The single home of the malformed→text fallback predicate: true when the
     /// turn produced no text and no successful tool calls but did capture a
@@ -71,19 +66,23 @@ nonisolated struct GenerationAccumulator: Sendable {
             thinking = thinking ?? ""
         case .thinking(let chunk):
             thinking = (thinking ?? "") + chunk
+            streamedThinkingAfterTruncate? += chunk
         case .thinkEnd:
             break
         case .thinkReclassify:
             // `<think>` never closed: reclassify buffered thinking as text by
-            // appending it AFTER any pre-think text, then clear the buffer.
+            // appending it AFTER any pre-think text, then clear the buffer
+            // (the streamed mirror follows — reclassified thinking is text).
             text += (thinking ?? "")
             thinking = nil
+            streamedThinkingAfterTruncate = nil
         case .thinkTruncate(let safePrefix):
             // Safeguard fired: the safe prefix becomes the canonical reasoning,
             // discarding whatever was buffered up to the trigger. The discarded
-            // buffer is kept aside — a streaming client already received it,
-            // and the leaf store keys the radix tree on what clients echo.
-            thinkingBeforeTruncate = thinking ?? ""
+            // buffer seeds the streamed mirror — a streaming client already
+            // received it, and the leaf store keys the radix tree on what
+            // clients echo.
+            streamedThinkingAfterTruncate = thinking ?? ""
             thinking = safePrefix
             safeguardSafePrefixChars = safePrefix.count
         case .toolCall(let call):

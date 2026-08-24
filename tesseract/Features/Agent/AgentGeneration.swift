@@ -294,6 +294,19 @@ nonisolated enum AgentGeneration: Sendable {
             self.draftTokensAccepted = draftTokensAccepted
         }
 
+        /// Bridge from the vendor's terminal completion record.
+        init(_ vendor: GenerateCompletionInfo) {
+            self.init(
+                promptTokenCount: vendor.promptTokenCount,
+                generationTokenCount: vendor.generationTokenCount,
+                promptTime: vendor.promptTime,
+                generateTime: vendor.generateTime,
+                stopReason: vendor.stopReason,
+                draftTokensProposed: vendor.proposedDraftTokens,
+                draftTokensAccepted: vendor.acceptedDraftTokens
+            )
+        }
+
         var tokensPerSecond: Double {
             guard generateTime > 0 else { return 0 }
             return Double(generationTokenCount) / generateTime

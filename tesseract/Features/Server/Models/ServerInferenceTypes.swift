@@ -158,8 +158,10 @@ nonisolated struct ServerInferenceRequest: Sendable {
         /// Whether the client consumes this completion as an SSE stream. The
         /// leaf store keys the radix tree on what the client will echo back,
         /// and after a thinking-safeguard truncation the streamed reasoning
-        /// and the final-message reasoning differ — the wire form follows
-        /// this flag.
+        /// and the final-message reasoning differ (see
+        /// `GenerationAccumulator.streamedThinking`) — the wire form follows
+        /// this flag. No default: every construction site states its client's
+        /// shape, because a silently inherited value keys the leaf wrong.
         let clientStreams: Bool
 
         var prefixCacheConversation: HTTPPrefixCacheConversation? {
@@ -173,7 +175,7 @@ nonisolated struct ServerInferenceRequest: Sendable {
             prefixCacheConversation: HTTPPrefixCacheConversation?,
             templateRenderContext: TemplateRenderContext = .canonical,
             progressHandler: ServerInferenceProgressHandler? = nil,
-            clientStreams: Bool = true
+            clientStreams: Bool
         ) {
             self.systemPrompt = systemPrompt
             self.messages = messages

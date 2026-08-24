@@ -50,7 +50,8 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: nil
+                        prefixCacheConversation: nil,
+                        clientStreams: true
                     )),
                 parameters: .default
             )
@@ -92,7 +93,8 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: prefixConversation
+                        prefixCacheConversation: prefixConversation,
+                        clientStreams: true
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -160,7 +162,8 @@ struct ServerInferenceServiceTests {
                         progressHandler: CompletionHandler.makeProgressHandler(
                             activityLog: log,
                             logHandle: handle
-                        )
+                        ),
+                        clientStreams: true
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -196,7 +199,8 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: nil
+                        prefixCacheConversation: nil,
+                        clientStreams: true
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -238,7 +242,8 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: assistantLast
+                        prefixCacheConversation: assistantLast,
+                        clientStreams: true
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -268,7 +273,8 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: nil
+                        prefixCacheConversation: nil,
+                        clientStreams: true
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -302,7 +308,8 @@ struct ServerInferenceServiceTests {
                             systemPrompt: "System",
                             messages: [.user(content: "Hello")],
                             toolSpecs: nil,
-                            prefixCacheConversation: prefixConversation
+                            prefixCacheConversation: prefixConversation,
+                            clientStreams: true
                         )),
                     parameters: .default,
                     route: .serverCompatible

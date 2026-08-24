@@ -119,14 +119,18 @@ enum GenerationFixtures {
         generationTokenCount: Int = 1,
         promptTime: TimeInterval = 0.1,
         generateTime: TimeInterval = 0.2,
-        stopReason: GenerateStopReason = .stop
+        stopReason: GenerateStopReason = .stop,
+        draftTokensProposed: Int? = nil,
+        draftTokensAccepted: Int? = nil
     ) -> AgentGeneration.Info {
         AgentGeneration.Info(
             promptTokenCount: promptTokenCount,
             generationTokenCount: generationTokenCount,
             promptTime: promptTime,
             generateTime: generateTime,
-            stopReason: stopReason
+            stopReason: stopReason,
+            draftTokensProposed: draftTokensProposed,
+            draftTokensAccepted: draftTokensAccepted
         )
     }
 

@@ -287,16 +287,10 @@ actor LLMActor {
             // prefill itself). Sampling presets speculate identically —
             // unlike the greedy-only MTP head, the draft carries a selector
             // for rejection sampling.
-            if let drafter = dflash2?.value,
-                DFlash2Support.shouldEngageRawArm(hasDrafter: true, input: prepared),
-                DFlash2Support.pairsWithTarget(context.model)
+            if let iterator = try DFlash2Support.rawArmIterator(
+                input: prepared, model: context.model,
+                drafter: dflash2?.value, parameters: genParams)
             {
-                var specParams = genParams
-                specParams.kvBits = nil  // speculation needs trimmable caches
-                let cache = try context.model.newCache(parameters: specParams)
-                let iterator = try DFlash2Support.makeIterator(
-                    input: prepared, model: context.model, drafter: drafter,
-                    cache: cache, parameters: specParams)
                 let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
                 await progressHandler?(.speculationEngaged(.dflash2))
                 await progressHandler?(
@@ -495,21 +489,15 @@ actor LLMActor {
             : flatArr
         let continuedInput = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
 
-        // DFlash2 speculative arm, mirroring `startRawGeneration`: the
+        // DFlash2 speculative arm, as in `startRawGeneration`: the
         // continuation re-prefills a text-only token sequence, exactly the
         // raw-arm shape. Without it an intervened turn's continuation decodes
         // autoregressively while the drafter sits loaded (~19 vs ~33 tok/s
         // observed on the 27B).
-        if let drafter,
-            DFlash2Support.shouldEngageRawArm(hasDrafter: true, input: continuedInput),
-            DFlash2Support.pairsWithTarget(context.model)
+        if let iterator = try DFlash2Support.rawArmIterator(
+            input: continuedInput, model: context.model,
+            drafter: drafter, parameters: parameters)
         {
-            var specParams = parameters
-            specParams.kvBits = nil  // speculation needs trimmable caches
-            let cache = try context.model.newCache(parameters: specParams)
-            let iterator = try DFlash2Support.makeIterator(
-                input: continuedInput, model: context.model, drafter: drafter,
-                cache: cache, parameters: specParams)
             return makeRawGenerationStart(
                 iterator: iterator,
                 promptTokenCount: combined.count,
@@ -593,7 +581,7 @@ actor LLMActor {
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler? = nil,
-        clientStreams: Bool = true
+        clientStreams: Bool
     ) async throws -> HTTPServerGenerationStart {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded

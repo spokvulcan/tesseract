@@ -50,7 +50,8 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
             modelID: "toy/model",
             conversation: conversation,
             toolSpecs: nil,
-            parameters: parameters
+            parameters: parameters,
+            clientStreams: true
         )
     }
 

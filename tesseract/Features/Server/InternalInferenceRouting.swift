@@ -77,7 +77,12 @@ nonisolated func makeServerInferenceGenerateClosure(
                                 systemPrompt: systemPrompt,
                                 messages: messages,
                                 toolSpecs: toolSpecs
-                            )
+                            ),
+                            // The agent's own history keeps the safeguard's
+                            // truncated reasoning (`AssistantPartsBuilder`), so
+                            // its echo is the final-message form, not the
+                            // streamed wire form.
+                            clientStreams: false
                         )),
                     parameters: parameters,
                     route: .serverCompatible

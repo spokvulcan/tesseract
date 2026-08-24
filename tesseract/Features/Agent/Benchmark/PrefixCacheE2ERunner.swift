@@ -398,11 +398,14 @@ final class PrefixCacheE2ERunner {
             messages: messages.map(\.prefixCacheMessage)
         )
         let startInstant = ContinuousClock.now
+        // The runner echoes the accumulator form (`applyThinkTruncate`
+        // mirrors the production consumers), not the streamed wire form.
         let start = try await engine.llmActor.startServerCompletion(
             modelID: modelID,
             conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
-            parameters: parameters
+            parameters: parameters,
+            clientStreams: false
         )
 
         var ttftSeconds: Double = 0
@@ -515,7 +518,8 @@ final class PrefixCacheE2ERunner {
                         systemPrompt: systemPrompt,
                         messages: messages,
                         toolSpecs: toolSpecs,
-                        prefixCacheConversation: nil
+                        prefixCacheConversation: nil,
+                        clientStreams: false
                     )),
                 parameters: toolLoopParams,
                 route: .standard
@@ -1308,7 +1312,10 @@ final class PrefixCacheE2ERunner {
                             systemPrompt: systemPrompt,
                             messages: llmHistory,
                             toolSpecs: []
-                        )
+                        ),
+                        // Mirrors the production internal route: the agent
+                        // echoes the final-message form.
+                        clientStreams: false
                     )),
                 parameters: params,
                 route: .serverCompatible

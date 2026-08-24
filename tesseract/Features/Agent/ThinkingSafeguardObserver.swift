@@ -71,6 +71,4 @@ nonisolated final class ThinkingSafeguardObserver {
         detector.reset()
         interventionsIssued = 0
     }
-
-    var hasIntervened: Bool { interventionsIssued > 0 }
 }

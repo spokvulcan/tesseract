@@ -503,7 +503,8 @@ final class PrefillStepBenchmarkRunner {
             modelID: modelID,
             conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
-            parameters: parameters
+            parameters: parameters,
+            clientStreams: false
         )
 
         var firstEventSeen = false

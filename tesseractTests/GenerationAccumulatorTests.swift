@@ -115,7 +115,6 @@ struct GenerationAccumulatorTests {
 
         #expect(acc.streamedThinking == "step one step two")
         #expect(acc.streamedThinking == acc.thinking)
-        #expect(acc.thinkingBeforeTruncate == nil)
     }
 
     /// A truncate cannot retract deltas the stream already forwarded: the
@@ -133,7 +132,6 @@ struct GenerationAccumulatorTests {
         acc.ingest(.thinkEnd)
 
         #expect(acc.thinking == "Step 1. (safeguard)")
-        #expect(acc.thinkingBeforeTruncate == "Step 1. Then a partial li")
         #expect(acc.streamedThinking == "Step 1. Then a partial li(safeguard)")
     }
 

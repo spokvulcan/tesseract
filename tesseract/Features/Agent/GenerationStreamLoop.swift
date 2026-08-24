@@ -45,7 +45,6 @@ nonisolated struct GenerationStreamLoop {
         /// Terminal `.info` captured from the stream, not pushed to the sink. Each
         /// caller re-yields it as the terminal stream event its downstream reads.
         let completionInfo: AgentGeneration.Info?
-        let intervened: Bool
         let cancelled: Bool
         /// Loop-owned silent-close surface; the agent caller ignores it.
         let diagnostics: Diagnostics
@@ -173,20 +172,6 @@ nonisolated struct GenerationStreamLoop {
             toCancel?.cancel()
         }
 
-        // Map a vendor terminal `.info` into the loop's Outcome shape. Used by
-        // the live `.info` case and the post-cancel drain of a swapped-out handle.
-        func mapCompletionInfo(_ vinfo: GenerateCompletionInfo) -> AgentGeneration.Info {
-            AgentGeneration.Info(
-                promptTokenCount: vinfo.promptTokenCount,
-                generationTokenCount: vinfo.generationTokenCount,
-                promptTime: vinfo.promptTime,
-                generateTime: vinfo.generateTime,
-                stopReason: vinfo.stopReason,
-                draftTokensProposed: vinfo.proposedDraftTokens,
-                draftTokensAccepted: vinfo.acceptedDraftTokens
-            )
-        }
-
         // One completion, possibly two vendor generations (an intervention
         // swap): fold the cancelled phase's drained usage into the final
         // handle's. Merging only when both exist keeps the no-info warning
@@ -303,7 +288,7 @@ nonisolated struct GenerationStreamLoop {
 
                     case .info(let vinfo):
                         // Captured into the Outcome, never pushed to the sink.
-                        completionInfo = mapCompletionInfo(vinfo)
+                        completionInfo = AgentGeneration.Info(vinfo)
                     }
 
                     if intervention != nil { break }
@@ -332,20 +317,16 @@ nonisolated struct GenerationStreamLoop {
                     return state.handle
                 }
                 old.cancel()
-                // The cancelled handle still yields a terminal `.info` (the
-                // producer synthesizes one when cancellation preceded the
-                // authoritative info) — drain the buffered tail for it, so
+                // The cancelled handle still yields exactly one terminal
+                // `.info` (the producer synthesizes one when cancellation
+                // preceded the authoritative info, and always finishes the
+                // stream right after it) — drain the buffered tail for it, so
                 // the outcome's usage can span both phases. The degenerate
                 // post-trigger content in the same tail is dropped, never
                 // sunk.
                 while let item = await streamIterator.next() {
                     if case .info(let vinfo) = item {
-                        let mapped = mapCompletionInfo(vinfo)
-                        interventionPriorInfo =
-                            interventionPriorInfo.map {
-                                AgentGeneration.Info.mergedAcrossContinuation(
-                                    prior: $0, continuation: mapped)
-                            } ?? mapped
+                        interventionPriorInfo = AgentGeneration.Info(vinfo)
                     }
                 }
                 await old.waitForCompletion()
@@ -367,8 +348,8 @@ nonisolated struct GenerationStreamLoop {
                     }
                     // Continuation picks up AFTER `</think>` — re-init the parser in
                     // out-of-think mode so its output is classified as text. Do NOT
-                    // reset the safeguard: `hasIntervened` must survive to the
-                    // result and the intervention limit must keep blocking a re-fire.
+                    // reset the safeguard: the intervention limit must keep
+                    // blocking a re-fire.
                     parser = ToolCallParser(startsInsideThinkBlock: false)
                     currentStream = newHandle.stream
                     continue streamLoop
@@ -401,7 +382,6 @@ nonisolated struct GenerationStreamLoop {
             // the caller discards partial output and clears its cache.
             return Outcome(
                 completionInfo: resolvedCompletionInfo(),
-                intervened: safeguard.hasIntervened,
                 cancelled: true,
                 diagnostics: makeDiagnostics()
             )
@@ -439,7 +419,6 @@ nonisolated struct GenerationStreamLoop {
 
         return Outcome(
             completionInfo: resolvedCompletionInfo(),
-            intervened: safeguard.hasIntervened,
             cancelled: false,
             diagnostics: makeDiagnostics()
         )
