@@ -139,6 +139,25 @@ struct ReasoningEffortTests {
         #expect(CompletionHandler.requestedReasoningEffortRaw(request) == "medium")
     }
 
+    @Test func validationSeesBothChannelsEvenWhenPrecedenceIgnoresOne() throws {
+        // An unknown value on the losing channel must still be visible to the
+        // pre-lease vocabulary check — precedence picks the first value, but
+        // validation sweeps every value present on the wire.
+        let json = """
+            {"messages": [{"role": "user", "content": "hi"}],
+             "reasoning_effort": "banana",
+             "chat_template_kwargs": {"reasoning_effort": "low"}}
+            """
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+        let values = CompletionHandler.requestedReasoningEffortRawValues(request)
+        #expect(values == ["low", "banana"])
+        #expect(CompletionHandler.requestedReasoningEffortRaw(request) == "low")
+        #expect(
+            values.first(where: { OpenAI.nativeReasoningEffort(fromWire: $0) == nil })
+                == "banana")
+    }
+
     // MARK: - Render-context resolution and digest
 
     @Test func effortEqualToTemplateDefaultResolvesCanonical() {
@@ -326,5 +345,33 @@ struct ReasoningEffortTests {
             return
         }
         #expect(reason == .budgetExceeded)
+    }
+
+    @Test func repetitionRewindWinsWhenBudgetCrossesInTheSameChunk() {
+        // Past the grace, the budget stays the *last* trigger checked: a loop
+        // that crosses both the n-gram threshold and the budget in one chunk
+        // must intervene as repetition (rewinding past the looped content),
+        // not as a budget cut that keeps it.
+        let config = ThinkingRepetitionDetector.Config(
+            enabled: true,
+            minLineLength: 9999,  // line signal off
+            maxLineRepeats: 999,
+            ngramSize: 20,
+            maxNgramRepeats: 5,
+            windowChars: 2_000,
+            maxThinkingChars: 100,
+            minCharsBeforeIntervention: 0
+        )
+        let detector = ThinkingRepetitionDetector(config: config)
+        // 6 × 20 chars = 120: over the 100-char budget AND 6 identical
+        // 20-char ngrams, above the 5-repeat threshold.
+        let chunk = String(repeating: "abcdefghijklmnopqrst", count: 6)
+        let decision = detector.ingest(chunk: chunk)
+        guard case .intervene(let reason, let safe) = decision else {
+            Issue.record("expected an intervention, got \(decision)")
+            return
+        }
+        #expect(reason == .duplicateNgram)
+        #expect(safe.isEmpty)  // rewound to before the loop's first occurrence
     }
 }

@@ -184,25 +184,29 @@ nonisolated final class ThinkingRepetitionDetector {
         // The budget trigger is its own absolute threshold, deliberately
         // outside the repetition heuristics' grace period (ADR-0060): a
         // cutoff configured below `minCharsBeforeIntervention` still cuts at
-        // the configured length. With the default 16_384 budget over the
-        // 8_192 grace this is behavior-preserving.
-        if let limit = config.maxThinkingChars {
-            let total = completedLines.count + pendingLine.count
-            if total >= limit {
-                let full = completedLines + pendingLine
-                return .intervene(
-                    reason: .budgetExceeded,
-                    safePrefix: Self.backtrackToLineBoundary(
-                        String(full.prefix(limit)))
-                )
-            }
+        // the configured length. Past the grace it stays the *last* trigger
+        // checked, so a loop that crosses both thresholds in one chunk keeps
+        // the repetition rewind's tighter safe prefix.
+        guard graceGate else {
+            return budgetDecision() ?? .continue
         }
-
-        guard graceGate else { return .continue }
 
         if let decision = processNgrams() { return decision }
 
-        return .continue
+        return budgetDecision() ?? .continue
+    }
+
+    /// The budget trigger's check, shared by both sides of the grace gate:
+    /// intervene once the accumulated thinking crosses `maxThinkingChars`.
+    private func budgetDecision() -> Decision? {
+        guard let limit = config.maxThinkingChars else { return nil }
+        let total = completedLines.count + pendingLine.count
+        guard total >= limit else { return nil }
+        let full = completedLines + pendingLine
+        return .intervene(
+            reason: .budgetExceeded,
+            safePrefix: Self.backtrackToLineBoundary(String(full.prefix(limit)))
+        )
     }
 
     func reset() {

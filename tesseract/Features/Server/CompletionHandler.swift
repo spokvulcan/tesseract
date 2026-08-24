@@ -149,10 +149,11 @@ struct CompletionHandler: Sendable {
 
         // Vocabulary check before the lease (ADR-0060): an unknown
         // `reasoning_effort` is a client error regardless of which model is
-        // loaded. Whether the loaded model honors the value is decided later,
+        // loaded — on *either* channel, even the one precedence would ignore.
+        // Whether the loaded model honors the value is decided later,
         // post-lease, from its template.
-        if let raw = Self.requestedReasoningEffortRaw(completionRequest),
-            OpenAI.nativeReasoningEffort(fromWire: raw) == nil
+        if let raw = Self.requestedReasoningEffortRawValues(completionRequest)
+            .first(where: { OpenAI.nativeReasoningEffort(fromWire: $0) == nil })
         {
             try await writer.send(
                 .badRequest(
@@ -416,9 +417,20 @@ struct CompletionHandler: Sendable {
     nonisolated static func requestedReasoningEffortRaw(
         _ request: OpenAI.ChatCompletionRequest
     ) -> String? {
-        request.chat_template_kwargs?
-            .stringValues[TemplateRenderContext.reasoningEffortKwargName]
-            ?? request.reasoning_effort
+        requestedReasoningEffortRawValues(request).first
+    }
+
+    /// Every `reasoning_effort` value present on the wire, kwargs channel
+    /// first. Precedence uses the first; validation rejects an unknown value
+    /// on either channel, including the one precedence would ignore.
+    nonisolated static func requestedReasoningEffortRawValues(
+        _ request: OpenAI.ChatCompletionRequest
+    ) -> [String] {
+        [
+            request.chat_template_kwargs?
+                .stringValues[TemplateRenderContext.reasoningEffortKwargName],
+            request.reasoning_effort,
+        ].compactMap(\.self)
     }
 
     @MainActor
