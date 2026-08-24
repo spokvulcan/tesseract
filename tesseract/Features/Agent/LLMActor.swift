@@ -613,6 +613,19 @@ actor LLMActor {
         serverCompletion?.modelIdentity?.templateFlagDefaults ?? [:]
     }
 
+    /// Whether the loaded template declares the **Reasoning Effort** kwarg
+    /// (ADR-0060), from the same load-time identity snapshot. `false` before
+    /// a load installs one.
+    func loadedDeclaresReasoningEffort() -> Bool {
+        serverCompletion?.modelIdentity?.declaresReasoningEffort ?? false
+    }
+
+    /// The loaded template's own default effort level, from the same
+    /// load-time identity snapshot. `nil` before a load installs one.
+    func loadedReasoningEffortTemplateDefault() -> ReasoningEffort? {
+        serverCompletion?.modelIdentity?.reasoningEffortTemplateDefault
+    }
+
     /// Tool-call format of the loaded model, read from the same load-time
     /// identity snapshot as the render flags. `nil` before a load installs
     /// one, or when the model has no override (vendor JSON default) — the

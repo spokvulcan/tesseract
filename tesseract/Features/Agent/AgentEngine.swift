@@ -67,6 +67,16 @@ final class AgentEngine {
     /// `declaredTemplateFlags`. Empty when unloaded.
     private(set) var templateFlagDefaults: [TemplateRenderFlag: Bool] = [:]
 
+    /// Whether the loaded template declares the **Reasoning Effort** kwarg
+    /// (`ModelIdentity.declaresReasoningEffort`, ADR-0060) — cached at load
+    /// beside `declaredTemplateFlags`. `false` when unloaded.
+    private(set) var declaresReasoningEffort = false
+
+    /// The loaded template's own default effort level
+    /// (`ModelIdentity.reasoningEffortTemplateDefault`) — cached at load
+    /// beside `declaredTemplateFlags`. `nil` when unloaded.
+    private(set) var reasoningEffortTemplateDefault: ReasoningEffort?
+
     /// The agent loop's render context, resolved at load: the agent always
     /// wants prior-turn thinking stripped (a small model re-reading every
     /// past turn's CoT measurably loses tool accuracy — issue #422 A/B), so
@@ -184,9 +194,17 @@ final class AgentEngine {
             promptStartsThinking = startsThinking
             declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
             templateFlagDefaults = await llmActor.loadedTemplateFlagDefaults()
+            declaresReasoningEffort = await llmActor.loadedDeclaresReasoningEffort()
+            reasoningEffortTemplateDefault =
+                await llmActor.loadedReasoningEffortTemplateDefault()
+            // The agent's explicit strip stance (issue #422): on a
+            // preserve-by-default template this emits `preserve_thinking:
+            // false`; on a strip-by-default one it resolves canonical.
+            // `enable_thinking` has no stance here, so it follows the
+            // template default and is never emitted.
             agentRenderContext = TemplateRenderContext.resolve(
                 requestKwargs: nil,
-                appEnabledFlags: [],
+                appDesired: [.preserveThinking: false],
                 declaredFlags: declaredTemplateFlags,
                 templateDefaults: templateFlagDefaults
             )
@@ -358,6 +376,8 @@ final class AgentEngine {
         promptStartsThinking = false
         declaredTemplateFlags = []
         templateFlagDefaults = [:]
+        declaresReasoningEffort = false
+        reasoningEffortTemplateDefault = nil
         agentRenderContext = .canonical
         toolCallFormat = nil
         loadedVisionMode = false
@@ -406,6 +426,7 @@ final class AgentEngine {
         input: UserInput,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
+        startsInsideThinkBlock: Bool? = nil,
         progressHandler: ServerInferenceProgressHandler? = nil
     ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
@@ -416,7 +437,8 @@ final class AgentEngine {
         return wrapManagedGeneration(
             input: input,
             toolSpecs: toolSpecs,
-            parameters: parameters
+            parameters: parameters,
+            startsInsideThinkBlock: startsInsideThinkBlock
         ) {
             try await actor.startRawGeneration(
                 input: input,
@@ -432,6 +454,7 @@ final class AgentEngine {
         input: UserInput? = nil,
         toolSpecs: [ToolSpec]? = nil,
         parameters: AgentGenerateParameters = .default,
+        startsInsideThinkBlock: Bool? = nil,
         launch: @escaping @Sendable () async throws -> HTTPServerRawGenerationStart
     ) -> HTTPServerGenerationStart {
         isGenerating = true
@@ -442,7 +465,10 @@ final class AgentEngine {
         let actor = llmActor
         let driver = ManagedGenerationDriver(
             parameters: parameters,
-            startsInsideThinkBlock: promptStartsThinking,
+            // `nil` = the template's own default; a render context that
+            // disables thinking passes an explicit `false` (the generation
+            // prompt then holds a closed, empty think block).
+            startsInsideThinkBlock: startsInsideThinkBlock ?? promptStartsThinking,
             logContext: "generation_id=\(generationID.uuidString)"
         )
         let continuationInjection = driver.safeguard.continuationHandOff
@@ -549,6 +575,7 @@ extension AgentEngine: ManagedInferenceStarting {
             input: input,
             toolSpecs: toolSpecs,
             parameters: parameters,
+            startsInsideThinkBlock: promptStartsThinking && !renderContext.disablesThinking,
             progressHandler: progressHandler
         )
     }

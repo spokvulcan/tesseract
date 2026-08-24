@@ -57,11 +57,12 @@ nonisolated final class ThinkingRepetitionDetector {
         /// Raise or set to `nil` for tasks that legitimately need longer
         /// reasoning; lower for tighter worst-case latency.
         var maxThinkingChars: Int? = 16_384
-        /// Minimum accumulated thinking-content chars before ANY repetition
-        /// signal (line-repeat, n-gram, budget) is allowed to fire. Detector
-        /// state still updates during the grace period — only the trigger
-        /// decision is gated — so a pattern that was already repeating can
-        /// fire on the first post-grace ingest.
+        /// Minimum accumulated thinking-content chars before any *repetition*
+        /// signal (line-repeat, starter, n-gram) is allowed to fire — the
+        /// budget trigger is its own absolute threshold and ignores this
+        /// grace (ADR-0060). Detector state still updates during the grace
+        /// period — only the trigger decision is gated — so a pattern that
+        /// was already repeating can fire on the first post-grace ingest.
         ///
         /// Default `8_192` (~2K tokens at Qwen3.5's ~3.6 chars/token).
         /// Structured reasoning on multi-field extraction tasks routinely
@@ -180,10 +181,11 @@ nonisolated final class ThinkingRepetitionDetector {
             }
         }
 
-        guard graceGate else { return .continue }
-
-        if let decision = processNgrams() { return decision }
-
+        // The budget trigger is its own absolute threshold, deliberately
+        // outside the repetition heuristics' grace period (ADR-0060): a
+        // cutoff configured below `minCharsBeforeIntervention` still cuts at
+        // the configured length. With the default 16_384 budget over the
+        // 8_192 grace this is behavior-preserving.
         if let limit = config.maxThinkingChars {
             let total = completedLines.count + pendingLine.count
             if total >= limit {
@@ -195,6 +197,10 @@ nonisolated final class ThinkingRepetitionDetector {
                 )
             }
         }
+
+        guard graceGate else { return .continue }
+
+        if let decision = processNgrams() { return decision }
 
         return .continue
     }
@@ -349,5 +355,34 @@ nonisolated final class ThinkingRepetitionDetector {
             i = window.index(after: i)
         }
         return nil
+    }
+}
+
+extension ThinkingRepetitionDetector.Config {
+    /// The fixed anti-runaway ceiling for models with native reasoning-effort
+    /// support (ADR-0060): ≈18K thinking tokens at Qwen's ~3.6 chars/token —
+    /// roughly 4× the legacy cutoff, far above anything a native `xhigh`
+    /// think produces on purpose, so it only ever catches pathology. Not
+    /// user-configurable; the repetition triggers stay armed regardless.
+    static let nativeReasoningEffortBudgetChars = 65_536
+
+    /// The ADR-0060 split of the safeguard's budget trigger: an effort-native
+    /// model gets the fixed hidden ceiling (its thinking length is shaped by
+    /// the native `reasoning_effort` kwarg, not the cutoff); a non-native
+    /// model gets the user-configured legacy cutoff, or no budget at all when
+    /// the setting is off. The three repetition triggers are untouched —
+    /// loop pathology detection applies to every model. Callers apply this
+    /// *before* per-request `thinking_safeguard` overrides, which stay
+    /// authoritative.
+    mutating func applyThinkingBudgetPolicy(
+        nativeReasoningEffort: Bool,
+        cutoffEnabled: Bool,
+        cutoffChars: Int
+    ) {
+        if nativeReasoningEffort {
+            maxThinkingChars = Self.nativeReasoningEffortBudgetChars
+        } else {
+            maxThinkingChars = cutoffEnabled ? cutoffChars : nil
+        }
     }
 }

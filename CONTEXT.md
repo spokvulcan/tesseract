@@ -441,6 +441,45 @@ context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
 
+### Reasoning effort and the thinking safeguard
+
+**Reasoning Effort**:
+The native thinking-depth level of an effort-declaring chat template
+(`low`/`medium`/`xhigh`; Qwen3.8 is the first): a template kwarg whose value is
+prose injected into the request's *first system block* — so each level is a
+distinct prefix from token 0 and its own cache partition. The wire accepts the
+union of the OpenAI and Qwen vocabularies mapped to native levels; the kwarg
+is emitted only when it differs from the template's own default (`xhigh` for
+Qwen3.8), so omitted-or-default keeps the canonical render. Capability is
+template introspection, never model name (ADR-0060).
+_Avoid_: thinking level (Pi's client-side vocabulary); a sampling parameter (it
+changes the prompt, not the sampler); **Thinking Budget Cutoff** (the
+non-native surrogate — a different mechanism); erroring on effort for a
+non-declaring model (it is ignored with a log line).
+
+**Thinking Safeguard**:
+The in-stream guard on one turn's `<think>` content — three repetition
+triggers (duplicate line, duplicate starter, duplicate n-gram; always armed,
+every model) plus one budget trigger — whose intervention truncates to a safe
+prefix, injects a hand-off, force-closes the think block, and restarts the
+stream as a continuation. Measured in characters of decoded text, never
+tokens. Distinct from the Turn Replay Breaker (ADR-0053), its whole-turn
+sibling.
+_Avoid_: "hard cutoff" for the whole mechanism (that names only the budget
+trigger); loop breaker (collides with the turn-level ADR-0053 mechanism);
+token budget (chars only).
+
+**Thinking Budget Cutoff**:
+The **Thinking Safeguard**'s budget trigger as a user-facing setting — the
+legacy thinking-length limit for models *without* native **Reasoning Effort**
+(ADR-0060). Effort-native models ignore it and carry a fixed, hidden
+anti-runaway ceiling instead; the repetition triggers are outside its remit
+entirely. An absolute threshold: unlike the repetition triggers it does not
+wait out the detector's grace period.
+_Avoid_: applying it to effort-native models (their depth is the native
+kwarg's); disabling it as "safeguard off" (repetition triggers stay armed);
+token budget (chars).
+
 ### Server completion
 
 **Server Completion**:

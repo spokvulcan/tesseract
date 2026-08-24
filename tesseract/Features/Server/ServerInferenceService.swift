@@ -29,6 +29,8 @@ final class ServerInferenceService {
                     visionMode: $0.visionMode,
                     declaredTemplateFlags: arbiter.loadedDeclaredTemplateFlags,
                     templateFlagDefaults: arbiter.loadedTemplateFlagDefaults,
+                    declaresReasoningEffort: arbiter.loadedDeclaresReasoningEffort,
+                    reasoningEffortTemplateDefault: arbiter.loadedReasoningEffortTemplateDefault,
                     toolCallFormat: arbiter.loadedToolCallFormat
                 )
             }

@@ -82,7 +82,7 @@ struct PreserveThinkingRenderTests {
         // emitted AND fragment the partition.
         let strip = TemplateRenderContext.resolve(
             requestKwargs: nil,
-            appEnabledFlags: [],
+            appDesired: [preserveFlag: false],
             declaredFlags: declared,
             templateDefaults: preserveByDefault
         )
@@ -95,7 +95,7 @@ struct PreserveThinkingRenderTests {
         // but the semantics still read as preserving.
         let preserve = TemplateRenderContext.resolve(
             requestKwargs: nil,
-            appEnabledFlags: [preserveFlag],
+            appDesired: [preserveFlag: true],
             declaredFlags: declared,
             templateDefaults: preserveByDefault
         )
@@ -110,7 +110,7 @@ struct PreserveThinkingRenderTests {
         // what the tokenizer's chat-template apply receives.
         let strip = TemplateRenderContext.resolve(
             requestKwargs: nil,
-            appEnabledFlags: [],
+            appDesired: [preserveFlag: false],
             declaredFlags: [preserveFlag],
             templateDefaults: [preserveFlag: true]
         )
@@ -146,21 +146,21 @@ struct PreserveThinkingRenderTests {
 
         let fromSetting = TemplateRenderContext.resolve(
             requestKwargs: nil,
-            appEnabledFlags: [preserveFlag],
+            appDesired: [preserveFlag: true],
             declaredFlags: declared
         )
         #expect(fromSetting.preservesThinking)
 
         let requestOff = TemplateRenderContext.resolve(
             requestKwargs: [preserveFlag.rawValue: false],
-            appEnabledFlags: [preserveFlag],
+            appDesired: [preserveFlag: true],
             declaredFlags: declared
         )
         #expect(requestOff == .canonical)
 
         let requestOn = TemplateRenderContext.resolve(
             requestKwargs: [preserveFlag.rawValue: true],
-            appEnabledFlags: [],
+            appDesired: [preserveFlag: false],
             declaredFlags: declared
         )
         #expect(requestOn.preservesThinking)
@@ -172,14 +172,15 @@ struct PreserveThinkingRenderTests {
         // the flag, and canonical everywhere else.
         #expect(SettingsCatalogue.preserveThinkingRender(modelID: "anything").default)
 
-        let appEnabled: Set<TemplateRenderFlag> =
-            SettingsCatalogue.preserveThinkingRender(modelID: "m").default ? [preserveFlag] : []
+        let appDesired: [TemplateRenderFlag: Bool] = [
+            preserveFlag: SettingsCatalogue.preserveThinkingRender(modelID: "m").default
+        ]
 
         // Declaring model under the default → preserve.
         #expect(
             TemplateRenderContext.resolve(
                 requestKwargs: nil,
-                appEnabledFlags: appEnabled,
+                appDesired: appDesired,
                 declaredFlags: [preserveFlag]
             ).preservesThinking)
 
@@ -187,7 +188,7 @@ struct PreserveThinkingRenderTests {
         #expect(
             TemplateRenderContext.resolve(
                 requestKwargs: nil,
-                appEnabledFlags: appEnabled,
+                appDesired: appDesired,
                 declaredFlags: []
             ) == .canonical)
     }
@@ -197,7 +198,7 @@ struct PreserveThinkingRenderTests {
         // neither may change the render nor the digest.
         let resolved = TemplateRenderContext.resolve(
             requestKwargs: [preserveFlag.rawValue: true, "bogus_flag": true],
-            appEnabledFlags: [preserveFlag],
+            appDesired: [preserveFlag: true],
             declaredFlags: []
         )
         #expect(resolved == .canonical)

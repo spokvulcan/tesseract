@@ -330,7 +330,8 @@ final class AgentCpuBenchRunner {
         let p2 = Self.ms {
             _ = MessageConverter.normalizeRequest(fixture.openAIMessages, tools: openAITools)
             _ = TemplateRenderContext.resolve(
-                requestKwargs: nil, appEnabledFlags: [], declaredFlags: [.preserveThinking])
+                requestKwargs: nil, appDesired: [.preserveThinking: false],
+                declaredFlags: [.preserveThinking])
         }
 
         // p3 — keying: Cache Key Space (text-only identity path) + partition key.

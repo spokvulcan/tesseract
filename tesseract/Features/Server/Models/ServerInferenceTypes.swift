@@ -50,6 +50,15 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
     /// emit a render kwarg only where the desired state differs from what
     /// the template renders anyway, in either polarity.
     let templateFlagDefaults: [TemplateRenderFlag: Bool]
+    /// Whether the loaded template declares the **Reasoning Effort** kwarg
+    /// (`ModelIdentity.declaresReasoningEffort`, ADR-0060) — the capability
+    /// gate for honoring a request's `reasoning_effort`; without it the
+    /// value is ignored with a log line, never an error.
+    let declaresReasoningEffort: Bool
+    /// The template's own default effort level
+    /// (`ModelIdentity.reasoningEffortTemplateDefault`) — a requested level
+    /// equal to it emits no kwarg, keeping the canonical render.
+    let reasoningEffortTemplateDefault: ReasoningEffort?
     /// The loaded model's tool-call format as the vendor resolved it at load time —
     /// what the completion handler's Argument Transcoder keys off. `nil`
     /// means "no override": the parser then falls back to the vendor JSON
@@ -61,12 +70,16 @@ nonisolated struct ServerInferenceModelState: Sendable, Equatable {
         visionMode: Bool,
         declaredTemplateFlags: Set<TemplateRenderFlag> = [],
         templateFlagDefaults: [TemplateRenderFlag: Bool] = [:],
+        declaresReasoningEffort: Bool = false,
+        reasoningEffortTemplateDefault: ReasoningEffort? = nil,
         toolCallFormat: ToolCallFormat? = nil
     ) {
         self.modelID = modelID
         self.visionMode = visionMode
         self.declaredTemplateFlags = declaredTemplateFlags
         self.templateFlagDefaults = templateFlagDefaults
+        self.declaresReasoningEffort = declaresReasoningEffort
+        self.reasoningEffortTemplateDefault = reasoningEffortTemplateDefault
         self.toolCallFormat = toolCallFormat
     }
 

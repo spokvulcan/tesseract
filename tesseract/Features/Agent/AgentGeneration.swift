@@ -34,6 +34,14 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// Applies only when the model uses a `<think>` chat template (Qwen3/3.5 thinking).
     var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
 
+    /// The agent-side **Reasoning Effort** desire (ADR-0060): `nil` means
+    /// Automatic — no kwarg is injected and the template's own default level
+    /// applies. Consumed on the internal routing edge, where the loaded
+    /// model's identity decides whether the template declares the kwarg at
+    /// all; HTTP requests carry their own `reasoning_effort` instead and
+    /// never read this.
+    var reasoningEffort: ReasoningEffort?
+
     /// Number of bits for KV cache quantization (4 or 8). nil disables quantization.
     ///
     /// **Default is `nil` (unquantized).** `kvBits = 8` was the default until #252
