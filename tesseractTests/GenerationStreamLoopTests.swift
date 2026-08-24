@@ -357,6 +357,74 @@ nonisolated struct GenerationStreamLoopTests {
     }
 
     @Test
+    func interventionSwapMergesCancelledPhaseUsageIntoOutcome() async throws {
+        let recorder = SinkRecorder()
+        let starter: GenerationStreamLoop.ContinuationStarter = { _ in
+            cannedHandle([
+                .chunk("the answer"),
+                info(prompt: 90, generated: 5, promptTime: 1.0, generateTime: 0.4),
+            ])
+        }
+        // The producer synthesizes a terminal `.info` even when cancelled —
+        // it sits buffered behind the trigger chunk, where only the swap's
+        // drain can reach it.
+        let loop = GenerationStreamLoop(
+            initial: cannedHandle(
+                trippingThinkingEvents + [
+                    info(prompt: 40, generated: 21, promptTime: 0.5, generateTime: 3.0)
+                ]),
+            startsInsideThinkBlock: true,
+            safeguard: trippingSafeguard
+        )
+
+        let outcome = try await loop.run(continuation: starter, sink: recorder.sink)
+
+        // One client-visible completion, two vendor generations: the prompt is
+        // the ORIGINAL request's (the continuation's prompt re-prefills context
+        // the client never sent), generated tokens span both phases, and the
+        // continuation's re-prefill time folds into generation latency.
+        let merged = try #require(outcome.completionInfo)
+        #expect(merged.promptTokenCount == 40)
+        #expect(merged.generationTokenCount == 26)
+        #expect(abs(merged.promptTime - 0.5) < 1e-9)
+        #expect(abs(merged.generateTime - (3.0 + 1.0 + 0.4)) < 1e-9)
+    }
+
+    @Test
+    func mergedAcrossContinuationSumsDraftTotalsNilPreserving() {
+        func makeInfo(proposed: Int?, accepted: Int?) -> AgentGeneration.Info {
+            AgentGeneration.Info(
+                promptTokenCount: 1, generationTokenCount: 1, promptTime: 0,
+                generateTime: 0, stopReason: .stop,
+                draftTokensProposed: proposed, draftTokensAccepted: accepted
+            )
+        }
+
+        // Two plain autoregressive phases stay "never speculated".
+        let neither = AgentGeneration.Info.mergedAcrossContinuation(
+            prior: makeInfo(proposed: nil, accepted: nil),
+            continuation: makeInfo(proposed: nil, accepted: nil)
+        )
+        #expect(neither.draftTokensProposed == nil)
+        #expect(neither.draftTokensAccepted == nil)
+
+        // One speculated phase makes the total real; the nil side counts as 0.
+        let mixed = AgentGeneration.Info.mergedAcrossContinuation(
+            prior: makeInfo(proposed: 100, accepted: 60),
+            continuation: makeInfo(proposed: nil, accepted: nil)
+        )
+        #expect(mixed.draftTokensProposed == 100)
+        #expect(mixed.draftTokensAccepted == 60)
+
+        let both = AgentGeneration.Info.mergedAcrossContinuation(
+            prior: makeInfo(proposed: 100, accepted: 60),
+            continuation: makeInfo(proposed: 40, accepted: 30)
+        )
+        #expect(both.draftTokensProposed == 140)
+        #expect(both.draftTokensAccepted == 90)
+    }
+
+    @Test
     func continuationFailureEndsGracefullyWithTruncatedResponse() async throws {
         struct StarterError: Error {}
         let recorder = SinkRecorder()

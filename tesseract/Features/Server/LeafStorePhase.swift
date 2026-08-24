@@ -51,7 +51,6 @@ nonisolated enum LeafStorePhase {
         prefixCache: PrefixCacheManager,
         renderContext: TemplateRenderContext,
         promptStartsThinking: Bool,
-        intervened: Bool,
         assistantText: String,
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
@@ -62,22 +61,13 @@ nonisolated enum LeafStorePhase {
         let mlxStart = mlxStartBox.value
         var result = Result()
 
-        // Skip leaf-store when a thinking-safeguard intervention fired: the
-        // continuation ran through the raw path, so the on-device KV cache no
-        // longer matches the radix-tree logical snapshot we'd compute from
-        // `textContent + thinkingContent + toolCalls`. Storing anything here
-        // would corrupt future prefix-cache hits for requests sharing this
-        // prefix. The stable-prefix snapshot captured pre-generation is still
-        // stored unconditionally by the drive, so future requests still
-        // benefit from partial cache reuse; only the leaf is lost for this
-        // one turn.
-        if intervened {
-            diagnosticsContext.logSkip(
-                stage: "leafStore",
-                reason: "thinking-safeguard-intervention"
-            )
-            return result
-        }
+        // Intervened turns store a leaf like any other: the boundary capture
+        // below never reuses the live KV cache — it restores the boundary
+        // snapshot and re-prefills the canonical render — so the raw-path
+        // continuation's on-device state is irrelevant. What matters is that
+        // `assistantReasoning` is the wire-truth reasoning (the drive passes
+        // the streamed form for streaming clients), because that is what the
+        // client echoes back and what the radix lookup must match.
 
         // An Unkeyed Completion never touches the radix tree — construction
         // failed, so no token path of this request can be trusted as a key.

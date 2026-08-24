@@ -599,7 +599,8 @@ nonisolated final class ServerCompletion {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler? = nil
+        progressHandler: ServerInferenceProgressHandler? = nil,
+        clientStreams: Bool = true
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
 
@@ -732,6 +733,7 @@ nonisolated final class ServerCompletion {
                 traceLog: traceLog,
                 driver: driver,
                 loopCancel: loopCancel,
+                clientStreams: clientStreams,
                 continuationStarter: continuationStarter,
                 continuation: continuation,
                 finishHook: { await actorRef.clearFinishedServerCompletion(requestID) },
@@ -779,6 +781,7 @@ nonisolated final class ServerCompletion {
         traceLog: CompletionTraceLog,
         driver: ManagedGenerationDriver,
         loopCancel: LateBoundCancel,
+        clientStreams: Bool,
         continuationStarter:
             @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
         continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation,
@@ -921,6 +924,11 @@ nonisolated final class ServerCompletion {
             // falls through to the request-end recordRequest call below — the
             // alpha tuner needs to see every request, not just the ones whose
             // leaf store completed.
+            // The leaf must match what THIS client will echo back: a streaming
+            // client assembled its reasoning from forwarded deltas (which a
+            // thinking-safeguard truncate cannot retract), a non-streaming
+            // client reads the final message built from the accumulator. The
+            // two differ only on intervened turns.
             let leafResult = try await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
@@ -930,9 +938,9 @@ nonisolated final class ServerCompletion {
                 prefixCache: prefixCache,
                 renderContext: renderContext,
                 promptStartsThinking: driver.startsInsideThinkBlock,
-                intervened: outcome.intervened,
                 assistantText: accumulator.text,
-                assistantReasoning: accumulator.thinking,
+                assistantReasoning: clientStreams
+                    ? accumulator.streamedThinking : accumulator.thinking,
                 toolCalls: toolCalls,
                 diagnosticsContext: diagnosticsContext,
                 trace: &trace

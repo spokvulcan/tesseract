@@ -96,7 +96,8 @@ final class ServerInferenceService {
                         toolSpecs: chat.toolSpecs,
                         parameters: request.parameters,
                         renderContext: chat.templateRenderContext,
-                        progressHandler: chat.progressHandler
+                        progressHandler: chat.progressHandler,
+                        clientStreams: chat.clientStreams
                     )
                     Log.server.info(
                         "HTTP completion using prefix-cache path — model=\(modelState.modelID) "

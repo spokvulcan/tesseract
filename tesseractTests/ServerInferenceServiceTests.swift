@@ -652,7 +652,8 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext,
-        progressHandler: ServerInferenceProgressHandler?
+        progressHandler: ServerInferenceProgressHandler?,
+        clientStreams: Bool
     ) async throws -> HTTPServerGenerationStart {
         calls.append(
             .init(

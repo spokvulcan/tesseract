@@ -104,6 +104,39 @@ struct GenerationAccumulatorTests {
         #expect(!empty.surfacesMalformedBuffer)
     }
 
+    /// Without an intervention, the streamed-wire reasoning IS the
+    /// accumulated reasoning — one form, no divergence to reconstruct.
+    @Test func streamedThinkingEqualsThinkingWithoutTruncate() {
+        var acc = GenerationAccumulator()
+        #expect(acc.streamedThinking == nil)
+        acc.ingest(.thinkStart)
+        acc.ingest(.thinking("step one "))
+        acc.ingest(.thinking("step two"))
+
+        #expect(acc.streamedThinking == "step one step two")
+        #expect(acc.streamedThinking == acc.thinking)
+        #expect(acc.thinkingBeforeTruncate == nil)
+    }
+
+    /// A truncate cannot retract deltas the stream already forwarded: the
+    /// streamed-wire reasoning is the pre-truncate buffer plus everything
+    /// emitted after the truncate (the injection), while the accumulated
+    /// reasoning is the safe prefix plus the injection. Both forms coexist —
+    /// the leaf store keys on the wire form, the final message on the
+    /// accumulated one.
+    @Test func streamedThinkingKeepsPreTruncateBufferPlusInjection() {
+        var acc = GenerationAccumulator()
+        acc.ingest(.thinkStart)
+        acc.ingest(.thinking("Step 1. Then a partial li"))
+        acc.ingest(.thinkTruncate(safePrefix: "Step 1. "))
+        acc.ingest(.thinking("(safeguard)"))
+        acc.ingest(.thinkEnd)
+
+        #expect(acc.thinking == "Step 1. (safeguard)")
+        #expect(acc.thinkingBeforeTruncate == "Step 1. Then a partial li")
+        #expect(acc.streamedThinking == "Step 1. Then a partial li(safeguard)")
+    }
+
     /// In-flight tool-call deltas and completion metrics are caller concerns;
     /// they leave accumulated turn content untouched.
     @Test func toolCallDeltaAndInfoAreInert() {
