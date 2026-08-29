@@ -125,6 +125,42 @@ tests), plus a new commit `fix(paroquant): resolve chat conventions when
 the caller passes none` adapting the loader to the post-#471 conventions
 scheme; force-pushed, MERGEABLE, awaiting review.
 
+**Status 2026-08-18** — davidkoski reported two Prepared Checkpoint tests
+failing on upstream's self-hosted macOS runner while green locally. Cause:
+`write()`'s advisory free-space guard read
+`volumeAvailableCapacityForImportantUsage`, which resolves through
+cache-management machinery CI hosts lack, so it reported nothing and the
+write was silently skipped. Fixed by `fix(paroquant): don't skip the
+checkpoint write when free space is unreadable` — fall back to the
+statfs-backed capacity, and unknown capacity never vetoes the write. Same
+day the branch was rebased onto upstream main `7871b09`; force-pushed, tip
+`f2dd7dc`.
+
+**Status 2026-08-28** — #471 rebased onto upstream main `37688d2` (26 new
+commits: reranker API #375, variance-normalized KV cache #329, parallel
+byte-balanced weight loading #575, fused/shared MoE router top-k #567/#568,
+compiled decode segments generalized to Qwen3-Next #569, direct expert
+reduction #573, fused GDN input projections #572, Helium #555, LoRA dropout
+#541, VLM processor loading rules #565). Two conflicts, both mechanical:
+
+- `ParoQuantLoader` step 12 — upstream replaced `eval(model)` with
+  `materializeModelForInference(model)`; kept upstream's call and our
+  `markPhase("eval")` around it.
+- `SwitchLayers` — upstream's #573 split `callAsFunction`'s dataflow out
+  into `projectExperts` (shared with the new `callAndWeightedReduce`), so
+  the `transformInput`/`transformHidden` hooks now sit on `projectExperts`.
+  That is the better seam: the PARO rotations reach both the plain call and
+  the new fused reduction. `weightedExpertUnsort` runs downstream of
+  `down_proj`, so it composes with the rotations either way.
+
+Full CI replica green (pre-commit/swift-format 603, `build-for-testing`,
+verify-docs, 565 XCTest + 722 Swift Testing). Force-pushed, tip `3ae4a12`,
+MERGEABLE; workflow runs sit at `action_required` pending maintainer
+approval. Pre-rebase tip `f2dd7dc` kept on local branch
+`backup/paroquant-moe-pre-rebase-20260828`. **The Vendor pin
+(`pin-upstream-mlx-swift`) still carries the pre-08-18 #471 commits — pick
+the rebased ten from `3ae4a12` at the next re-pin.**
+
 1. **Compiled decode schedule for Qwen3.5/3.6** — C11 + C12 + the unowned-
    captures fix + C14 + the PR #427 review-round commit, squashed into one
    PR: per-layer decode traces, the whole-step segment schedule split at
