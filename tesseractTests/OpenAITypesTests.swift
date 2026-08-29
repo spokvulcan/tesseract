@@ -126,6 +126,38 @@ struct OpenAITypesTests {
         #expect(request.tools?[0].function.description == "Execute shell commands")
     }
 
+    @Test func decodesDeveloperRoleAsSystem() throws {
+        let json = """
+            {
+              "messages": [
+                { "role": "developer", "content": "You are a coding assistant." },
+                { "role": "user", "content": "Hello" }
+              ]
+            }
+            """
+
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+
+        #expect(request.messages.count == 2)
+        #expect(request.messages[0].role == .system)
+        #expect(request.messages[0].content?.textValue == "You are a coding assistant.")
+
+        let (systemPrompt, converted) = MessageConverter.convertMessages(request.messages)
+        #expect(systemPrompt == "You are a coding assistant.")
+        #expect(converted.count == 1)
+    }
+
+    @Test func unknownRoleStillFailsToDecode() {
+        let json = """
+            { "messages": [{ "role": "moderator", "content": "hi" }] }
+            """
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(
+                OpenAI.ChatCompletionRequest.self, from: Data(json.utf8))
+        }
+    }
+
     @Test func effectiveMaxTokensFallsBackToMaxTokens() throws {
         let json = """
             { "messages": [{ "role": "user", "content": "hi" }], "max_tokens": 512 }

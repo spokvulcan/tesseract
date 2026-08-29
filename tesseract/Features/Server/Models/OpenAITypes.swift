@@ -210,6 +210,25 @@ nonisolated enum OpenAI {
         case user
         case assistant
         case tool
+
+        /// OpenAI's successor to `system`; newer SDK clients send it
+        /// unconditionally. Local chat templates only know `system`, so it
+        /// is aliased at the wire and everything downstream — rendering,
+        /// prefix-cache keying, telemetry — sees one canonical role.
+        nonisolated init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            let raw = try container.decode(String.self)
+            if raw == "developer" {
+                self = .system
+            } else if let role = ChatRole(rawValue: raw) {
+                self = role
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Cannot initialize ChatRole from invalid String value \(raw)"
+                )
+            }
+        }
     }
 
     enum MessageContent: Codable, Sendable {
