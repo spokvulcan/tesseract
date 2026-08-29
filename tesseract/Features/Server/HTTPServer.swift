@@ -395,10 +395,13 @@ actor SSEWriter {
 
     /// Send SSE headers and begin the chunked stream.
     func open() async throws {
+        // No Connection header: beginStreaming defaults to `Connection: close`,
+        // which must match the server's one-request-per-connection lifecycle —
+        // advertising keep-alive makes pooling clients (undici, URLSession)
+        // reuse the torn-down socket and fail their next request.
         try await writer.beginStreaming(headers: [
             ("Content-Type", "text/event-stream"),
             ("Cache-Control", "no-cache"),
-            ("Connection", "keep-alive"),
         ])
         lastWriteAt = clock.now
     }

@@ -814,6 +814,28 @@ struct HTTPServerIntegrationTests {
         #expect(lines.last == "data: [DONE]")
     }
 
+    @Test func sseStreamAdvertisesConnectionClose() async throws {
+        let server = HTTPServer(port: 0)
+        server.route(.GET, "/test-sse-connection") { _, writer in
+            let sse = SSEWriter(writer)
+            try await sse.open()
+            await sse.done()
+        }
+        let port = try await startOnRandomPort(server)
+        defer { server.stop() }
+
+        let (bytes, response) = try await URLSession.shared.bytes(
+            from: URL(string: "http://127.0.0.1:\(port)/test-sse-connection")!
+        )
+        let http = try #require(response as? HTTPURLResponse)
+        #expect(http.statusCode == 200)
+        // The server tears the socket down after each response; advertising
+        // keep-alive here makes pooling clients (undici, URLSession) reuse a
+        // dead socket and fail their next request with a connection error.
+        #expect(http.value(forHTTPHeaderField: "Connection")?.lowercased() == "close")
+        for try await line in bytes.lines where line == "data: [DONE]" { break }
+    }
+
     @Test func sseStreamSupportsReasoningChunks() async throws {
         let server = HTTPServer(port: 0)
         server.route(.GET, "/test-reasoning-sse") { _, writer in
