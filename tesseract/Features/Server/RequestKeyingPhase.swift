@@ -116,13 +116,17 @@ nonisolated enum RequestKeyingPhase {
         // non-rendering tokenizers, and any render/encode failure all fall back
         // to the processor. The eligibility decision lives in
         // `RenderTokenSource`, shared with the other four seams.
-        // `hasMedia` deliberately keys on the conversation's images, not the
-        // instance-filtered list: a dropped-image request could render
-        // identically through the cache, but extending C25 eligibility is a
-        // separate, separately-tested change — media requests stay on the
-        // processor path.
+        // `hasMedia` keys on the INSTANCE-FILTERED list (issue #439): a
+        // dropped-image request is text-only by construction — the processor
+        // never sees the bytes, only the same content-array prompt the cache
+        // renders — so it is C25-eligible like any other text render. On this
+        // path the two conditions are coupled (images survive the filter only
+        // when the instance processes them, which is exactly when
+        // `producesFlatTextTokens` is false), so real media still lands on the
+        // processor via the flat-tokens guard; passing `keyedImages` keeps the
+        // seam honest if that coupling ever changes.
         let renderTokens = RenderTokenSource.forTextOnlyRequest(
-            hasMedia: !requestImages.isEmpty,
+            hasMedia: !keyedImages.isEmpty,
             producesFlatTextTokens: producesFlatTextTokens,
             modelFingerprint: modelFingerprint
         )
