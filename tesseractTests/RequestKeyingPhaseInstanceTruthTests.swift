@@ -55,11 +55,13 @@ import Testing
         let isIdentity: Bool
         let seedsPositionAnchor: Bool
         let unkeyedReason: String?
+        let fullTokens: [Int]
     }
 
     private static func runPhase(
         provider: ToyModelSessionProvider,
-        conversation: HTTPPrefixCacheConversation
+        conversation: HTTPPrefixCacheConversation,
+        modelFingerprint: String? = nil
     ) async throws -> OutcomeFacts {
         try await provider.withSession { session in
             switch try await RequestKeyingPhase.run(
@@ -69,7 +71,7 @@ import Testing
                 renderContext: .canonical,
                 parameters: GenerateParameters(temperature: 0),
                 modelID: "toy/model",
-                modelFingerprint: nil,
+                modelFingerprint: modelFingerprint,
                 imageKeying: Self.visionFamilyKeying
             ) {
             case .keyed(let keyed):
@@ -77,14 +79,16 @@ import Testing
                     isKeyed: true,
                     isIdentity: keyed.keySpace.isIdentity,
                     seedsPositionAnchor: keyed.seedsPositionAnchor,
-                    unkeyedReason: nil
+                    unkeyedReason: nil,
+                    fullTokens: keyed.fullTokens
                 )
-            case .unkeyed(_, _, _, let reason):
+            case .unkeyed(_, let fullTokens, _, let reason):
                 return OutcomeFacts(
                     isKeyed: false,
                     isIdentity: false,
                     seedsPositionAnchor: false,
-                    unkeyedReason: reason.rawValue
+                    unkeyedReason: reason.rawValue,
+                    fullTokens: fullTokens
                 )
             }
         }
@@ -111,6 +115,75 @@ import Testing
         #expect(outcome.isIdentity)
         #expect(outcome.seedsPositionAnchor == false)
         #expect(outcome.unkeyedReason == nil)
+    }
+
+    /// Issue #439: the dropped-image render is text-only by construction —
+    /// the processor never sees the bytes, only the same content-array prompt
+    /// the cache renders — so a text-only instance with a rendering tokenizer
+    /// and a known fingerprint tokenizes an image-bearing conversation
+    /// THROUGH the C25 Render+Token Cache: `prepare` never runs, and the
+    /// keyed tokens are byte-identical to the fused `applyChatTemplate` the
+    /// processor path would build. Before the fix, `hasMedia` keyed on the
+    /// conversation's images and every such turn re-encoded the whole prompt.
+    @Test func droppedImageRequestTokenizesThroughRenderTokenCache() async throws {
+        let tokenizer = GreedyTokenizer(pieces: [
+            "<|im_start|>", "<|im_end|>", "assistant", "user", "system",
+            "\n", "look", " ",
+        ])
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]),
+            tokenizer: tokenizer,
+            reportsFlatTextTokens: true
+        )
+        let conversation = Self.imageConversation(imageData: Data("not an image".utf8))
+        let outcome = try await Self.runPhase(
+            provider: provider,
+            conversation: conversation,
+            modelFingerprint: "dropped-image-parity-\(UUID().uuidString)"
+        )
+
+        #expect(outcome.isKeyed)
+        #expect(outcome.isIdentity)
+        #expect(outcome.seedsPositionAnchor == false)
+        // The cache path was taken: no session verb — in particular no
+        // `prepare` — was recorded for the whole keying phase.
+        #expect(provider.recorder.verbs.isEmpty)
+        // Render parity with the processor path: the toy processor's prepare
+        // IS the fused `applyChatTemplate` over the same prompt messages.
+        let truth = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        #expect(outcome.fullTokens == truth)
+    }
+
+    /// The guard the #439 eligibility extension must NOT loosen: genuinely
+    /// processed media — a vision-container instance, whose images survive
+    /// the instance filter — stays on the processor path even when the
+    /// tokenizer can render, because a media `prepare` (pad runs, 2D tokens,
+    /// grids) is nothing the render cache can reproduce.
+    @Test func visionInstanceMediaStaysOnProcessorPath() async throws {
+        let tokenizer = GreedyTokenizer(pieces: [
+            "<|im_start|>", "<|im_end|>", "assistant", "user", "system",
+            "\n", "look", " ",
+        ])
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]),
+            tokenizer: tokenizer,
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: Self.visionFamilyKeying.imagePadTokenId,
+                padRunLength: 4,
+                frame: THW(1, 8, 8)
+            )
+        )
+        let outcome = try await Self.runPhase(
+            provider: provider,
+            conversation: Self.imageConversation(imageData: ImageTestFixtures.tinyPNGData),
+            modelFingerprint: "vision-media-guard-\(UUID().uuidString)"
+        )
+
+        #expect(outcome.isKeyed)
+        #expect(outcome.isIdentity == false)
+        #expect(outcome.seedsPositionAnchor)
+        #expect(provider.recorder.verbs == [.prepare])
     }
 
     /// The guard the fix must NOT loosen: a vision-container instance whose

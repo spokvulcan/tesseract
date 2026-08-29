@@ -169,6 +169,26 @@ struct RenderChatTemplateParityTests {
                     ["role": "user", "content": "Hello"]
                 ]
             ),
+            // Issue #439: the dropped-image shape — a text-only instance keys
+            // and serves an image-bearing conversation through the C25 cache,
+            // so the content-array form (`["type": "image"]` parts before the
+            // text part) must hold split parity too. Built from the production
+            // `promptMessages` so the shape under test cannot drift from what
+            // Request Keying actually renders.
+            ParityCase(
+                name: "dropped-image content-array turn",
+                messages: HTTPPrefixCacheConversation(
+                    systemPrompt: "You are a careful assistant.",
+                    messages: [
+                        HTTPPrefixCacheMessage(
+                            role: .user, content: "What's on this screenshot?",
+                            images: [HTTPPrefixCacheImage(data: Data("opaque bytes".utf8))]
+                        ),
+                        .assistant(content: "A code editor."),
+                        HTTPPrefixCacheMessage(role: .user, content: "Zoom into the sidebar."),
+                    ]
+                ).promptMessages
+            ),
         ]
     }
 
