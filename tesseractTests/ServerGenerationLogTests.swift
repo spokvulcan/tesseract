@@ -426,4 +426,54 @@ struct ServerGenerationLogTests {
         log.complete(handle: bogus, finishReason: "stop")
         #expect(log.traces.isEmpty)
     }
+
+    // MARK: - Revision-keyed equality
+
+    // `RequestTrace.==` compares `(id, revision)` so SwiftUI's view diffing
+    // never walks the captured span text. Every observable mutation must
+    // therefore make the trace compare unequal to its prior value.
+
+    @Test func spanFlushMakesTraceUnequal() {
+        let log = ServerGenerationLog()
+        let h = log.startRequest(completionID: "a", model: "m", stream: true, sessionAffinity: nil)
+        log.ingest(handle: h, event: .thinking("deep thought"))
+        let before = log.traces[0]
+        log.flushPending(handle: h)
+        #expect(log.traces[0] != before)
+        #expect(log.traces[0].spans.count == 1)
+    }
+
+    @Test func phaseAndMetadataMutationsMakeTraceUnequal() {
+        let log = ServerGenerationLog()
+        let h = log.startRequest(completionID: "a", model: "m", stream: true, sessionAffinity: nil)
+
+        var previous = log.traces[0]
+        log.markLeaseAcquired(handle: h)
+        #expect(log.traces[0] != previous)
+
+        previous = log.traces[0]
+        log.registerCancelAction(handle: h) {}
+        #expect(log.traces[0] != previous)
+        #expect(log.traces[0].isCancellable)
+
+        previous = log.traces[0]
+        log.requestCancel(traceID: h.id)
+        #expect(log.traces[0] != previous)
+        #expect(log.traces[0].cancelRequested)
+
+        previous = log.traces[0]
+        log.complete(handle: h, finishReason: "stop")
+        #expect(log.traces[0] != previous)
+    }
+
+    @Test func untouchedTraceComparesEqualAcrossOtherTracesMutating() {
+        let log = ServerGenerationLog()
+        _ = log.startRequest(completionID: "a", model: "m", stream: true, sessionAffinity: nil)
+        let first = log.traces[0]
+        let h2 = log.startRequest(completionID: "b", model: "m", stream: true, sessionAffinity: nil)
+        log.ingest(handle: h2, event: .text("body"))
+        log.flushPending(handle: h2)
+
+        #expect(log.traces[0] == first)
+    }
 }

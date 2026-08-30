@@ -65,7 +65,10 @@ nonisolated struct GenerationAccumulator: Sendable {
         case .thinkStart:
             thinking = thinking ?? ""
         case .thinking(let chunk):
-            thinking = (thinking ?? "") + chunk
+            // In-place append through the optional — `(thinking ?? "") + chunk`
+            // rebuilt the whole accumulated string on every token.
+            if thinking == nil { thinking = "" }
+            thinking? += chunk
             streamedThinkingAfterTruncate? += chunk
         case .thinkEnd:
             break

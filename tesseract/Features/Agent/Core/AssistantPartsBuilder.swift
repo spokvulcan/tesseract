@@ -260,6 +260,14 @@ nonisolated struct AssistantPartsBuilder: Sendable {
     private mutating func appendText(_ chunk: String) -> [AssistantMessageEvent] {
         retractOpenToolCall()
         if let index = openIndex, case .text(var t) = parts[index] {
+            // Release the array's reference before appending so the buffer
+            // can grow in place — with both references alive, `+=` failed
+            // the CoW uniqueness check and copied the accumulated text on
+            // every token. The `partial` snapshots on events alias this
+            // storage too: consumers may retain a *start* snapshot (taken
+            // while the part is empty) but must not retain per-delta ones,
+            // or every append copies again.
+            parts[index] = .text(TextPart(text: ""))
             t.text += chunk
             parts[index] = .text(t)
             return [.textDelta(contentIndex: index, delta: chunk, partial: snapshot())]
@@ -279,6 +287,8 @@ nonisolated struct AssistantPartsBuilder: Sendable {
     private mutating func appendThinking(_ chunk: String) -> [AssistantMessageEvent] {
         retractOpenToolCall()
         if let index = openIndex, case .thinking(var t) = parts[index] {
+            // Same CoW-release trick as `appendText`.
+            parts[index] = .thinking(ThinkingPart(thinking: ""))
             t.thinking += chunk
             parts[index] = .thinking(t)
             return [.thinkingDelta(contentIndex: index, delta: chunk, partial: snapshot())]

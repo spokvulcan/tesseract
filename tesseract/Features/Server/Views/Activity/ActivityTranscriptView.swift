@@ -43,7 +43,7 @@ struct ActivityTranscriptView: View {
     private var renderedExchange: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ChatLayout.rowSpacing) {
-                InboundSection(trace: trace)
+                InboundSection(inbound: trace.inbound, promptTokens: trace.promptTokens)
 
                 Divider()
 
@@ -288,12 +288,13 @@ private struct ActivityRequestHeader: View {
 /// one-line disclosure (#272). Reads the real capture attached to the
 /// trace at `startRequest` (#274); when the per-trace budget dropped
 /// middle messages, the gap is shown in place, never papered over.
+/// Takes only the capture + prompt-token count (not the whole trace) so a
+/// streaming flush that grows the response spans never re-evaluates it.
 private struct InboundSection: View {
-    let trace: RequestTrace
+    let inbound: RequestTrace.InboundCapture
+    let promptTokens: Int?
 
     @State private var isExpanded = false
-
-    private var inbound: RequestTrace.InboundCapture { trace.inbound }
 
     var body: some View {
         VStack(alignment: .leading, spacing: ChatLayout.rowSpacing) {
@@ -345,7 +346,7 @@ private struct InboundSection: View {
         let count = inbound.messages.count + inbound.elidedMessages
         guard count > 0 else { return "no messages" }
         let tokens: String
-        if let promptTokens = trace.promptTokens, promptTokens > 0 {
+        if let promptTokens, promptTokens > 0 {
             tokens = "\(promptTokens.formatted()) tokens"
         } else {
             tokens = "~\(inbound.estimatedTokens.formatted()) tokens"

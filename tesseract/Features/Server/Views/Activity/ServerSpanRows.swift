@@ -115,12 +115,20 @@ struct ServerLiveProseView: View {
 /// The chat's collapsible thinking row, server-owned: "+ Thought" with an
 /// inline preview, expanding to the full reasoning. While live it streams
 /// plain text (the chat's own precedent — markdown lands on commit), with
-/// a spinner in the marker slot.
+/// a spinner in the marker slot. Live updates re-publish at most every
+/// ~100 ms (the `ServerLiveProseView` throttle) and the expanded body
+/// renders through `ChunkedStreamingText`, so neither the 30 Hz store flush
+/// nor the accumulated length sets the layout cost.
 struct ServerThinkingRow: View {
     let text: String
     let isLive: Bool
 
     @State private var isExpanded = false
+    @State private var displayed = ""
+    @State private var lastPublish = Date.distantPast
+    @State private var trailingFlush: Task<Void, Never>?
+
+    private static let throttle: TimeInterval = 0.1
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -147,7 +155,7 @@ struct ServerThinkingRow: View {
             .help(isExpanded ? "Hide reasoning" : "Show reasoning")
 
             if isExpanded {
-                Text(text.chatDisplayTrimmed)
+                expandedBody
                     .font(.system(size: chatBodyFontSize))
                     .lineSpacing(chatLineSpacing)
                     .foregroundStyle(.secondary)
@@ -156,6 +164,23 @@ struct ServerThinkingRow: View {
                     .padding(.leading, ChatLayout.markerWidth + 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .onAppear {
+            displayed = text
+            lastPublish = Date()
+        }
+        .onChange(of: text) { _, newValue in
+            if isLive { publish(newValue) }
+        }
+        .onDisappear { trailingFlush?.cancel() }
+    }
+
+    @ViewBuilder
+    private var expandedBody: some View {
+        if isLive {
+            ChunkedStreamingText(text: displayed)
+        } else {
+            Text(text.chatDisplayTrimmed)
         }
     }
 
@@ -174,8 +199,27 @@ struct ServerThinkingRow: View {
     }
 
     private var previewLine: String {
-        text.replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        isLive
+            ? displayed.chatPreviewLine(tail: ChatLayout.previewTailChars)
+            : text.chatPreviewLine(head: ChatLayout.previewHeadChars)
+    }
+
+    private func publish(_ newValue: String) {
+        let now = Date()
+        if now.timeIntervalSince(lastPublish) >= Self.throttle {
+            trailingFlush?.cancel()
+            trailingFlush = nil
+            displayed = newValue
+            lastPublish = now
+        } else if trailingFlush == nil {
+            let wait = Self.throttle - now.timeIntervalSince(lastPublish)
+            trailingFlush = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.01) * 1_000_000_000))
+                trailingFlush = nil
+                displayed = text
+                lastPublish = Date()
+            }
+        }
     }
 }
 

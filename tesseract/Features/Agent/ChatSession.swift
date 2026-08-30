@@ -436,6 +436,9 @@ final class ChatSession {
 
         case .textDelta(let index, let delta, let partial),
             .thinkingDelta(let index, let delta, let partial):
+            // Do not retain `partial` here (e.g. `liveMessage = partial`): a
+            // held delta snapshot aliases the builder's open buffer and would
+            // defeat its in-place append — an O(accumulated) copy per token.
             if let livePart, livePart.partIndex == index {
                 livePart.append(delta)
             } else {

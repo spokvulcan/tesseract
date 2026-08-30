@@ -36,11 +36,18 @@ enum ChatLayout {
     /// Durations below this render no badge — "0.0s" reads as broken, and a
     /// near-instant operation has no cost worth flagging.
     static let minBadgeDuration: Duration = .milliseconds(100)
+    /// Collapsed-row preview windows: one truncated line at `columnMaxWidth`
+    /// can never show more characters than this, so preview builders slice
+    /// this window instead of rebuilding the whole accumulated text — the
+    /// head once committed (tail-truncated), the tail while live
+    /// (head-truncated, newest words visible).
+    static let previewHeadChars = 200
+    static let previewTailChars = 160
 }
 
 // MARK: - Blank parts
 
-extension String {
+extension StringProtocol {
     /// Edge-trim for multi-line transcript text rendered through a plain
     /// `Text`. The model brackets parts with cosmetic newlines ("\n\n" around
     /// think and tool blocks, a trailing "\n" before a block close); the
@@ -49,6 +56,24 @@ extension String {
     /// formatting is untouched.
     var chatDisplayTrimmed: String {
         trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// One collapsed-preview line from the head of the text: bounded window,
+    /// newlines flattened to spaces, edges trimmed. O(window), never
+    /// O(accumulated text) — collapsed rows rebuild this on every flush.
+    func chatPreviewLine(head: Int) -> String {
+        chatPreviewLine(window: prefix(head))
+    }
+
+    /// The tail counterpart, for head-truncated live rows.
+    func chatPreviewLine(tail: Int) -> String {
+        chatPreviewLine(window: suffix(tail))
+    }
+
+    private func chatPreviewLine(window: SubSequence) -> String {
+        window
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

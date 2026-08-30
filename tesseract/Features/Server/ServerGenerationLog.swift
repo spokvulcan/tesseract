@@ -319,11 +319,9 @@ final class ServerGenerationLog {
         handle: TraceHandle,
         _ action: @escaping @Sendable () -> Void
     ) {
-        guard let idx = traces.firstIndex(where: { $0.id == handle.id }),
-            traces[idx].isActive
-        else { return }
+        guard traces.first(where: { $0.id == handle.id })?.isActive == true else { return }
         cancelActions[handle.id] = action
-        traces[idx].isCancellable = true
+        update(traceID: handle.id) { $0.isCancellable = true }
     }
 
     /// User-initiated cancel from the dashboard. Fires the registered
@@ -331,9 +329,9 @@ final class ServerGenerationLog {
     /// as cancelled regardless of which exit route the pipeline takes.
     func requestCancel(traceID: UUID) {
         guard let action = cancelActions.removeValue(forKey: traceID) else { return }
-        if let idx = traces.firstIndex(where: { $0.id == traceID }) {
-            traces[idx].cancelRequested = true
-            traces[idx].isCancellable = false
+        update(traceID: traceID) {
+            $0.cancelRequested = true
+            $0.isCancellable = false
         }
         action()
     }
@@ -341,8 +339,16 @@ final class ServerGenerationLog {
     // MARK: - Helpers
 
     private func update(_ handle: TraceHandle, _ mutate: (inout RequestTrace) -> Void) {
-        guard let idx = traces.firstIndex(where: { $0.id == handle.id }) else { return }
+        update(traceID: handle.id, mutate)
+    }
+
+    /// The one funnel for mutating a stored trace: `RequestTrace.==` keys on
+    /// `revision`, so a mutation that bypasses this and forgets the bump
+    /// silently freezes the trace's row in the dashboard.
+    private func update(traceID: UUID, _ mutate: (inout RequestTrace) -> Void) {
+        guard let idx = traces.firstIndex(where: { $0.id == traceID }) else { return }
         mutate(&traces[idx])
+        traces[idx].revision &+= 1
     }
 
     /// Accumulate a text/thinking chunk off the observed path. On the first
@@ -479,6 +485,17 @@ nonisolated struct TraceHandle: Sendable, Hashable {
 }
 
 struct RequestTrace: Identifiable, Equatable {
+
+    /// Change counter, bumped by `ServerGenerationLog` on every mutation of
+    /// this trace. `==` compares `(id, revision)` instead of the synthesized
+    /// memberwise walk: with up to ~256 KB of captured text per span and
+    /// 30 Hz coalesced flushes while streaming, deep string comparison in
+    /// every SwiftUI view diff was an O(total captured text) tax per flush.
+    var revision: Int = 0
+
+    static func == (lhs: RequestTrace, rhs: RequestTrace) -> Bool {
+        lhs.id == rhs.id && lhs.revision == rhs.revision
+    }
 
     enum Phase: Equatable, Sendable {
         case queued
@@ -753,6 +770,11 @@ struct RequestTrace: Identifiable, Equatable {
         }.joined()
     }
 
+    /// Either appends (the fast path) or elides — and an elide must come out
+    /// *strictly shorter* than its input (`textSliceSlackBytes` exceeding the
+    /// marker + fence overhead guarantees it): `ChunkedTextAccumulator`
+    /// treats a shrink as its only reset signal, so a non-append rewrite
+    /// that grew would fold onto stale frozen chunks downstream.
     nonisolated static func cappedAppend(_ current: String, _ chunk: String) -> String {
         let headBytes = ServerGenerationLog.textHeadBytes
         let tailBytes = ServerGenerationLog.textTailBytes

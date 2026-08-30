@@ -202,8 +202,7 @@ struct ThinkingRowView: View {
     }
 
     private var previewLine: String {
-        text.replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        text.chatPreviewLine(head: ChatLayout.previewHeadChars)
     }
 }
 
@@ -509,7 +508,7 @@ struct LiveThinkingRowView: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                Text(live.displayText.chatDisplayTrimmed)
+                ChunkedStreamingText(text: live.displayText)
                     .font(.system(size: chatBodyFontSize))
                     .lineSpacing(chatLineSpacing)
                     .foregroundStyle(.secondary)
@@ -524,9 +523,7 @@ struct LiveThinkingRowView: View {
     /// The last stretch of the stream, single line — head-truncated so the
     /// newest words stay visible.
     private var tailPreview: String {
-        String(live.displayText.suffix(160))
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        live.displayText.chatPreviewLine(tail: ChatLayout.previewTailChars)
     }
 }
 
