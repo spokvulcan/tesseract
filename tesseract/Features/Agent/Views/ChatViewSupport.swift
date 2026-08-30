@@ -77,6 +77,16 @@ extension StringProtocol {
     }
 }
 
+extension String {
+    /// `String.Index` for a UTF-8 byte offset from the start — O(1) on native
+    /// strings (the index stores the byte offset directly). Callers guarantee
+    /// the offset lands on a grapheme boundary; the chunk accumulators only
+    /// record offsets at line starts.
+    nonisolated func index(atUTF8Offset offset: Int) -> Index {
+        utf8.index(utf8.startIndex, offsetBy: offset)
+    }
+}
+
 extension ContentPart {
     /// Whether this part would render as an empty row: a whitespace-only text
     /// part — the model's cosmetic "\n\n" between tool calls. The stored

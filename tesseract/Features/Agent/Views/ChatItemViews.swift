@@ -117,23 +117,39 @@ struct AssistantPartView: View {
 }
 
 /// Assistant prose — the document body. Markdown by default; the toolbar
-/// toggle falls back to plain text.
+/// toggle falls back to plain text. The live row passes `isLive` to swap in
+/// the chunked streaming renderers, whose publishes cost O(new tail); the
+/// committed row renders whole, restoring one selection surface and full
+/// markdown fidelity. One view owns the mode branch and the plain-text
+/// modifier stack, so the live→committed hand-off cannot drift visually.
 struct AssistantProseView: View {
     let text: String
+    var isLive = false
     @Environment(SettingsManager.self) private var settings
 
     var body: some View {
         #if DEBUG
-        let _ = ChatViewPerf.signposter.emitEvent("AssistantProseView.body")
+        let _ = ChatViewPerf.signposter.emitEvent(
+            isLive ? "AssistantProseView.live" : "AssistantProseView.body")
         #endif
         if settings.agentUseMarkdown {
-            ChatMarkdownView(text: text)
+            if isLive {
+                ChunkedStreamingMarkdown(text: text)
+            } else {
+                ChatMarkdownView(text: text)
+            }
         } else {
-            Text(text.chatDisplayTrimmed)
-                .font(.system(size: chatBodyFontSize))
-                .lineSpacing(chatLineSpacing)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Group {
+                if isLive {
+                    ChunkedStreamingText(text: text)
+                } else {
+                    Text(text.chatDisplayTrimmed)
+                }
+            }
+            .font(.system(size: chatBodyFontSize))
+            .lineSpacing(chatLineSpacing)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
@@ -471,7 +487,7 @@ struct LivePartView: View {
         #endif
         switch live.kind {
         case .text:
-            AssistantProseView(text: live.displayText)
+            AssistantProseView(text: live.displayText, isLive: true)
         case .thinking:
             LiveThinkingRowView(live: live)
         }
