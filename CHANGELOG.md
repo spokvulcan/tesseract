@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.11.1](https://github.com/spokvulcan/tesseract/compare/v1.11.0...v1.11.1) (2026-08-30)
+
+
+### Bug Fixes
+
+* **server:** accept the OpenAI developer role as a system alias ([#446](https://github.com/spokvulcan/tesseract/issues/446)) ([c81af9f](https://github.com/spokvulcan/tesseract/commit/c81af9f449a7ea5370253d5b48e5574c6ab02485)), closes [#444](https://github.com/spokvulcan/tesseract/issues/444)
+* **server:** C25 cache serves dropped-image requests ([#449](https://github.com/spokvulcan/tesseract/issues/449)) ([6dd1332](https://github.com/spokvulcan/tesseract/commit/6dd13327d4e3387843af6879666f68ed55938310))
+* **server:** stop advertising keep-alive on SSE responses ([#448](https://github.com/spokvulcan/tesseract/issues/448)) ([be13930](https://github.com/spokvulcan/tesseract/commit/be13930a5a4701586292e3cc947d5bcc505b6eb0))
+
+
+### Performance Improvements
+
+* **ui:** chunk the live markdown row so a publish costs O(tail) ([#452](https://github.com/spokvulcan/tesseract/issues/452)) ([05375bb](https://github.com/spokvulcan/tesseract/commit/05375bbc9019b686ce12eae75d67bed4bc76c927))
+* **ui:** fix thinking-block streaming lag in chat and Activity ([#451](https://github.com/spokvulcan/tesseract/issues/451)) ([8a8f024](https://github.com/spokvulcan/tesseract/commit/8a8f024609c1eb735b8a65d6a613ba5c2b082571))
+
 ## [1.11.0](https://github.com/spokvulcan/tesseract/compare/v1.10.0...v1.11.0) (2026-08-24)
 
 
