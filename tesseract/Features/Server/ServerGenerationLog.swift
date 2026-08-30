@@ -324,6 +324,7 @@ final class ServerGenerationLog {
         else { return }
         cancelActions[handle.id] = action
         traces[idx].isCancellable = true
+        traces[idx].revision &+= 1
     }
 
     /// User-initiated cancel from the dashboard. Fires the registered
@@ -334,6 +335,7 @@ final class ServerGenerationLog {
         if let idx = traces.firstIndex(where: { $0.id == traceID }) {
             traces[idx].cancelRequested = true
             traces[idx].isCancellable = false
+            traces[idx].revision &+= 1
         }
         action()
     }
@@ -343,6 +345,7 @@ final class ServerGenerationLog {
     private func update(_ handle: TraceHandle, _ mutate: (inout RequestTrace) -> Void) {
         guard let idx = traces.firstIndex(where: { $0.id == handle.id }) else { return }
         mutate(&traces[idx])
+        traces[idx].revision &+= 1
     }
 
     /// Accumulate a text/thinking chunk off the observed path. On the first
@@ -479,6 +482,17 @@ nonisolated struct TraceHandle: Sendable, Hashable {
 }
 
 struct RequestTrace: Identifiable, Equatable {
+
+    /// Change counter, bumped by `ServerGenerationLog` on every mutation of
+    /// this trace. `==` compares `(id, revision)` instead of the synthesized
+    /// memberwise walk: with up to ~256 KB of captured text per span and
+    /// 30 Hz coalesced flushes while streaming, deep string comparison in
+    /// every SwiftUI view diff was an O(total captured text) tax per flush.
+    var revision: Int = 0
+
+    static func == (lhs: RequestTrace, rhs: RequestTrace) -> Bool {
+        lhs.id == rhs.id && lhs.revision == rhs.revision
+    }
 
     enum Phase: Equatable, Sendable {
         case queued

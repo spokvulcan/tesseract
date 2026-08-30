@@ -202,7 +202,10 @@ struct ThinkingRowView: View {
     }
 
     private var previewLine: String {
-        text.replacingOccurrences(of: "\n", with: " ")
+        // Tail-truncated single line: only the first ~200 characters can
+        // ever be visible, so don't rebuild the whole thought to feed it.
+        String(text.prefix(200))
+            .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
@@ -509,7 +512,7 @@ struct LiveThinkingRowView: View {
             .buttonStyle(.plain)
 
             if isExpanded {
-                Text(live.displayText.chatDisplayTrimmed)
+                ChunkedStreamingText(text: live.displayText)
                     .font(.system(size: chatBodyFontSize))
                     .lineSpacing(chatLineSpacing)
                     .foregroundStyle(.secondary)

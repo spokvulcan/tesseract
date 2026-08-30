@@ -115,12 +115,24 @@ struct ServerLiveProseView: View {
 /// The chat's collapsible thinking row, server-owned: "+ Thought" with an
 /// inline preview, expanding to the full reasoning. While live it streams
 /// plain text (the chat's own precedent — markdown lands on commit), with
-/// a spinner in the marker slot.
+/// a spinner in the marker slot. Live updates re-publish at most every
+/// ~100 ms (the `ServerLiveProseView` throttle) and the expanded body
+/// renders through `ChunkedStreamingText`, so neither the 30 Hz store flush
+/// nor the accumulated length sets the layout cost.
 struct ServerThinkingRow: View {
     let text: String
     let isLive: Bool
 
     @State private var isExpanded = false
+    @State private var displayed = ""
+    @State private var lastPublish = Date.distantPast
+    @State private var trailingFlush: Task<Void, Never>?
+
+    private static let throttle: TimeInterval = 0.1
+
+    /// What the row renders: the throttled copy while live, the committed
+    /// text once finalized.
+    private var displayText: String { isLive ? displayed : text }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -147,7 +159,7 @@ struct ServerThinkingRow: View {
             .help(isExpanded ? "Hide reasoning" : "Show reasoning")
 
             if isExpanded {
-                Text(text.chatDisplayTrimmed)
+                expandedBody
                     .font(.system(size: chatBodyFontSize))
                     .lineSpacing(chatLineSpacing)
                     .foregroundStyle(.secondary)
@@ -156,6 +168,29 @@ struct ServerThinkingRow: View {
                     .padding(.leading, ChatLayout.markerWidth + 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+        }
+        .onAppear {
+            displayed = text
+            lastPublish = Date()
+        }
+        .onChange(of: text) { _, newValue in
+            if isLive { publish(newValue) }
+        }
+        .onChange(of: isLive) { _, nowLive in
+            if !nowLive {
+                trailingFlush?.cancel()
+                trailingFlush = nil
+            }
+        }
+        .onDisappear { trailingFlush?.cancel() }
+    }
+
+    @ViewBuilder
+    private var expandedBody: some View {
+        if isLive {
+            ChunkedStreamingText(text: displayText)
+        } else {
+            Text(text.chatDisplayTrimmed)
         }
     }
 
@@ -173,9 +208,33 @@ struct ServerThinkingRow: View {
         }
     }
 
+    /// One truncated line: only ~200 characters can ever be visible, so the
+    /// preview never rebuilds the whole accumulated thought — the tail while
+    /// live (head-truncated), the head once committed (tail-truncated).
     private var previewLine: String {
-        text.replacingOccurrences(of: "\n", with: " ")
+        let window = isLive ? String(displayText.suffix(160)) : String(displayText.prefix(200))
+        return
+            window
+            .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func publish(_ newValue: String) {
+        let now = Date()
+        if now.timeIntervalSince(lastPublish) >= Self.throttle {
+            trailingFlush?.cancel()
+            trailingFlush = nil
+            displayed = newValue
+            lastPublish = now
+        } else if trailingFlush == nil {
+            let wait = Self.throttle - now.timeIntervalSince(lastPublish)
+            trailingFlush = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(max(wait, 0.01) * 1_000_000_000))
+                trailingFlush = nil
+                displayed = text
+                lastPublish = Date()
+            }
+        }
     }
 }
 
