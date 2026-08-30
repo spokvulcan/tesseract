@@ -202,11 +202,7 @@ struct ThinkingRowView: View {
     }
 
     private var previewLine: String {
-        // Tail-truncated single line: only the first ~200 characters can
-        // ever be visible, so don't rebuild the whole thought to feed it.
-        String(text.prefix(200))
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        text.chatPreviewLine(head: ChatLayout.previewHeadChars)
     }
 }
 
@@ -527,9 +523,7 @@ struct LiveThinkingRowView: View {
     /// The last stretch of the stream, single line — head-truncated so the
     /// newest words stay visible.
     private var tailPreview: String {
-        String(live.displayText.suffix(160))
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespaces)
+        live.displayText.chatPreviewLine(tail: ChatLayout.previewTailChars)
     }
 }
 

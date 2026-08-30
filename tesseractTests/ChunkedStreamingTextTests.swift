@@ -9,9 +9,9 @@ import Testing
 /// resets the state.
 struct ChunkedTextAccumulatorTests {
 
-    private func makeText(paragraphs: Int, paragraphLength: Int = 600) -> String {
+    private func makeText(paragraphs: Int) -> String {
         (0..<paragraphs).map { index in
-            String(repeating: "p\(index) word ", count: paragraphLength / 8)
+            String(repeating: "p\(index) word ", count: 75)
         }.joined(separator: "\n")
     }
 

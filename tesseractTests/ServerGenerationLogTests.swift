@@ -468,13 +468,12 @@ struct ServerGenerationLogTests {
 
     @Test func untouchedTraceComparesEqualAcrossOtherTracesMutating() {
         let log = ServerGenerationLog()
-        let h1 = log.startRequest(completionID: "a", model: "m", stream: true, sessionAffinity: nil)
+        _ = log.startRequest(completionID: "a", model: "m", stream: true, sessionAffinity: nil)
         let first = log.traces[0]
         let h2 = log.startRequest(completionID: "b", model: "m", stream: true, sessionAffinity: nil)
         log.ingest(handle: h2, event: .text("body"))
         log.flushPending(handle: h2)
 
         #expect(log.traces[0] == first)
-        _ = h1
     }
 }

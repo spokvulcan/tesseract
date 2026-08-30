@@ -130,10 +130,6 @@ struct ServerThinkingRow: View {
 
     private static let throttle: TimeInterval = 0.1
 
-    /// What the row renders: the throttled copy while live, the committed
-    /// text once finalized.
-    private var displayText: String { isLive ? displayed : text }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button {
@@ -176,19 +172,13 @@ struct ServerThinkingRow: View {
         .onChange(of: text) { _, newValue in
             if isLive { publish(newValue) }
         }
-        .onChange(of: isLive) { _, nowLive in
-            if !nowLive {
-                trailingFlush?.cancel()
-                trailingFlush = nil
-            }
-        }
         .onDisappear { trailingFlush?.cancel() }
     }
 
     @ViewBuilder
     private var expandedBody: some View {
         if isLive {
-            ChunkedStreamingText(text: displayText)
+            ChunkedStreamingText(text: displayed)
         } else {
             Text(text.chatDisplayTrimmed)
         }
@@ -208,15 +198,10 @@ struct ServerThinkingRow: View {
         }
     }
 
-    /// One truncated line: only ~200 characters can ever be visible, so the
-    /// preview never rebuilds the whole accumulated thought — the tail while
-    /// live (head-truncated), the head once committed (tail-truncated).
     private var previewLine: String {
-        let window = isLive ? String(displayText.suffix(160)) : String(displayText.prefix(200))
-        return
-            window
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        isLive
+            ? displayed.chatPreviewLine(tail: ChatLayout.previewTailChars)
+            : text.chatPreviewLine(head: ChatLayout.previewHeadChars)
     }
 
     private func publish(_ newValue: String) {
