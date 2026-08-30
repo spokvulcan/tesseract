@@ -96,7 +96,7 @@ nonisolated struct ChunkedTextAccumulator {
         guard consumedUTF8 > 0, text.utf8.count >= consumedUTF8 else {
             return text[...]
         }
-        return text[Self.index(text, atUTF8Offset: consumedUTF8)...]
+        return text[text.index(atUTF8Offset: consumedUTF8)...]
     }
 
     /// Fold the latest full text: reset if it shrank (rewrite upstream),
@@ -111,7 +111,7 @@ nonisolated struct ChunkedTextAccumulator {
         if lastSeenUTF8 < total {
             let utf8 = text.utf8
             var offset = lastSeenUTF8
-            for byte in utf8[Self.index(text, atUTF8Offset: lastSeenUTF8)...] {
+            for byte in utf8[text.index(atUTF8Offset: lastSeenUTF8)...] {
                 offset += 1
                 if byte == 0x0A { newlineEndUTF8 = offset }
             }
@@ -122,8 +122,8 @@ nonisolated struct ChunkedTextAccumulator {
             newlineEndUTF8 > consumedUTF8
         else { return }
 
-        let tailStart = Self.index(text, atUTF8Offset: consumedUTF8)
-        let cutEnd = Self.index(text, atUTF8Offset: newlineEndUTF8)
+        let tailStart = text.index(atUTF8Offset: consumedUTF8)
+        let cutEnd = text.index(atUTF8Offset: newlineEndUTF8)
         // `index(before:)` steps back one grapheme, so a CRLF pair drops
         // from the chunk whole.
         var chunk = text[tailStart..<text.index(before: cutEnd)]
@@ -134,9 +134,5 @@ nonisolated struct ChunkedTextAccumulator {
             chunks.append(String(chunk))
         }
         consumedUTF8 = newlineEndUTF8
-    }
-
-    private static func index(_ text: String, atUTF8Offset offset: Int) -> String.Index {
-        text.utf8.index(text.utf8.startIndex, offsetBy: offset)
     }
 }

@@ -39,17 +39,19 @@ struct ChunkedStreamingMarkdown: View {
         let accumulator = frozen.accumulator
         let tail = accumulator.liveTail(of: text)
         // Spacing is per-seam (paragraph rhythm vs. heading headroom), so
-        // the stack carries none and each chunk pads its own bottom.
+        // the stack carries none and each element pads its own top. Frozen
+        // seams were classified at freeze time; only the tail's seam is
+        // derived here, because its first line may still be streaming.
         VStack(alignment: .leading, spacing: 0) {
             ForEach(accumulator.chunks.indices, id: \.self) { index in
-                ChatMarkdownView(text: accumulator.chunks[index])
-                    .padding(
-                        .bottom,
-                        ChunkedMarkdownAccumulator.seamSpacing(
-                            before: index + 1 < accumulator.chunks.count
-                                ? accumulator.chunks[index + 1][...] : tail))
+                ChatMarkdownView(text: accumulator.chunks[index].text)
+                    .padding(.top, accumulator.chunks[index].topSpacing)
             }
             ChatMarkdownView(text: String(tail))
+                .padding(
+                    .top,
+                    accumulator.chunks.isEmpty
+                        ? 0 : ChunkedMarkdownAccumulator.seamSpacing(before: tail))
         }
         .onChange(of: text, initial: true) { _, newValue in
             frozen.accumulator.freezeCompletedBlocks(of: newValue)
@@ -73,10 +75,19 @@ struct ChunkedStreamingMarkdown: View {
 /// misread fence only suppresses or misplaces a seam; it cannot corrupt the
 /// text, and the committed row re-renders the document whole.
 nonisolated struct ChunkedMarkdownAccumulator {
-    /// Frozen markdown chunks — append-only, never mutated afterward, so a
-    /// chunk view keyed by its index is stable for the life of the stream.
-    /// `chunks.joined() + liveTail` always equals the source text.
-    private(set) var chunks: [String] = []
+    /// One frozen markdown chunk plus the seam above it, classified once at
+    /// freeze time so `body` never re-derives spacing for frozen content.
+    struct Chunk: Equatable {
+        let text: String
+        /// The vertical gap drawn above this chunk: Textual's spacing for
+        /// the chunk's lead block, or 0 for the first chunk.
+        let topSpacing: CGFloat
+    }
+
+    /// Frozen chunks — append-only, never mutated afterward, so a chunk view
+    /// keyed by its index is stable for the life of the stream. The chunk
+    /// texts joined plus `liveTail` always equal the source text.
+    private(set) var chunks: [Chunk] = []
     /// UTF-8 length of the consumed source prefix. Always lands at a line
     /// start, so re-deriving the index is grapheme-safe.
     private(set) var consumedUTF8: Int = 0
@@ -115,7 +126,7 @@ nonisolated struct ChunkedMarkdownAccumulator {
         guard consumedUTF8 > 0, text.utf8.count >= consumedUTF8 else {
             return text[...]
         }
-        return text[Self.index(text, atUTF8Offset: consumedUTF8)...]
+        return text[text.index(atUTF8Offset: consumedUTF8)...]
     }
 
     /// Fold the latest full text: reset if it shrank (rewrite upstream),
@@ -134,35 +145,33 @@ nonisolated struct ChunkedMarkdownAccumulator {
             lastSafeCutUTF8 > consumedUTF8
         else { return }
 
-        let start = Self.index(text, atUTF8Offset: consumedUTF8)
-        let cut = Self.index(text, atUTF8Offset: lastSafeCutUTF8)
-        chunks.append(String(text[start..<cut]))
+        let start = text.index(atUTF8Offset: consumedUTF8)
+        let cut = text.index(atUTF8Offset: lastSafeCutUTF8)
+        let chunk = String(text[start..<cut])
+        chunks.append(
+            Chunk(
+                text: chunk,
+                topSpacing: chunks.isEmpty ? 0 : Self.seamSpacing(before: chunk)))
         consumedUTF8 = lastSafeCutUTF8
     }
 
     // MARK: Seam spacing
 
-    /// The vertical gap a chunk seam draws, matching what Textual's block
-    /// stack would put between the same two blocks in one document: the
-    /// GitHub styles' 16pt paragraph rhythm, or a heading / thematic
-    /// break's 24pt top headroom.
+    /// The vertical gap a chunk seam draws above the given content, matching
+    /// what Textual's block stack would put between the same two blocks in
+    /// one document (`ChatMarkdownBlockSpacing`): the paragraph rhythm, or a
+    /// heading / thematic break's top headroom.
     static func seamSpacing(before next: some StringProtocol) -> CGFloat {
         let firstLine = next.prefix(while: { $0 != "\n" })
-        var indent = 0
-        var content = firstLine[...]
-        while content.first == " " { indent += 1; content = content.dropFirst() }
-        guard indent < 4 else { return seamSpacingDefault }
+        let indent = firstLine.prefix(while: { $0 == " " }).count
+        guard indent < 4 else { return ChatMarkdownBlockSpacing.betweenBlocks }
 
+        let content = firstLine.dropFirst(indent)
         if isHeading(content) || isThematicBreak(content) {
-            return seamSpacingBeforeHeading
+            return ChatMarkdownBlockSpacing.beforeHeading
         }
-        return seamSpacingDefault
+        return ChatMarkdownBlockSpacing.betweenBlocks
     }
-
-    /// GitHub paragraph/code/table bottom spacing (`BlockSpacing.bottom`).
-    static let seamSpacingDefault: CGFloat = 16
-    /// GitHub heading / thematic-break top spacing (`BlockSpacing.top`).
-    static let seamSpacingBeforeHeading: CGFloat = 24
 
     private static func isHeading(_ line: some StringProtocol) -> Bool {
         let hashes = line.prefix(while: { $0 == "#" })
@@ -172,13 +181,11 @@ nonisolated struct ChunkedMarkdownAccumulator {
     }
 
     private static func isThematicBreak(_ line: some StringProtocol) -> Bool {
-        for marker: Character in ["-", "*", "_"] {
-            let stripped = line.filter { $0 != " " && $0 != "\t" }
-            if stripped.count >= 3, stripped.allSatisfy({ $0 == marker }) {
-                return true
-            }
-        }
-        return false
+        let stripped = line.filter { $0 != " " && $0 != "\t" }
+        guard stripped.count >= 3, let marker = stripped.first,
+            marker == "-" || marker == "*" || marker == "_"
+        else { return false }
+        return stripped.allSatisfy { $0 == marker }
     }
 
     // MARK: Line scanning
@@ -190,7 +197,7 @@ nonisolated struct ChunkedMarkdownAccumulator {
     private mutating func scan(_ text: String, fromUTF8Offset start: Int) {
         let utf8 = text.utf8
         var offset = start
-        for byte in utf8[Self.index(text, atUTF8Offset: start)...] {
+        for byte in utf8[text.index(atUTF8Offset: start)...] {
             if byte == 0x0A {
                 finishLine()
                 lineStartUTF8 = offset + 1
@@ -223,32 +230,26 @@ nonisolated struct ChunkedMarkdownAccumulator {
     /// A `\n` just arrived; classify the completed line and reset per-line
     /// scanner state.
     private mutating func finishLine() {
-        if contentStarted {
-            let isDelimiterRun =
-                (runByte == 0x60 || runByte == 0x7E)
-                && runLength >= 3 && leadingColumns <= 3
+        let isDelimiterRun =
+            (runByte == 0x60 || runByte == 0x7E)
+            && runLength >= 3 && leadingColumns <= 3
+        if contentStarted, isDelimiterRun {
             if inFence {
                 // A close fence: the same delimiter, at least as long, with
                 // nothing but whitespace after the run.
-                if isDelimiterRun, runByte == fenceByte, runLength >= fenceLength,
-                    !tailHasNonSpace
-                {
+                if runByte == fenceByte, runLength >= fenceLength, !tailHasNonSpace {
                     inFence = false
                 }
-            } else if isDelimiterRun {
+            } else if runByte != 0x60 || !tailHasBacktick {
                 // An open fence. A backtick fence's info string cannot
                 // contain a backtick (that line is inline code, not a
                 // fence).
-                if runByte != 0x60 || !tailHasBacktick {
-                    inFence = true
-                    fenceByte = runByte
-                    fenceLength = runLength
-                }
+                inFence = true
+                fenceByte = runByte
+                fenceLength = runLength
             }
-            previousLineBlank = false
-        } else {
-            previousLineBlank = true
         }
+        previousLineBlank = !contentStarted
         leadingColumns = 0
         contentStarted = false
         runByte = 0
@@ -256,9 +257,5 @@ nonisolated struct ChunkedMarkdownAccumulator {
         runEnded = false
         tailHasNonSpace = false
         tailHasBacktick = false
-    }
-
-    private static func index(_ text: String, atUTF8Offset offset: Int) -> String.Index {
-        text.utf8.index(text.utf8.startIndex, offsetBy: offset)
     }
 }

@@ -18,7 +18,7 @@ struct ChunkedMarkdownAccumulatorTests {
     /// Frozen chunks plus the live tail must always reassemble the source
     /// text exactly — chunking may never drop or duplicate a byte.
     private func expectReassembles(_ acc: ChunkedMarkdownAccumulator, _ text: String) {
-        #expect(acc.chunks.joined() + acc.liveTail(of: text) == text)
+        #expect(acc.chunks.map(\.text).joined() + acc.liveTail(of: text) == text)
     }
 
     @Test func shortTextNeverFreezes() {
@@ -37,7 +37,8 @@ struct ChunkedMarkdownAccumulatorTests {
         #expect(!acc.chunks.isEmpty)
         // The cut lands at the start of a paragraph: the frozen prefix ends
         // with the blank-line separator, the tail starts with content.
-        #expect(acc.chunks.last?.hasSuffix("\n\n") == true)
+        #expect(acc.chunks.last?.text.hasSuffix("\n\n") == true)
+        #expect(acc.chunks.first?.topSpacing == 0)
         #expect(acc.liveTail(of: text).first?.isWhitespace == false)
         expectReassembles(acc, text)
     }
@@ -174,9 +175,25 @@ struct ChunkedMarkdownAccumulatorTests {
 
     // MARK: Seam spacing
 
+    @Test func frozenChunkRecordsSeamSpacingForItsLeadBlock() {
+        var acc = ChunkedMarkdownAccumulator()
+        var text = makeMarkdown(paragraphs: 8) + "\n\n# Title"
+        acc.freezeCompletedBlocks(of: text)
+        #expect(acc.chunks.count == 1)
+        #expect(acc.chunks.first?.topSpacing == 0)
+        #expect(String(acc.liveTail(of: text)) == "# Title")
+
+        text += "\n\n" + makeMarkdown(paragraphs: 8)
+        acc.freezeCompletedBlocks(of: text)
+        #expect(acc.chunks.count == 2)
+        #expect(acc.chunks[1].text.hasPrefix("# Title"))
+        #expect(acc.chunks[1].topSpacing == ChatMarkdownBlockSpacing.beforeHeading)
+        expectReassembles(acc, text)
+    }
+
     @Test func seamSpacingMatchesBlockTopSpacing() {
-        let heading = ChunkedMarkdownAccumulator.seamSpacingBeforeHeading
-        let base = ChunkedMarkdownAccumulator.seamSpacingDefault
+        let heading = ChatMarkdownBlockSpacing.beforeHeading
+        let base = ChatMarkdownBlockSpacing.betweenBlocks
 
         #expect(ChunkedMarkdownAccumulator.seamSpacing(before: "# Title") == heading)
         #expect(ChunkedMarkdownAccumulator.seamSpacing(before: "###### h6\nbody") == heading)

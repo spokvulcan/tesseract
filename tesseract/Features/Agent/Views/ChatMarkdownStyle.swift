@@ -204,10 +204,26 @@ struct ChatMarkdownStyle: StructuredText.Style {
     let thematicBreakStyle: StructuredText.GitHubThematicBreakStyle = .gitHub
 }
 
+/// The vertical gaps Textual's GitHub styles draw between blocks. Textual
+/// keeps them as private literals inside the style bodies
+/// (`GitHubParagraphStyle` bottom 16, `GitHubHeadingStyle` /
+/// `GitHubThematicBreakStyle` top 24), so they cannot be imported — they are
+/// mirrored here, beside the style bundle that picks those styles, and must
+/// be re-checked whenever the Textual pin moves. `ChunkedStreamingMarkdown`
+/// draws them at its chunk seams so a seam is indistinguishable from the gap
+/// Textual would draw inside one document.
+nonisolated enum ChatMarkdownBlockSpacing {
+    /// GitHub paragraph / code / table bottom spacing.
+    static let betweenBlocks: CGFloat = 16
+    /// GitHub heading / thematic-break top spacing.
+    static let beforeHeading: CGFloat = 24
+}
+
 /// The one way chat markdown is rendered: the style bundle above plus the
 /// copyable code blocks, the Code Accent highlighter, and the transcript type
-/// size. The transcript (`AssistantProseView`) and the Markdown Gallery both
-/// render through this view, so the gallery cannot drift from the chat.
+/// size. The transcript (`AssistantProseView`), the live row's frozen chunks
+/// (`ChunkedStreamingMarkdown`), and the Markdown Gallery all render through
+/// this view, so no caller can drift from the chat.
 struct ChatMarkdownView: View {
     let text: String
 
