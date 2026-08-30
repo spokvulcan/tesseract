@@ -471,9 +471,31 @@ struct LivePartView: View {
         #endif
         switch live.kind {
         case .text:
-            AssistantProseView(text: live.displayText)
+            LiveProseView(text: live.displayText)
         case .thinking:
             LiveThinkingRowView(live: live)
+        }
+    }
+}
+
+/// The live text row's prose: the streaming counterpart of
+/// `AssistantProseView`, chunked so a publish costs O(new tail) instead of
+/// re-rendering the whole accumulated answer (markdown and plain alike).
+/// The committed row goes back through `AssistantProseView`, restoring one
+/// selection surface and full markdown fidelity.
+private struct LiveProseView: View {
+    let text: String
+    @Environment(SettingsManager.self) private var settings
+
+    var body: some View {
+        if settings.agentUseMarkdown {
+            ChunkedStreamingMarkdown(text: text)
+        } else {
+            ChunkedStreamingText(text: text)
+                .font(.system(size: chatBodyFontSize))
+                .lineSpacing(chatLineSpacing)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }
