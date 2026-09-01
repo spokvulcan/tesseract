@@ -76,6 +76,11 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// participation — the post-generation store flow must stay away from the
     /// radix tree entirely.
     let unkeyedReason: CacheKeySpace.UnkeyedReason?
+    /// The request's **Conversation Render**, sealed at Request Keying — the
+    /// one render authority the post-generation phases (leaf-store measure,
+    /// admission probes) draw on. `nil` exactly for an **Unkeyed
+    /// Completion**, which the leaf store leaves before any render.
+    let render: ConversationRender?
     /// Whether warm forwards must seed the **Position Anchor** (the loaded
     /// family is the recognized vision container). False for text models,
     /// where restored prefills keep their nil-state behavior.
@@ -931,10 +936,8 @@ nonisolated final class ServerCompletion {
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
                 sessions: sessions,
-                canonicalTools: canonicalTools,
                 requestID: requestID,
                 prefixCache: prefixCache,
-                renderContext: renderContext,
                 promptStartsThinking: driver.startsInsideThinkBlock,
                 assistantText: accumulator.text,
                 assistantReasoning: clientStreams
@@ -1044,30 +1047,24 @@ nonisolated final class ServerCompletion {
         // seed path already requires.
         if speculativeSeed == nil,
             Task.isCancelled,
-            mlxStart.unkeyedReason == nil,
+            // Keyed only: the render is nil exactly for an Unkeyed Completion.
+            let render = mlxStart.render,
             mlxStart.transientLastUserBoundarySnapshot != nil,
             !renderContext.preservesThinking
         {
-            // Session entry cannot fail with a non-throwing body; the
-            // hypothetical failure just skips the abort-arm seed.
-            let abortTokenizer = try? await sessions.withSession { $0.tokenizer }
-            if let abortTokenizer {
-                speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
-                    storedConversation: conversation,
-                    toolSpecs: canonicalTools,
-                    tokenizer: abortTokenizer,
-                    keySpace: mlxStart.keySpace,
-                    partitionKey: mlxStart.partitionKey,
-                    prefillStepSize: mlxStart.prefillStepSize,
-                    ssdEnabled: mlxStart.ssdEnabled,
-                    seedsPositionAnchor: mlxStart.seedsPositionAnchor,
-                    canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
-                        .tokenOffset ?? 0,
-                    renderContext: renderContext,
-                    ramOnlySpine: true,
-                    diagnostics: diagnosticsContext
-                )
-            }
+            speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
+                storedConversation: conversation,
+                render: render,
+                keySpace: mlxStart.keySpace,
+                partitionKey: mlxStart.partitionKey,
+                prefillStepSize: mlxStart.prefillStepSize,
+                ssdEnabled: mlxStart.ssdEnabled,
+                seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+                canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
+                    .tokenOffset ?? 0,
+                ramOnlySpine: true,
+                diagnostics: diagnosticsContext
+            )
         }
 
         // Release this request's Budget Floor restore pins on every exit
@@ -1191,12 +1188,9 @@ nonisolated final class ServerCompletion {
             // construction.
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
-                toolSpecs: canonicalTools,
                 promptStartsThinking: promptStartsThinking,
-                tokenizer: session.tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext,
-                modelFingerprint: modelFingerprint
+                render: keyed.render
             )
             if let failure = boundaries.lastUserTranslationFailure {
                 diagnosticsContext.logSkip(
@@ -1435,6 +1429,7 @@ nonisolated final class ServerCompletion {
                         fullTokenCount: fullTokenCount,
                         tokenNDim: tokenNDim,
                         keySpace: keySpace,
+                        render: keyed.render,
                         parameters: parameters,
                         toolSpecs: canonicalTools,
                         partitionKey: partitionKey,
@@ -1811,6 +1806,7 @@ nonisolated final class ServerCompletion {
                 fullTokens: fullTokens,
                 keySpace: keySpace,
                 unkeyedReason: nil,
+                render: keyed.render,
                 seedsPositionAnchor: seedsPositionAnchor,
                 snapshotAdmission: snapshotAdmission,
                 ssdEnabled: ssdEnabled,
@@ -2084,6 +2080,7 @@ nonisolated final class ServerCompletion {
             fullTokens: fullTokens,
             keySpace: .identity(keyPath: fullTokens),
             unkeyedReason: reason,
+            render: nil,
             seedsPositionAnchor: false,
             snapshotAdmission: nil,
             ssdEnabled: ssdEnabled,
@@ -2112,6 +2109,7 @@ nonisolated final class ServerCompletion {
         fullTokenCount: Int,
         tokenNDim: Int,
         keySpace: CacheKeySpace,
+        render: ConversationRender,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
@@ -2131,6 +2129,7 @@ nonisolated final class ServerCompletion {
             fullTokenCount: fullTokenCount,
             tokenNDim: tokenNDim,
             keySpace: keySpace,
+            render: render,
             parameters: parameters,
             toolSpecs: toolSpecs,
             partitionKey: partitionKey,
@@ -2164,6 +2163,7 @@ nonisolated final class ServerCompletion {
         fullTokenCount: Int,
         tokenNDim: Int,
         keySpace: CacheKeySpace,
+        render: ConversationRender,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
@@ -2246,6 +2246,7 @@ nonisolated final class ServerCompletion {
             fullTokens: fullTokens,
             keySpace: keySpace,
             unkeyedReason: nil,
+            render: render,
             seedsPositionAnchor: seedsPositionAnchor,
             snapshotAdmission: nil,
             ssdEnabled: ssdEnabled,

@@ -121,13 +121,18 @@ nonisolated enum CanonicalEchoFidelity {
             echoHasReasoning: echo.reasoning != nil
         )
 
+        // Replay renders are always uncached — no live entry to resolve
+        // against, so every render runs in full through the same verbs the
+        // server uses.
+        let probeRender = ConversationRender.uncached(
+            tokenizer: tokenizer, toolSpecs: probeToolSpecs
+        )
         let nextRender: [Int]
         do {
-            nextRender = try tokenizer.applyChatTemplate(
-                messages: next.promptMessages,
-                tools: nextToolSpecs,
-                additionalContext: ["add_generation_prompt": false]
-            )
+            nextRender =
+                try ConversationRender
+                .uncached(tokenizer: tokenizer, toolSpecs: nextToolSpecs)
+                .continuationRender(messages: next.promptMessages)
         } catch {
             let verdict = Verdict.noPath(reason: "next-render-failed: \(error)")
             return BoundaryReport(boundary: boundary, leaf: verdict, speculation: nil)
@@ -143,9 +148,8 @@ nonisolated enum CanonicalEchoFidelity {
                 try LeafAdmissionBuilder.reusablePrefix(
                     continuation: kind == .toolContinuation ? .toolResult : .userTurn,
                     storedConversation: stored,
-                    toolSpecs: probeToolSpecs,
-                    tokenizer: tokenizer,
-                    keySpace: .identity()
+                    keySpace: .identity(),
+                    render: probeRender
                 )
             },
             against: nextRender,
@@ -170,9 +174,8 @@ nonisolated enum CanonicalEchoFidelity {
                 of: {
                     try LeafAdmissionBuilder.futureSharedPrefix(
                         storedConversation: stored,
-                        toolSpecs: probeToolSpecs,
-                        tokenizer: tokenizer,
-                        keySpace: .identity()
+                        keySpace: .identity(),
+                        render: probeRender
                     )
                 },
                 against: nextRender,

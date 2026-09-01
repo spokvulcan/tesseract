@@ -38,7 +38,7 @@
 //    This is the ONLY resolve with no empirical arbiter behind it — its
 //    exactness rests entirely on (byte equality, model fingerprint), which is
 //    why an unknown fingerprint bypasses the cache upstream rather than
-//    sharing a synthetic key (`RenderTokenSource`).
+//    sharing a synthetic key (`ConversationRender`).
 //
 //  The cache keys on (modelFingerprint, templateHash, tools digest,
 //  additional-context digest, per-message digest chain). `templateHash` is
@@ -46,7 +46,7 @@
 //  path's `ModelFingerprint.computeFingerprint` already hashes
 //  `tokenizer_config.json` / `chat_template.*`, so template identity is
 //  covered twice. Images and vision-family models never reach here — every
-//  integration seam bypasses upstream of this type via `RenderTokenSource`.
+//  integration seam bypasses upstream of this type via `ConversationRender`.
 //
 //  Experiment C27 — the **truncated resolve**: `PrefillPlanner` re-renders
 //  every cache-aware request truncated at the last user message (with
@@ -937,7 +937,7 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
     /// remains keyed.
     ///
     /// Memoized per model fingerprint. That is only sound because an unknown
-    /// fingerprint never reaches this type: `RenderTokenSource` bypasses the
+    /// fingerprint never reaches this type: `ConversationRender` bypasses the
     /// cache rather than passing a synthetic key, so two different models can
     /// never collide on one memo slot (they would then share a probe hash and
     /// the template-mismatch check would pass vacuously).

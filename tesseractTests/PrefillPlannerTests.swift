@@ -317,10 +317,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
 
         // The two probes diverge at the user content, so the boundary is the
@@ -337,10 +336,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
         #expect(boundaries.stablePrefixOffset == nil)
     }
@@ -356,10 +354,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
 
         let genPromptBytes = FakeChatMLTokenizer.generationPrompt(thinking: true).utf8.count
@@ -375,10 +372,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: false,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
 
         let genPromptBytes = FakeChatMLTokenizer.generationPrompt(thinking: false).utf8.count
@@ -396,10 +392,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: false,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
         #expect(boundaries.lastMessageOffset == nil)
     }
@@ -416,10 +411,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
 
         // The re-render stops after the user turn — it excludes the trailing
@@ -441,10 +435,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: .identity(keyPath: tokens)
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer)
         )
         #expect(boundaries.lastUserOffset == nil)
     }
@@ -466,10 +459,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: keySpace
+            keySpace: keySpace,
+            render: makeRender(tokenizer)
         )
 
         // The re-render up to the user turn carries one single-pad placeholder;
@@ -524,10 +516,9 @@ import MLXLMCommon
 
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conv,
-            toolSpecs: nil,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
-            keySpace: keySpace
+            keySpace: keySpace,
+            render: makeRender(tokenizer)
         )
 
         #expect(boundaries.lastUserOffset == nil)

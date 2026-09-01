@@ -125,26 +125,24 @@ nonisolated enum PrefillPlanner {
     /// so the last-message boundary is found by encoding the known generation
     /// prompt string and subtracting it from the full token suffix.
     ///
-    /// `modelFingerprint` engages the C27 truncated resolve for the last-user
-    /// re-render (text key space only): the Request Keying phase just cached
-    /// the full render+tokens of this same conversation under that
-    /// fingerprint, so the truncated token list is recovered as a verified
-    /// trim of the stored entry. `nil` — or any inexactness — runs today's
-    /// `applyChatTemplate`.
+    /// `render` is the request's **Conversation Render** — its last-user
+    /// re-render engages the C27 truncated resolve internally (text key space
+    /// only, known fingerprint): the Request Keying phase just cached the
+    /// full render+tokens of this same conversation, so the truncated token
+    /// list is recovered as a verified trim of the stored entry, with any
+    /// inexactness falling back to the full `applyChatTemplate`.
     static func detectBoundaries(
         conversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
         promptStartsThinking: Bool,
-        tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext = .canonical,
-        modelFingerprint: String? = nil
+        render: ConversationRender
     ) throws -> PrefillBoundaries {
+        let tokenizer = render.tokenizer
         let fullTokens = keySpace.keyPath
         let stablePrefixOffset = try StablePrefixDetector.detect(
             systemPrompt: conversation.systemPrompt,
-            toolSpecs: toolSpecs,
-            additionalContext: renderContext.additionalContext(),
+            toolSpecs: render.toolSpecs,
+            additionalContext: render.renderContext.additionalContext(),
             fullTokens: fullTokens,
             tokenizer: tokenizer
         )
@@ -177,43 +175,16 @@ nonisolated enum PrefillPlanner {
                 toolDefinitionsDigest: conversation.toolDefinitionsDigest,
                 templateContextDigest: conversation.templateContextDigest
             )
-            let mergedContext = renderContext.additionalContext(
-                merging: ["add_generation_prompt": false])
-            let renderTokens: [Int]
-            let source = RenderTokenSource.forIdentityKeySpace(
-                keySpace, modelFingerprint: modelFingerprint)
-            if let cacheFingerprint = source.cacheFingerprint,
-                let truncated = try? RenderTokenCache.shared.resolveTruncated(
-                    tokenizer: tokenizer,
-                    messages: userPrefixConversation.promptMessages,
-                    tools: toolSpecs,
-                    baseAdditionalContext: renderContext.additionalContext(),
-                    mergedAdditionalContext: mergedContext,
-                    modelFingerprint: cacheFingerprint,
-                    // C31: when this request's Request Keying phase resolved
-                    // through the cache it resolved the same `conversation`
-                    // value, and the truncation above is a message prefix of
-                    // it — so the entry's stored digest chain head IS the
-                    // truncated chain (cumulative hashing). A bypassed or
-                    // fallen-back Request Keying leaves an older entry, which
-                    // the render arbiters then reject; the assertion is a cost
-                    // hint, never a correctness input.
-                    messagesAreEntryPrefix: true
-                )
-            {
-                // C27: text-space requests recover the truncated render's
-                // tokens as a verified trim of the entry the Request Keying
-                // phase cached for this same conversation. Image-bearing
-                // (non-identity) key spaces keep the full render below —
-                // their placeholder runs need the real token list.
-                renderTokens = truncated
-            } else {
-                renderTokens = try tokenizer.applyChatTemplate(
-                    messages: userPrefixConversation.promptMessages,
-                    tools: toolSpecs,
-                    additionalContext: mergedContext
-                )
-            }
+            // C27: text-space requests recover the truncated render's tokens
+            // as a verified trim of the entry the Request Keying phase cached
+            // for this same conversation (the truncation above is a
+            // prompt-message prefix of it). Image-bearing (non-identity) key
+            // spaces render in full — their placeholder runs need the real
+            // token list; the sealed render bypasses the cache for them. The
+            // whole ladder — eligibility, resolve, fallback — is the verb's.
+            let renderTokens = try render.lastUserPrefixRender(
+                messages: userPrefixConversation.promptMessages
+            )
             switch keySpace.translatedLength(renderTokens: renderTokens) {
             case .success(let keyLength):
                 lastUserOffset = keyLength

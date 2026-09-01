@@ -288,55 +288,64 @@ struct RenderTokenCacheFakeTests {
 
 // MARK: - Cache eligibility
 
-/// `RenderTokenSource` is the single home for "may this render tokenize
-/// through the cache" — the predicate five seams used to spell five ways, two
-/// of which disagreed on the unknown-fingerprint case.
-struct RenderTokenSourceTests {
+/// The **Conversation Render** owns cache eligibility — decided once at its
+/// request-edge construction and re-checked at key-space sealing; the
+/// predicate five seams used to spell five ways, two of which disagreed on
+/// the unknown-fingerprint case.
+struct ConversationRenderEligibilityTests {
+
+    private let tokenizer = GreedyTokenizer(pieces: [" "])
+
+    /// A key space carrying one image run — non-identity by construction,
+    /// built through the same fixture the builder suites use.
+    private func imageKeySpace() throws -> CacheKeySpace {
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [
+                HTTPPrefixCacheMessage(
+                    role: .user, content: "describe",
+                    images: [HTTPPrefixCacheImage(data: Data([0x01]))]
+                )
+            ]
+        )
+        return try FakeChatMLTokenizer.keySpace(for: conversation, runLengths: [4])
+    }
 
     /// An unknown fingerprint must BYPASS, never resolve under a synthetic
     /// shared key: the repeat path trusts (bytes, fingerprint) with no
     /// empirical arbiter behind it, so two models sharing a key could return
     /// each other's tokens.
-    @Test func unknownFingerprintBypassesEverySeam() {
-        #expect(
-            RenderTokenSource.forTextOnlyRequest(
-                hasMedia: false, producesFlatTextTokens: true, modelFingerprint: nil
-            ).cacheFingerprint == nil)
-        #expect(
-            RenderTokenSource.forIdentityKeySpace(.identity(), modelFingerprint: nil)
-                .cacheFingerprint == nil)
+    @Test func unknownFingerprintBypasses() {
+        #expect(makeRender(tokenizer, fingerprint: nil).cacheFingerprint == nil)
     }
 
     @Test func mediaAndNonFlatTokenModelsBypass() {
+        #expect(makeRender(tokenizer, hasMedia: true, fingerprint: "m").cacheFingerprint == nil)
         #expect(
-            RenderTokenSource.forTextOnlyRequest(
-                hasMedia: true, producesFlatTextTokens: true, modelFingerprint: "m"
-            ).cacheFingerprint == nil)
-        #expect(
-            RenderTokenSource.forTextOnlyRequest(
-                hasMedia: false, producesFlatTextTokens: false, modelFingerprint: "m"
-            ).cacheFingerprint == nil)
+            makeRender(tokenizer, producesFlatTextTokens: false, fingerprint: "m")
+                .cacheFingerprint == nil)
     }
 
     @Test func eligibleTextOnlyRequestCarriesTheFingerprint() {
-        #expect(
-            RenderTokenSource.forTextOnlyRequest(
-                hasMedia: false, producesFlatTextTokens: true, modelFingerprint: "m"
-            ).cacheFingerprint == "m")
-        #expect(
-            RenderTokenSource.forIdentityKeySpace(.identity(), modelFingerprint: "m")
-                .cacheFingerprint == "m")
+        #expect(makeRender(tokenizer, fingerprint: "m").cacheFingerprint == "m")
     }
 
-    /// The plumbed base render travels with the eligibility decision and does
-    /// not alter it.
-    @Test func baseRenderTokensRideAlongWithoutChangingEligibility() {
-        let source = RenderTokenSource.forIdentityKeySpace(.identity(), modelFingerprint: "m")
-            .withBaseRenderTokens([1, 2, 3])
-        #expect(source.cacheFingerprint == "m")
-        #expect(source.baseRenderTokens == [1, 2, 3])
-        #expect(RenderTokenSource.uncached.cacheFingerprint == nil)
-        #expect(RenderTokenSource.uncached.baseRenderTokens == nil)
+    /// Sealing re-checks eligibility against the settled key space: identity
+    /// keeps the fingerprint, an image-bearing space clears it (placeholder
+    /// runs need the real token list, so those requests always render).
+    @Test func sealingKeepsTheFingerprintOnlyForAnIdentityKeySpace() throws {
+        let render = makeRender(tokenizer, fingerprint: "m")
+        #expect(render.sealed(for: .identity()).cacheFingerprint == "m")
+        #expect(try render.sealed(for: imageKeySpace()).cacheFingerprint == nil)
+    }
+
+    /// The C31 plumbed base render travels with the eligibility decision and
+    /// does not alter it.
+    @Test func carriedBaseRenderRidesAlongWithoutChangingEligibility() {
+        let render = makeRender(tokenizer, fingerprint: "m").carryingBaseRender([1, 2, 3])
+        #expect(render.cacheFingerprint == "m")
+        #expect(render.baseRenderTokens == [1, 2, 3])
+        #expect(makeRender(tokenizer, fingerprint: nil).baseRenderTokens == nil)
     }
 }
 

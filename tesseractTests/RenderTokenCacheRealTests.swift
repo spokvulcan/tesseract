@@ -679,10 +679,10 @@ struct RenderTokenCacheReplacingFakeTests {
 /// The **Leaf Admission Builder**'s reusable-prefix probe routed through the
 /// C28 tail-replacement resolve: with a fingerprint and an identity key
 /// space, both probe renders recover from the entry the request cached — and
-/// the probe result is identical to the uncached path. Serialized: the suite
-/// drives the process-global `RenderTokenCache.shared`.
-@Suite(.serialized)
-struct LeafAdmissionCachePathTests {
+/// the probe result is identical to the uncached path. Each test injects its
+/// own private `RenderTokenCache` through the render's `cache:` seam, so the
+/// suite never touches the process-global `.shared`.
+@Suite struct LeafAdmissionCachePathTests {
 
     private static let fingerprint = "fake-model"
 
@@ -696,9 +696,7 @@ struct LeafAdmissionCachePathTests {
 
     @Test func reusablePrefixServedByTheCacheMatchesTheUncachedProbe() throws {
         let tokenizer = Self.tokenizer()
-        let cache = RenderTokenCache.shared
-        cache.reset()
-        defer { cache.reset() }
+        let cache = RenderTokenCache()
 
         // The request's entry: the conversation WITHOUT its assistant turn,
         // rendered with the generation prompt — exactly what the Request
@@ -717,18 +715,15 @@ struct LeafAdmissionCachePathTests {
             try LeafAdmissionBuilder.reusablePrefix(
                 continuation: .userTurn,
                 storedConversation: storedConversation,
-                toolSpecs: nil,
-                tokenizer: tokenizer,
                 keySpace: .identity(),
-                renderTokens: RenderTokenSource(cacheFingerprint: Self.fingerprint)
+                render: makeRender(tokenizer, fingerprint: Self.fingerprint, cache: cache)
             )?.get())
         let uncached = try #require(
             try LeafAdmissionBuilder.reusablePrefix(
                 continuation: .userTurn,
                 storedConversation: storedConversation,
-                toolSpecs: nil,
-                tokenizer: tokenizer,
-                keySpace: .identity()
+                keySpace: .identity(),
+                render: makeRender(tokenizer, cache: cache)
             )?.get())
         #expect(cached == uncached)
         // Both probe renders (stored + continuation) came off the cache.
@@ -740,9 +735,7 @@ struct LeafAdmissionCachePathTests {
     /// construction.
     @Test func reusablePrefixFallsBackWithoutACachedEntry() throws {
         let tokenizer = Self.tokenizer()
-        let cache = RenderTokenCache.shared
-        cache.reset()
-        defer { cache.reset() }
+        let cache = RenderTokenCache()
 
         let storedConversation = HTTPPrefixCacheConversation(
             systemPrompt: "You are helpful.",
@@ -753,10 +746,8 @@ struct LeafAdmissionCachePathTests {
         _ = try LeafAdmissionBuilder.reusablePrefix(
             continuation: .userTurn,
             storedConversation: storedConversation,
-            toolSpecs: nil,
-            tokenizer: tokenizer,
             keySpace: .identity(),
-            renderTokens: RenderTokenSource(cacheFingerprint: "never-stored")
+            render: makeRender(tokenizer, fingerprint: "never-stored", cache: cache)
         )?.get()
         #expect(cache.statsSnapshot().replacedHits == 0)
         #expect(cache.statsSnapshot().replacedFallbacks == 2)

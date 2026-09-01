@@ -145,3 +145,30 @@ extension Array {
         indices.contains(index) ? self[index] : nil
     }
 }
+
+// MARK: - Shared Conversation Render fixture
+
+/// The one test spelling of a **Conversation Render**: built through the
+/// production request-edge constructor, uncached unless a `fingerprint` is
+/// given, with the C31 base render optionally carried. The eligibility knobs
+/// default to the eligible text-only shape; the eligibility suite flips them.
+nonisolated func makeRender(
+    _ tokenizer: any MLXLMCommon.Tokenizer,
+    toolSpecs: [ToolSpec]? = nil,
+    hasMedia: Bool = false,
+    producesFlatTextTokens: Bool = true,
+    fingerprint: String? = nil,
+    base: [Int]? = nil,
+    cache: RenderTokenCache = .shared
+) -> ConversationRender {
+    let render = ConversationRender.forTextOnlyRequest(
+        tokenizer: tokenizer,
+        toolSpecs: toolSpecs,
+        renderContext: .canonical,
+        hasMedia: hasMedia,
+        producesFlatTextTokens: producesFlatTextTokens,
+        modelFingerprint: fingerprint,
+        cache: cache
+    )
+    return base.map { render.carryingBaseRender($0) } ?? render
+}

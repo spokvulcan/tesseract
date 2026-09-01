@@ -256,10 +256,20 @@ render fixup.
 
 **Conversation Render**:
 The token-only rendering contract — family message-forming plus chat-template
-application, no pixel work — shared by the planner's re-render and the leaf probes,
-identical to the shape prepare uses, so a probe render cannot drift from prepare's.
+application, no pixel work — shared by the request edge, the planner's
+re-render, and the leaf probes, identical to the shape prepare uses, so a probe
+render cannot drift from prepare's. Since 2026-09 a module, not a convention:
+one per-request value (`ConversationRender`) built at **Request Keying** where
+instance truth lives, sealed for the settled **Cache Key Space**, whose render
+verbs own the whole choreography — cache eligibility, the Render+Token Cache
+resolve, the template fallback, the no-generation-prompt merged context — so a
+call site can no longer wire an ingredient wrong (the issue #439 defect class).
+The render cache stays the implementation below it.
 _Avoid_: re-render (unqualified), probe tokenization, per-call-site
-`applyChatTemplate` (the rendering it standardizes, not a synonym for it).
+`applyChatTemplate` (the rendering it standardizes, not a synonym for it);
+RenderTokenSource (the dissolved predecessor — eligibility as a free-standing
+value each call site wired by hand); per-site resolve-or-fallback ladders (the
+retired shape).
 
 **Position Anchor**:
 The M-RoPE continuation state a warm-restored conversation resumes generation at —

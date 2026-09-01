@@ -33,6 +33,10 @@ nonisolated enum RequestKeyingPhase {
         let tokenNDim: Int
         let partitionKey: CachePartitionKey
         let keySpace: CacheKeySpace
+        /// The request's **Conversation Render**, sealed for `keySpace` —
+        /// the one render authority every later phase (planner boundary,
+        /// leaf-store measure, admission probes) draws on.
+        let render: ConversationRender
         /// The recognized vision container mis-positions M-RoPE on any
         /// nil-state warm forward — text-only restores included — so the
         /// Position Anchor is seeded whenever the family is recognized AND
@@ -114,8 +118,10 @@ nonisolated enum RequestKeyingPhase {
         // the text-only processor builds. Media, vision containers (whose
         // text-only `prepare` emits 2D tokens), an unknown model fingerprint,
         // non-rendering tokenizers, and any render/encode failure all fall back
-        // to the processor. The eligibility decision lives in
-        // `RenderTokenSource`, shared with the other four seams.
+        // to the processor. This is the ONE construction of the request's
+        // **Conversation Render** — eligibility decided here, where instance
+        // truth lives, then sealed for the key space below and threaded to
+        // every later render.
         // `hasMedia` keys on the INSTANCE-FILTERED list (issue #439): a
         // dropped-image request is text-only by construction — the processor
         // never sees the bytes, only the same content-array prompt the cache
@@ -125,22 +131,17 @@ nonisolated enum RequestKeyingPhase {
         // `producesFlatTextTokens` is false), so real media still lands on the
         // processor via the flat-tokens guard; passing `keyedImages` keeps the
         // seam honest if that coupling ever changes.
-        let renderTokens = RenderTokenSource.forTextOnlyRequest(
+        let render = ConversationRender.forTextOnlyRequest(
+            tokenizer: session.tokenizer,
+            toolSpecs: canonicalTools,
+            renderContext: renderContext,
             hasMedia: !keyedImages.isEmpty,
             producesFlatTextTokens: producesFlatTextTokens,
             modelFingerprint: modelFingerprint
         )
         let fullInput: LMInput
-        if let cacheFingerprint = renderTokens.cacheFingerprint,
-            let resolution = try? RenderTokenCache.shared.resolve(
-                tokenizer: session.tokenizer,
-                messages: conversation.promptMessages,
-                tools: canonicalTools,
-                additionalContext: renderContext.additionalContext(),
-                modelFingerprint: cacheFingerprint
-            )
-        {
-            fullInput = LMInput(tokens: MLXArray(resolution.tokens))
+        if let renderedTokens = render.fullRender(messages: conversation.promptMessages) {
+            fullInput = LMInput(tokens: MLXArray(renderedTokens))
         } else {
             fullInput = try await session.prepare(
                 UserInput(
@@ -225,6 +226,7 @@ nonisolated enum RequestKeyingPhase {
                 tokenNDim: tokenNDim,
                 partitionKey: partitionKey,
                 keySpace: keySpace,
+                render: render.sealed(for: keySpace),
                 seedsPositionAnchor: effectiveImageKeying != nil
             ))
     }

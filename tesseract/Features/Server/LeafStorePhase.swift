@@ -51,10 +51,8 @@ nonisolated enum LeafStorePhase {
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
         sessions: any ModelSessionProviding,
-        canonicalTools: [ToolSpec]?,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
-        renderContext: TemplateRenderContext,
         promptStartsThinking: Bool,
         assistantText: String,
         assistantReasoning: String?,
@@ -89,22 +87,25 @@ nonisolated enum LeafStorePhase {
         // translate into key space (identity for text-only). The translated
         // path is what every capture offset and admission below keys on —
         // length-equal to the prepared sequence, so key index == KV offset
-        // holds.
-        // C25–C31: one eligibility decision for every render this phase and
-        // the admission builder below make.
-        let renderTokenSource = RenderTokenSource.forIdentityKeySpace(
-            mlxStart.keySpace,
-            modelFingerprint: mlxStart.partitionKey.modelFingerprint
-        )
-        guard
-            let storedRenderTokens = await measureStoredTokenSequence(
-                sessions: sessions,
-                conversation: storedConversation,
-                toolSpecs: canonicalTools,
-                renderContext: renderContext,
-                renderTokens: renderTokenSource
+        // holds. The **Conversation Render** owns the whole C28 ladder
+        // (cache-eligibility, tail-replacement resolve, template fallback);
+        // the guard/nil diagnostics behavior is unchanged. Raw prompt
+        // messages, so assistant `reasoning_content` and `tool_calls`
+        // survive template rendering.
+        guard let render = mlxStart.render else {
+            // The render is nil exactly for an Unkeyed Completion, which the
+            // guard above already returned on.
+            return result
+        }
+        let storedRenderTokens: [Int]
+        do {
+            storedRenderTokens = try render.continuationRender(
+                messages: storedConversation.promptMessages
             )
-        else {
+        } catch {
+            Log.agent.warning(
+                "Stored token sequence measurement failed — error=\(error.localizedDescription)"
+            )
             diagnosticsContext.logSkip(
                 stage: "leafStore",
                 reason: "tokenization-failed",
@@ -156,21 +157,16 @@ nonisolated enum LeafStorePhase {
                 case .directTool: mlxStart.transientLastMessageBoundarySnapshot
                 case .canonical: mlxStart.transientLastUserBoundarySnapshot
                 }
-            let leafTokenizer = try await sessions.withSession { $0.tokenizer }
             let leafPlan = await LeafAdmissionBuilder.plan(
                 mode: boundaryMode,
                 storedConversation: storedConversation,
                 storedTokens: storedTokens,
-                toolSpecs: canonicalTools,
                 transientBoundary: transientBoundary,
-                tokenizer: leafTokenizer,
                 keySpace: mlxStart.keySpace,
-                renderContext: renderContext,
-                // C31: the base render the builder's probe would re-run is
-                // the identical computation `measureStoredTokenSequence`
-                // just performed for this request (verified in C28) — hand
-                // it in so the base render runs once per request.
-                renderTokens: renderTokenSource.withBaseRenderTokens(storedRenderTokens),
+                // C31: the stored render just computed above is the identical
+                // computation the builder's base probe would re-run (verified
+                // in C28) — carry it so the base render runs once per request.
+                render: render.carryingBaseRender(storedRenderTokens),
                 resolveBoundary: { tokens in
                     // Drive Snapshot Resolution inside the Model Session so
                     // the SSD `loadSync` stays off-MainActor (ADR-0001).
@@ -230,14 +226,13 @@ nonisolated enum LeafStorePhase {
                 // its rewind span from the last-user boundary.
                 let seedPlan = Self.speculativeSeedPlan(
                     boundaryMode: boundaryMode,
-                    renderContext: renderContext
+                    renderContext: render.renderContext
                 )
                 let pendingSeed: SpeculativeCanonicalPrefill.Seed? =
                     seedPlan.map { plan in
                         SpeculativeCanonicalPrefill.makeSeed(
                             storedConversation: storedConversation,
-                            toolSpecs: canonicalTools,
-                            tokenizer: leafTokenizer,
+                            render: render,
                             keySpace: mlxStart.keySpace,
                             partitionKey: mlxStart.partitionKey,
                             prefillStepSize: mlxStart.prefillStepSize,
@@ -247,7 +242,6 @@ nonisolated enum LeafStorePhase {
                                 ? boundaryStoredTokens.count
                                 : mlxStart.transientLastUserBoundarySnapshot?
                                     .tokenOffset ?? 0,
-                            renderContext: renderContext,
                             idleDelay: plan.idleDelay,
                             ramOnlySpine: plan.ramOnlySpine,
                             diagnostics: diagnosticsContext
@@ -581,59 +575,6 @@ nonisolated enum LeafStorePhase {
                 idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,
                 ramOnlySpine: true
             )
-        }
-    }
-
-    // MARK: - Stored-token measurement
-
-    /// Re-tokenize the stored conversation (prompt + generated response) and return
-    /// the flat token sequence. The HTTP prefix cache uses raw prompt messages here
-    /// so assistant `reasoning_content` and `tool_calls` survive template rendering.
-    /// Used for storing the leaf snapshot under the correct radix path.
-    /// Returns `nil` on tokenization failure.
-    ///
-    /// C28: when `renderTokens` is eligible (text-only identity key space,
-    /// known model fingerprint) the tail-replacement resolve recovers the
-    /// sequence as a verified trim+extension of the entry the **Request
-    /// Keying** phase cached for this request — one suffix encode instead of a
-    /// full re-encode. A bypass or any inexactness falls back to today's full
-    /// `applyChatTemplate`; the guard/nil behavior for diagnostics is
-    /// unchanged.
-    private static func measureStoredTokenSequence(
-        sessions: any ModelSessionProviding,
-        conversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        renderContext: TemplateRenderContext = .canonical,
-        renderTokens: RenderTokenSource
-    ) async -> [Int]? {
-        do {
-            return try await sessions.withSession { session in
-                let mergedContext = renderContext.additionalContext(
-                    merging: ["add_generation_prompt": false]
-                )
-                if let cacheFingerprint = renderTokens.cacheFingerprint,
-                    let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
-                        tokenizer: session.tokenizer,
-                        messages: conversation.promptMessages,
-                        tools: toolSpecs,
-                        baseAdditionalContext: renderContext.additionalContext(),
-                        mergedAdditionalContext: mergedContext,
-                        modelFingerprint: cacheFingerprint
-                    )
-                {
-                    return resolved
-                }
-                return try session.tokenizer.applyChatTemplate(
-                    messages: conversation.promptMessages,
-                    tools: toolSpecs,
-                    additionalContext: mergedContext
-                )
-            }
-        } catch {
-            Log.agent.warning(
-                "Stored token sequence measurement failed — error=\(error.localizedDescription)"
-            )
-            return nil
         }
     }
 

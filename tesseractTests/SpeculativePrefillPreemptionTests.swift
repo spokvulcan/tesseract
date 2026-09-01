@@ -29,10 +29,8 @@ import Testing
         // The pass's own probe machinery computes the future shared path.
         let probed = try LeafAdmissionBuilder.futureSharedPrefix(
             storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: tokenizer,
             keySpace: .identity(keyPath: []),
-            renderContext: .canonical
+            render: ConversationRender.uncached(tokenizer: tokenizer)
         )
         let futurePrefix = try #require(try probed?.get())
         let admitPath = try #require(
@@ -90,8 +88,7 @@ import Testing
 
         let seed = SpeculativeCanonicalPrefill.makeSeed(
             storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: tokenizer,
+            render: ConversationRender.uncached(tokenizer: tokenizer),
             keySpace: .identity(keyPath: []),
             partitionKey: partitionKey,
             prefillStepSize: 1024,
