@@ -135,7 +135,8 @@ tesseract/
 │   │   └── Views/                     # Chat UI
 │   ├── Server/                        # Local OpenAI-compatible HTTP server
 │   │   ├── HTTPServer.swift           # HTTP/1.1 server
-│   │   ├── CompletionHandler.swift    # Streaming + non-streaming completions
+│   │   ├── CompletionHandler.swift    # HTTP framing edge: lease, validation, start
+│   │   ├── CompletionDelivery.swift   # One delivery script; Delivery Sink seam (JSON body, SSE)
 │   │   ├── ServerInferenceService.swift   # Dispatcher: Completion Route → two arms
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module

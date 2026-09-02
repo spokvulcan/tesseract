@@ -6,7 +6,7 @@ import MLXLMCommon
 /// `ToolCallParser` produces `ToolCall` objects without IDs (Qwen3.5 XML format has no ID concept).
 /// This converter assigns server-generated `call_<UUID>` IDs and JSON-stringifies arguments
 /// for the OpenAI wire format.
-enum ToolCallConverter {
+nonisolated enum ToolCallConverter {
 
     /// Converts internal parsed tool calls into OpenAI-compatible format.
     ///

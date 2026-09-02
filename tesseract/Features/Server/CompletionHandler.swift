@@ -2,8 +2,6 @@ import Foundation
 import MLXLMCommon
 import os
 
-// Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-// swiftlint:disable type_body_length
 /// Handles `POST /v1/chat/completions` requests by acquiring an inference lease
 /// from the `InferenceArbiter`, running generation through
 /// `ServerInferenceService`, and writing the response.
@@ -34,28 +32,6 @@ struct CompletionHandler: Sendable {
         self.downloads = downloads
         self.activityLog = activityLog
         self.settings = settings
-    }
-
-    private struct StartedGeneration {
-        let modelID: String
-        /// Physical vision-mode flag of the loaded container at generation
-        /// start. Used alongside `modelID` to partition the session replay
-        /// store so that recovered reasoning content cannot cross two
-        /// different physical LLM slots with the same client session.
-        let visionMode: Bool
-        /// Tool-call format of the loaded model — what the streaming path's
-        /// Argument Transcoder keys off (`nil` ⇒ the vendor JSON default,
-        /// mirroring the parser's own fallback).
-        let toolCallFormat: ToolCallFormat?
-        /// The request's converted tool definitions, for schema-typed
-        /// argument transcoding.
-        let toolSpecs: [ToolSpec]?
-        let completionID: String
-        let stream: AsyncThrowingStream<AgentGeneration, Error>
-        let cachedTokenCount: Int
-        let cancel: @Sendable () -> Void
-        let waitForCompletion: @Sendable () async -> Void
-        let diagnostics: HTTPServerGenerationStart.Diagnostics
     }
 
     /// Routing decision for the request's `model` field.
@@ -278,23 +254,71 @@ struct CompletionHandler: Sendable {
         completionID: String,
         logHandle: TraceHandle
     ) async {
+        let generation: CompletionDelivery.Generation
+        switch await startGeneration(
+            request,
+            sessionAffinity: sessionAffinity,
+            completionID: completionID,
+            logHandle: logHandle
+        ) {
+        case .success(let started):
+            generation = started
+        case .failure(let error):
+            Log.server.error("Generation failed to start: \(error)")
+            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
+            try? await writer.send(
+                .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
+            return
+        }
+
+        // Transport is the only thing that varies past this point: the
+        // Completion Delivery script runs once, behind the Delivery Sink seam.
+        let envelope = CompletionDelivery.Envelope(
+            completionID: generation.completionID,
+            requestModel: request.model,
+            physicalModelID: generation.modelID,
+            created: Int(Date().timeIntervalSince1970)
+        )
+        let sink: any CompletionDeliverySink
         if request.stream == true {
-            await runStreamingCompletion(
-                request,
-                sessionAffinity: sessionAffinity,
-                writer: writer,
-                completionID: completionID,
-                logHandle: logHandle
+            sink = SSEDeliverySink(
+                wire: .live(sse: SSEWriter(writer), writer: writer),
+                envelope: envelope,
+                // The Argument Transcoder keys off the loaded model's
+                // tool-call format — the same identity that selects the
+                // parser; `nil` mirrors the parser's vendor JSON default
+                // (ADR-0020).
+                transcoder: ArgumentTranscoder(
+                    format: generation.toolCallFormat ?? .json,
+                    toolSpecs: generation.toolSpecs
+                ),
+                includeUsage: request.stream_options?.include_usage == true
             )
         } else {
-            await runNonStreamingCompletion(
-                request,
-                sessionAffinity: sessionAffinity,
-                writer: writer,
-                completionID: completionID,
-                logHandle: logHandle
+            sink = NonStreamingDeliverySink(
+                envelope: envelope,
+                waitForDisconnect: { await writer.waitForDisconnect() },
+                send: { try await writer.send(.jsonBody($0)) }
             )
         }
+
+        let modelID = generation.modelID
+        let visionMode = generation.visionMode
+        await CompletionDelivery.deliver(
+            generation,
+            maxTokens: request.effectiveMaxTokens,
+            sink: sink,
+            activityLog: activityLog,
+            logHandle: logHandle,
+            recordReplay: { message in
+                await Self.sessionReplayStore.record(
+                    sessionAffinity: sessionAffinity,
+                    modelID: modelID,
+                    visionMode: visionMode,
+                    assistantMessage: message
+                )
+            }
+        )
     }
 
     /// Convert request, read model state, and start generation in one MainActor hop.
@@ -303,7 +327,7 @@ struct CompletionHandler: Sendable {
         sessionAffinity: String?,
         completionID: String,
         logHandle: TraceHandle
-    ) async -> Result<StartedGeneration, Error> {
+    ) async -> Result<CompletionDelivery.Generation, Error> {
         let modelState = inferenceService.currentModelState() ?? .unavailable
 
         let repairedRequest = await Self.sessionReplayStore.repair(
@@ -479,380 +503,6 @@ struct CompletionHandler: Sendable {
         return params
     }
 
-    /// Non-streaming: accumulate all generation events, then send a single JSON response.
-    private func runNonStreamingCompletion(
-        _ request: OpenAI.ChatCompletionRequest,
-        sessionAffinity: String?,
-        writer: HTTPResponseWriter,
-        completionID: String,
-        logHandle: TraceHandle
-    ) async {
-        let start: StartedGeneration
-        switch await startGeneration(
-            request,
-            sessionAffinity: sessionAffinity,
-            completionID: completionID,
-            logHandle: logHandle
-        ) {
-        case .success(let started):
-            start = started
-        case .failure(let error):
-            Log.server.error("Generation failed to start: \(error)")
-            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
-            try? await writer.send(
-                .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
-            return
-        }
-
-        // Expose the transport-level cancel to the dashboard so an in-flight
-        // generation can be stopped from inside the app, not just by client
-        // disconnect.
-        await activityLog.registerCancelAction(handle: logHandle, start.cancel)
-
-        await recordCacheLookup(start: start, logHandle: logHandle)
-
-        var accumulator = GenerationAccumulator()
-        var info: AgentGeneration.Info?
-
-        do {
-            for try await event in start.stream {
-                await activityLog.ingest(handle: logHandle, event: event)
-                accumulator.ingest(event)
-                switch event {
-                case .malformedToolCall(let raw):
-                    Log.server.warning(
-                        "Malformed tool call in HTTP response — "
-                            + "completionID=\(start.completionID) "
-                            + "rawLen=\(raw.count) "
-                            + "head=\(String(raw.prefix(120)).debugDescription) "
-                            + "tail=\(String(raw.suffix(80)).debugDescription)"
-                    )
-                case .info(let i):
-                    info = i
-                default:
-                    // text / thinking / tool-call accumulation is folded by the
-                    // accumulator above; in-flight `.toolCallDelta`s are consumed
-                    // only by the activity log (live Requests-log rendering).
-                    break
-                }
-            }
-        } catch {
-            Log.server.error("Generation stream error: \(error)")
-            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
-            try? await writer.send(
-                .internalError("Generation error: \(error.localizedDescription)"))
-            return
-        }
-
-        // One Generation Projection maps the terminal accumulator to this path's
-        // output: finish_reason, fallback-applied text, reasoning, tool calls,
-        // the safeguard sidecar, and the finish-reason diagnostic.
-        let projection = CompletionProjection(
-            accumulator: accumulator,
-            info: info,
-            maxTokens: request.effectiveMaxTokens,
-            completionID: start.completionID
-        )
-
-        // The caller logs the diagnostic the projection classified on pre-fallback
-        // state — identical classification to the streaming path.
-        projection.diagnostic.emit(label: "non-streaming")
-
-        // Surface a dropped tool-call buffer as text so the caller sees the
-        // attempted tool call instead of an empty-stop response (shared with the
-        // streaming path, which additionally emits one SSE content chunk).
-        if projection.malformedFallbackSurfaced {
-            logSurfacedFallback(
-                completionID: start.completionID,
-                rawLen: projection.diagnostic.malformedLen
-            )
-        }
-
-        await Self.sessionReplayStore.record(
-            sessionAffinity: sessionAffinity,
-            modelID: start.modelID,
-            visionMode: start.visionMode,
-            assistantMessage: makeReplayAssistantMessage(
-                textContent: projection.textContent,
-                thinkingContent: projection.thinkingContent,
-                toolCalls: projection.toolCalls
-            )
-        )
-
-        var response = Self.makeNonStreamingResponse(
-            projection: projection,
-            completionID: start.completionID,
-            requestModel: request.model,
-            physicalModelID: start.modelID,
-            created: Int(Date().timeIntervalSince1970),
-            cachedTokenCount: start.cachedTokenCount
-        )
-        response.tesseract_thinking_safeguard = projection.safeguardReport
-
-        // Encodable conformance requires MainActor context (Swift 6.2 isolation inference)
-        let data: Data = await MainActor.run {
-            (try? JSONEncoder().encode(response)) ?? Data("{}".utf8)
-        }
-        let finishReason = projection.finishReason
-        Log.server.notice(
-            "HTTP completion finished — completionID=\(start.completionID) "
-                + "stream=false finishReason=\(finishReason.rawValue) "
-                + "promptTokens=\(info?.promptTokenCount ?? 0) completionTokens=\(info?.generationTokenCount ?? 0) "
-                + "cachedTokens=\(start.cachedTokenCount) "
-                + "decodeTokS=\(String(format: "%.1f", info?.tokensPerSecond ?? 0))"
-        )
-        await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
-        do {
-            try await writer.send(.jsonBody(data))
-        } catch {
-            Log.server.error("Failed to send HTTP completion response: \(error)")
-        }
-    }
-
-    // MARK: - Streaming Completion
-
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable function_body_length
-    /// Streaming: emit SSE chunks as generation events arrive.
-    private func runStreamingCompletion(
-        _ request: OpenAI.ChatCompletionRequest,
-        sessionAffinity: String?,
-        writer: HTTPResponseWriter,
-        completionID: String,
-        logHandle: TraceHandle
-    ) async {
-        // swiftlint:enable function_body_length
-        let start: StartedGeneration
-        switch await startGeneration(
-            request,
-            sessionAffinity: sessionAffinity,
-            completionID: completionID,
-            logHandle: logHandle
-        ) {
-        case .success(let started):
-            start = started
-        case .failure(let error):
-            Log.server.error("Streaming generation failed to start: \(error)")
-            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
-            try? await writer.send(
-                .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
-            return
-        }
-
-        // Expose the transport-level cancel to the dashboard so an in-flight
-        // generation can be stopped from inside the app, not just by client
-        // disconnect.
-        await activityLog.registerCancelAction(handle: logHandle, start.cancel)
-
-        await recordCacheLookup(start: start, logHandle: logHandle)
-
-        let sse = SSEWriter(writer)
-        do { try await sse.open() } catch {
-            await cancelAndDrainGeneration(start)
-            await activityLog.fail(handle: logHandle, error: "Failed to open SSE stream")
-            Log.server.error("Failed to open SSE stream: \(error)")
-            return
-        }
-
-        let created = Int(Date().timeIntervalSince1970)
-        let model = Self.echoModelID(requestModel: request.model, physical: start.modelID)
-        let includeUsage = request.stream_options?.include_usage == true
-
-        // Emit initial chunk with role
-        guard
-            await sse.send(
-                Self.makeChunk(
-                    id: start.completionID, model: model, created: created,
-                    delta: OpenAI.ChunkDelta(role: .assistant)
-                ))
-        else {
-            await cancelAndDrainGeneration(start)
-            return
-        }
-
-        // The transport-lifecycle race — disconnect watch, idle keepalive
-        // prober, and the drive as first-finisher-wins — lives in the driver
-        // (keepalive cadence defaulted to today's value there). The handler
-        // hands it the SSE/writer probes and the generation pump.
-        let outcome = await StreamLifecycleDriver.run(
-            transport: StreamLifecycleDriver.Transport(
-                waitForDisconnect: { await writer.waitForDisconnect() },
-                idleFor: { await sse.idleFor(atLeast: $0) },
-                sendKeepalive: { await sse.keepalive("keepalive") }
-            ),
-            onTransportCancel: start.cancel,
-            drive: {
-                await Self.streamGenerationEvents(
-                    start.stream,
-                    envelope: ChunkEnvelope(
-                        completionID: start.completionID, model: model, created: created
-                    ),
-                    // The Argument Transcoder keys off the loaded model's
-                    // tool-call format — the same identity that selects the
-                    // parser; `nil` mirrors the parser's vendor JSON default
-                    // (ADR-0020).
-                    transcoder: ArgumentTranscoder(
-                        format: start.toolCallFormat ?? .json,
-                        toolSpecs: start.toolSpecs
-                    ),
-                    activityLog: self.activityLog,
-                    logHandle: logHandle,
-                    cancel: start.cancel,
-                    send: { await sse.send($0) }
-                )
-            }
-        )
-
-        switch outcome {
-        case .completed(let accumulator, let info, let wireStreamedToolCalls):
-            // One Generation Projection — identical construction to the
-            // non-streaming path — owns finish_reason, the malformed→text
-            // fallback, the safeguard sidecar, and the diagnostic.
-            let projection = CompletionProjection(
-                accumulator: accumulator,
-                info: info,
-                maxTokens: request.effectiveMaxTokens,
-                completionID: start.completionID
-            )
-
-            // Diagnostic log before the terminal chunk goes out: correlates which
-            // state inputs produced the finish_reason. The warning paths catch a
-            // stop with empty text AND empty tool_calls but non-empty reasoning
-            // (the jundot/omlx#825 stale-recurrent-state symptom on Qwen3.6) and a
-            // dropped malformed tool call — classified once, on pre-fallback state.
-            projection.diagnostic.emit(label: "streaming")
-
-            // Surface a dropped tool-call buffer as final text content when the
-            // response would otherwise be empty. Without this the client sees
-            // `finish_reason=stop` with empty `content` and empty `tool_calls`
-            // and has no way to know the model attempted a tool call — it
-            // treats the turn as "model chose to stop", so no retry happens at
-            // the agent-loop layer upstream. Emitting the raw buffer (as the
-            // final text content and one SSE content chunk) lets the caller
-            // detect the pattern (e.g. content contains `<tool_call>`) and
-            // decide how to recover.
-            //
-            // The fallback survives only where nothing streamed (ADR-0020):
-            // once Argument Fragments went out, the attempted call is already
-            // on the wire wire-valid — re-sending it as text would duplicate
-            // it, so the extra content chunk is suppressed.
-            if projection.malformedFallbackSurfaced {
-                logSurfacedFallback(
-                    completionID: start.completionID,
-                    rawLen: projection.diagnostic.malformedLen
-                )
-                if !wireStreamedToolCalls {
-                    _ = await sse.send(
-                        Self.makeChunk(
-                            id: start.completionID,
-                            model: model,
-                            created: created,
-                            delta: OpenAI.ChunkDelta(content: projection.textContent)
-                        ))
-                }
-            }
-
-            // A call that streamed but never produced a parsed `.toolCall`
-            // (malformation, dashboard cancel) leaves the projection at
-            // `.stop` — but the wire carries a closed tool call, so the
-            // finish reason must say so. `.length` keeps priority.
-            let finishReason = Self.resolvedStreamingFinishReason(
-                projection: projection.finishReason,
-                wireStreamedToolCalls: wireStreamedToolCalls
-            )
-
-            let finalChunk = Self.makeFinalStreamingChunk(
-                projection: projection,
-                completionID: start.completionID,
-                requestModel: request.model,
-                physicalModelID: start.modelID,
-                created: created,
-                cachedTokenCount: start.cachedTokenCount,
-                includeUsage: includeUsage,
-                finishReasonOverride: finishReason
-            )
-
-            guard await sse.send(finalChunk) else {
-                start.cancel()
-                await activityLog.cancel(handle: logHandle)
-                Log.server.info(
-                    "HTTP streaming disconnect — completionID=\(start.completionID) source=\(DisconnectSource.chunkWrite.rawValue)"
-                )
-                return
-            }
-            guard await sse.done() else {
-                Log.server.info(
-                    "HTTP streaming disconnect — completionID=\(start.completionID) source=\(DisconnectSource.chunkWrite.rawValue)"
-                )
-                await activityLog.cancel(handle: logHandle)
-                return
-            }
-
-            await Self.sessionReplayStore.record(
-                sessionAffinity: sessionAffinity,
-                modelID: start.modelID,
-                visionMode: start.visionMode,
-                assistantMessage: makeReplayAssistantMessage(
-                    textContent: projection.textContent,
-                    thinkingContent: projection.thinkingContent,
-                    toolCalls: projection.toolCalls
-                )
-            )
-
-            Log.server.notice(
-                "HTTP completion finished — completionID=\(start.completionID) "
-                    + "stream=true finishReason=\(finishReason.rawValue) "
-                    + "promptTokens=\(projection.info?.promptTokenCount ?? 0) "
-                    + "completionTokens=\(projection.info?.generationTokenCount ?? 0) "
-                    + "cachedTokens=\(start.cachedTokenCount) "
-                    + "decodeTokS=\(String(format: "%.1f", projection.info?.tokensPerSecond ?? 0))"
-            )
-            await activityLog.complete(
-                handle: logHandle, finishReason: finishReason.rawValue)
-
-        case .disconnected(let source):
-            Log.server.info(
-                "HTTP streaming disconnect — completionID=\(start.completionID) source=\(source.rawValue)"
-            )
-            Log.server.debug(
-                "HTTP streaming cancel dispatched — completionID=\(start.completionID)")
-            await cancelAndDrainGeneration(start)
-            await activityLog.cancel(handle: logHandle)
-            return
-
-        case .failed(let message):
-            await cancelAndDrainGeneration(start)
-            await activityLog.fail(handle: logHandle, error: message)
-            Log.server.error(
-                "Streaming generation error — completionID=\(start.completionID) error=\(message)"
-            )
-            return
-
-        case .cancelled:
-            await cancelAndDrainGeneration(start)
-            await activityLog.cancel(handle: logHandle)
-            return
-        }
-    }
-
-    private func recordCacheLookup(start: StartedGeneration, logHandle: TraceHandle) async {
-        let diagnostics = start.diagnostics
-        await activityLog.markCacheLookupFinished(
-            handle: logHandle,
-            reason: diagnostics.cacheReason,
-            cachedTokens: start.cachedTokenCount,
-            sharedPrefixLength: diagnostics.sharedPrefixLength,
-            promptTokens: diagnostics.promptTokenCount,
-            lookupMs: diagnostics.lookupMs,
-            restoreMs: diagnostics.restoreMs,
-            newTokensToPrefill: max(0, diagnostics.promptTokenCount - start.cachedTokenCount)
-        )
-        await activityLog.markPrefillFinished(
-            handle: logHandle,
-            prefillMs: diagnostics.prefillMs
-        )
-    }
-
     static func makeProgressHandler(
         activityLog: ServerGenerationLog,
         logHandle: TraceHandle
@@ -903,317 +553,6 @@ struct CompletionHandler: Sendable {
         }
     }
 
-    private func cancelAndDrainGeneration(_ start: StartedGeneration) async {
-        start.cancel()
-        await start.waitForCompletion()
-    }
-
-    private nonisolated static func makeChunk(
-        id: String,
-        model: String,
-        created: Int,
-        delta: OpenAI.ChunkDelta,
-        finishReason: OpenAI.FinishReason? = nil
-    ) -> OpenAI.ChatCompletionChunk {
-        OpenAI.ChatCompletionChunk(
-            id: id,
-            model: model,
-            created: created,
-            system_fingerprint: "tesseract-1.0-mlx",
-            choices: [
-                OpenAI.ChatCompletionChunkChoice(
-                    index: 0,
-                    delta: delta,
-                    finish_reason: finishReason
-                )
-            ]
-        )
-    }
-
-    nonisolated static func makeUsage(
-        info: AgentGeneration.Info?,
-        cachedTokenCount: Int
-    ) -> OpenAI.Usage {
-        OpenAI.Usage(
-            prompt_tokens: info?.promptTokenCount ?? 0,
-            completion_tokens: info?.generationTokenCount ?? 0,
-            total_tokens: (info?.promptTokenCount ?? 0) + (info?.generationTokenCount ?? 0),
-            prompt_tokens_details: OpenAI.PromptTokensDetails(cached_tokens: cachedTokenCount)
-        )
-    }
-
-    static func makeNonStreamingResponse(
-        projection: CompletionProjection,
-        completionID: String,
-        requestModel: String?,
-        physicalModelID: String,
-        created: Int,
-        cachedTokenCount: Int
-    ) -> OpenAI.ChatCompletionResponse {
-        let openAIToolCalls =
-            projection.toolCalls.isEmpty
-            ? nil
-            : ToolCallConverter.convertToOpenAI(projection.toolCalls)
-
-        return OpenAI.ChatCompletionResponse(
-            id: completionID,
-            model: echoModelID(requestModel: requestModel, physical: physicalModelID),
-            created: created,
-            system_fingerprint: "tesseract-1.0-mlx",
-            choices: [
-                OpenAI.ChatCompletionChoice(
-                    index: 0,
-                    finish_reason: projection.finishReason,
-                    message: OpenAI.ResponseMessage(
-                        role: .assistant,
-                        content: projection.textContent.isEmpty ? nil : projection.textContent,
-                        reasoning_content: projection.thinkingContent.isEmpty
-                            ? nil : projection.thinkingContent,
-                        tool_calls: openAIToolCalls
-                    )
-                )
-            ],
-            usage: makeUsage(
-                info: projection.info,
-                cachedTokenCount: cachedTokenCount
-            )
-        )
-    }
-
-    /// The streaming-path finish-reason resolution: once Argument Fragments
-    /// streamed on the wire, a `.stop` (no parsed call survived — the
-    /// transcoder closed the call wire-valid) must still read `tool_calls`;
-    /// `.length` and an already-computed `tool_calls` pass through.
-    nonisolated static func resolvedStreamingFinishReason(
-        projection finishReason: OpenAI.FinishReason,
-        wireStreamedToolCalls: Bool
-    ) -> OpenAI.FinishReason {
-        if wireStreamedToolCalls && finishReason == .stop {
-            return .tool_calls
-        }
-        return finishReason
-    }
-
-    static func makeFinalStreamingChunk(
-        projection: CompletionProjection,
-        completionID: String,
-        requestModel: String?,
-        physicalModelID: String,
-        created: Int,
-        cachedTokenCount: Int,
-        includeUsage: Bool,
-        finishReasonOverride: OpenAI.FinishReason? = nil
-    ) -> OpenAI.ChatCompletionChunk {
-        var chunk = OpenAI.ChatCompletionChunk(
-            id: completionID,
-            model: echoModelID(requestModel: requestModel, physical: physicalModelID),
-            created: created,
-            system_fingerprint: "tesseract-1.0-mlx",
-            choices: [
-                OpenAI.ChatCompletionChunkChoice(
-                    index: 0,
-                    delta: OpenAI.ChunkDelta(),
-                    finish_reason: finishReasonOverride ?? projection.finishReason
-                )
-            ]
-        )
-        if includeUsage, let info = projection.info {
-            chunk.usage = makeUsage(
-                info: info,
-                cachedTokenCount: cachedTokenCount
-            )
-        }
-        chunk.tesseract_thinking_safeguard = projection.safeguardReport
-        return chunk
-    }
-
-    // MARK: - Stream Event Loop
-
-    enum DisconnectSource: String, Sendable {
-        case connectionState = "connection_state"
-        case keepaliveWrite = "keepalive_write"
-        case chunkWrite = "chunk_write"
-    }
-
-    enum StreamingOutcome: Sendable {
-        /// The terminal Generation Accumulator plus captured completion metrics
-        /// and whether the Argument Transcoder streamed tool-call fragments on
-        /// the wire. Both completion paths build one `CompletionProjection`
-        /// from the first two; the flag adjusts only this path's closure.
-        case completed(GenerationAccumulator, AgentGeneration.Info?, wireStreamedToolCalls: Bool)
-        case disconnected(DisconnectSource)
-        case failed(String)
-        case cancelled
-    }
-
-    /// The per-completion identity every streamed SSE chunk repeats. Bundled
-    /// so tests can drive the stream event loop directly with an injected
-    /// chunk sink (the production sink is `SSEWriter.send`).
-    struct ChunkEnvelope: Sendable {
-        let completionID: String
-        let model: String
-        let created: Int
-    }
-
-    /// Consume generation events, emit SSE chunks, return accumulated metadata.
-    ///
-    /// The Argument Transcoder owns every tool-call wire delta on this path:
-    /// in-flight `.toolCallDelta`s become Argument Fragments for transcodable
-    /// formats (Qwen XML, JSON wrapper), `.toolCall` closes the streamed call
-    /// — or falls back to the atomic two-delta emission when nothing streamed
-    /// — and any termination after engagement gets a Wire-Valid Close.
-    nonisolated static func streamGenerationEvents(
-        _ stream: AsyncThrowingStream<AgentGeneration, Error>,
-        envelope: ChunkEnvelope,
-        transcoder: ArgumentTranscoder,
-        activityLog: ServerGenerationLog,
-        logHandle: TraceHandle,
-        cancel: @escaping @Sendable () -> Void,
-        send: @Sendable (OpenAI.ChatCompletionChunk) async -> Bool
-    ) async -> StreamingOutcome {
-        let completionID = envelope.completionID
-        let model = envelope.model
-        let created = envelope.created
-        var accumulator = GenerationAccumulator()
-        var info: AgentGeneration.Info?
-        var transcoder = transcoder
-        var loggedCrossCheckMismatches = 0
-
-        // Send every wire tool-call delta the transcoder produced for one
-        // event, one SSE chunk each. Returns false on client disconnect.
-        func sendToolCallDeltas(_ wireCalls: [OpenAI.ToolCall]) async -> Bool {
-            for wireCall in wireCalls {
-                guard
-                    await send(
-                        makeChunk(
-                            id: completionID, model: model, created: created,
-                            delta: OpenAI.ChunkDelta(tool_calls: [wireCall])
-                        ))
-                else { return false }
-            }
-            return true
-        }
-
-        do {
-            for try await event in stream {
-                await activityLog.ingest(handle: logHandle, event: event)
-                // Fold accumulated turn state in one place; the switch below
-                // keeps only this path's SSE side effects (per-event deltas).
-                accumulator.ingest(event)
-                switch event {
-                case .text(let chunk):
-                    guard
-                        await send(
-                            makeChunk(
-                                id: completionID, model: model, created: created,
-                                delta: OpenAI.ChunkDelta(content: chunk)
-                            ))
-                    else {
-                        cancel()
-                        return .disconnected(.chunkWrite)
-                    }
-
-                case .thinking(let chunk):
-                    guard
-                        await send(
-                            makeChunk(
-                                id: completionID, model: model, created: created,
-                                delta: OpenAI.ChunkDelta(reasoning_content: chunk)
-                            ))
-                    else {
-                        cancel()
-                        return .disconnected(.chunkWrite)
-                    }
-
-                case .toolCallDelta, .toolCall:
-                    guard await sendToolCallDeltas(transcoder.ingest(event)) else {
-                        cancel()
-                        return .disconnected(.chunkWrite)
-                    }
-                    if transcoder.crossCheckMismatchCount > loggedCrossCheckMismatches {
-                        loggedCrossCheckMismatches = transcoder.crossCheckMismatchCount
-                        Log.server.warning(
-                            "Argument Transcoder cross-check mismatch — streamed "
-                                + "fragments disagree semantically with the parsed tool "
-                                + "call (wire not corrected) — completionID=\(completionID)"
-                        )
-                    }
-
-                case .malformedToolCall(let raw):
-                    Log.server.warning(
-                        "Malformed tool call in stream — "
-                            + "completionID=\(completionID) "
-                            + "rawLen=\(raw.count) "
-                            + "head=\(String(raw.prefix(120)).debugDescription) "
-                            + "tail=\(String(raw.suffix(80)).debugDescription)"
-                    )
-                    // Wire-Valid Close for an engaged call — after fragments
-                    // streamed there is no retraction, so the malformed→text
-                    // fallback no longer applies to this call.
-                    guard await sendToolCallDeltas(transcoder.ingest(event)) else {
-                        cancel()
-                        return .disconnected(.chunkWrite)
-                    }
-
-                case .info(let i):
-                    info = i
-
-                case .thinkStart, .thinkEnd, .thinkReclassify, .thinkTruncate:
-                    // No SSE side effect. text/thinking state is folded by the
-                    // accumulator above; reclassify/truncate only adjust the
-                    // final accumulated content — deltas already sent to the
-                    // client stand.
-                    break
-                }
-            }
-        } catch is CancellationError {
-            return .cancelled
-        } catch {
-            return .failed(error.localizedDescription)
-        }
-
-        // Wire-Valid Close for a stream that terminated (dashboard cancel,
-        // max-tokens, intervention) while a transcoded call was engaged: the
-        // accumulated Argument Fragments must parse before the final chunk.
-        guard await sendToolCallDeltas(transcoder.finish()) else {
-            cancel()
-            return .disconnected(.chunkWrite)
-        }
-
-        // Hand the terminal accumulator (plus completion metrics) to the caller;
-        // both completion paths build one CompletionProjection from it.
-        return .completed(
-            accumulator, info, wireStreamedToolCalls: transcoder.hasStreamedFragments)
-    }
-
-    /// Emit the shared "surfaced dropped tool-call buffer" info-log. Both
-    /// completion paths call this when `CompletionProjection.malformedFallbackSurfaced`
-    /// is set, so the line has one home; `rawLen` reads through the projection's
-    /// diagnostic rather than re-walking the raw accumulator buffer.
-    private func logSurfacedFallback(completionID: String, rawLen: Int) {
-        Log.server.info(
-            "Surfaced dropped tool-call buffer as text content — "
-                + "completionID=\(completionID) rawLen=\(rawLen)"
-        )
-    }
-
-    private func makeReplayAssistantMessage(
-        textContent: String,
-        thinkingContent: String,
-        toolCalls: [ToolCall]
-    ) -> HTTPPrefixCacheMessage {
-        HTTPPrefixCacheMessage.assistant(
-            content: textContent,
-            reasoning: thinkingContent.isEmpty ? nil : thinkingContent,
-            toolCalls: toolCalls.map {
-                HTTPPrefixCacheToolCall(
-                    name: $0.function.name,
-                    arguments: $0.function.arguments
-                )
-            }
-        )
-    }
-
     /// Timeout that covers only lease acquisition + model loading, not generation.
     ///
     /// The timer task sleeps for the timeout duration, then checks whether the
@@ -1260,7 +599,6 @@ struct CompletionHandler: Sendable {
         }
     }
 }
-// swiftlint:enable type_body_length
 
 /// Thread-safe flag signaling that the inference lease has been acquired.
 final class LeaseAcquiredSignal: Sendable {

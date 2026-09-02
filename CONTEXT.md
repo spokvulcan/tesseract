@@ -541,9 +541,33 @@ behind injected transport closures, sitting below the ADR-0015 dispatcher seam.
 It is the reason a client abort cancels a long prefill promptly (and an idle
 prefill keeps proxies from timing out): `CompletionHandler` builds the SSE
 envelope and hands the race to the driver rather than constructing a task group
-inline.
-_Avoid_: SSE framing (`SSEWriter`'s); the event pump (`streamGenerationEvents`);
+inline; since **Completion Delivery** both transports run under it.
+_Avoid_: SSE framing (`SSEWriter`'s); the event pump (`CompletionDelivery.pump`);
 keepalive timer (one task inside it, not the module).
+
+**Completion Delivery**:
+The one script that carries a started HTTP completion from its first
+generation event to the client's last byte — register the dashboard cancel,
+record the cache lookup, open the response, drive the stream under the
+**Stream Lifecycle Driver**, project the terminal accumulator, emit the
+diagnostic, surface the malformed→text fallback, record the session replay,
+log and complete. It runs once for both transports; the streaming and
+non-streaming arms of `CompletionHandler` were two hand copies of it. Two
+rules it fixes: every drive runs under the driver (a dropped client cancels
+generation on either transport), and the replay record and `complete` follow
+only a fully delivered response.
+_Avoid_: completion pipeline; response writer (the sink's job); the two arms
+(retired).
+
+**Delivery Sink**:
+The transport adapter one **Completion Delivery** writes to — open, one
+per-event side effect, the Wire-Valid Close, the terminal envelope — behind
+which the script sees only "still connected". Two production adapters make
+the seam real (the single-JSON-body sink and the SSE sink, which owns the
+**Argument Transcoder** and the `[DONE]` sentinel); a recording peer makes it
+the test surface.
+_Avoid_: writer (`HTTPResponseWriter` is the socket, not the seam); output
+channel; transport (the driver's probe closures, which the sink exposes).
 
 ### Streaming tool calls
 
