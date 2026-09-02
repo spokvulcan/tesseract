@@ -57,3 +57,49 @@ integration-flavoured by design: real MLX ops, hermetic, no model download.
   MainActor current-cache accessor owns "which manager is live" (deletion test:
   that knowledge otherwise reappears at every caller). Drain and
   speculative-prefill scheduling stay genuine `LLMActor` lifecycle members.
+
+## Amendment (2026-09-02): the agent path is the seam's second consumer
+
+The decision above reserved widening the port for "a second consumer that
+needs a member". The agent chat turn and both thinking-safeguard
+continuations were that consumer: three hand-copied arms in `LLMActor`
+(~360 lines inside `container.perform`) with no test reach, a private
+tokenize step reaching into `ModelContext` beside the seam, a speculation
+badge the continuation arms never emitted, and everything
+downstream — the loop start, the prefill executor route, the DFlash2 raw
+arm — reachable only through them.
+
+The widening, member by member:
+
+- `prepareText(_:modelFingerprint:)` — the agent-edge tokenize verb, a
+  protocol-extension default over the port's own verbs (`producesFlatTextTokens`,
+  `templateMessages(for:)`, `tokenizer`, `prepare`) composing the
+  **Conversation Render**'s `agentEdgeFullRender`, so eligibility keeps its
+  one spelling there and a recording peer's overridden flat-tokens fact
+  steers the same code production runs. The keying phase keeps building its
+  own `ConversationRender` value at the edge — later phases carry it.
+- `templateMessages(for:)` — the chat-template dicts the processor would
+  render: the model's own `messageGenerator` on an `LLMModel`, the prompt's
+  `.messages` otherwise.
+- `makeRawDecodeIterator(_:parameters:)` — the **Prefill Strategy** route
+  (ADR-0044) decided and executed, returning the upstream `TokenIterator` the
+  agent path decodes through. The strategy stays the one route decider.
+- `ModelSessionProviding.withSession(nonSendable:_:)` — the container's
+  `perform(nonSendable:)` shape, because the agent's `UserInput` is not
+  `Sendable`; the server never needed it as it builds its input inside the
+  session.
+
+The consumer is the **Raw Generation Start** module (`RawGenerationStart.start`
+over a `RawGenerationPrompt`: `.fresh` or `.continuation(base:handoff:)`), run
+inside one session by the actor's single `startRawGeneration(prompt:)`. Two
+deliberate behaviour changes rode along: every prompt shape now preempts the
+background speculative prefill (only the fresh turn did), and continuations
+emit the same progress-event sequence and speculation badge the fresh turn
+does. The DFlash2 raw arm's `kvBits = nil` override is preserved unchanged;
+reconciling it with the server's refuse-on-`kvBits` gate is the Speculation
+Plan's job, not this amendment's.
+
+Still rejected: a separate `AgentSession` protocol over the same
+`ModelContext` (two seams for one variation), and moving the agent arm onto
+the Unkeyed Completion's `StateThreadedTokenIterator` (a decode-path change
+that deserves its own perf-gated decision).

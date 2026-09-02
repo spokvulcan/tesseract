@@ -64,6 +64,33 @@ nonisolated protocol ModelSession {
     /// tools) → tokenized `LMInput`.
     func prepare(_ input: UserInput) async throws -> LMInput
 
+    /// The chat-template message dicts the processor would render for
+    /// `input` — the model's own `messageGenerator` where the family has one
+    /// (`LLMModel`), the prompt's own `.messages` otherwise, `nil` when the
+    /// session cannot say. The **Render+Token Cache** renders exactly these,
+    /// so its token list reproduces the processor's.
+    func templateMessages(for input: UserInput) -> [Message]?
+
+    /// The agent-edge tokenize verb (ADR-0016 amendment): the **Conversation
+    /// Render**'s agent edge — C25 **Render+Token Cache** render + verified
+    /// suffix encode when the request is eligible (no media, a flat-token
+    /// model, a known fingerprint, a rendering tokenizer) — and the
+    /// processor's `prepare` otherwise. The **Raw Generation Start**
+    /// tokenizes through it; the **Request Keying** phase builds its own
+    /// `ConversationRender` value at the edge because later phases carry it.
+    /// Provided by a protocol extension over the verbs above.
+    func prepareText(_ input: UserInput, modelFingerprint: String?) async throws -> LMInput
+
+    /// Construct the raw arms' decode iterator over the whole prompt from
+    /// zero: the **Prefill Strategy** route (ADR-0044) decided and executed
+    /// — the chunked arm warms a fresh cache through `PrefillExecutor`, the
+    /// single-shot arm lets the vendor iterator's init prefill. The upstream
+    /// `TokenIterator` shape the agent chat path decodes through.
+    func makeRawDecodeIterator(
+        _ input: LMInput,
+        parameters: GenerateParameters
+    ) throws -> TokenIterator
+
     /// Create the model-shaped empty KV cache array.
     func newCache(parameters: GenerateParameters) throws -> [any KVCache]
 
@@ -168,6 +195,38 @@ extension ModelSession {
 
     nonisolated var dflash2Drafter: (any DFlash2DrafterModel)? { nil }
 
+    /// The agent-edge tokenize step over the session's own verbs: the
+    /// **Conversation Render**'s `agentEdgeFullRender` (eligibility and the
+    /// cache resolve in their one home) fed by `templateMessages(for:)`, the
+    /// processor fallback otherwise. Decorators inherit it, so a recording
+    /// peer's overridden `producesFlatTextTokens` steers the same code
+    /// production runs.
+    ///
+    /// A `nil` fingerprint BYPASSES rather than resolving under a synthetic
+    /// key; any render/encode failure falls back too, which reproduces the
+    /// processor's own error handling (the missing-template plain-text
+    /// fallback stays in the processor). Message forming runs before the
+    /// eligibility check — it is a dict conversion, never pixel work — so a
+    /// session that cannot form messages never renders an empty prompt.
+    nonisolated func prepareText(
+        _ input: UserInput, modelFingerprint: String?
+    ) async throws -> LMInput {
+        if let messages = templateMessages(for: input),
+            let tokens = ConversationRender.agentEdgeFullRender(
+                tokenizer: tokenizer,
+                messages: messages,
+                tools: input.tools,
+                additionalContext: input.additionalContext,
+                hasMedia: !(input.images.isEmpty && input.videos.isEmpty && input.audios.isEmpty),
+                producesFlatTextTokens: producesFlatTextTokens,
+                modelFingerprint: modelFingerprint
+            )
+        {
+            return LMInput(tokens: MLXArray(tokens))
+        }
+        return try await prepare(input)
+    }
+
     nonisolated func makeMTPDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
@@ -194,6 +253,15 @@ extension ModelSession {
 nonisolated protocol ModelSessionProviding: Sendable {
     func withSession<R: Sendable>(
         _ body: @Sendable (any ModelSession) async throws -> R
+    ) async throws -> R
+
+    /// The same entry carrying a non-`Sendable` payload into the session —
+    /// the container's `perform(nonSendable:)` shape. The agent's
+    /// `UserInput` (images, tool dicts) crosses here; the server never
+    /// needed it because it builds its `UserInput` inside the session.
+    func withSession<V, R: Sendable>(
+        nonSendable payload: sending V,
+        _ body: @Sendable (any ModelSession, V) async throws -> R
     ) async throws -> R
 }
 
@@ -234,6 +302,29 @@ nonisolated struct ContextBackedModelSession: ModelSession {
 
     func prepare(_ input: UserInput) async throws -> LMInput {
         try await context.processor.prepare(input: input)
+    }
+
+    func templateMessages(for input: UserInput) -> [Message]? {
+        // The model's own generator is the exact expression the installed
+        // processors (`LLMUserInputProcessor` in MLXLLM, the app-side
+        // ParoQuant processor) captured at load — so the dicts rendered here
+        // are the dicts the processor would render. A `.messages` prompt
+        // reaches every processor's `generate(from:)` unchanged.
+        if let llmModel = context.model as? any LLMModel {
+            return llmModel.messageGenerator(tokenizer: context.tokenizer).generate(from: input)
+        }
+        if case .messages(let messages) = input.prompt {
+            return messages
+        }
+        return nil
+    }
+
+    func makeRawDecodeIterator(
+        _ input: LMInput,
+        parameters: GenerateParameters
+    ) throws -> TokenIterator {
+        try PrefillStrategy.decide(for: input, prefillStepSize: parameters.prefill.stepSize)
+            .makeIterator(input: input, model: context.model, parameters: parameters)
     }
 
     func newCache(parameters: GenerateParameters) throws -> [any KVCache] {
@@ -393,6 +484,19 @@ nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
                 ContextBackedModelSession(
                     context: context, mtpDrafter: mtpDrafter?.value,
                     dflash2Drafter: dflash2Drafter?.value))
+        }
+    }
+
+    func withSession<V, R: Sendable>(
+        nonSendable payload: sending V,
+        _ body: @Sendable (any ModelSession, V) async throws -> R
+    ) async throws -> R {
+        try await container.perform(nonSendable: payload) { context, payload in
+            try await body(
+                ContextBackedModelSession(
+                    context: context, mtpDrafter: mtpDrafter?.value,
+                    dflash2Drafter: dflash2Drafter?.value),
+                payload)
         }
     }
 }

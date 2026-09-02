@@ -129,37 +129,14 @@ nonisolated enum DFlash2Support {
         hasDrafter && textOnlyIdentityKeySpace && kvBits == nil
     }
 
-    /// The agent raw-arm engagement decision: text-only input on a pairing
-    /// target with a loaded drafter.
+    /// The **Raw Generation Start** engagement decision: text-only input with
+    /// a loaded drafter (the drafter is only loaded when it pairs with the
+    /// target — `pairsWithTarget` at load is the family gate).
     static func shouldEngageRawArm(
         hasDrafter: Bool,
         input: LMInput
     ) -> Bool {
         hasDrafter && input.image == nil && input.video == nil && input.audio == nil
-    }
-
-    /// The raw arms' engage-and-build step, shared by `startRawGeneration`
-    /// and the thinking-safeguard continuation so the engagement contract has
-    /// one home: gate (loaded drafter, text-only input, pairing target),
-    /// clear `kvBits` (speculation needs trimmable caches), build the fresh
-    /// cache and the iterator. Returns `nil` when the arm doesn't engage —
-    /// the caller falls back to the ordinary `PrefillStrategy` path.
-    static func rawArmIterator(
-        input: LMInput,
-        model: any LanguageModel,
-        drafter: (any DFlash2DrafterModel)?,
-        parameters: GenerateParameters
-    ) throws -> DFlash2SpeculativeTokenIterator? {
-        guard let drafter,
-            shouldEngageRawArm(hasDrafter: true, input: input),
-            pairsWithTarget(model)
-        else { return nil }
-        var specParams = parameters
-        specParams.kvBits = nil  // speculation needs trimmable caches
-        let cache = try model.newCache(parameters: specParams)
-        return try makeIterator(
-            input: input, model: model, drafter: drafter,
-            cache: cache, parameters: specParams)
     }
 
     /// Build the DFlash2 iterator with the app's penalty discipline (ADR-0053):

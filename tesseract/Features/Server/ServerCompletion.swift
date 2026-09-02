@@ -680,13 +680,13 @@ nonisolated final class ServerCompletion {
         let actorRef = actor
         let continuationStarter: @Sendable (String) async throws -> HTTPServerRawGenerationStart = {
             safePrefix in
-            try await actorRef.startThinkingContinuationFromTokens(
-                originalTokens: fullTokensForContinuation,
-                tokenNDim: tokenNDimForContinuation,
-                safeThinkingPrefix: safePrefix,
-                injection: continuationInjection,
+            try await actorRef.startRawGeneration(
+                prompt: .continuation(
+                    base: .tokens(fullTokensForContinuation, ndim: tokenNDimForContinuation),
+                    handoff: safePrefix + continuationInjection),
                 toolSpecs: continuationToolSpecs,
-                parameters: parameters
+                parameters: parameters,
+                progressHandler: progressHandler
             )
         }
 

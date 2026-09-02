@@ -212,6 +212,7 @@ nonisolated enum ModelVerb: String, Equatable, Sendable {
     case prefill
     case makeDecodeIterator
     case makePreparingDecodeIterator
+    case makeRawDecodeIterator
     case quantizeKVCache
     case captureSnapshot
     case visionContinuationQuery
@@ -257,6 +258,18 @@ nonisolated struct RecordingModelSession: ModelSession {
     func prepare(_ input: UserInput) async throws -> LMInput {
         recorder.record(.prepare)
         return try await base.prepare(input)
+    }
+
+    func templateMessages(for input: UserInput) -> [Message]? {
+        base.templateMessages(for: input)
+    }
+
+    func makeRawDecodeIterator(
+        _ input: LMInput,
+        parameters: GenerateParameters
+    ) throws -> TokenIterator {
+        recorder.record(.makeRawDecodeIterator)
+        return try base.makeRawDecodeIterator(input, parameters: parameters)
     }
 
     func newCache(parameters: GenerateParameters) throws -> [any KVCache] {
@@ -380,6 +393,24 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
                     recorder: recorder,
                     producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil
                 )
+            )
+        }
+    }
+
+    func withSession<V, R: Sendable>(
+        nonSendable payload: sending V,
+        _ body: @Sendable (any ModelSession, V) async throws -> R
+    ) async throws -> R {
+        let recorder = self.recorder
+        let reportsFlatTextTokens = self.reportsFlatTextTokens
+        return try await container.perform(nonSendable: payload) { context, payload in
+            return try await body(
+                RecordingModelSession(
+                    base: ContextBackedModelSession(context: context),
+                    recorder: recorder,
+                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil
+                ),
+                payload
             )
         }
     }
