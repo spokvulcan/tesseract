@@ -50,7 +50,7 @@ private actor Counter {
 
 /// A terminal drive outcome that carries no accumulated content — the shape a
 /// clean completion hands back to the handler.
-private func completedOutcome() -> CompletionHandler.StreamingOutcome {
+private func completedOutcome() -> CompletionDelivery.StreamingOutcome {
     .completed(GenerationAccumulator(), nil, wireStreamedToolCalls: false)
 }
 
@@ -63,7 +63,7 @@ private func connectionStaysUp() -> AsyncLatch {
 // MARK: - Tests
 
 /// Drives `StreamLifecycleDriver.run` — the transport-lifecycle race behind
-/// `runStreamingCompletion` — with scripted transport closures, asserting the
+/// `CompletionDelivery.deliver` — with scripted transport closures, asserting the
 /// first-finisher-wins outcome, the cancel bridge, and keepalive cadence
 /// without opening a socket.
 struct StreamLifecycleDriverTests {
@@ -86,8 +86,7 @@ struct StreamLifecycleDriverTests {
         let outcome = await StreamLifecycleDriver.run(
             transport: .init(
                 waitForDisconnect: { await connection.wait() },
-                idleFor: { _ in false },
-                sendKeepalive: { true }
+                keepalive: nil
             ),
             keepaliveCadence: .milliseconds(5),
             onTransportCancel: { cancelBridged.set() },
@@ -127,11 +126,13 @@ struct StreamLifecycleDriverTests {
         let outcome = await StreamLifecycleDriver.run(
             transport: .init(
                 waitForDisconnect: { await connection.wait() },
-                idleFor: { _ in true },
-                sendKeepalive: {
-                    await keepalives.increment()
-                    return true
-                }
+                keepalive: .init(
+                    idleFor: { _ in true },
+                    send: {
+                        await keepalives.increment()
+                        return true
+                    }
+                )
             ),
             keepaliveCadence: .milliseconds(3),
             onTransportCancel: {},
@@ -165,11 +166,13 @@ struct StreamLifecycleDriverTests {
         let outcome = await StreamLifecycleDriver.run(
             transport: .init(
                 waitForDisconnect: { await connection.wait() },
-                idleFor: { _ in true },
-                sendKeepalive: {
-                    await keepalives.increment()
-                    return true
-                }
+                keepalive: .init(
+                    idleFor: { _ in true },
+                    send: {
+                        await keepalives.increment()
+                        return true
+                    }
+                )
             ),
             keepaliveCadence: .milliseconds(10),
             onTransportCancel: { cancelBridged.set() },
@@ -195,8 +198,7 @@ struct StreamLifecycleDriverTests {
         let outcome = await StreamLifecycleDriver.run(
             transport: .init(
                 waitForDisconnect: { await connection.wait() },
-                idleFor: { _ in false },
-                sendKeepalive: { true }
+                keepalive: nil
             ),
             keepaliveCadence: .milliseconds(5),
             onTransportCancel: {},
@@ -219,8 +221,7 @@ struct StreamLifecycleDriverTests {
             await StreamLifecycleDriver.run(
                 transport: .init(
                     waitForDisconnect: { await connection.wait() },
-                    idleFor: { _ in false },
-                    sendKeepalive: { true }
+                    keepalive: nil
                 ),
                 keepaliveCadence: .milliseconds(50),
                 onTransportCancel: {},

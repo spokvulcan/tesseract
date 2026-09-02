@@ -701,12 +701,7 @@ private func makeEventStream(
 private func makeEventStream(
     events: [AgentGeneration]
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
-    AsyncThrowingStream<AgentGeneration, Error> { continuation in
-        for event in events {
-            continuation.yield(event)
-        }
-        continuation.finish()
-    }
+    GenerationFixtures.eventStream(events)
 }
 
 private func collectText(

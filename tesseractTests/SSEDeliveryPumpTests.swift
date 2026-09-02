@@ -6,60 +6,24 @@ import Testing
 
 // MARK: - Streaming event pump (scripted events → chunk sink)
 
-/// Tool schema for the streaming pump tests: one string parameter.
-private let pumpToolSpecs: [ToolSpec] = [
-    [
-        "type": "function",
-        "function": [
-            "name": "demo",
-            "description": "demo tool",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "text": ["type": "string"] as [String: any Sendable]
-                ] as [String: any Sendable],
-            ] as [String: any Sendable],
-        ] as [String: any Sendable],
-    ]
-]
-
-/// Captures every chunk the pump sends; optionally simulates a client
-/// disconnect by refusing sends once `acceptLimit` chunks are in.
-private actor PumpChunkCollector {
-    private(set) var chunks: [OpenAI.ChatCompletionChunk] = []
-    private let acceptLimit: Int?
-
-    init(acceptLimit: Int?) { self.acceptLimit = acceptLimit }
-
-    func collect(_ chunk: OpenAI.ChatCompletionChunk) -> Bool {
-        if let acceptLimit, chunks.count >= acceptLimit { return false }
-        chunks.append(chunk)
-        return true
-    }
-}
-
-/// Drive the production stream event pump with a scripted event sequence and
-/// return the chunks a client would have received, in order.
+/// Drive the production Completion Delivery pump through the SSE Delivery Sink
+/// with a scripted event sequence and return the chunks a client would have
+/// received, in order (the role chunk goes out on `open`, which the pump does
+/// not call).
 private func pumpEvents(
     _ events: [AgentGeneration],
     format: ToolCallFormat,
     acceptLimit: Int? = nil,
     cancel: @escaping @Sendable () -> Void = {}
-) async -> (chunks: [OpenAI.ChatCompletionChunk], outcome: CompletionHandler.StreamingOutcome) {
-    let collector = PumpChunkCollector(acceptLimit: acceptLimit)
-    let stream = AsyncThrowingStream<AgentGeneration, Error> { continuation in
-        for event in events { continuation.yield(event) }
-        continuation.finish()
-    }
+) async -> (chunks: [OpenAI.ChatCompletionChunk], outcome: CompletionDelivery.StreamingOutcome) {
+    let collector = SSEWireCollector(acceptLimit: acceptLimit)
     let activityLog = await MainActor.run { ServerGenerationLog() }
-    let outcome = await CompletionHandler.streamGenerationEvents(
-        stream,
-        envelope: .init(completionID: "chatcmpl-pump", model: "toy/model", created: 1),
-        transcoder: ArgumentTranscoder(format: format, toolSpecs: pumpToolSpecs),
+    let outcome = await CompletionDelivery.pump(
+        GenerationFixtures.eventStream(events),
+        sink: makeSSEDeliverySink(collector: collector, format: format),
         activityLog: activityLog,
         logHandle: TraceHandle(id: UUID()),
-        cancel: cancel,
-        send: { await collector.collect($0) }
+        cancel: cancel
     )
     return (await collector.chunks, outcome)
 }
@@ -74,10 +38,10 @@ private func xmlDeltas(_ text: String) -> [AgentGeneration] {
     text.map { .toolCallDelta(name: nil, argumentsDelta: String($0)) }
 }
 
-/// Drives `CompletionHandler.streamGenerationEvents` — the production event
-/// pump behind the SSE writer — end to end with scripted generation events,
+/// Drives `CompletionDelivery.pump` through `SSEDeliverySink` — the production
+/// event pump behind the SSE writer — end to end with scripted generation events,
 /// asserting on the chunk stream a client would decode.
-struct CompletionHandlerStreamingPumpTests {
+struct SSEDeliveryPumpTests {
 
     private let xmlBlock =
         "<tool_call>\n<function=demo>\n<parameter=text>\nhello world\n</parameter>\n</function>\n"

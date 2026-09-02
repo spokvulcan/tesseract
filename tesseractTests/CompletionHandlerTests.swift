@@ -194,14 +194,11 @@ struct CompletionHandlerTests {
             maxTokens: 256,
             completionID: "chatcmpl-123"
         )
-        let response = CompletionHandler.makeNonStreamingResponse(
-            projection: projection,
-            completionID: "chatcmpl-123",
-            requestModel: "client-model",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 12
-        )
+        let response = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-123", requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro", created: 1_712_345_678
+        ).response(
+            projection: projection, finishReason: projection.finishReason, cachedTokenCount: 12)
 
         #expect(response.model == "client-model")
         #expect(response.choices[0].finish_reason == .tool_calls)
@@ -229,14 +226,11 @@ struct CompletionHandlerTests {
             maxTokens: 32,
             completionID: "chatcmpl-456"
         )
-        let response = CompletionHandler.makeNonStreamingResponse(
-            projection: projection,
-            completionID: "chatcmpl-456",
-            requestModel: "   ",
-            physicalModelID: "qwen3.5-9b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 0
-        )
+        let response = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-456", requestModel: "   ", physicalModelID: "qwen3.5-9b-paro",
+            created: 1_712_345_678
+        ).response(
+            projection: projection, finishReason: projection.finishReason, cachedTokenCount: 0)
 
         #expect(response.model == "qwen3.5-9b-paro")
         #expect(response.choices[0].finish_reason == .length)
@@ -259,15 +253,12 @@ struct CompletionHandlerTests {
             maxTokens: 256,
             completionID: "chatcmpl-789"
         )
-        let chunk = CompletionHandler.makeFinalStreamingChunk(
-            projection: projection,
-            completionID: "chatcmpl-789",
-            requestModel: "client-model",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 7,
-            includeUsage: true
-        )
+        let chunk = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-789", requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro", created: 1_712_345_678
+        ).finalChunk(
+            projection: projection, finishReason: projection.finishReason, cachedTokenCount: 7,
+            includeUsage: true)
 
         #expect(chunk.model == "client-model")
         #expect(chunk.choices[0].finish_reason == .stop)
@@ -290,145 +281,16 @@ struct CompletionHandlerTests {
             maxTokens: 256,
             completionID: "chatcmpl-999"
         )
-        let chunk = CompletionHandler.makeFinalStreamingChunk(
-            projection: projection,
-            completionID: "chatcmpl-999",
-            requestModel: nil,
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 7,
-            includeUsage: false
-        )
+        let chunk = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-999", requestModel: nil, physicalModelID: "qwen3.5-4b-paro",
+            created: 1_712_345_678
+        ).finalChunk(
+            projection: projection, finishReason: projection.finishReason, cachedTokenCount: 7,
+            includeUsage: false)
 
         #expect(chunk.model == "qwen3.5-4b-paro")
         #expect(chunk.choices[0].finish_reason == .tool_calls)
         #expect(chunk.usage == nil)
-    }
-
-    /// Epic 3 Task 3 parity gate — the OpenAI response envelope is invariant
-    /// over engine internals. `makeNonStreamingResponse` and
-    /// `makeFinalStreamingChunk` take only a `CompletionProjection` plus the
-    /// envelope identity (`completionID`, model ids, `created`,
-    /// `cachedTokenCount`): no engine-mode parameter. Identical inputs must
-    /// therefore produce byte-identical envelopes regardless of how the engine
-    /// produced the tokens underneath.
-    ///
-    /// Now that both emitters derive every turn-shaped field from one
-    /// projection, this holds by construction — it regression-guards against a
-    /// future refactor threading an engine-mode flag into envelope
-    /// construction and leaking runtime-mode information into the response.
-    @MainActor @Test func responseEnvelopesDoNotVaryWhenInputsAreIdentical() throws {
-        let info = AgentGeneration.Info(
-            promptTokenCount: 120,
-            generationTokenCount: 30,
-            promptTime: 0.2,
-            generateTime: 0.4,
-            stopReason: .stop
-        )
-        func parityProjection() -> CompletionProjection {
-            makeProjection(
-                text: "Answer",
-                thinking: "Reasoning",
-                info: info,
-                maxTokens: 512,
-                completionID: "chatcmpl-parity"
-            )
-        }
-
-        let firstNonStreaming = CompletionHandler.makeNonStreamingResponse(
-            projection: parityProjection(),
-            completionID: "chatcmpl-parity",
-            requestModel: "qwen3.5-4b-paro",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 19
-        )
-        let secondNonStreaming = CompletionHandler.makeNonStreamingResponse(
-            projection: parityProjection(),
-            completionID: "chatcmpl-parity",
-            requestModel: "qwen3.5-4b-paro",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 19
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let firstData = try encoder.encode(firstNonStreaming)
-        let secondData = try encoder.encode(secondNonStreaming)
-        #expect(firstData == secondData)
-
-        let firstStreaming = CompletionHandler.makeFinalStreamingChunk(
-            projection: parityProjection(),
-            completionID: "chatcmpl-parity",
-            requestModel: "qwen3.5-4b-paro",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 19,
-            includeUsage: true
-        )
-        let secondStreaming = CompletionHandler.makeFinalStreamingChunk(
-            projection: parityProjection(),
-            completionID: "chatcmpl-parity",
-            requestModel: "qwen3.5-4b-paro",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 19,
-            includeUsage: true
-        )
-        let firstChunkData = try encoder.encode(firstStreaming)
-        let secondChunkData = try encoder.encode(secondStreaming)
-        #expect(firstChunkData == secondChunkData)
-    }
-
-    /// Epic 3 Task 3 parity gate — `cached_tokens` accounting contract.
-    ///
-    /// The `cached_tokens` value reported by the engine must flow verbatim into
-    /// both the non-streaming `usage.prompt_tokens_details.cached_tokens` and
-    /// the streaming final chunk's identical field. No transform, no mode
-    /// gating. This test documents the contract: the same engine-reported
-    /// count reaches both envelopes unchanged.
-    @MainActor @Test func cachedTokenCountFlowsUnchangedIntoBothEnvelopes() {
-        let info = AgentGeneration.Info(
-            promptTokenCount: 200,
-            generationTokenCount: 42,
-            promptTime: 0.5,
-            generateTime: 0.9,
-            stopReason: .stop
-        )
-
-        let projection = makeProjection(
-            text: "Ok",
-            info: info,
-            maxTokens: 1024,
-            completionID: "chatcmpl-cached"
-        )
-        let nonStreaming = CompletionHandler.makeNonStreamingResponse(
-            projection: projection,
-            completionID: "chatcmpl-cached",
-            requestModel: "qwen3.5-4b-paro",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 77
-        )
-        let streaming = CompletionHandler.makeFinalStreamingChunk(
-            projection: projection,
-            completionID: "chatcmpl-cached",
-            requestModel: "qwen3.5-4b-paro",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 77,
-            includeUsage: true
-        )
-
-        #expect(nonStreaming.usage?.prompt_tokens_details?.cached_tokens == 77)
-        #expect(streaming.usage?.prompt_tokens_details?.cached_tokens == 77)
-        #expect(
-            nonStreaming.usage?.prompt_tokens_details?.cached_tokens
-                == streaming.usage?.prompt_tokens_details?.cached_tokens
-        )
-        #expect(nonStreaming.usage?.prompt_tokens == streaming.usage?.prompt_tokens)
-        #expect(nonStreaming.usage?.completion_tokens == streaming.usage?.completion_tokens)
-        #expect(nonStreaming.usage?.total_tokens == streaming.usage?.total_tokens)
     }
 
     // MARK: - Streaming tool-call closure (ADR-0020)
@@ -439,23 +301,23 @@ struct CompletionHandlerTests {
     /// nothing changes when nothing streamed.
     @Test func resolvedStreamingFinishReasonOverridesStopOnlyAfterFragments() {
         #expect(
-            CompletionHandler.resolvedStreamingFinishReason(
+            CompletionDelivery.resolvedFinishReason(
                 projection: .stop, wireStreamedToolCalls: true
             ) == .tool_calls)
         #expect(
-            CompletionHandler.resolvedStreamingFinishReason(
+            CompletionDelivery.resolvedFinishReason(
                 projection: .length, wireStreamedToolCalls: true
             ) == .length)
         #expect(
-            CompletionHandler.resolvedStreamingFinishReason(
+            CompletionDelivery.resolvedFinishReason(
                 projection: .tool_calls, wireStreamedToolCalls: true
             ) == .tool_calls)
         #expect(
-            CompletionHandler.resolvedStreamingFinishReason(
+            CompletionDelivery.resolvedFinishReason(
                 projection: .stop, wireStreamedToolCalls: false
             ) == .stop)
         #expect(
-            CompletionHandler.resolvedStreamingFinishReason(
+            CompletionDelivery.resolvedFinishReason(
                 projection: .length, wireStreamedToolCalls: false
             ) == .length)
     }
@@ -476,29 +338,22 @@ struct CompletionHandlerTests {
         )
         #expect(projection.finishReason == .stop)
 
-        // …but when fragments streamed, the caller overrides to `.tool_calls`.
-        let overridden = CompletionHandler.makeFinalStreamingChunk(
-            projection: projection,
-            completionID: "chatcmpl-override",
-            requestModel: nil,
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 0,
-            includeUsage: false,
-            finishReasonOverride: .tool_calls
-        )
+        // …but when fragments streamed, the script resolves `.tool_calls`.
+        let overridden = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-override", requestModel: nil,
+            physicalModelID: "qwen3.5-4b-paro", created: 1_712_345_678
+        ).finalChunk(
+            projection: projection, finishReason: .tool_calls, cachedTokenCount: 0,
+            includeUsage: false)
         #expect(overridden.choices[0].finish_reason == .tool_calls)
 
-        // Default (no override) preserves the projection's reason.
-        let plain = CompletionHandler.makeFinalStreamingChunk(
-            projection: projection,
-            completionID: "chatcmpl-override",
-            requestModel: nil,
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 0,
-            includeUsage: false
-        )
+        // The projection's own reason passes through otherwise.
+        let plain = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-override", requestModel: nil,
+            physicalModelID: "qwen3.5-4b-paro", created: 1_712_345_678
+        ).finalChunk(
+            projection: projection, finishReason: projection.finishReason, cachedTokenCount: 0,
+            includeUsage: false)
         #expect(plain.choices[0].finish_reason == .stop)
     }
 
@@ -509,15 +364,12 @@ struct CompletionHandlerTests {
             maxTokens: 256,
             completionID: "chatcmpl-1000"
         )
-        let chunk = CompletionHandler.makeFinalStreamingChunk(
-            projection: projection,
-            completionID: "chatcmpl-1000",
-            requestModel: "client-model",
-            physicalModelID: "qwen3.5-4b-paro",
-            created: 1_712_345_678,
-            cachedTokenCount: 7,
-            includeUsage: true
-        )
+        let chunk = CompletionDelivery.Envelope(
+            completionID: "chatcmpl-1000", requestModel: "client-model",
+            physicalModelID: "qwen3.5-4b-paro", created: 1_712_345_678
+        ).finalChunk(
+            projection: projection, finishReason: projection.finishReason, cachedTokenCount: 7,
+            includeUsage: true)
 
         #expect(chunk.model == "client-model")
         #expect(chunk.choices[0].finish_reason == .stop)
@@ -917,76 +769,6 @@ struct HTTPServerIntegrationTests {
     }
 
     // MARK: - Prefill Disconnect
-
-    @Test func prefillDisconnectCancelsGeneration() async throws {
-        // Exercises the exact task-group pattern from runStreamingCompletion:
-        // keepalive detects disconnect → throws → cancels generation child task.
-        let generationCancelled = LeaseAcquiredSignal()
-        let handlerExited = LeaseAcquiredSignal()
-
-        let server = HTTPServer(port: 0)
-        server.route(.GET, "/prefill-disconnect") { _, writer in
-            let sse = SSEWriter(writer)
-            try await sse.open()
-
-            // Send initial role chunk so the client can connect
-            await sse.send(["role": "assistant"] as [String: String])
-
-            // Simulate the CompletionHandler task group pattern:
-            // keepalive monitors for disconnect, generation blocks on prefill.
-            struct Disconnected: Error {}
-
-            do {
-                try await withThrowingTaskGroup(of: Void.self) { group in
-                    // Keepalive: check connection every 100ms (fast for testing)
-                    group.addTask {
-                        while true {
-                            try await Task.sleep(nanoseconds: 100_000_000)
-                            try Task.checkCancellation()
-                            guard await sse.keepalive("keepalive") else {
-                                throw Disconnected()
-                            }
-                        }
-                    }
-
-                    // Fake "generation" that blocks for 30s (simulating prefill)
-                    group.addTask {
-                        do {
-                            try await Task.sleep(nanoseconds: 30_000_000_000)
-                        } catch is CancellationError {
-                            generationCancelled.set()
-                        }
-                    }
-
-                    try await group.next()
-                    group.cancelAll()
-                }
-            } catch is Disconnected {
-                // Expected: keepalive detected client gone
-            } catch {}
-
-            handlerExited.set()
-        }
-        let port = try await startOnRandomPort(server)
-
-        // Connect and read the initial chunk, then disconnect by stopping server
-        let readTask = Task {
-            let (bytes, _) = try await URLSession.shared.bytes(
-                from: URL(string: "http://127.0.0.1:\(port)/prefill-disconnect")!
-            )
-            for try await line in bytes.lines where line.hasPrefix("data: {") {
-                break
-            }
-        }
-
-        try? await readTask.value
-        server.stop()
-
-        // The keepalive should detect disconnect within ~200ms, cancel generation
-        try await Task.sleep(nanoseconds: 500_000_000)
-        #expect(generationCancelled.isSet)
-        #expect(handlerExited.isSet)
-    }
 
     // MARK: - OpenAI Error Shape (model_not_found)
 

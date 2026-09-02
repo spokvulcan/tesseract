@@ -137,4 +137,32 @@ enum GenerationFixtures {
     static func toolCall(name: String, arguments: [String: JSONValue] = [:]) -> ToolCall {
         ToolCall(function: .init(name: name, arguments: arguments))
     }
+
+    /// A finished generation stream that yields `events` in order.
+    static func eventStream(_ events: [AgentGeneration]) -> AsyncThrowingStream<
+        AgentGeneration, Error
+    > {
+        AsyncThrowingStream { continuation in
+            for event in events { continuation.yield(event) }
+            continuation.finish()
+        }
+    }
+
+    /// One `demo` tool with a single string parameter — the schema the
+    /// Argument Transcoder suites stream against.
+    static let demoToolSpecs: [ToolSpec] = [
+        [
+            "type": "function",
+            "function": [
+                "name": "demo",
+                "description": "demo tool",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "text": ["type": "string"] as [String: any Sendable]
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ] as [String: any Sendable],
+        ]
+    ]
 }

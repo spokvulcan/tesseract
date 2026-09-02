@@ -16,6 +16,10 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/HTTPPrefixCacheSpikeTests \
   -only-testing:tesseractTests/HTTPPrefixCacheSessionReplayTests \
   -only-testing:tesseractTests/CompletionHandlerTests \
+  -only-testing:tesseractTests/CompletionDeliveryTests \
+  -only-testing:tesseractTests/SSEDeliverySinkTests \
+  -only-testing:tesseractTests/SSEDeliveryPumpTests \
+  -only-testing:tesseractTests/StreamLifecycleDriverTests \
   -only-testing:tesseractTests/CompletionRouteTests \
   -only-testing:tesseractTests/ServerInferenceServiceTests \
   -only-testing:tesseractTests/ServerCompletionDrainTests \
