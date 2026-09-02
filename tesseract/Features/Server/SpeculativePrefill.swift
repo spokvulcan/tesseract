@@ -106,15 +106,13 @@ nonisolated enum SpeculativeCanonicalPrefill {
     /// be `discard()`ed so the probe stops at its next cooperative check.
     static func makeSeed(
         storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        tokenizer: any Tokenizer,
+        render: ConversationRender,
         keySpace: CacheKeySpace,
         partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         ssdEnabled: Bool,
         seedsPositionAnchor: Bool,
         canonicalLeafOffset: Int,
-        renderContext: TemplateRenderContext = .canonical,
         idleDelay: Duration = .zero,
         ramOnlySpine: Bool = false,
         diagnostics: PrefixCacheDiagnostics.Context
@@ -123,10 +121,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let probe = Task.detached {
             try LeafAdmissionBuilder.futureSharedPrefix(
                 storedConversation: storedConversation,
-                toolSpecs: toolSpecs,
-                tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext
+                render: render
             )
         }
         return Seed(

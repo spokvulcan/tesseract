@@ -105,60 +105,33 @@ nonisolated enum LeafAdmissionBuilder {
     /// is not strictly shorter than the continuation (the appended turn added
     /// no tokens, so there is no distinct boundary to align to).
     ///
-    /// `renderTokens` carries both the C28 and the C31 plumbing:
-    /// - Its `cacheFingerprint` engages the C28 tail-replacement resolve for
-    ///   both renders (identity key space, known fingerprint): post-generation,
-    ///   the **Request Keying** phase's entry still holds this request's full
-    ///   render, so each of these generation-prompt-OFF renders is recovered as
-    ///   a verified trim+extension of that entry — one suffix encode instead of
-    ///   two full re-encodes. A bypass, or any inexactness, runs today's
-    ///   `applyChatTemplate`.
-    /// - Its `baseRenderTokens` is the base render's token list, already
-    ///   computed this request by the **Leaf Store** phase's
-    ///   `measureStoredTokenSequence` — the IDENTICAL computation (same
-    ///   messages, tools, contexts, fingerprint, tokenizer, key-space guard;
-    ///   verified in C28) — so the base render runs once per request. `nil`
-    ///   computes it here, exactly as before. Only the base render is plumbed;
-    ///   the continuation render is a different conversation and is always
+    /// `render` — the request's **Conversation Render** — carries both the
+    /// C28 and the C31 plumbing:
+    /// - Its `continuationRender` verb owns the C28 tail-replacement ladder
+    ///   for both renders (identity key space, known fingerprint):
+    ///   post-generation, the **Request Keying** phase's entry still holds
+    ///   this request's full render, so each of these generation-prompt-OFF
+    ///   renders is recovered as a verified trim+extension of that entry —
+    ///   one suffix encode instead of two full re-encodes. A bypass, or any
+    ///   inexactness, runs today's `applyChatTemplate`.
+    /// - Its `baseRender` serves the base render's token list when the
+    ///   **Leaf Store** phase already computed it this request — the
+    ///   IDENTICAL computation (same messages, tools, contexts, fingerprint,
+    ///   tokenizer, key-space guard; verified in C28) — so the base render
+    ///   runs once per request. Only the base render is ever plumbed; the
+    ///   continuation render is a different conversation and is always
     ///   computed.
     static func reusablePrefix(
         continuation: Continuation,
         storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext = .canonical,
-        renderTokens: RenderTokenSource = .uncached
+        render: ConversationRender
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         let baseMessages = storedConversation.promptMessages
-        let probeContext = renderContext.additionalContext(
-            merging: ["add_generation_prompt": false]
+        let storedTokens = try render.baseRender(messages: baseMessages)
+        let continuationTokens = try render.continuationRender(
+            messages: baseMessages + [continuation.probeMessage]
         )
-        // One ladder for both renders: cache-resolve if eligible, else render
-        // in full. The cached resolve is keyed on the base (unmerged) context
-        // the Request Keying phase stored the entry under.
-        func tokens(for messages: [[String: any Sendable]]) throws -> [Int] {
-            if let cacheFingerprint = renderTokens.cacheFingerprint,
-                let resolved = try? RenderTokenCache.shared.resolveReplacingTail(
-                    tokenizer: tokenizer,
-                    messages: messages,
-                    tools: toolSpecs,
-                    baseAdditionalContext: renderContext.additionalContext(),
-                    mergedAdditionalContext: probeContext,
-                    modelFingerprint: cacheFingerprint
-                )
-            {
-                return resolved
-            }
-            return try tokenizer.applyChatTemplate(
-                messages: messages,
-                tools: toolSpecs,
-                additionalContext: probeContext
-            )
-        }
-
-        let storedTokens = try renderTokens.baseRenderTokens ?? tokens(for: baseMessages)
-        let continuationTokens = try tokens(for: baseMessages + [continuation.probeMessage])
 
         let common = zip(storedTokens, continuationTokens).prefix { $0 == $1 }.count
         guard common > 0, common <= storedTokens.count, common < continuationTokens.count else {
@@ -199,12 +172,16 @@ nonisolated enum LeafAdmissionBuilder {
     /// checks here bound the abandoned work to one render+tokenize — without
     /// them a cancel would be a no-op against this synchronous body, and the
     /// preempting request would wait out the full remaining probe.
+    ///
+    /// `render` supplies the request's ingredients only — this probe is
+    /// deliberately CACHE-FREE (raw `applyChatTemplate`, never the render's
+    /// verbs): it runs detached and cancellable, and a resolve against the
+    /// live entry would neither observe the cancellation checks nor be
+    /// abandonable mid-render.
     static func futureSharedPrefix(
         storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext = .canonical
+        render: ConversationRender
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         try Task.checkCancellation()
         let baseMessages = storedConversation.promptMessages
@@ -215,18 +192,18 @@ nonisolated enum LeafAdmissionBuilder {
         // walks. (`preserve_thinking` disables speculation today, so the
         // canonical default is what currently runs; this keeps the two in
         // step for the next flag that does not.)
-        let probeContext = renderContext.additionalContext(
+        let probeContext = render.renderContext.additionalContext(
             merging: ["add_generation_prompt": false]
         )
-        let firstRender = try tokenizer.applyChatTemplate(
+        let firstRender = try render.tokenizer.applyChatTemplate(
             messages: baseMessages + [Continuation.userTurn.probeMessage],
-            tools: toolSpecs,
+            tools: render.toolSpecs,
             additionalContext: probeContext
         )
         try Task.checkCancellation()
-        let secondRender = try tokenizer.applyChatTemplate(
+        let secondRender = try render.tokenizer.applyChatTemplate(
             messages: baseMessages + [divergentUserProbeMessage],
-            tools: toolSpecs,
+            tools: render.toolSpecs,
             additionalContext: probeContext
         )
 
@@ -248,22 +225,16 @@ nonisolated enum LeafAdmissionBuilder {
     private static func probeTokens(
         continuation: Continuation,
         storedConversation: HTTPPrefixCacheConversation,
-        toolSpecs: [ToolSpec]?,
-        tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext,
-        renderTokens: RenderTokenSource
+        render: ConversationRender
     ) -> Probe {
         let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
         do {
             probe = try reusablePrefix(
                 continuation: continuation,
                 storedConversation: storedConversation,
-                toolSpecs: toolSpecs,
-                tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext,
-                renderTokens: renderTokens
+                render: render
             )
         } catch {
             return .skip(.tokenizationFailed(error: error.localizedDescription))
@@ -289,21 +260,19 @@ nonisolated enum LeafAdmissionBuilder {
     /// offset-guard arithmetic, and emits a `LeafCapturePlan`. No live KV cache,
     /// no Metal — the actor executes the capture/`admit` from the decision.
     ///
-    /// `renderTokens` carries the cache eligibility and the C31 plumbing down
-    /// to the reusable-prefix probe: its `baseRenderTokens` is the stored
-    /// conversation's render-space token list the **Leaf Store** phase already
-    /// computed this request (the identical computation the probe's base render
-    /// would run), so the base render runs once per request.
+    /// `render` — the request's **Conversation Render** — carries the cache
+    /// eligibility and the C31 plumbing down to the reusable-prefix probe:
+    /// its `baseRender` serves the stored conversation's render-space token
+    /// list the **Leaf Store** phase already computed this request (the
+    /// identical computation the probe's base render would run), so the base
+    /// render runs once per request.
     static func plan(
         mode: BoundaryLeafMode,
         storedConversation: HTTPPrefixCacheConversation,
         storedTokens: [Int],
-        toolSpecs: [ToolSpec]?,
         transientBoundary: HybridCacheSnapshot?,
-        tokenizer: any Tokenizer,
         keySpace: CacheKeySpace,
-        renderContext: TemplateRenderContext = .canonical,
-        renderTokens: RenderTokenSource = .uncached,
+        render: ConversationRender,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
         switch mode {
@@ -318,11 +287,8 @@ nonisolated enum LeafAdmissionBuilder {
             switch probeTokens(
                 continuation: .toolResult,
                 storedConversation: storedConversation,
-                toolSpecs: toolSpecs,
-                tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext,
-                renderTokens: renderTokens
+                render: render
             ) {
             case .tokens(let translated): toolTokens = translated
             case .skip(let reason): return .skip(reason: reason)
@@ -354,11 +320,8 @@ nonisolated enum LeafAdmissionBuilder {
             switch probeTokens(
                 continuation: .userTurn,
                 storedConversation: storedConversation,
-                toolSpecs: toolSpecs,
-                tokenizer: tokenizer,
                 keySpace: keySpace,
-                renderContext: renderContext,
-                renderTokens: renderTokens
+                render: render
             ) {
             case .tokens(let translated): canonicalTokens = translated
             case .skip(let reason): return .skip(reason: reason)

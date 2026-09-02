@@ -347,37 +347,30 @@ actor LLMActor {
     /// MLXLLM, the app-side ParoQuant processor) captured at load — so the
     /// dicts rendered here are the dicts the processor would render.
     ///
-    /// The eligibility decision goes through `RenderTokenSource`, the shared
-    /// home for the predicate: notably, a `nil` fingerprint BYPASSES rather
-    /// than resolving under a synthetic key, because the cache's repeat path
-    /// trusts (bytes, fingerprint) with no arbiter behind it.
+    /// The eligibility decision and resolve go through the **Conversation
+    /// Render**'s agent edge, the shared home for the choreography: notably,
+    /// a `nil` fingerprint BYPASSES rather than resolving under a synthetic
+    /// key, because the cache's repeat path trusts (bytes, fingerprint) with
+    /// no arbiter behind it.
     private static func prepareViaRenderTokenCache(
         context: ModelContext,
         input: UserInput,
         modelFingerprint: String?
     ) -> LMInput? {
-        let llmModel = context.model as? any LLMModel
-        let source = RenderTokenSource.forTextOnlyRequest(
-            hasMedia: !(input.images.isEmpty && input.videos.isEmpty && input.audios.isEmpty),
-            producesFlatTextTokens: llmModel != nil,
-            modelFingerprint: modelFingerprint
-        )
-        guard let cacheFingerprint = source.cacheFingerprint, let llmModel else {
-            return nil
-        }
-        let messages = llmModel.messageGenerator(tokenizer: context.tokenizer).generate(from: input)
+        guard let llmModel = context.model as? any LLMModel else { return nil }
         guard
-            let resolution = try? RenderTokenCache.shared.resolve(
+            let tokens = ConversationRender.agentEdgeFullRender(
                 tokenizer: context.tokenizer,
-                messages: messages,
+                messages: llmModel.messageGenerator(tokenizer: context.tokenizer)
+                    .generate(from: input),
                 tools: input.tools,
                 additionalContext: input.additionalContext,
-                modelFingerprint: cacheFingerprint
+                hasMedia: !(input.images.isEmpty && input.videos.isEmpty && input.audios.isEmpty),
+                producesFlatTextTokens: true,
+                modelFingerprint: modelFingerprint
             )
-        else {
-            return nil
-        }
-        return LMInput(tokens: MLXArray(resolution.tokens))
+        else { return nil }
+        return LMInput(tokens: MLXArray(tokens))
     }
 
     /// Thinking-loop safeguard continuation for the HTTP prefix-cache path.

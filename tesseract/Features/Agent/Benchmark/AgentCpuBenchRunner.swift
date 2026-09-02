@@ -263,26 +263,19 @@ final class AgentCpuBenchRunner {
             log("FAIL: conversation build returned nil on \(fixtures[index].label)")
             throw NSError(domain: "AgentCpuBench", code: 2)
         }
-        let resolution = try RenderTokenCache.shared.resolve(
-            tokenizer: tokenizer,
-            messages: conversation.promptMessages,
-            tools: canonicalTools,
-            additionalContext: nil,
-            modelFingerprint: fingerprint
+        let render = Self.makeRender(
+            tokenizer: tokenizer, canonicalTools: canonicalTools, fingerprint: fingerprint
         )
-        guard let resolution else {
+        guard let fullTokens = render.fullRender(messages: conversation.promptMessages) else {
             log("FAIL: resolve returned nil on \(fixtures[index].label)")
             throw NSError(domain: "AgentCpuBench", code: 1)
         }
-        fixtures[index].fullTokens = resolution.tokens
+        fixtures[index].fullTokens = fullTokens
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conversation,
-            toolSpecs: canonicalTools,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
             keySpace: .identity(keyPath: fixtures[index].fullTokens),
-            renderContext: .canonical,
-            modelFingerprint: fingerprint
+            render: render
         )
         if index == 0, let offset = boundaries.stablePrefixOffset {
             stablePrefixOffset = offset
@@ -292,6 +285,24 @@ final class AgentCpuBenchRunner {
                 + "stablePrefix=\(boundaries.stablePrefixOffset ?? -1) "
                 + "lastMessage=\(boundaries.lastMessageOffset ?? -1) "
                 + "lastUser=\(boundaries.lastUserOffset ?? -1)"
+        )
+    }
+
+    /// The bench's **Conversation Render** — the exact request-edge value the
+    /// production keying phase builds for a text-only request, so the seed
+    /// resolve and both boundary detects measure the production verbs.
+    private static func makeRender(
+        tokenizer: any MLXLMCommon.Tokenizer,
+        canonicalTools: [ToolSpec]?,
+        fingerprint: String
+    ) -> ConversationRender {
+        ConversationRender.forTextOnlyRequest(
+            tokenizer: tokenizer,
+            toolSpecs: canonicalTools,
+            renderContext: .canonical,
+            hasMedia: false,
+            producesFlatTextTokens: true,
+            modelFingerprint: fingerprint
         )
     }
 
@@ -351,17 +362,18 @@ final class AgentCpuBenchRunner {
             )
         }
 
-        // p4 — boundary detection, memo-warm steady state.
+        // p4 — boundary detection, memo-warm steady state. The render is
+        // loop-invariant setup, built before the timed span starts.
+        let render = Self.makeRender(
+            tokenizer: tokenizer, canonicalTools: canonicalTools, fingerprint: fingerprint
+        )
         var p4 = 0.0
         let p4Start = ContinuousClock.now
         _ = try PrefillPlanner.detectBoundaries(
             conversation: conversation,
-            toolSpecs: canonicalTools,
             promptStartsThinking: true,
-            tokenizer: tokenizer,
             keySpace: .identity(keyPath: fixture.fullTokens),
-            renderContext: .canonical,
-            modelFingerprint: fingerprint
+            render: render
         )
         p4 = Self.ms(since: p4Start)
 

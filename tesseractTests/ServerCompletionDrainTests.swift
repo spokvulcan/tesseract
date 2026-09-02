@@ -216,8 +216,7 @@ struct ServerCompletionDrainTests {
         let stored = turn1.appendingAssistant(.assistant(content: "OK"))
         let seed = SpeculativeCanonicalPrefill.makeSeed(
             storedConversation: stored,
-            toolSpecs: nil,
-            tokenizer: tokenizer,
+            render: ConversationRender.uncached(tokenizer: tokenizer),
             keySpace: .identity(keyPath: []),
             partitionKey: CachePartitionKey(
                 modelID: "toy/model", kvBits: nil, kvGroupSize: 64
