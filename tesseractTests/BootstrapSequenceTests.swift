@@ -128,6 +128,7 @@ struct BootstrapSequenceTests {
                 "startCompanionPerception",
                 "materializeAgent",
                 "startMCPClient",
+                "startWhip",
             ])
     }
 
