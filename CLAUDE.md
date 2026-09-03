@@ -61,7 +61,11 @@ Match the ambition above with this rigor.
 - **New files:** Xcode synchronized groups pick up anything added under
   `tesseract/` or `tesseractTests/` automatically — never edit `project.pbxproj`.
 - **Never use `print()`** — use the `Log` enum (`Core/Logging.swift`).
-- **Commits:** follow Conventional Commits.
+- **Commits and PR titles:** follow Conventional Commits. The repo
+  squash-merges, so the PR title becomes the commit on `main` and the
+  changelog line; `pr-title.yml` rejects anything else, and a Claude Code
+  hook (`scripts/hooks/check-pr-title.py`) blocks `gh pr create/edit`
+  with a non-conventional title.
 
 ## Subagents & workflows
 
