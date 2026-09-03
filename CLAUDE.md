@@ -80,6 +80,7 @@ Match the ambition above with this rigor.
 
 - Architecture → `ARCHITECTURE.md`
 - Tests & suites → `docs/testing.md`
+- Model numbers (context, output length, sampling) → `docs/model-parameters.md`
 - Decisions & domain → `CONTEXT.md`, `docs/adr/`
 
 ## Agent skills
