@@ -91,7 +91,7 @@ struct ModelCatalogTests {
         #expect(ModelCatalog.isDownloaded("absent", statuses: statuses) == false)
     }
 
-    // MARK: - isVisionCapable(directory:)
+    // MARK: - checkpointDeclaresImageInput(directory:)
 
     @Test func visionRuleReadsTheModelConfig() throws {
         let visionDir = try makeModelDir(
@@ -102,18 +102,30 @@ struct ModelCatalogTests {
             try? FileManager.default.removeItem(at: textDir)
         }
 
-        #expect(ModelCatalog.isVisionCapable(directory: visionDir) == true)
-        #expect(ModelCatalog.isVisionCapable(directory: textDir) == false)
+        #expect(ModelCatalog.checkpointDeclaresImageInput(directory: visionDir) == true)
+        #expect(ModelCatalog.checkpointDeclaresImageInput(directory: textDir) == false)
+    }
+
+    @Test func textOnlyOverrideWithholdsDeclaredVision() throws {
+        let visionDir = try makeModelDir(
+            config: #"{ "model_type": "qwen3_5", "vision_config": { "spatial_merge_size": 2 } }"#)
+        defer { try? FileManager.default.removeItem(at: visionDir) }
+
+        let withheld = agentDef(id: "withheld", textOnlyOverride: true)
+        let served = agentDef(id: "served")
+
+        #expect(ModelCatalog.isVisionCapable(definition: withheld, directory: visionDir) == false)
+        #expect(ModelCatalog.isVisionCapable(definition: served, directory: visionDir) == true)
     }
 
     // MARK: - Fixtures
 
-    private func agentDef(id: String) -> ModelDefinition {
+    private func agentDef(id: String, textOnlyOverride: Bool = false) -> ModelDefinition {
         ModelDefinition(
             id: id, displayName: "Display \(id)", description: "",
             category: .agent,
             source: .huggingFace(repo: "fixture/\(id)", requiredExtension: "safetensors"),
-            sizeDescription: "", dependencies: [])
+            sizeDescription: "", dependencies: [], textOnlyOverride: textOnlyOverride)
     }
 
     private func speechDef(id: String) -> ModelDefinition {

@@ -14,6 +14,14 @@ Usage:
 Writes `model-mtp-head.safetensors` into the quant dir and rewrites
 `model.safetensors.index.json` (a backup of the original index is kept as
 `model.safetensors.index.json.pre-mtp`).
+
+Single-file checkpoints without an index (the z-lab PARO releases ship one
+`model.safetensors`) get the extra shard only: every loader that matters —
+the app's `checkpointShipsMTPHead` header scan, the vendor weight loader,
+and the PARO loader's `sourceURLs` — enumerates `*.safetensors` in the
+directory when no index exists, so no index is fabricated. Note the PARO
+loader's Prepared Checkpoint manifest covers every source shard, so the
+graft invalidates it and the next load re-converts once.
 """
 
 import argparse
@@ -79,12 +87,15 @@ def main() -> int:
     args = ap.parse_args()
 
     index_path = args.quant_dir / "model.safetensors.index.json"
-    if not index_path.exists():
-        sys.exit(f"no index at {index_path}")
-    index = json.loads(index_path.read_text())
-    already = [k for k in index["weight_map"] if k.startswith("mtp.")]
+    index = json.loads(index_path.read_text()) if index_path.exists() else None
+    already = [
+        k
+        for shard in sorted(args.quant_dir.glob("*.safetensors"))
+        for k in read_header(shard)
+        if k.startswith("mtp.")
+    ]
     if already:
-        print(f"index already has {len(already)} mtp.* entries; nothing to do")
+        print(f"directory already has {len(already)} mtp.* entries; nothing to do")
         return 0
 
     tensors = extract_mtp_tensors(args.bf16_shard)
@@ -96,15 +107,18 @@ def main() -> int:
     write_safetensors(out_shard, tensors)
     print(f"wrote {out_shard} ({out_shard.stat().st_size / 1e6:.0f} MB)")
 
-    shutil.copy2(index_path, index_path.with_suffix(".json.pre-mtp"))
-    for name in tensors:
-        index["weight_map"][name] = args.shard_name
-    if "metadata" in index and "total_size" in index["metadata"]:
-        index["metadata"]["total_size"] += sum(
-            len(t["bytes"]) for t in tensors.values()
-        )
-    index_path.write_text(json.dumps(index, indent=2))
-    print(f"patched {index_path.name} (+{len(tensors)} entries)")
+    if index is None:
+        print("no index in the quant dir (single-file checkpoint); shard-only graft")
+    else:
+        shutil.copy2(index_path, index_path.with_suffix(".json.pre-mtp"))
+        for name in tensors:
+            index["weight_map"][name] = args.shard_name
+        if "metadata" in index and "total_size" in index["metadata"]:
+            index["metadata"]["total_size"] += sum(
+                len(t["bytes"]) for t in tensors.values()
+            )
+        index_path.write_text(json.dumps(index, indent=2))
+        print(f"patched {index_path.name} (+{len(tensors)} entries)")
 
     # Round-trip verification: re-read what we wrote.
     check = read_header(out_shard)

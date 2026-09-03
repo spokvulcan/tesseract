@@ -769,19 +769,33 @@ extension LLMActor {
         guard let directory = DFlash2Support.draftDirectory(storageRoot: storageRoot) else {
             return  // draft not downloaded — the common case, stay silent
         }
-        let pairs = await container.perform { context in
-            DFlash2Support.pairsWithTarget(context.model)
+        let targetLayers = await container.perform { context in
+            DFlash2Support.targetLayerCount(context.model)
         }
-        guard pairs else {
+        guard let targetLayers else {
             Log.agent.info(
                 "DFlash2 draft: loaded target class pairs with no DFlash2 draft — off")
             return
         }
         do {
+            // Geometry comes from config.json, so a mismatched draft is
+            // refused before its weights are read.
+            let draftConfig = try DFlash2Support.draftConfiguration(directory: directory)
+            guard
+                DFlash2Support.geometryMatches(
+                    targetLayerCount: targetLayers,
+                    draftNumTargetLayers: draftConfig.numTargetLayers,
+                    draftTargetLayerIds: draftConfig.dflash.targetLayerIds)
+            else {
+                Log.agent.notice(
+                    "DFlash2 draft: distilled for a \(draftConfig.numTargetLayers)-layer target, "
+                        + "loaded target has \(targetLayers) layers — off")
+                return
+            }
             let draft = try DFlash2Support.loadDrafter(directory: directory)
             // Same-input QMM stacking (bitwise-exact, ledger R40/R47) on both
-            // sides of the speculative pair. Non-matching layer classes
-            // (PARO quant, VLM) fail the QuantizedLinear casts and no-op.
+            // sides of the speculative pair. Only plain QuantizedLinear folds
+            // (`plainQuantizedLinear`); a PARO target stacks fewer blocks.
             if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0" {
                 let stackedTarget = await container.perform { context in
                     let n = dflash2StackGateUpProjections(model: context.model)

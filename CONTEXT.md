@@ -292,11 +292,22 @@ in-actor `nil` return (a retired pattern), degraded mode (unqualified).
 
 **Vision-Capable Model**:
 A model whose on-disk config declares image input (the Qwen3.5-family
-`vision_config`); text-only checkpoints do not. A fixed property of the model as
-downloaded — distinct from **Vision Mode**, which is whether that capability is
-currently loaded. The PARO family is vision-capable.
+`vision_config`) and whose catalog entry carries no **Text-Only Override**;
+text-only checkpoints do not. Fixed for a downloaded model — distinct from
+**Vision Mode**, which is whether that capability is currently loaded. Every
+**PARO Checkpoint** in the catalog declares image input.
 _Avoid_: "vision model" (ambiguous with the loaded container), "multimodal" (there
-is no audio/video input path), "supports images" as a per-request flag.
+is no audio/video input path), "supports images" as a per-request flag,
+"declares vision" as a synonym (declaration is one of the two inputs).
+
+**Text-Only Override**:
+A catalog entry's declaration that its checkpoint, although it declares image
+input, is served as text-only: no image affordances, the text-class load, no
+image keying. The catalog withholding a capability the checkpoint has — never the
+checkpoint lacking it.
+_Avoid_: "vision disabled" (collides with the global vision opt-out, a user
+setting), "text-only model" (that is a checkpoint without `vision_config`),
+"unsupported vision" (the capability exists; it is withheld).
 
 **Vision Mode**:
 Whether a **Vision-Capable Model** is currently loaded as its image-able VLM
@@ -1916,8 +1927,17 @@ field), model config / `config.json` dict (a source, not the value), ModelFinger
 (separate). "Model identity" vs "flop profile" — the latter is one field of the
 former.
 
+**PARO Checkpoint**:
+A checkpoint whose weights are quantized with pairwise-rotation INT4 (the
+`paroquant` quantization method), whatever its base architecture — dense or
+sparse-MoE, any Qwen generation. Recognized by its quantization method, never by
+name or size.
+_Avoid_: "PARO model" / "PARO family" as an architecture (it is a weight format
+spanning architectures), "z-lab model" (the publisher, not the format), "AWQ
+model" (PARO extends AWQ's layout with rotations; the two are not interchangeable).
+
 **Prepared Checkpoint**:
-The once-converted MLX-native form of a PARO checkpoint, stored beside the
+The once-converted MLX-native form of a **PARO Checkpoint**, stored beside the
 original so later loads skip the AutoAWQ conversion; rotation parameters remain
 runtime state loaded verbatim — nothing semantic is baked into the artifact.
 Stale or unreadable artifacts self-heal by re-conversion.

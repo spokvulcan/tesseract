@@ -58,6 +58,13 @@ struct ModelDefinition: Identifiable, Sendable {
     let sizeDescription: String
     let dependencies: [String]
     var companionFiles: [CompanionFile] = []
+    /// The **Text-Only Override** (CONTEXT.md): the entry withholds the image
+    /// input its checkpoint declares, so the app serves it text-only — no
+    /// image affordances, the text-class load, no image keying. Today's use is
+    /// the two Qwen3.8-27B entries: DFlash2 pairs only with the MLXLLM text
+    /// classes, and a vision-mode load would silently never speculate. Lifted
+    /// by map #457 once the VLM wrapper hosts the MLXLLM engine (#459).
+    var textOnlyOverride: Bool = false
 
     var cacheSubdirectory: String? {
         guard case .huggingFace(let repo, _, _) = source else { return nil }
@@ -243,23 +250,38 @@ extension ModelDefinition {
             dependencies: []
         ),
         ModelDefinition(
+            id: "qwen3.8-27b-paro",
+            displayName: "Qwen3.8-27B PARO",
+            description:
+                "Dense 27B agent built on Qwen3.8 with pairwise-rotation INT4 (near-FP16 accuracy). Served text-only for now so the DFlash2 draft engages; image input returns with #457. Requires a high-memory Mac (48 GB+ recommended); the first load writes a ~19 GB Prepared Checkpoint beside the download.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "z-lab/Qwen3.8-27B-PARO",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~19 GB",
+            dependencies: ["qwen3.8-27b-dflash2-draft"],
+            textOnlyOverride: true
+        ),
+        ModelDefinition(
             id: "qwen3.8-27b",
             displayName: "Qwen3.8-27B (MLX 4bit)",
             description:
-                "Dense 27B agent from the Qwen3.8 generation (uniform 4-bit MLX, vision-capable). Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5.",
+                "Dense 27B agent from the Qwen3.8 generation (uniform 4-bit MLX). Served text-only: its legacy tensor layout loads as the text class, which is also what the DFlash2 draft pairs with; image input returns with #457. Requires a high-memory Mac (48 GB+ recommended). Ships as qwen3_5.",
             category: .agent,
             source: .huggingFace(
                 repo: "mlx-community/Qwen3.8-27B-4bit",
                 requiredExtension: "safetensors"
             ),
             sizeDescription: "~16 GB",
-            dependencies: ["qwen3.8-27b-dflash2-draft"]
+            dependencies: ["qwen3.8-27b-dflash2-draft"],
+            textOnlyOverride: true
         ),
         ModelDefinition(
             id: "qwen3.8-27b-dflash2-draft",
             displayName: "Qwen3.8-27B DFlash2 Draft",
             description:
-                "Block-parallel speculative-decoding draft for Qwen3.8-27B (incoai/Qwen3.8-27B-DFlash2). Downloads alongside the target and accelerates decode ~3× at greedy and sampling presets alike. Never usable on its own.",
+                "Block-parallel speculative-decoding draft for Qwen3.8-27B (incoai/Qwen3.8-27B-DFlash2). Downloads alongside either Qwen3.8-27B target and accelerates decode ~2× at greedy and sampling presets alike. Never usable on its own.",
             category: .draft,
             source: .huggingFace(
                 repo: "incoai/Qwen3.8-27B-DFlash2",
