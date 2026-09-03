@@ -161,6 +161,32 @@ approval. Pre-rebase tip `f2dd7dc` kept on local branch
 (`pin-upstream-mlx-swift`) still carries the pre-08-18 #471 commits — pick
 the rebased ten from `3ae4a12` at the next re-pin.**
 
+**Status 2026-09-03** — davidkoski's first review of #471 (nine inline
+comments, 2026-09-02) verified and answered. Branch rebased onto upstream
+main `5694a2f` (9 new commits, clean; #511 made `SwitchGLU` `open`, #598
+landed upstream the same conv1d-layout norm-shift fix carried below — drop
+that carry at the next re-pin). One review-round commit `c39c560`
+`fix(paroquant): address review round — frozen rotations, sized generic
+kernel, resolved tool formats`: `PairwiseRotation` freezes (direct weighted
+reduction requires no trainable params); the generic rotation kernel is
+templated on groupSize/krot/element type (any even groupSize ≤ 2048, bf16
+on both kernels) with geometry checked once (typed
+`ParoQuantError.unsupportedRotationGeometry` at load + init preconditions);
+`convertAutoAWQ` casts scales/biases to the checkpoint float dtype read
+from the rotation tensors; `loadParoQuantModel` resolves tool formats via
+`ToolCallFormat.resolved(forTokenizerDirectory:)`. Two comments answered
+without code by measurement: the artifact carries the vision tower (667 MB /
+17.5% on the 4B, 893 MB / 4.3% on the 35B — kept, one artifact serves both
+containers; subset artifact offered as a follow-up) and f16 cos/sin
+derivation (matches the z-lab MLX reference bitwise; max |c²+s²−1| 6.8e-4
+f16 vs 1.2e-7 f32 over the 4B's theta tensors — kept). Values-identical on
+every shipped checkpoint (all-f16). Full CI replica: lint, build-for-testing,
+verify-docs, 722/722 Swift Testing, 576/577 XCTest — the one failure
+(`TurboQuantIntegrationTests.testRawKeyModeBFloat16MatchesReference`, cos
+0.951 < 0.97) is untouched by the PR and passes 4/4 in isolation
+(order-dependent random state). Force-pushed, tip `c39c560`. **Vendor pin
+not yet moved to this tip** — next re-pin should take it.
+
 1. **Compiled decode schedule for Qwen3.5/3.6** — C11 + C12 + the unowned-
    captures fix + C14 + the PR #427 review-round commit, squashed into one
    PR: per-layer decode traces, the whole-step segment schedule split at
