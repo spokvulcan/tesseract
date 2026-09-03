@@ -57,6 +57,35 @@ struct DFlash2SupportTests {
         #expect(!DFlash2Support.shouldEngageRawArm(hasDrafter: false, input: input))
     }
 
+    // MARK: - Target geometry
+
+    /// The release draft's shape: distilled against a 64-layer target,
+    /// reading layers 5/19/33/47/61.
+    private func geometryMatches(targetLayerCount: Int) -> Bool {
+        DFlash2Support.geometryMatches(
+            targetLayerCount: targetLayerCount,
+            draftNumTargetLayers: 64,
+            draftTargetLayerIds: [5, 19, 33, 47, 61])
+    }
+
+    @Test func geometryMatchesTheTargetItWasDistilledFor() {
+        #expect(geometryMatches(targetLayerCount: 64))
+    }
+
+    @Test func geometryRefusesOtherDepthsOfThePairableClass() {
+        // The class check admits every Qwen3.5 dense size; the draft's
+        // captured layers only mean something at the depth it was trained on.
+        #expect(!geometryMatches(targetLayerCount: 40))  // 9B-class stack
+        #expect(!geometryMatches(targetLayerCount: 80))
+    }
+
+    @Test func geometryRefusesCapturedLayersPastTheTargetEnd() {
+        #expect(
+            !DFlash2Support.geometryMatches(
+                targetLayerCount: 64, draftNumTargetLayers: 64,
+                draftTargetLayerIds: [5, 19, 33, 47, 64]))
+    }
+
     // MARK: - Draft folder detection
 
     private func makeStorageRoot() throws -> URL {
@@ -98,14 +127,22 @@ struct DFlash2SupportTests {
 
     // MARK: - Model definition wiring
 
+    /// Both Qwen3.8-27B targets — the uniform quant and the PARO Checkpoint
+    /// — pull the draft, and both carry the Text-Only Override: the draft
+    /// pairs only with the MLXLLM text classes (`pairsWithTarget`), so a
+    /// vision-mode load of either would never speculate (map #457 lifts it).
     @MainActor
-    @Test func draftIsDownloadableDependencyOfQwen38() {
+    @Test func draftIsDownloadableDependencyOfBothQwen38Targets() {
         let draft = ModelDefinition.withID(DFlash2Support.draftModelID)
         #expect(draft != nil)
         #expect(draft?.category == .draft)
         #expect(draft?.repoID == "incoai/Qwen3.8-27B-DFlash2")
-        let target = ModelDefinition.withID("qwen3.8-27b")
-        #expect(target?.dependencies.contains(DFlash2Support.draftModelID) == true)
+        for id in ["qwen3.8-27b", "qwen3.8-27b-paro"] {
+            let target = ModelDefinition.withID(id)
+            #expect(target != nil, "missing \(id)")
+            #expect(target?.dependencies.contains(DFlash2Support.draftModelID) == true)
+            #expect(target?.textOnlyOverride == true, "\(id) must load the text class")
+        }
     }
 
     @MainActor

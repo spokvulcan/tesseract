@@ -299,6 +299,25 @@ arithmetic (fewer encode boundaries, single-grid streaming): canonical
 contention)**, bs3f 34.2 — stacking finally moved the launch-bound
 short-round arm.
 
+**2026-09-03 addendum — stacking is for plain `QuantizedLinear` only.**
+The stacking helpers admitted their members with `as? QuantizedLinear`,
+which also admits subclasses. ParoQuant's `RotateQuantizedLinear` is one:
+its forward rotates and channel-scales the input before the quantized
+matmul, so folding its `weight`/`scales` into a plain stacked layer kept
+the weights and dropped the rotations. First seen the day the
+Qwen3.8-27B PARO checkpoint (a text-only load, so the draft paired) went
+through the lever: every stacked block decoded garbage (`3333…`), the
+bench's greedy identity ruler read 0.2% acceptance, and
+`DFLASH2_STACK_GATEUP=0` restored coherent output at once. The guard is
+now an exact class check (`plainQuantizedLinear(_:)`): the uniform quant
+still stacks all 128 groups; a PARO target stacks only what is plain
+(its drafter side is unaffected). Same lesson as R44 in a different
+coat — a lever is only bitwise-neutral for the layer class it was
+priced on. A load-time depth guard was added in the app beside it
+(`DFlash2Support.geometryMatches`): the class check pairs every Qwen3.5
+dense size, but the draft only reads the layer depth it was distilled
+for.
+
 **R44 addendum — the trajectory-sensitivity constraint.** Fusing the
 GDN q/k RMS norms into the scan kernel (mathematically exact, f32
 instead of eager's bf16 intermediate roundings, spec==AR MATCH by

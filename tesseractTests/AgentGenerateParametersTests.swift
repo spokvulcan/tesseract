@@ -39,13 +39,15 @@ struct AgentGenerateParametersTests {
         // Qwen3.8's card recommends temp 1.0 / top_p 0.95 / top_k 20 with
         // presence_penalty 0.0 in thinking mode — must not fall through to
         // the generic `qwen3` instruct profile (temp 0.7, presence 1.5).
-        let params = AgentGenerateParameters.forModel("qwen3.8-27b")
-        #expect(params.temperature == 1.0)
-        #expect(params.topP == 0.95)
-        #expect(params.topK == 20)
-        #expect(params.presencePenalty == nil)
-        #expect(params.repetitionPenalty == nil)
-        #expect(params.thinkingSafeguard.enabled == true)
+        for id in ["qwen3.8-27b", "qwen3.8-27b-paro"] {
+            let params = AgentGenerateParameters.forModel(id)
+            #expect(params.temperature == 1.0, "\(id)")
+            #expect(params.topP == 0.95, "\(id)")
+            #expect(params.topK == 20, "\(id)")
+            #expect(params.presencePenalty == nil, "\(id)")
+            #expect(params.repetitionPenalty == nil, "\(id)")
+            #expect(params.thinkingSafeguard.enabled == true, "\(id)")
+        }
     }
 
     @MainActor

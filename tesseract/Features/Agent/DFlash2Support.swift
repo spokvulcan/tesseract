@@ -70,6 +70,37 @@ nonisolated enum DFlash2Support {
         model is MLXLLM.Qwen35Model || model is Qwen35TextModel
     }
 
+    /// Depth of the loaded target's layer stack when it pairs
+    /// (``pairsWithTarget(_:)``), `nil` otherwise. Every pairable class
+    /// reports its depth through `KVCacheDimensionProvider`.
+    static func targetLayerCount(_ model: any LanguageModel) -> Int? {
+        guard pairsWithTarget(model) else { return nil }
+        return (model as? KVCacheDimensionProvider)?.kvHeads.count
+    }
+
+    /// The draft checkpoint's configuration — the geometry facts
+    /// (`num_target_layers`, `target_layer_ids`) without the weights.
+    static func draftConfiguration(directory: URL) throws -> DFlash2Configuration {
+        let data = try Data(contentsOf: directory.appendingPathComponent("config.json"))
+        return try JSONDecoder.json5().decode(DFlash2Configuration.self, from: data)
+    }
+
+    /// Whether a draft was distilled for a target of this depth. The class
+    /// check admits every Qwen3.5 dense size and every PARO checkpoint of
+    /// the family, but the draft reads hidden states at fixed
+    /// `target_layer_ids` of a `num_target_layers`-deep stack: bound to a
+    /// shallower target it would index past the end, to a deeper one it
+    /// would read layers it never saw. Both are a silent-garbage or trap
+    /// outcome, so the pairing is refused at load instead.
+    static func geometryMatches(
+        targetLayerCount: Int,
+        draftNumTargetLayers: Int,
+        draftTargetLayerIds: [Int]
+    ) -> Bool {
+        targetLayerCount == draftNumTargetLayers
+            && draftTargetLayerIds.allSatisfy { $0 < targetLayerCount }
+    }
+
     // MARK: - Loading
 
     /// Load + 4-bit quantize the draft (reference: `nn.quantize(draft,

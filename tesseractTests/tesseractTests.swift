@@ -77,6 +77,25 @@ struct ModelDefinitionCatalogTests {
         #expect(isParoModel)
     }
 
+    @Test func includesQwen38_27BParoInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.8-27b-paro" }) else {
+            Issue.record("Missing qwen3.8-27b-paro model definition")
+            return
+        }
+
+        #expect(model.displayName == "Qwen3.8-27B PARO")
+        #expect(model.category == .agent)
+        #expect(model.repoID == "z-lab/Qwen3.8-27B-PARO")
+        #expect(model.cacheSubdirectory == "z-lab_Qwen3.8-27B-PARO")
+        #expect(model.requiredExtension == "safetensors")
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
     @Test func includesQwen36_35BParoInAgentCatalog() async throws {
         guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-paro" })
         else {
