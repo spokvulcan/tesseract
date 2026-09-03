@@ -91,11 +91,13 @@ The widening, member by member:
 
 The consumer is the **Raw Generation Start** module (`RawGenerationStart.start`
 over a `RawGenerationPrompt`: `.fresh` or `.continuation(base:handoff:)`), run
-inside one session by the actor's single `startRawGeneration(prompt:)`. Two
+inside one session by the actor's single `startRawGeneration(prompt:)`. Three
 deliberate behaviour changes rode along: every prompt shape now preempts the
-background speculative prefill (only the fresh turn did), and continuations
-emit the same progress-event sequence and speculation badge the fresh turn
-does. The DFlash2 raw arm's `kvBits = nil` override is preserved unchanged;
+background speculative prefill (only the fresh turn did); continuations emit
+the same progress-event sequence and speculation badge the fresh turn does;
+and the agent's input-continuation re-tokenizes its base through the
+agent-edge verb (Render+Token Cache when eligible) where it used to call the
+processor directly. The DFlash2 raw arm's `kvBits = nil` override is preserved unchanged;
 reconciling it with the server's refuse-on-`kvBits` gate is the Speculation
 Plan's job, not this amendment's.
 

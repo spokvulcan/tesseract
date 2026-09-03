@@ -44,8 +44,9 @@ cases (`chunked(stepSize:)`, `singleShot`) and three members:
   chunked arm. Stays inside `ModelContainer.perform`, as ADR-0033's
   "derivation out, MLX glue stays" prescribes.
 
-`LLMActor` keeps one shared `makeRawGenerationStart` tail (token-event loop
-start + start-value wrap) that both raw arms return through. The parity
+The raw arms share one tail (token-event loop start + start-value wrap) —
+since ADR-0016's amendment, the **Raw Generation Start** module, which
+executes the route through the session's `makeRawDecodeIterator`. The parity
 bench routes its guard through the same `decide` and keeps its own timed
 execution arms — the mirror is now structural, not copied.
 

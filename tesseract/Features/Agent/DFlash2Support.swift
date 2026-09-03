@@ -139,6 +139,17 @@ nonisolated enum DFlash2Support {
         hasDrafter && input.image == nil && input.video == nil && input.audio == nil
     }
 
+    /// The **Raw Generation Start**'s iterator parameters once the arm
+    /// engages: `kvBits` cleared, because speculation rewinds verify rows in
+    /// place and needs trimmable caches. The one home for the override the
+    /// server's keyed gate spells as a refusal (`shouldEngage`) — reconciling
+    /// the two is the Speculation Plan's job.
+    static func rawArmParameters(_ parameters: GenerateParameters) -> GenerateParameters {
+        var specParams = parameters
+        specParams.kvBits = nil
+        return specParams
+    }
+
     /// Build the DFlash2 iterator with the app's penalty discipline (ADR-0053):
     /// penalties are stripped from the iterator parameters and re-attached as
     /// the app logit processor through `GenerationComponents`, so the vendor's

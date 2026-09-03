@@ -8,19 +8,6 @@ import UniformTypeIdentifiers
 
 @testable import Tesseract_Agent
 
-/// Counts toy-model forwards across isolations — the "allocate" side of the
-/// ADR-0014 ordering assertion: a rejected request must never have run one.
-private nonisolated final class ForwardCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _count = 0
-
-    var hasForwarded: Bool { lock.withLock { _count > 0 } }
-
-    func onForward(_ offset: Int) {
-        lock.withLock { _count += 1 }
-    }
-}
-
 /// Vision-guard ordering at both generation arms (PRD #137, user story 12;
 /// ADR-0014): an image whose priced patch count would put the global ViT's
 /// `[heads, ΣP, ΣP]` attention matrix past the Metal buffer limit must be
@@ -66,7 +53,7 @@ private nonisolated final class ForwardCounter: @unchecked Sendable {
     /// creation but no prefill verb — with zero forwards on the model.
     @Test func keyedArmRejectsOversizedVisionTowerBeforeAnyForward() async throws {
         let tokenizer = ToySequencingTokenizer()
-        let forwards = ForwardCounter()
+        let forwards = ForwardLog()
         let provider = ToyModelSessionProvider(
             model: ToyLanguageModel(script: [0], onForward: forwards.onForward),
             tokenizer: tokenizer,
@@ -113,7 +100,7 @@ private nonisolated final class ForwardCounter: @unchecked Sendable {
     /// no-forward ordering.
     @Test func unkeyedArmRejectsOversizedVisionTowerBeforeAnyForward() async throws {
         let tokenizer = FakeChatMLTokenizer()
-        let forwards = ForwardCounter()
+        let forwards = ForwardLog()
         let prompt = try tokenizer.applyChatTemplate(
             messages: [["role": "user", "content": "Hi"]], tools: nil, additionalContext: nil
         )

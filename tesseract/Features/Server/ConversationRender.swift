@@ -297,10 +297,11 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     /// home without pretending the contexts match. `nil` sends the caller
     /// to its processor's `prepare`. `messages` is an autoclosure so an
     /// ineligible request (media, 2D tokens, unknown fingerprint) never pays
-    /// the message-forming pass.
+    /// the message-forming pass; a caller that cannot form messages at all
+    /// yields `nil` from it and falls back the same way.
     static func agentEdgeFullRender(
         tokenizer: any Tokenizer,
-        messages: @autoclosure () -> [[String: any Sendable]],
+        messages: @autoclosure () -> [[String: any Sendable]]?,
         tools: [ToolSpec]?,
         additionalContext: [String: any Sendable]?,
         hasMedia: Bool,
@@ -315,10 +316,11 @@ nonisolated struct ConversationRender: @unchecked Sendable {
                 modelFingerprint: modelFingerprint
             )
         else { return nil }
+        guard let messages = messages() else { return nil }
         return resolveFull(
             cache: cache,
             tokenizer: tokenizer,
-            messages: messages(),
+            messages: messages,
             tools: tools,
             additionalContext: additionalContext,
             fingerprint: fingerprint

@@ -252,9 +252,8 @@ actor LLMActor {
         // order the tokenizer uses for the prompt. Type-aware tool-call
         // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
-        let sessions = ContainerModelSessionProvider(
-            container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter)
-        return try await sessions.withSession(nonSendable: prompt) { session, prompt in
+        return try await sessionProvider(container).withSession(nonSendable: prompt) {
+            session, prompt in
             try await RawGenerationStart.start(
                 session: session,
                 prompt: prompt,
@@ -264,6 +263,14 @@ actor LLMActor {
                 progressHandler: progressHandler
             )
         }
+    }
+
+    /// The **Model Session** provider over the loaded container, with the
+    /// drafters loaded beside it — the one place the drafter list is wired,
+    /// so neither consumer can silently drop a speculative arm.
+    private func sessionProvider(_ container: ModelContainer) -> ContainerModelSessionProvider {
+        ContainerModelSessionProvider(
+            container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter)
     }
 
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions` —
@@ -287,8 +294,7 @@ actor LLMActor {
         }
         return try await ensureServerCompletion().start(
             on: self,
-            sessions: ContainerModelSessionProvider(
-                container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter),
+            sessions: sessionProvider(container),
             modelID: modelID,
             conversation: conversation,
             toolSpecs: toolSpecs,

@@ -203,6 +203,37 @@ nonisolated final class ForwardGate: @unchecked Sendable {
     }
 }
 
+/// Records every toy-model forward's pre-update cache offset, in order —
+/// the observable difference between the chunked and single-shot prefill
+/// routes, and the "did it allocate at all" fact the vision-guard ordering
+/// suites assert. Pass `onForward` as the toy's hook.
+nonisolated final class ForwardLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _offsets: [Int] = []
+
+    var offsets: [Int] { lock.withLock { _offsets } }
+    var hasForwarded: Bool { !offsets.isEmpty }
+
+    func onForward(_ offset: Int) {
+        lock.withLock { _offsets.append(offset) }
+    }
+}
+
+/// Collects `ServerInferenceProgressEvent`s across isolations: the handler
+/// fires on the MainActor, assertions read after the drive settles.
+nonisolated final class ProgressEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _events: [ServerInferenceProgressEvent] = []
+
+    var events: [ServerInferenceProgressEvent] {
+        lock.withLock { _events }
+    }
+
+    func append(_ event: ServerInferenceProgressEvent) {
+        lock.withLock { _events.append(event) }
+    }
+}
+
 /// The verbs a **Model Session** exposes, as recordable facts — the
 /// sequencing suites assert their order (the seam's contract).
 nonisolated enum ModelVerb: String, Equatable, Sendable {
@@ -379,22 +410,6 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
                 tokenizer: tokenizer
             )
         )
-    }
-
-    func withSession<R: Sendable>(
-        _ body: @Sendable (any ModelSession) async throws -> R
-    ) async throws -> R {
-        let recorder = self.recorder
-        let reportsFlatTextTokens = self.reportsFlatTextTokens
-        return try await container.perform { context in
-            return try await body(
-                RecordingModelSession(
-                    base: ContextBackedModelSession(context: context),
-                    recorder: recorder,
-                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil
-                )
-            )
-        }
     }
 
     func withSession<V, R: Sendable>(

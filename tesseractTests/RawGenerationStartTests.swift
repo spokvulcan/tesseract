@@ -8,28 +8,11 @@ import Testing
 /// The **Raw Generation Start** module (ADR-0016 amendment) driven through
 /// the **Model Session** seam over the toy model — the agent chat turn and
 /// both thinking-continuation shapes run the same script with no weights:
-/// tokenize through the session's one authority, the progress-event
+/// tokenize through the session's agent-edge verb, the progress-event
 /// sequence, the **Prefill Strategy** route, the loop start, the handle
 /// wrap. These paths had no test reach before the seam.
 @MainActor
 struct RawGenerationStartTests {
-
-    /// Progress events, as the Activity surfaces would receive them.
-    @MainActor
-    private final class EventLog {
-        var events: [ServerInferenceProgressEvent] = []
-    }
-
-    /// Forward offsets the toy model reports, in order — the observable
-    /// difference between the chunked and single-shot prefill routes.
-    private final class ForwardLog: @unchecked Sendable {
-        private let lock = NSLock()
-        private var _offsets: [Int] = []
-        var offsets: [Int] { lock.withLock { _offsets } }
-        func record(_ offset: Int) {
-            lock.withLock { _offsets.append(offset) }
-        }
-    }
 
     private static func parameters(prefillStepSize: Int? = nil) -> GenerateParameters {
         var agentParameters = AgentGenerateParameters()
@@ -48,18 +31,40 @@ struct RawGenerationStartTests {
 
     private static let messages: [Message] = [["role": "user", "content": "Hi"]]
 
+    /// A toy session whose model believes in `script`, over the sequencing
+    /// tokenizer unless a test needs a rendering one.
+    private static func toy(
+        script: [Int],
+        tokenizer: any Tokenizer = ToySequencingTokenizer(),
+        onForward: (@Sendable (Int) -> Void)? = nil,
+        reportsFlatTextTokens: Bool = false
+    ) -> ToyModelSessionProvider {
+        ToyModelSessionProvider(
+            model: ToyLanguageModel(script: script, onForward: onForward),
+            tokenizer: tokenizer,
+            reportsFlatTextTokens: reportsFlatTextTokens
+        )
+    }
+
+    /// The chat-template render of the one-message conversation.
+    private static func render(_ tokenizer: any Tokenizer = ToySequencingTokenizer()) throws
+        -> [Int]
+    {
+        try tokenizer.applyChatTemplate(messages: messages, tools: nil, additionalContext: nil)
+    }
+
     /// Run the module inside one toy session and drain the stream.
     private static func run(
         provider: ToyModelSessionProvider,
         prompt: sending RawGenerationPrompt,
         parameters: GenerateParameters,
         modelFingerprint: String? = nil,
-        log: EventLog? = nil,
+        log: ProgressEventLog? = nil,
         onStarted: (@Sendable (HTTPServerRawGenerationStart) async -> Void)? = nil
     ) async throws -> String {
         let handler: ServerInferenceProgressHandler?
         if let log {
-            handler = { @MainActor event in log.events.append(event) }
+            handler = { event in log.append(event) }
         } else {
             handler = nil
         }
@@ -89,14 +94,9 @@ struct RawGenerationStartTests {
     /// prompt token count the tokenizer produced. No speculation badge: the
     /// toy session has no drafter.
     @Test func freshTurnDecodesTheScriptAndReportsProgress() async throws {
-        let tokenizer = ToySequencingTokenizer()
-        let render = try tokenizer.applyChatTemplate(
-            messages: Self.messages, tools: nil, additionalContext: nil)
-        let provider = ToyModelSessionProvider(
-            model: ToyLanguageModel(script: render + Self.bytes("Done")),
-            tokenizer: tokenizer
-        )
-        let log = EventLog()
+        let render = try Self.render()
+        let provider = Self.toy(script: render + Self.bytes("Done"))
+        let log = ProgressEventLog()
 
         let text = try await Self.run(
             provider: provider,
@@ -121,7 +121,7 @@ struct RawGenerationStartTests {
             Issue.record("expected a lookup-finished event")
             return
         }
-        #expect(lookup.reason == RawGenerationStart.freshLookupReason)
+        #expect(lookup.reason == "standardGenerationNoPrefixCache")
         #expect(lookup.promptTokens == render.count)
         #expect(lookup.cachedTokens == 0)
         guard case .prefillFinished(let prefill) = log.events[3] else {
@@ -139,15 +139,10 @@ struct RawGenerationStartTests {
     /// original plus the appended tokens, and decode picks up right after
     /// the hand-off.
     @Test func continuationFromTokensAppendsTheHandoff() async throws {
-        let tokenizer = ToySequencingTokenizer()
-        let render = try tokenizer.applyChatTemplate(
-            messages: Self.messages, tools: nil, additionalContext: nil)
+        let render = try Self.render()
         let handoff = "</think>"
-        let provider = ToyModelSessionProvider(
-            model: ToyLanguageModel(script: render + Self.bytes(handoff) + Self.bytes("After")),
-            tokenizer: tokenizer
-        )
-        let log = EventLog()
+        let provider = Self.toy(script: render + Self.bytes(handoff) + Self.bytes("After"))
+        let log = ProgressEventLog()
 
         let text = try await Self.run(
             provider: provider,
@@ -163,7 +158,7 @@ struct RawGenerationStartTests {
             Issue.record("expected a lookup-finished event")
             return
         }
-        #expect(lookup.reason == RawGenerationStart.continuationLookupReason)
+        #expect(lookup.reason == "thinkingContinuationNoPrefixCache")
         #expect(lookup.promptTokens == render.count + handoff.utf8.count)
     }
 
@@ -172,23 +167,19 @@ struct RawGenerationStartTests {
     /// the captured token list. This is the drift guard the old hand copies
     /// needed, expressed as the module's contract.
     @Test func continuationFromInputMatchesContinuationFromTokens() async throws {
-        let tokenizer = ToySequencingTokenizer()
-        let render = try tokenizer.applyChatTemplate(
-            messages: Self.messages, tools: nil, additionalContext: nil)
+        let render = try Self.render()
         let handoff = "</think>"
         let script = render + Self.bytes(handoff) + Self.bytes("Same")
-        let fromTokensLog = EventLog()
-        let fromInputLog = EventLog()
+        let fromTokensLog = ProgressEventLog()
+        let fromInputLog = ProgressEventLog()
 
         let fromTokens = try await Self.run(
-            provider: ToyModelSessionProvider(
-                model: ToyLanguageModel(script: script), tokenizer: tokenizer),
+            provider: Self.toy(script: script),
             prompt: .continuation(base: .tokens(render, ndim: 1), handoff: handoff),
             parameters: Self.parameters(),
             log: fromTokensLog
         )
-        let fromInputProvider = ToyModelSessionProvider(
-            model: ToyLanguageModel(script: script), tokenizer: tokenizer)
+        let fromInputProvider = Self.toy(script: script)
         let fromInput = try await Self.run(
             provider: fromInputProvider,
             prompt: .continuation(
@@ -211,53 +202,27 @@ struct RawGenerationStartTests {
 
     // MARK: - Prefill route
 
-    /// A 2D text-only prompt longer than one step takes the chunked route
-    /// (ADR-0044): the toy sees forwards at each chunk boundary before the
-    /// iterator's prime forward, where a single-shot prompt sees one.
-    @Test func longTwoDimensionalPromptChunksThroughTheAppDriver() async throws {
-        let tokenizer = ToySequencingTokenizer()
+    /// The **Prefill Strategy** route (ADR-0044), observed through the toy's
+    /// forward offsets: a 2D text-only prompt longer than one step chunks
+    /// through the app driver — forwards at each chunk boundary, then the
+    /// remainder priming the iterator — while the same prompt as a flat 1D
+    /// list goes single-shot, one forward over the whole prompt inside the
+    /// vendor iterator's init. 21 prompt tokens at step 8.
+    @Test(arguments: [(ndim: 2, forwards: [0, 8, 16]), (ndim: 1, forwards: [0, 21])])
+    func prefillRouteFollowsThePromptRank(ndim: Int, forwards expected: [Int]) async throws {
         let base = Self.bytes(String(repeating: "a", count: 20))
         let forwards = ForwardLog()
-        let provider = ToyModelSessionProvider(
-            model: ToyLanguageModel(
-                script: base + Self.bytes("!") + Self.bytes("ok"),
-                onForward: forwards.record),
-            tokenizer: tokenizer
-        )
+        let provider = Self.toy(
+            script: base + Self.bytes("!") + Self.bytes("ok"), onForward: forwards.onForward)
 
         let text = try await Self.run(
             provider: provider,
-            prompt: .continuation(base: .tokens(base, ndim: 2), handoff: "!"),
+            prompt: .continuation(base: .tokens(base, ndim: ndim), handoff: "!"),
             parameters: Self.parameters(prefillStepSize: 8)
         )
 
         #expect(text == "ok")
-        // 21 prompt tokens at step 8: chunks at 0 and 8, then the remainder
-        // primes the iterator at 16 — decode forwards follow from 21.
-        #expect(Array(forwards.offsets.prefix(3)) == [0, 8, 16])
-    }
-
-    /// The same prompt as a flat 1D list goes single-shot: one forward over
-    /// the whole prompt inside the vendor iterator's init.
-    @Test func flatPromptPrefillsSingleShot() async throws {
-        let tokenizer = ToySequencingTokenizer()
-        let base = Self.bytes(String(repeating: "a", count: 20))
-        let forwards = ForwardLog()
-        let provider = ToyModelSessionProvider(
-            model: ToyLanguageModel(
-                script: base + Self.bytes("!") + Self.bytes("ok"),
-                onForward: forwards.record),
-            tokenizer: tokenizer
-        )
-
-        let text = try await Self.run(
-            provider: provider,
-            prompt: .continuation(base: .tokens(base, ndim: 1), handoff: "!"),
-            parameters: Self.parameters(prefillStepSize: 8)
-        )
-
-        #expect(text == "ok")
-        #expect(Array(forwards.offsets.prefix(2)) == [0, 21])
+        #expect(Array(forwards.offsets.prefix(expected.count)) == expected)
     }
 
     // MARK: - Cancellation
@@ -265,16 +230,10 @@ struct RawGenerationStartTests {
     /// The wrapped handle's `cancel` stops the loop mid-decode and
     /// `waitForCompletion` returns once the model is no longer touched.
     @Test func cancelStopsGenerationAndCompletionSettles() async throws {
-        let tokenizer = ToySequencingTokenizer()
-        let render = try tokenizer.applyChatTemplate(
-            messages: Self.messages, tools: nil, additionalContext: nil)
+        let render = try Self.render()
         let scripted = String(repeating: "x", count: 64)
         let gate = ForwardGate(threshold: render.count + 8)
-        let provider = ToyModelSessionProvider(
-            model: ToyLanguageModel(
-                script: render + Self.bytes(scripted), onForward: gate.onForward),
-            tokenizer: tokenizer
-        )
+        let provider = Self.toy(script: render + Self.bytes(scripted), onForward: gate.onForward)
 
         let text = try await Self.run(
             provider: provider,
@@ -299,14 +258,10 @@ struct RawGenerationStartTests {
         let tokenizer = GreedyTokenizer(pieces: [
             "<|im_start|>", "<|im_end|>", "assistant", "user", "system", "\n", "Hi",
         ])
-        let truth = try tokenizer.applyChatTemplate(
-            messages: Self.messages, tools: nil, additionalContext: nil)
-        let cachedLog = EventLog()
-        let cachedProvider = ToyModelSessionProvider(
-            model: ToyLanguageModel(script: truth),
-            tokenizer: tokenizer,
-            reportsFlatTextTokens: true
-        )
+        let truth = try Self.render(tokenizer)
+        let cachedLog = ProgressEventLog()
+        let cachedProvider = Self.toy(
+            script: truth, tokenizer: tokenizer, reportsFlatTextTokens: true)
         _ = try await Self.run(
             provider: cachedProvider,
             prompt: .fresh(UserInput(messages: Self.messages)),
@@ -321,11 +276,8 @@ struct RawGenerationStartTests {
         }
         #expect(lookup.promptTokens == truth.count)
 
-        let uncachedProvider = ToyModelSessionProvider(
-            model: ToyLanguageModel(script: truth),
-            tokenizer: tokenizer,
-            reportsFlatTextTokens: true
-        )
+        let uncachedProvider = Self.toy(
+            script: truth, tokenizer: tokenizer, reportsFlatTextTokens: true)
         _ = try await Self.run(
             provider: uncachedProvider,
             prompt: .fresh(UserInput(messages: Self.messages)),
