@@ -5,21 +5,6 @@ import Testing
 
 @testable import Tesseract_Agent
 
-/// Collects `ServerInferenceProgressEvent`s across isolations: the handler
-/// fires on the MainActor, assertions read after the drive settles.
-private nonisolated final class ProgressEventLog: @unchecked Sendable {
-    private let lock = NSLock()
-    private var _events: [ServerInferenceProgressEvent] = []
-
-    var events: [ServerInferenceProgressEvent] {
-        lock.withLock { _events }
-    }
-
-    func append(_ event: ServerInferenceProgressEvent) {
-        lock.withLock { _events.append(event) }
-    }
-}
-
 /// First sequencing coverage at the **Model Session** seam (PRD #137, PR A;
 /// ADR-0016): the **Unkeyed Completion** arm — the smallest complete
 /// consumer — driven end-to-end with the toy-model peer. The real

@@ -19,8 +19,8 @@ import os
 /// server's cache-aware path. The server execution itself lives in the
 /// actor-confined ``ServerCompletion`` module (CONTEXT.md → Server completion,
 /// ADR-0015), installed at model load and dropped at unload. The
-/// thinking-continuation primitives stay here as actor primitives shared by
-/// both paths; the module composes them for the safeguard's continuation swap.
+/// raw arm serves both the agent chat turn and the safeguard's continuation
+/// swap on either path, through the **Raw Generation Start** module.
 actor LLMActor {
 
     /// Memory budget for the LLM stack.
@@ -213,10 +213,17 @@ actor LLMActor {
         )
     }
 
-    /// Start a raw text/tool generation and surface the underlying vendor task so
-    /// callers can deterministically wait for model use to actually stop.
+    /// Start a raw whole-prompt generation — the agent chat turn or a
+    /// thinking-safeguard continuation — and surface the underlying vendor
+    /// task so callers can deterministically wait for model use to stop.
+    ///
+    /// The actor keeps the lifecycle: container guard, memory cap, speculative
+    /// prefill preemption, parameter conversion, tool canonicalisation. The
+    /// script itself — tokenize, progress events, speculation, prefill route,
+    /// loop start — is the **Raw Generation Start** module, run inside one
+    /// **Model Session** (ADR-0016 amendment).
     func startRawGeneration(
-        input: sending UserInput,
+        prompt: sending RawGenerationPrompt,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         progressHandler: ServerInferenceProgressHandler? = nil
@@ -227,337 +234,43 @@ actor LLMActor {
 
         Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
-        // The standard path bypasses `ServerCompletion.start`, so it preempts
-        // the background speculative prefill itself — otherwise its first
-        // `container.perform` could queue behind background chunks. Awaited:
-        // the pass settles (bounded by ~one chunk plus one capture) so its
-        // partial-leaf admission lands before this generation touches the
-        // container, preserved for future cache-aware requests.
+        // The raw path bypasses `ServerCompletion.start`, so it preempts the
+        // background speculative prefill itself — otherwise its first session
+        // could queue behind background chunks. Awaited: the pass settles
+        // (bounded by ~one chunk plus one capture) so its partial-leaf
+        // admission lands before this generation touches the container,
+        // preserved for future cache-aware requests. Every prompt shape
+        // preempts — a continuation's first session queues exactly the same
+        // way a fresh turn's would.
         await preemptServerSpeculativePrefill()
 
         let genParams = Self.makeGenerateParameters(from: parameters)
-        // Read once on the actor so the `@Sendable` perform-closure below
+        // Read once on the actor so the `@Sendable` session body below
         // captures a value, not actor state.
         let modelFingerprint = activeModelFingerprint
-        let dflash2 = dflash2Drafter
         // Canonicalize once so the loop-handler sees the same dict iteration
         // order the tokenizer uses for the prompt. Type-aware tool-call
         // parsing reads this schema via `XMLFunctionParser.parse(content:tools:)`.
         let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
-        return try await container.perform(nonSendable: input) { context, input in
-            await progressHandler?(.cacheLookupStarted)
-            let lookupStarted = Date.timeIntervalSinceReferenceDate
-            // C25 Render+Token Cache: text-only inputs on LLM-family models
-            // tokenize through the cache (render + verified suffix encode,
-            // exactly the processor's token list); anything else falls back
-            // to the processor's `prepare`.
-            let prepared: LMInput
-            if let cached = Self.prepareViaRenderTokenCache(
-                context: context, input: input, modelFingerprint: modelFingerprint
-            ) {
-                prepared = cached
-            } else {
-                prepared = try await context.processor.prepare(input: input)
-            }
-            let lookupMs = (Date.timeIntervalSinceReferenceDate - lookupStarted) * 1000
-            let promptTokenCount = prepared.text.tokens.size
-            await progressHandler?(
-                .cacheLookupFinished(
-                    .init(
-                        reason: "standardGenerationNoPrefixCache",
-                        cachedTokens: 0,
-                        sharedPrefixLength: 0,
-                        promptTokens: promptTokenCount,
-                        newTokensToPrefill: promptTokenCount,
-                        lookupMs: lookupMs,
-                        restoreMs: 0
-                    )))
-            await progressHandler?(
-                .prefillStarted(
-                    .init(
-                        promptTokens: promptTokenCount,
-                        cachedTokens: 0,
-                        newTokensToPrefill: promptTokenCount,
-                        prefillMs: nil
-                    )))
-            let prefillStarted = Date.timeIntervalSinceReferenceDate
-            // DFlash2 speculative arm: a text-only prompt on a pairing target
-            // with the draft loaded decodes through the block-parallel
-            // speculative iterator (its init runs the capture-emitting chunked
-            // prefill itself). Sampling presets speculate identically —
-            // unlike the greedy-only MTP head, the draft carries a selector
-            // for rejection sampling.
-            if let iterator = try DFlash2Support.rawArmIterator(
-                input: prepared, model: context.model,
-                drafter: dflash2?.value, parameters: genParams)
-            {
-                let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-                await progressHandler?(.speculationEngaged(.dflash2))
-                await progressHandler?(
-                    .prefillFinished(
-                        .init(
-                            promptTokens: promptTokenCount,
-                            cachedTokens: 0,
-                            newTokensToPrefill: promptTokenCount,
-                            prefillMs: prefillMs
-                        )))
-                return Self.makeRawGenerationStart(
-                    iterator: iterator,
-                    promptTokenCount: promptTokenCount,
-                    context: context,
-                    tools: canonicalTools
-                )
-            }
-            let strategy = PrefillStrategy.decide(
-                for: prepared, prefillStepSize: genParams.prefill.stepSize
-            )
-            let iterator = try strategy.makeIterator(
-                input: prepared,
-                model: context.model,
-                parameters: genParams
-            )
-            let prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            await progressHandler?(
-                .prefillFinished(
-                    .init(
-                        promptTokens: promptTokenCount,
-                        cachedTokens: 0,
-                        newTokensToPrefill: promptTokenCount,
-                        prefillMs: prefillMs
-                    )))
-            return Self.makeRawGenerationStart(
-                iterator: iterator,
-                promptTokenCount: promptTokenCount,
-                context: context,
-                tools: canonicalTools
-            )
-        }
-    }
-
-    /// C25 Render+Token Cache seam for `startRawGeneration`: reproduce
-    /// `context.processor.prepare`'s token list through `RenderTokenCache`
-    /// for text-only inputs on LLM-family models. Returns `nil` — the caller
-    /// falls back to the processor — for media inputs, VLM-family models
-    /// (their text-only `prepare` emits 2D `[batch, seq]` tokens and
-    /// parts-shaped message content), an unknown model fingerprint,
-    /// non-rendering tokenizers, and any render/encode failure.
-    ///
-    /// The message conversion uses the model's own `messageGenerator` — the
-    /// exact expression the installed processors (`LLMUserInputProcessor` in
-    /// MLXLLM, the app-side ParoQuant processor) captured at load — so the
-    /// dicts rendered here are the dicts the processor would render.
-    ///
-    /// The eligibility decision and resolve go through the **Conversation
-    /// Render**'s agent edge, the shared home for the choreography: notably,
-    /// a `nil` fingerprint BYPASSES rather than resolving under a synthetic
-    /// key, because the cache's repeat path trusts (bytes, fingerprint) with
-    /// no arbiter behind it.
-    private static func prepareViaRenderTokenCache(
-        context: ModelContext,
-        input: UserInput,
-        modelFingerprint: String?
-    ) -> LMInput? {
-        guard let llmModel = context.model as? any LLMModel else { return nil }
-        guard
-            let tokens = ConversationRender.agentEdgeFullRender(
-                tokenizer: context.tokenizer,
-                messages: llmModel.messageGenerator(tokenizer: context.tokenizer)
-                    .generate(from: input),
-                tools: input.tools,
-                additionalContext: input.additionalContext,
-                hasMedia: !(input.images.isEmpty && input.videos.isEmpty && input.audios.isEmpty),
-                producesFlatTextTokens: true,
-                modelFingerprint: modelFingerprint
-            )
-        else { return nil }
-        return LMInput(tokens: MLXArray(tokens))
-    }
-
-    /// Thinking-loop safeguard continuation for the HTTP prefix-cache path.
-    /// We already have the fully-tokenized original prompt (captured during
-    /// prefill by the Server Completion module), so re-tokenizing the
-    /// `UserInput` is unnecessary work — encode the appended hand-off text
-    /// straight onto the token sequence. The resulting input is fed to a
-    /// fresh `TokenIterator`; the on-device KV cache for the cancelled
-    /// generation is discarded by vendor cleanup.
-    func startThinkingContinuationFromTokens(
-        originalTokens: [Int],
-        tokenNDim: Int,
-        safeThinkingPrefix: String,
-        injection: String,
-        toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
-    ) async throws -> HTTPServerRawGenerationStart {
-        guard let container = modelContainer else {
-            throw AgentEngineError.modelNotLoaded
-        }
-        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
-        let genParams = Self.makeGenerateParameters(from: parameters)
-        let handoff = safeThinkingPrefix + injection
-        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
-        // Read once on the actor so the perform-closure captures a value.
-        let dflash2 = dflash2Drafter
-
-        return try await container.perform { context in
-            try Self.buildThinkingContinuationStart(
-                context: context,
-                originalTokens: originalTokens,
-                tokenNDim: tokenNDim,
-                handoffText: handoff,
+        return try await sessionProvider(container).withSession(nonSendable: prompt) {
+            session, prompt in
+            try await RawGenerationStart.start(
+                session: session,
+                prompt: prompt,
                 tools: canonicalTools,
-                drafter: dflash2?.value,
-                parameters: genParams
+                parameters: genParams,
+                modelFingerprint: modelFingerprint,
+                progressHandler: progressHandler
             )
         }
     }
 
-    /// Thinking-loop safeguard continuation: re-prefill `originalInput` augmented
-    /// with `safeThinkingPrefix + injection` (encoded as additional tokens) so
-    /// the model picks up where it left off with the degen thinking truncated
-    /// and a hand-off phrase that closes `</think>`.
-    ///
-    /// The original chat-template prompt already ends with
-    /// `<|im_start|>assistant\n<think>\n` (Qwen3.5 thinking preset), so we append
-    /// tokens with `addSpecialTokens: false` — this extends the in-progress
-    /// assistant turn rather than starting a new one.
-    ///
-    /// This intentionally bypasses the HTTP prefix cache: the continuation is
-    /// rare, the original prompt is typically small, and routing through the
-    /// prefix cache would require first-class partial-assistant-turn support
-    /// that the Qwen3.5 chat template doesn't provide.
-    func startThinkingContinuationRaw(
-        originalInput: sending UserInput,
-        safeThinkingPrefix: String,
-        injection: String,
-        toolSpecs: [ToolSpec]?,
-        parameters: AgentGenerateParameters
-    ) async throws -> HTTPServerRawGenerationStart {
-        guard let container = modelContainer else {
-            throw AgentEngineError.modelNotLoaded
-        }
-
-        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
-        let genParams = Self.makeGenerateParameters(from: parameters)
-        let handoff = safeThinkingPrefix + injection
-        let canonicalTools = Self.canonicalizeToolSpecs(toolSpecs)
-        // Read once on the actor so the perform-closure captures a value.
-        let dflash2 = dflash2Drafter
-
-        return try await container.perform(nonSendable: originalInput) { context, input in
-            let basePrepared = try await context.processor.prepare(input: input)
-            return try Self.buildThinkingContinuationStart(
-                context: context,
-                originalTokens: Self.extractTokenSequence(basePrepared.text.tokens),
-                tokenNDim: basePrepared.text.tokens.ndim,
-                handoffText: handoff,
-                tools: canonicalTools,
-                drafter: dflash2?.value,
-                parameters: genParams
-            )
-        }
-    }
-
-    /// Build an `HTTPServerRawGenerationStart` by extending a pre-tokenized
-    /// prompt with the hand-off suffix and feeding the combined sequence to
-    /// a fresh `TokenIterator`. Must run inside a
-    /// ``ModelContainer/perform(_:)`` closure on this actor.
-    private static func buildThinkingContinuationStart(
-        context: ModelContext,
-        originalTokens: [Int],
-        tokenNDim: Int,
-        handoffText: String,
-        tools: [ToolSpec]?,
-        drafter: (any DFlash2DrafterModel)?,
-        parameters: GenerateParameters
-    ) throws -> HTTPServerRawGenerationStart {
-        let appendedIDs = try context.tokenizer.encode(
-            text: handoffText,
-            addSpecialTokens: false
-        )
-        let combined = originalTokens + appendedIDs
-        let flatArr = MLXArray(combined.map { Int32($0) })
-        let tokenArr: MLXArray =
-            tokenNDim >= 2
-            ? flatArr.expandedDimensions(axis: 0)
-            : flatArr
-        let continuedInput = LMInput(text: LMInput.Text(tokens: tokenArr, mask: nil))
-
-        // DFlash2 speculative arm, as in `startRawGeneration`: the
-        // continuation re-prefills a text-only token sequence, exactly the
-        // raw-arm shape. Without it an intervened turn's continuation decodes
-        // autoregressively while the drafter sits loaded (~19 vs ~33 tok/s
-        // observed on the 27B).
-        if let iterator = try DFlash2Support.rawArmIterator(
-            input: continuedInput, model: context.model,
-            drafter: drafter, parameters: parameters)
-        {
-            return makeRawGenerationStart(
-                iterator: iterator,
-                promptTokenCount: combined.count,
-                context: context,
-                tools: tools
-            )
-        }
-
-        let strategy = PrefillStrategy.decide(
-            for: continuedInput, prefillStepSize: parameters.prefill.stepSize
-        )
-        let iterator = try strategy.makeIterator(
-            input: continuedInput,
-            model: context.model,
-            parameters: parameters
-        )
-        return makeRawGenerationStart(
-            iterator: iterator,
-            promptTokenCount: combined.count,
-            context: context,
-            tools: tools
-        )
-    }
-
-    /// The raw arms' shared tail: start the token-event loop over a built
-    /// iterator and wrap it as the start value both arms return. Must run
-    /// inside a ``ModelContainer/perform(_:)`` closure on this actor.
-    private static func makeRawGenerationStart(
-        iterator: consuming TokenIterator,
-        promptTokenCount: Int,
-        context: ModelContext,
-        tools: [ToolSpec]?
-    ) -> HTTPServerRawGenerationStart {
-        let (stream, completion) = TokenGenerationLoop.start(
-            promptTokenCount: promptTokenCount,
-            modelConfiguration: context.configuration,
-            tokenizer: context.tokenizer,
-            iterator: iterator,
-            tools: tools
-        )
-        return HTTPServerRawGenerationStart(
-            stream: stream,
-            cancel: { completion.cancel() },
-            waitForCompletion: { await completion.value }
-        )
-    }
-
-    /// The speculative-iterator twin of ``makeRawGenerationStart`` (the loop's
-    /// `some TokenIteratorProtocol` overload covers DFlash2 and MTP arms).
-    private static func makeRawGenerationStart(
-        iterator: consuming some TokenIteratorProtocol,
-        promptTokenCount: Int,
-        context: ModelContext,
-        tools: [ToolSpec]?
-    ) -> HTTPServerRawGenerationStart {
-        let (stream, completion) = TokenGenerationLoop.start(
-            promptTokenCount: promptTokenCount,
-            modelConfiguration: context.configuration,
-            tokenizer: context.tokenizer,
-            iterator: iterator,
-            tools: tools
-        )
-        return HTTPServerRawGenerationStart(
-            stream: stream,
-            cancel: { completion.cancel() },
-            waitForCompletion: { await completion.value }
-        )
+    /// The **Model Session** provider over the loaded container, with the
+    /// drafters loaded beside it — the one place the drafter list is wired,
+    /// so neither consumer can silently drop a speculative arm.
+    private func sessionProvider(_ container: ModelContainer) -> ContainerModelSessionProvider {
+        ContainerModelSessionProvider(
+            container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter)
     }
 
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions` —
@@ -581,8 +294,7 @@ actor LLMActor {
         }
         return try await ensureServerCompletion().start(
             on: self,
-            sessions: ContainerModelSessionProvider(
-                container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter),
+            sessions: sessionProvider(container),
             modelID: modelID,
             conversation: conversation,
             toolSpecs: toolSpecs,

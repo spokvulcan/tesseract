@@ -33,7 +33,9 @@ nonisolated enum ServerInferenceProgressEvent: Sendable, Equatable {
         let promptTokens: Int
         let cachedTokens: Int
         let newTokensToPrefill: Int
-        let prefillMs: Double?
+        /// `nil` on `prefillStarted`; the measured value on `prefillFinished`
+        /// — one info value carried across the pair.
+        var prefillMs: Double?
     }
 }
 

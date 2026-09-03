@@ -544,6 +544,19 @@ token-stream vocabulary, not the model handle); Inference Session (collides with
 **Inference Arbiter**); model surface / perform wrapper (the mechanism, not the
 concept); widening it before a second consumer needs a member.
 
+**Raw Generation Start**:
+The one script that starts a whole-prompt-from-zero generation over a **Model
+Session** — the agent chat turn and the thinking-safeguard continuation on either
+path: tokenize through the session's agent-edge verb (the **Conversation
+Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
+events, engage the DFlash2 raw arm on a text-only prompt when the session pairs a
+drafter, else run the **Prefill Strategy** route, start the token-event loop, wrap
+the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
+`LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
+_Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
+pre-cache name); thinking continuation as its own module (one prompt shape of
+this one).
+
 **Stream Lifecycle Driver**:
 The module owning one streaming completion's transport-lifecycle race — the
 disconnect watch, the idle keepalive, and the drive as first-finisher-wins —

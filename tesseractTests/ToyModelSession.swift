@@ -203,6 +203,37 @@ nonisolated final class ForwardGate: @unchecked Sendable {
     }
 }
 
+/// Records every toy-model forward's pre-update cache offset, in order —
+/// the observable difference between the chunked and single-shot prefill
+/// routes, and the "did it allocate at all" fact the vision-guard ordering
+/// suites assert. Pass `onForward` as the toy's hook.
+nonisolated final class ForwardLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _offsets: [Int] = []
+
+    var offsets: [Int] { lock.withLock { _offsets } }
+    var hasForwarded: Bool { !offsets.isEmpty }
+
+    func onForward(_ offset: Int) {
+        lock.withLock { _offsets.append(offset) }
+    }
+}
+
+/// Collects `ServerInferenceProgressEvent`s across isolations: the handler
+/// fires on the MainActor, assertions read after the drive settles.
+nonisolated final class ProgressEventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _events: [ServerInferenceProgressEvent] = []
+
+    var events: [ServerInferenceProgressEvent] {
+        lock.withLock { _events }
+    }
+
+    func append(_ event: ServerInferenceProgressEvent) {
+        lock.withLock { _events.append(event) }
+    }
+}
+
 /// The verbs a **Model Session** exposes, as recordable facts — the
 /// sequencing suites assert their order (the seam's contract).
 nonisolated enum ModelVerb: String, Equatable, Sendable {
@@ -212,6 +243,7 @@ nonisolated enum ModelVerb: String, Equatable, Sendable {
     case prefill
     case makeDecodeIterator
     case makePreparingDecodeIterator
+    case makeRawDecodeIterator
     case quantizeKVCache
     case captureSnapshot
     case visionContinuationQuery
@@ -257,6 +289,18 @@ nonisolated struct RecordingModelSession: ModelSession {
     func prepare(_ input: UserInput) async throws -> LMInput {
         recorder.record(.prepare)
         return try await base.prepare(input)
+    }
+
+    func templateMessages(for input: UserInput) -> [Message]? {
+        base.templateMessages(for: input)
+    }
+
+    func makeRawDecodeIterator(
+        _ input: LMInput,
+        parameters: GenerateParameters
+    ) throws -> TokenIterator {
+        recorder.record(.makeRawDecodeIterator)
+        return try base.makeRawDecodeIterator(input, parameters: parameters)
     }
 
     func newCache(parameters: GenerateParameters) throws -> [any KVCache] {
@@ -368,18 +412,20 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         )
     }
 
-    func withSession<R: Sendable>(
-        _ body: @Sendable (any ModelSession) async throws -> R
+    func withSession<V, R: Sendable>(
+        nonSendable payload: sending V,
+        _ body: @Sendable (any ModelSession, V) async throws -> R
     ) async throws -> R {
         let recorder = self.recorder
         let reportsFlatTextTokens = self.reportsFlatTextTokens
-        return try await container.perform { context in
+        return try await container.perform(nonSendable: payload) { context, payload in
             return try await body(
                 RecordingModelSession(
                     base: ContextBackedModelSession(context: context),
                     recorder: recorder,
                     producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil
-                )
+                ),
+                payload
             )
         }
     }

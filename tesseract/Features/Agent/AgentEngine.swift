@@ -438,10 +438,11 @@ final class AgentEngine {
             input: input,
             toolSpecs: toolSpecs,
             parameters: parameters,
-            startsInsideThinkBlock: startsInsideThinkBlock
+            startsInsideThinkBlock: startsInsideThinkBlock,
+            progressHandler: progressHandler
         ) {
             try await actor.startRawGeneration(
-                input: input,
+                prompt: .fresh(input),
                 toolSpecs: toolSpecs,
                 parameters: parameters,
                 progressHandler: progressHandler
@@ -455,6 +456,7 @@ final class AgentEngine {
         toolSpecs: [ToolSpec]? = nil,
         parameters: AgentGenerateParameters = .default,
         startsInsideThinkBlock: Bool? = nil,
+        progressHandler: ServerInferenceProgressHandler? = nil,
         launch: @escaping @Sendable () async throws -> HTTPServerRawGenerationStart
     ) -> HTTPServerGenerationStart {
         isGenerating = true
@@ -496,12 +498,13 @@ final class AgentEngine {
                 let continuationStarter: GenerationStreamLoop.ContinuationStarter?
                 if let originalInput = input {
                     continuationStarter = { safePrefix in
-                        let newStart = try await actor.startThinkingContinuationRaw(
-                            originalInput: originalInput,
-                            safeThinkingPrefix: safePrefix,
-                            injection: continuationInjection,
+                        let newStart = try await actor.startRawGeneration(
+                            prompt: .continuation(
+                                base: .input(originalInput),
+                                handoff: safePrefix + continuationInjection),
                             toolSpecs: toolSpecs,
-                            parameters: parameters
+                            parameters: parameters,
+                            progressHandler: progressHandler
                         )
                         return .init(newStart)
                     }
