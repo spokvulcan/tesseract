@@ -4019,3 +4019,49 @@ temp 0): turn 1 `lookup=hit(branchPoint at 40/328)` → acceptance 62.3%
 `canonicalLeaf captured — offset=490`, 2.35s total. Speculation and
 the radix cache compound on the exact traffic ADR-0056's amendment had
 parked — the #437 acceptance criterion.
+
+### R55 — 2026-09-03/04 vendor re-pin (upstream e3d4a20): trajectory bit-identical, speed at parity
+
+Re-pinned `Vendor/mlx-swift-lm` onto upstream main `e3d4a20` (44 commits:
+#471 merged, #572 fused GDN in-projections, #573 direct expert reduction,
+#589 `CompiledTrace` compile state, #569 generalized decode segments, …).
+Our GDN in-proj stack was dropped for upstream's #572 fusion; every DFlash2
+compiled function became a `CompiledTrace` (details:
+`docs/mlx-swift-lm-fork.md`, ADR-0058 re-pin addendum).
+
+Gate, Qwen3.8-27B 4-bit + DFlash2 draft, bs8f, direct-binary launches,
+interleaved old-pin (`ddc1f66`) vs new-pin (`a7e5d9b`) binaries built from
+the same tesseract tree:
+
+| leg | ar median | bs8f run0 / run1 | accepted |
+| --- | --- | --- | --- |
+| old-1 | 20.6 | 24.6 / 30.2 | 115/532 |
+| new-1 | 20.8 | 28.5 / 28.9 | 115/532 |
+| old-2 | 20.6 | 28.9 / 29.6 | 115/532 |
+| new-2 | 20.9 | 29.6 / 32.1 | 115/532 |
+
+Better-of-two: old 30.2 / 29.6, new 28.9 / 32.1 — parity within the
+run-to-run spread; output-identity MATCH on every leg; **acceptance
+115/532 bit-identical on both binaries**, so the 44 upstream commits and the
+two re-expressed carries leave the greedy trajectory untouched.
+
+Why 115/532 and not the banked 125/469 (R54) or 147/322 (R52): the bench
+prompt is built from `ARCHITECTURE.md` + `CONTEXT.md` + `AGENTS.md` + the
+first 12 ADRs, and `ARCHITECTURE.md`/`CONTEXT.md` changed since R54 — a
+different prompt, hence a different trajectory and acceptance. Same
+R44 class as before, now with the cause pinned: **acceptance references
+are only comparable across identical prompt bytes**; a future bank should
+record the prompt hash. Under this prompt both binaries sit at ~30 tok/s
+bs8f (1.4–1.5x over ar 20.6), so the 45 tok/s block line from the 47.9
+record is not a valid absolute gate today; the old-vs-new A/B is.
+
+Kill-switch probes on the new binary (single runs): `MLX_QWEN_FOUR_GDN=0`
+→ 116/525, `DFLASH2_STACK_GATEUP=0` → 116/539 — each toggle perturbs the
+trajectory by ~1 accepted token, i.e. the fused/stacked QMMs are NOT
+bitwise against their unfused forms on this base (suspect: kernel choice by
+N on the M=8 verify window; unverified). Neither toggle recovers anything.
+
+Also found while gating: two of the real-model `DFlash2ParityTests`
+running in one process (a `swift test --filter` substring match) deadlock
+ABBA between mlx-swift's global `compiledSilu.lock` and its recursive
+`evalLock`; run them one at a time (`--filter 'name\(\)'`).
