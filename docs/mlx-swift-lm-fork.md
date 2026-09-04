@@ -27,71 +27,93 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
-## Current pin (2026-08-17)
+## Current pin (2026-09-03)
 
-Base: upstream `main` @ `d7dc03d` — 44 commits past the 2026-07-27 base
-(`3cbf928`). Headline upstream content: Qwen3.5 MTP speculative decoding #351
-(+ MTP sliding-window hardening #506/#516), prompt-cache model-state
-persistence with fail-closed restore #475, balanced prefill chunking behind
-`PrefillParameters` #470 (ours, merged 2026-08-06), typed KV-cache
-configuration/limits #453/#514, chat conventions moved from the
-`ToolCallFormat.infer` table to per-model declarations + a
-`ChatConventionsRegistry` (with the new `.qwen35` format for the Qwen3.5
-family, #529), rejected-tool-call generation events #512, Harmony/ATEM tool
-parsers #146/#523, DeepSeek-V2 #379→, Hunyuan #347, Muse-Glimmer #523,
-TranslateGemma #348.
+Base: upstream `main` @ `e3d4a20` — 44 commits past the 2026-08-17 base
+(`d7dc03d`). Headline upstream content: **our #471 ParoQuant MoE batch merged
+(`e23300b`, byte-identical to the review tip `c39c560`)**; Qwen3.5 norm-shift
+detection from the conv1d layout #598 (the fix we carried as `f90e3eb`);
+fused GDN input projections #572 (the same four-way qkv|z|b|a stack our
+DFlash2 lever built post-load, now done by the model lifecycle with the same
+exact-class guard); direct expert reduction #573 and shared fused router
+top-k #567/#568; compiled decode segments generalized to Qwen3-Next #569 and
+module weights declared as compile state (`CompiledTrace`) #589; downstream
+specialization hooks for the Qwen3.5 GDN/MoE blocks and an `open` SwitchGLU
+#511; variance-normalized KV cache #329; byte-balanced parallel weight
+loading #575; prompt-cache reuse for text-only inputs #549 and its report in
+`GenerateCompletionInfo` #559; reranker API #375; Helium #555; LoRA dropout
+#541; VLM processor loading rules #565; Gemma4 LoRA layers #602.
 
-The pin branch is built on the rebased **#471 PR branch**
-(`feat/paroquant-moe-batch`), which also gained
-`fix(paroquant): resolve chat conventions when the caller passes none`
-(loadParoQuantModel now mirrors the factory precedence: caller value →
-registry → model declaration) — required because the conventions scheme
-landed after #471 was filed.
+The pin branch is built directly on upstream `main` — no PR branch of ours
+is in flight any more. Two carries were re-expressed against the new base
+rather than picked verbatim (`perf(dflash2): model-side verify prebuild +
+same-input QMM stacking` and `fix(dflash2): stack only plain QuantizedLinear
+projections`):
 
-Dropped from the carry list as merged upstream: #460 (Nanbeige), #467
-(compiled decode C11/C12/C14 + leak fix), #468 (C16 — upstream's f16/bf16-gated
-form now replaces the Vendor's ungated one), #469 (C18 router top-k), #470
-(balanced chunking), and the #427 review-round commit (split across
-#467/#468/#469). The previous tip (`47aa83a`) is preserved by the old pin
-branch history; old pin branches stay per the policy above.
+- The GDN in-projection stack (`stackInProjections`) is gone — #572's
+  `prepareFusedInputProjection` fuses the same rows in the same order under
+  the same exact-class guard, so `dflash2StackGateUpProjections` now counts
+  upstream's fusion for that group and keeps gate|up, attention q|k|v and
+  the drafter's stacks. Bitwise-neutral by construction (one concatenation
+  along the output axis; per-row K-accumulation unchanged). Rollback switch
+  for the upstream half: `MLX_QWEN_FOUR_GDN=0`.
+- Every DFlash2 compiled function (`compiledVerifySegments`, the drafter's
+  context/segment traces, the greedy selector) is a `CompiledTrace` with its
+  weights declared as compile state, as #589 requires — upstream's `compile`
+  shadow rejects a `[unowned self]` capture. The attention-pre trace keeps
+  the rope offset as its second trace input.
 
-mlx-core stays at v0.31.1: the move to upstream mlx main is built and green on
-`pin-tesseract-2026-07-27` in both mlx forks, but is blocked on thread-local
-command encoders. Full diagnosis and re-attempt checklist:
-`docs/mlx-core-fork.md`.
+Dropped from the carry list as merged upstream: the ten #471 commits
+(`2ee084d`…`98076af`, plus the 08-18/09-03 review-round commits that only
+ever lived on the PR branch) and `fix(qwen3_5): detect the raw-HF norm
+convention from conv1d layout` (#598). The three `pin mlx-swift` commits
+collapsed into one. The previous tip (`ddc1f66`) stays reachable through
+the old gitlink history; old pin branches stay per the policy above.
 
-Carried on top, in order (the first ten rows are the #471 PR branch
-`feat/paroquant-moe-batch`, which the pin branch is built on):
+mlx-swift needs no move: upstream requires `0.31.6` up-to-next-minor, no
+newer tag exists, and the fork pin `24779d5` sits on the `0.31.6` tag.
+mlx-core stays at v0.31.1 (thread-local command encoders block the move;
+`docs/mlx-core-fork.md`).
+
+Carried on top, in order:
 
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
-| `fix(paroquant): convert every AWQ prefix and cast scales to f16` | AWQ→PARO conversion correctness | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `refactor(paroquant): extract PairwiseRotation from RotateQuantizedLinear` | Shared rotation core for the MoE path | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `feat(paroquant): MoE PARO path — RotateSwitchGLU + loader passes` | PARO quantization for MoE models (Qwen3.6-35B-A3B) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `feat(paroquant): Prepared Checkpoint + O(1) AWQ conversion matching` | Prepared Checkpoint artifact + O(1) matcher (ADR-0032) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `perf(paroquant): rotate gate_up before the MoE expert gather/sort` | Pre-gather rotation (bitwise-identical); +3–4.5% MoE prefill at 8K–32K (ledger E1) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `perf(paroquant): compile-fuse the GatedDelta decay gate chain` | One compiled kernel for the elementwise g chain per GDN layer per step (bitwise-identical); +3.1% MoE decode (ledger E2) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `perf(paroquant): simdgroup-resident rotation kernel — no CTA barriers` | 32-lane simdgroup CTAs for groupSize 128; kernel 1.7–2× at prefill shapes (ledger E6b) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `fix(paroquant): restore generic rotation fallback for groupSize != 128` | Generic pre-E6b kernel as the fallback for other group sizes (shared `dispatchPairwiseRotation`) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `Fix formatting for swift-format 603 (CI lint)` + `refactor(paroquant): dedupe rotation state, hook SwitchGLU, batch the load-time eval` | #471 review-round commits (lint alignment; 2026-08 review feedback) | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) |
-| `fix(paroquant): resolve chat conventions when the caller passes none` | `loadParoQuantModel` mirrors the factory precedence (caller value → `ChatConventionsRegistry` → model declaration) — the conventions scheme landed upstream after #471 was filed, and without this a nil caller format left PARO models with no tool-call format | Filed in [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) (added 2026-08-17) |
-| `fix: pin mlx-swift to the spokvulcan fork at 457a0d6d` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + .gitmodules provenance + the Cmlx gitlink bumps carrying C1/C4–C9/C13). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
-| `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer (new `ChatTemplateRendering` protocol; the macro-generated bridge forwards, same `missingChatTemplate` mapping). Enables tesseract's render+token cache (experiments-ledger C25). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract` @ `63edf42` (scheme: `docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
-| `fix(qwen3_5): detect the raw-HF norm convention from conv1d layout, not mtp.* presence` | Qwen3.5 `sanitize` (MLXLLM + MLXVLM) shifted every RMSNorm weight by +1 whenever the checkpoint shipped `mtp.*`. That proxy breaks on a quantized checkpoint with a grafted MTP head (pre-shifted norms *and* mtp present → double shift → garbage forwards, ADR-0056). The conv1d weight layout (`dim(-1) != 1`) is the direct observation of the file's convention and now decides alone | Not filed (queued) |
+| `fix: pin mlx-swift to the spokvulcan fork at 24779d5` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + provenance + the Cmlx gitlink bumps carrying the C-series, qmv_wide, affine_qmm_mma8, SDPA mma8, multi-query SDPA and round-5 kernels + `dynamicSliceUpdated`). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
+| `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer. Enables tesseract's render+token cache (experiments-ledger C25). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract` @ `63edf42` (`docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
+| `feat(speculative): DFlash2 block-parallel drafter + speculative iterator (ADR-0057)` | The DFlash2 drafter model, context cache and speculative token iterator | Not filed — **next upstream candidate** (the whole DFlash2 series below) |
+| `feat(speculative): DFlash2 single-sync pipeline + adaptive width bandit (ADR-0058)` | One sync per round, adaptive block width | Not filed (DFlash2 series) |
+| `perf(dflash2): buffered draft context cache + per-round mask memo` | Draft-side context cache buffering, mask memoization | Not filed (DFlash2 series) |
+| `tools(dflash2): sub-phase propose timing under DFLASH2_PROFILE=1` | Bench instrumentation | Not filed (DFlash2 series) |
+| `feat(dflash2): compiled draft forward + mlx-swift pin bump (mq SDPA kernel)` | Compiled drafter forward (pin hunk folded into the pin commit above) | Not filed (DFlash2 series) |
+| `feat(gdn): optional fused q/k RMS norm in the gated-delta scan kernel` | Opt-in `DFLASH2_FUSED_QKNORM=1` (rejected for speed, ledger R44) | Not filed (DFlash2 series) |
+| `feat(dflash2): accept-invariant rollback prebuild + compiled GDN replay` | Rollback prebuild, compiled GDN replay | Not filed (DFlash2 series) |
+| `perf(dflash2): pipelined round + stage-2 accept-invariant verify prebuild` | Stage-2 pipelined verify | Not filed (DFlash2 series) |
+| `perf(dflash2): model-side verify prebuild + same-input QMM stacking` | Verify prebuild, rope-in-trace, gate|up + q|k|v + drafter stacking (GDN in-proj stack now upstream #572; traces re-expressed as `CompiledTrace` per #589) | Not filed (DFlash2 series) |
+| `style: swift-format over the round-5 series` | Formatting | Not filed (DFlash2 series) |
+| `docs: resolve docc symbol links + missing cache parameter` | DocC fixes for the series | Not filed (DFlash2 series) |
+| `feat(dflash2): warm-start speculation over a prefilled prefix cache` | Speculation on the keyed/warm prefix-cache path (ADR-0059) | Not filed (DFlash2 series) |
+| `fix(dflash2): stack only plain QuantizedLinear projections` | Exact-class guard for the remaining stacks (`plainQuantizedLinear(_:)`) — ParoQuant's `RotateQuantizedLinear` must not fold into a plain stack | Not filed (DFlash2 series) |
 
 Earlier pin branches carried one `chore: pin mlx-swift to <rev>` commit per
 accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round). That
 lockstep bookkeeping is collapsed into the single pin commit above as of the
 2026-07-27 re-pin; `pin-2026-07-23-upstream-eaefe75` still has the long form.
 
-## Upstream filing queue (2026-07-25)
+## Upstream filing queue — closed 2026-09-03
 
-The 2026-07-18 → 07-25 inference-perf loop is closed (ledger: C1–C19 run,
-decode/prefill program re-priced and exhausted under the zero-output-change
-constraint), so the accepted survivors are ready to shape into upstream
-PRs. Four units, each self-contained and parity-evidence-backed; file
-against `ml-explore/mlx-swift-lm` `main` with the #460 cherry-pick
-procedure. Owner go-ahead is the trigger — nothing below is filed yet.
+The 2026-07-18 → 07-25 inference-perf loop's four units and the balanced
+chunking are all upstream: #467 (compiled decode schedule), #468 (GDN
+decode conv1d as fused multiply-adds), #469 (fused router top-k), #470
+(balanced prompt chunking) and #471 (ParoQuant MoE batch, merged
+2026-09-03). The mlx-core-side wins from the same loop (C1/C13/C8+C9 filed
+as mlx#3918/#3919/#3920; C4/C5/C7 deferred) are tracked in
+`docs/mlx-core-fork.md`. **Next filing candidate: the DFlash2 series
+(ADR-0057/0058/0059)** — since #471 merged it is the whole carry apart from
+C25 and the pin commit; shaping it into upstream PRs is its own task
+(owner go-ahead).
+
+### Status log
 
 **Filed 2026-07-26** — umbrella issue
 [#466](https://github.com/ml-explore/mlx-swift-lm/issues/466); unit 1 =
@@ -187,40 +209,19 @@ verify-docs, 722/722 Swift Testing, 576/577 XCTest — the one failure
 (order-dependent random state). Force-pushed, tip `c39c560`. **Vendor pin
 not yet moved to this tip** — next re-pin should take it.
 
-1. **Compiled decode schedule for Qwen3.5/3.6** — C11 + C12 + the unowned-
-   captures fix + C14 + the PR #427 review-round commit, squashed into one
-   PR: per-layer decode traces, the whole-step segment schedule split at
-   the KV write, the MoE block closure for non-plain cache kinds, and both
-   test files (`Qwen35CompiledDecodeLifecycleTests`,
-   `Qwen35BitwiseContractTests`). Quantization-agnostic — none of it
-   depends on PARO. Evidence: +3–7% MoE decode (C11), +1.75% dense (C12),
-   +1.33%/+0.67%/+1.73% on top (C14), 108 A/B pairs token-identical.
-2. **GDN decode conv1d as fused multiply-adds (C16)** — depends on unit 1
-   (the FMA form pays by folding into the compiled segment, and lives in
-   `decodeForward`). Small diff; general to every Qwen3Next-family GDN
-   model upstream ships. Evidence: bitwise gate (f32 accumulation, 8192
-   channels, f16+bf16) now CI-pinned by the contract tests; +1.77% median
-   MoE 8K decode.
-3. **Fused router top-k kernel (C18)** — independent of units 1–2
-   (`routerTopK` works in the uncompiled block too). Offer upstream the
-   generalization to every `SwitchGLU` router, or Qwen3.5-only first with
-   the MLXVLM copy flagged as the follow-up. Evidence: bit-identical by
-   construction with the contract tests as proof, +1.91% MoE 128 decode
-   (10/10 pairs).
-4. **PARO batch** — the existing #164 follow-up: AWQ conversion fixes,
-   `PairwiseRotation` extraction, the MoE PARO path, Prepared Checkpoint,
-   E1 (pre-gather rotation, +3–4.5% MoE prefill), E2 (decay-gate compile
-   fuse, +3.1% MoE decode), E6b (simdgroup-resident rotation kernel,
-   +1.8–5% by shape). One batched PR, queued since the 2026-07-23 review
-   round (tesseract PR #424).
-
-Also carried but filed separately when touched next: `perf(prefill):
-balance the prompt chunks` (standalone, model-agnostic, ~9% prefill).
-The mlx-core-side wins from the same loop (C4 caps, C9, C13 fused
-causal-softmax, gather identity-index cache, …) are tracked in
-`docs/mlx-core-fork.md`, and the two ripe evidence-backed `ml-explore/mlx`
-issues (M1 tile geometry, M2 command-buffer segmentation) in the section
-below — different upstream, different queue.
+**Status 2026-09-03 (re-pin)** — #471 merged upstream as `e23300b`
+(byte-identical to `c39c560` in the ParoQuant files). Pin branch rebuilt on
+upstream `main` `e3d4a20`: 15 carried commits (pin + C25 + 13 DFlash2), two
+re-expressed against #572/#589 as described under "Current pin". Fork `main`
+fast-forwarded to `e3d4a20`. The post-review ParoQuant polish that was
+sitting uncommitted in the fork clone (rotations frozen at init, MLX
+template-argument kernels, test rewrite) is parked on
+`feat/paroquant-templated-kernels` (`2b71167`, WIP, unbuilt) — not carried.
+Gates (2026-09-04): fork build + swift-format 603 + focused suites green;
+app Release build with zero source changes, server + agent group green;
+Prepared Checkpoint parity PASS on Qwen3.8-27B PARO and Qwen3.6-35B-A3B
+PARO; DFlash2 bs8f acceptance 115/532 bit-identical old vs new pin, speed at
+parity in an interleaved A/B (experiments-ledger R55).
 
 ## Contributed back
 
@@ -240,7 +241,7 @@ below — different upstream, different queue.
 | [#468](https://github.com/ml-explore/mlx-swift-lm/pull/468) | GDN decode conv1d as fused multiply-adds (C16 + contract test) | Filed 2026-07-26; 2026-07-29 rebased onto deduped #467 (2ba11d5): fused conv extracted as `decodeConv` vs `generalConv`, test pins one against the other. **f32-input discovery: FMA ≠ Convolution kernel for f32 (102/256 channels) — fused branch gated to unmasked f16/bf16 S==1**; Vendor copy still carries the ungated C16 form (fine in practice: models run f16/bf16) — align at next re-pin. After #460/#467/#469 merged, re-rebased onto main (ee026ba, 2 own commits). **Merged 2026-07-30** (0321f28) |
 | [#469](https://github.com/ml-explore/mlx-swift-lm/pull/469) | Fused router top-k kernel (C18, uint32 indices, contract test) | **Merged 2026-07-29** (861649b); review round 2026-07-29 — MLXFast import/dep removed (deprecated, lives in MLX) |
 | [#470](https://github.com/ml-explore/mlx-swift-lm/pull/470) | Balanced prompt chunking (~9% prefill) | **Merged 2026-08-06** (4c7874b), landed as `PrefillParameters` with balanced chunking as the default |
-| [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) | ParoQuant MoE batch: MoE path, Prepared Checkpoint, E1/E2/E6b (#164 follow-up) | Filed 2026-07-26 |
+| [#471](https://github.com/ml-explore/mlx-swift-lm/pull/471) | ParoQuant MoE batch: MoE path, Prepared Checkpoint, E1/E2/E6b (#164 follow-up); review round 2026-09-02/03 (frozen rotations, templated generic kernel, resolved tool formats) | **Merged 2026-09-03** (e23300b) |
 
 Earlier fork-era contributions (#167 ToolCallProcessor schema plumbing, #168
 TokenRing fix) predate the submodule pin scheme; see ADR-0006 for that history.

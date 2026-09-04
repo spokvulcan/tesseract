@@ -318,6 +318,18 @@ priced on. A load-time depth guard was added in the app beside it
 dense size, but the draft only reads the layer depth it was distilled
 for.
 
+**2026-09-03 re-pin addendum — the GDN four-way stack now rides
+upstream.** mlx-swift-lm #572 ("Fuse Qwen GDN input projections")
+landed the same lever for the GDN in-projections — one physical
+`QuantizedLinear` over the qkv|z|b|a rows in the same order, the same
+exact-class guard, built at load by the model lifecycle
+(`prepareFusedInputProjection`, rollback switch `MLX_QWEN_FOUR_GDN=0`).
+The Vendor's `stackInProjections` was dropped at the 2026-09-03 re-pin;
+`dflash2StackGateUpProjections` counts upstream's fusion for that group
+and still owns gate|up, attention q|k|v and the drafter's stacks.
+Bitwise-neutral by the same argument (concatenation along the output
+axis, per-row K-accumulation unchanged).
+
 **R44 addendum — the trajectory-sensitivity constraint.** Fusing the
 GDN q/k RMS norms into the scan kernel (mathematically exact, f32
 instead of eager's bf16 intermediate roundings, spec==AR MATCH by
