@@ -2,6 +2,7 @@ import Foundation
 import MLX
 import MLXLLM
 import MLXLMCommon
+import MLXNN
 
 /// App-side surface for the DFlash2 block-parallel speculative drafter
 /// (`incoai/Qwen3.8-27B-DFlash2`) paired with Qwen3.8-27B.
@@ -14,9 +15,9 @@ import MLXLMCommon
 ///
 /// Three jobs, mirroring `MTPDrafterSupport`:
 /// 1. **Detection** — is the draft folder on disk and complete?
-/// 2. **Loading** — instantiate the draft, 4-bit quantize it (reference:
-///    `nn.quantize(draft, group_size: 64, bits: 4)`), bind the target's
-///    embedding/head.
+/// 2. **Loading** — instantiate the draft and 4-bit quantize it (reference:
+///    `nn.quantize(draft, group_size: 64, bits: 4)`); the target's
+///    embedding/head are borrowed per proposal by the vendor iterator.
 /// 3. **Engagement policy** — pure, unit-tested predicates for the server
 ///    cold path and the agent's raw arm.
 nonisolated enum DFlash2Support {
@@ -31,14 +32,8 @@ nonisolated enum DFlash2Support {
     /// test target pins the two together.
     static let draftCacheSubdirectory = "incoai_Qwen3.8-27B-DFlash2"
 
-    /// Round-width cap (1 anchor + `blockSize - 1` drafts per verify pass at
-    /// the widest). The checkpoint was distilled at block size 8 and the mma8
-    /// verify kernel (ADR-0058) makes wide blocks near-flat in cost, so the
-    /// iterator runs its adaptive-width policy under this cap: it narrows on
-    /// acceptance (measured per-position acceptance decays with width on
-    /// high-entropy content — 59% → 22% from bs3 to bs8 on the docs-summary
-    /// bench — while width is free money on predictable content) instead of
-    /// pinning one width for everything.
+    /// Tokens per verify pass (1 anchor + 7 drafts): the width the checkpoint
+    /// was distilled at, and the fastest one on the bench (ADR-0058).
     static let blockSize = 8
 
     // MARK: - Detection
@@ -61,13 +56,13 @@ nonisolated enum DFlash2Support {
         return configPresent && hasWeights ? directory : nil
     }
 
-    /// Which loaded target classes the DFlash2 draft can bind to — exactly the
-    /// classes `bindDFlashTarget` knows (anything else binds nothing and would
-    /// trap on first use). The app force-loads the MLXLLM text target even
-    /// from VLM-shaped checkpoints (see `MTPDrafterSupport`), so the MLXVLM
-    /// container never reaches here in practice.
+    /// Which loaded targets the DFlash2 draft can speculate for: the vendor
+    /// `DFlash2TargetModel` conformers (the MLXLLM Qwen3.5 text classes).
+    /// The app force-loads the MLXLLM text target even from VLM-shaped
+    /// checkpoints (see `MTPDrafterSupport`), so the MLXVLM container never
+    /// reaches here in practice.
     static func pairsWithTarget(_ model: any LanguageModel) -> Bool {
-        model is MLXLLM.Qwen35Model || model is Qwen35TextModel
+        model is any DFlash2TargetModel
     }
 
     /// Depth of the loaded target's layer stack when it pairs
@@ -104,26 +99,18 @@ nonisolated enum DFlash2Support {
     // MARK: - Loading
 
     /// Load + 4-bit quantize the draft (reference: `nn.quantize(draft,
-    /// group_size: 64, bits: 4)`). Target binding happens per generation in
-    /// the iterator's `init` (`bindDFlashTarget`), so the loaded draft stays
-    /// a value the actor can box without a `perform` hop. Callers must have
-    /// checked ``pairsWithTarget(_:)`` — a wrong-family target traps in
-    /// `bindDFlashTarget` by design.
-    ///
-    /// `DFLASH2_DRAFT_BITS` (probe lever, ledger R53): 8 loads an 8-bit
-    /// draft, ≥16 keeps the checkpoint's bf16. Draft precision is
-    /// identity-safe by construction — the target verifies every proposal,
-    /// so it moves acceptance, never output — making it the one lever the
-    /// R44 trajectory trap does not bind. Default 4 is the reference path.
+    /// group_size: 64, bits: 4)`). The draft holds no target state, so the
+    /// loaded value can be boxed and shared across sessions; the iterator
+    /// checks the pairing (`DFlash2SpeculationError`) at construction.
     static func loadDrafter(
         directory: URL
     ) throws -> any DFlash2DrafterModel {
-        let bits =
-            ProcessInfo.processInfo.environment["DFLASH2_DRAFT_BITS"]
-            .flatMap(Int.init) ?? 4
-        return try loadDFlash2Draft(
-            from: directory,
-            quantization: bits >= 16 ? nil : (groupSize: 64, bits: bits))
+        let config = try draftConfiguration(directory: directory)
+        let draft = DFlash2DraftModel(config)
+        try loadWeights(modelDirectory: directory, model: draft)
+        quantize(model: draft, groupSize: 64, bits: 4)
+        eval(draft)
+        return draft
     }
 
     // MARK: - Engagement policy

@@ -30,16 +30,12 @@ nonisolated struct DFlash2BenchRunner {
 
     @MainActor
     func run() async throws {
-        // Stage-2 pipelined-verify defaults (ledger R36). Must precede the
-        // first MLX eval: the command-buffer cap is latched on first use.
-        // `overwrite: 0` keeps explicit overrides from the command line.
-        // - MLX_MAX_ACTIVE_TASKS=40: the 10-buffer cap re-throttles the
-        //   round seam once the next verify schedules a round ahead.
-        // - MLX_DYNSLICE_INPLACE=1: rolling-KV dynamic writes update rows
-        //   in place (safe under the verify masks) instead of copying the
-        //   full store per boundary.
+        // Pipelined-round default (ledger R36). Must precede the first MLX
+        // eval: the command-buffer cap is latched on first use. `overwrite: 0`
+        // keeps explicit overrides from the command line. The 10-buffer cap
+        // re-throttles the round seam once the next verify is scheduled a
+        // round ahead.
         setenv("MLX_MAX_ACTIVE_TASKS", "40", 0)
-        setenv("MLX_DYNSLICE_INPLACE", "1", 0)
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
         Self.log("[dflash2-bench] loading model: \(modelDir.path)")
@@ -80,9 +76,7 @@ nonisolated struct DFlash2BenchRunner {
         emit("[dflash2-bench] === summary ===")
         let arms =
             ["ar"]
-            + Self.blockSizes().map {
-                "dflash2-bs\($0.block)\($0.adaptive ? "" : "f")"
-            }
+            + Self.blockSizes().map { "dflash2-bs\($0)" }
         var medians: [String: Double] = [:]
         for arm in arms {
             let rates = results.filter { $0.arm == arm }.map(\.tokPerSec).sorted()
@@ -135,16 +129,14 @@ nonisolated struct DFlash2BenchRunner {
     ) async throws -> [ArmResult] {
         let maxNewTokens = 192
 
-        // Stack same-input gate+up MLP projections into one QMM each
-        // (bitwise-neutral, applies to both arms via the shared model).
-        if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0" {
-            let stacked = dflash2StackGateUpProjections(model: context.model)
-            // The stacking transiently duplicated the MLP weights; the freed
-            // originals sit in the buffer cache and crowd GPU residency —
-            // release them before the runs.
-            GPU.clearCache()
-            emit("[dflash2-bench] same-input projections stacked in \(stacked) blocks")
-        }
+        // Stack same-input projections into one QMM each (bitwise-neutral,
+        // applies to both arms via the shared model).
+        let stacked = stackSameInputProjections(in: context.model)
+        // The stacking transiently duplicated the weights; the freed
+        // originals sit in the buffer cache and crowd GPU residency —
+        // release them before the runs.
+        GPU.clearCache()
+        emit("[dflash2-bench] same-input projections stacked in \(stacked) blocks")
 
         let promptText = buildPromptText()
         let prepared = try await context.processor.prepare(
@@ -155,12 +147,8 @@ nonisolated struct DFlash2BenchRunner {
         emit("[dflash2-bench] prompt sha256 \(promptSHA256(promptText))")
 
         let draft = try DFlash2Support.loadDrafter(directory: draftDir)
-        if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0",
-            let draftModule = draft as? Module
-        {
-            let stackedDraft = dflash2StackGateUpProjections(model: draftModule)
-            emit("[dflash2-bench] drafter projections stacked in \(stackedDraft) blocks")
-        }
+        let stackedDraft = stackSameInputProjections(in: draft)
+        emit("[dflash2-bench] drafter projections stacked in \(stackedDraft) blocks")
 
         func runAR(_ runIndex: Int, prepared: LMInput = prepared) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
@@ -194,15 +182,14 @@ nonisolated struct DFlash2BenchRunner {
         }
 
         func runDFlash2(
-            _ runIndex: Int, blockSize: Int, adaptive: Bool, prepared: LMInput = prepared
+            _ runIndex: Int, blockSize: Int, prepared: LMInput = prepared
         ) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
             parameters.temperature = 0
             let cache = try context.model.newCache(parameters: parameters)
             var iterator = try DFlash2SpeculativeTokenIterator(
                 input: prepared, mainModel: context.model, drafter: draft,
-                mainCache: cache, parameters: parameters, blockSize: blockSize,
-                adaptiveWidth: adaptive)
+                mainCache: cache, parameters: parameters, blockSize: blockSize)
             let start = ContinuousClock.now
             var tokens = 0
             var fingerprint: [Int] = []
@@ -211,18 +198,8 @@ nonisolated struct DFlash2BenchRunner {
                 tokens += 1
             }
             let seconds = elapsedSeconds(since: start)
-            if iterator.profileRoundCount > 0 {
-                let rounds = Double(iterator.profileRoundCount)
-                let parts = ["propose", "verify", "accept", "reconcile"].map { phase in
-                    let ms = 1000 * (iterator.profilePhaseSeconds[phase] ?? 0) / rounds
-                    return "\(phase)=\(String(format: "%.1f", ms))ms"
-                }
-                emit(
-                    "[dflash2-bench] profile bs\(blockSize): \(parts.joined(separator: " ")) "
-                        + "(\(iterator.profileRoundCount) rounds)")
-            }
             return ArmResult(
-                arm: "dflash2-bs\(blockSize)\(adaptive ? "" : "f")", runIndex: runIndex,
+                arm: "dflash2-bs\(blockSize)", runIndex: runIndex,
                 decodeSeconds: seconds, tokens: tokens,
                 accepted: iterator.acceptedCount, proposed: iterator.proposedCount,
                 fingerprint: fingerprint)
@@ -267,8 +244,8 @@ nonisolated struct DFlash2BenchRunner {
             let a = try runAR(round * 2)
             results.append(a)
             report(a)
-            for (blockSize, adaptive) in blocks {
-                let b = try runDFlash2(round, blockSize: blockSize, adaptive: adaptive)
+            for blockSize in blocks {
+                let b = try runDFlash2(round, blockSize: blockSize)
                 results.append(b)
                 report(b)
             }
@@ -279,23 +256,21 @@ nonisolated struct DFlash2BenchRunner {
         return results
     }
 
-    /// `--bench-blocks 3,4,5,8` overrides the default [8, 5] scan. A suffix
-    /// `f` (e.g. `8f`) pins the width (policy off); plain numbers run the
-    /// adaptive-width policy under that cap.
-    private static func blockSizes() -> [(block: Int, adaptive: Bool)] {
-        func parse(_ raw: String) -> [(block: Int, adaptive: Bool)] {
+    /// `--bench-blocks 3,4,5,8` overrides the default [8] arm. A trailing
+    /// `f` (the retired fixed-width marker, e.g. `8f`) is accepted and
+    /// ignored so older bench recipes keep working.
+    private static func blockSizes() -> [Int] {
+        func parse(_ raw: String) -> [Int] {
             raw.split(separator: ",").compactMap { token in
-                let fixed = token.hasSuffix("f")
-                guard let b = Int(fixed ? token.dropLast() : token) else { return nil }
-                return (b, !fixed)
+                Int(token.hasSuffix("f") ? token.dropLast() : token)
             }
         }
         let args = ProcessInfo.processInfo.arguments
         guard let i = args.firstIndex(of: "--bench-blocks"), i + 1 < args.count else {
-            return parse("8,5")
+            return parse("8")
         }
         let parsed = parse(args[i + 1])
-        return parsed.isEmpty ? parse("8,5") : parsed
+        return parsed.isEmpty ? parse("8") : parsed
     }
 
     private struct VariantRow {
@@ -313,10 +288,10 @@ nonisolated struct DFlash2BenchRunner {
     /// shifted by 97 characters per variant, same question) once per arm and
     /// reports the spread; the canonical ABBA run is untouched without the flag.
     private static func benchVariants(
-        _ variants: Int, context: ModelContext, blocks: [(block: Int, adaptive: Bool)],
+        _ variants: Int, context: ModelContext, blocks: [Int],
         emit: (String) -> Void,
         runAR: (Int, LMInput) throws -> ArmResult,
-        runDFlash2: (Int, Int, Bool, LMInput) throws -> ArmResult
+        runDFlash2: (Int, Int, LMInput) throws -> ArmResult
     ) async throws {
         var rows: [VariantRow] = []
         for variant in 0..<variants {
@@ -327,9 +302,9 @@ nonisolated struct DFlash2BenchRunner {
                 "[dflash2-bench] variant \(variant): prompt sha256 \(promptSHA256(text)) "
                     + "(\(prepared.text.tokens.dim(-1)) tokens)")
             let ar = try runAR(variant, prepared)
-            for (blockSize, adaptive) in blocks {
-                let spec = try runDFlash2(variant, blockSize, adaptive, prepared)
-                let rounds = adaptive ? 0 : (spec.proposed + blockSize - 2) / (blockSize - 1)
+            for blockSize in blocks {
+                let spec = try runDFlash2(variant, blockSize, prepared)
+                let rounds = (spec.proposed + blockSize - 2) / (blockSize - 1)
                 let perRound =
                     rounds > 0
                     ? String(format: " tok/round %.2f", Double(spec.tokens) / Double(rounds))
@@ -349,8 +324,8 @@ nonisolated struct DFlash2BenchRunner {
             }
         }
         emit("[dflash2-bench] === variant summary (n=\(variants)) ===")
-        for (blockSize, adaptive) in blocks {
-            let arm = "dflash2-bs\(blockSize)\(adaptive ? "" : "f")"
+        for blockSize in blocks {
+            let arm = "dflash2-bs\(blockSize)"
             let armRows = rows.filter { $0.arm == arm }
             guard !armRows.isEmpty else { continue }
             let acc = armRows.map(\.acceptance)
@@ -396,8 +371,8 @@ nonisolated struct DFlash2BenchRunner {
     /// Long-context workload: the tesseract repo's own docs plus a question
     /// (mirrors research/bench_dflash.py for cross-stack comparability).
     /// `DFLASH2_BENCH_PROMPT=repeat` swaps in a tiled predictable paragraph —
-    /// the agent-typical high-acceptance regime the adaptive width exists for
-    /// (the docs prompt is the adversarial low-acceptance one).
+    /// the agent-typical high-acceptance regime (the docs prompt is the
+    /// adversarial low-acceptance one).
     /// `variant` > 0 shifts the docs body start by 97 characters per step
     /// (the `--bench-prompt-variants` acceptance-spread ruler); 0 is the
     /// canonical prompt.
