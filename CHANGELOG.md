@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.12.0](https://github.com/spokvulcan/tesseract/compare/v1.11.1...v1.12.0) (2026-09-04)
+
+
+### Features
+
+* **bench:** DFlash2 acceptance research + prompt-hash, variant and prompt-file arms ([1d03aba](https://github.com/spokvulcan/tesseract/commit/1d03abaa79a687b5d25357c28672e161bf89802b))
+* **models:** add Qwen3.8-27B PARO with DFlash2 speculation ([#461](https://github.com/spokvulcan/tesseract/issues/461)) ([d33674f](https://github.com/spokvulcan/tesseract/commit/d33674ff66f4c30339a384f394c74e4aa5ef4958))
+
+
+### Code Refactoring
+
+* **agent:** one Raw Generation Start over the Model Session seam ([#456](https://github.com/spokvulcan/tesseract/issues/456)) ([4f345ee](https://github.com/spokvulcan/tesseract/commit/4f345ee4c99460f6aa6c182a69db24ebdf889ad2))
+* **dflash2:** reduce the drafter to its fast path and move the pin (ADR-0061) ([#464](https://github.com/spokvulcan/tesseract/issues/464)) ([3cb640a](https://github.com/spokvulcan/tesseract/commit/3cb640abc427ef75d044488fcce03072ed84b0e6))
+* **server:** make Conversation Render a real module ([#453](https://github.com/spokvulcan/tesseract/issues/453)) ([2321017](https://github.com/spokvulcan/tesseract/commit/2321017637d0eae75c7bf4cf242c34486ba2b69f))
+* **server:** one Completion Delivery script behind a Delivery Sink seam ([#455](https://github.com/spokvulcan/tesseract/issues/455)) ([75a9428](https://github.com/spokvulcan/tesseract/commit/75a942889541cfd86ed6174437bceb10884a7e0c))
+
+
+### Documentation
+
+* add model parameters reference ([#462](https://github.com/spokvulcan/tesseract/issues/462)) ([9139e11](https://github.com/spokvulcan/tesseract/commit/9139e113d7837e78a2336e25ac2e5221303dab45))
+* point CLAUDE.md at the pr-title workflow's real path (fixes Docs Check) ([b0d6749](https://github.com/spokvulcan/tesseract/commit/b0d674989413e375bc95f763cefd0df39c0a8234))
+
+
+### Miscellaneous Chores
+
+* **deps:** re-pin mlx-swift-lm to upstream e3d4a20 ([d37fc13](https://github.com/spokvulcan/tesseract/commit/d37fc13fc5b14e609551257e4df28c66a9708998))
+
 ## [1.11.1](https://github.com/spokvulcan/tesseract/compare/v1.11.0...v1.11.1) (2026-08-30)
 
 
