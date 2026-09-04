@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MLX
 import MLXLLM
@@ -145,9 +146,13 @@ nonisolated struct DFlash2BenchRunner {
             emit("[dflash2-bench] same-input projections stacked in \(stacked) blocks")
         }
 
+        let promptText = buildPromptText()
         let prepared = try await context.processor.prepare(
-            input: UserInput(chat: [.user(buildPromptText())]))
+            input: UserInput(chat: [.user(promptText)]))
         let promptTokens = prepared.text.tokens.dim(-1)
+        // Acceptance references are only comparable across identical prompt
+        // bytes (ledger R55): every bank records the prompt hash.
+        emit("[dflash2-bench] prompt sha256 \(promptSHA256(promptText))")
 
         let draft = try DFlash2Support.loadDrafter(directory: draftDir)
         if ProcessInfo.processInfo.environment["DFLASH2_STACK_GATEUP"] != "0",
@@ -157,7 +162,7 @@ nonisolated struct DFlash2BenchRunner {
             emit("[dflash2-bench] drafter projections stacked in \(stackedDraft) blocks")
         }
 
-        func runAR(_ runIndex: Int) throws -> ArmResult {
+        func runAR(_ runIndex: Int, prepared: LMInput = prepared) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
             parameters.temperature = 0
             var iterator = try TokenIterator(
@@ -188,7 +193,9 @@ nonisolated struct DFlash2BenchRunner {
                 tokens: tokens, accepted: 0, proposed: 0, fingerprint: fingerprint)
         }
 
-        func runDFlash2(_ runIndex: Int, blockSize: Int, adaptive: Bool) throws -> ArmResult {
+        func runDFlash2(
+            _ runIndex: Int, blockSize: Int, adaptive: Bool, prepared: LMInput = prepared
+        ) throws -> ArmResult {
             var parameters = GenerateParameters(maxTokens: maxNewTokens)
             parameters.temperature = 0
             let cache = try context.model.newCache(parameters: parameters)
@@ -240,6 +247,22 @@ nonisolated struct DFlash2BenchRunner {
                 maxNewTokens))
         emit("[dflash2-bench] draft loaded (4-bit)")
         let blocks = Self.blockSizes()
+
+        // `--bench-prompt-variants N`: the acceptance-spread ruler. Draft
+        // acceptance is a property of one exact greedy trajectory (ledger
+        // R44/R54/R55: the same content class rolled 45.7%, 33.6%, 26.7%,
+        // 21.6% across one-line prompt edits), so a single prompt cannot
+        // price a tokens/round lever. This mode decodes N near-identical
+        // prompts (the docs body shifted by 97 characters per variant, same
+        // question) once each per arm and reports the spread; the canonical
+        // ABBA run below is untouched when the flag is absent.
+        if let variants = Self.promptVariants(), variants > 0 {
+            try await benchVariants(
+                variants, context: context, blocks: blocks, emit: emit,
+                runAR: runAR, runDFlash2: runDFlash2)
+            return []
+        }
+
         for round in 0..<2 {
             let a = try runAR(round * 2)
             results.append(a)
@@ -275,6 +298,91 @@ nonisolated struct DFlash2BenchRunner {
         return parsed.isEmpty ? parse("8,5") : parsed
     }
 
+    private struct VariantRow {
+        let arm: String
+        let tokPerSec: Double
+        let acceptance: Double
+        let match: Bool
+    }
+
+    /// `--bench-prompt-variants N`: the acceptance-spread ruler. Draft
+    /// acceptance is a property of one exact greedy trajectory (ledger
+    /// R44/R54/R55/R56: the same content class rolled 45.7%, 33.6%, 26.7%,
+    /// 21.6% across one-line prompt edits), so a single prompt cannot price a
+    /// tokens/round lever. Decodes N near-identical prompts (the docs body
+    /// shifted by 97 characters per variant, same question) once per arm and
+    /// reports the spread; the canonical ABBA run is untouched without the flag.
+    private static func benchVariants(
+        _ variants: Int, context: ModelContext, blocks: [(block: Int, adaptive: Bool)],
+        emit: (String) -> Void,
+        runAR: (Int, LMInput) throws -> ArmResult,
+        runDFlash2: (Int, Int, Bool, LMInput) throws -> ArmResult
+    ) async throws {
+        var rows: [VariantRow] = []
+        for variant in 0..<variants {
+            let text = buildPromptText(variant: variant)
+            let prepared = try await context.processor.prepare(
+                input: UserInput(chat: [.user(text)]))
+            emit(
+                "[dflash2-bench] variant \(variant): prompt sha256 \(promptSHA256(text)) "
+                    + "(\(prepared.text.tokens.dim(-1)) tokens)")
+            let ar = try runAR(variant, prepared)
+            for (blockSize, adaptive) in blocks {
+                let spec = try runDFlash2(variant, blockSize, adaptive, prepared)
+                let rounds = adaptive ? 0 : (spec.proposed + blockSize - 2) / (blockSize - 1)
+                let perRound =
+                    rounds > 0
+                    ? String(format: " tok/round %.2f", Double(spec.tokens) / Double(rounds))
+                    : ""
+                let match = spec.fingerprint == ar.fingerprint
+                emit(
+                    "[dflash2-bench] variant \(variant) \(spec.arm.paddedToColumn) "
+                        + String(format: "%6.1f tok/s", spec.tokPerSec)
+                        + " accepted=\(spec.accepted)/\(spec.proposed)" + perRound
+                        + String(format: " ar %.1f", ar.tokPerSec)
+                        + " identity \(match ? "MATCH" : "DIVERGED")")
+                rows.append(
+                    VariantRow(
+                        arm: spec.arm, tokPerSec: spec.tokPerSec,
+                        acceptance: Double(spec.accepted) / Double(max(1, spec.proposed)),
+                        match: match))
+            }
+        }
+        emit("[dflash2-bench] === variant summary (n=\(variants)) ===")
+        for (blockSize, adaptive) in blocks {
+            let arm = "dflash2-bs\(blockSize)\(adaptive ? "" : "f")"
+            let armRows = rows.filter { $0.arm == arm }
+            guard !armRows.isEmpty else { continue }
+            let acc = armRows.map(\.acceptance)
+            let rates = armRows.map(\.tokPerSec)
+            emit(
+                "[dflash2-bench] \(arm.paddedToColumn) acceptance mean "
+                    + String(
+                        format: "%.1f%% min %.1f%% max %.1f%%",
+                        100 * acc.reduce(0, +) / Double(acc.count), 100 * (acc.min() ?? 0),
+                        100 * (acc.max() ?? 0))
+                    + String(
+                        format: " | tok/s mean %.1f min %.1f max %.1f",
+                        rates.reduce(0, +) / Double(rates.count), rates.min() ?? 0,
+                        rates.max() ?? 0)
+                    + " | identity \(armRows.filter(\.match).count)/\(armRows.count) MATCH")
+        }
+    }
+
+    /// `--bench-prompt-variants N` (nil when absent).
+    private static func promptVariants() -> Int? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "--bench-prompt-variants"), i + 1 < args.count else {
+            return nil
+        }
+        return Int(args[i + 1])
+    }
+
+    private static func promptSHA256(_ text: String) -> String {
+        let digest = SHA256.hash(data: Data(text.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func elapsedSeconds(since start: ContinuousClock.Instant) -> Double {
         let elapsed = ContinuousClock.now - start
         return Double(elapsed.components.seconds)
@@ -290,7 +398,17 @@ nonisolated struct DFlash2BenchRunner {
     /// `DFLASH2_BENCH_PROMPT=repeat` swaps in a tiled predictable paragraph —
     /// the agent-typical high-acceptance regime the adaptive width exists for
     /// (the docs prompt is the adversarial low-acceptance one).
-    private static func buildPromptText() -> String {
+    /// `variant` > 0 shifts the docs body start by 97 characters per step
+    /// (the `--bench-prompt-variants` acceptance-spread ruler); 0 is the
+    /// canonical prompt.
+    private static func buildPromptText(variant: Int = 0) -> String {
+        // `DFLASH2_BENCH_PROMPT_FILE=<path>`: the file's contents become the
+        // user message verbatim (content-class probes: math, code, chat).
+        if let path = ProcessInfo.processInfo.environment["DFLASH2_BENCH_PROMPT_FILE"],
+            let text = try? String(contentsOfFile: path, encoding: .utf8)
+        {
+            return text
+        }
         if ProcessInfo.processInfo.environment["DFLASH2_BENCH_PROMPT"] == "repeat" {
             let sentence =
                 "func fibonacci(_ n: Int) -> Int { n <= 1 ? n : fibonacci(n - 1) + fibonacci(n - 2) }\n"
@@ -316,7 +434,10 @@ nonisolated struct DFlash2BenchRunner {
                 }
             }
         }
-        let joined = parts.joined(separator: "\n\n")
+        var joined = parts.joined(separator: "\n\n")
+        if variant > 0 {
+            joined = String(joined.dropFirst(97 * variant))
+        }
         // `--bench-context-mult N` tiles the prompt body N times before
         // truncation, scaling the context for the long-KV regime (decode-only
         // timing makes the repeated prefill cost irrelevant).

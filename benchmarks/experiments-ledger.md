@@ -4065,3 +4065,145 @@ Also found while gating: two of the real-model `DFlash2ParityTests`
 running in one process (a `swift test --filter` substring match) deadlock
 ABBA between mlx-swift's global `compiledSilu.lock` and its recursive
 `evalLock`; run them one at a time (`--filter 'name\(\)'`).
+
+### R56 — 2026-09-04 re-pricing on the re-pinned base: today's roll is physics-capped at ~53; acceptance, not the round, is the lever
+
+Bank of the current prompt bytes (first 24,000 characters of `ARCHITECTURE.md`
+— the other docs never reach the window — plus the question; the body changed
+one line at `75a94288` on 2026-09-03, which is the whole R52→R55 prompt delta;
+sha256 `cd4da088…d7750`, 27,675 bytes, 5,976 tokens; bench now prints it):
+Qwen3.8-27B 4-bit + `incoai/Qwen3.8-27B-DFlash2` (block 8 = 1 anchor + 7
+drafts), bs8f, Release, owner active at the machine (WindowServer ~45%):
+
+| run | ar median | bs8f run0 / run1 | accepted | identity |
+| --- | --- | --- | --- | --- |
+| plain | 20.9 | 31.3 / 30.3 | 115/532 | MATCH |
+| `DFLASH2_HOST_PROFILE=1` | 20.4 | 30.9 / 26.7 | 115/532 | MATCH |
+| `DFLASH2_ACCEPT_LOG=1` | 20.8 | 28.1 / 28.6 | 116/522 | MATCH |
+
+The generated 192 tokens are the model's THINKING preamble in full ("We need
+answer user's request … Need produce one paragraph … Need no bullet list") —
+the answer never starts inside the budget. Round anatomy on this roll:
+76 rounds, τ = 192/76 = **2.53 tok/round**, round = 6.14 s/76 = **81 ms**
+(contended); host timeline is GPU-bound (pb-dsched 67-71 ms/round = the
+throttled asyncEval wait; every host phase < 1 ms). Per-position anatomy
+(sibling roll under the eager selector walk, 116/522): match
+0.69/0.49/0.39/0.35/0.24/0.31/0.24, survive 0.69/0.41/0.20/0.11/0.05/0.05/0.03,
+top-2 cover 0.79/0.68/0.51/…, rounds accepting nothing 23/75 = 31%, and at
+the first miss the target sat at selector rank 1 in 29/73 rounds.
+`DFLASH2_ACCEPT_LOG` is NOT zero-perturbation any more: the eager selector walk
+it forces drafts one token differently from the compiled walk (115/532 →
+116/522) — same regime, but bank on the plain run only.
+
+Old pin (`ddc1f66`) vs new pin (`a7e5d9b`), same tree, back-to-back
+`DFLASH2_VERIFY_PROFILE=1 MLX_OP_CENSUS=1`: op census byte-identical
+(567,078 primitives over the same 154 verify windows; QMM 45,200, RMSNorm
+50,920, CustomKernel 14,688, Convolution 7,392, SDPA 3,224), verify-seg
+90.0 vs 88.3 ms, attn 14.0 vs 14.3. The re-pin changed no launch. Per pass:
+QMM ~293 = the target's 256 (R43) + the drafter's ~37 that the pipelined
+draft evaluates inside the profiling window.
+
+**Physics on this roll.** The 4-bit checkpoint is 16.9 GB; every decode
+pass streams ~16.2 GB of it (all but the embedding table). The AR step
+measures 47.8 ms (20.9 tok/s) = 339 GB/s effective; nominal 400 GB/s would
+be 40.5 ms. A verify round streams the same bytes, so round ≥ 47.8 ms as
+demonstrated (≥ 40.5 at nominal), and today's τ caps tok/s at
+2.53/0.0478 = **52.8** with zero verify overhead (62 at nominal peak — an
+unattainable number, not a target). 60 on this prompt needs τ ≥ 2.87 at a
+zero-overhead round, τ ≥ 4.2 (the record roll's 45.7% acceptance) at a
+70 ms round, or τ ≥ 4.9 at today's 81 ms.
+
+**The three open levers, priced on this base** (τ 2.53, round 81 ms →
+30.9; the record roll τ 4.20 shown beside it because it is the same stack
+on a different die roll):
+
+| lever | Δ | today's roll | record roll (τ 4.20) | cost |
+| --- | --- | --- | --- | --- |
+| base | — | 30.9 | 51.3 | — |
+| b16 drafter (paper τ ×1.21, S=16 round +11-17 ms) | τ 3.06, round 93-99 | 31-33 | 51-55 | ~$1K cloud, 1-2 wk, DFlash2≠v1 risk |
+| verify-window kernels: mma16 hole | only S>8 | 0 | 0 | banked |
+| verify-window kernels: M=8 QMM 54.7 → stream floor ~41 | ≤13 ms theory, 3-5 realistic (bitwise-constrained, R44) | 32-33 | 53-54 | days |
+| launch count: glue 12-16 ms | 2-4 realistic; RMSNorm folds indicted by R44 | 32 | 53 | days |
+| all three, perfect (round ≈ 56 ms) | — | 45 | 75 | — |
+| all three, realistic (round ≈ 72 ms) | — | 35 | 58 | — |
+
+Verdict: **on the current prompt bytes nothing in the round-time program
+reaches 60, and no combination can — the AR weight stream caps this roll at
+~53.** The only lever with headroom is tokens/round, i.e. drafter hit
+rate on this model's planning-trace content (0.69 at the first draft
+position, 31% empty rounds), and R53 closed every draft-side knob except
+training. The record 47.9 was the same stack on a lucky trajectory
+(45.7%): rolled across one-line prompt edits and environments the same
+content class gave 45.7 / 33.6 / 26.7 / 21.6% (R42b / R44 / R54 / R55).
+
+**Acceptance spread on this content class** (`--bench-prompt-variants 8`,
+same binary, one AR + one bs8f decode per variant, ar 20.1-21.1 on every
+leg, identity MATCH 8/8):
+
+| variant | accepted | acceptance | τ tok/round | bs8f tok/s |
+| --- | --- | --- | --- | --- |
+| 0 (canonical) | 115/532 | 21.6% | 2.53 | 29.6 |
+| 1 | 125/476 | 26.3% | 2.82 | 36.1 |
+| 2 | 124/476 | 26.1% | 2.82 | 36.3 |
+| 3 | 128/441 | 29.0% | 3.05 | 35.4 |
+| 4 | 129/434 | 29.7% | 3.10 | 39.4 |
+| 5 | 133/420 | 31.7% | 3.20 | 40.5 |
+| 6 | 133/406 | 32.8% | 3.31 | 42.0 |
+| 7 | 129/434 | 29.7% | 3.10 | 37.0 |
+
+Mean acceptance 28.4% (min 21.6, max 32.8), mean τ 2.99, mean 37.0 tok/s
+(29.6-42.0). Today's canonical prompt is the WORST roll of the eight; the
+content class's expected τ is ~3.0, and even its best roll (3.31) needs a
+55 ms round for 60 — below the perfect-kernel floor. The record-era 45.7%
+sits outside this spread entirely, so the 47.9 record was a tail roll of
+this ruler, not its centre. The single-prompt canonical should be read
+as one sample; a bank line now carries its prompt hash so re-rolls are
+never again mistaken for regressions.
+
+Routes that do cross 60, all owner calls: (1) a drafter trained on the
+deployed distribution — this target's 4-bit hidden states and its thinking
+traces, block 16 — the one unbounded τ lever (R30 costs stand; add the
+data-distribution angle); (2) the ruler: production traffic already accepts
+50-62% (R54 live turns), i.e. τ ≈ 4.5-4.9 → 55-60 at today's round, so a
+production-content canonical arm would sit at the line the docs prompt
+cannot reach; (3) M5-class bandwidth; (4) relaxed losslessness. Harness
+change landed with this entry: `--bench-prompt-variants N` (docs body
+shifted 97 characters per variant, same question, one AR + one spec decode
+each, per-variant identity gate, mean/min/max acceptance) and the prompt
+sha256 on every bank line.
+
+### R57 — why 28%: cross-stack acceptance by content class; the port is at spec, math crosses 60
+
+Owner question after R56: DFlash2 is advertised at >50% acceptance, so is
+28% a port defect? Research write-up: `docs/research/2026-09-04-dflash2-acceptance-research.md`.
+
+Sources: the model card and paper report acceptance LENGTH τ (tokens per
+verify step, bonus included); drafts accepted = (τ−1)/7 at block 8. For this
+drafter on a bf16 H200 target with sampling: GSM8K 5.46 (63.7%), MATH-500
+5.28 (61.1%), HumanEval 4.39 (48.4%), MBPP 4.79 (54.1%), MT-Bench 4.10
+(44.3%). Open-ended prose is the floor in every published table (paper's
+Alpaca τ 3.73 = 30% at block 10); thinking traces cost ~27% τ (paper Table 2,
+7.84 → 5.74); a 4-bit target costs ~5 points on this model (mlx-dspark 64.7%
+→ 59.1%). ">50%" is the generic speculative-decoding rule of thumb, not a
+DFlash claim.
+
+Cross-stack on this machine (4-bit target + 4-bit draft, greedy, block 8,
+192 tokens; Swift = app bench, Python = z-lab `model_mlx.py` on identical
+prompt bytes + chat template):
+
+| prompt | Swift | Python |
+| --- | --- | --- |
+| canonical docs (thinking on) | 115/532 = 21.6%, τ 2.53 | 111/552 = 20.1%, τ 2.40 |
+| docs variant 6 | 133/406 = 32.8%, τ 3.31 | 129/423 = 30.5%, τ 3.10 |
+| canonical docs, raw / thinking off | — | 20.3% / 25.5% |
+| math (GSM8K-style) | **158/252 = 62.7%, τ 5.33** | 156/241 = 64.7%, τ 5.49 |
+| code (HumanEval-style) | 140/357 = 39.2%, τ 3.76 | 143/334 = 42.8%, τ 4.00 |
+
+Identity MATCH on every Swift arm; the stacks agree within 2–4 points on
+every prompt and both reproduce the card's GSM8K τ. Speed on the short
+prompts (147/98 prompt tokens): **math bs8f 75.2 tok/s (3.31× over ar
+22.7), code 53.7 (2.41×)** — the 60 line is crossed on the drafter's home
+content with today's stack. Bench gained `DFLASH2_BENCH_PROMPT_FILE=<path>`
+(user message verbatim) for content-class arms. Verdict: the canonical docs
+prompt is the adversarial arm by design (prose + thinking trace + 4-bit
+target); nothing in the inference stack is leaving acceptance on the table.

@@ -342,3 +342,27 @@ future optimization: draft acceptance is a property of the exact
 bitwise AR token stream, so a lever must preserve that stream
 bit-for-bit (as the QMM stacking does) or be priced against an
 acceptance re-roll that dwarfs per-launch savings.
+
+**2026-09-04 re-pricing addendum — the ruler rolls, the round is
+physics-capped (ledger R56).** On the re-pinned base the canonical prompt
+(one line of `ARCHITECTURE.md` changed on 2026-09-03) decodes its 192
+tokens entirely inside the model's thinking preamble and accepts 21.6%
+(115/532, τ 2.53 tok/round, round ~81 ms, 30.9 tok/s contended). The same
+content class rolled 45.7 / 33.6 / 26.7 / 21.6% across one-line prompt
+edits and environments (R42b / R44 / R54 / R55), so a single-prompt
+acceptance is a die roll, not a property of the stack; the bench now
+prints the prompt sha256 and has an opt-in `--bench-prompt-variants N`
+spread ruler. Every decode pass streams ~16.2 GB of the 16.9 GB
+checkpoint; the AR step measures 47.8 ms (339 GB/s effective, 40.5 ms at
+nominal), and a verify round streams the same bytes, so today's τ caps
+tok/s at ~53 with zero verify overhead. The three open levers priced on
+this base — b16 drafter (+1-2), M=8 QMM toward the stream floor (+1-2),
+launch-count glue (+1-2), all three perfect ≈ 45 — cannot reach 60 on
+this trajectory; the record 47.9 was this stack on a τ 4.20 roll, where a
+70 ms round would cross 60. The program's lever is therefore tokens/round
+on planning-trace content (first-draft hit rate 0.69, 31% empty rounds),
+which R53 left to drafter training; production traffic (R54: 50-62%
+acceptance) already sits at 55-60 at today's round. The 60 target on M3
+Max is an owner decision between a drafter trained on the deployed
+distribution, a production-content canonical arm, hardware, or relaxed
+losslessness — not a kernel.
