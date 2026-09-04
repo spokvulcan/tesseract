@@ -197,9 +197,7 @@ private nonisolated func dflash2PrefillSplitOffset(
     fullTokenCount: Int
 ) -> Int {
     let lastCapture = checkpointOffsets.max() ?? executionBaseOffset
-    let windowStart =
-        drafter.dflashContextKeepCount
-        .map { fullTokenCount - 1 - $0 } ?? executionBaseOffset
+    let windowStart = fullTokenCount - 1 - drafter.contextWindow
     return min(
         max(executionBaseOffset, lastCapture, windowStart),
         fullTokenCount - 1

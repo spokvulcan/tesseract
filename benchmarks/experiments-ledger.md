@@ -4207,3 +4207,27 @@ content with today's stack. Bench gained `DFLASH2_BENCH_PROMPT_FILE=<path>`
 (user message verbatim) for content-class arms. Verdict: the canonical docs
 prompt is the adversarial arm by design (prose + thinking trace + 4-bit
 target); nothing in the inference stack is leaving acceptance on the table.
+
+### R58 — 2026-09-04 content classes on the reshaped stack (ADR-0061): at spec vs the DFlash 2 post
+
+Same stack as the ADR-0061 gate (reshaped vendor commit, Qwen3.8-27B 4-bit +
+4-bit draft, greedy, block 8, 192 tokens, thinking on, quiet machine, direct
+binary), `DFLASH2_BENCH_PROMPT_FILE` arms; the math/code files are R57's, the
+chat prompt is an MT-Bench-style travel-blog request, math2 is three
+MATH-style algebra/geometry problems. τ = tokens per verify step, bonus
+included (the post's Table 4 metric; block 8, default sampling):
+
+| prompt | ar median | bs8 run0 / run1 | accepted | τ | post τ |
+| --- | --- | --- | --- | --- | --- |
+| math (R57, GSM8K-style), twice | 22.9 / 23.0 | 76.0 / 77.0, 77.4 / 76.4 | 158/249 | 5.33 | GSM8K 5.46 |
+| math2 (MATH-style) | 22.9 | 84.3 / 84.0 | 160/231 | 5.82 | MATH-500 5.28 |
+| code (R57, HumanEval-style) | 22.7 | 54.6 / 54.0 | 140/356 | 3.76 | HumanEval 4.39 |
+| chat (MT-Bench-style) | 21.7 | 28.0 / 28.5 | 119/518 | 2.59 | MT-Bench 4.10 |
+
+Identity MATCH on every arm; acceptance bit-stable across runs and across
+the two math legs. Math/code reproduce R57's pre-reshape counts within one
+drafted round (158/252 → 158/249 is the final-round narrowing to the token
+budget, R55 note) at +1-2 tok/s. The chat arm is the new floor datum: an
+open-ended request with the thinking trace on sits at τ 2.6, alongside the
+docs prompt's 2.53 — the content class, not the port. These are the numbers
+in the upstream issue/PR drafts.

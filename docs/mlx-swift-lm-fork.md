@@ -81,19 +81,8 @@ Carried on top, in order:
 | --- | --- | --- |
 | `fix: pin mlx-swift to the spokvulcan fork at 24779d5` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + provenance + the Cmlx gitlink bumps carrying the C-series, qmv_wide, affine_qmm_mma8, SDPA mma8, multi-query SDPA and round-5 kernels + `dynamicSliceUpdated`). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
 | `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer. Enables tesseract's render+token cache (experiments-ledger C25). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract` @ `63edf42` (`docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
-| `feat(speculative): DFlash2 block-parallel drafter + speculative iterator (ADR-0057)` | The DFlash2 drafter model, context cache and speculative token iterator | Not filed — **next upstream candidate** (the whole DFlash2 series below) |
-| `feat(speculative): DFlash2 single-sync pipeline + adaptive width bandit (ADR-0058)` | One sync per round, adaptive block width | Not filed (DFlash2 series) |
-| `perf(dflash2): buffered draft context cache + per-round mask memo` | Draft-side context cache buffering, mask memoization | Not filed (DFlash2 series) |
-| `tools(dflash2): sub-phase propose timing under DFLASH2_PROFILE=1` | Bench instrumentation | Not filed (DFlash2 series) |
-| `feat(dflash2): compiled draft forward + mlx-swift pin bump (mq SDPA kernel)` | Compiled drafter forward (pin hunk folded into the pin commit above) | Not filed (DFlash2 series) |
-| `feat(gdn): optional fused q/k RMS norm in the gated-delta scan kernel` | Opt-in `DFLASH2_FUSED_QKNORM=1` (rejected for speed, ledger R44) | Not filed (DFlash2 series) |
-| `feat(dflash2): accept-invariant rollback prebuild + compiled GDN replay` | Rollback prebuild, compiled GDN replay | Not filed (DFlash2 series) |
-| `perf(dflash2): pipelined round + stage-2 accept-invariant verify prebuild` | Stage-2 pipelined verify | Not filed (DFlash2 series) |
-| `perf(dflash2): model-side verify prebuild + same-input QMM stacking` | Verify prebuild, rope-in-trace, gate|up + q|k|v + drafter stacking (GDN in-proj stack now upstream #572; traces re-expressed as `CompiledTrace` per #589) | Not filed (DFlash2 series) |
-| `style: swift-format over the round-5 series` | Formatting | Not filed (DFlash2 series) |
-| `docs: resolve docc symbol links + missing cache parameter` | DocC fixes for the series | Not filed (DFlash2 series) |
-| `feat(dflash2): warm-start speculation over a prefilled prefix cache` | Speculation on the keyed/warm prefix-cache path (ADR-0059) | Not filed (DFlash2 series) |
-| `fix(dflash2): stack only plain QuantizedLinear projections` | Exact-class guard for the remaining stacks (`plainQuantizedLinear(_:)`) — ParoQuant's `RotateQuantizedLinear` must not fold into a plain stack | Not filed (DFlash2 series) |
+| `feat(speculative): expose GenerationFinalizingTokenIterator` | Makes the finalize protocol (and the two upstream conformances) public so the app's own token loop (`TokenGenerationLoop`) can rewind speculative lookahead the way `generateLoopTask` does | Permanent local unless upstream wants it; kept out of the DFlash2 PR |
+| `feat(speculative): DFlash2 block-parallel speculative decoding for Qwen3.5 (ADR-0061)` | The whole DFlash2 series reshaped into one commit in upstream's own shapes: `DFlash2DrafterModel` / `DFlash2TargetModel` protocols, `DFlash2SpeculativeTokenIterator`, factory/registry/container, `generate` overloads, Qwen3.5 target side (verify pass, `writeRows`, gated-delta captures), `SameInputProjectionStacking`. Fast path only — no environment knobs, no research arms | **Upstream PR ready** (branch `dflash2-upstream-clean` = `e3d4a20` + this commit; issue + PR drafts in the 2026-09-04 status entry) |
 
 Earlier pin branches carried one `chore: pin mlx-swift to <rev>` commit per
 accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round). That
@@ -108,10 +97,9 @@ decode conv1d as fused multiply-adds), #469 (fused router top-k), #470
 (balanced prompt chunking) and #471 (ParoQuant MoE batch, merged
 2026-09-03). The mlx-core-side wins from the same loop (C1/C13/C8+C9 filed
 as mlx#3918/#3919/#3920; C4/C5/C7 deferred) are tracked in
-`docs/mlx-core-fork.md`. **Next filing candidate: the DFlash2 series
-(ADR-0057/0058/0059)** — since #471 merged it is the whole carry apart from
-C25 and the pin commit; shaping it into upstream PRs is its own task
-(owner go-ahead).
+`docs/mlx-core-fork.md`. The DFlash2 series (ADR-0057/0058/0059) was
+reshaped into a single upstreamable commit on 2026-09-04 (ADR-0061); the
+issue and PR drafts are ready for the owner to post (status entry below).
 
 ### Status log
 
@@ -222,6 +210,32 @@ app Release build with zero source changes, server + agent group green;
 Prepared Checkpoint parity PASS on Qwen3.8-27B PARO and Qwen3.6-35B-A3B
 PARO; DFlash2 bs8f acceptance 115/532 bit-identical old vs new pin, speed at
 parity in an interleaved A/B (experiments-ledger R55).
+
+**Status 2026-09-04 (DFlash2 reshaped for upstream, ADR-0061)** — the 13
+DFlash2 carry commits (~5,000 lines, a dozen `DFLASH2_*` knobs, the
+advised selector, lattice dump, accept log, profile timelines, fused
+q/k-norm kernel, elementwise conv, verify stride, adaptive width,
+passthrough, parity fixtures) collapse into one commit that keeps only the
+measured fast path: pipelined round, fixed width 8, compiled draft/verify
+segments, masked GDN replay, same-input QMM stacking. Shape follows
+upstream's MTP drafter: `DFlash2DrafterModel` + `DFlash2TargetModel`
+protocols instead of `LMOutput.State` keys, verify computes / iterator
+commits (`KVCacheSimple.writeRows` + `GatedDeltaCapture`), stateless
+drafter with per-stream `DFlash2ContextCache`, processor-copy losslessness,
+`SameInputProjectionStacking`. `GatedDelta.swift` is back to upstream.
+One bug surfaced by the acceptance gate and fixed before banking: the
+prompt-window rows entered the drafter's context cache as placeholders and
+were never resolved, so from round 1 the mask hid the whole prompt
+(identity still MATCHed — the target verifies everything — but acceptance
+fell to 108/577; a per-round trace against the old build diverged at round
+1). Gates: 740/740 vendor tests, swift-format 603, verify-docs, full ABBA
+vs the pre-reshape build on the docs prompt (`cd4da088…`): identity MATCH,
+acceptance 115/532 bit-identical, per-round drafts identical to the old
+build for the whole run, tok/s new 32.8 / 30.1 vs old 28.8 / 27.8 tok/s medians (per-run 29.5–32.8 vs 26.9–28.8), AR flat at ~21. Upstream branch
+`dflash2-upstream-clean` (= `e3d4a20` + the commit, without the pin, C25
+and the finalize-public carry) builds against upstream `mlx-swift` 0.31.6
+(740/740 tests, verify-docs, swift-format). `MLX_MAX_ACTIVE_TASKS=40` is still set only by the
+bench runner.
 
 ## Contributed back
 
