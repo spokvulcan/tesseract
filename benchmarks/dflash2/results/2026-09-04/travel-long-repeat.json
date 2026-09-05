@@ -1,0 +1,9684 @@
+{
+  "capturedFullStream" : true,
+  "draftPolicy" : "4bit",
+  "fullIdentityCheck" : false,
+  "inputTokenIds" : [
+    248045,
+    8678,
+    198,
+    24342,
+    286,
+    4879,
+    369,
+    716,
+    310,
+    830,
+    11553,
+    13,
+    5044,
+    1683,
+    15060,
+    1472,
+    279,
+    3274,
+    11,
+    9307,
+    1328,
+    30800,
+    11,
+    2814,
+    47675,
+    25605,
+    11,
+    321,
+    60445,
+    55404,
+    11,
+    27224,
+    11,
+    321,
+    30246,
+    303,
+    279,
+    1534,
+    4087,
+    13,
+    248046,
+    198,
+    248045,
+    846,
+    198,
+    7734,
+    264,
+    5640,
+    4849,
+    1675,
+    883,
+    264,
+    1936,
+    303,
+    26629,
+    13,
+    58737,
+    279,
+    17865,
+    11,
+    3487,
+    11,
+    321,
+    2136,
+    7431,
+    11,
+    440,
+    14542,
+    17683,
+    364,
+    264,
+    1118,
+    7019,
+    19568,
+    13,
+    248046,
+    198,
+    248045,
+    74455,
+    198,
+    248068,
+    198
+  ],
+  "maxNewTokens" : 768,
+  "model" : "models\/mlx-community_Qwen3.8-27B-4bit",
+  "promptSHA256" : "d80ce7731b3321c8cee9786461491731dd81e0e834ec25b121f6b95e628b4534",
+  "promptTokens" : 82,
+  "results" : [
+    {
+      "accepted" : 470,
+      "arm" : "dflash2-bs8",
+      "decodeSeconds" : 21.3516375,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328,
+        7734,
+        264,
+        5640,
+        4849,
+        1675,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        13,
+        58737,
+        279,
+        17865,
+        11,
+        3487,
+        11,
+        321,
+        2136,
+        7431,
+        11,
+        440,
+        14542,
+        17683,
+        364,
+        264,
+        1118,
+        7019,
+        19568,
+        1149,
+        14235,
+        7936,
+        1534,
+        4849,
+        1675,
+        13,
+        14235,
+        4222,
+        303,
+        6163,
+        13,
+        14235,
+        6970,
+        2830,
+        2192,
+        11,
+        13753,
+        11,
+        14542,
+        10104,
+        13,
+        28320,
+        524,
+        2166,
+        1248,
+        30,
+        85027,
+        888,
+        63008,
+        220,
+        24,
+        11,
+        748,
+        11346,
+        13,
+        14235,
+        6970,
+        5471,
+        51286,
+        11,
+        46448,
+        13,
+        16018,
+        2830,
+        70426,
+        30,
+        2570,
+        16561,
+        5640,
+        4849,
+        1675,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        7276,
+        17865,
+        11,
+        3487,
+        11,
+        2136,
+        7431,
+        11,
+        14542,
+        17683,
+        364,
+        1118,
+        7019,
+        19568,
+        13,
+        1165,
+        628,
+        3165,
+        430,
+        4849,
+        1675,
+        13,
+        14235,
+        6970,
+        6088,
+        28053,
+        30,
+        26629,
+        369,
+        5157,
+        78285,
+        6106,
+        26,
+        1118,
+        7019,
+        19568,
+        4222,
+        496,
+        25842,
+        466,
+        5971,
+        10404,
+        13,
+        16018,
+        3899,
+        430,
+        328,
+        588,
+        1936,
+        11,
+        799,
+        12552,
+        1,
+        466,
+        7072,
+        29440,
+        1867,
+        30,
+        357,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        496,
+        25842,
+        13,
+        14235,
+        14542,
+        17683,
+        25,
+        21185,
+        11,
+        17367,
+        11,
+        6797,
+        11,
+        2919,
+        11,
+        4929,
+        11,
+        7786,
+        11,
+        34532,
+        11,
+        3487,
+        11,
+        7253,
+        13,
+        14235,
+        17865,
+        11,
+        3487,
+        11,
+        7431,
+        13,
+        6558,
+        579,
+        10453,
+        21870,
+        4849,
+        1675,
+        440,
+        67100,
+        13,
+        28763,
+        328,
+        32,
+        379,
+        4084,
+        1,
+        694,
+        10033,
+        13,
+        10380,
+        2830,
+        5887,
+        220,
+        22,
+        10902,
+        3019,
+        383,
+        496,
+        25842,
+        30,
+        1921,
+        1156,
+        3105,
+        914,
+        13441,
+        12552,
+        13,
+        16018,
+        1910,
+        328,
+        2381,
+        264,
+        1118,
+        2308,
+        3034,
+        11,
+        353,
+        6709,
+        2255,
+        5941,
+        383,
+        496,
+        25842,
+        364,
+        264,
+        1936,
+        11,
+        440,
+        264,
+        1834,
+        8151,
+        310,
+        31348,
+        547,
+        2075,
+        466,
+        89258,
+        7285,
+        1921,
+        264,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        5971,
+        10404,
+        13,
+        14235,
+        14542,
+        17683,
+        13,
+        10380,
+        3165,
+        25,
+        328,
+        4888,
+        1936,
+        303,
+        26629,
+        25,
+        496,
+        25842,
+        11,
+        440,
+        264,
+        12293,
+        314,
+        279,
+        28053,
+        3158,
+        28763,
+        17865,
+        25,
+        63834,
+        11,
+        10849,
+        1278,
+        35080,
+        11,
+        33657,
+        11,
+        22767,
+        11,
+        33101,
+        82884,
+        13,
+        11754,
+        25,
+        49814,
+        11,
+        11629,
+        15322,
+        11,
+        542,
+        2181,
+        84,
+        23553,
+        11,
+        34183,
+        4144,
+        22952,
+        11,
+        202489,
+        10784,
+        11,
+        70142,
+        9561,
+        11,
+        2136,
+        13565,
+        13,
+        19775,
+        25,
+        51379,
+        4084,
+        11,
+        304,
+        5432,
+        11,
+        57938,
+        11,
+        4929,
+        364,
+        4128,
+        11,
+        3809,
+        11,
+        16213,
+        56057,
+        3712,
+        11,
+        3992,
+        11,
+        89994,
+        13,
+        63422,
+        25,
+        4992,
+        12552,
+        11,
+        2236,
+        74026,
+        11,
+        7765,
+        1740,
+        11,
+        6797,
+        8862,
+        11,
+        67673,
+        53269,
+        79250,
+        11,
+        2919,
+        11,
+        40554,
+        11,
+        9163,
+        11,
+        4929,
+        843,
+        3234,
+        11,
+        8091,
+        11,
+        38731,
+        11,
+        8831,
+        11,
+        17415,
+        6925,
+        11,
+        7786,
+        13,
+        14235,
+        4849,
+        15754,
+        13,
+        16018,
+        2830,
+        328,
+        3710,
+        353,
+        1467,
+        1754,
+        1834,
+        1,
+        694,
+        524,
+        2166,
+        70426,
+        8545,
+        13,
+        6558,
+        579,
+        7936,
+        41928,
+        1675,
+        13,
+        271,
+        22916,
+        5790,
+        874,
+        867,
+        7929,
+        30,
+        26629,
+        682,
+        2136,
+        3487,
+        13,
+        82210,
+        328,
+        1688,
+        15322,
+        1,
+        4047,
+        13,
+        328,
+        1948,
+        511,
+        9561,
+        1,
+        524,
+        328,
+        898,
+        4005,
+        9561,
+        3158,
+        328,
+        47,
+        4587,
+        3158,
+        328,
+        28633,
+        299,
+        10784,
+        1,
+        494,
+        40790,
+        13,
+        328,
+        84014,
+        4144,
+        22952,
+        1,
+        303,
+        324,
+        51178,
+        134,
+        119,
+        2770,
+        13,
+        328,
+        32,
+        379,
+        4084,
+        1,
+        3254,
+        23066,
+        4691,
+        1338,
+        27450,
+        14,
+        29069,
+        13,
+        328,
+        2665,
+        551,
+        46272,
+        1,
+        6970,
+        30,
+        16018,
+        2830,
+        328,
+        1667,
+        22864,
+        87687,
+        3158,
+        14235,
+        381,
+        46448,
+        25,
+        5471,
+        328,
+        284,
+        1867,
+        3616,
+        1,
+        4831,
+        13,
+        82210,
+        16213,
+        56057,
+        7431,
+        11,
+        524,
+        1066,
+        328,
+        83,
+        48387,
+        48079,
+        3158,
+        28763,
+        14542,
+        25,
+        67673,
+        53269,
+        79250,
+        2483,
+        303,
+        26629,
+        30,
+        26629,
+        682,
+        2253,
+        46919,
+        2397,
+        12,
+        740,
+        69,
+        53269,
+        79250,
+        30,
+        7179,
+        3115,
+        220,
+        17,
+        20,
+        12,
+        16,
+        19,
+        30,
+        1049,
+        56467,
+        6080,
+        314,
+        2397,
+        12,
+        740,
+        69,
+        53269,
+        79250,
+        30,
+        32645,
+        26629,
+        20199,
+        6080,
+        314,
+        2397,
+        12,
+        740,
+        69,
+        53269,
+        79250,
+        303,
+        220,
+        17,
+        15,
+        16,
+        23,
+        30,
+        1049,
+        579,
+        2253,
+        13,
+        1165,
+        628,
+        1910,
+        328,
+        26184,
+        67673,
+        53269,
+        3158,
+        14235,
+        6088,
+        328,
+        39,
+        34777,
+        1068,
+        3992,
+        1,
+        6970,
+        13,
+        271,
+        22916,
+        1534,
+        1132,
+        13,
+        6558,
+        579,
+        9665,
+        440,
+        2192,
+        11,
+        19104,
+        11,
+        13753,
+        25,
+        561,
+        17865,
+        11,
+        561,
+        3487,
+        11,
+        561,
+        7431,
+        11,
+        357,
+        14542,
+        1936,
+        364,
+        1118,
+        2308,
+        65607,
+        11,
+        34532,
+        1103,
+        11,
+        1534,
+        13,
+        16018,
+        2830,
+        220,
+        22,
+        10902,
+        5887,
+        25,
+        5870,
+        220,
+        16,
+        27584,
+        1524,
+        7330,
+        14,
+        2033,
+        64,
+        5861,
+        3253,
+        11,
+        5870,
+        220,
+        17,
+        4634,
+        43236,
+        11,
+        5870,
+        220,
+        18,
+        23570,
+        10877,
+        478,
+        710,
+        589,
+        4144,
+        11,
+        5870,
+        220,
+        19,
+        462,
+        3253,
+        13029,
+        8881,
+        478,
+        28358,
+        11620,
+        2141,
+        11,
+        5870,
+        220,
+        20,
+        35045,
+        37885,
+        478,
+        414,
+        1219,
+        11,
+        5870,
+        220,
+        21,
+        21403,
+        1550,
+        13255,
+        14,
+        1600,
+        18939,
+        11,
+        5870,
+        220,
+        22,
+        38876,
+        13,
+        1921,
+        413,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        6970,
+        496,
+        25842,
+        13,
+        14235,
+        14542,
+        17683,
+        364,
+        1118,
+        7019,
+        19568,
+        13,
+        16018,
+        2830,
+        328,
+        2592,
+        488,
+        1132,
+        599,
+        799,
+        1936,
+        11,
+        1459,
+        914,
+        12552,
+        47093,
+        26,
+        3608,
+        799,
+        12552,
+        3158,
+        7441,
+        13,
+        271,
+        22916,
+        6970,
+        6088,
+        328,
+        39,
+        68547,
+        369,
+        524,
+        799,
+        12552,
+        26,
+        424,
+        579
+      ],
+      "prefillSeconds" : 0.592046583,
+      "proposed" : 2080,
+      "roundTimings" : [
+        {
+          "accepted" : 7,
+          "milliseconds" : 67.272458,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 67.76729200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 68.985958,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 71.358541,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 68.924708,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 69.069542,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 69.680542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.8485,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 69.026292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.475458,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 69.252208,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 69.659083,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.56425,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.905541,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.861042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.763583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 67.204792,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.113167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 68.697333,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 68.67604200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.533625,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 68.606208,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 69.43337500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.123458,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 68.964416,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.248791,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 67.349459,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 70.515,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 68.780125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.927375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.016459,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.3665,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.726208,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.94033300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.460916,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.789084,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.378625,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.142334,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.41274999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 67.97408300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.443875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.476708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.05775,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.256,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.875416,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.371583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.404625,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.457542,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.152167,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 68.148958,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 70.929417,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.62154199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.24775,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.541417,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.49137499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.69816700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.585208,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.116,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.273083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.281833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.14108300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 71.25625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.952375,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.715084,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.788958,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 68.003,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.155375,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.783708,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.250709,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.213042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.477625,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.11725000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.22954200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.797958,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.50345800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.782417,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.768209,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.886916,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.794542,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.167125,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.311458,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.681583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.63075,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.376708,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.751042,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.12516600000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.84637500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.990542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.153834,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.740542,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.701875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.824292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.173875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.59329100000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.829875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.056,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 70.336833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.485417,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.268125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.610541,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.103375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.088708,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.07950000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.153042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.913875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.621292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 68.793875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.087833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.60395799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.75604200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 67.982583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.443166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.902542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.166125,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.220125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.400167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.320958,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.656959,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.557042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.548917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.651125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.428917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.986542,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.308833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.32058400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.769666,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 69.021333,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.387959,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.756125,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.99412500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.52154200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.080083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.09966700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.99554099999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.53087500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.820833,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.017208,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.26816699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.52870899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.504833,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.122333,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.398208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.312334,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.99137499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.704583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.699792,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.29370899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.50233300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 73.30675000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.514375,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.09825000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 71.607875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.344583,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.441959,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.135208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.678792,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 70.711209,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.509417,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.427583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.894625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.797,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.853042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.859417,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.442083,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 72.631917,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.77562499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.798583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.29041699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.14049999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 73.773291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.537917,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.813708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.14925,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.53925,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.167583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.77091700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.830709,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.625667,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 71.786542,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.27300000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.101,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 70.93804200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.022083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.43737499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.985125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.616042,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.799458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.71674999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.491875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.506542,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.30162499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.585917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.561542,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.808416,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.775958,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.772333,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.818291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 71.00275,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.57545900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.977833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.823834,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.117625,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.527709,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 71.301917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.78691699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.9955,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.13475,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 72.8265,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.368541,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.346083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.55220800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.67783299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.78316699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 70.969958,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 74.371208,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.109375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.27787500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.274292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.60654099999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 75.044292,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 73.420458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.734375,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.39625,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 71.59204199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 75.312583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.606625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.323583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.394292,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 71.782,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.29950000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.807125,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 73.87412499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.504208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 75.47337499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.365167,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 74.440125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.57433300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.766042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 76.20325,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.349959,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 74.30895799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.116958,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 72.406541,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 75.949292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.48649999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.299042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 74.463833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.965916,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 76.03999999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.589416,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.481041,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 77.62704199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 77.20658399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 76.38470799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.34362499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.897583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.51587500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.72220899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 74.182375,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 74.93487499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.84175,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 76.193584,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.493667,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.270792,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 75.107334,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 77.07625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.07391700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.18670800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 75.217542,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.793041,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 77.005291,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 75.504958,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.638416,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 75.54208299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 74.005292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 77.486792,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.67675,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 75.46629200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 76.576583,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 81.564292,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 76.328458,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 73.70125,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 73.46925,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.543041,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 74.026792,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 74.503291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 75.135125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 75.72066600000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 76.04912499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 76.425333,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 74.645,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 76.315959,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 76.08825,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 76.35729199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 77.20866699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 75.33316599999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.499208,
+          "width" : 6
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 67.31495899999999,
+          "width" : 4
+        }
+      ],
+      "rounds" : 298,
+      "runIndex" : 0,
+      "tokens" : 768
+    },
+    {
+      "accepted" : 419,
+      "arm" : "dflash2-bs3",
+      "decodeSeconds" : 20.3416365,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328,
+        7734,
+        264,
+        5640,
+        4849,
+        1675,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        13,
+        58737,
+        279,
+        17865,
+        11,
+        3487,
+        11,
+        321,
+        2136,
+        7431,
+        11,
+        440,
+        14542,
+        17683,
+        364,
+        264,
+        1118,
+        7019,
+        19568,
+        1149,
+        271,
+        22916,
+        7936,
+        1534,
+        4087,
+        1132,
+        13,
+        14235,
+        4222,
+        3165,
+        264,
+        5640,
+        4849,
+        1675,
+        13,
+        14235,
+        6970,
+        2830,
+        2192,
+        11,
+        13753,
+        11,
+        14542,
+        10104,
+        13,
+        28320,
+        12995,
+        11,
+        46448,
+        11,
+        14542,
+        13,
+        16018,
+        381,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        6970,
+        4992,
+        28053,
+        30,
+        2570,
+        2640,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        4222,
+        4437,
+        13,
+        1165,
+        628,
+        3165,
+        430,
+        4849,
+        1675,
+        13,
+        14235,
+        7276,
+        17865,
+        11,
+        3487,
+        11,
+        2136,
+        7431,
+        11,
+        14542,
+        17683,
+        364,
+        1118,
+        7019,
+        19568,
+        13,
+        16018,
+        5759,
+        25,
+        19104,
+        11,
+        1834,
+        13909,
+        10902,
+        30,
+        10380,
+        264,
+        1936,
+        70426,
+        3808,
+        496,
+        25842,
+        11,
+        89258,
+        11,
+        5971,
+        10404,
+        30,
+        1921,
+        264,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        799,
+        12552,
+        466,
+        5081,
+        13,
+        1690,
+        1118,
+        7019,
+        19568,
+        11,
+        14542,
+        17683,
+        25,
+        4992,
+        12552,
+        11,
+        2236,
+        3988,
+        11,
+        4929,
+        7431,
+        11,
+        6797,
+        11,
+        9163,
+        11,
+        38731,
+        11,
+        8091,
+        11,
+        4831,
+        13,
+        14235,
+        4849,
+        15754,
+        13,
+        271,
+        22916,
+        381,
+        16097,
+        25,
+        26629,
+        369,
+        264,
+        1528,
+        11,
+        524,
+        264,
+        3074,
+        12552,
+        13,
+        16018,
+        1910,
+        328,
+        64,
+        1936,
+        303,
+        26629,
+        1,
+        321,
+        5077,
+        383,
+        496,
+        25842,
+        478,
+        89258,
+        30,
+        1921,
+        413,
+        1118,
+        7019,
+        11,
+        6970,
+        496,
+        25842,
+        369,
+        28622,
+        13,
+        1921,
+        17865,
+        11,
+        3487,
+        11,
+        7431,
+        628,
+        381,
+        9469,
+        13,
+        10380,
+        3165,
+        264,
+        4849,
+        1675,
+        25,
+        328,
+        3833,
+        10040,
+        303,
+        26629,
+        25,
+        357,
+        5339,
+        9009,
+        3034,
+        725,
+        12347,
+        310,
+        21546,
+        11,
+        91191,
+        4084,
+        11,
+        321,
+        29315,
+        53732,
+        287,
+        3158,
+        28763,
+        17865,
+        25,
+        34103,
+        6852,
+        11,
+        33657,
+        11,
+        10849,
+        1278,
+        35080,
+        11,
+        50255,
+        88559,
+        13,
+        11754,
+        25,
+        49814,
+        11,
+        11629,
+        15322,
+        11,
+        70142,
+        9561,
+        11,
+        34183,
+        4144,
+        33907,
+        11,
+        202489,
+        10784,
+        11,
+        2136,
+        13565,
+        13,
+        19775,
+        25,
+        51379,
+        4084,
+        11,
+        304,
+        5432,
+        11,
+        4929,
+        364,
+        220,
+        134,
+        119,
+        29656,
+        2141,
+        11,
+        220,
+        134,
+        119,
+        81431,
+        11,
+        16213,
+        56057,
+        3712,
+        11,
+        89994,
+        13,
+        63422,
+        25,
+        4992,
+        12552,
+        11,
+        2236,
+        74026,
+        11,
+        7765,
+        1740,
+        11,
+        38731,
+        11,
+        6797,
+        11,
+        67673,
+        53269,
+        79250,
+        11,
+        8091,
+        11,
+        9163,
+        11,
+        4929,
+        843,
+        3234,
+        11,
+        1761,
+        2136,
+        11,
+        1459,
+        914,
+        5615,
+        68980,
+        11,
+        4831,
+        13,
+        271,
+        22916,
+        6970,
+        2830,
+        264,
+        5887,
+        220,
+        22,
+        10902,
+        3019,
+        25,
+        5870,
+        220,
+        16,
+        496,
+        25842,
+        18085,
+        11,
+        27584,
+        1524,
+        7330,
+        26,
+        5870,
+        220,
+        17,
+        4634,
+        43236,
+        26,
+        5870,
+        220,
+        18,
+        35045,
+        37885,
+        26,
+        5870,
+        220,
+        19,
+        23570,
+        10877,
+        26,
+        5870,
+        220,
+        20,
+        89258,
+        5459,
+        310,
+        462,
+        3253,
+        30,
+        1921,
+        264,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        7072,
+        29440,
+        1867,
+        13,
+        1368,
+        1118,
+        7019,
+        11,
+        6970,
+        496,
+        25842,
+        220,
+        19,
+        2756,
+        11,
+        89258,
+        220,
+        18,
+        2756,
+        13,
+        1921,
+        14542,
+        25,
+        916,
+        29440,
+        1867,
+        24118,
+        13,
+        2441,
+        5971,
+        10404,
+        364,
+        17865,
+        13,
+        16018,
+        3165,
+        264,
+        18209,
+        1936,
+        25,
+        496,
+        25842,
+        478,
+        89258,
+        13,
+        1921,
+        1156,
+        3105,
+        914,
+        2466,
+        70426,
+        11352,
+        11,
+        694,
+        14542,
+        17683,
+        13,
+        357,
+        4849,
+        1675,
+        628,
+        2830,
+        328,
+        2329,
+        1936,
+        1,
+        321,
+        10104,
+        13,
+        271,
+        22916,
+        6970,
+        5471,
+        888,
+        7611,
+        286,
+        13,
+        5272,
+        46448,
+        3665,
+        25,
+        16213,
+        56057,
+        11,
+        2136,
+        13,
+        82210,
+        328,
+        39,
+        34777,
+        1068,
+        1,
+        628,
+        8042,
+        310,
+        1208,
+        2805,
+        10210,
+        26,
+        958,
+        328,
+        20166,
+        56057,
+        1,
+        364,
+        37298,
+        13,
+        5272,
+        220,
+        134,
+        119,
+        547,
+        2141,
+        30,
+        16018,
+        2830,
+        694,
+        6970,
+        524,
+        5689,
+        13,
+        14235,
+        6970,
+        6088,
+        328,
+        278,
+        62885,
+        1,
+        7063,
+        23066,
+        4691,
+        1338,
+        27450,
+        14,
+        29069,
+        13,
+        271,
+        22916,
+        1534,
+        440,
+        2192,
+        11,
+        21870,
+        13,
+        16018,
+        2830,
+        67100,
+        13,
+        14235,
+        6970,
+        524,
+        2166,
+        1248,
+        694,
+        11346,
+        13,
+        85027,
+        888,
+        63008,
+        220,
+        24,
+        11,
+        748,
+        16908,
+        13,
+        6558,
+        579,
+        10453,
+        264,
+        41928,
+        5640,
+        4849,
+        1675,
+        13,
+        28763,
+        14542,
+        50802,
+        13,
+        10380,
+        2830,
+        328,
+        2592,
+        488,
+        1132,
+        599,
+        799,
+        1936,
+        11,
+        635,
+        411,
+        3158,
+        271,
+        92306,
+        5759,
+        25,
+        198,
+        12,
+        10552,
+        198,
+        12,
+        50239,
+        25,
+        1118,
+        1936,
+        303,
+        26629,
+        11,
+        524,
+        1066,
+        33657,
+        694,
+        17865,
+        11,
+        3487,
+        11,
+        7431,
+        13,
+        198,
+        12,
+        561,
+        17865,
+        25,
+        496,
+        25842,
+        579,
+        15203,
+        21772,
+        544,
+        278,
+        11,
+        4634,
+        43236,
+        11,
+        23570,
+        10877,
+        11,
+        462,
+        3253,
+        13029,
+        8881,
+        26,
+        89258,
+        579,
+        9254,
+        310,
+        462,
+        3253,
+        11,
+        353,
+        3331,
+        12673,
+        11,
+        63918,
+        570,
+        5864,
+        26,
+        5971,
+        10404,
+        579,
+        34103,
+        6852,
+        11,
+        2919,
+        31519,
+        11,
+        3565,
+        9002,
+        13,
+        1368,
+        799,
+        1936,
+        11,
+        4992,
+        799,
+        466,
+        1330,
+        28053,
+        13,
+        198,
+        12,
+        11754,
+        25,
+        11629,
+        15322,
+        11,
+        49814,
+        11,
+        49814,
+        57955,
+        11,
+        34183,
+        4144,
+        33907,
+        11,
+        324,
+        20784,
+        38984,
+        11,
+        45360,
+        11,
+        70142,
+        9561,
+        11,
+        202489,
+        10784,
+        11,
+        10482,
+        11,
+        2136,
+        32121,
+        11,
+        3487,
+        25909,
+        13,
+        10646,
+        310,
+        7923,
+        25,
+        2136,
+        18206,
+        11,
+        524,
+        1066,
+        28992,
+        88,
+        13,
+        198,
+        12,
+        19775,
+        25,
+        51379,
+        4084,
+        11,
+        220,
+        134,
+        119,
+        81431,
+        11,
+        220,
+        134,
+        119,
+        29656,
+        2141,
+        11,
+        304,
+        5432,
+        11,
+        57938,
+        11,
+        4929,
+        11,
+        16213
+      ],
+      "prefillSeconds" : 0.593064583,
+      "proposed" : 696,
+      "roundTimings" : [
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.597624999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.794166999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.343708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.244916,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.195208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.297334,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.832042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.627791,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.686792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.250125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.655625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.542708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.570625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.43275,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.510417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.8915,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.870875000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.056875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.98875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.277083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.96025,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.075042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.21525,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.397584,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.222417,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.017417,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 66.170333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 66.979292,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.223875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 67.365375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.25066699999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.30387499999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.937667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.352375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.966083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.182042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.380167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.947125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.851667,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.863208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.020208000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.672083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.374874999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.658167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 66.64695900000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.401333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.0155,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.469167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 63.252041999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.339208,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.652415999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.980084,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.498875000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.663584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.876042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.34725,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.124625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.709167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.237792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.405708000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.410041,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.003207999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 65.0295,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.137625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.11375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.292083999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.625875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.011874999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.406167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.287,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.097,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.582166,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.022625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.237083999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.083875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.077333,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.879584,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.163167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.495833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.072167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.760417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.820625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.103,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.3835,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.103375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.36620799999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.043,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.762875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.741833,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.720583999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.746458000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.537957999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.248667000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.567,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.585875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.814167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.697291,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.403709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.748791000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.038208,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.48025,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.742125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.913917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.855250000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.657250000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.306458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.441625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.268584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.359709,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.636167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.993708000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.171333,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.56037499999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.083833,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.24525,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.546,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.591041,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.210792000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.239875000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.539708,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.03175,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.13875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.33575,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.738792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.85424999999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.351833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.813458999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.532875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.369875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.87925,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.30116700000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.40875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.190416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.635375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.433375000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.785000000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.856125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.67250000000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.082667,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.95675,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.044624999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.928917,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.172333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.362166,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.772084,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.180375000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.3175,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.393542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.675583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.737459,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.601167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.291708,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.165834,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.136375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.841542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.69195800000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.225291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.4075,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.249791,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.158,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.860625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.304041999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.628499999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.01,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.879791999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.910792,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.690666,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.328041,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.15375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.4505,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.297334,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.323083,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.371792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.844375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.646958999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.747084,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.65,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.808625000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.209834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.022875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.421458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.475959,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.069125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.020208000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.680875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.570125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.655375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.492583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.228207999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.013083,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.916917000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.815084,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.090916,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.210375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.838042,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.686416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.93825,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.431082999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.583459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.626125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.531791999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.717583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.675041,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.613167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.374666,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.421166,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.489292000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.961459,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.651875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.868792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.445917,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.878125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.352709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.471792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.158666,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.0085,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.992416999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.960457999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.48225,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.63012500000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.545708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.766042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.041125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.750208,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.814583,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.228,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.646291,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.641041,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.608125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.571041,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.454041999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.349333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.466499999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.319792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.727209,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.231042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.929542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.205583,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.375041,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.763,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.586917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.449209,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.627041000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.662709,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.356167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.636583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.213916999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.3115,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.99,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.18875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.803875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.040833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.169084000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.330167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.049457999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.858792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.017292,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.147292,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.345792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.020958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.625375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.131125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.815708,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.267208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.52025,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.075542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.75,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.442875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.859042,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.702583000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.64125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.587834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.827666,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.482583999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.745332999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.315459000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.204333000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.893791,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.363792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.39875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.778917,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.462083,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.73975,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.548875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.970833,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.476124999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.799209,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.582542000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.768208,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.073459,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.094333,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.584375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.820917,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.833875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.634125000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.376791,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.181833000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.001292,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.96,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.178083,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.301584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.133542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.583834,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.584292,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.036291999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.85875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.2685,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.919042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.696417000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.899459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.5585,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.290333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.638541999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.654667,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.524417,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.55875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.678875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.910417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.429584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.916042000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.595375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.479541,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.121916999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.772042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.278125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.358083,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.604791999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.928208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.686457999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.366542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.491125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.3515,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.74375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.696833,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.078875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.872167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.622291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.309250000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.350666999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.846375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.383958,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.066958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.378750000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.842459,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.14525,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.816916,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 48.877375,
+          "width" : 3
+        }
+      ],
+      "rounds" : 348,
+      "runIndex" : 0,
+      "tokens" : 768
+    },
+    {
+      "accepted" : 470,
+      "arm" : "dflash2-bs8",
+      "decodeSeconds" : 24.751246417,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328,
+        7734,
+        264,
+        5640,
+        4849,
+        1675,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        13,
+        58737,
+        279,
+        17865,
+        11,
+        3487,
+        11,
+        321,
+        2136,
+        7431,
+        11,
+        440,
+        14542,
+        17683,
+        364,
+        264,
+        1118,
+        7019,
+        19568,
+        1149,
+        14235,
+        7936,
+        1534,
+        4849,
+        1675,
+        13,
+        14235,
+        4222,
+        303,
+        6163,
+        13,
+        14235,
+        6970,
+        2830,
+        2192,
+        11,
+        13753,
+        11,
+        14542,
+        10104,
+        13,
+        28320,
+        524,
+        2166,
+        1248,
+        30,
+        85027,
+        888,
+        63008,
+        220,
+        24,
+        11,
+        748,
+        11346,
+        13,
+        14235,
+        6970,
+        5471,
+        51286,
+        11,
+        46448,
+        13,
+        16018,
+        2830,
+        70426,
+        30,
+        2570,
+        16561,
+        5640,
+        4849,
+        1675,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        7276,
+        17865,
+        11,
+        3487,
+        11,
+        2136,
+        7431,
+        11,
+        14542,
+        17683,
+        364,
+        1118,
+        7019,
+        19568,
+        13,
+        1165,
+        628,
+        3165,
+        430,
+        4849,
+        1675,
+        13,
+        14235,
+        6970,
+        6088,
+        28053,
+        30,
+        26629,
+        369,
+        5157,
+        78285,
+        6106,
+        26,
+        1118,
+        7019,
+        19568,
+        4222,
+        496,
+        25842,
+        466,
+        5971,
+        10404,
+        13,
+        16018,
+        3899,
+        430,
+        328,
+        588,
+        1936,
+        11,
+        799,
+        12552,
+        1,
+        466,
+        7072,
+        29440,
+        1867,
+        30,
+        357,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        496,
+        25842,
+        13,
+        14235,
+        14542,
+        17683,
+        25,
+        21185,
+        11,
+        17367,
+        11,
+        6797,
+        11,
+        2919,
+        11,
+        4929,
+        11,
+        7786,
+        11,
+        34532,
+        11,
+        3487,
+        11,
+        7253,
+        13,
+        14235,
+        17865,
+        11,
+        3487,
+        11,
+        7431,
+        13,
+        6558,
+        579,
+        10453,
+        21870,
+        4849,
+        1675,
+        440,
+        67100,
+        13,
+        28763,
+        328,
+        32,
+        379,
+        4084,
+        1,
+        694,
+        10033,
+        13,
+        10380,
+        2830,
+        5887,
+        220,
+        22,
+        10902,
+        3019,
+        383,
+        496,
+        25842,
+        30,
+        1921,
+        1156,
+        3105,
+        914,
+        13441,
+        12552,
+        13,
+        16018,
+        1910,
+        328,
+        2381,
+        264,
+        1118,
+        2308,
+        3034,
+        11,
+        353,
+        6709,
+        2255,
+        5941,
+        383,
+        496,
+        25842,
+        364,
+        264,
+        1936,
+        11,
+        440,
+        264,
+        1834,
+        8151,
+        310,
+        31348,
+        547,
+        2075,
+        466,
+        89258,
+        7285,
+        1921,
+        264,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        5971,
+        10404,
+        13,
+        14235,
+        14542,
+        17683,
+        13,
+        10380,
+        3165,
+        25,
+        328,
+        4888,
+        1936,
+        303,
+        26629,
+        25,
+        496,
+        25842,
+        11,
+        440,
+        264,
+        12293,
+        314,
+        279,
+        28053,
+        3158,
+        28763,
+        17865,
+        25,
+        63834,
+        11,
+        10849,
+        1278,
+        35080,
+        11,
+        33657,
+        11,
+        22767,
+        11,
+        33101,
+        82884,
+        13,
+        11754,
+        25,
+        49814,
+        11,
+        11629,
+        15322,
+        11,
+        542,
+        2181,
+        84,
+        23553,
+        11,
+        34183,
+        4144,
+        22952,
+        11,
+        202489,
+        10784,
+        11,
+        70142,
+        9561,
+        11,
+        2136,
+        13565,
+        13,
+        19775,
+        25,
+        51379,
+        4084,
+        11,
+        304,
+        5432,
+        11,
+        57938,
+        11,
+        4929,
+        364,
+        4128,
+        11,
+        3809,
+        11,
+        16213,
+        56057,
+        3712,
+        11,
+        3992,
+        11,
+        89994,
+        13,
+        63422,
+        25,
+        4992,
+        12552,
+        11,
+        2236,
+        74026,
+        11,
+        7765,
+        1740,
+        11,
+        6797,
+        8862,
+        11,
+        67673,
+        53269,
+        79250,
+        11,
+        2919,
+        11,
+        40554,
+        11,
+        9163,
+        11,
+        4929,
+        843,
+        3234,
+        11,
+        8091,
+        11,
+        38731,
+        11,
+        8831,
+        11,
+        17415,
+        6925,
+        11,
+        7786,
+        13,
+        14235,
+        4849,
+        15754,
+        13,
+        16018,
+        2830,
+        328,
+        3710,
+        353,
+        1467,
+        1754,
+        1834,
+        1,
+        694,
+        524,
+        2166,
+        70426,
+        8545,
+        13,
+        6558,
+        579,
+        7936,
+        41928,
+        1675,
+        13,
+        271,
+        22916,
+        5790,
+        874,
+        867,
+        7929,
+        30,
+        26629,
+        682,
+        2136,
+        3487,
+        13,
+        82210,
+        328,
+        1688,
+        15322,
+        1,
+        4047,
+        13,
+        328,
+        1948,
+        511,
+        9561,
+        1,
+        524,
+        328,
+        898,
+        4005,
+        9561,
+        3158,
+        328,
+        47,
+        4587,
+        3158,
+        328,
+        28633,
+        299,
+        10784,
+        1,
+        494,
+        40790,
+        13,
+        328,
+        84014,
+        4144,
+        22952,
+        1,
+        303,
+        324,
+        51178,
+        134,
+        119,
+        2770,
+        13,
+        328,
+        32,
+        379,
+        4084,
+        1,
+        3254,
+        23066,
+        4691,
+        1338,
+        27450,
+        14,
+        29069,
+        13,
+        328,
+        2665,
+        551,
+        46272,
+        1,
+        6970,
+        30,
+        16018,
+        2830,
+        328,
+        1667,
+        22864,
+        87687,
+        3158,
+        14235,
+        381,
+        46448,
+        25,
+        5471,
+        328,
+        284,
+        1867,
+        3616,
+        1,
+        4831,
+        13,
+        82210,
+        16213,
+        56057,
+        7431,
+        11,
+        524,
+        1066,
+        328,
+        83,
+        48387,
+        48079,
+        3158,
+        28763,
+        14542,
+        25,
+        67673,
+        53269,
+        79250,
+        2483,
+        303,
+        26629,
+        30,
+        26629,
+        682,
+        2253,
+        46919,
+        2397,
+        12,
+        740,
+        69,
+        53269,
+        79250,
+        30,
+        7179,
+        3115,
+        220,
+        17,
+        20,
+        12,
+        16,
+        19,
+        30,
+        1049,
+        56467,
+        6080,
+        314,
+        2397,
+        12,
+        740,
+        69,
+        53269,
+        79250,
+        30,
+        32645,
+        26629,
+        20199,
+        6080,
+        314,
+        2397,
+        12,
+        740,
+        69,
+        53269,
+        79250,
+        303,
+        220,
+        17,
+        15,
+        16,
+        23,
+        30,
+        1049,
+        579,
+        2253,
+        13,
+        1165,
+        628,
+        1910,
+        328,
+        26184,
+        67673,
+        53269,
+        3158,
+        14235,
+        6088,
+        328,
+        39,
+        34777,
+        1068,
+        3992,
+        1,
+        6970,
+        13,
+        271,
+        22916,
+        1534,
+        1132,
+        13,
+        6558,
+        579,
+        9665,
+        440,
+        2192,
+        11,
+        19104,
+        11,
+        13753,
+        25,
+        561,
+        17865,
+        11,
+        561,
+        3487,
+        11,
+        561,
+        7431,
+        11,
+        357,
+        14542,
+        1936,
+        364,
+        1118,
+        2308,
+        65607,
+        11,
+        34532,
+        1103,
+        11,
+        1534,
+        13,
+        16018,
+        2830,
+        220,
+        22,
+        10902,
+        5887,
+        25,
+        5870,
+        220,
+        16,
+        27584,
+        1524,
+        7330,
+        14,
+        2033,
+        64,
+        5861,
+        3253,
+        11,
+        5870,
+        220,
+        17,
+        4634,
+        43236,
+        11,
+        5870,
+        220,
+        18,
+        23570,
+        10877,
+        478,
+        710,
+        589,
+        4144,
+        11,
+        5870,
+        220,
+        19,
+        462,
+        3253,
+        13029,
+        8881,
+        478,
+        28358,
+        11620,
+        2141,
+        11,
+        5870,
+        220,
+        20,
+        35045,
+        37885,
+        478,
+        414,
+        1219,
+        11,
+        5870,
+        220,
+        21,
+        21403,
+        1550,
+        13255,
+        14,
+        1600,
+        18939,
+        11,
+        5870,
+        220,
+        22,
+        38876,
+        13,
+        1921,
+        413,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        6970,
+        496,
+        25842,
+        13,
+        14235,
+        14542,
+        17683,
+        364,
+        1118,
+        7019,
+        19568,
+        13,
+        16018,
+        2830,
+        328,
+        2592,
+        488,
+        1132,
+        599,
+        799,
+        1936,
+        11,
+        1459,
+        914,
+        12552,
+        47093,
+        26,
+        3608,
+        799,
+        12552,
+        3158,
+        7441,
+        13,
+        271,
+        22916,
+        6970,
+        6088,
+        328,
+        39,
+        68547,
+        369,
+        524,
+        799,
+        12552,
+        26,
+        424,
+        579
+      ],
+      "prefillSeconds" : 0.777657792,
+      "proposed" : 2080,
+      "roundTimings" : [
+        {
+          "accepted" : 7,
+          "milliseconds" : 54.691167,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 77.89808300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 79.087375,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 81.093,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 79.1195,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 81.804667,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.464417,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.102084,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 82.109375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.225708,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 84.354584,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.407666,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.636042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.329334,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.609209,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.725417,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.327625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.131875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.407666,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 83.087041,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.485166,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 85.118708,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 84.00229200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.03637499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 84.774583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.23825,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.700791,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.118292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.10662500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.427084,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.709041,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.74216700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.387792,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.301792,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 80.983209,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.5165,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.612375,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.57104199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.93120900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 83.126958,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.181625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.23162500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.21287500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.599,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.061834,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.469417,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.356333,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.153208,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 85.425584,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 83.80725,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.033,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.305875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.220208,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.176084,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.64629099999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.598166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.451625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.033375,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.519292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.693875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.70979200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.57220799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.7745,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.960833,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.222458,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.458667,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.890375,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.110833,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.629958,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.003834,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.43854200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.06008299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.27654199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.11470899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.61408300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.68808299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.758125,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 85.851625,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.96075,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.774083,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.81254200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.829417,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.241916,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.26,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.26641699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.762083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.55054200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.924291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.138791,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.93433399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.339792,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.227792,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.90520799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.912791,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.603292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.587333,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.57033299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.978917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.52933399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.68495800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.55787500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.68270799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.338167,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.358166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.534875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.347625,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.620166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.469167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.60716699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.046375,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.23433299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.36508300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.84979200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.9555,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.590208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.601208,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.366042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.678833,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.268333,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.75225,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.66725,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.692042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.284625,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.96075,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.20287499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.730666,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.528875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.30270800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.721042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 80.601416,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.123458,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.72925000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.8945,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.062292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.565167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.39,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.534834,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.023167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.459667,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.380292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.76350000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.772917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.715291,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.177667,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.77345799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.86020900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.449042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.36425,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 85.603334,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.388834,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.529375,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 84.259,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.57000000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.59949999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.0955,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.998375,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 85.679166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.929083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.367042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.225458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.545625,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.423875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.716875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.985292,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.030042,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.3015,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.373458,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.88891699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.896709,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 81.355583,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.142167,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.898917,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.447042,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.879834,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.278541,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.522541,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.400416,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.098333,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 80.958958,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.457584,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.524084,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 82.971458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.407708,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 79.692708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.88195800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.052125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.850334,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.413167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.16433400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.982208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.61320900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.87616700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.333666,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.309708,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.70700000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.1115,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.95512500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.948375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.499291,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.922125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.089459,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.4115,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.871709,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.238,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.186167,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.21954099999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.113958,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.55825,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.145083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.664584,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.840333,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.88591600000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.391,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.827125,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.546708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.488,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.7065,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.037583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.70308399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.429417,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 80.885708,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.142666,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.67425,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.144708,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 83.29941600000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.299167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.41850000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.145875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.98212500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.995542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.661833,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.982083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.459375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.62937500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.553583,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.545458,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.93516600000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.335667,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.619833,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.839917,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 81.597125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.483167,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.42633400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 82.98491700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.601041,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.359708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.323875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.974334,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.93675,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.647667,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.4315,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.57029200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.113583,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.246166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.99416599999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 78.98237499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.575542,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.072542,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.240625,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.57766699999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.562792,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.72004199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.478292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.331292,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 81.45604200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.421917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.35008300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.270041,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.400125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.11749999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.103708,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.984125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.030291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.866834,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.65966700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.122625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.67225,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.23141700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.735416,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.06087500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.187292,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 83.962333,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.39425,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.56225,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.392875,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 83.766958,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.21662500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.168334,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.261917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.544584,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.75399999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.04162500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 81.841083,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 80.580666,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.071167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.554875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.804834,
+          "width" : 6
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 70.937417,
+          "width" : 4
+        }
+      ],
+      "rounds" : 298,
+      "runIndex" : 1,
+      "tokens" : 768
+    },
+    {
+      "accepted" : 419,
+      "arm" : "dflash2-bs3",
+      "decodeSeconds" : 21.418395542,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328,
+        7734,
+        264,
+        5640,
+        4849,
+        1675,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        13,
+        58737,
+        279,
+        17865,
+        11,
+        3487,
+        11,
+        321,
+        2136,
+        7431,
+        11,
+        440,
+        14542,
+        17683,
+        364,
+        264,
+        1118,
+        7019,
+        19568,
+        1149,
+        271,
+        22916,
+        7936,
+        1534,
+        4087,
+        1132,
+        13,
+        14235,
+        4222,
+        3165,
+        264,
+        5640,
+        4849,
+        1675,
+        13,
+        14235,
+        6970,
+        2830,
+        2192,
+        11,
+        13753,
+        11,
+        14542,
+        10104,
+        13,
+        28320,
+        12995,
+        11,
+        46448,
+        11,
+        14542,
+        13,
+        16018,
+        381,
+        883,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        6970,
+        4992,
+        28053,
+        30,
+        2570,
+        2640,
+        264,
+        1936,
+        303,
+        26629,
+        11,
+        4222,
+        4437,
+        13,
+        1165,
+        628,
+        3165,
+        430,
+        4849,
+        1675,
+        13,
+        14235,
+        7276,
+        17865,
+        11,
+        3487,
+        11,
+        2136,
+        7431,
+        11,
+        14542,
+        17683,
+        364,
+        1118,
+        7019,
+        19568,
+        13,
+        16018,
+        5759,
+        25,
+        19104,
+        11,
+        1834,
+        13909,
+        10902,
+        30,
+        10380,
+        264,
+        1936,
+        70426,
+        3808,
+        496,
+        25842,
+        11,
+        89258,
+        11,
+        5971,
+        10404,
+        30,
+        1921,
+        264,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        799,
+        12552,
+        466,
+        5081,
+        13,
+        1690,
+        1118,
+        7019,
+        19568,
+        11,
+        14542,
+        17683,
+        25,
+        4992,
+        12552,
+        11,
+        2236,
+        3988,
+        11,
+        4929,
+        7431,
+        11,
+        6797,
+        11,
+        9163,
+        11,
+        38731,
+        11,
+        8091,
+        11,
+        4831,
+        13,
+        14235,
+        4849,
+        15754,
+        13,
+        271,
+        22916,
+        381,
+        16097,
+        25,
+        26629,
+        369,
+        264,
+        1528,
+        11,
+        524,
+        264,
+        3074,
+        12552,
+        13,
+        16018,
+        1910,
+        328,
+        64,
+        1936,
+        303,
+        26629,
+        1,
+        321,
+        5077,
+        383,
+        496,
+        25842,
+        478,
+        89258,
+        30,
+        1921,
+        413,
+        1118,
+        7019,
+        11,
+        6970,
+        496,
+        25842,
+        369,
+        28622,
+        13,
+        1921,
+        17865,
+        11,
+        3487,
+        11,
+        7431,
+        628,
+        381,
+        9469,
+        13,
+        10380,
+        3165,
+        264,
+        4849,
+        1675,
+        25,
+        328,
+        3833,
+        10040,
+        303,
+        26629,
+        25,
+        357,
+        5339,
+        9009,
+        3034,
+        725,
+        12347,
+        310,
+        21546,
+        11,
+        91191,
+        4084,
+        11,
+        321,
+        29315,
+        53732,
+        287,
+        3158,
+        28763,
+        17865,
+        25,
+        34103,
+        6852,
+        11,
+        33657,
+        11,
+        10849,
+        1278,
+        35080,
+        11,
+        50255,
+        88559,
+        13,
+        11754,
+        25,
+        49814,
+        11,
+        11629,
+        15322,
+        11,
+        70142,
+        9561,
+        11,
+        34183,
+        4144,
+        33907,
+        11,
+        202489,
+        10784,
+        11,
+        2136,
+        13565,
+        13,
+        19775,
+        25,
+        51379,
+        4084,
+        11,
+        304,
+        5432,
+        11,
+        4929,
+        364,
+        220,
+        134,
+        119,
+        29656,
+        2141,
+        11,
+        220,
+        134,
+        119,
+        81431,
+        11,
+        16213,
+        56057,
+        3712,
+        11,
+        89994,
+        13,
+        63422,
+        25,
+        4992,
+        12552,
+        11,
+        2236,
+        74026,
+        11,
+        7765,
+        1740,
+        11,
+        38731,
+        11,
+        6797,
+        11,
+        67673,
+        53269,
+        79250,
+        11,
+        8091,
+        11,
+        9163,
+        11,
+        4929,
+        843,
+        3234,
+        11,
+        1761,
+        2136,
+        11,
+        1459,
+        914,
+        5615,
+        68980,
+        11,
+        4831,
+        13,
+        271,
+        22916,
+        6970,
+        2830,
+        264,
+        5887,
+        220,
+        22,
+        10902,
+        3019,
+        25,
+        5870,
+        220,
+        16,
+        496,
+        25842,
+        18085,
+        11,
+        27584,
+        1524,
+        7330,
+        26,
+        5870,
+        220,
+        17,
+        4634,
+        43236,
+        26,
+        5870,
+        220,
+        18,
+        35045,
+        37885,
+        26,
+        5870,
+        220,
+        19,
+        23570,
+        10877,
+        26,
+        5870,
+        220,
+        20,
+        89258,
+        5459,
+        310,
+        462,
+        3253,
+        30,
+        1921,
+        264,
+        1936,
+        303,
+        26629,
+        1362,
+        381,
+        7072,
+        29440,
+        1867,
+        13,
+        1368,
+        1118,
+        7019,
+        11,
+        6970,
+        496,
+        25842,
+        220,
+        19,
+        2756,
+        11,
+        89258,
+        220,
+        18,
+        2756,
+        13,
+        1921,
+        14542,
+        25,
+        916,
+        29440,
+        1867,
+        24118,
+        13,
+        2441,
+        5971,
+        10404,
+        364,
+        17865,
+        13,
+        16018,
+        3165,
+        264,
+        18209,
+        1936,
+        25,
+        496,
+        25842,
+        478,
+        89258,
+        13,
+        1921,
+        1156,
+        3105,
+        914,
+        2466,
+        70426,
+        11352,
+        11,
+        694,
+        14542,
+        17683,
+        13,
+        357,
+        4849,
+        1675,
+        628,
+        2830,
+        328,
+        2329,
+        1936,
+        1,
+        321,
+        10104,
+        13,
+        271,
+        22916,
+        6970,
+        5471,
+        888,
+        7611,
+        286,
+        13,
+        5272,
+        46448,
+        3665,
+        25,
+        16213,
+        56057,
+        11,
+        2136,
+        13,
+        82210,
+        328,
+        39,
+        34777,
+        1068,
+        1,
+        628,
+        8042,
+        310,
+        1208,
+        2805,
+        10210,
+        26,
+        958,
+        328,
+        20166,
+        56057,
+        1,
+        364,
+        37298,
+        13,
+        5272,
+        220,
+        134,
+        119,
+        547,
+        2141,
+        30,
+        16018,
+        2830,
+        694,
+        6970,
+        524,
+        5689,
+        13,
+        14235,
+        6970,
+        6088,
+        328,
+        278,
+        62885,
+        1,
+        7063,
+        23066,
+        4691,
+        1338,
+        27450,
+        14,
+        29069,
+        13,
+        271,
+        22916,
+        1534,
+        440,
+        2192,
+        11,
+        21870,
+        13,
+        16018,
+        2830,
+        67100,
+        13,
+        14235,
+        6970,
+        524,
+        2166,
+        1248,
+        694,
+        11346,
+        13,
+        85027,
+        888,
+        63008,
+        220,
+        24,
+        11,
+        748,
+        16908,
+        13,
+        6558,
+        579,
+        10453,
+        264,
+        41928,
+        5640,
+        4849,
+        1675,
+        13,
+        28763,
+        14542,
+        50802,
+        13,
+        10380,
+        2830,
+        328,
+        2592,
+        488,
+        1132,
+        599,
+        799,
+        1936,
+        11,
+        635,
+        411,
+        3158,
+        271,
+        92306,
+        5759,
+        25,
+        198,
+        12,
+        10552,
+        198,
+        12,
+        50239,
+        25,
+        1118,
+        1936,
+        303,
+        26629,
+        11,
+        524,
+        1066,
+        33657,
+        694,
+        17865,
+        11,
+        3487,
+        11,
+        7431,
+        13,
+        198,
+        12,
+        561,
+        17865,
+        25,
+        496,
+        25842,
+        579,
+        15203,
+        21772,
+        544,
+        278,
+        11,
+        4634,
+        43236,
+        11,
+        23570,
+        10877,
+        11,
+        462,
+        3253,
+        13029,
+        8881,
+        26,
+        89258,
+        579,
+        9254,
+        310,
+        462,
+        3253,
+        11,
+        353,
+        3331,
+        12673,
+        11,
+        63918,
+        570,
+        5864,
+        26,
+        5971,
+        10404,
+        579,
+        34103,
+        6852,
+        11,
+        2919,
+        31519,
+        11,
+        3565,
+        9002,
+        13,
+        1368,
+        799,
+        1936,
+        11,
+        4992,
+        799,
+        466,
+        1330,
+        28053,
+        13,
+        198,
+        12,
+        11754,
+        25,
+        11629,
+        15322,
+        11,
+        49814,
+        11,
+        49814,
+        57955,
+        11,
+        34183,
+        4144,
+        33907,
+        11,
+        324,
+        20784,
+        38984,
+        11,
+        45360,
+        11,
+        70142,
+        9561,
+        11,
+        202489,
+        10784,
+        11,
+        10482,
+        11,
+        2136,
+        32121,
+        11,
+        3487,
+        25909,
+        13,
+        10646,
+        310,
+        7923,
+        25,
+        2136,
+        18206,
+        11,
+        524,
+        1066,
+        28992,
+        88,
+        13,
+        198,
+        12,
+        19775,
+        25,
+        51379,
+        4084,
+        11,
+        220,
+        134,
+        119,
+        81431,
+        11,
+        220,
+        134,
+        119,
+        29656,
+        2141,
+        11,
+        304,
+        5432,
+        11,
+        57938,
+        11,
+        4929,
+        11,
+        16213
+      ],
+      "prefillSeconds" : 0.89087075,
+      "proposed" : 696,
+      "roundTimings" : [
+        {
+          "accepted" : 2,
+          "milliseconds" : 47.904,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 47.84975,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 44.148917000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.259208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.8155,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.222417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.919667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.617959000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.923708000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.221374999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.443458,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.042125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.090624999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.346542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.073875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.816708,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.977666000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.145417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.453291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.367083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.676209,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.145041,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.628875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.28325,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.945125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.502041,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.539208,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.460833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.756625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.52375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.354708,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.66525,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.079834000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.506417,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.342541000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.639875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.875042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.618833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.370791999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.014917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.219334,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.399375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.501166,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.670166,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.202000000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.692709,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.271667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.765125000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.614,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.188917,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.730917,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.946916,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.752708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.403292,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.393542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.77775,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.83475,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.043583000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.987417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.588417,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.907209,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.743625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.845917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.30883300000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.62425,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.916334,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.770875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.861084,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.401041,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.458542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.607708,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.298459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.471542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.643042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.987333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.695083000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.119209000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.821667,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.728916999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.752207999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.5515,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.494125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.935291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.306792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.716207999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.4345,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.021666999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.922542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.49270799999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.619457999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.830792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.628,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.828834,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.308875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.127334000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.615041,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.466666,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.333833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.804709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.399459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.586084,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.685792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.888834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.858374999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.200750000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.978042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.972,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.815875000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.112125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.029959,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.656791999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.518665999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.556084000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 65.176375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.77791699999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.324792,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.05866599999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 71.746375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.603333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 71.449666,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.124083,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.642791,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.196,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.742667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 66.926208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.940666,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.736666,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.383250000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.321625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.383042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.042832999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.592417,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.502542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.007959,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 68.633209,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 74.315416,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 74.88787500000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 72.63925,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.517458,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 66.017584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.475415999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.20358399999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.277083000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.247458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.337708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.990167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 63.40474999999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.876416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.658125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.208209,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.077124999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.655959,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.076291,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 66.914541,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.925124999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 66.657,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 66.7355,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.6795,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.646708,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 63.937458,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.480624999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.440166999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.721250000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.492708,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.976957999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.979209,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.090709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.922125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 60.641625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.282792,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.176333,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.385833000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.267416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.668665999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.33525,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.022417000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.982042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.267708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.386542000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.567416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.316708999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.655375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.258458000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.82125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.368165999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.542667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.691666999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.462042000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.91375000000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 67.49454200000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.330333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.853083,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 73.8335,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.991084,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.146292,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.071917,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.640458,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.180417,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 63.475249999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.33375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.309625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.702958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.010958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.725625,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 63.263459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.26475,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.870542,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.469667,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.899583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.543208,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.285959000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 65.766334,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 65.80850000000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.47225,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 73.686292,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 73.075,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.999459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 63.13025,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.50570799999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.825334,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.78191699999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.62650000000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.355458000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.40712499999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 62.575292000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.5005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.699584,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.695916000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.369125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.703125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.355666,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.752041,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.13125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.893625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 67.80104200000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.325958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 66.867209,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.57033399999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 65.457583,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.78045899999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 63.415875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.55754099999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.69837500000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.599458000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.949042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.950125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.015625,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 49.423584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.414209,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.6895,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 65.711,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 63.296833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.645125,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 65.339292,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 63.480290999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.93008400000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.186542,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 67.945875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.484167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.598040999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.21325,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.025042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.464834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.460958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 67.381625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 70.374291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.577209,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 66.34941699999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.245958,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.197834,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.642625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.609375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.581708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 67.77154200000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.617791,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 67.947542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.137584000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.933,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.729666,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.037125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 66.612291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 68.42512500000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.44770799999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 68.47825,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.64275,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.553375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 68.581208,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 70.31700000000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.76083399999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 69.70029099999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 69.905334,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 67.16108299999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 66.13920800000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 69.184917,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.431375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 64.648583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.68375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.333375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.48,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.882916,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.69325,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.470042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.577332999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.889083,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 67.132458,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 72.25820800000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 71.928292,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 65.095625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.784915999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.847666,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 65.26929200000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.80624999999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.772125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 64.1095,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.006375000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.326583,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 63.1105,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.151709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.742292000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.097584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.240333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.896833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.135042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.658625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.07425,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 60.274583,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 61.604666,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.68470800000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.802,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.218417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 64.284834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 63.1215,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 61.093334,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.132625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.473875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.730334,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.943833,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 62.949791000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.725708000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.846708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.73904099999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 61.930667,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 63.392624999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.1555,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.714166,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.110125000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 62.385000000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 50.479042,
+          "width" : 3
+        }
+      ],
+      "rounds" : 348,
+      "runIndex" : 1,
+      "tokens" : 768
+    }
+  ],
+  "sourceRevision" : "reused-binary"
+}

@@ -1,0 +1,4 @@
+All accepted-prefix counts 0..8: bitwise exact
+{"valid": 1, "ms_per_48_replays": {"base": 3.116312436759472, "state": 2.524999959859997}}
+{"valid": 3, "ms_per_48_replays": {"base": 2.4160415050573647, "state": 2.075770520605147}}
+{"valid": 8, "ms_per_48_replays": {"base": 2.4943960015662014, "state": 2.114083501510322}}

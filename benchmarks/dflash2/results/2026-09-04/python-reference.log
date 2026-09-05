@@ -1,0 +1,4 @@
+[probe] canon prompt sha256 cd4da0882e8151f57b9e9f64dc465a7618728ddc96ecd6fd31656f22ab3d7750 chat tokens 5976 tail '\n\nQuestion: summarize the key architectural decisions in one paragraph.\nAnswer:<|im_end|>\n<|im_start|>assistant\n<think>\n'
+[probe] canon-chat: accepted=111/552 (20.1%) rounds=80 tokens=192 tau=2.40 tok/round  4.6 tok/s (incl. prefill)
+[probe] canon-chat hist 0:32 1:18 2:16 3:6 4:3 5:1 6:2 7:2
+[probe] canon-chat text: 'We need answer user\'s request: "Question: summarize the key architectural decisions in one paragraph. Answer:" They provided a long architecture doc. Need produce one paragraph summarizing key architectural decisions. Need likely concise but comprehensive. Need ensure one paragraph only. Need maybe mention privacy/offline, Apple Silicon, local models, @Observable, ports/adapters, actor isolation, '

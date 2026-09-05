@@ -1,0 +1,22 @@
+{
+  "hardware": "Apple M3 Max, 48 GiB unified memory",
+  "os": "macOS 26.5.2 (25F84)",
+  "target": "mlx-community/Qwen3.8-27B-4bit",
+  "draft": "incoai/Qwen3.8-27B-DFlash2",
+  "targetSampling": {
+    "temperature": 0
+  },
+  "binaries": {
+    "before": {
+      "path": "/tmp/dflash2-before.app/Contents/MacOS/Tesseract Agent",
+      "sha256": "058eed0e99bc5691d4505d474d491706d5bbe6dbde333d9f6bb07e0bcef61bb0"
+    },
+    "after": {
+      "path": "/Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app/Contents/MacOS/Tesseract Agent",
+      "sha256": "bcc2d891d0d6bfef1a93855ec058daecf7f45d4e5c1ec1c24285966c1e18fcbe"
+    }
+  },
+  "tesseractCommit": "3cb640abc427ef75d044488fcce03072ed84b0e6",
+  "swiftLMCommit": "6d251c6cedff52ebdf9872129b32bebb5b2f9c32",
+  "pythonReferenceCommit": "07ebd93db9f472af339b644bb70221ad8428328a"
+}

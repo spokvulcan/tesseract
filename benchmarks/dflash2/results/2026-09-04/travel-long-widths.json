@@ -1,0 +1,4866 @@
+{
+  "draftPolicy" : "4bit",
+  "fullIdentityCheck" : false,
+  "inputTokenIds" : [
+    248045,
+    8678,
+    198,
+    24342,
+    286,
+    4879,
+    369,
+    716,
+    310,
+    830,
+    11553,
+    13,
+    5044,
+    1683,
+    15060,
+    1472,
+    279,
+    3274,
+    11,
+    9307,
+    1328,
+    30800,
+    11,
+    2814,
+    47675,
+    25605,
+    11,
+    321,
+    60445,
+    55404,
+    11,
+    27224,
+    11,
+    321,
+    30246,
+    303,
+    279,
+    1534,
+    4087,
+    13,
+    248046,
+    198,
+    248045,
+    846,
+    198,
+    7734,
+    264,
+    5640,
+    4849,
+    1675,
+    883,
+    264,
+    1936,
+    303,
+    26629,
+    13,
+    58737,
+    279,
+    17865,
+    11,
+    3487,
+    11,
+    321,
+    2136,
+    7431,
+    11,
+    440,
+    14542,
+    17683,
+    364,
+    264,
+    1118,
+    7019,
+    19568,
+    13,
+    248046,
+    198,
+    248045,
+    74455,
+    198,
+    248068,
+    198
+  ],
+  "maxNewTokens" : 768,
+  "model" : "models\/mlx-community_Qwen3.8-27B-4bit",
+  "promptSHA256" : "d80ce7731b3321c8cee9786461491731dd81e0e834ec25b121f6b95e628b4534",
+  "promptTokens" : 82,
+  "results" : [
+    {
+      "accepted" : 419,
+      "arm" : "dflash2-bs3",
+      "decodeSeconds" : 18.906206583,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328
+      ],
+      "prefillSeconds" : 0.583546458,
+      "proposed" : 696,
+      "roundTimings" : [
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.619583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.571958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.733917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.149750000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.070541999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.110499999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.958125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.291375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.46925,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.582625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.517208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.250166,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.835791,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.400958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.12675,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.263542,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.011916,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.440958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.317,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.854167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.567458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.445167000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.487292,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.291709,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.420791,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.510957999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.575375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.456792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.509584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.658375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.680792,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.958667,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 51.981083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.082292,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.423874999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.143041000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.215458999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.362,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.945417,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.343,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.98725,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.040625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.626917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.614667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.759167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.185084,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.487083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.520417,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.569958,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.090291,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.464333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 51.963750000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.4605,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.877832999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.255917000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.772124999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.8935,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.15875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.190833999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.258834,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.405542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.953166,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.510166999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.036542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.352667000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.481,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.130833,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.522332999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.294833,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.799875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.036625,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.179875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.561208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.01025,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.747458,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.593542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.281709,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.643625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.272459,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.458290999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.265,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.305375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.670125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.055916,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.465083,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.548333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 51.986167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.45875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.191709,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.726749999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.956250000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.275417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.590875000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.0075,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.544459,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.028334,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.334583,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.622707999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.037375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.58,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.317375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.650791,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.37525,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.943999999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.50725,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.205042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.519083,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.968374999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.153,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.703250000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.129833,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.131917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.465209,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.258166,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.298875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.185,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.70033299999999,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.396583,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.182249999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.500834,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.006707999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.365666,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.582042,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.337458999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.305666,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.512,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 51.840125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.474042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.20525,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 51.864333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.412542,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.264083,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.633834,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.362624999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.172625000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.225291,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.274084,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.7575,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 51.928000000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.525791999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.3535,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.303250000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.878,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 51.998916,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.724624999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.453250000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.106874999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.743792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.152167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.598292,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.84275,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.682667,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.652958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.53475,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.242916,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.661500000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.585709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.529542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.379957999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.605000000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.590832999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.591292,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.213875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.455124999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.693875000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.067665999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.736625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.400709,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.400083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.052333,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.303916,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.691167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.817458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.690875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.915709,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.634541999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.303,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.835708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.673375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.398917,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.119291999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.138917,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.215792,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.35525,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.673542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.501,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.72375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.273832999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.710665999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.691292000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.466417,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.294208,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.255708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.61375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.396,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.524959,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.539583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.082417,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.856750000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.42275,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.085125000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.876708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.142541,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.756875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.4985,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.284,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.611167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.487624999999994,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.359958999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.747167,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.222291,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.971583,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.581292,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.275291,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.775083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.631666,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.670542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.596792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.781625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.487917,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.662375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.400000000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.667500000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.82925,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.00379100000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.613791,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.633625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.118417,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.691458999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.960542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.437374999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.180459,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.571209,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.029875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.084042,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.64375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.095833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.737292,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.513332999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.193208999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.705834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.77375,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.917583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.433625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.973875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.975833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 52.435875,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.941834,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.435125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.807333,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.372499999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 53.185207999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.29375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.845875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.101167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.650875,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.696332999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 52.355542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.609542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.366958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.848041,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.644,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.464208,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.119959,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 52.776167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.235583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.062125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.090125,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.147084,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 53.052833,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.454958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.189958000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.240708999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.798584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.358166999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.019416,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 54.897583,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.781542,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.152584,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 53.89275000000001,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.112666999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.149249999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.220375000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.314459,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.525167,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 55.954625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.337917000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.123084,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.452542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.008625,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.275791999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.790959,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.145125,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 54.981,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.532458,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.188083,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.559042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.672374999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 54.944666000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.78225,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.53225,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.098167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.21475,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 55.428834,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.112375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 56.982875,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 55.802583000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.197375,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.043792,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.1365,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 57.096292,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.252042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.247458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.994125000000004,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.172458,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.785208999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.580833,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.558625,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.622291,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.325958,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.241416,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 57.899541,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.159458,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.068625,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 56.542958,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 59.274166,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 58.230041,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.249375,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.162541999999995,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 56.99825,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 59.525042,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.467209,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.35925,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.360167,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.255041,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.893667,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.476709,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 58.556333,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.526917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.440542,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.155167000000006,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.764667,
+          "width" : 3
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 59.114208000000005,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.962708,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 57.391917,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 60.502417,
+          "width" : 3
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 58.981249999999996,
+          "width" : 3
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 47.707792,
+          "width" : 3
+        }
+      ],
+      "rounds" : 348,
+      "runIndex" : 0,
+      "tokens" : 768
+    },
+    {
+      "accepted" : 473,
+      "arm" : "dflash2-bs5",
+      "decodeSeconds" : 24.722280375,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328
+      ],
+      "prefillSeconds" : 0.642088083,
+      "proposed" : 1180,
+      "roundTimings" : [
+        {
+          "accepted" : 4,
+          "milliseconds" : 70.958291,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 73.82525,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.016958,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 77.605542,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.107541,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.616292,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 76.573958,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 79.868,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.750584,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 76.99658299999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.12325,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 78.642291,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 79.01474999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.773167,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 77.537667,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 79.209417,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.959041,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 81.17854100000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 79.654916,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 79.047833,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 79.77408299999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 79.4475,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 79.711208,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 79.740042,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.002333,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 78.095125,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 80.035,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 80.266334,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 81.97083300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 80.158792,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 80.725708,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 80.197542,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.85125,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 79.091959,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.177042,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.32499999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.131333,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 78.622625,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.296917,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 78.719375,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.583708,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 80.834042,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.912208,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.25687500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.076583,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.335416,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 79.760458,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 81.33045899999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 81.387875,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.59720800000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.893417,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.921125,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.157666,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 80.110416,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.285,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.282708,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.43079200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 80.694166,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.326042,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.48949999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.59475,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.255291,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.1585,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.32825,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.44741599999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.2665,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.769041,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.458958,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.1785,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 80.716542,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.479625,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.358375,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 80.812708,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.813833,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.62899999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.995291,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.684583,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.52954199999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.18658400000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.125083,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.453334,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.58458300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.905625,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.04625,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.82529199999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.98891699999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.716334,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.316625,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.861875,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.143209,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.402167,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.286,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.182417,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.108333,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.264416,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.29212500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.400416,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.53525,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.415875,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.555375,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.440333,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.93029200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.64704200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.598792,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.718709,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.84958300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.8585,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.765625,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.857959,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.167375,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.54054099999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.902958,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.212041,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.3815,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 85.85158399999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.05999999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.694209,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.62475,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.120792,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.91758300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.64191699999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.195375,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.396959,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.037042,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.21225,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.243125,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.236833,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.215125,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.434625,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.925958,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.00475,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.940375,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 86.095625,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.29875000000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.82675,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.43754200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.158833,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.08275,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.524542,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.218083,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.41316599999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.01658300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.941542,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.187,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.044709,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.6215,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.29725,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.42287499999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.22816700000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.377875,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 87.176666,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.29549999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 85.09245899999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.18675,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.218958,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.36937499999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.66425,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.689875,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.813416,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.504916,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.812,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.83279200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.773875,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.953917,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.90120900000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.303541,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.141625,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.4235,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.74175000000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.93508399999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.52787500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.61087500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 85.856791,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.610334,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.122958,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.8415,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.937042,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.299333,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.030458,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.725708,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.519375,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.313125,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.8535,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 86.384917,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.605,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.338584,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.51266700000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.6185,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.264792,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 87.257625,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.693791,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.493333,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.171541,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.819625,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 85.04225,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.127708,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.339417,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.793958,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.801333,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.45700000000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.806625,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.75841700000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.336709,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.933667,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.632583,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.66324999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.48887500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.967,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 86.707875,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.21995799999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.706,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.520917,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.202792,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 86.332959,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.237166,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.795583,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.38575,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.98254200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.312792,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.580916,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.475791,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.119125,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 82.192791,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.063625,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.93075,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.275209,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.71716599999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 82.195041,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.305,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.736042,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.046459,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.154583,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 82.24437499999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.740208,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 84.413667,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 84.162459,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.119666,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 82.056541,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 86.059417,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.00537499999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.16929099999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.810791,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.47033300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.769166,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 84.15429200000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.061792,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.211,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.394291,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 85.843209,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.713084,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.493834,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 84.09454199999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.39887499999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.568375,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.71325,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 83.66,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.64933400000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 81.53533300000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.123208,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.29154199999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.496542,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.65641699999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.850709,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 87.617667,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.408125,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.063541,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.926167,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.37075,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.530208,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.323292,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.499209,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 87.330167,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 85.447458,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.994042,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.999958,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 87.835334,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.63541599999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.904667,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.252125,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.547417,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 87.55470899999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.202167,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.652084,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 90.01341599999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 87.446375,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.82412500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 87.5985,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.727542,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.598292,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.27699999999999,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.386875,
+          "width" : 5
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 98.289708,
+          "width" : 5
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 102.618167,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 105.08862500000001,
+          "width" : 5
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 92.47316599999999,
+          "width" : 5
+        }
+      ],
+      "rounds" : 295,
+      "runIndex" : 0,
+      "tokens" : 768
+    },
+    {
+      "accepted" : 470,
+      "arm" : "dflash2-bs8",
+      "decodeSeconds" : 26.912387291,
+      "fingerprint" : [
+        1596,
+        1144,
+        310,
+        5707,
+        310,
+        1156,
+        25,
+        328
+      ],
+      "prefillSeconds" : 0.684165833,
+      "proposed" : 2080,
+      "roundTimings" : [
+        {
+          "accepted" : 7,
+          "milliseconds" : 73.6495,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 77.385166,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 82.163375,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 82.16066599999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 82.863167,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 80.916792,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 83.4785,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.686417,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 82.692375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.118,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 83.73420800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 86.53325000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.829667,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 90.745833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.032958,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 92.47875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 90.189458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.662416,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.44758399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 88.957958,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.46345799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 85.898792,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 88.278583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 90.598917,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 88.147167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.73725,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.45708400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 88.663166,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.71691700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.5715,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.779625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.85125000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.946708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.36358299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.648167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.300083,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.033584,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.04108299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.143,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 89.352875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.31004200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.61358299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.731917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.70362499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.595709,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.682709,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.49583299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 90.69945899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.68208399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 88.773333,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 88.82929200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.851292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.59100000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.534167,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.661833,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.513333,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.42595899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.053083,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.530583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.640625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 90.84762500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.72149999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.743166,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.100167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.429334,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 88.27575,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.350583,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.371083,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.61495799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.723167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.7975,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.72275,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 87.08625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.643,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 91.002791,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.859875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.060625,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.176959,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.97075,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.223125,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 86.98708400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.139417,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 91.059,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.241084,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.436083,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.27487500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.599166,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 86.66787500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.935792,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.672292,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 90.479208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.70958399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.72824999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.82454100000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.148416,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.19175,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 88.831125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.23616700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.72125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.6155,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.636458,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.660833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.34412499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 86.559,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.919625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.972917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 103.161625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 116.043875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 110.85329200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 104.558667,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 99.492375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 96.396041,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 94.53625,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 93.898792,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 93.9715,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 92.79929200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.91275,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.049458,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.413375,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.291417,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 93.890917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 96.177125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 105.196125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 104.757583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 107.69820800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 104.706958,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 99.24025,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 102.207167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 95.022542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.856916,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 80.144125,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 78.929458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 85.43337500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 85.541042,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 95.40204200000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 106.67125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 103.594208,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 105.26,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 99.819125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 96.079208,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.877083,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 77.96370900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.759291,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 83.208583,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.063625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.203333,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.006917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 93.842,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 91.13870899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.858417,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.724583,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 87.18237500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.327542,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.58275,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.86395900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 90.245958,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 88.584583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.165958,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.237292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.127667,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 90.378625,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 96.567542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.241833,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.206125,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 88.35825,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.814667,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.511584,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.668875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 91.942208,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.552875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.712291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.877291,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.84720899999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 91.75262500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.170208,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.04762500000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.09875000000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 87.11416700000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 91.475292,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.3385,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.340834,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 89.257,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.615416,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.49575,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.227125,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.430708,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.277125,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.816917,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 101.7435,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.678708,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.76733300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 86.662875,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.291459,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 106.88612499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 108.628917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 96.8325,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.693875,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 84.85437499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 83.927875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 85.708167,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.873833,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.408708,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 92.972542,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.634458,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 91.01299999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.237542,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.129583,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 92.206042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.721417,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.72854199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.93245900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 88.12783300000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 91.36079199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.43375,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.504,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 90.030667,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.547583,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.629458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.709,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.662209,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 101.56775,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 105.256333,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 107.255292,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 101.3235,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 99.220167,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 97.188833,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 94.02737499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 97.408584,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 96.09208299999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 92.928417,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 93.203542,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 90.049958,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 88.54058400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 92.62208399999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 93.058667,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 83.830917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 81.512708,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 86.18974999999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.130042,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.209042,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 91.053375,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.303458,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 95.08045800000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 7,
+          "milliseconds" : 104.214083,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 91.004625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 86.68375,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 92.155458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 103.999667,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 101.906916,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 100.219375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 98.141459,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 94.107333,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 94.007791,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 81.903584,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 80.851917,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.213042,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 82.9145,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.7375,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 90.849334,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 93.457166,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 92.094042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 92.927084,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.72916599999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.794791,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 89.358542,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.754666,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.12458400000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.2405,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.353792,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.668666,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 92.19287499999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 89.813042,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.920666,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.56945900000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 87.455458,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.830625,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.485834,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.379792,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 88.857875,
+          "width" : 8
+        },
+        {
+          "accepted" : 4,
+          "milliseconds" : 88.9365,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.009,
+          "width" : 8
+        },
+        {
+          "accepted" : 6,
+          "milliseconds" : 89.35825,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.96095799999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.300375,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 89.08116600000001,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 88.794959,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.267875,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 87.135375,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.13054199999999,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 91.052041,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.240709,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 89.042625,
+          "width" : 8
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 91.286625,
+          "width" : 8
+        },
+        {
+          "accepted" : 5,
+          "milliseconds" : 89.776416,
+          "width" : 8
+        },
+        {
+          "accepted" : 2,
+          "milliseconds" : 89.95725,
+          "width" : 8
+        },
+        {
+          "accepted" : 1,
+          "milliseconds" : 89.455708,
+          "width" : 8
+        },
+        {
+          "accepted" : 0,
+          "milliseconds" : 87.345375,
+          "width" : 6
+        },
+        {
+          "accepted" : 3,
+          "milliseconds" : 81.720458,
+          "width" : 4
+        }
+      ],
+      "rounds" : 298,
+      "runIndex" : 0,
+      "tokens" : 768
+    }
+  ],
+  "sourceRevision" : "reused-binary"
+}

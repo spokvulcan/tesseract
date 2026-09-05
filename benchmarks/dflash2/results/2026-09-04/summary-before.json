@@ -1,0 +1,29 @@
+{
+  "fullIdentityCheck" : false,
+  "maxNewTokens" : 192,
+  "model" : "models\/mlx-community_Qwen3.8-27B-4bit",
+  "promptSHA256" : "cd4da0882e8151f57b9e9f64dc465a7618728ddc96ecd6fd31656f22ab3d7750",
+  "promptTokens" : 5976,
+  "results" : [
+    {
+      "accepted" : 115,
+      "arm" : "dflash2-bs8",
+      "decodeSeconds" : 6.687572916,
+      "fingerprint" : [
+        1596,
+        1144,
+        4087,
+        1156,
+        579,
+        1622,
+        25,
+        328
+      ],
+      "prefillSeconds" : 31.980144125,
+      "proposed" : 532,
+      "rounds" : 76,
+      "runIndex" : 0,
+      "tokens" : 192
+    }
+  ]
+}

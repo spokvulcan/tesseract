@@ -1,0 +1,1 @@
+Write a Python function `longest_common_subsequence(a: str, b: str) -> str` that returns one longest common subsequence using dynamic programming, with docstring, type hints, and a few asserts as tests.

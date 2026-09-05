@@ -42,6 +42,39 @@ done
 RESULTS_DIR="$BENCH_DIR/results"
 REPO_RESULTS="$PROJECT_DIR/benchmarks/results"
 
+# All benchmark entrypoints share one GPU and log file. Refuse overlap.
+LOCK_DIR="$(dirname "$BENCH_DIR")/benchmark.lock"
+mkdir -p "$(dirname "$LOCK_DIR")"
+if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "Another benchmark owns $LOCK_DIR (pid $(cat "$LOCK_DIR/pid" 2>/dev/null || echo unknown))."
+    echo "Wait for it to finish. Remove the lock only if its owner has exited."
+    exit 1
+fi
+echo "$$" > "$LOCK_DIR/pid"
+trap 'rm -f "$LOCK_DIR/pid"; rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+
+SKIP_BUILD=0
+FILTERED_ARGS=()
+for arg in "$@"; do
+    if [ "$arg" = "--no-build" ]; then
+        SKIP_BUILD=1
+    else
+        FILTERED_ARGS+=("$arg")
+    fi
+done
+# macOS Bash 3.2 treats an empty array as unset under `set -u`.
+set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
+APP_PATH_FILE="$BENCH_DIR/release-app.path"
+
+if [ "$SKIP_BUILD" = 0 ]; then
+
+show_build_failure() {
+    mkdir -p "$BENCH_DIR"
+    echo "$BUILD_OUTPUT" > "$BENCH_DIR/build.log"
+    rg -n -B2 -A4 ': error:|^error:|fatal error:' "$BENCH_DIR/build.log" | head -60 || true
+    echo "Full build log: $BENCH_DIR/build.log"
+}
+
 # Clean stale module cache on config switch to avoid "Unable to find module dependency" errors
 DERIVED_DATA=$(ls -d $DERIVED_DATA_GLOB 2>/dev/null | head -1)
 if [ -n "$DERIVED_DATA" ]; then
@@ -71,12 +104,12 @@ BUILD_OUTPUT=$(xcodebuild build -project "$PROJECT" -scheme "$SCHEME" \
             -destination 'platform=macOS' \
             -skipPackagePluginValidation \
             2>&1) || {
-            echo "$BUILD_OUTPUT" | tail -20
+            show_build_failure
             echo "BUILD FAILED after retry"
             exit 1
         }
     else
-        echo "$BUILD_OUTPUT" | tail -20
+        show_build_failure
         echo "BUILD FAILED"
         exit 1
     fi
@@ -98,6 +131,20 @@ APP="$PRODUCTS_DIR/Tesseract Agent.app"
 if [ -z "$PRODUCTS_DIR" ] || [ ! -d "$APP" ]; then
     echo "Error: 'Tesseract Agent.app' ($CONFIGURATION) not found at BUILT_PRODUCTS_DIR ('${PRODUCTS_DIR:-unresolved}')."
     exit 1
+fi
+mkdir -p "$BENCH_DIR"
+echo "$APP" > "$APP_PATH_FILE"
+else
+    if [ ! -f "$APP_PATH_FILE" ]; then
+        echo "No recorded Release build. Run without --no-build once."
+        exit 1
+    fi
+    APP="${TESSERACT_BENCH_APP:-$(cat "$APP_PATH_FILE")}"
+    if [ ! -d "$APP" ]; then
+        echo "Recorded app is missing: $APP"
+        exit 1
+    fi
+    echo "Reusing Release binary (--no-build): $APP"
 fi
 
 SWEEP="${1:-quick}"
@@ -133,6 +180,9 @@ set -- "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 SOURCE_REV="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if [ -n "$(git -C "$PROJECT_DIR" status --porcelain 2>/dev/null)" ]; then
     SOURCE_REV="${SOURCE_REV}-dirty"
+fi
+if [ "$SKIP_BUILD" = 1 ]; then
+    SOURCE_REV="reused-binary"
 fi
 
 echo "Running benchmark (sweep: $SWEEP)..."
@@ -179,8 +229,21 @@ wait $OPEN_PID 2>/dev/null || true
 
 # Stop tailing
 kill $TAIL_PID 2>/dev/null || true
+wait $TAIL_PID 2>/dev/null || true
 echo ""
 echo "───────────────────────────────────────"
+
+if [[ " $* " == *" --dflash2-bench "* ]]; then
+    if ! rg -q '\[dflash2-bench\] === summary ===' "$LOG_FILE"; then
+        echo "DFlash2 benchmark did not finish."
+        exit 1
+    fi
+    if [[ " $* " == *" --bench-check "* ]] && rg -q 'DIVERGED' "$LOG_FILE"; then
+        echo "Full-stream identity check failed. See $LOG_FILE"
+        exit 1
+    fi
+    exit 0
+fi
 
 # Copy results to repo
 if [ -d "$RESULTS_DIR" ]; then
