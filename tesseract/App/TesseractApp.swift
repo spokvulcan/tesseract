@@ -67,6 +67,12 @@ struct TesseractApp: App {
     }
 
     init() {
+        // In-place dynamic slice updates (mlx fork C9): DFlash2 writes its
+        // verify rows and the drafter's block K/V into cache slack rows whose
+        // readers all precede the write on the stream; without the flag every
+        // such write copies the whole store. The bench sets the same flag;
+        // overwrite 0 keeps an explicit environment override.
+        setenv("MLX_DYNSLICE_INPLACE", "1", 0)
         let args = CommandLine.arguments
         // `--paro-parity-bench` precedes `--benchmark`: scripts/bench.sh always
         // passes `--benchmark`, so the perf-ruler/gate harness is opt-in via
