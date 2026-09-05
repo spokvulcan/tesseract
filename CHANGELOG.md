@@ -2,6 +2,14 @@
 
 ## [1.12.0](https://github.com/spokvulcan/tesseract/compare/v1.11.1...v1.12.0) (2026-09-05)
 
+### Highlights
+
+DFlash2 speculative decoding on Qwen3.8-27B is a lot faster. On an M3 Max with the 4-bit model, decode went from 28 to 49 tok/s on a travel blog post, from 55 to 71 tok/s on code and from 77 to 98 tok/s on math word problems, against 23 tok/s without speculation. The round that drafts eight tokens and verifies them dropped from 68 ms to 54 ms: a leaner 4-bit matmul kernel for the eight-row verify pass, a dozen small kernels fused into single launches in the Qwen3.5 layers and the drafter, a fused attention route for the verify block, and a drafter head that scores only the part of the vocabulary that ever comes up. The generated text is unchanged on the prompts we track; the target model still decides every token.
+
+One fix matters outside the benchmark: the app now sets `MLX_DYNSLICE_INPLACE` at launch, so speculative rows are written into the KV cache in place. Before, only the benchmark runner set it, and production copied the whole cache store on every such write, a cost that grew with the context.
+
+For anyone building from source, `scripts/dflash2-bench.sh` runs a single DFlash2 pass on a frozen prompt in about 40 seconds after the build, with an optional token-for-token check against plain decoding; the prompts and the measured ledger live under `benchmarks/dflash2/`. The model catalog also gains Qwen3.8-27B in its PARO quantization with the same speculation (#461). The full list of changes follows.
+
 
 ### Features
 
