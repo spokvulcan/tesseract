@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.12.0](https://github.com/spokvulcan/tesseract/compare/v1.11.1...v1.12.0) (2026-09-05)
+
+### Highlights
+
+DFlash2 speculative decoding on Qwen3.8-27B is a lot faster. On an M3 Max with the 4-bit model, decode went from 28 to 49 tok/s on a travel blog post, from 55 to 71 tok/s on code and from 77 to 98 tok/s on math word problems, against 23 tok/s without speculation. The round that drafts eight tokens and verifies them dropped from 68 ms to 54 ms: a leaner 4-bit matmul kernel for the eight-row verify pass, a dozen small kernels fused into single launches in the Qwen3.5 layers and the drafter, a fused attention route for the verify block, and a drafter head that scores only the part of the vocabulary that ever comes up. The generated text is unchanged on the prompts we track; the target model still decides every token.
+
+One fix matters outside the benchmark: the app now sets `MLX_DYNSLICE_INPLACE` at launch, so speculative rows are written into the KV cache in place. Before, only the benchmark runner set it, and production copied the whole cache store on every such write, a cost that grew with the context.
+
+For anyone building from source, `scripts/dflash2-bench.sh` runs a single DFlash2 pass on a frozen prompt in about 40 seconds after the build, with an optional token-for-token check against plain decoding; the prompts and the measured ledger live under `benchmarks/dflash2/`. The model catalog also gains Qwen3.8-27B in its PARO quantization with the same speculation (#461). The full list of changes follows.
+
+
+### Features
+
+* **bench:** DFlash2 acceptance research + prompt-hash, variant and prompt-file arms ([1d03aba](https://github.com/spokvulcan/tesseract/commit/1d03abaa79a687b5d25357c28672e161bf89802b))
+* **bench:** DFlash2 fast bench, fixtures and ledger ([606e3db](https://github.com/spokvulcan/tesseract/commit/606e3dbafe05be3c038ce8842afb1444d50d4329))
+* **models:** add Qwen3.8-27B PARO with DFlash2 speculation ([#461](https://github.com/spokvulcan/tesseract/issues/461)) ([d33674f](https://github.com/spokvulcan/tesseract/commit/d33674ff66f4c30339a384f394c74e4aa5ef4958))
+
+
+### Bug Fixes
+
+* **app:** set MLX_DYNSLICE_INPLACE at launch ([98a1cda](https://github.com/spokvulcan/tesseract/commit/98a1cdae5a82e36e21aab239eaf6ca7c4cc9494c))
+
+
+### Code Refactoring
+
+* **agent:** one Raw Generation Start over the Model Session seam ([#456](https://github.com/spokvulcan/tesseract/issues/456)) ([4f345ee](https://github.com/spokvulcan/tesseract/commit/4f345ee4c99460f6aa6c182a69db24ebdf889ad2))
+* **dflash2:** reduce the drafter to its fast path and move the pin (ADR-0061) ([#464](https://github.com/spokvulcan/tesseract/issues/464)) ([3cb640a](https://github.com/spokvulcan/tesseract/commit/3cb640abc427ef75d044488fcce03072ed84b0e6))
+* **server:** make Conversation Render a real module ([#453](https://github.com/spokvulcan/tesseract/issues/453)) ([2321017](https://github.com/spokvulcan/tesseract/commit/2321017637d0eae75c7bf4cf242c34486ba2b69f))
+* **server:** one Completion Delivery script behind a Delivery Sink seam ([#455](https://github.com/spokvulcan/tesseract/issues/455)) ([75a9428](https://github.com/spokvulcan/tesseract/commit/75a942889541cfd86ed6174437bceb10884a7e0c))
+
+
+### Documentation
+
+* add model parameters reference ([#462](https://github.com/spokvulcan/tesseract/issues/462)) ([9139e11](https://github.com/spokvulcan/tesseract/commit/9139e113d7837e78a2336e25ac2e5221303dab45))
+* point CLAUDE.md at the pr-title workflow's real path (fixes Docs Check) ([b0d6749](https://github.com/spokvulcan/tesseract/commit/b0d674989413e375bc95f763cefd0df39c0a8234))
+* record the 2026-09-05 DFlash2 loop landing in the fork docs ([fda975b](https://github.com/spokvulcan/tesseract/commit/fda975b67818270850a50b2fb8bd63a2f395938c))
+
+
+### Miscellaneous Chores
+
+* **deps:** move the mlx-swift pins to 6058402 and the vendor to 0647cf9 ([a4bff95](https://github.com/spokvulcan/tesseract/commit/a4bff957340c19804fa4d5d2ec4d9122a9059e83))
+* **deps:** re-pin mlx-swift-lm to upstream e3d4a20 ([d37fc13](https://github.com/spokvulcan/tesseract/commit/d37fc13fc5b14e609551257e4df28c66a9708998))
+
 ## [1.11.1](https://github.com/spokvulcan/tesseract/compare/v1.11.0...v1.11.1) (2026-08-30)
 
 
