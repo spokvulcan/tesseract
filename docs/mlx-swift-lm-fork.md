@@ -71,7 +71,8 @@ collapsed into one. The previous tip (`ddc1f66`) stays reachable through
 the old gitlink history; old pin branches stay per the policy above.
 
 mlx-swift needs no move: upstream requires `0.31.6` up-to-next-minor, no
-newer tag exists, and the fork pin `24779d5` sits on the `0.31.6` tag.
+newer tag exists, and the fork pin (`6058402` since 2026-09-05, `24779d5`
+before) sits on the `0.31.6` tag.
 mlx-core stays at v0.31.1 (thread-local command encoders block the move;
 `docs/mlx-core-fork.md`).
 
@@ -82,7 +83,12 @@ Carried on top, in order:
 | `fix: pin mlx-swift to the spokvulcan fork at 24779d5` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + provenance + the Cmlx gitlink bumps carrying the C-series, qmv_wide, affine_qmm_mma8, SDPA mma8, multi-query SDPA and round-5 kernels + `dynamicSliceUpdated`). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
 | `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer. Enables tesseract's render+token cache (experiments-ledger C25). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract` @ `63edf42` (`docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
 | `feat(speculative): expose GenerationFinalizingTokenIterator` | Makes the finalize protocol (and the two upstream conformances) public so the app's own token loop (`TokenGenerationLoop`) can rewind speculative lookahead the way `generateLoopTask` does | Permanent local unless upstream wants it; kept out of the DFlash2 PR |
-| `feat(speculative): DFlash2 block-parallel speculative decoding for Qwen3.5 (ADR-0061)` | The whole DFlash2 series reshaped into one commit in upstream's own shapes: `DFlash2DrafterModel` / `DFlash2TargetModel` protocols, `DFlash2SpeculativeTokenIterator`, factory/registry/container, `generate` overloads, Qwen3.5 target side (verify pass, `writeRows`, gated-delta captures), `SameInputProjectionStacking`. Fast path only — no environment knobs, no research arms | **Upstream PR ready** (branch `dflash2-upstream-clean` = `e3d4a20` + this commit; issue + PR drafts in the 2026-09-04 status entry) |
+| `feat(speculative): DFlash2 block-parallel speculative decoding for Qwen3.5 (ADR-0061)` | The whole DFlash2 series reshaped into one commit in upstream's own shapes: `DFlash2DrafterModel` / `DFlash2TargetModel` protocols, `DFlash2SpeculativeTokenIterator`, factory/registry/container, `generate` overloads, Qwen3.5 target side (verify pass, `writeRows`, gated-delta captures), `SameInputProjectionStacking`. Fast path only — no environment knobs, no research arms | Upstream PR #607 (branch `dflash2-upstream-clean` = `e3d4a20` + this commit) |
+| `chore(deps): pin mlx-swift to 6058402 (dynamicSlice op, mlx b6a5f3b6)` (`fa7012a`) | Moves the pin to the 2026-09-05 loop's mlx-swift/mlx commits (`dynamicSlice`, QMM tile diet + v2 default, 1-pass SDPA, fast-math custom kernels, profiler probes) | Permanent local; collapses into the pin row at the next re-pin |
+| `perf(qwen35): fuse the GDN conv + norm, the gated output norm and the scan's gate tables` (`552fd61`) | `GatedDeltaConvNorm.swift`, `GatedDeltaNormGate.swift`; in-kernel gate tables and output-only / state-after-valid scan variants in `GatedDelta.swift`; `GatedDeltaCapture` carries gates. All bitwise with the ops chains | Follow-up PR candidate on #607 (2026-09-05 loop) |
+| `perf(qwen35): fuse the q/k RMSNorm + RoPE and fold the attention scale into the query norm` (`fc20fec`) | `AttentionNormRope.swift` (`fastmath_` kernel name: bitwise with the AOT `rope` kernel only under the fork's fast-math compile), `PlainRoPEParameters` from the config, folded power-of-two query scale, head-major gate | Follow-up PR candidate; the `fastmath_` compile needs an mlx-side change first |
+| `perf(qwen35): fuse each residual add into the RMSNorm that follows it` (`9f5f43e`) | `RMSNormResidual.swift` (bitwise with Add then RMSNorm over both norm geometries), next-norm plumbing through the decode/verify segments and the drafter's | Follow-up PR candidate |
+| `perf(dflash2): fused drafter dynamic conv, greedy walk, top-k and a head over the vocabulary prefix` (`0647cf9`) | `DFlash2DynamicConv.swift`, `DFlash2GreedyWalk.swift`, `TopKIndices.swift`, the 98304-row head prefix (`DFLASH2_DRAFT_VOCAB`, `observeCommitted`), context-cache slack rows via `dynamicSliceUpdated`, traces declaring their modules | Follow-up PR candidate; the slack-row write pays off only with the fork's `MLX_DYNSLICE_INPLACE` |
 
 Earlier pin branches carried one `chore: pin mlx-swift to <rev>` commit per
 accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round). That
@@ -237,6 +243,15 @@ and the finalize-public carry) builds against upstream `mlx-swift` 0.31.6
 (740/740 tests, verify-docs, swift-format). `MLX_MAX_ACTIVE_TASKS=40` is still set only by the
 bench runner.
 
+**Status 2026-09-05 (optimization loop landed)** — the 10-hour DFlash2
+throughput loop (travel 68.3-69.8 -> 54.2-54.4 ms/round, 69.4 tok/s at the
+same acceptance; ledger `benchmarks/dflash2/FINDINGS.md`) is committed on
+`pin-upstream-mlx-swift` as `fa7012a` (pin to mlx-swift `6058402`) +
+four per-family `perf(qwen35|dflash2)` commits, tip `0647cf9`; mlx-side
+in spokvulcan/mlx `b6a5f3b6` and mlx-swift `6058402` (pushed). Section
+"2026-09-05 optimization loop — landed" below has the map. Upstream:
+these are follow-up PR candidates on #607, not filed.
+
 ## Contributed back
 
 | PR | What | Status |
@@ -321,3 +336,166 @@ Gotcha: the fork's pre-commit hook formats the **whole repo** with the PATH
 `swift-format` (602.x), which fights the CI-pinned 603 on import sorting.
 Format touched files with `xcrun swift-format` (CI-matching) and commit with
 `SKIP=swift-format git commit`.
+
+## 2026-09-05 optimization loop — landed
+
+Final numbers (verification 08:30, `--bench-check`, cool GPU): travel
+54.24 / 54.36 ms/round 140/356 identity MATCH (69.4 tok/s, from 54-55 at
+00:20), code 54.48 / 54.57 141/349 MATCH (70.4 tok/s), math 54.50 / 54.57
+158/249 DIVERGED +8 as before the loop (97.8 tok/s). The measured ledger
+is `benchmarks/dflash2/FINDINGS.md`; the reference fixtures after the loop
+are travel 140/356, code 141/349, math 158/249 (192 tokens each, streams
+identical to the pre-loop streams; the draft acceptance re-rolled once,
+when the small-M QMM tile switched to scale-after-accumulate).
+
+Everything the loop kept is committed and pushed (11:40-12:30, see the
+commit split below); the refuted knobs and the `sdpa_mma_prefetch` kernel
+variant were stripped first and the three fixtures re-verified on the
+stripped text (AR and speculative fingerprints equal to the 06:55 v2
+references, identity MATCH on travel and code). A clean Release build on
+the re-resolved package graph (12:09-12:16) confirmed the landed stack:
+travel 54.1/54.3 ms/round, 69.5 tok/s, 140/356; code 54.0/54.2 ms/round,
+70.9 tok/s, 141/349; identity MATCH on both, AR and speculative
+fingerprints equal to the v2 references.
+
+### Where the mlx-side changes live
+
+- spokvulcan/mlx `pin-tesseract` `b2fcc671` -> `b6a5f3b6`: `7e1110cc8`
+  feat(metal) fast-math compile for custom kernels named `fastmath_*`;
+  `122e60c46` feat(metal) `MLX_KERNEL_PROFILE` / `MLX_CB_PROFILE` probes;
+  `9c1dfe5b1` perf(metal) small-M 4-bit QMM tile diet, `full_tiles`
+  variant and v2 scale-after-accumulate default (`MLX_QMM_MMA8_V2=0`
+  kill-switch, `MLX_QUANTIZED_KERNEL_FILE` dev override, `MLX_QMM_DEBUG`);
+  `b6a5f3b61` perf(metal) 1-pass SDPA for any qL <= 8 (gqa <= 32) and
+  32/64 partitions for the 2-pass MMA kernel + the unit-scale skip in
+  `fast.cpp`.
+- spokvulcan/mlx-swift `pin-tesseract` `24779d5` -> `6058402`: `a9e589f`
+  feat `dynamicSlice` op (`Ops+DynamicSlice.swift`); `6058402` the gitlink
+  bump with `mlx-generated/quantized.cpp` regenerated from the submodule
+  (cmake `-DMLX_METAL_JIT=ON`, `make quantized`, as `tools/update-mlx.sh`
+  does — the regenerated text differed from the hand-carried region
+  replace only by a trailing separator comment). `mlx-generated/metal/
+  sdpa_vector.h` is back at its base (the prefetch variant is gone).
+- The three `Package.swift` pins (`Vendor/mlx-swift-lm`,
+  `Vendor/mlx-audio-swift`, `Vendor/tesseract-speech`) moved to `6058402`
+  in lockstep; the DerivedData checkout re-resolved clean at `6058402` /
+  `b6a5f3b6` (SwiftPM refuses the submodule update while the checkout
+  carries local edits — reset the submodule to the pushed commit first).
+
+### Environment knobs the loop left behind
+
+| Knob | Read in | Default | Disposition |
+|---|---|---|---|
+| `DFLASH2_DRAFT_VOCAB` | `MLXLLM/Models/DFlash2.swift` (`headLogits`) | 98304 rows, `0` = full head | product default; keep documented |
+| `MLX_QMM_MMA8_MMIN` | fork `quantized.cpp` | 5 (mma8 tile serves M = 5..8; below that the qmv family) | keep or strip to the constant; the tile's M gate also requires `group_size == 64`, `K % 512 == 0`, `N >= 2048`, bf16 activations, so other models' odd K (11008, 8960) fall through to the generic route |
+| `MLX_QMM_MMA8_V2` | fork `quantized.cpp` | `1` (v2 tile) | keep: `0` is the kill-switch to the per-element tile (bitwise with the pre-loop logits; v2 differs in logit low bits, -6% per QMM) |
+| `MLX_QMM_MMA8_N16` | fork `quantized.cpp` | on | keep: kill-switch to the 8-wide tile |
+| `MLX_DYNSLICE_INPLACE` | `TesseractApp.swift`, bench runner | set to 1 by the app | keep until the fork defaults it |
+| `MLX_SDPA_1PASS_ANY_QL` | fork `scaled_dot_product_attention.cpp` | on | DONE: the fork default (`use_fallback` serves any qL <= 8 with gqa <= 32), knob gone |
+| `GDN_SCAN_RPT` | `MLXLMCommon/GatedDelta.swift` | 2 (falls back to 1 unless it divides `Dv`) | DONE: the constant `gatedDeltaRowsPerThread = 2` |
+| `GDN_CONV_NORM_VARIANT`, `ATTN_NORM_ROPE_VARIANT` | `GatedDeltaConvNorm.swift`, `AttentionNormRope.swift` | v2 / plain fast-math form | DONE: variant structs, mode template args and the losing kernel forms gone; the bench runner's two microbenches check the one production kernel |
+| `MLX_SDPA_2PASS_MIN_N`, `MLX_SDPA_2PASS_MIN_KL`, `MLX_SDPA_MMA_PREFETCH` | fork | off | DONE: stripped with the `sdpa_mma_prefetch` kernel variant (function constant 27) |
+| `MLX_SDPA_MMA_BLOCKS`, `MLX_QMM_MMA8_N32` | fork | override off / off | KEPT: both pre-date the loop (in `b2fcc671`); `MLX_SDPA_MMA_BLOCKS` now only overrides the 32/64 default. Strip in a follow-up if wanted |
+| `MLX_QMM_DEBUG`, `MLX_KERNEL_PROFILE`, `MLX_CB_PROFILE`, `MLX_QUANTIZED_KERNEL_FILE`, `MLX_MAX_ACTIVE_TASKS` | fork | off | keep: diagnostics / dev loop |
+| `DFLASH2_QMM_MICROBENCH`, `DFLASH2_QMM_SHAPES`, `DFLASH2_GDN_ITERATIONS`, `DFLASH2_BW_MICROBENCH`, `DFLASH2_SDPA_MICROBENCH` | `DFlash2BenchRunner.swift` | off | keep: bench-only microbenches |
+
+### Vendor test pass (07:29-07:50)
+
+`xcodebuild test -scheme mlx-swift-lm-Package -destination platform=macOS
+-skipPackagePluginValidation -only-testing:MLXLMTests`, at the time with
+the `spokvulcan/mlx-swift` dependency temporarily swapped for
+`.package(path: <DerivedData checkout>)` because the pinned revision
+lacked `dynamicSlice` (no longer needed: the pin is `6058402`). Two rules
+the tests taught, both applied:
+
+- MLX binds custom-kernel inputs under 8 elements in the `constant` address
+  space, so `const device T* p = input + ...` in an `MLXFast.metalKernel`
+  source fails to JIT on tiny test arrays (the fused-gate scan, greedy
+  walk, dynamic conv, conv+norm and norm+gate kernels all did, taking the
+  xctest process down). Every such pointer is `auto` now.
+- The GDN scan's rows per thread must divide `Dv` (the grid is `Dv / RPT`
+  simdgroups per head); the launch falls back to one row per thread
+  otherwise (the Kahan test's `Dv = 1` state ran nothing before).
+- When a Swift Testing case crashes the xctest process the log cannot name
+  it (every case runs in parallel); read the faulting thread of the newest
+  `~/Library/Logs/DiagnosticReports/xctest-*.ips` instead. To run Swift
+  Testing functions alone: `-only-testing:MLXLMTests/<function>()` (the
+  parentheses are part of the identifier; without them nothing matches
+  and xcodebuild reports success over zero tests).
+- Xcode's parallel test runner hung at 0% CPU in two of four full runs of
+  this GPU-heavy target (~165 of ~800 Swift Testing cases finished). With
+  `-parallel-testing-enabled NO -test-timeouts-enabled YES
+  -default-test-execution-time-allowance 120` the whole target passes:
+  XCTest 592 (1 skipped), Swift Testing 743 cases in 55 suites, 2.5 min
+  total. Use those flags when replicating CI.
+- CI replication on the committed tree (12:03-12:10, run on the first-cut
+  tip `ac3a96d`, whose tree the final tip `0647cf9` reproduces exactly):
+  swift-format 6.3 over the tree (no changes outside the loop's files),
+  `scripts/verify-docs.sh` green after two DocC link fixes (`RoPE` is an
+  MLXNN symbol; a `GateLayout` doc linked its parent's package-level init),
+  `build-for-testing` green, serialized `MLXLMTests` green (XCTest 592,
+  1 skipped, 0 failures; Swift Testing 743 cases in 55 suites, 2.5 min).
+  Every intermediate commit (`fa7012a`, `552fd61`, `fc20fec`, `9f5f43e`)
+  builds for testing on its own; the first cut of the residual commit
+  (`913db53`) carried the top-k test and did not, so the two top commits
+  were rewritten (12:16-12:18) and the branch force-pushed with lease.
+
+### Commit split (executed 2026-09-05, 11:40-12:30)
+
+Bottom of the stack first, each replicating CI (lint, verify-docs, the
+serialized xctest run above) before a push. What was executed differs
+from the plan below in five places: the fast-math compile for `fastmath_*`
+custom kernels got its own fork commit (`7e1110cc8`) ahead of the probes;
+the four test repairs were made inside the family commits that introduced
+the code they repair (no separate `fix(tests)`); the loop-only knobs were
+stripped before anything was committed, so no `chore: strip` commit exists;
+`MLX_SDPA_MMA_BLOCKS` / `MLX_QMM_MMA8_N32` stayed (pre-existing, see the
+table); and the vendor branch was force-pushed once, after the residual
+and drafter commits were re-cut so that the top-k test lands with the
+top-k kernel (the tree is unchanged). Vendor tip `0647cf9` = `fa7012a`
+pin + `552fd61` GDN + `fc20fec` norm+RoPE + `9f5f43e` residual+norm +
+`0647cf9` drafter. The plan as approved:
+
+1. spokvulcan/mlx `pin-tesseract` (submodule under the DerivedData
+   checkout, 10 files): `perf(metal): small-M 4-bit QMM tile diet,
+   full-tile variant and v2 scale-after-accumulate default` (`kernels/
+   quantized.h`, `quantized.cpp`, `jit_kernels.cpp`, `quantized.metal`),
+   `perf(metal): 1-pass SDPA for any qL <= 8 and 32/64 partitions for the
+   2-pass MMA kernel` (`scaled_dot_product_attention.cpp`, `fast.cpp`,
+   `sdpa_vector.h`), `feat(metal): MLX_KERNEL_PROFILE and MLX_CB_PROFILE
+   probes` (`device.cpp/.h`, `eval.cpp`). Strip the refuted knobs and the
+   `sdpa_mma_prefetch` function-constant variant (82 lines, measured
+   neutral to slower) before the first of these.
+2. spokvulcan/mlx-swift (the checkout, 3 files): `feat: dynamicSlice op`
+   (`Ops+DynamicSlice.swift`), plus the regenerated `mlx-generated/
+   quantized.cpp` preamble and `mlx-generated/metal/sdpa_vector.h`, which
+   must be re-derived from the submodule commit rather than hand-carried.
+   Then move the vendor's `Package.swift` pin to the new revision.
+3. spokvulcan/mlx-swift-lm (vendor, 7 modified + 7 new files): one
+   `perf(dflash2): ...` commit per fused kernel family keeps upstream
+   review possible (GDN conv+norm / norm+gate / gate tables; q/k norm +
+   RoPE; drafter dynamic conv, greedy walk, top-k, head vocabulary
+   prefix; RMSNorm+residual), a `fix(tests): ...` commit for the four test
+   repairs, and a `chore: strip loop-only env knobs` commit per the table
+   above. Upstream PR #607 stays the drafter/iterator reshape; these are
+   follow-up PRs on top of it.
+4. tesseract: `feat(bench): DFlash2 fast bench, fixtures and ledger`
+   (`scripts/dflash2-bench.sh`, `scripts/dflash2-compare.py`,
+   `benchmarks/dflash2/`, `DFlash2BenchRunner.swift`, `scripts/bench.sh`),
+   `fix(app): set MLX_DYNSLICE_INPLACE at launch` (`TesseractApp.swift`),
+   and the docs commit for this file; the vendor pin moves last.
+
+### Follow-ups the loop measured but did not build
+
+- Per-group activation row sums precomputed once per QMM for the v2 tile:
+  BUILT AND REVERTED. -2..-3% per QMM in the microbench, nothing
+  measurable in ms/round, and the `simd_sum` order flipped target argmaxes
+  (travel identity DIVERGED at +38, code at +146). A retry must reproduce
+  the tile's own shuffle order bit for bit (ledger, 07:20).
+- Long context: the 2-pass MMA SDPA runs ~4x off the K/V bandwidth floor at
+  16k keys (summary fixture 78-84 ms/round at 6k prompt tokens).
+- Tree / multi-candidate verification (acceptance lever; algorithmic).
+- Prefill, not decode: the prompt chunks (M = 53 / 81 rows) run MLX's
+  generic quantized GEMM at 9-11 TFLOPS (gate_up 3.1 ms at M = 81, 1.2 ms
+  at M = 53 for 100 MB of weights) — a separate program, outside this
+  loop's per-round ruler.

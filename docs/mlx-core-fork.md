@@ -52,6 +52,19 @@ from the pre-backport tips is byte-identical to the text that was benched
 (clean-build confirmation + bs3 smoke leg). The carry drops for free when the
 pin rebases to ≥ v0.32.0 (the commit is already upstream).
 
+### Carried since 2026-09-05: the DFlash2 loop's kernels
+
+mlx `b2fcc671` -> `b6a5f3b6` (four commits: fast-math compile for custom
+kernels named `fastmath_*`, the `MLX_KERNEL_PROFILE` / `MLX_CB_PROFILE`
+probes, the small-M 4-bit QMM tile diet + `full_tiles` + v2
+scale-after-accumulate default, 1-pass SDPA for any qL <= 8 with 32/64
+partitions for the 2-pass MMA kernel), mlx-swift `24779d5` -> `6058402`
+(`dynamicSlice` op + the gitlink bump with `mlx-generated/quantized.cpp`
+regenerated from the submodule). Verified after re-resolution: the
+DerivedData checkout is clean at those two commits and its source equals
+the text the fixtures were verified on. Details and the knob dispositions:
+`docs/mlx-swift-lm-fork.md`, "2026-09-05 optimization loop — landed".
+
 Scheme creation started from `54ca1ec` (provenance-only) on the original
 `pin-tesseract` branch.
 
