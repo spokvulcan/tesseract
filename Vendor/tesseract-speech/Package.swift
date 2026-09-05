@@ -10,7 +10,7 @@ let package = Package(
     dependencies: [
         .package(path: "../mlx-audio-swift"),
         .package(path: "../mlx-swift-lm"),
-        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "24779d5cf68ef0038ddd32caf6e1bd880d104e83"),
+        .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "6058402c676de25560051acda772e80d86d696d1"),
     ],
     targets: [
         .target(
