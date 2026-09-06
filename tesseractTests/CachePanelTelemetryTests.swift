@@ -61,21 +61,23 @@ struct SSDBudgetPanelContextTests {
         #expect(!context.floorBound)
     }
 
-    /// A nearly-full disk degrades the measured budget to the floor —
-    /// and the context says so (the panel's "at floor, disk low").
-    @Test func nearlyFullDiskDegradesToFloorVisibly() {
+    /// A nearly-full disk pulls the measured budget under the floor — to
+    /// what the disk can hold above the reserve, here nothing — and the
+    /// context says so (the panel's "disk low").
+    @Test func nearlyFullDiskDropsBelowTheFloorVisibly() {
         let root = makeScratchDir()
         defer { try? FileManager.default.removeItem(at: root) }
         let ledger = SnapshotLedger(
             rootURL: root,
             budgetBytes: 1_000_000,
             manifestDebounce: .milliseconds(20),
-            freeDiskBytesProvider: { _ in 2_000_000 }  // 0.25 · 2 MB ≪ floor
+            freeDiskBytesProvider: { _ in 2_000_000 }  // 2 MB free ≪ the reserve
         )
         _ = ledger.admit(makeDescriptor(bytes: 1_000))
 
         let context = ledger.budgetContext()
-        #expect(context.budgetBytes == 1_000_000)
+        #expect(context.budgetBytes == 0)
+        #expect(context.floorBytes == 1_000_000)
         #expect(context.freeDiskBytes == 2_000_000)
         #expect(context.floorBound)
     }

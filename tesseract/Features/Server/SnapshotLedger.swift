@@ -273,10 +273,11 @@ nonisolated final class SnapshotLedger: @unchecked Sendable {
     }
 
     /// Panel-facing budget context (PRD #150): the budget in force, the
-    /// floor it degrades to, the last measured free-disk bytes (`nil`
-    /// when dynamic budgeting is off or unmeasured), and whether that
-    /// measurement was floor-bound. The panel's "nearly-full disk
-    /// degraded to the floor" copy reads off exactly this.
+    /// floor, the last measured free-disk bytes (`nil` when dynamic
+    /// budgeting is off or unmeasured), and whether that measurement was
+    /// floor-bound — free disk under the floor's share, so the budget
+    /// holds at the floor or, past the reserve, at what the disk can
+    /// keep. The panel's "disk low" copy reads off exactly this.
     func budgetContext() -> (
         budgetBytes: Int, floorBytes: Int, freeDiskBytes: Int?, floorBound: Bool
     ) {

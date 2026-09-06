@@ -2345,13 +2345,10 @@ nonisolated final class ServerCompletion {
                 evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
                 alphaTuner: AlphaTuner(flopProfile: flopProfile),
                 tieredStore: tieredStore,
-                // Snapshot Demotion's write-through extraction — Deferred
-                // Payload Extraction, so this MainActor call reads array
-                // shapes only and the SSD writer's task copies the bytes.
-                // Snapshot arrays are evaluated deep copies
-                // (`HybridCacheSnapshot.capture`), never live model state,
-                // which is what lets a thread outside the Model Session
-                // read them at all.
+                // Snapshot Demotion's write-through extraction: **Deferred
+                // Payload Extraction**, so this MainActor call reads shapes
+                // only and the SSD writer copies the bytes (snapshot arrays
+                // are evaluated deep copies, never live model state).
                 demotionPayloadExtractor: { snapshot in
                     Self.extractSnapshotPayload(snapshot)
                 },
@@ -2687,7 +2684,7 @@ nonisolated final class ServerCompletion {
             let suffixBaseOffset: Int?
         }
 
-        private var owed: [Layer?]
+        private var owed: [Layer]
 
         init(_ layers: [Layer]) {
             owed = layers
@@ -2696,9 +2693,8 @@ nonisolated final class ServerCompletion {
         func materialize() -> [SnapshotPayload.LayerPayload] {
             var layers: [SnapshotPayload.LayerPayload] = []
             layers.reserveCapacity(owed.count)
-            for index in owed.indices {
-                guard let layer = owed[index] else { continue }
-                owed[index] = nil
+            while !owed.isEmpty {
+                let layer = owed.removeFirst()
                 var arrays: [SnapshotPayload.ArrayPayload] = []
                 arrays.reserveCapacity(layer.arrays.count)
                 for array in layer.arrays {

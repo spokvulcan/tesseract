@@ -159,7 +159,7 @@ struct MemoryHeadroomSampleTests {
             for _ in 0..<rounds {
                 let sample = MemoryHeadroomSample(
                     freeBytes: 1 * gib, purgeableBytes: 0, reclaimableBytes: 30 * gib,
-                    workingSetHeadroomBytes: bounded ? workingSetLeft - resident : nil
+                    workingSetHeadroomBytes: bounded ? workingSetLeft - resident : .max
                 )
                 let ceiling = DynamicCeilingPolicy.ceilingBytes(
                     residentBytes: resident,
@@ -531,7 +531,8 @@ struct DynamicBudgetCeilingManagerTests {
     /// `budgetChange reason=measurement` (PRD #149 item 5).
     @Test func measurementEmitsDiagnostics() {
         let headroom = InMemoryMemoryHeadroomSource(
-            next: MemoryHeadroomSample(freeBytes: 10 * gib, purgeableBytes: 0)
+            next: MemoryHeadroomSample(
+                freeBytes: 10 * gib, purgeableBytes: 0, workingSetHeadroomBytes: 40 * gib)
         )
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 3 * gib,
@@ -547,8 +548,7 @@ struct DynamicBudgetCeilingManagerTests {
         let measures = lines.filter { $0.contains("event=budgetMeasure") }
         #expect(measures.count == 1)
         #expect(measures[0].contains("headroomBytes=\(10 * gib)"))
-        // A scripted sample carries no footprint: the bound reads unmeasured.
-        #expect(measures[0].contains("workingSetHeadroomBytes=unmeasured"))
+        #expect(measures[0].contains("workingSetHeadroomBytes=\(40 * gib)"))
         #expect(
             measures[0].contains(
                 "reserveBytes=\(ActiveInferenceReserve.bootstrapPerLaneBytes)"))

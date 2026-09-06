@@ -32,6 +32,7 @@
 
 import Foundation
 import MLXLMCommon
+import os
 
 // MARK: - Schema version
 
@@ -741,11 +742,13 @@ nonisolated struct SnapshotPayload: Sendable {
     /// for a deferred one.
     var isMaterialized: Bool { source.isMaterialized }
 
-    /// Run the deferred host copy now (a no-op once materialized). The SSD
-    /// writer calls it before the file write so the copy is timed and
-    /// attributed there rather than hidden inside the container encoder.
-    func materialize() {
-        _ = source.layers()
+    /// Run the deferred host copy now: `true` when this call did the copy,
+    /// `false` when the bytes were already in hand. The SSD writer calls
+    /// it before the file write so the copy is timed and attributed there
+    /// rather than hidden inside the container encoder.
+    @discardableResult
+    func materialize() -> Bool {
+        source.materialize()
     }
 
     /// A payload whose bytes are already in hand.
@@ -794,40 +797,48 @@ nonisolated struct SnapshotPayload: Sendable {
     /// concurrent reader blocks until that copy finishes and sees the
     /// cached result). Reference semantics on purpose — copies of the
     /// payload share one materialization.
-    private final class LayerSource: @unchecked Sendable {
+    private final class LayerSource: Sendable {
         private enum State {
             case deferred(@Sendable () -> [LayerPayload])
             case ready([LayerPayload])
         }
 
-        private let lock = NSLock()
-        private var state: State
+        private let state: OSAllocatedUnfairLock<State>
 
         init(ready layers: [LayerPayload]) {
-            state = .ready(layers)
+            state = OSAllocatedUnfairLock(initialState: .ready(layers))
         }
 
         init(deferred materialize: @escaping @Sendable () -> [LayerPayload]) {
-            state = .deferred(materialize)
+            state = OSAllocatedUnfairLock(initialState: .deferred(materialize))
         }
 
         var isMaterialized: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            if case .ready = state { return true }
-            return false
+            state.withLock { state in
+                if case .ready = state { return true }
+                return false
+            }
+        }
+
+        /// `true` when this call ran the materializer.
+        func materialize() -> Bool {
+            state.withLock { state in
+                guard case .deferred(let materialize) = state else { return false }
+                state = .ready(materialize())
+                return true
+            }
         }
 
         func layers() -> [LayerPayload] {
-            lock.lock()
-            defer { lock.unlock() }
-            switch state {
-            case .ready(let layers):
-                return layers
-            case .deferred(let materialize):
-                let layers = materialize()
-                state = .ready(layers)
-                return layers
+            state.withLock { state in
+                switch state {
+                case .ready(let layers):
+                    return layers
+                case .deferred(let materialize):
+                    let layers = materialize()
+                    state = .ready(layers)
+                    return layers
+                }
             }
         }
     }

@@ -16,14 +16,9 @@
 //  thin Mach adapter, the in-memory peer tests drive, the pure ceiling
 //  policy, and the reserve fold.
 //
-//  The kernel's buckets alone are not a safe headroom (2026-09-06
-//  incident): the cache's own cold snapshot pages age into "inactive",
-//  so a growing cache raised its own ceiling — 8.7 → 38.7 GB in 17
-//  minutes on a 48 GB machine, swap filled the disk, the machine
-//  rebooted. The sample therefore also carries the **Working-Set
-//  Bound** — the per-process working set the GPU driver recommends,
-//  minus this process's physical footprint — and headroom is the
-//  smaller of the two. Growth now shrinks the ceiling it feeds.
+//  The sample also carries the **Working-Set Bound** (ADR-0018, the
+//  2026-09-06 runaway): headroom is the smaller of the kernel buckets
+//  and what the process may still take before it is the one swapped.
 //
 
 import Foundation
@@ -59,13 +54,13 @@ nonisolated struct MemoryHeadroomSample: Sendable, Equatable {
     /// swapped. The kernel buckets above cannot see this: the cache's
     /// own cold pages age into "inactive" and would count as headroom,
     /// so a growing cache raised its own ceiling (the 2026-09-06
-    /// runaway). `nil` when unmeasured (scripted samples), which keeps
-    /// the bucket sum.
-    let workingSetHeadroomBytes: Int?
+    /// runaway). Defaults to no bound so scripted test samples keep the
+    /// bucket shape.
+    let workingSetHeadroomBytes: Int
 
     init(
         freeBytes: Int, purgeableBytes: Int, reclaimableBytes: Int = 0,
-        workingSetHeadroomBytes: Int? = nil
+        workingSetHeadroomBytes: Int = .max
     ) {
         self.freeBytes = freeBytes
         self.purgeableBytes = purgeableBytes
@@ -74,11 +69,9 @@ nonisolated struct MemoryHeadroomSample: Sendable, Equatable {
     }
 
     /// What the OS could hand this process without swapping it: the
-    /// reclaimable buckets, capped by the Working-Set Bound when measured.
+    /// reclaimable buckets, capped by the Working-Set Bound.
     var headroomBytes: Int {
-        let buckets = freeBytes + purgeableBytes + reclaimableBytes
-        guard let workingSetHeadroomBytes else { return buckets }
-        return min(buckets, max(workingSetHeadroomBytes, 0))
+        min(freeBytes + purgeableBytes + reclaimableBytes, max(workingSetHeadroomBytes, 0))
     }
 }
 
@@ -106,29 +99,21 @@ protocol MemoryHeadroomSource: AnyObject, Sendable {
 @MainActor
 final class MachMemoryHeadroomSource: MemoryHeadroomSource {
     /// The per-process working set the GPU driver recommends
-    /// (`MTLDevice.recommendedMaxWorkingSetSize`, ~78% of physical
-    /// memory on Apple Silicon), read once; a machine without a Metal
-    /// device falls back to the same fraction of physical memory.
-    nonisolated let workingSetBytes: Int
+    /// (`MTLDevice.recommendedMaxWorkingSetSize`), read once. A host
+    /// without a Metal device gets the three quarters of physical memory
+    /// Apple Silicon reports.
+    private nonisolated let workingSetBytes: Int
 
     /// Constructible from any isolation (e.g. `LLMActor`'s load path);
     /// `sample()` stays MainActor.
     nonisolated init() {
-        if let device = MTLCreateSystemDefaultDevice() {
-            workingSetBytes = Int(clamping: device.recommendedMaxWorkingSetSize)
-        } else {
-            workingSetBytes = Int(
-                Double(ProcessInfo.processInfo.physicalMemory)
-                    * Self.fallbackWorkingSetFraction)
-        }
+        workingSetBytes =
+            MTLCreateSystemDefaultDevice().map { Int(clamping: $0.recommendedMaxWorkingSetSize) }
+            ?? Int(Double(ProcessInfo.processInfo.physicalMemory) * 0.75)
     }
 
-    /// The Apple Silicon `recommendedMaxWorkingSetSize` ratio, for hosts
-    /// that report no Metal device.
-    nonisolated static let fallbackWorkingSetFraction = 0.75
-
     func sample() -> MemoryHeadroomSample? {
-        let footprint = Self.physicalFootprintBytes()
+        guard let footprint = Self.physicalFootprintBytes() else { return nil }
         var stats = vm_statistics64_data_t()
         var count = mach_msg_type_number_t(
             MemoryLayout<vm_statistics64_data_t>.stride / MemoryLayout<integer_t>.stride
@@ -155,16 +140,17 @@ final class MachMemoryHeadroomSource: MemoryHeadroomSource {
             freeBytes: Int(clamping: stats.free_count) * pageSize,
             purgeableBytes: Int(clamping: stats.purgeable_count) * pageSize,
             reclaimableBytes: reclaimablePages * pageSize,
-            workingSetHeadroomBytes: footprint.map { workingSetBytes - $0 }
+            workingSetHeadroomBytes: workingSetBytes - footprint
         )
     }
 
     /// This process's physical footprint (`task_vm_info.phys_footprint`):
     /// resident anonymous pages, their compressed form, and IOKit-mapped
     /// memory — so Metal buffers count, and pages the compressor already
-    /// took still count. `nil` when the task query fails; the sample
-    /// then falls back to the kernel buckets alone.
-    nonisolated static func physicalFootprintBytes() -> Int? {
+    /// took still count. `nil` when the task query fails; the sample fails
+    /// with it and the manager keeps its ceiling, as for a
+    /// `host_statistics64` failure.
+    private nonisolated static func physicalFootprintBytes() -> Int? {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(
             MemoryLayout<task_vm_info_data_t>.stride / MemoryLayout<integer_t>.stride

@@ -252,18 +252,19 @@ nonisolated struct PromptCacheSSDSnapshot: Codable, Equatable, Sendable {
     let pendingCount: Int
     let snapshotCount: Int
     let partitionCount: Int
-    /// The floor the dynamic budget degrades to on a nearly-full disk
-    /// (ADR-0018; the old 20 GiB constant). Panel context.
+    /// The dynamic budget's floor (ADR-0018; the old 20 GiB constant),
+    /// honored while the disk can hold it. Panel context.
     var budgetFloorBytes: Int = 0
     /// Last measured free-disk bytes; `nil` when dynamic budgeting is
     /// off (tests, replay) or the volume was never probed.
     var freeDiskBytes: Int?
     /// The panel's "disk low" signal: the last measurement found free
-    /// space, not policy, holding the budget at the floor. Measured
-    /// ledger-side (`SSDBudgetPolicy.isFloorBound`) rather than derived
-    /// from `budgetBytes <= budgetFloorBytes` here — a user cap below
-    /// the floor also parks the budget there, and that is a settings
-    /// choice, not a full disk.
+    /// space, not policy, limiting the budget — at the floor, or below it
+    /// once the disk reserve binds. Measured ledger-side
+    /// (`SSDBudgetPolicy.isFloorBound`) rather than derived from
+    /// `budgetBytes <= budgetFloorBytes` here — a user cap below the
+    /// floor also parks the budget there, and that is a settings choice,
+    /// not a full disk.
     var budgetFloorBound: Bool = false
 
     static let disabled = PromptCacheSSDSnapshot(

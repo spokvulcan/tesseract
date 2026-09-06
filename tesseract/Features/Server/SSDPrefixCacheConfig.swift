@@ -58,10 +58,12 @@ nonisolated enum SSDBudgetPolicy {
         Int(Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction)
     }
 
-    /// True when the floor, not the disk, is holding the budget up —
-    /// the panel's "disk low" signal (PRD #150). Deliberately distinct
-    /// from `budget == floor`: a *user cap* below the floor also drags
-    /// the budget down there, and that must not read as a full disk.
+    /// True when free disk, not policy, is what limits the budget — the
+    /// panel's "disk low" signal (PRD #150): the disk's share is under the
+    /// floor, so the budget sits at the floor or, once the reserve binds,
+    /// at whatever the disk can still hold. Deliberately distinct from
+    /// `budget <= floor`: a *user cap* below the floor also drags the
+    /// budget down there, and that must not read as a full disk.
     static func isFloorBound(
         freeDiskBytes: Int,
         currentTierBytes: Int,
