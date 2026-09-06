@@ -59,3 +59,18 @@ waits for a better kernel story; the batch engine is unaffected either way.
   unchanged in meaning.
 - The decode-shape spike (ADR-0022) runs on the paged layout if the gate
   passes — contiguous-KV measurements would not transfer.
+
+## Clarification 2026-09-06 (ADR-0064) — a move is not the rejected alias
+
+The rejection of *copy-on-write restore* above stands as written. ADR-0064's
+**Leaf Handoff** is a different shape: the conversation's cache objects have
+exactly one owner at any instant, the radix tree or the running generation,
+and they change hands by move at a quiescent point inside the Model Session.
+Nothing is shared between two owners and nothing is copied on write; a
+**Leaf Lease** blocks every tree-side release for the turn. It is also not
+the refcounted KV Pages this ADR decides for batch lanes: a sequential
+coding-agent session has one reader of its leaf at a time, and a move gives
+it the single-owner memory shape without a page kernel. The Restore Pin
+consequence above ("dissolves into refcounts") is about the paged design;
+under ADR-0064 the pin remains for copy restores and the lease is its strong
+counterpart.

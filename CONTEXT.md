@@ -81,6 +81,38 @@ hydration discipline lives at this seam.
 _Avoid_: widening it before a second caller needs a member; the concrete store's
 full surface; mock/stub (the in-memory peer is a real adapter).
 
+**Leaf Handoff**:
+Transferring a conversation's KV cache objects between their only two possible
+owners — the radix tree and a running generation — by move, never by copy and
+never by alias: the finished turn's live cache becomes the leaf as it is, and
+the request that extends that leaf takes the objects back as its live cache.
+Only at quiescent points; only for a leaf hit at its full offset that every
+layer can return from (**Leaf Rewind**); anything else restores by copy as
+before.
+_Avoid_: copy-on-write restore (the alias ADR-0023 rejected — a handoff shares
+nothing between two owners); zero-copy (the SSD write still copies); cache
+sharing (one owner at a time, never two).
+
+**Leaf Lease**:
+The claim a running generation holds on the leaf it took by **Leaf Handoff**,
+from check-out to check-in: while it holds, the tree may not drop the body,
+demote it, clear the RAM tier of it, promote it into an SSD write, or let the
+SSD writer read from it. Ends only at check-in or **Leaf Rewind**, never by
+age-out; the leased bytes stay counted.
+_Avoid_: **Restore Pin** (the weak claim of a copy restore — it protects a path,
+it does not own a body); GPU lease (the inference arbiter's turn-taking, a
+different resource); lock, refcount (one owner needs neither).
+
+**Leaf Rewind**:
+Returning a leaf taken by **Leaf Handoff** to its exact pre-check-out state when
+the turn is cancelled, fails, or is intervened: the attention layers are trimmed
+back to the leaf offset and the recurrent layers' state is restored from the
+independent copy saved at check-out, then the leaf is checked back in unchanged.
+_Avoid_: **Think-Strip Rewind** (a render-caused prefix invalidation,
+unrelated); rollback (the vendor's speculative-decoding checkpoint, which aliases
+and is not used here); discard (the pre-handoff cancel outcome, which loses the
+conversation's cache).
+
 **State Effect**:
 The topology-only outcome of a **Snapshot State** transition: `settled`,
 `becameEmpty` (the sole trigger for the tree's self-heal node removal), or
@@ -418,25 +450,61 @@ capture and admit.
 _Avoid_: leaf store mode (one input, not the whole story); capture port (it returns
 a decision, not a capture).
 
+**Emitted Path**:
+The token path a conversation prefix actually took through the model on this
+server — the prompt ids as fed plus the generated ids, ending with the canonical
+end-of-turn id. The truth for every assistant turn the server generated; a
+canonical re-encoding of such a turn is not it.
+_Avoid_: **Cache Key Path** (the prompt as keyed, which the Emitted Path begins
+with); generated tokens (only the tail); canonical path, stored path (the
+re-render's encoding, which the Emitted Path replaces for server-generated
+turns).
+
+**Emitted Path Index**:
+The per-model-fingerprint map from a rendered prefix — the template's bytes from
+the start of the render through a server-generated assistant message's
+end-of-turn marker — to that prefix's **Emitted Path**. Keyed on the whole
+prefix so the same text after a different history is a different key; bounded in
+bytes, evicted least-recently-used, cleared on model unload; last writer wins on
+a same key.
+_Avoid_: token cache (the Render+Token Cache holds canonical encodes and never an
+emitted id); session table, lineage store (nothing is keyed by client or
+session); the tree (KV lives there — the index is provenance and outlives the
+leaf it points at).
+
+**Emitted Path Resolve**:
+The one way a request's tokens are built: render to bytes, find the deepest
+end-of-turn marker the **Emitted Path Index** knows, take that entry's path,
+canonically encode only the bytes after the marker, concatenate. Its output is
+both the model input and the **Cache Key Space** input; anything unindexed
+encodes canonically and is a safe miss. Text-only requests only.
+_Avoid_: tokenize (the resolve may not tokenize an indexed prefix at all);
+render-and-encode (the per-call-site spellings it replaces); lookup (the tree's
+read side, which consumes the resolve's output).
+
 **Live Leaf Capture**:
-Storing a finished turn's leaf straight from the live decode cache, with no
-re-prefill, once the token path the model actually fed (prompt plus emitted ids)
-is proven to be a prefix of the turn's canonical re-render. Proven per turn by
-comparing the two paths, never assumed from a template flag; any disagreement
-falls back to the boundary restore-and-re-prefill.
-_Avoid_: cache reuse (too broad — the prompt hit is also reuse); skipping the
-re-prefill (it is not skipped, it is shown to be unnecessary); preserve-thinking
-fast path (the render mode makes it likely, the comparison makes it safe).
+Storing a finished turn's leaf straight from the live decode cache at the
+cache's own offset, under the **Emitted Path**, with no re-prefill. By
+construction for a turn the **Emitted Path Index** registers: the path the leaf
+is keyed on is the path the model fed, so nothing is compared against a
+re-render; only structural eligibility (an intervened turn, a non-identity key
+space, no fed ids, an offset outside the live path) sends a turn to the boundary
+path.
+_Avoid_: cache reuse (too broad — the prompt hit is also reuse); proven
+append-stability (the ADR-0062 shape — a per-turn comparison the index made
+unnecessary); preserve-thinking fast path (the render mode makes a turn
+indexable; the index makes it exact).
 
 **Append-Stable Render**:
 The property of a chat-template render under which a finished turn's canonical
 re-render equals the token path the model was fed — prompt plus emitted ids —
-followed only by template glue. The Live Leaf Capture proves it per turn rather
-than assuming it from a template flag.
+followed only by template glue. A property some templates have and the cache no
+longer depends on: with the **Emitted Path Index** a server-generated turn is
+keyed on what the model fed whether or not the re-render would have matched.
 _Avoid_: preserve-thinking (a render mode that usually has the property, not the
 property); canonical render (the re-render itself, which may or may not be
-append-stable); wire fidelity (the client-facing text, one of the things that
-can break it).
+append-stable); a cache invariant (it was one under ADR-0062; it is a template
+observation now).
 
 **Think-Strip Rewind**:
 The prefix invalidation a thinking template causes when a new real user message
@@ -444,7 +512,9 @@ arrives and the template strips the `<think>` blocks it had kept in the assistan
 turns since the previous user query, forcing everything past that divergence point
 to re-prefill. It is bounded — not removed — by the canonical-leaf probe.
 _Avoid_: cache miss after tools (the felt symptom, not the mechanism); template
-drift (the render is deterministic); client mutation.
+drift (the render is deterministic); client mutation; **Leaf Rewind** (returning
+a checked-out leaf to its prior state — an ownership mechanism, not a template
+artifact).
 
 **Client Prefix Divergence**:
 A deep prefix-cache loss caused by the client changing early tokens of its own
@@ -2038,7 +2108,9 @@ An in-flight request's claim on the node it restored from: pinned into the **Bud
 Floor** at resolve, released at the completion drive's all-exit-paths tail, so no
 drain may evict the body a running generation depends on. Weak by reference — a pin
 protects, it does not own.
-_Avoid_: node lock, refcount, lease; leaf pinning (pins hold restore *paths*, not the
+_Avoid_: node lock, refcount; lease unqualified (the **Leaf Lease** is the strong
+claim of a **Leaf Handoff** — it owns the body for the turn — and the GPU lease is
+arbitration; a pin is neither); leaf pinning (pins hold restore *paths*, not the
 newest leaf — that floor member is recency-defined).
 
 **Guarantee-Class Write**:

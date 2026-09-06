@@ -81,3 +81,31 @@ demotion victim's live on only there — and the materializer releases each
 layer as it copies it, so a demotion never doubles in RAM. The front door's
 `maxPendingBytes` accounting is unchanged: it always counted the byte total,
 which the payload still knows up front.
+
+## Amendment 2026-09-06 (proposed with ADR-0064) — Leaf Lease, and extension payloads that retain no body array
+
+Takes effect when ADR-0064 is Accepted
+([issue #471](https://github.com/spokvulcan/tesseract/issues/471)).
+
+The **Restore Pin** above is the weak claim of a request that restored *by
+copy*: it protects a restore path in the Budget Floor, it owns nothing, and
+the pin table's age-out backstop may end it. ADR-0064 adds a second, strong
+claim beside it. A request that takes a leaf's cache objects by **Leaf
+Handoff** holds a **Leaf Lease** on that body from check-out to check-in:
+while it holds, no eviction drain, **Snapshot Demotion**, RAM-tier clear,
+write-eagerness promotion or SSD-writer materialization may touch the body.
+The lease ends only at check-in or **Leaf Rewind**, never by age-out; the
+backstop stays for pins and is exempt for leases. Leased bytes stay counted
+in the tree total, and check-in reconciles the growth. Budget Floor
+membership keeps its meaning: a leased body is a floor member for the turn,
+and if pressure cannot be relieved because the only candidate is leased the
+outcome is what the floor gives today.
+
+The Deferred Payload Extraction amendment above says a deferred payload
+"keeps the arrays alive" and that "a leaf shares them with its RAM body".
+That sharing narrows to full payloads. An extension payload detaches every
+array it retains, the recurrent layers' state as well as the attention
+suffix slices, deep-copied and evaluated on the Metal-affine caller, so a
+pending suffix payload never references a body a generation may own. A full
+payload still aliases the attention body, which is why ADR-0064 makes the
+next check-out of that leaf copy until the writer has materialized it.
