@@ -1,6 +1,7 @@
 import Foundation
 import MLX
 import MLXLMCommon
+import os
 
 /// The raw generation event stream produced by the app's token-event mapping —
 /// the app-level replacement for the vendor fork's `Generation` enum
@@ -27,6 +28,32 @@ nonisolated enum RawGeneration: Sendable {
 
     /// Completion information summarizing token counts and performance metrics.
     case info(GenerateCompletionInfo)
+}
+
+/// The token ids one generation fed through the model, in order — every id
+/// the decode iterator returned, including the stop token that ended the
+/// turn. The iterators return a token only after feeding it (the AR loop
+/// feeds `previousY` to sample the next; DFlash2 drains verified positions),
+/// so this list is the live KV cache's token path past the prompt, up to the
+/// iterator's own unfed tail. The **Live Leaf Capture** compares it against
+/// the canonical re-render to decide whether the finished turn's leaf can be
+/// taken from the live cache instead of re-prefilled (`LiveLeafCapture`).
+///
+/// A class so the producer task can append while the consumer holds the
+/// handle; read only after the generation task has completed.
+nonisolated final class GeneratedTokenRecorder: @unchecked Sendable {
+    private let tokens = OSAllocatedUnfairLock<[Int]>(initialState: [])
+
+    init() {}
+
+    func append(_ token: Int) {
+        tokens.withLock { $0.append(token) }
+    }
+
+    /// The ids recorded so far. Stable once the generation task has finished.
+    var snapshot: [Int] {
+        tokens.withLock { $0 }
+    }
 }
 
 /// The app's generation entry point: drives upstream's public raw-token loop
@@ -84,13 +111,15 @@ nonisolated enum TokenGenerationLoop {
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
         iterator: consuming some TokenIteratorProtocol,
-        tools: [ToolSpec]? = nil
+        tools: [ToolSpec]? = nil,
+        generatedTokens: GeneratedTokenRecorder? = nil
     ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
         let (tokens, generationTask) = rawTokenTask(
             promptTokenCount: promptTokenCount,
             modelConfiguration: modelConfiguration,
             tokenizer: tokenizer,
-            iterator: iterator
+            iterator: iterator,
+            generatedTokens: generatedTokens
         )
         return events(
             from: tokens,
@@ -112,7 +141,8 @@ nonisolated enum TokenGenerationLoop {
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
-        iterator: consuming some TokenIteratorProtocol
+        iterator: consuming some TokenIteratorProtocol,
+        generatedTokens: GeneratedTokenRecorder?
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
 
@@ -137,6 +167,10 @@ nonisolated enum TokenGenerationLoop {
             var stopReason: GenerateStopReason?
 
             while let token = iterator.next() {
+                // Every returned token has been fed (the stop token included)
+                // — record it before any exit so the live KV cache's token
+                // path stays reconstructible for the Live Leaf Capture.
+                generatedTokens?.append(token)
                 if Task.isCancelled {
                     stopReason = .cancelled
                     break

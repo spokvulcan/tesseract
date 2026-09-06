@@ -406,6 +406,16 @@ decides; the actor-side execution does the Metal capture and admit.
 _Avoid_: leaf store mode (one input, not the whole story); capture port (it returns
 a decision, not a capture).
 
+**Live Leaf Capture**:
+Storing a finished turn's leaf straight from the live decode cache, with no
+re-prefill, once the token path the model actually fed (prompt plus emitted ids)
+is proven to be a prefix of the turn's canonical re-render. Proven per turn by
+comparing the two paths, never assumed from a template flag; any disagreement
+falls back to the boundary restore-and-re-prefill.
+_Avoid_: cache reuse (too broad — the prompt hit is also reuse); skipping the
+re-prefill (it is not skipped, it is shown to be unnecessary); preserve-thinking
+fast path (the render mode makes it likely, the comparison makes it safe).
+
 **Think-Strip Rewind**:
 The prefix invalidation a thinking template causes when a new real user message
 arrives and the template strips the `<think>` blocks it had kept in the assistant
@@ -454,11 +464,12 @@ _Avoid_: cache miss (a rewind is a partial hit at a deeper-than-zero floor); lat
 spike (the symptom, not the measured cause).
 
 **Preserve-Thinking Render**:
-An opt-in render mode, declared by a template that natively supports it, that keeps
+A render mode, declared by a template that natively supports it, that keeps
 `<think>` blocks in every assistant turn so the render is append-stable and the
-**Think-Strip Rewind** cannot occur. Being part of the template context, the flag
-is part of the cache partition, and retained reasoning permanently occupies
-context.
+**Think-Strip Rewind** cannot occur. Whether it is the template's default or a
+per-model choice is the template's business; being part of the template context,
+the flag is part of the cache partition, and retained reasoning permanently
+occupies context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
 

@@ -25,6 +25,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ServerCompletionDrainTests \
   -only-testing:tesseractTests/ServerCompletionLeafStoreModeTests \
   -only-testing:tesseractTests/ServerCompletionLeafSkipLogTests \
+  -only-testing:tesseractTests/LiveLeafCaptureTests \
   -only-testing:tesseractTests/CompletionProjectionTests \
   -only-testing:tesseractTests/MessageConverterTests \
   -only-testing:tesseractTests/OpenAITypesTests \

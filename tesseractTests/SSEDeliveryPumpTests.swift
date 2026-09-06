@@ -82,7 +82,7 @@ struct SSEDeliveryPumpTests {
         }
         #expect(accumulated == #"{"text":"hello world"}"#)
 
-        guard case .completed(_, _, let wireStreamed) = outcome else {
+        guard case .completed(_, _, let wireStreamed, _) = outcome else {
             Issue.record("expected .completed, got \(outcome)")
             return
         }
@@ -142,7 +142,7 @@ struct SSEDeliveryPumpTests {
         #expect(toolChunks[1].id == nil)
         #expect(toolChunks[1].function?.arguments == #"{"text":"hello world"}"#)
 
-        guard case .completed(_, _, let wireStreamed) = outcome else {
+        guard case .completed(_, _, let wireStreamed, _) = outcome else {
             Issue.record("expected .completed, got \(outcome)")
             return
         }
@@ -159,7 +159,7 @@ struct SSEDeliveryPumpTests {
         let data = try #require(accumulated.data(using: .utf8))
         #expect((try? JSONSerialization.jsonObject(with: data)) is [String: Any])
 
-        guard case .completed(_, _, let wireStreamed) = outcome else {
+        guard case .completed(_, _, let wireStreamed, _) = outcome else {
             Issue.record("expected .completed, got \(outcome)")
             return
         }

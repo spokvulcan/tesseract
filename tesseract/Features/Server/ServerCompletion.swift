@@ -124,6 +124,11 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// the tensor with two axes — passing 1D there crashes in
     /// `getRopeIndex` on `inputIds.dim(1)`.
     let tokenNDim: Int
+    /// The ids the decode loop fed past the prompt (stop token included),
+    /// filled by the generation task and read by the **Leaf Store** phase
+    /// once `completion` has finished — the live cache's token path the
+    /// **Live Leaf Capture** compares against the canonical re-render.
+    let generatedTokens: GeneratedTokenRecorder
 }
 
 extension GenerationStreamLoop.RawGenerationHandle {
@@ -161,7 +166,8 @@ private nonisolated enum KeyedDecodeIterator {
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any MLXLMCommon.Tokenizer,
-        tools: [ToolSpec]?
+        tools: [ToolSpec]?,
+        generatedTokens: GeneratedTokenRecorder
     ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
         switch consume self {
         case .standard(let decode):
@@ -170,7 +176,8 @@ private nonisolated enum KeyedDecodeIterator {
                 modelConfiguration: modelConfiguration,
                 tokenizer: tokenizer,
                 iterator: decode,
-                tools: tools
+                tools: tools,
+                generatedTokens: generatedTokens
             )
         case .dflash2(let decode):
             TokenGenerationLoop.start(
@@ -178,7 +185,8 @@ private nonisolated enum KeyedDecodeIterator {
                 modelConfiguration: modelConfiguration,
                 tokenizer: tokenizer,
                 iterator: decode,
-                tools: tools
+                tools: tools,
+                generatedTokens: generatedTokens
             )
         }
     }
@@ -858,6 +866,11 @@ nonisolated final class ServerCompletion {
                 },
                 sink: handle
             )
+            // Everything from here to `continuation.finish()` is inside the
+            // client-visible wait: the terminal SSE chunk goes out only after
+            // the drive finishes (Completion Delivery). The Leaf store notice
+            // below prints this span so a post-EOS stall is attributable.
+            let generationEnded = Date.timeIntervalSinceReferenceDate
 
             if outcome.cancelled {
                 Memory.clearCache()
@@ -930,6 +943,7 @@ nonisolated final class ServerCompletion {
             // leaf store completed.
             // The leaf keys on what THIS client will echo back — see
             // `GenerationAccumulator.streamedThinking`.
+            let leafStoreStart = Date.timeIntervalSinceReferenceDate
             let leafResult = try await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
@@ -941,9 +955,12 @@ nonisolated final class ServerCompletion {
                 assistantReasoning: clientStreams
                     ? accumulator.streamedThinking : accumulator.thinking,
                 toolCalls: toolCalls,
+                generatedTokens: mlxStart.generatedTokens.snapshot,
+                intervened: accumulator.safeguardTriggered,
                 diagnosticsContext: diagnosticsContext,
                 trace: &trace
             )
+            let leafStoreSeconds = Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
             if let seed = leafResult.speculativeSeed {
                 speculativeSeed = seed
@@ -985,6 +1002,17 @@ nonisolated final class ServerCompletion {
                     mlxCacheLimitBytes: Int64(clamping: Memory.cacheLimit)
                 ))
 
+            // The persisted (notice-level) post-EOS account: which leaf path
+            // ran, its stage breakdown, and the whole span from generation
+            // end to here — the client sees its terminal chunk right after.
+            let postGenerationSeconds = Date.timeIntervalSinceReferenceDate - generationEnded
+            Log.agent.notice(
+                "Leaf store — request_id=\(requestID.uuidString) "
+                    + "\(leafResult.report.logFields) "
+                    + "leafStoreMs=\(String(format: "%.1f", leafStoreSeconds * 1000)) "
+                    + "postGenerationMs=\(String(format: "%.1f", postGenerationSeconds * 1000))"
+            )
+
             // Per-completion trace record (PRD #82, slice #83): one line in
             // the replay corpus for every finished cache-aware completion.
             // Unkeyed Completions return nil from `make`; requests whose
@@ -1012,7 +1040,9 @@ nonisolated final class ServerCompletion {
                     leafStore: leafCapture,
                     ramBudgetBytes: finalBudgetBytes,
                     residualPromptSeconds: completionInfo.promptTime,
-                    deviceEstimates: finalEstimates
+                    deviceEstimates: finalEstimates,
+                    leafStoreSeconds: leafStoreSeconds,
+                    tailSeconds: postGenerationSeconds
                 )
                 if let record {
                     traceLog.append(record)
@@ -1780,11 +1810,13 @@ nonisolated final class ServerCompletion {
             }
 
             // 11. Start the app-owned generation stream.
+            let generatedTokens = GeneratedTokenRecorder()
             let (stream, task) = iterator.startGeneration(
                 promptTokenCount: fullTokenCount,
                 modelConfiguration: session.configuration,
                 tokenizer: session.tokenizer,
-                tools: canonicalTools
+                tools: canonicalTools,
+                generatedTokens: generatedTokens
             )
 
             return HTTPPrefixCacheGeneration(
@@ -1812,7 +1844,8 @@ nonisolated final class ServerCompletion {
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
                 prefillStepSize: parameters.prefill.stepSize ?? 512,
-                tokenNDim: tokenNDim
+                tokenNDim: tokenNDim,
+                generatedTokens: generatedTokens
             )
         }
     }
@@ -2053,12 +2086,14 @@ nonisolated final class ServerCompletion {
                     prefillMs: prefillMs * 1000
                 )))
 
+        let generatedTokens = GeneratedTokenRecorder()
         let (stream, task) = TokenGenerationLoop.start(
             promptTokenCount: fullTokenCount,
             modelConfiguration: session.configuration,
             tokenizer: session.tokenizer,
             iterator: iterator,
-            tools: toolSpecs
+            tools: toolSpecs,
+            generatedTokens: generatedTokens
         )
 
         return HTTPPrefixCacheGeneration(
@@ -2086,7 +2121,8 @@ nonisolated final class ServerCompletion {
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
             prefillStepSize: parameters.prefill.stepSize ?? 512,
-            tokenNDim: fullInput.text.tokens.ndim
+            tokenNDim: fullInput.text.tokens.ndim,
+            generatedTokens: generatedTokens
         )
     }
 
@@ -2219,12 +2255,14 @@ nonisolated final class ServerCompletion {
                     prefillMs: prefillMs * 1000
                 )))
 
+        let generatedTokens = GeneratedTokenRecorder()
         let (stream, task) = TokenGenerationLoop.start(
             promptTokenCount: fullTokenCount,
             modelConfiguration: session.configuration,
             tokenizer: session.tokenizer,
             iterator: iterator,
-            tools: toolSpecs
+            tools: toolSpecs,
+            generatedTokens: generatedTokens
         )
 
         return HTTPPrefixCacheGeneration(
@@ -2252,7 +2290,8 @@ nonisolated final class ServerCompletion {
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
             prefillStepSize: parameters.prefill.stepSize ?? 512,
-            tokenNDim: tokenNDim
+            tokenNDim: tokenNDim,
+            generatedTokens: generatedTokens
         )
     }
 

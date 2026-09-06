@@ -145,6 +145,7 @@ tesseract/
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
 │   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
+│   │   ├── LiveLeafCapture.swift      # Pure live-vs-boundary leaf decision
 │   │   ├── EvictionPolicy.swift       # Pure eviction scoring + AlphaTuner
 │   │   └── Telemetry/                 # Prompt-cache telemetry store
 │   ├── Settings/

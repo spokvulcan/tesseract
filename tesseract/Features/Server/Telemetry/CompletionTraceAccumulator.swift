@@ -106,7 +106,9 @@ nonisolated struct CompletionTraceAccumulator {
         leafStore: AlphaTuner.LeafStore?,
         ramBudgetBytes: Int,
         residualPromptSeconds: Double,
-        deviceEstimates: MeasuredSecondsEstimates?
+        deviceEstimates: MeasuredSecondsEstimates?,
+        leafStoreSeconds: Double? = nil,
+        tailSeconds: Double? = nil
     ) -> CompletionTraceRecord? {
         let restoredOffset = Self.restoredOffset(for: start.lookupReason)
         return CompletionTraceRecord.make(
@@ -146,7 +148,9 @@ nonisolated struct CompletionTraceAccumulator {
             rewind: RewindTelemetry.make(
                 sharedPrefixLength: start.sharedPrefixLength,
                 restoredOffset: restoredOffset
-            )
+            ),
+            leafStoreSeconds: leafStoreSeconds,
+            tailSeconds: tailSeconds
         )
     }
 }
