@@ -147,6 +147,13 @@ nonisolated enum PrefillPlanner {
             tokenizer: tokenizer
         )
 
+        // A standalone plain-text encode of the generation-prompt string,
+        // subtracted from the key path's tail to find the last-message
+        // boundary. It measures and never builds a prompt, and the text it
+        // encodes sits after the last end-of-turn marker — so it can never
+        // coincide with an **Emitted Path Index** prefix (ADR-0063) and stays
+        // outside the **Conversation Render** module's template application
+        // by design (ticket #473 audit).
         let genPromptStr =
             promptStartsThinking
             ? "<|im_start|>assistant\n<think>\n"

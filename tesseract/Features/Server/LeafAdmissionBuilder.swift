@@ -176,11 +176,18 @@ nonisolated enum LeafAdmissionBuilder {
     /// them a cancel would be a no-op against this synchronous body, and the
     /// preempting request would wait out the full remaining probe.
     ///
-    /// `render` supplies the request's ingredients only — this probe is
-    /// deliberately CACHE-FREE (raw `applyChatTemplate`, never the render's
-    /// verbs): it runs detached and cancellable, and a resolve against the
-    /// live entry would neither observe the cancellation checks nor be
-    /// abandonable mid-render.
+    /// Both renders go through `render`'s `uncachedContinuationRender` verb
+    /// — the **Conversation Render** module's deliberately CACHE-FREE render
+    /// (never its cached verbs): the probe runs detached and cancellable,
+    /// and a resolve against the live entry would neither observe the
+    /// cancellation checks nor be abandonable mid-render. The verb renders
+    /// under the request's flags with no generation prompt, exactly as
+    /// `reusablePrefix` does: the seed is keyed under a render-context-
+    /// dependent partition, so its probe path must render under the same
+    /// flags — otherwise the spine lands in a partition the real next turn
+    /// never walks. (`preserve_thinking` disables speculation today, so the
+    /// canonical default is what currently runs; this keeps the two in step
+    /// for the next flag that does not.)
     static func futureSharedPrefix(
         storedConversation: HTTPPrefixCacheConversation,
         keySpace: CacheKeySpace,
@@ -188,26 +195,12 @@ nonisolated enum LeafAdmissionBuilder {
     ) throws -> Result<[Int], CacheKeySpace.TranslationFailure>? {
         try Task.checkCancellation()
         let baseMessages = storedConversation.promptMessages
-        // Render under the request's flags, exactly as `reusablePrefix`
-        // does. The seed is keyed under a render-context-dependent
-        // partition, so its probe path must render under the same flags —
-        // otherwise the spine lands in a partition the real next turn never
-        // walks. (`preserve_thinking` disables speculation today, so the
-        // canonical default is what currently runs; this keeps the two in
-        // step for the next flag that does not.)
-        let probeContext = render.renderContext.additionalContext(
-            merging: ["add_generation_prompt": false]
-        )
-        let firstRender = try render.tokenizer.applyChatTemplate(
-            messages: baseMessages + [Continuation.userTurn.probeMessage],
-            tools: render.toolSpecs,
-            additionalContext: probeContext
+        let firstRender = try render.uncachedContinuationRender(
+            messages: baseMessages + [Continuation.userTurn.probeMessage]
         )
         try Task.checkCancellation()
-        let secondRender = try render.tokenizer.applyChatTemplate(
-            messages: baseMessages + [divergentUserProbeMessage],
-            tools: render.toolSpecs,
-            additionalContext: probeContext
+        let secondRender = try render.uncachedContinuationRender(
+            messages: baseMessages + [divergentUserProbeMessage]
         )
 
         let common = zip(firstRender, secondRender).prefix { $0 == $1 }.count

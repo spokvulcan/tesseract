@@ -45,6 +45,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/CacheKeySpaceTests \
   -only-testing:tesseractTests/PrefillPlannerTests \
   -only-testing:tesseractTests/LeafAdmissionBuilderTests \
+  -only-testing:tesseractTests/ConversationRenderSourceShapeTests \
+  -only-testing:tesseractTests/ConversationRenderProbeParityTests \
+  -only-testing:tesseractTests/ConversationRenderProbeParityRealTests \
   -only-testing:tesseractTests/SnapshotResolutionTests \
   -only-testing:tesseractTests/SnapshotLedgerTests \
   -only-testing:tesseractTests/SnapshotStateTests \

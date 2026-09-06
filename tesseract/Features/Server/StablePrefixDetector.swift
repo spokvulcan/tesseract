@@ -177,8 +177,17 @@ struct StablePrefixDetector {
             ["role": "system", "content": systemPrompt],
             ["role": "user", "content": userContent],
         ]
-        return try tokenizer.applyChatTemplate(
-            messages: messages, tools: toolSpecs, additionalContext: additionalContext
+        // Through the **Conversation Render** module's cache-free probe
+        // entry (ticket #473): one place in the server applies the chat
+        // template. This pair renders a system+user conversation with no
+        // assistant turn, so its tokens can never coincide with an **Emitted
+        // Path Index** prefix (ADR-0063 keys on a server-generated assistant
+        // end-of-turn marker) — the probes stay unresolved by construction.
+        return try ConversationRender.stablePrefixProbeRender(
+            tokenizer: tokenizer,
+            messages: messages,
+            tools: toolSpecs,
+            additionalContext: additionalContext
         )
     }
 }

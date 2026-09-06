@@ -146,6 +146,73 @@ extension Array {
     }
 }
 
+// MARK: - Template-call observing tokenizer
+
+/// Forwards every call to a `ChatTemplateRendering` tokenizer and reports
+/// each template application — the fused `applyChatTemplate` or the split
+/// `renderChatTemplate` the Render+Token Cache runs — to `onTemplateCall`
+/// with its 1-based index, for tests that count applications or interrupt
+/// one mid-flight. A class, so a detached probe task and the test that
+/// spawned it share one counter.
+final class TemplateCallObservingTokenizer: ChatTemplateRendering, @unchecked Sendable {
+    private let inner: any ChatTemplateRendering
+    private let onTemplateCall: @Sendable (Int) -> Void
+    private(set) var templateCalls = 0
+
+    init(
+        _ inner: any ChatTemplateRendering,
+        onTemplateCall: @escaping @Sendable (Int) -> Void = { _ in }
+    ) {
+        self.inner = inner
+        self.onTemplateCall = onTemplateCall
+    }
+
+    var bosToken: String? { inner.bosToken }
+    var eosToken: String? { inner.eosToken }
+    var unknownToken: String? { inner.unknownToken }
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        inner.encode(text: text, addSpecialTokens: addSpecialTokens)
+    }
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        inner.decode(tokenIds: tokenIds, skipSpecialTokens: skipSpecialTokens)
+    }
+    func convertTokenToId(_ token: String) -> Int? { inner.convertTokenToId(token) }
+    func convertIdToToken(_ id: Int) -> String? { inner.convertIdToToken(id) }
+
+    func renderChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> String {
+        noteTemplateCall()
+        return try inner.renderChatTemplate(
+            messages: messages, tools: tools, additionalContext: additionalContext)
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        noteTemplateCall()
+        return try inner.applyChatTemplate(
+            messages: messages, tools: tools, additionalContext: additionalContext)
+    }
+
+    private func noteTemplateCall() {
+        templateCalls += 1
+        onTemplateCall(templateCalls)
+    }
+}
+
+/// A ChatML-shaped greedy vocabulary for the observing tokenizer: the
+/// template markers merge as whole pieces, everything else falls to
+/// per-scalar tokens.
+let chatMLGreedyPieces = [
+    "<|im_start|>", "<|im_end|>", "\n", "user", "assistant", "system", "tool",
+]
+
 // MARK: - Shared Conversation Render fixture
 
 /// The one test spelling of a **Conversation Render**: built through the

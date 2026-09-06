@@ -299,14 +299,21 @@ render fixup.
 **Conversation Render**:
 The token-only rendering contract — family message-forming plus chat-template
 application, no pixel work — shared by the request edge, the planner's
-re-render, and the leaf probes, identical to the shape prepare uses, so a probe
-render cannot drift from prepare's. Since 2026-09 a module, not a convention:
-one per-request value (`ConversationRender`) built at **Request Keying** where
-instance truth lives, sealed for the settled **Cache Key Space**, whose render
-verbs own the whole choreography — cache eligibility, the Render+Token Cache
-resolve, the template fallback, the no-generation-prompt merged context — so a
-call site can no longer wire an ingredient wrong (the issue #439 defect class).
-The render cache stays the implementation below it.
+re-render, the leaf probes, the speculative future-shared-prefix probe pair and
+the stable-prefix detector's probe pair, identical to the shape prepare uses, so
+a probe render cannot drift from prepare's. Since 2026-09 a module, not a
+convention: one per-request value (`ConversationRender`) built at **Request
+Keying** where instance truth lives, sealed for the settled **Cache Key Space**,
+whose render verbs own the whole choreography — cache eligibility, the
+Render+Token Cache resolve, the template fallback, the no-generation-prompt
+merged context — so a call site can no longer wire an ingredient wrong (the
+issue #439 defect class). The two probe pairs use its cache-free probe verbs
+(cancellable, no cache telemetry). The render cache stays the implementation
+below it, and no server source outside the two applies the chat template
+(source-shape-tested); the processor `prepare` a bypassing request falls back
+to, the planner's generation-prompt measure and the agent hand-off suffix stay
+outside by design — the last two plain-text encodes past the last end-of-turn
+marker.
 _Avoid_: re-render (unqualified), probe tokenization, per-call-site
 `applyChatTemplate` (the rendering it standardizes, not a synonym for it);
 RenderTokenSource (the dissolved predecessor — eligibility as a free-standing

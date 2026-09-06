@@ -168,6 +168,13 @@ nonisolated enum RawGenerationStart {
                 originalTokens = LLMActor.extractTokenSequence(basePrepared.text.tokens)
                 tokenNDim = basePrepared.text.tokens.ndim
             }
+            // A plain-text encode of the hand-off suffix, appended after the
+            // original prompt's generation prompt: text past the last
+            // end-of-turn marker, inside the open assistant turn. It never
+            // applies the chat template and can never coincide with an
+            // **Emitted Path Index** prefix (ADR-0063), so it stays outside
+            // the **Conversation Render** module by design (ticket #473
+            // audit).
             let appendedIDs = try session.tokenizer.encode(text: handoff, addSpecialTokens: false)
             let flat = MLXArray((originalTokens + appendedIDs).map { Int32($0) })
             // Rebuild at the original rank: the vision containers index

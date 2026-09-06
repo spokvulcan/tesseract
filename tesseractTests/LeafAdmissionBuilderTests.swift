@@ -246,6 +246,45 @@ import MLXLMCommon
         #expect(observedCancellation)
     }
 
+    @Test func futureSharedPrefixAbortsBetweenItsTwoRendersWhenCancelledMidway() async {
+        // A preemption that lands while the first probe render is running
+        // must stop the probe at the check between the renders: the second
+        // render never runs, and the caller sees the cancellation. The probe
+        // renders now go through the Conversation Render module's cache-free
+        // verb (#473); the cooperative checks stay with the builder.
+        let stored = conversation(messages: [
+            HTTPPrefixCacheMessage(role: .user, content: "question"),
+            HTTPPrefixCacheMessage(role: .assistant, content: "answer"),
+        ])
+        // Cancels the running task from inside its FIRST template
+        // application — a preemption landing while that render is in flight.
+        let tokenizer = TemplateCallObservingTokenizer(
+            GreedyTokenizer(pieces: chatMLGreedyPieces)
+        ) { index in
+            if index == 1 {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+        }
+
+        let observed = await Task.detached { () -> (cancelled: Bool, renders: Int) in
+            do {
+                _ = try LeafAdmissionBuilder.futureSharedPrefix(
+                    storedConversation: stored,
+                    keySpace: .identity(),
+                    render: makeRender(tokenizer)
+                )
+                return (false, tokenizer.templateCalls)
+            } catch is CancellationError {
+                return (true, tokenizer.templateCalls)
+            } catch {
+                return (false, tokenizer.templateCalls)
+            }
+        }.value
+
+        #expect(observed.cancelled)
+        #expect(observed.renders == 1)
+    }
+
     @Test func futureSharedPrefixRendersUnderTheRequestsThinkingFlag() throws {
         // The probe must render under the request's flags, not a hard-coded
         // canonical context. A stored assistant <think> block sits before the

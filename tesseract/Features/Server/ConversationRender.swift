@@ -5,11 +5,21 @@
 //  The **Conversation Render** contract (CONTEXT.md) as a module: the one
 //  home for token-only rendering — family message-forming plus chat-template
 //  application, no pixel work — shared by the request edge, the planner's
-//  last-user re-render, the leaf store's stored-conversation measure, and the
-//  admission builder's continuation probes. Each verb owns the whole
-//  choreography its call sites used to repeat by hand: cache-eligibility,
-//  the **Render+Token Cache** resolve, the `applyChatTemplate` fallback, and
-//  the `add_generation_prompt: false` merged-context derivation.
+//  last-user re-render, the leaf store's stored-conversation measure, the
+//  admission builder's continuation probes, its cache-free future-shared-
+//  prefix probe pair, and the stable-prefix detector's probe pair. Each verb
+//  owns the whole choreography its call sites used to repeat by hand:
+//  cache-eligibility, the **Render+Token Cache** resolve, the
+//  `applyChatTemplate` fallback, and the `add_generation_prompt: false`
+//  merged-context derivation. Since ticket #473 (issue #471) no server
+//  source outside the module — this file and its **Render+Token Cache**,
+//  the resolve arm below it — applies the chat template; a source-shape
+//  test pins it, so the **Emitted Path Resolve** (ADR-0063) is added here
+//  once and reaches every server spelling. What stays outside, by design:
+//  the processor `prepare` a bypassing request falls back to (the vendor
+//  and in-tree PARO input processors, which ADR-0063 decision 5 narrows in
+//  #475), the planner's generation-prompt measure, and the agent hand-off
+//  suffix — the last two plain-text encodes past the last end-of-turn marker.
 //
 //  Eligibility is decided at construction, from instance truth, once:
 //  a `nil` `cacheFingerprint` means "always render+encode in full" — the
@@ -260,10 +270,76 @@ nonisolated struct ConversationRender: @unchecked Sendable {
                 return resolved
             }
         }
-        return try tokenizer.applyChatTemplate(
+        return try Self.applyTemplate(
+            tokenizer: tokenizer,
             messages: messages,
             tools: toolSpecs,
             additionalContext: merged
+        )
+    }
+
+    // MARK: - Cache-free probe renders
+
+    /// The admission builder's future-shared-prefix probe render: the stored
+    /// conversation plus one synthetic continuation, rendered without a
+    /// generation prompt under the request's ingredients — the same
+    /// computation as `continuationRender`, deliberately CACHE-FREE. The
+    /// probe runs detached from the speculative pass and is cancelled on
+    /// preemption; its caller checks cancellation between the two renders,
+    /// bounding abandoned work to one render, and a resolve against the live
+    /// entry could neither observe those checks nor be abandoned mid-render.
+    /// Never counts against the Render+Token Cache's telemetry.
+    func uncachedContinuationRender(messages: [[String: any Sendable]]) throws -> [Int] {
+        try Self.applyTemplate(
+            tokenizer: tokenizer,
+            messages: messages,
+            tools: toolSpecs,
+            additionalContext: renderContext.additionalContext(
+                merging: ["add_generation_prompt": false]
+            )
+        )
+    }
+
+    /// The stable-prefix detector's probe render, from raw ingredients: the
+    /// detector has no request value (it is memoized on exactly these
+    /// ingredients and benchmarked standalone), so this is the narrow static
+    /// entry over the module's one template application, parallel to
+    /// `agentEdgeFullRender`. `additionalContext` passes through verbatim —
+    /// the detector renders its system+user probes under the request's base
+    /// context, generation prompt included, exactly as before.
+    static func stablePrefixProbeRender(
+        tokenizer: any Tokenizer,
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        try applyTemplate(
+            tokenizer: tokenizer,
+            messages: messages,
+            tools: tools,
+            additionalContext: additionalContext
+        )
+    }
+
+    // MARK: - The one template application
+
+    /// The single spelling of the fused chat-template application inside the
+    /// module. Every render that runs in full bottoms out here — the C27/C28
+    /// fallback and both probe verbs; the cached paths' miss render lives in
+    /// `RenderTokenCache` (render to bytes, then encode), the module's resolve
+    /// arm. One spelling, so an addition to the template application (the
+    /// **Emitted Path Resolve** of ADR-0063) lands in one place and reaches
+    /// every verb.
+    private static func applyTemplate(
+        tokenizer: any Tokenizer,
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        try tokenizer.applyChatTemplate(
+            messages: messages,
+            tools: tools,
+            additionalContext: additionalContext
         )
     }
 
