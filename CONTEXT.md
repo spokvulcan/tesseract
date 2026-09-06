@@ -418,6 +418,16 @@ _Avoid_: cache reuse (too broad — the prompt hit is also reuse); skipping the
 re-prefill (it is not skipped, it is shown to be unnecessary); preserve-thinking
 fast path (the render mode makes it likely, the comparison makes it safe).
 
+**Append-Stable Render**:
+The property of a chat-template render under which a finished turn's canonical
+re-render equals the token path the model was fed — prompt plus emitted ids —
+followed only by template glue. The Live Leaf Capture proves it per turn rather
+than assuming it from a template flag.
+_Avoid_: preserve-thinking (a render mode that usually has the property, not the
+property); canonical render (the re-render itself, which may or may not be
+append-stable); wire fidelity (the client-facing text, one of the things that
+can break it).
+
 **Think-Strip Rewind**:
 The prefix invalidation a thinking template causes when a new real user message
 arrives and the template strips the `<think>` blocks it had kept in the assistant

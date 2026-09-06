@@ -62,9 +62,11 @@ nonisolated enum LiveLeafCapture {
         /// (`promptCount < offset <= liveCount`) — the loop's accounting and
         /// the cache disagree, so nothing can be trusted.
         case cacheOffsetOutsideLivePath(cacheOffset: Int, promptCount: Int, liveCount: Int)
-        /// The fed path is longer than the canonical stored path — the render
-        /// dropped emitted tokens (whitespace normalization, a stripped
-        /// span); the live state past the stored end has no key.
+        /// Every stored position matched, but the fed path runs past the
+        /// canonical stored path's end — the render dropped emitted tokens
+        /// (whitespace normalization, a stripped span); the live state past
+        /// the stored end has no key. A path that both differs and runs long
+        /// reports the divergence, which says where.
         case liveLongerThanStored(cacheOffset: Int, storedLen: Int)
         /// First position where the fed id and the re-rendered id differ,
         /// with a few ids of context on each side so the *kind* of
@@ -109,17 +111,15 @@ nonisolated enum LiveLeafCapture {
                 .cacheOffsetOutsideLivePath(
                     cacheOffset: cacheOffset, promptCount: promptCount, liveCount: liveCount))
         }
-        guard cacheOffset <= storedTokens.count else {
-            return .boundary(
-                .liveLongerThanStored(cacheOffset: cacheOffset, storedLen: storedTokens.count))
-        }
-
         // The prompt prefix is the same render on both sides by construction,
-        // but the comparison is the proof — check every fed position.
+        // but the comparison is the proof — check every fed position the
+        // stored path covers. Divergence is reported before the length guard
+        // so a path that both differs and runs long names the first differing
+        // position instead of only its length.
         func liveToken(_ index: Int) -> Int {
             index < promptCount ? promptKeyPath[index] : generatedTokens[index - promptCount]
         }
-        for index in 0..<cacheOffset {
+        for index in 0..<min(cacheOffset, storedTokens.count) {
             let live = liveToken(index)
             let stored = storedTokens[index]
             if live != stored {
@@ -133,6 +133,10 @@ nonisolated enum LiveLeafCapture {
                             storedTokens[window.clamped(to: 0..<storedTokens.count)])
                     ))
             }
+        }
+        guard cacheOffset <= storedTokens.count else {
+            return .boundary(
+                .liveLongerThanStored(cacheOffset: cacheOffset, storedLen: storedTokens.count))
         }
         return .live(offset: cacheOffset)
     }

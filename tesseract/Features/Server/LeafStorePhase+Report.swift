@@ -103,7 +103,8 @@ nonisolated extension LeafStorePhase {
         var prefillSeconds: TimeInterval = 0
         /// Leaf snapshot deep copy.
         var captureSeconds: TimeInterval = 0
-        /// SSD payload extraction (full or extension suffix).
+        /// SSD payload preparation — extension slicing only; the host copy
+        /// is deferred to the SSD writer (**Deferred Payload Extraction**).
         var payloadSeconds: TimeInterval = 0
         /// Radix-tree admission on the MainActor.
         var admitSeconds: TimeInterval = 0

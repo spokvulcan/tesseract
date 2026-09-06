@@ -58,8 +58,11 @@ whether the leaf can be captured from the live decode cache
    on an append-stable render it means the render or the wire text is
    wrong; under the strip-by-default canonical render, which drops the
    emitted thinking by design, the same two log at info. A cache offset
-   outside the live path always warns. That warning is how the vendored
-   `ToolCallProcessor`'s dropped-prefix bug surfaced (mlx-swift-lm #609).
+   outside the live path always warns. The per-token comparison runs
+   before the length guard, so a path that both differs and runs long
+   reports where it differs rather than only that it is longer. That
+   warning is how the vendored `ToolCallProcessor`'s dropped-prefix bug
+   surfaced (mlx-swift-lm #609).
 5. The speculative seed takes the canonical leaf offset from the live
    decision, so the ADR-0009 pass extends the same leaf.
 
@@ -74,12 +77,31 @@ the trace corpus as optional fields.
 
 - Client-visible tails on the same replays: 2.34 → 0.10 s (4.5k prompt,
   stop turn), 0.54 → 0.06 s (its follow-up), 0.39 s for a 60k-token stop
-  turn. A 52k-prompt, 7.2k-token tool turn still takes 4.7 s: 3.0 s is the
-  SSD full-payload extraction and 1.2 s the snapshot deep copy. Moving the
-  payload write off the critical path is the follow-up.
+  turn. A 52k-prompt, 7.2k-token tool turn still took 4.7 s: 3.0 s was the
+  SSD full-payload extraction and 1.2 s the snapshot deep copy. The
+  extraction left the tail the same day (**Deferred Payload Extraction**,
+  ADR-0019 amendment 2026-09-06: the SSD writer copies the bytes); the deep
+  copy remains.
 - Correctness never rests on the render flag. A template that claims
   append-stability but re-renders differently falls back, and the warning
   names the first differing token.
+- The comparison earned its keep on its first day. A 65-turn Pi session
+  (2026-09-06) stored 45 leaves live and fell back 20 times for 216 s of
+  post-EOS tail, 47 s on one `write` turn; decoding the logged ids found
+  two breakers of the **Append-Stable Render**, neither in this branch.
+  The vendored streaming detokenizer re-emitted the base character of any
+  grapheme cluster that grew across a token boundary (`🏳️‍🌈` reached the
+  client as `🏳🏳️🏳️‍🏳️‍🌈`, `'️` as `''️`), a client-visible corruption fixed
+  in the mlx-swift-lm fork and filed upstream. And swift-jinja's `tojson`,
+  which the Qwen3 templates apply to array- and object-typed tool
+  parameters, escaped `/` as `\/` and non-ASCII as `\uXXXX`, so a
+  re-rendered `edit` call never matched the emitted text; the
+  swift-transformers fork now renders `tojson` the way Hugging Face
+  transformers does (`docs/swift-transformers-fork.md`). With both fixed,
+  the fallback is reserved for renders that genuinely differ: the model's
+  own JSON spacing inside array-typed tool arguments and its parameter
+  order, which the parse-and-render round trip cannot reproduce
+  (issue #466).
 - The comparison is one CPU pass over the fed ids, negligible next to the
   snapshot; the recorder adds one array append per generated token.
 - Think-stripping templates still diverge at the strip point on a

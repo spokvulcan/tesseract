@@ -109,6 +109,24 @@ struct LiveLeafCaptureTests {
                         storedLen: shortStored.count)))
     }
 
+    @Test func divergentPathThatAlsoRunsLongReportsTheDivergence() {
+        // Both defects at once (a re-render that is shorter than the emitted
+        // text and differs inside it): the divergence wins, so the log names
+        // the first differing position instead of only the length.
+        var shortStored = prompt + generated.dropLast()
+        shortStored[prompt.count + 1] = 42
+        guard
+            case .boundary(.divergence(let offset, let live, let storedTok, _, _)) =
+                decide(stored: shortStored)
+        else {
+            Issue.record("expected a divergence ahead of the length guard")
+            return
+        }
+        #expect(offset == prompt.count + 1)
+        #expect(live == generated[1])
+        #expect(storedTok == 42)
+    }
+
     @Test func divergenceAtTheFirstGeneratedTokenNamesTheOffset() {
         // A strip-by-default render replaces the emitted `<think>` opener.
         var reRendered = stored
