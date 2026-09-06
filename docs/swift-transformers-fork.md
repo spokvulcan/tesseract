@@ -27,6 +27,7 @@ tesseract.xcodeproj
 | `63edf42` `feat(tokenizers): expose renderChatTemplate` | Splits the render half of `applyChatTemplate` into a public `renderChatTemplate` (pure refactor, byte-identical output; public default impl keeps third-party conformers compiling). Enables the C25 render+token cache | Not filed (queued — owner go-ahead) |
 | `a524093` `perf(tokenizers): byte-native BPE inner loop + byte-keyed lookup tables` | Same serial algorithm, same merge order, byte-identical output on byte-level BPE vocabs: byte-range symbols in one UTF-8 buffer instead of per-scalar Strings and per-merge concats; open-addressed byte-keyed rank/id tables (FNV-1a + full byte-compare) instead of String-keyed dictionary probes. 1.22×/1.21×/1.20× encode at 32K/8K/128; 88/88 corpus items byte-identical (experiments-ledger C24). **Narrows the merge-table match semantics — see the semantics note below; the commit message's "byte-identical output" claim is scoped to byte-level vocabs.** Adds ~20 MB resident per loaded tokenizer (the byte tables sit alongside `bpeRanks`/`tokensToIds`, both still live) | Not filed (queued — owner go-ahead) |
 | `0033bc7` `fix(tokenizers): C24 review round — eager byte tables, correct semantics note` | Replaces the lazy double-checked-locked `byteTablesCache` with a `let` built in `init` (the unlocked fast-path read had no acquire semantics — a reader on a weakly-ordered core could see the published pointer before the table's array buffers); corrects the `BytePairTables` doc comment, which claimed byte-exactness was equivalent to what it replaced; bounds the leading-byte scalar-width walk against a malformed buffer. No behavior change on well-formed input | Not filed (queued — owner go-ahead) |
+| `08933b6` `fix(tokenizers): render tojson the way transformers does` | Installs a `tojson` filter in the `renderChatTemplate` context (a filter provided through the environment wins over swift-jinja's built-in): no `\/` escaping and `ensure_ascii` off by default, as in transformers' `json.dumps(ensure_ascii=False)`; sorted keys and compact separators are kept because values arrive as unordered Swift dictionaries and sorted keys keep a render stable across launches. swift-jinja's built-in wrote `<\/style>` and `—` into every tool-call argument rendered from a container, so the canonical re-render of a finished turn was not the text the model emitted and **Live Leaf Capture** fell back to a re-prefill. One offline test in `ChatTemplateTests` | swift-jinja issue [#71](https://github.com/huggingface/swift-jinja/issues/71) lists all four divergences from transformers; PR [#72](https://github.com/huggingface/swift-jinja/pull/72) (fork `spokvulcan/swift-jinja`, branch `fix/tojson-slashes`) fixes the slash escaping; both opened 2026-09-06. The carry stays until swift-jinja matches transformers on all four |
 
 ### Merge-table semantics note (read before filing upstream)
 
@@ -56,8 +57,8 @@ so expect the question.
 ## Pin state
 
 `Vendor/mlx-audio-swift`'s `Package.swift` and `Package.resolved` pin
-`0033bc79ed8dbff2ff5dff83807d83c7d1352b05` — the head of `pin-tesseract`, so the
-app tree resolves and builds all three carries. Appending to the pin branch does
+`08933b683e26abfdc7b116d5fdbf5c0d3efc6a48` — the head of `pin-tesseract`, so the
+app tree resolves and builds all four carries. Appending to the pin branch does
 not move the app: the pin is an exact revision, and every append needs this same
 two-file edit.
 
@@ -71,6 +72,12 @@ parity failures / 0 path failures, and `--prefix-cache-e2e` PASS 32/32. See
 confirmation is CI's `build-release` on a pristine runner rather than a local
 `dev.sh clean`, so the timing legs above were measured on a thermally quiet
 machine.
+
+Moved 2026-09-06 (`0033bc7` → `08933b6`): re-resolved, the DerivedData checkout
+confirmed at the new head with a diff against `0033bc7` equal to the fork commit,
+and the replay gate (three ~3k-token tool prompts with emoji, dashes and slashes,
+reconstructed from the 2026-09-06 Pi session) re-run against the built tree with
+every previously divergent `write` turn stored live and zero duplicated graphemes.
 
 ## Per-iteration workflow
 
