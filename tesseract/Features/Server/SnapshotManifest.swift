@@ -620,19 +620,27 @@ nonisolated struct ChainPrefixRestorePoint: Sendable, Equatable {
 
 // MARK: - In-memory transport payload (Sendable, not Codable)
 
-/// Raw bytes extracted from a `HybridCacheSnapshot` inside
-/// `container.perform`, plus the metadata needed to reconstruct the
-/// snapshot on hydration. The only shape that crosses the
-/// LLMActor → `SSDSnapshotStore` boundary — pure `Sendable` value
-/// type with no MLX references.
+/// The bytes of a `HybridCacheSnapshot` on their way to the SSD tier, plus
+/// the metadata needed to reconstruct the snapshot on hydration. The only
+/// shape that crosses the LLMActor → `SSDSnapshotStore` boundary.
 ///
-/// Not `Codable`. The payload is the input to the safetensors
-/// writer, which consumes it byte-for-byte via
-/// `HybridCacheSnapshot.serialize(to:metadata:)` inside the writer
-/// task and never round-trips it through JSON. Making this
-/// `Codable` would encourage callers to persist the payload without
-/// going through the safetensors path, which is exactly what the
-/// Metal-affinity rules forbid.
+/// The bytes are owed, not carried (**Deferred Payload Extraction**): the
+/// extraction edge builds the value from the snapshot's arrays with only
+/// their byte total, and the host copy — a full-KV memcpy — runs the first
+/// time `layers` is read, which in production is the SSD writer's task
+/// right before the file write. Admission, eviction and **Snapshot
+/// Demotion** on the MainActor and the **Leaf Store** tail on the
+/// inference thread never pay it. Until then the payload keeps the arrays
+/// alive (a leaf shares them with its RAM body; a demotion victim's live
+/// on only here), and the materializer releases each layer as it copies
+/// it. A payload built from ready `[LayerPayload]` (fixtures, hydration
+/// tests) is materialized from the start.
+///
+/// Not `Codable`. The payload is the input to the placeholder-container
+/// writer, which consumes it byte-for-byte inside the writer task and
+/// never round-trips it through JSON. Making this `Codable` would
+/// encourage callers to persist the payload without going through that
+/// path, which is exactly what the Metal-affinity rules forbid.
 nonisolated struct SnapshotPayload: Sendable {
 
     /// One MLX state array, pre-extracted from Metal-resident memory
@@ -708,16 +716,39 @@ nonisolated struct SnapshotPayload: Sendable {
     /// (not the wire String) because the payload is in-memory only.
     let checkpointType: HybridCacheSnapshot.CheckpointType
 
-    /// Per-layer extracted payloads, in the same order as the vendor
-    /// snapshot's `layers` array.
-    let layers: [LayerPayload]
-
     /// Non-nil when this payload is a **Leaf Extension Admission**: the
     /// sliceable layers carry only the suffix past `extending.baseOffset`
     /// and the SSD front door must validate-and-transfer the base's
     /// **Segment Chain**. `nil` for every full payload.
     let extending: SnapshotExtension?
 
+    /// Sum of every `state` array's byte count across every layer, fixed
+    /// at construction so the front door's `maxPendingBytes` check and the
+    /// ledger's descriptor never need the bytes themselves. A deferred
+    /// payload's materializer must produce exactly this many.
+    let totalBytes: Int
+
+    private let source: LayerSource
+
+    /// Per-layer payloads, in the same order as the vendor snapshot's
+    /// `layers` array. Reading a deferred payload runs its materializer on
+    /// the calling thread — once, the result is cached — so in production
+    /// only the SSD writer reads this.
+    var layers: [LayerPayload] { source.layers() }
+
+    /// `true` once the bytes exist as `Data`: from construction for a
+    /// ready payload, after the first `layers` read (or `materialize()`)
+    /// for a deferred one.
+    var isMaterialized: Bool { source.isMaterialized }
+
+    /// Run the deferred host copy now (a no-op once materialized). The SSD
+    /// writer calls it before the file write so the copy is timed and
+    /// attributed there rather than hidden inside the container encoder.
+    func materialize() {
+        _ = source.layers()
+    }
+
+    /// A payload whose bytes are already in hand.
     init(
         tokenOffset: Int,
         checkpointType: HybridCacheSnapshot.CheckpointType,
@@ -726,15 +757,29 @@ nonisolated struct SnapshotPayload: Sendable {
     ) {
         self.tokenOffset = tokenOffset
         self.checkpointType = checkpointType
-        self.layers = layers
         self.extending = extending
+        self.totalBytes = Self.byteCount(of: layers)
+        self.source = LayerSource(ready: layers)
     }
 
-    /// Sum of every `state` array's byte count across every layer.
-    /// The front-door `tryEnqueue` uses this to enforce
-    /// `SSDPrefixCacheConfig.maxPendingBytes`, so the value has to be
-    /// cheap — it walks the `[LayerPayload]` once, no allocation.
-    var totalBytes: Int {
+    /// A deferred payload: `materialize` produces the layers on the first
+    /// read and must yield exactly `totalBytes` bytes.
+    init(
+        tokenOffset: Int,
+        checkpointType: HybridCacheSnapshot.CheckpointType,
+        extending: SnapshotExtension? = nil,
+        totalBytes: Int,
+        materialize: @escaping @Sendable () -> [LayerPayload]
+    ) {
+        self.tokenOffset = tokenOffset
+        self.checkpointType = checkpointType
+        self.extending = extending
+        self.totalBytes = totalBytes
+        self.source = LayerSource(deferred: materialize)
+    }
+
+    /// Sum of every `state` array's byte count across `layers`.
+    static func byteCount(of layers: [LayerPayload]) -> Int {
         var total = 0
         for layer in layers {
             for array in layer.state {
@@ -742,6 +787,49 @@ nonisolated struct SnapshotPayload: Sendable {
             }
         }
         return total
+    }
+
+    /// The one-shot holder behind `layers`: ready from construction, or
+    /// produced by a materializer the first reader runs under the lock (a
+    /// concurrent reader blocks until that copy finishes and sees the
+    /// cached result). Reference semantics on purpose — copies of the
+    /// payload share one materialization.
+    private final class LayerSource: @unchecked Sendable {
+        private enum State {
+            case deferred(@Sendable () -> [LayerPayload])
+            case ready([LayerPayload])
+        }
+
+        private let lock = NSLock()
+        private var state: State
+
+        init(ready layers: [LayerPayload]) {
+            state = .ready(layers)
+        }
+
+        init(deferred materialize: @escaping @Sendable () -> [LayerPayload]) {
+            state = .deferred(materialize)
+        }
+
+        var isMaterialized: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            if case .ready = state { return true }
+            return false
+        }
+
+        func layers() -> [LayerPayload] {
+            lock.lock()
+            defer { lock.unlock() }
+            switch state {
+            case .ready(let layers):
+                return layers
+            case .deferred(let materialize):
+                let layers = materialize()
+                state = .ready(layers)
+                return layers
+            }
+        }
     }
 }
 

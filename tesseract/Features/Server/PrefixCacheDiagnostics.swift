@@ -769,6 +769,27 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// One **Deferred Payload Extraction** settled: the SSD writer copied
+    /// a payload's array bytes to the host right before its file write —
+    /// the full-KV memcpy that used to run on the MainActor for a
+    /// demotion and on the inference thread for a leaf. `durationMs` is
+    /// the copy alone, not the write.
+    struct SSDPayloadMaterializedEvent: Payload {
+        let id: String
+        let bytes: Int
+        let durationSeconds: TimeInterval
+
+        let eventName = "ssdPayloadMaterialize"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("bytes", "\(bytes)"),
+                ("durationMs", PrefixCacheDiagnostics.milliseconds(durationSeconds)),
+            ]
+        }
+    }
+
     /// One partition warm start reclaimed, with the reason and the
     /// bytes returned to the budget. The visibility fix for the
     /// 2026-07-04 silent invalidation (PRD #150): the cache panel

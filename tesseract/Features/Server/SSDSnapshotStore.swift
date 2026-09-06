@@ -904,10 +904,24 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             descriptorToWrite = item.descriptor
         }
 
-        // 2. Write the payload atomically (temp + fsync + rename).
-        //    On disk-full, run a single eviction-retry pass — its
-        //    victim is also cleaned up outside the lock. Any other
-        //    error drops the incoming and fires the drop callback.
+        // 2. Materialize the payload's bytes — the host copy **Deferred
+        //    Payload Extraction** left for this task, so the full-KV
+        //    memcpy is timed and attributed here, never on the MainActor
+        //    that admitted or demoted the snapshot — then write them
+        //    atomically (temp + fsync + rename). On disk-full, run a
+        //    single eviction-retry pass — its victim is also cleaned up
+        //    outside the lock. Any other error drops the incoming and
+        //    fires the drop callback.
+        if !item.payload.isMaterialized {
+            let materializeStart = Date.timeIntervalSinceReferenceDate
+            item.payload.materialize()
+            PrefixCacheDiagnostics.logSystem(
+                PrefixCacheDiagnostics.SSDPayloadMaterializedEvent(
+                    id: item.descriptor.snapshotID,
+                    bytes: item.payload.totalBytes,
+                    durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
+                ))
+        }
         do {
             try writePayload(item.payload, descriptor: descriptorToWrite)
         } catch WriteError.diskFull {

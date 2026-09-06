@@ -1095,6 +1095,88 @@ struct SSDSnapshotStoreTests {
         #expect(commitLines.count == 1)
     }
 
+    /// Records where and how often a deferred payload's materializer ran.
+    private final class MaterializationProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _calls = 0
+        private var _onMainThread = false
+
+        func record(onMainThread: Bool) {
+            lock.lock()
+            _calls += 1
+            _onMainThread = _onMainThread || onMainThread
+            lock.unlock()
+        }
+
+        var calls: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return _calls
+        }
+
+        var ranOnMainThread: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return _onMainThread
+        }
+    }
+
+    @Test
+    func writerMaterializesADeferredPayloadBeforeTheWrite() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        // Deferred Payload Extraction: the front door sees only the byte
+        // total; the writer's task runs the copy right before the write.
+        let ready = makePayload(bytes: 2_048)
+        let probe = MaterializationProbe()
+        let deferred = SnapshotPayload(
+            tokenOffset: ready.tokenOffset,
+            checkpointType: ready.checkpointType,
+            totalBytes: ready.totalBytes
+        ) { [layers = ready.layers] in
+            probe.record(onMainThread: Thread.isMainThread)
+            return layers
+        }
+        let descriptor = makeDescriptor(id: "deferred-test-000000", bytes: deferred.totalBytes)
+        #expect(!deferred.isMaterialized)
+
+        let result = store.tryEnqueue(payload: deferred, descriptor: descriptor)
+        guard case .accepted = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        let committed = await waitUntil { tracker.committed.contains(descriptor.snapshotID) }
+        #expect(committed)
+        #expect(deferred.isMaterialized)
+        #expect(probe.calls == 1)
+        #expect(!probe.ranOnMainThread, "the host copy must run on the writer's task")
+
+        let fileURL =
+            root
+            .appendingPathComponent("partitions")
+            .appendingPathComponent(descriptor.partitionDigest)
+            .appendingPathComponent("snapshots")
+            .appendingPathComponent("d")
+            .appendingPathComponent("\(descriptor.snapshotID).safetensors")
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let size = try #require((attributes[.size] as? NSNumber)?.intValue)
+        #expect(size > 2_048, "the file carries the header plus the materialized bytes")
+
+        let lines = sink.lines(matching: "event=ssdPayloadMaterialize")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("bytes=2048") == true)
+    }
+
     @Test
     func ssdAdmitFiresDroppedTooLargeForBudgetSynchronously() {
         let (config, root) = makeConfig(maxPendingBytes: 1_024)

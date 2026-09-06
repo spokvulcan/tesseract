@@ -761,3 +761,95 @@ struct SnapshotManifestTests {
         #expect(a != c)
     }
 }
+
+/// **Deferred Payload Extraction**: a `SnapshotPayload` knows its byte total
+/// from construction and runs the host copy once, on the first reader.
+struct SnapshotPayloadDeferralTests {
+
+    private final class MaterializeCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+
+        func increment() {
+            lock.lock()
+            count += 1
+            lock.unlock()
+        }
+
+        var value: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return count
+        }
+    }
+
+    private func makeLayers(bytes: [Int]) -> [SnapshotPayload.LayerPayload] {
+        [
+            SnapshotPayload.LayerPayload(
+                className: "KVCache",
+                state: bytes.map { count in
+                    SnapshotPayload.ArrayPayload(
+                        data: Data(repeating: 0xAA, count: count),
+                        dtype: "bfloat16",
+                        shape: [1, count]
+                    )
+                },
+                metaState: [],
+                offset: 4_096
+            )
+        ]
+    }
+
+    @Test
+    func deferredPayloadOwesItsBytesUntilFirstRead() {
+        let counter = MaterializeCounter()
+        let layers = makeLayers(bytes: [1_024, 512])
+        let payload = SnapshotPayload(
+            tokenOffset: 4_096, checkpointType: .leaf, totalBytes: 1_536
+        ) {
+            counter.increment()
+            return layers
+        }
+
+        // The front door and the ledger read the byte total; nothing
+        // runs the copy until the writer asks for the layers.
+        #expect(payload.totalBytes == 1_536)
+        #expect(!payload.isMaterialized)
+        #expect(counter.value == 0, "construction must not run the materializer")
+
+        let first = payload.layers
+        let second = payload.layers
+        #expect(counter.value == 1, "the materializer runs once; the result is cached")
+        #expect(payload.isMaterialized)
+        #expect(first.count == 1 && second.count == 1)
+        #expect(SnapshotPayload.byteCount(of: first) == payload.totalBytes)
+    }
+
+    @Test
+    func readyPayloadIsMaterializedFromConstruction() {
+        let payload = SnapshotPayload(
+            tokenOffset: 1, checkpointType: .system, layers: makeLayers(bytes: [64]))
+        #expect(payload.isMaterialized)
+        #expect(payload.totalBytes == 64)
+        payload.materialize()
+        #expect(payload.layers.count == 1)
+    }
+
+    @Test
+    func copiesOfADeferredPayloadShareOneMaterialization() {
+        let counter = MaterializeCounter()
+        let layers = makeLayers(bytes: [256])
+        let original = SnapshotPayload(
+            tokenOffset: 8, checkpointType: .leaf, totalBytes: 256
+        ) {
+            counter.increment()
+            return layers
+        }
+        let copy = original
+
+        copy.materialize()
+        #expect(original.isMaterialized)
+        _ = original.layers
+        #expect(counter.value == 1)
+    }
+}

@@ -2345,11 +2345,13 @@ nonisolated final class ServerCompletion {
                 evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
                 alphaTuner: AlphaTuner(flopProfile: flopProfile),
                 tieredStore: tieredStore,
-                // Snapshot Demotion's write-through extraction. Snapshot
-                // arrays are deep copies (`HybridCacheSnapshot.capture`),
-                // so extracting on MainActor here matches the AlphaTuner
-                // replay precedent rather than the container.perform rule
-                // for live model state.
+                // Snapshot Demotion's write-through extraction — Deferred
+                // Payload Extraction, so this MainActor call reads array
+                // shapes only and the SSD writer's task copies the bytes.
+                // Snapshot arrays are evaluated deep copies
+                // (`HybridCacheSnapshot.capture`), never live model state,
+                // which is what lets a thread outside the Model Session
+                // read them at all.
                 demotionPayloadExtractor: { snapshot in
                     Self.extractSnapshotPayload(snapshot)
                 },
@@ -2610,54 +2612,115 @@ nonisolated final class ServerCompletion {
         return StructuredLeafAdmission(survived: true, store: storeDiagnostics)
     }
 
+    /// Build the SSD payload for `snapshot` — **Deferred Payload
+    /// Extraction**, so this call moves no array bytes on the calling
+    /// thread. It settles the extension (a sliceable layer's suffix past
+    /// the base is sliced into its own contiguous device buffer and
+    /// evaluated here, on the Metal-affine caller, so the later copy is a
+    /// plain memcpy) and fixes the byte total; the host copies run when
+    /// the payload's `layers` are first read, on the SSD writer's task.
+    /// Callable from the MainActor too (**Snapshot Demotion**'s extractor
+    /// passes no extension, so that path reads shapes only): the arrays
+    /// are evaluated deep copies, never live model state.
     static func extractSnapshotPayload(
         _ snapshot: HybridCacheSnapshot,
         extending: SnapshotExtension? = nil
     ) -> SnapshotPayload {
         let activeExtension = validatedExtension(extending, for: snapshot)
 
-        var layers: [SnapshotPayload.LayerPayload] = []
-        layers.reserveCapacity(snapshot.layers.count)
+        var owed: [DeferredLayers.Layer] = []
+        owed.reserveCapacity(snapshot.layers.count)
+        var slices: [MLXArray] = []
+        var totalBytes = 0
 
         for layer in snapshot.layers {
             var suffixBaseOffset: Int?
-            var stateToExtract = layer.state
+            var arrays = layer.state
             if let activeExtension,
                 layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset)
             {
                 suffixBaseOffset = activeExtension.baseOffset
-                stateToExtract = layer.state.map { array in
-                    array[.ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
+                arrays = layer.state.map { array in
+                    HybridCacheSnapshot.deepCopyState(
+                        array[.ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
+                    )
                 }
+                slices.append(contentsOf: arrays)
             }
-
-            var arrays: [SnapshotPayload.ArrayPayload] = []
-            arrays.reserveCapacity(stateToExtract.count)
-            for array in stateToExtract {
-                let extracted = array.asData(access: .copy)
-                arrays.append(
-                    SnapshotPayload.ArrayPayload(
-                        data: extracted.data,
-                        dtype: dtypeWireString(extracted.dType),
-                        shape: extracted.shape
-                    ))
-            }
-            layers.append(
-                SnapshotPayload.LayerPayload(
+            totalBytes += arrays.reduce(0) { $0 + $1.nbytes }
+            owed.append(
+                DeferredLayers.Layer(
                     className: layer.className,
-                    state: arrays,
+                    arrays: arrays,
                     metaState: layer.metaState,
                     offset: layer.offset,
                     suffixBaseOffset: suffixBaseOffset
                 ))
         }
+        // One sync for every slice, as `HybridCacheSnapshot.capture` does
+        // for its copies; a full payload has nothing to evaluate.
+        if !slices.isEmpty {
+            eval(slices)
+        }
 
+        let deferred = DeferredLayers(owed)
         return SnapshotPayload(
             tokenOffset: snapshot.tokenOffset,
             checkpointType: snapshot.checkpointType,
-            layers: layers,
-            extending: activeExtension
+            extending: activeExtension,
+            totalBytes: totalBytes,
+            materialize: { deferred.materialize() }
         )
+    }
+
+    /// The arrays a deferred payload still owes the SSD writer.
+    /// `materialize` copies them layer by layer and releases each as it
+    /// goes, so a demotion victim — whose only remaining reference is this
+    /// box once its RAM body dropped — never sits in memory twice. Runs
+    /// once, under the payload's own lock.
+    private final class DeferredLayers: @unchecked Sendable {
+        struct Layer {
+            let className: String
+            let arrays: [MLXArray]
+            let metaState: [String]
+            let offset: Int
+            let suffixBaseOffset: Int?
+        }
+
+        private var owed: [Layer?]
+
+        init(_ layers: [Layer]) {
+            owed = layers
+        }
+
+        func materialize() -> [SnapshotPayload.LayerPayload] {
+            var layers: [SnapshotPayload.LayerPayload] = []
+            layers.reserveCapacity(owed.count)
+            for index in owed.indices {
+                guard let layer = owed[index] else { continue }
+                owed[index] = nil
+                var arrays: [SnapshotPayload.ArrayPayload] = []
+                arrays.reserveCapacity(layer.arrays.count)
+                for array in layer.arrays {
+                    let copy = array.asData(access: .copy)
+                    arrays.append(
+                        SnapshotPayload.ArrayPayload(
+                            data: copy.data,
+                            dtype: ServerCompletion.dtypeWireString(copy.dType),
+                            shape: copy.shape
+                        ))
+                }
+                layers.append(
+                    SnapshotPayload.LayerPayload(
+                        className: layer.className,
+                        state: arrays,
+                        metaState: layer.metaState,
+                        offset: layer.offset,
+                        suffixBaseOffset: layer.suffixBaseOffset
+                    ))
+            }
+            return layers
+        }
     }
 
     /// Stable wire-format name for an MLX `DType`. Load-bearing: the

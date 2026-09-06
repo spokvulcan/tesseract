@@ -35,6 +35,16 @@ Built only at the MLX extraction edge so invalid write shapes are
 unrepresentable; the read-side counterpart is **Snapshot Resolution**.
 _Avoid_: capturedPayloads plumbing, payload alignment, storeSnapshots payloads.
 
+**Deferred Payload Extraction**:
+Building a snapshot's SSD payload without copying its bytes: the extraction edge
+fixes the byte total (slicing and evaluating a **Leaf Extension Admission**'s
+suffix on the Metal-affine caller), and the host copy runs on the SSD writer's
+task right before the file write. **Snapshot Admission**, eviction and **Snapshot
+Demotion** on the MainActor and the **Leaf Store** tail on the inference thread
+never pay the full-KV memcpy; a deferred payload keeps its arrays alive until the
+writer materializes it, releasing each layer as it is copied.
+_Avoid_: lazy payload, async extraction, background asData, payload streaming.
+
 **Snapshot Admission Path**:
 The validated token path carried by a **Snapshot Admission** — the proof that a
 snapshot may be stored at a given token offset, checked before any cache mutation.

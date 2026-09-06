@@ -140,6 +140,9 @@ final class PrefixCacheManager {
     /// before dropping it. Injected (production wires the **Server
     /// Completion** module's extraction edge) because payload extraction
     /// knows the safetensors shape, which is not this layer's business.
+    /// The payload is deferred (**Deferred Payload Extraction**): the call
+    /// reads array shapes and the SSD writer copies the bytes — a copy
+    /// here held this actor 24–50 s per admission on 2026-09-06.
     /// `nil` (tests, replay caches) disables demotion — every unbacked
     /// drop is terminal, today's pre-demotion behavior.
     private let demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)?
@@ -2420,10 +2423,10 @@ final class PrefixCacheManager {
     /// unbacked RAM body whose lookup hit count crossed the eagerness
     /// threshold has proven its reuse — persist it with a deferred-class
     /// write (the writer schedules those around hydration reads and
-    /// active prefill). The extraction is a full KV copy, so it runs in
-    /// a follow-up MainActor task rather than on the lookup's TTFT path;
-    /// the guards re-run there because eviction or a fresh admission may
-    /// land in between. One shot per node (`ssdPromotionAttempted`): if
+    /// active prefill). The enqueue runs in a follow-up MainActor task
+    /// rather than on the lookup's TTFT path (the payload itself is
+    /// deferred — the writer copies the bytes); the guards re-run there
+    /// because eviction or a fresh admission may land in between. One shot per node (`ssdPromotionAttempted`): if
     /// the front door rejects the write, demote-before-drop remains the
     /// safety net, exactly as for a deferral that was never promoted.
     private func promoteHotUnbackedNodeIfEarned(

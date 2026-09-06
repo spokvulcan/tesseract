@@ -128,6 +128,26 @@ struct LeafExtensionExtractionTests {
         array[.ellipsis, base..<offset, 0...].asData(access: .copy).data
     }
 
+    @Test func extensionPayloadKnowsTheSuffixBytesBeforeMaterializing() throws {
+        let snapshot = makeSliceableSnapshot(tokenOffset: 8)
+        let extending = SnapshotExtension(baseSnapshotID: "base-1", baseOffset: 5)
+
+        let payload = ServerCompletion.extractSnapshotPayload(snapshot, extending: extending)
+
+        // Two float32 arrays of [1, 2, 3, 8] past the base: the byte total
+        // is fixed at extraction, the copy itself is owed to the SSD writer.
+        let suffixBytes = 2 * (1 * 2 * 3 * 8) * MemoryLayout<Float>.size
+        #expect(!payload.isMaterialized)
+        #expect(payload.totalBytes == suffixBytes)
+
+        let layer = try #require(payload.layers.first)
+        #expect(payload.isMaterialized)
+        #expect(SnapshotPayload.byteCount(of: payload.layers) == suffixBytes)
+        for (arrayPayload, original) in zip(layer.state, snapshot.layers[0].state) {
+            #expect(arrayPayload.data == sliceData(original, from: 5, to: 8))
+        }
+    }
+
     @Test func slicesSliceableLayersPastBase() throws {
         let snapshot = makeSliceableSnapshot(tokenOffset: 8)
         let extending = SnapshotExtension(baseSnapshotID: "base-1", baseOffset: 5)

@@ -59,3 +59,25 @@ write was enqueued. Decided in the 2026-07-04 grilling.
   near-zero RAM budget (35B models on 48 GiB machines, ADR-0018) survivable:
   the cache degrades to SSD-served (measured hydration 0.65–0.87 GB/s vs
   ~370 tok/s re-prefill ≈ 50× cheaper) instead of failing.
+
+## Amendment 2026-09-06 — Deferred Payload Extraction
+
+A **Snapshot Demotion** used to copy the victim's arrays to host memory on
+the MainActor, inside the admission that triggered the eviction (the "full
+KV copy" of `extractSnapshotPayload`). On 2026-09-06 a 27B model with 3 GB
+leaves demoted two or three victims per admission while the machine was
+swapping: four admissions held the MainActor 24–50 s each, and the leaf
+path's own extraction added 2–3.5 s to the client-visible tail of every
+large turn.
+
+A `SnapshotPayload` now owes its bytes instead of carrying them. The
+extraction edge fixes the byte total (and, for a **Leaf Extension
+Admission**, slices and evaluates the suffix on the Metal-affine caller); the
+SSD writer's task materializes the host copy right before the file write and
+logs it as `event=ssdPayloadMaterialize`. Nothing on the MainActor or the
+inference thread copies KV bytes any more. Until the writer gets to it, the
+payload keeps the arrays alive — a leaf shares them with its RAM body, a
+demotion victim's live on only there — and the materializer releases each
+layer as it copies it, so a demotion never doubles in RAM. The front door's
+`maxPendingBytes` accounting is unchanged: it always counted the byte total,
+which the payload still knows up front.
