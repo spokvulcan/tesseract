@@ -1948,6 +1948,7 @@ final class PrefixCacheManager {
         PrefixCacheDiagnostics.logSystem(
             PrefixCacheDiagnostics.BudgetMeasurementEvent(
                 headroomBytes: sample.headroomBytes,
+                workingSetHeadroomBytes: sample.workingSetHeadroomBytes,
                 reserveBytes: reserveBytes,
                 lanes: lanes,
                 residentBytes: residentBytes,

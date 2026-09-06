@@ -1989,6 +1989,16 @@ _Avoid_: minimum cache size, reserved bytes, fixed floor, per-partition floor,
 workload heuristics in the floor; `.system` chains as floor members (they are
 SSD-protected, not RAM-pinned — ADR-0019).
 
+**Working-Set Bound**:
+The cap on measured memory headroom set by the process itself: the per-process
+working set the GPU driver recommends, minus what the process already holds. The
+headroom feeding the **Pressure-Reactive Budget**'s ceiling is the smaller of the
+kernel's reclaimable pages and this bound, so the cache's own growth always
+shrinks its ceiling — the kernel's buckets alone rise with the cache, because its
+cold pages become "inactive".
+_Avoid_: memory limit (nothing is refused — the bound caps the ceiling, and
+eviction does the rest); footprint cap; static tax (it is measured every time).
+
 **Snapshot Demotion**:
 Moving a snapshot's body out of RAM while keeping it recoverable — backing it to SSD
 first, then dropping the RAM body — so the next hit pays a cheap hydration instead of

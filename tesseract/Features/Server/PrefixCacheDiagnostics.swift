@@ -478,6 +478,10 @@ nonisolated enum PrefixCacheDiagnostics {
     /// `budgetChange reason=measurement` fires only on movement.
     struct BudgetMeasurementEvent: Payload {
         let headroomBytes: Int
+        /// The **Working-Set Bound** the sample carried (`nil` when the
+        /// footprint was unmeasured) — the one input that says whether
+        /// the process itself, not the machine, limited the ceiling.
+        let workingSetHeadroomBytes: Int?
         let reserveBytes: Int
         let lanes: Int
         let residentBytes: Int
@@ -490,6 +494,10 @@ nonisolated enum PrefixCacheDiagnostics {
         var fields: [(String, String)] {
             [
                 ("headroomBytes", "\(headroomBytes)"),
+                (
+                    "workingSetHeadroomBytes",
+                    workingSetHeadroomBytes.map { "\($0)" } ?? "unmeasured"
+                ),
                 ("reserveBytes", "\(reserveBytes)"),
                 ("lanes", "\(lanes)"),
                 ("residentBytes", "\(residentBytes)"),
