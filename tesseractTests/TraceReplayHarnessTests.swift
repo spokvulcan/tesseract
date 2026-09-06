@@ -59,7 +59,9 @@ struct TraceReplayHarnessTests {
             terminalEvictionCount: terminal,
             recoveredEvictionCount: recovered,
             deviceEstimates: estimates,
-            rewind: rewind
+            rewind: rewind,
+            leafStoreSeconds: nil,
+            tailSeconds: nil
         )
     }
 

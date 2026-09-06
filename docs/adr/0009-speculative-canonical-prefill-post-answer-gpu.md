@@ -4,6 +4,11 @@ status: accepted
 
 # The server spends idle GPU after a finished stretch on speculative canonical prefill
 
+_Amended 2026-09-06 by ADR-0062: the rejected "capture from the turn's final
+cache" alternative below is adopted for append-stable renders, where the live
+token path is proven equal to the canonical re-render; the boundary re-prefill
+stays the fallback and this pass still extends the admitted leaf._
+
 CONTEXT.md → **Speculative Canonical Prefill**, **Think-Strip Rewind**,
 **Stretch Abandonment**; issues #76, #100. GPU work no request asked for, run
 after the response is delivered.

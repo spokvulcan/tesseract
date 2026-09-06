@@ -68,10 +68,13 @@ nonisolated enum LeafSkipReason: Sendable, Equatable {
 /// live KV cache — the actor executes the Metal capture/`admit` from the
 /// decision this produces.
 ///
-/// Today this owns the **reusable-prefix probes** shared by the canonical-user
-/// and tool-continuation leaf modes. Leaf-mode selection still lives on
-/// `LeafStorePhase.selectHTTPLeafStoreMode` (already a tested pure function), and the
-/// Metal capture stays in the actor.
+/// Two steps, so the **Live Leaf Capture** can sit between them: `probe`
+/// finds the token path the mode's continuation will share (tokenizer only),
+/// `plan` chooses the restore boundary for it (**Snapshot Resolution** on the
+/// canonical fallback). A live capture takes the probe's path and never
+/// needs the boundary. Leaf-mode selection still lives on
+/// `LeafStorePhase.selectHTTPLeafStoreMode` (already a tested pure function),
+/// and the Metal capture stays in the actor.
 nonisolated enum LeafAdmissionBuilder {
 
     /// The synthetic continuation a reusable-prefix probe appends to discover
@@ -214,20 +217,33 @@ nonisolated enum LeafAdmissionBuilder {
         return keySpace.translate(renderTokens: Array(firstRender[0..<common]))
     }
 
-    /// `reusablePrefix` with its three failure channels — tokenization throw,
-    /// probe divergence (`nil`), translation failure — folded into the one
-    /// `LeafSkipReason` vocabulary both boundary modes speak.
-    private enum Probe {
+    /// The reusable-prefix probe's outcome: the token path the mode's
+    /// continuation will share, or the decidable skip that ruled it out —
+    /// `reusablePrefix`'s three failure channels (tokenization throw, probe
+    /// divergence, translation failure) folded into the one `LeafSkipReason`
+    /// vocabulary both boundary modes speak.
+    enum Probe: Sendable {
         case tokens([Int])
         case skip(LeafSkipReason)
     }
 
-    private static func probeTokens(
-        continuation: Continuation,
+    /// Step one of the routing, tokenizer-only: probe the token path a future
+    /// continuation of this mode will share, and apply the guards that need
+    /// no boundary. Runs before any boundary is looked up, so the **Live
+    /// Leaf Capture** can be decided on its result without paying **Snapshot
+    /// Resolution** for a boundary a live capture never restores.
+    static func probe(
+        mode: BoundaryLeafMode,
         storedConversation: HTTPPrefixCacheConversation,
+        storedTokens: [Int],
         keySpace: CacheKeySpace,
         render: ConversationRender
     ) -> Probe {
+        let continuation: Continuation =
+            switch mode {
+            case .directTool: .toolResult
+            case .canonical: .userTurn
+            }
         let probe: Result<[Int], CacheKeySpace.TranslationFailure>?
         do {
             probe = try reusablePrefix(
@@ -239,42 +255,42 @@ nonisolated enum LeafAdmissionBuilder {
         } catch {
             return .skip(.tokenizationFailed(error: error.localizedDescription))
         }
+        let tokens: [Int]
         switch probe {
         case .none:
             return .skip(.probeDivergence)
         case .some(.failure(let failure)):
             return .skip(.renderTranslationFailed(failure: failure))
         case .some(.success(let translated)):
-            return .tokens(translated)
+            tokens = translated
         }
+        // Thinking templates may re-render non-latest assistant turns
+        // differently from the just-generated form; the canonical path must
+        // not outrun the stored one.
+        if mode == .canonical, tokens.count > storedTokens.count {
+            return .skip(
+                .canonicalLongerThanStored(
+                    canonicalLen: tokens.count, storedLen: storedTokens.count))
+        }
+        return .tokens(tokens)
     }
 
-    /// The whole GPU-free leaf-capture routing decision for one boundary mode.
-    ///
-    /// Takes the boundary `mode` (the actor maps `selectHTTPLeafStoreMode`'s
-    /// output down to the two boundary modes; `directLeaf` captures from the live
-    /// cache and never reaches here), the re-tokenized stored token path, the
-    /// mode-relevant transient boundary snapshot, a tokenizer, and a
-    /// `resolveBoundary` closure-**peer** for the canonical fallback. Runs the
-    /// reusable-prefix probe, chooses the boundary source, applies the
-    /// offset-guard arithmetic, and emits a `LeafCapturePlan`. No live KV cache,
-    /// no Metal — the actor executes the capture/`admit` from the decision.
-    ///
-    /// `render` — the request's **Conversation Render** — carries the cache
-    /// eligibility and the C31 plumbing down to the reusable-prefix probe:
-    /// its `baseRender` serves the stored conversation's render-space token
-    /// list the **Leaf Store** phase already computed this request (the
-    /// identical computation the probe's base render would run), so the base
-    /// render runs once per request.
+    /// Step two of the routing: choose the restore boundary for a probed
+    /// path, or the decidable skip. Takes the boundary `mode` (the actor maps
+    /// `selectHTTPLeafStoreMode`'s output down to the two boundary modes;
+    /// `directLeaf` captures from the live cache and never reaches here), the
+    /// `probe` result, the mode-relevant transient boundary snapshot, and a
+    /// `resolveBoundary` closure-**peer** for the canonical fallback. No live
+    /// KV cache, no Metal — the actor executes the capture/`admit` from the
+    /// decision. Only the boundary arm of the **Live Leaf Capture** needs it.
     static func plan(
         mode: BoundaryLeafMode,
-        storedConversation: HTTPPrefixCacheConversation,
-        storedTokens: [Int],
+        probedTokens: [Int],
         transientBoundary: HybridCacheSnapshot?,
         keySpace: CacheKeySpace,
-        render: ConversationRender,
         resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
     ) async -> LeafCapturePlan {
+        let minimumWarmOffset = keySpace.minimumWarmOffset
         switch mode {
         case .directTool:
             // Tool-call turns are reused by the immediate tool-result
@@ -283,85 +299,50 @@ nonisolated enum LeafAdmissionBuilder {
             guard let transientBoundary else {
                 return .skip(reason: .noTransientBoundary)
             }
-            let toolTokens: [Int]
-            switch probeTokens(
-                continuation: .toolResult,
-                storedConversation: storedConversation,
-                keySpace: keySpace,
-                render: render
-            ) {
-            case .tokens(let translated): toolTokens = translated
-            case .skip(let reason): return .skip(reason: reason)
-            }
-            guard toolTokens.count > transientBoundary.tokenOffset else {
+            guard probedTokens.count > transientBoundary.tokenOffset else {
                 return .skip(
                     reason: .storedAtOrBeforeBoundary(
-                        storedLen: toolTokens.count,
+                        storedLen: probedTokens.count,
                         boundaryOffset: transientBoundary.tokenOffset
                     ))
             }
-            // The residual `toolTokens[boundary...]` doubles as the reprefill
+            // The residual `probedTokens[boundary...]` doubles as the reprefill
             // input, so it must be image-free — past the last image run, key
             // space and real tokens agree token-for-token.
-            guard transientBoundary.tokenOffset >= keySpace.minimumWarmOffset else {
+            guard transientBoundary.tokenOffset >= minimumWarmOffset else {
                 return .skip(
                     reason: .boundaryInsideImagePrefix(
                         boundaryOffset: transientBoundary.tokenOffset,
-                        minimumWarmOffset: keySpace.minimumWarmOffset
+                        minimumWarmOffset: minimumWarmOffset
                     ))
             }
-            return .fromBoundary(boundary: transientBoundary, storedTokens: toolTokens)
+            return .fromBoundary(boundary: transientBoundary, storedTokens: probedTokens)
 
         case .canonical:
-            // Thinking templates may re-render non-latest assistant turns
-            // differently from the just-generated form: capture the canonical
-            // render under the token path a future non-latest render will see.
-            let canonicalTokens: [Int]
-            switch probeTokens(
-                continuation: .userTurn,
-                storedConversation: storedConversation,
-                keySpace: keySpace,
-                render: render
-            ) {
-            case .tokens(let translated): canonicalTokens = translated
-            case .skip(let reason): return .skip(reason: reason)
-            }
-
             // Prefer the request-local transient boundary when it sits strictly
             // before the canonical path; otherwise fall back through the injected
             // **Snapshot Resolution** closure-peer. Both arms require
-            // `tokenOffset < canonicalTokens.count`, so the chosen boundary always
+            // `tokenOffset < probedTokens.count`, so the chosen boundary always
             // leaves a non-empty residual to reprefill — no separate
             // at-or-before-boundary guard is needed. Both arms also require the
             // boundary to sit past the image prefix (`≥ minimumWarmOffset`):
             // the residual doubles as the reprefill input, and an image run in
             // it cannot be reprefilled (a resolved snapshot from an older,
             // pre-image turn can land there).
-            let minimumWarmOffset = keySpace.minimumWarmOffset
-            let boundary: HybridCacheSnapshot
             if let transientBoundary,
-                transientBoundary.tokenOffset < canonicalTokens.count,
+                transientBoundary.tokenOffset < probedTokens.count,
                 transientBoundary.tokenOffset >= minimumWarmOffset
             {
-                boundary = transientBoundary
-            } else if let resolved = await resolveBoundary(canonicalTokens),
+                return .fromBoundary(boundary: transientBoundary, storedTokens: probedTokens)
+            }
+            if let resolved = await resolveBoundary(probedTokens),
                 resolved.tokenOffset > 0,
-                resolved.tokenOffset < canonicalTokens.count,
+                resolved.tokenOffset < probedTokens.count,
                 resolved.tokenOffset >= minimumWarmOffset
             {
-                boundary = resolved
-            } else {
-                return .skip(reason: .noResolvedBoundary(canonicalLen: canonicalTokens.count))
+                return .fromBoundary(boundary: resolved, storedTokens: probedTokens)
             }
-
-            guard canonicalTokens.count <= storedTokens.count else {
-                return .skip(
-                    reason: .canonicalLongerThanStored(
-                        canonicalLen: canonicalTokens.count,
-                        storedLen: storedTokens.count
-                    ))
-            }
-            return .fromBoundary(boundary: boundary, storedTokens: canonicalTokens)
+            return .skip(reason: .noResolvedBoundary(canonicalLen: probedTokens.count))
         }
     }
 }

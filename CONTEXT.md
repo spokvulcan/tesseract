@@ -400,11 +400,33 @@ _Avoid_: **Prefill Plan** (the server path's richer pre-prefill value); chunking
 flag; VLM path (the model class is one input, not the route).
 
 **Leaf Admission Builder**:
-The GPU-free routing decision for storing one leaf snapshot — given a boundary
-mode, it returns either a capture-from-boundary plan or a typed skip reason. It
-decides; the actor-side execution does the Metal capture and admit.
+The GPU-free routing decision for storing one leaf snapshot, in two steps: the
+reusable-prefix probe that finds the token path a future continuation will share,
+then — only when the Live Leaf Capture is refused — a capture-from-boundary plan
+or a typed skip reason. It decides; the actor-side execution does the Metal
+capture and admit.
 _Avoid_: leaf store mode (one input, not the whole story); capture port (it returns
 a decision, not a capture).
+
+**Live Leaf Capture**:
+Storing a finished turn's leaf straight from the live decode cache, with no
+re-prefill, once the token path the model actually fed (prompt plus emitted ids)
+is proven to be a prefix of the turn's canonical re-render. Proven per turn by
+comparing the two paths, never assumed from a template flag; any disagreement
+falls back to the boundary restore-and-re-prefill.
+_Avoid_: cache reuse (too broad — the prompt hit is also reuse); skipping the
+re-prefill (it is not skipped, it is shown to be unnecessary); preserve-thinking
+fast path (the render mode makes it likely, the comparison makes it safe).
+
+**Append-Stable Render**:
+The property of a chat-template render under which a finished turn's canonical
+re-render equals the token path the model was fed — prompt plus emitted ids —
+followed only by template glue. The Live Leaf Capture proves it per turn rather
+than assuming it from a template flag.
+_Avoid_: preserve-thinking (a render mode that usually has the property, not the
+property); canonical render (the re-render itself, which may or may not be
+append-stable); wire fidelity (the client-facing text, one of the things that
+can break it).
 
 **Think-Strip Rewind**:
 The prefix invalidation a thinking template causes when a new real user message
@@ -454,11 +476,12 @@ _Avoid_: cache miss (a rewind is a partial hit at a deeper-than-zero floor); lat
 spike (the symptom, not the measured cause).
 
 **Preserve-Thinking Render**:
-An opt-in render mode, declared by a template that natively supports it, that keeps
+A render mode, declared by a template that natively supports it, that keeps
 `<think>` blocks in every assistant turn so the render is append-stable and the
-**Think-Strip Rewind** cannot occur. Being part of the template context, the flag
-is part of the cache partition, and retained reasoning permanently occupies
-context.
+**Think-Strip Rewind** cannot occur. Whether it is the template's default or a
+per-model choice is the template's business; being part of the template context,
+the flag is part of the cache partition, and retained reasoning permanently
+occupies context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
 

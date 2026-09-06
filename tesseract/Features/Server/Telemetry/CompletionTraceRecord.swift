@@ -161,6 +161,14 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
     /// not change and the pre-#94 incident corpus still replays.
     let rewind: RewindTelemetry?
 
+    /// Post-EOS tail telemetry: `leafStoreSeconds` is the **Leaf Store**
+    /// phase alone, `tailSeconds` the whole span from generation end to the
+    /// drive's finish (the client's wait for its terminal chunk). Additive
+    /// optionals like `rewind` — `nil` on records written before the fields
+    /// existed, so the schema version does not change.
+    let leafStoreSeconds: Double?
+    let tailSeconds: Double?
+
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable function_parameter_count
     /// Assemble a record for one finished cache-aware completion, or
@@ -189,7 +197,9 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
         terminalEvictionCount: Int,
         recoveredEvictionCount: Int,
         deviceEstimates: MeasuredSecondsEstimates?,
-        rewind: RewindTelemetry? = nil
+        rewind: RewindTelemetry? = nil,
+        leafStoreSeconds: Double? = nil,
+        tailSeconds: Double? = nil
     ) -> CompletionTraceRecord? {
         // swiftlint:enable function_parameter_count
         guard unkeyedReason == nil else { return nil }
@@ -217,7 +227,9 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
             terminalEvictionCount: terminalEvictionCount,
             recoveredEvictionCount: recoveredEvictionCount,
             deviceEstimates: deviceEstimates,
-            rewind: rewind
+            rewind: rewind,
+            leafStoreSeconds: leafStoreSeconds,
+            tailSeconds: tailSeconds
         )
     }
 }
