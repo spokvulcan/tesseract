@@ -78,8 +78,68 @@ nonisolated enum CanonicalEchoFidelity {
         /// Stop answers only: the `futureSharedPrefix` speculation target
         /// path — the gate for abandonment-seeded speculation.
         let speculation: Verdict?
+        /// The Emitted Path Index's account of this boundary when the walk
+        /// learns one (ADR-0063).
+        var emittedPath: EmittedPathVerdict?
 
         var hasMismatch: Bool { leaf.isMismatch || (speculation?.isMismatch ?? false) }
+    }
+
+    // MARK: - Emitted Path learning (ADR-0063, ticket #475)
+
+    /// The private index an offline walk learns and resolves against: each
+    /// echoed turn registers its path exactly as the Leaf Store would (the
+    /// emitted ids simulated as the canonical encode of the stored render
+    /// past request N's prompt), and request N+1's render resolves against
+    /// it through the same Conversation Render verbs the server runs.
+    struct EmittedPathLearning: Sendable {
+        let index: EmittedPathIndex
+        let fingerprint: String
+        let toolCallFormat: ToolCallFormat
+        /// Whether the template's generation prompt opens a `<think>` block
+        /// (the model identity's `promptStartsThinking`).
+        let promptStartsThinking: Bool
+
+        init(
+            fingerprint: String, toolCallFormat: ToolCallFormat, promptStartsThinking: Bool,
+            byteBudget: Int = EmittedPathIndex.defaultByteBudget
+        ) {
+            self.index = EmittedPathIndex(byteBudget: byteBudget)
+            self.fingerprint = fingerprint
+            self.toolCallFormat = toolCallFormat
+            self.promptStartsThinking = promptStartsThinking
+        }
+    }
+
+    struct EmittedPathVerdict: Sendable {
+        /// `registered`, a `EmittedPathRegistration.SkipReason` raw value,
+        /// or `promptNotTokenPrefix` when request N's prompt is not a token
+        /// prefix of the stored render — the junction merge the Live Leaf
+        /// Capture would have refused as a divergence, so no live-stored
+        /// turn is simulated for it.
+        let registration: String
+        let pathLength: Int?
+        /// Request N+1's resolve (the harness renders it as the leaf-store
+        /// continuation spelling — same bytes through the last marker as the
+        /// request edge, so the same hit): the indexed prefix on a hit.
+        let nextIndexedPrefix: Int?
+        let nextMissReason: String?
+        /// Shadow differences over every resolve this boundary ran.
+        let shadowDifferences: Int
+
+        var registered: Bool { registration == "registered" }
+    }
+
+    struct EmittedPathSessionSummary: Sendable, Equatable {
+        var boundaries = 0
+        var registered = 0
+        /// Registration outcome (other than `registered`) → count.
+        var registrationSkips: [String: Int] = [:]
+        /// Registered boundaries whose next request resolved with a
+        /// non-zero indexed prefix.
+        var nextResolved = 0
+        var nextMisses: [String: Int] = [:]
+        var shadowDifferences = 0
     }
 
     /// Tokens of decoded context shown on each side of a fork.
@@ -99,7 +159,8 @@ nonisolated enum CanonicalEchoFidelity {
         probeToolSpecs: [ToolSpec]?,
         nextToolSpecs: [ToolSpec]?,
         requestIndex: Int,
-        tokenizer: any Tokenizer
+        tokenizer: any Tokenizer,
+        learning: EmittedPathLearning? = nil
     ) -> BoundaryReport {
         let stored = previous.appendingAssistant(echo)
         // The kind is decided by the *actual* future: a tool-call turn whose
@@ -123,19 +184,49 @@ nonisolated enum CanonicalEchoFidelity {
 
         // Replay renders are always uncached — no live entry to resolve
         // against, so every render runs in full through the same verbs the
-        // server uses.
-        let probeRender = ConversationRender.uncached(
-            tokenizer: tokenizer, toolSpecs: probeToolSpecs
+        // server uses. A learning walk hands the same renders a private
+        // Emitted Path Index: the stored render registers the turn (and is
+        // carried as the probe's base render, as the Leaf Store carries it),
+        // and request N+1's render resolves against it — no render is run
+        // twice for the index's sake.
+        let telemetry = learning.map { _ in EmittedPathRequestTelemetry(diagnostics: nil) }
+        var probeRender = ConversationRender.uncached(
+            tokenizer: tokenizer, toolSpecs: probeToolSpecs,
+            emittedPathIndex: learning?.index, emittedPathFingerprint: learning?.fingerprint,
+            emittedPathTelemetry: telemetry
         )
+        var learned: (registration: String, pathLength: Int?)?
+        if let learning {
+            let registered = registerEmittedPath(
+                learning, previous: previous, echo: echo, stored: stored,
+                probeToolSpecs: probeToolSpecs, render: probeRender, tokenizer: tokenizer)
+            learned = (registered.registration, registered.pathLength)
+            if let storedTokens = registered.storedTokens {
+                probeRender = probeRender.carryingBaseRender(storedTokens)
+            }
+        }
         let nextRender: [Int]
         do {
             nextRender =
                 try ConversationRender
-                .uncached(tokenizer: tokenizer, toolSpecs: nextToolSpecs)
+                .uncached(
+                    tokenizer: tokenizer, toolSpecs: nextToolSpecs,
+                    emittedPathIndex: learning?.index,
+                    emittedPathFingerprint: learning?.fingerprint,
+                    emittedPathTelemetry: telemetry
+                )
                 .continuationRender(messages: next.promptMessages)
         } catch {
             let verdict = Verdict.noPath(reason: "next-render-failed: \(error)")
             return BoundaryReport(boundary: boundary, leaf: verdict, speculation: nil)
+        }
+        let emittedPath = learned.map { learned in
+            let summary = telemetry?.summary ?? .init()
+            return EmittedPathVerdict(
+                registration: learned.registration, pathLength: learned.pathLength,
+                nextIndexedPrefix: summary.lastIndexedPrefix,
+                nextMissReason: summary.lastMissReason,
+                shadowDifferences: summary.shadowDifferences)
         }
 
         // The boundary-leaf path. For `interruptRewind` this is the
@@ -186,8 +277,67 @@ nonisolated enum CanonicalEchoFidelity {
         return BoundaryReport(
             boundary: boundary,
             leaf: leafVerdict,
-            speculation: speculationVerdict
+            speculation: speculationVerdict,
+            emittedPath: emittedPath
         )
+    }
+
+    /// The Leaf Store's registration, simulated on the recorded pair:
+    /// request N's prompt is its full render (generation prompt included);
+    /// the emitted ids are the canonical encode of the stored render past
+    /// that prompt, through the last end-of-turn marker — what a live-stored
+    /// turn's path equals once the Live Leaf Capture has proved the fed path
+    /// canonical. Returns the stored render's tokens, for the probe render
+    /// to carry as its base render (the harness renders `stored` once).
+    private static func registerEmittedPath(
+        _ learning: EmittedPathLearning,
+        previous: HTTPPrefixCacheConversation,
+        echo: HTTPPrefixCacheMessage,
+        stored: HTTPPrefixCacheConversation,
+        probeToolSpecs: [ToolSpec]?,
+        render: ConversationRender,
+        tokenizer: any Tokenizer
+    ) -> (registration: String, pathLength: Int?, storedTokens: [Int]?) {
+        guard
+            case .eligible(let index, let fingerprint, let marker) = render.emittedPathEligibility()
+        else {
+            return (EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue, nil, nil)
+        }
+        do {
+            let rendered = try render.storedRender(messages: stored.promptMessages)
+            guard let bytes = rendered.bytes,
+                let markerIndex = rendered.tokens.lastIndex(of: marker.tokenID)
+            else {
+                return (
+                    EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue, nil,
+                    rendered.tokens
+                )
+            }
+            let prompt = try ConversationRender.stablePrefixProbeRender(
+                tokenizer: tokenizer, messages: previous.promptMessages, tools: probeToolSpecs,
+                additionalContext: TemplateRenderContext.canonical.additionalContext())
+            let path = Array(rendered.tokens[...markerIndex])
+            guard path.starts(with: prompt) else {
+                return ("promptNotTokenPrefix", nil, rendered.tokens)
+            }
+            let outcome = EmittedPathRegistration.register(
+                EmittedPathRegistration.Inputs(
+                    index: index, fingerprint: fingerprint, marker: marker, tokenizer: tokenizer,
+                    storedRenderBytes: bytes, storedMessage: echo, promptKeyPath: prompt,
+                    generatedTokens: Array(path[prompt.count...]), stoppedOn: marker.tokenID,
+                    toolCallFormat: learning.toolCallFormat, tools: probeToolSpecs,
+                    startsInsideThinkBlock: TemplateRenderContext.canonical
+                        .startsInsideThinkBlock(promptStartsThinking: learning.promptStartsThinking)
+                ))
+            switch outcome {
+            case .registered(let registered):
+                return ("registered", registered.pathLength, rendered.tokens)
+            case .skipped(let skip):
+                return (skip.reason.rawValue, nil, rendered.tokens)
+            }
+        } catch {
+            return (EmittedPathRegistration.SkipReason.renderUnavailable.rawValue, nil, nil)
+        }
     }
 
     private static func verdict(
@@ -251,6 +401,28 @@ extension CanonicalEchoFidelity {
         let skipped: [(requestIndex: Int, reason: String)]
 
         var mismatchCount: Int { boundaries.count(where: \.hasMismatch) }
+
+        /// The Emitted Path account over the walk, when it learned an index.
+        var emittedPathSummary: EmittedPathSessionSummary? {
+            let verdicts = boundaries.compactMap(\.emittedPath)
+            guard !verdicts.isEmpty else { return nil }
+            var summary = EmittedPathSessionSummary()
+            summary.boundaries = verdicts.count
+            for verdict in verdicts {
+                summary.shadowDifferences += verdict.shadowDifferences
+                guard verdict.registered else {
+                    summary.registrationSkips[verdict.registration, default: 0] += 1
+                    continue
+                }
+                summary.registered += 1
+                if let prefix = verdict.nextIndexedPrefix, prefix > 0 {
+                    summary.nextResolved += 1
+                } else {
+                    summary.nextMisses[verdict.nextMissReason ?? "noHit", default: 0] += 1
+                }
+            }
+            return summary
+        }
     }
 
     /// Walk one session's requests in order, mirroring the live pipeline:
@@ -263,7 +435,8 @@ extension CanonicalEchoFidelity {
         requests: [RecordedRequest],
         sessionAffinity: String?,
         modelID: String,
-        tokenizer: any Tokenizer
+        tokenizer: any Tokenizer,
+        learning: EmittedPathLearning? = nil
     ) async -> SessionReport {
         let repairStore = HTTPPrefixCacheSessionReplayStore()
         var boundaries: [BoundaryReport] = []
@@ -306,7 +479,8 @@ extension CanonicalEchoFidelity {
                             probeToolSpecs: previousToolSpecs,
                             nextToolSpecs: toolSpecs,
                             requestIndex: index - 1,
-                            tokenizer: tokenizer
+                            tokenizer: tokenizer,
+                            learning: learning
                         ))
                     // Mirror the live server: the completed turn enters the
                     // replay record so later requests that drop its
@@ -357,6 +531,26 @@ extension CanonicalEchoFidelity {
         }
         for (index, reason) in report.skipped {
             lines.append("skipped request#\(index): \(reason)")
+        }
+        if let summary = report.emittedPathSummary {
+            lines.append(
+                "emitted-path boundaries=\(summary.boundaries) registered=\(summary.registered) "
+                    + "skips=\(summary.registrationSkips) nextResolved=\(summary.nextResolved) "
+                    + "nextMisses=\(summary.nextMisses) shadowDifferences=\(summary.shadowDifferences)"
+            )
+            for boundaryReport in report.boundaries {
+                guard let verdict = boundaryReport.emittedPath,
+                    !verdict.registered || (verdict.nextIndexedPrefix ?? 0) == 0
+                        || verdict.shadowDifferences > 0
+                else { continue }
+                lines.append(
+                    "emitted-path request#\(boundaryReport.boundary.requestIndex) "
+                        + "kind=\(boundaryReport.boundary.kind.rawValue) "
+                        + "registration=\(verdict.registration) "
+                        + "nextPrefix=\(verdict.nextIndexedPrefix ?? 0) "
+                        + "nextMiss=\(verdict.nextMissReason ?? "-") "
+                        + "shadow=\(verdict.shadowDifferences)")
+            }
         }
         return lines.joined(separator: "\n")
     }

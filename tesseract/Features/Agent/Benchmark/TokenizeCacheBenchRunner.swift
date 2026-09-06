@@ -164,7 +164,7 @@ final class TokenizeCacheBenchRunner {
                     baseAdditionalContext: nil,
                     mergedAdditionalContext: mergedContext,
                     modelFingerprint: fingerprint
-                )
+                )?.tokens
                 let cachedMs = Self.ms(since: cachedStart)
                 let standaloneStart = ContinuousClock.now
                 let standalone = try tokenizer.applyChatTemplate(
@@ -232,7 +232,7 @@ final class TokenizeCacheBenchRunner {
                 mergedAdditionalContext: mergedContext,
                 modelFingerprint: fingerprint,
                 messagesAreEntryPrefix: true
-            )
+            )?.tokens
             let truncMs = Self.ms(since: truncStart)
             let standaloneStart = ContinuousClock.now
             let standalone = try tokenizer.applyChatTemplate(

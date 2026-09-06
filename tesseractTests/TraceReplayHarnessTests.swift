@@ -61,7 +61,8 @@ struct TraceReplayHarnessTests {
             deviceEstimates: estimates,
             rewind: rewind,
             leafStoreSeconds: nil,
-            tailSeconds: nil
+            tailSeconds: nil,
+            emittedPath: nil
         )
     }
 

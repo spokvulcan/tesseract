@@ -129,6 +129,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// once `completion` has finished — the live cache's token path the
     /// **Live Leaf Capture** compares against the canonical re-render.
     let generatedTokens: GeneratedTokenRecorder
+    /// The loaded model's tool-call format — what the generation loop's
+    /// `ToolCallProcessor` parsed with, so the Emitted Path fidelity check
+    /// replays the emitted ids through the same parser (ADR-0063).
+    let toolCallFormat: ToolCallFormat
 }
 
 extension GenerationStreamLoop.RawGenerationHandle {
@@ -1007,6 +1011,10 @@ nonisolated final class ServerCompletion {
             // ran, its stage breakdown, and the whole span from generation
             // end to here — the client sees its terminal chunk right after.
             leafResult.report.tailSeconds = Date.timeIntervalSinceReferenceDate - generationEnded
+            // ADR-0063 dark launch: fold the request's Emitted Path resolves
+            // (request edge, planner, leaf store) into the same account.
+            let emittedPathSummary = mlxStart.render?.emittedPathTelemetry?.summary
+            leafResult.report.emittedPathResolves = emittedPathSummary
             diagnosticsContext.log(leafResult.report, level: .notice)
 
             // Per-completion trace record (PRD #82, slice #83): one line in
@@ -1038,7 +1046,9 @@ nonisolated final class ServerCompletion {
                     residualPromptSeconds: completionInfo.promptTime,
                     deviceEstimates: finalEstimates,
                     leafStoreSeconds: leafResult.report.leafStoreSeconds,
-                    tailSeconds: leafResult.report.tailSeconds
+                    tailSeconds: leafResult.report.tailSeconds,
+                    emittedPath: EmittedPathTraceTelemetry.make(
+                        report: leafResult.report, resolves: emittedPathSummary)
                 )
                 if let record {
                     traceLog.append(record)
@@ -1176,7 +1186,8 @@ nonisolated final class ServerCompletion {
                 parameters: parameters,
                 modelID: modelID,
                 modelFingerprint: modelFingerprint,
-                imageKeying: imageKeying
+                imageKeying: imageKeying,
+                diagnostics: diagnosticsContext
             ) {
             case .keyed(let identities):
                 keyed = identities
@@ -1841,7 +1852,8 @@ nonisolated final class ServerCompletion {
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
                 prefillStepSize: parameters.prefill.stepSize ?? 512,
                 tokenNDim: tokenNDim,
-                generatedTokens: generatedTokens
+                generatedTokens: generatedTokens,
+                toolCallFormat: session.configuration.toolCallFormat ?? .json
             )
         }
     }
@@ -2118,7 +2130,8 @@ nonisolated final class ServerCompletion {
             transientLastUserBoundarySnapshot: nil,
             prefillStepSize: parameters.prefill.stepSize ?? 512,
             tokenNDim: fullInput.text.tokens.ndim,
-            generatedTokens: generatedTokens
+            generatedTokens: generatedTokens,
+            toolCallFormat: session.configuration.toolCallFormat ?? .json
         )
     }
 
@@ -2287,7 +2300,8 @@ nonisolated final class ServerCompletion {
             transientLastUserBoundarySnapshot: nil,
             prefillStepSize: parameters.prefill.stepSize ?? 512,
             tokenNDim: tokenNDim,
-            generatedTokens: generatedTokens
+            generatedTokens: generatedTokens,
+            toolCallFormat: session.configuration.toolCallFormat ?? .json
         )
     }
 

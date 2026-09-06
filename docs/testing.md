@@ -53,7 +53,12 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/SnapshotStateTests \
   -only-testing:tesseractTests/LeafHomeGuaranteeTests \
   -only-testing:tesseractTests/StablePrefixDetectorNonDeterminismTests \
-  -only-testing:tesseractTests/JinjaNonDeterminismReproTests
+  -only-testing:tesseractTests/JinjaNonDeterminismReproTests \
+  -only-testing:tesseractTests/EmittedPathIndexTests \
+  -only-testing:tesseractTests/EmittedPathFidelityTests \
+  -only-testing:tesseractTests/EmittedPathRegistrationTests \
+  -only-testing:tesseractTests/ConversationRenderEmittedPathTests \
+  -only-testing:tesseractTests/EmittedPathResolveRealTests
 
 # Voice session + barge detector (quit the app first — its capture engine
 # starves test hosts; VoiceBargeReplayTests replays real-hardware traces from
@@ -122,6 +127,44 @@ both variables the test is skipped (`.enabled(if:)`), so it is safe in CI.
 Note the `TEST_RUNNER_` prefix — plain environment variables do not reach the
 test host process. Per-boundary verdicts print to the test log; mismatches
 include decoded windows around the fork.
+
+## Emitted Path Index replay gate (corpus mode)
+
+`EmittedPathReplayCorpusTests` (ADR-0063, ticket #475) walks the same
+recorded sessions through the canonical-echo harness with a private
+**Emitted Path Index** learning every echoed turn — the Leaf Store's
+registration simulated on the canonical encode of the stored render past
+request N's prompt — and every next request resolving at its edge through
+the Conversation Render. It fails when a simulated live-stored turn does
+not register (the one tolerated skip is `promptNotTokenPrefix`: request N's
+prompt is not a token prefix of the stored render, the junction merge the
+Live Leaf Capture would have refused, so no live turn exists to register),
+when a registered boundary's next request misses the index, or when the
+shadow check finds a difference between the composition and the canonical
+encode. Same variables as the fidelity gate; the reference corpus is
+`~/projects/tesseract-traces/2026-09-06-emitted-path`:
+
+```bash
+TEST_RUNNER_TESSERACT_FIDELITY_CORPUS="$HOME/projects/tesseract-traces/2026-09-06-emitted-path" \
+TEST_RUNNER_TESSERACT_FIDELITY_MODEL="$HOME/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit" \
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/EmittedPathReplayCorpusTests \
+  -parallel-testing-enabled NO
+```
+
+Per-session totals print to the test log (`emitted-path boundaries=…
+registered=… nextResolved=… shadowDifferences=…`), with one line per
+boundary that did not register or resolve. The walk is CPU-bound on one
+core: every boundary renders and BPE-encodes the whole conversation
+through the Debug-build tokenizer (the hot frames are the byte-pair merge
+and the regex pretokenizer), about 4–5 s per 30k-token boundary — budget
+~2 min for the 2026-09-06 corpus and prefix the command with `nice -n 20`
+when the machine is in use. `EmittedPathResolveRealTests`
+(in the prefix-cache group above) covers the same claims on the local PARO
+tokenizer without a corpus: marker derivation, suffix-encode equality at
+every end-of-turn marker, and the request-edge invariant across a
+tool-call boundary.
 
 ## Interrupt-readiness acceptance (corpus + live drill)
 

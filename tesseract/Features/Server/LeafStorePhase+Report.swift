@@ -50,6 +50,13 @@ nonisolated extension LeafStorePhase {
         /// chunk).
         var leafStoreSeconds: TimeInterval?
         var tailSeconds: TimeInterval?
+        /// Emitted Path registration (ADR-0063 dark launch): what the index
+        /// learned from this turn, or why it learned nothing.
+        var emittedPathRegistered: EmittedPathRegistration.Registered?
+        var emittedPathSkip: String?
+        var emittedPathRegisterSeconds: TimeInterval = 0
+        /// The request's resolves against the index, folded in by the drive.
+        var emittedPathResolves: EmittedPathRequestTelemetry.Summary?
 
         let eventName = "leafStore"
 
@@ -71,7 +78,53 @@ nonisolated extension LeafStorePhase {
             ]
             if let leafStoreSeconds { fields.append(("leafStoreMs", ms(leafStoreSeconds))) }
             if let tailSeconds { fields.append(("postGenerationMs", ms(tailSeconds))) }
+            if let emittedPathRegistered {
+                fields.append(("emittedPath", "registered"))
+                fields.append(("emittedPathLength", "\(emittedPathRegistered.pathLength)"))
+            } else if let emittedPathSkip {
+                fields.append(("emittedPath", "skipped"))
+                fields.append(("emittedPathSkip", emittedPathSkip))
+            }
+            fields.append(("emittedPathRegisterMs", ms(emittedPathRegisterSeconds)))
+            if let resolves = emittedPathResolves {
+                fields.append(("emittedPathResolves", "\(resolves.resolves)"))
+                fields.append(("emittedPathHits", "\(resolves.hits)"))
+                if let prefix = resolves.requestEdgeIndexedPrefix {
+                    fields.append(("emittedPathRequestPrefix", "\(prefix)"))
+                }
+                if let suffix = resolves.requestEdgeSuffixTokens {
+                    fields.append(("emittedPathRequestSuffix", "\(suffix)"))
+                }
+                fields.append(("emittedPathShadowDifferences", "\(resolves.shadowDifferences)"))
+            }
             return fields
+        }
+
+        /// Record why the turn registered no Emitted Path — through the
+        /// diagnostics net and into this account.
+        mutating func recordEmittedPathSkip(
+            _ reason: EmittedPathRegistration.SkipReason,
+            fields: [(String, String)] = [],
+            in diagnostics: PrefixCacheDiagnostics.Context
+        ) {
+            EmittedPathRegistration.emitSkip(
+                EmittedPathRegistration.Skip(reason, fields: fields), in: diagnostics)
+            emittedPathSkip = reason.rawValue
+        }
+
+        /// Fold a registration outcome (already emitted) into the account.
+        mutating func absorbEmittedPath(
+            _ outcome: EmittedPathRegistration.Outcome, registerSeconds: TimeInterval
+        ) {
+            emittedPathRegisterSeconds = registerSeconds
+            switch outcome {
+            case .registered(let registered):
+                emittedPathRegistered = registered
+                emittedPathSkip = nil
+            case .skipped(let skip):
+                emittedPathRegistered = nil
+                emittedPathSkip = skip.reason.rawValue
+            }
         }
 
         /// Emit a decidable skip and record its reason — the one way a skip

@@ -188,6 +188,15 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
     struct Resolution: Sendable {
         let tokens: [Int]
         let path: Path
+        /// The render the tokens encode — the bytes the Emitted Path
+        /// Resolve keys on (ADR-0063).
+        let renderedBytes: [UInt8]
+    }
+
+    /// A C27/C28 recovery: the tokens and the render they encode.
+    struct Recovered: Sendable {
+        let tokens: [Int]
+        let renderedBytes: [UInt8]
     }
 
     struct Stats: Equatable, Sendable {
@@ -264,7 +273,8 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         {
             lock.withLock { stats.repeats += 1 }
             logSummaryIfDue()
-            return Resolution(tokens: snapshot.tokens, path: .hitRepeat)
+            return Resolution(
+                tokens: snapshot.tokens, path: .hitRepeat, renderedBytes: snapshot.renderedBytes)
         }
 
         // 4. Digest chain + template probe hash. C29: the chain reuses the
@@ -349,7 +359,8 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
             stats.missReasons[finalReason.rawValue, default: 0] += 1
         }
         logSummaryIfDue()
-        return Resolution(tokens: fullTokens, path: .miss(finalReason))
+        return Resolution(
+            tokens: fullTokens, path: .miss(finalReason), renderedBytes: renderedBytes)
     }
 
     /// C27 truncated resolve: recover the token list of a render TRUNCATED at
@@ -405,12 +416,12 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         mergedAdditionalContext: [String: any Sendable]?,
         modelFingerprint: String,
         messagesAreEntryPrefix: Bool = false
-    ) throws -> [Int]? {
+    ) throws -> Recovered? {
         guard let rendering = tokenizer as? any ChatTemplateRendering else {
             return nil
         }
 
-        func fallback(_ reason: FallbackReason) -> [Int]? {
+        func fallback(_ reason: FallbackReason) -> Recovered? {
             lock.withLock {
                 stats.truncatedFallbacks += 1
                 stats.truncatedFallbackReasons[reason.rawValue, default: 0] += 1
@@ -508,7 +519,7 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         }
         lock.withLock { stats.truncatedHits += 1 }
         logSummaryIfDue()
-        return candidateTokens
+        return Recovered(tokens: candidateTokens, renderedBytes: truncatedBytes)
     }
 
     /// C28 tail-replacement resolve: recover the token list of a render that
@@ -550,12 +561,12 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         baseAdditionalContext: [String: any Sendable]?,
         mergedAdditionalContext: [String: any Sendable]?,
         modelFingerprint: String
-    ) throws -> [Int]? {
+    ) throws -> Recovered? {
         guard let rendering = tokenizer as? any ChatTemplateRendering else {
             return nil
         }
 
-        func fallback(_ reason: FallbackReason) -> [Int]? {
+        func fallback(_ reason: FallbackReason) -> Recovered? {
             lock.withLock {
                 stats.replacedFallbacks += 1
                 stats.replacedFallbackReasons[reason.rawValue, default: 0] += 1
@@ -651,7 +662,7 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
             {
                 lock.withLock { stats.replacedHits += 1 }
                 logSummaryIfDue()
-                return prefixTokens + suffixTokens
+                return Recovered(tokens: prefixTokens + suffixTokens, renderedBytes: renderedBytes)
             }
             lock.withLock { stats.replacedJunctionFailures += 1 }
         }
@@ -801,7 +812,9 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
                     stats.hits += 1
                     stats.trimHistogram[k, default: 0] += 1
                 }
-                return .resolved(Resolution(tokens: fullTokens, path: .hit(trimmedBy: k)))
+                return .resolved(
+                    Resolution(
+                        tokens: fullTokens, path: .hit(trimmedBy: k), renderedBytes: renderedBytes))
             }
             lock.withLock { stats.junctionFailures += 1 }
         }

@@ -284,7 +284,7 @@ struct RenderTokenCacheTruncatedRealTests {
             tokenizer: tokenizer, messages: messages, tools: nil,
             baseAdditionalContext: baseContext,
             mergedAdditionalContext: Self.noGenPrompt,
-            modelFingerprint: Self.fingerprint)
+            modelFingerprint: Self.fingerprint)?.tokens
     }
 
     /// The production shape: a growing conversation whose last message is its
@@ -343,7 +343,7 @@ struct RenderTokenCacheTruncatedRealTests {
                 baseAdditionalContext: nil,
                 mergedAdditionalContext: Self.noGenPrompt,
                 modelFingerprint: Self.fingerprint,
-                messagesAreEntryPrefix: true),
+                messagesAreEntryPrefix: true)?.tokens,
             "entry-prefix assertion fell back")
         let computed = try #require(
             try Self.resolveTruncated(cache, tokenizer: tokenizer, messages: messages))
@@ -493,7 +493,7 @@ struct RenderTokenCacheReplacingFakeTests {
             tokenizer: tokenizer, messages: messages, tools: tools,
             baseAdditionalContext: baseContext,
             mergedAdditionalContext: Self.noGenPrompt,
-            modelFingerprint: fingerprint)
+            modelFingerprint: fingerprint)?.tokens
     }
 
     /// The production shape: the request's entry is cached, then the stored
@@ -793,7 +793,7 @@ struct RenderTokenCacheReplacingRealTests {
             tokenizer: tokenizer, messages: messages, tools: nil,
             baseAdditionalContext: baseContext,
             mergedAdditionalContext: Self.noGenPrompt,
-            modelFingerprint: Self.fingerprint)
+            modelFingerprint: Self.fingerprint)?.tokens
     }
 
     /// The production shape: a growing conversation; every turn's stored

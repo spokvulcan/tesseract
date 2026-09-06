@@ -43,6 +43,7 @@ nonisolated enum RawGeneration: Sendable {
 /// handle; read only after the generation task has completed.
 nonisolated final class GeneratedTokenRecorder: @unchecked Sendable {
     private let tokens = OSAllocatedUnfairLock<[Int]>(initialState: [])
+    private let stop = OSAllocatedUnfairLock<Int?>(initialState: nil)
 
     init() {}
 
@@ -50,9 +51,21 @@ nonisolated final class GeneratedTokenRecorder: @unchecked Sendable {
         tokens.withLock { $0.append(token) }
     }
 
+    /// The stop id the loop broke on — the last appended id when set. Left
+    /// `nil` by a token-limit cut or a cancellation, which the **Emitted
+    /// Path**'s terminal-token accounting (ADR-0063 decision 3) reads as
+    /// "no stop id fed".
+    func markStop(_ token: Int) {
+        stop.withLock { $0 = token }
+    }
+
     /// The ids recorded so far. Stable once the generation task has finished.
     var snapshot: [Int] {
         tokens.withLock { $0 }
+    }
+
+    var stopToken: Int? {
+        stop.withLock { $0 }
     }
 }
 
@@ -181,6 +194,7 @@ nonisolated enum TokenGenerationLoop {
                     start = now
                 }
                 if token == unknownTokenId || stopTokenIds.contains(token) {
+                    generatedTokens?.markStop(token)
                     stopReason = .stop
                     break
                 }

@@ -97,6 +97,8 @@ nonisolated enum LeafStorePhase {
                     stage: "leafStore", reason: "unkeyed-completion", level: .info,
                     extraFields: [("unkeyedReason", unkeyedReason.rawValue)]),
                 in: diagnosticsContext)
+            result.report.recordEmittedPathSkip(
+                .ineligibleRender, fields: [("cause", "unkeyed")], in: diagnosticsContext)
             return result
         }
 
@@ -124,10 +126,15 @@ nonisolated enum LeafStorePhase {
         }
         let renderStart = Date.timeIntervalSinceReferenceDate
         let storedRenderTokens: [Int]
+        let storedRenderBytes: [UInt8]?
         do {
-            storedRenderTokens = try render.continuationRender(
+            // The one Jinja render of the stored conversation: its tokens
+            // measure the leaf, its bytes key the Emitted Path registration.
+            let storedRender = try render.storedRender(
                 messages: storedConversation.promptMessages
             )
+            storedRenderTokens = storedRender.tokens
+            storedRenderBytes = storedRender.bytes
         } catch {
             Log.agent.warning(
                 "Stored token sequence measurement failed — error=\(error.localizedDescription)"
@@ -137,6 +144,8 @@ nonisolated enum LeafStorePhase {
                     stage: "leafStore", reason: "tokenization-failed", level: .warning,
                     extraFields: []),
                 in: diagnosticsContext)
+            result.report.recordEmittedPathSkip(
+                .renderUnavailable, fields: [("cause", "renderThrew")], in: diagnosticsContext)
             return result
         }
         let storedTokens: [Int]
@@ -179,6 +188,18 @@ nonisolated enum LeafStorePhase {
             case .directLeaf: nil
             }
 
+        // The facts the Emitted Path registration needs beyond the request
+        // (ADR-0063): the stored render's bytes, the appended assistant
+        // message the fidelity check compares against, and whether the
+        // generation began inside a think block.
+        let emittedPathTurn = EmittedPathTurn(
+            storedRenderBytes: storedRenderBytes,
+            storedMessage: storedConversation.messages.last
+                ?? .assistant(
+                    content: assistantText, reasoning: assistantReasoning, toolCalls: toolCalls),
+            startsInsideThinkBlock: promptStartsThinking
+        )
+
         let capture: LeafCapture
         let path: Report.Path
         var pendingSeed: SpeculativeCanonicalPrefill.Seed?
@@ -196,6 +217,7 @@ nonisolated enum LeafStorePhase {
                     // runs once per request.
                     probeRender: render.carryingBaseRender(storedRenderTokens),
                     preservesThinking: render.renderContext.preservesThinking,
+                    emittedPath: emittedPathTurn,
                     report: &result.report
                 )
             else { return result }
@@ -250,6 +272,23 @@ nonisolated enum LeafStorePhase {
         } else {
             // Non-thinking templates: the pre-existing live path. The direct
             // executor snapshots the live final cache under the stored path.
+            // The dark launch registers only turns the Live Leaf Capture
+            // proved canonical; the render-trusting direct path runs no
+            // comparison, so it registers nothing yet (#476). The ticket's
+            // own guards are still named first, so an image-bearing or
+            // intervened turn logs its real reason here as well.
+            let directSkip: (EmittedPathRegistration.SkipReason, [(String, String)]) =
+                if !mlxStart.keySpace.isIdentity {
+                    (.nonIdentityKeySpace, [])
+                } else if intervened {
+                    (.intervened, [])
+                } else if mlxStart.generatedTokens.snapshot.isEmpty {
+                    (.noGeneratedTokens, [])
+                } else {
+                    (.notProvenLive, [("cause", "directLeaf")])
+                }
+            result.report.recordEmittedPathSkip(
+                directSkip.0, fields: directSkip.1, in: diagnosticsContext)
             path = .direct
             capture = await captureDirectLeaf(
                 sessions: sessions, mlxStartBox: mlxStartBox,
@@ -318,6 +357,7 @@ nonisolated enum LeafStorePhase {
         storedTokens: [Int],
         probeRender: ConversationRender,
         preservesThinking: Bool,
+        emittedPath: EmittedPathTurn,
         report: inout Report
     ) async -> BoundaryRoute? {
         let mlxStart = inputs.mlxStart
@@ -335,6 +375,8 @@ nonisolated enum LeafStorePhase {
             probedTokens = tokens
         case .skip(let reason):
             report.recordSkip(leafSkipLog(for: reason, mode: mode), in: diagnostics)
+            report.recordEmittedPathSkip(
+                .notProvenLive, fields: [("cause", "probeSkipped")], in: diagnostics)
             return nil
         }
 
@@ -353,12 +395,18 @@ nonisolated enum LeafStorePhase {
             keySpaceIsIdentity: mlxStart.keySpace.isIdentity
         ) {
         case .live(let offset):
+            // ADR-0063 dark launch: the fed path proved canonical up to the
+            // cache offset — register the turn's Emitted Path.
+            registerEmittedPath(emittedPath, inputs: inputs, render: probeRender, report: &report)
             return .live(storedTokens: Array(probedTokens.prefix(offset)))
         case .boundary(let reason):
             let record = liveFallbackLog(
                 for: reason, mode: mode, preservesThinking: preservesThinking)
             record.emit(in: diagnostics)
             report.liveFallbackReason = record.reason
+            let skip = EmittedPathRegistration.skipReason(for: reason)
+            report.recordEmittedPathSkip(
+                skip.reason, fields: skip.detail.map { [("cause", $0)] } ?? [], in: diagnostics)
         }
 
         let transientBoundary: HybridCacheSnapshot? =
@@ -416,6 +464,71 @@ nonisolated enum LeafStorePhase {
             return .boundary(
                 boundary, positionAnchorRopeDelta: positionAnchorRopeDelta, storedTokens: tokens)
         }
+    }
+
+    // MARK: - Emitted Path registration (ADR-0063, dark launch)
+
+    /// The turn facts the registration needs beyond the request itself.
+    struct EmittedPathTurn: Sendable {
+        /// The stored conversation's render bytes (no generation prompt);
+        /// `nil` when the tokenizer cannot render to bytes.
+        let storedRenderBytes: [UInt8]?
+        /// The assistant message appended to the stored conversation.
+        let storedMessage: HTTPPrefixCacheMessage
+        /// Whether the generation began inside a `<think>` block.
+        let startsInsideThinkBlock: Bool
+    }
+
+    /// Register the finished turn's Emitted Path, once the Live Leaf
+    /// Capture has decided live: the fed prompt ids and generated ids, the
+    /// stop id, and the stored render's bytes through its last end-of-turn
+    /// marker. Every outcome lands in the diagnostics net and the report.
+    static func registerEmittedPath(
+        _ turn: EmittedPathTurn,
+        inputs: Inputs,
+        render: ConversationRender,
+        report: inout Report
+    ) {
+        let diagnostics = inputs.diagnosticsContext
+        let mlxStart = inputs.mlxStart
+        let start = Date.timeIntervalSinceReferenceDate
+        let index: EmittedPathIndex
+        let fingerprint: String
+        let marker: EndOfTurnMarker
+        switch render.emittedPathEligibility() {
+        case .ineligible(let reason):
+            let noMarker = EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue
+            report.recordEmittedPathSkip(
+                reason == noMarker ? .noEndOfTurnMarker : .ineligibleRender,
+                fields: reason == noMarker ? [] : [("cause", reason)], in: diagnostics)
+            return
+        case .eligible(let engaged, let scoped, let derived):
+            index = engaged
+            fingerprint = scoped
+            marker = derived
+        }
+        guard let storedRenderBytes = turn.storedRenderBytes else {
+            report.recordEmittedPathSkip(.renderUnavailable, in: diagnostics)
+            return
+        }
+        let outcome = EmittedPathRegistration.register(
+            EmittedPathRegistration.Inputs(
+                index: index,
+                fingerprint: fingerprint,
+                marker: marker,
+                tokenizer: render.tokenizer,
+                storedRenderBytes: storedRenderBytes,
+                storedMessage: turn.storedMessage,
+                promptKeyPath: mlxStart.keySpace.keyPath,
+                generatedTokens: mlxStart.generatedTokens.snapshot,
+                stoppedOn: mlxStart.generatedTokens.stopToken,
+                toolCallFormat: mlxStart.toolCallFormat,
+                tools: render.toolSpecs,
+                startsInsideThinkBlock: turn.startsInsideThinkBlock
+            ))
+        let seconds = secondsSince(start)
+        EmittedPathRegistration.emit(outcome, registerSeconds: seconds, in: diagnostics)
+        report.absorbEmittedPath(outcome, registerSeconds: seconds)
     }
 
     // MARK: - Mode selection
