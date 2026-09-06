@@ -46,22 +46,29 @@ whether the leaf can be captured from the live decode cache
 3. If the live path up to that offset equals the stored path's prefix, the
    phase captures the live final cache at that offset and admits it under
    the stored path. Zero prefill; the cost is the snapshot copy plus
-   admission.
-4. Any mismatch falls back to the unchanged boundary restore-and-re-prefill.
-   Eligibility misses (intervened turn, non-identity key space with image
-   placeholders, no fed ids) log at info. A real disagreement (divergence,
-   live longer than stored, cache offset outside the live path) logs a
-   warning with the offset, both ids and four ids of context on each side,
-   because on an append-stable render it means the render or the wire text
-   is wrong. That warning is how the vendored `ToolCallProcessor`'s
-   dropped-prefix bug surfaced (mlx-swift-lm #609).
+   admission. The decision runs on the probe result before any restore
+   boundary is looked up, so a live turn never pays **Snapshot Resolution**
+   (which can hydrate from SSD) and needs no boundary at all: turns that
+   used to skip for lack of one now store a live leaf.
+4. Any mismatch falls back to the boundary plan and the unchanged
+   restore-and-re-prefill. Eligibility misses (intervened turn,
+   non-identity key space with image placeholders, no fed ids) log at info.
+   A real disagreement (divergence, live longer than stored) logs a warning
+   with the offset, both ids and four ids of context on each side, because
+   on an append-stable render it means the render or the wire text is
+   wrong; under the strip-by-default canonical render, which drops the
+   emitted thinking by design, the same two log at info. A cache offset
+   outside the live path always warns. That warning is how the vendored
+   `ToolCallProcessor`'s dropped-prefix bug surfaced (mlx-swift-lm #609).
 5. The speculative seed takes the canonical leaf offset from the live
    decision, so the ADR-0009 pass extends the same leaf.
 
-Every post-generation stage is timed and reported in one `Leaf store —`
-notice line (render, restore, prefill, capture, payload, admit), and the
-completion line carries `tailMs`, the last-delta-to-finish gap the client
-experiences. Both reach the trace corpus as optional fields.
+Every post-generation stage is timed and reported in one `leafStore`
+diagnostics event (render, plan, restore, prefill, capture, payload, admit,
+the whole phase, and the span from generation end to the drive's finish —
+the client's wait for its terminal chunk). The drive emits it at notice
+level, so it survives in `log show`; the phase and tail seconds also reach
+the trace corpus as optional fields.
 
 ## Consequences
 

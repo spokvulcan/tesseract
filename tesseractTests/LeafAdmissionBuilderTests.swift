@@ -5,8 +5,8 @@ import MLXLMCommon
 @testable import Tesseract_Agent
 
 /// Behavior of the **Leaf Admission Builder**: the GPU-free reusable-prefix
-/// probe and the `plan()` routing decision (`.fromBoundary` / `.skip`) that
-/// finds the shared token path a future continuation can hydrate. Driven by a
+/// `probe()` and the `plan()` boundary decision (`.fromBoundary` / `.skip`)
+/// that together find the shared token path a future continuation can hydrate. Driven by a
 /// byte-level fake tokenizer and a pure `resolveBoundary` closure — no model.
 @Suite struct LeafAdmissionBuilderTests {
 
@@ -133,7 +133,7 @@ import MLXLMCommon
             keySpace: .identity(),
             render: makeRender(tokenizer)
         )!.get()
-        let plumbed = await LeafAdmissionBuilder.plan(
+        let plumbed = await plan(
             mode: .directTool,
             storedConversation: stored,
             storedTokens: toolTokens,
@@ -301,6 +301,30 @@ import MLXLMCommon
     /// A resolver that never yields a boundary — the canonical fallback misses.
     private let noResolvedBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot? = { _ in nil }
 
+    /// The full routing, probe then plan — what the **Leaf Store** phase runs
+    /// with the **Live Leaf Capture** decision between the two steps.
+    private func plan(
+        mode: BoundaryLeafMode,
+        storedConversation: HTTPPrefixCacheConversation,
+        storedTokens: [Int],
+        transientBoundary: HybridCacheSnapshot?,
+        keySpace: CacheKeySpace,
+        render: ConversationRender,
+        resolveBoundary: @Sendable ([Int]) async -> HybridCacheSnapshot?
+    ) async -> LeafCapturePlan {
+        switch LeafAdmissionBuilder.probe(
+            mode: mode, storedConversation: storedConversation, storedTokens: storedTokens,
+            keySpace: keySpace, render: render
+        ) {
+        case .skip(let reason):
+            return .skip(reason: reason)
+        case .tokens(let tokens):
+            return await LeafAdmissionBuilder.plan(
+                mode: mode, probedTokens: tokens, transientBoundary: transientBoundary,
+                keySpace: keySpace, resolveBoundary: resolveBoundary)
+        }
+    }
+
     // MARK: directTool routing
 
     private func toolTurn() -> HTTPPrefixCacheConversation {
@@ -318,7 +342,7 @@ import MLXLMCommon
             keySpace: .identity(),
             render: makeRender(tokenizer)
         )!.get()
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .directTool,
             storedConversation: stored,
             storedTokens: toolTokens,
@@ -336,7 +360,7 @@ import MLXLMCommon
     }
 
     @Test func directToolWithoutTransientBoundarySkips() async {
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .directTool,
             storedConversation: toolTurn(),
             storedTokens: [1, 2, 3],
@@ -355,7 +379,7 @@ import MLXLMCommon
     @Test func directToolWithDivergingProbeSkips() async {
         // An empty conversation diverges; the transient boundary is present, so
         // the probe — not the boundary — is what rules out the capture.
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .directTool,
             storedConversation: HTTPPrefixCacheConversation(systemPrompt: nil, messages: []),
             storedTokens: [1, 2, 3],
@@ -380,7 +404,7 @@ import MLXLMCommon
             render: makeRender(tokenizer)
         )!.get()
         // Boundary sits at the end of the tool render: the residual is empty.
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .directTool,
             storedConversation: stored,
             storedTokens: toolTokens,
@@ -411,7 +435,7 @@ import MLXLMCommon
             HTTPPrefixCacheMessage(role: .assistant, content: "calling"),
         ])
         let keySpace = try FakeChatMLTokenizer.keySpace(for: stored, runLengths: [4])
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .directTool,
             storedConversation: stored,
             storedTokens: [1, 2, 3],
@@ -450,7 +474,7 @@ import MLXLMCommon
         // The transient boundary sits inside the image prefix; the resolver's
         // snapshot past the warm offset is chosen instead.
         let resolvedOffset = keySpace.minimumWarmOffset + 2
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
@@ -484,7 +508,7 @@ import MLXLMCommon
         )!.get()
         // Both the transient boundary and the resolved snapshot sit inside the
         // image prefix — there is no usable restore boundary.
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
@@ -517,7 +541,7 @@ import MLXLMCommon
         let keySpace = try FakeChatMLTokenizer.keySpace(
             for: conversation(messages: [first]), runLengths: [4]
         )
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .directTool,
             storedConversation: stored,
             storedTokens: [1, 2, 3],
@@ -558,7 +582,7 @@ import MLXLMCommon
     @Test func canonicalWithUsableTransientBoundaryPlansFromIt() async throws {
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
@@ -578,7 +602,7 @@ import MLXLMCommon
     @Test func canonicalFallsBackToResolverWhenNoTransientBoundary() async throws {
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
@@ -598,7 +622,7 @@ import MLXLMCommon
     @Test func canonicalSkipsWhenResolverMisses() async throws {
         let stored = canonicalTurn()
         let canonical = try canonicalPrefix(stored)
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
@@ -620,7 +644,7 @@ import MLXLMCommon
         let canonical = try canonicalPrefix(stored)
         // A resolved snapshot at the canonical length is not a usable restore
         // boundary — there is no residual to reprefill.
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: canonical,
@@ -641,7 +665,7 @@ import MLXLMCommon
         let canonical = try canonicalPrefix(stored)
         // A usable boundary, but the stored path is shorter than the canonical
         // prefix — the render disagreement the canonical leaf exists to avoid.
-        let plan = await LeafAdmissionBuilder.plan(
+        let plan = await plan(
             mode: .canonical,
             storedConversation: stored,
             storedTokens: [1, 2],

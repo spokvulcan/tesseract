@@ -2,11 +2,14 @@
 //  LeafStorePhase+Executors.swift
 //  tesseract
 //
-//  The model-affine executors of the **Leaf Store** phase: the direct
-//  (non-thinking template) capture of the live final cache, and the boundary
-//  restore + canonical residual re-prefill. `LeafStorePhase.run` decides;
-//  these perform the Metal capture and admit. The **Live Leaf Capture**
-//  executor lives beside its decision in `LeafStorePhase+LiveLeaf.swift`.
+//  The model-affine executors of the **Leaf Store** phase — `LeafStorePhase.run`
+//  decides, these perform the Metal capture and admit. Three ways to bring
+//  the cache to snapshot, one shared tail (`admitLeaf`):
+//  - live: the finished turn's final cache, no prefill (**Live Leaf Capture**)
+//  - direct: the same live cache under a non-thinking template, behind the
+//    reusable-state and normalization-trim guards of the render-trusting path
+//  - boundary: restore the boundary snapshot and re-prefill the canonical
+//    residual
 //
 
 import Foundation
@@ -14,153 +17,56 @@ import MLX
 import MLXLMCommon
 
 nonisolated extension LeafStorePhase {
-    // MARK: - Direct executor
+    /// The diagnostics labels one leaf path logs under: the `logSkip` stages
+    /// of its store, capture and admission steps, and the capture source the
+    /// admission's `CaptureEvent` names (also the `mode` field of the live
+    /// fallback record).
+    struct LeafStages: Sendable {
+        let store: String
+        let capture: String
+        let admission: String
+        let source: String
 
-    /// The `directLeaf` executor (non-thinking templates): snapshot the live
-    /// final cache at the stored path's length and admit it. The cache array
-    /// is quiescent — the drive awaited the loop's completion task (ADR-0006).
-    static func captureDirectLeaf(
-        mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
-        sessions: any ModelSessionProviding,
-        storedTokens: [Int],
-        requestID: UUID,
-        prefixCache: PrefixCacheManager,
-        diagnosticsContext: PrefixCacheDiagnostics.Context
-    ) async throws -> LeafCapture {
-        // The module owns the cache array the generation ran on; the loop's
-        // completion task has been awaited by the drive, so the array is no
-        // longer being mutated (ADR-0006 — this read replaced the fork's
-        // FinalizedKVCacheHandle hand-off).
-        guard !Task.isCancelled else {
-            return LeafCapture(skipReason: "cancelled")
-        }
-        let mlxStart = mlxStartBox.value
-        let finalCache = mlxStart.finalCache
-
-        let cacheOffsets = httpPrefixCacheOffsets(finalCache)
-        guard httpPrefixCacheHasReusableState(finalCache) else {
-            diagnosticsContext.logSkip(
-                stage: "store",
-                reason: "no-reusable-cache-state",
-                extraFields: [("cacheOffsets", "\(cacheOffsets)")]
-            )
-            return LeafCapture(skipReason: "no-reusable-cache-state")
-        }
-
-        // 3. Offset-alignment guard: if normalization shortened the stored
-        //    conversation (whitespace-only assistant content → ""), we can
-        //    only trim attention K/V — Mamba's recurrent state can't be
-        //    unwound (`canTrimPromptCache` returns `false`). Trimming the
-        //    cache and capturing it as a leaf produces a snapshot whose
-        //    attention is aligned to `storedTokens.count` but whose Mamba
-        //    state is from the full pre-trim offset. On Qwen3.5 the resulting
-        //    leaf hit perturbs raw logits by ~10 even at trim=1: argmax stays
-        //    stable (greedy decoding survives), but the rest of the
-        //    distribution drifts in a way that affects sampled decoding.
-        //    Since the HTTP server propagates the request's
-        //    `temperature`/`top_p` and we can't predict future request
-        //    sampling params at store time, the safe choice is to skip the
-        //    leaf store entirely when normalization would require any trim.
-        //    Lost cache hits on whitespace-normalized conversations are the
-        //    trade-off for sampler-agnostic correctness. Verified by
-        //    `HybridCacheCorrectnessRunner` test 9 — see the
-        //    `leafHitWithNormalizationDivergence...` diagnostics for the
-        //    empirical drift measurements.
-        let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
-        if actualCacheOffset > storedTokens.count {
-            let trimAmount = actualCacheOffset - storedTokens.count
-            diagnosticsContext.logSkip(
-                stage: "leafStore",
-                reason: "normalization-trim",
-                extraFields: [
-                    ("trimAmount", "\(trimAmount)"),
-                    ("offsetBefore", "\(actualCacheOffset)"),
-                    ("canonicalCount", "\(storedTokens.count)"),
-                ]
-            )
-            return LeafCapture(skipReason: "normalization-trim")
-        }
-
-        // 4. Capture the leaf snapshot and derive its admission storage
-        //    inside a Metal-affine Model Session so any per-array `asData()`
-        //    calls run on the inference thread. `finalCache` is non-`Sendable`
-        //    `[any KVCache]` — reached through the boxed `mlxStart` instead
-        //    of a direct capture. The offset guard above ensures no per-layer
-        //    trimming is needed before capture.
-        let ssdEnabled = mlxStart.ssdEnabled
-        let extensionBase = await ServerCompletion.resolveExtensionBase(
-            ssdEnabled: ssdEnabled,
-            tokens: storedTokens,
-            partitionKey: mlxStart.partitionKey,
-            prefixCache: prefixCache
-        )
-        var timings = Timings()
-        let (maybeLeaf, maybeStorage, sessionTimings):
-            (HybridCacheSnapshot?, SnapshotAdmission.Storage?, Timings) =
-                try await sessions.withSession { session in
-                    var timings = Timings()
-                    let cache = mlxStartBox.value.finalCache
-                    let captureStart = Date.timeIntervalSinceReferenceDate
-                    guard
-                        let snap = session.captureSnapshot(
-                            cache: cache,
-                            offset: storedTokens.count,
-                            type: .leaf
-                        )
-                    else {
-                        return (nil, nil, timings)
-                    }
-                    timings.captureMs = millisecondsSince(captureStart)
-                    let payloadStart = Date.timeIntervalSinceReferenceDate
-                    let storage = ServerCompletion.snapshotAdmissionStorage(
-                        for: snap,
-                        ssdEnabled: ssdEnabled,
-                        extending: extensionBase
-                    )
-                    timings.payloadMs = millisecondsSince(payloadStart)
-                    return (snap, storage, timings)
-                }
-        timings = sessionTimings
-        guard let leafSnapshot = maybeLeaf, let leafStorage = maybeStorage else {
-            diagnosticsContext.logSkip(
-                stage: "leafCapture",
-                reason: "unsupported-cache-type",
-                extraFields: [("cacheOffsets", "\(cacheOffsets)")]
-            )
-            return LeafCapture(skipReason: "unsupported-cache-type", timings: timings)
-        }
-
-        // Admission + eviction/supersession classification through the one
-        // shared admit (the same path the boundary executor and the
-        // speculative pass use), tallied into the per-request trace.
-        let admitStart = Date.timeIntervalSinceReferenceDate
-        let admission = await ServerCompletion.admitStructuredLeaf(
-            leafSnapshot,
-            storedTokens: storedTokens,
-            storage: leafStorage,
-            partitionKey: mlxStart.partitionKey,
-            requestID: requestID,
-            prefixCache: prefixCache,
-            diagnostics: diagnosticsContext,
-            admissionStage: "leafAdmission",
-            captureSource: "leaf"
-        )
-        timings.admitMs = millisecondsSince(admitStart)
-
-        // Release the MLX free buffer pool back to the OS so it doesn't
-        // accumulate transient prefill intermediates across requests.
-        Memory.clearCache()
-        return LeafCapture(
-            leafStore: admission.survived
-                ? AlphaTuner.LeafStore(storedTokens: storedTokens, bytes: leafSnapshot.memoryBytes)
-                : nil,
-            admission: admission.store,
-            leafOffset: leafSnapshot.tokenOffset,
-            timings: timings
-        )
+        /// `directLeaf`: the pre-existing labels of the non-thinking live path.
+        static let direct = LeafStages(
+            store: "leafStore", capture: "leafCapture", admission: "leafAdmission",
+            source: "leaf")
     }
 
-    // MARK: - Boundary executor
+    /// What every executor needs beside the cache it brings to snapshot: the
+    /// token path the leaf is admitted under and the request's admission
+    /// context.
+    struct LeafAdmissionContext: Sendable {
+        let storedTokens: [Int]
+        let partitionKey: CachePartitionKey
+        let ssdEnabled: Bool
+        let requestID: UUID
+        let prefixCache: PrefixCacheManager
+        let diagnosticsContext: PrefixCacheDiagnostics.Context
+        let stages: LeafStages
+
+        init(storedTokens: [Int], inputs: Inputs, stages: LeafStages) {
+            let mlxStart = inputs.mlxStart
+            self.storedTokens = storedTokens
+            partitionKey = mlxStart.partitionKey
+            ssdEnabled = mlxStart.ssdEnabled
+            requestID = inputs.requestID
+            prefixCache = inputs.prefixCache
+            diagnosticsContext = inputs.diagnosticsContext
+            self.stages = stages
+        }
+
+        /// The SSD extension base for `storedTokens`, resolved before the
+        /// session is entered (a MainActor hop).
+        func resolveExtensionBase() async -> SnapshotExtension? {
+            await ServerCompletion.resolveExtensionBase(
+                ssdEnabled: ssdEnabled,
+                tokens: storedTokens,
+                partitionKey: partitionKey,
+                prefixCache: prefixCache
+            )
+        }
+    }
 
     /// What an executor produced: the tuner record when the leaf survived,
     /// the admission's store diagnostics for the phase to tally into the
@@ -179,55 +85,143 @@ nonisolated extension LeafStorePhase {
         var timings = Timings()
     }
 
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable function_parameter_count
-    /// Restore the boundary snapshot, prefill the residual stored-token suffix,
-    /// capture a `.leaf`, and admit it under the given token path. The pure
-    /// model-affine executor for a `.fromBoundary` **Leaf Capture Plan**, shared
-    /// by the direct-tool and canonical-user modes so both align to the
-    /// structured template render, not the raw generated bytes.
+    // MARK: - Live executor
+
+    /// Capture the live final cache at the stored path's length and admit it
+    /// under `context.storedTokens` (already proven equal to the fed path by
+    /// `LiveLeafCapture.decide`, or trusted by the direct mode's render). No
+    /// restore, no prefill: the generation loop has been awaited by the
+    /// drive, so the array is quiescent (ADR-0006), and the snapshot is a
+    /// deep copy inside a Metal-affine Model Session.
+    static func captureLiveLeaf(
+        sessions: any ModelSessionProviding,
+        mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
+        context: LeafAdmissionContext
+    ) async -> LeafCapture {
+        let extensionBase = await context.resolveExtensionBase()
+        do {
+            return try await sessions.withSession { session in
+                // `finalCache` is non-`Sendable` `[any KVCache]` — reached
+                // through the boxed generation instead of a direct capture.
+                await admitLeaf(
+                    cache: mlxStartBox.value.finalCache,
+                    session: session,
+                    residualTokens: 0,
+                    extensionBase: extensionBase,
+                    context: context,
+                    timings: Timings()
+                )
+            }
+        } catch {
+            context.diagnosticsContext.logSkip(
+                stage: context.stages.capture,
+                reason: "live-capture-threw",
+                level: .warning,
+                extraFields: [("error", error.localizedDescription)]
+            )
+            return LeafCapture(skipReason: "live-capture-threw")
+        }
+    }
+
+    // MARK: - Direct executor
+
+    /// The `directLeaf` executor (non-thinking templates): the live capture
+    /// behind the two guards the render-trusting path needs — the cache must
+    /// hold reusable state, and normalization must not have shortened the
+    /// stored conversation.
+    static func captureDirectLeaf(
+        sessions: any ModelSessionProviding,
+        mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
+        context: LeafAdmissionContext
+    ) async -> LeafCapture {
+        // The module owns the cache array the generation ran on; the loop's
+        // completion task has been awaited by the drive, so the array is no
+        // longer being mutated (ADR-0006 — this read replaced the fork's
+        // FinalizedKVCacheHandle hand-off).
+        guard !Task.isCancelled else {
+            return LeafCapture(skipReason: "cancelled")
+        }
+        let finalCache = mlxStartBox.value.finalCache
+        let diagnostics = context.diagnosticsContext
+
+        guard httpPrefixCacheHasReusableState(finalCache) else {
+            diagnostics.logSkip(
+                stage: "store",
+                reason: "no-reusable-cache-state",
+                extraFields: [("cacheOffsets", "\(httpPrefixCacheOffsets(finalCache))")]
+            )
+            return LeafCapture(skipReason: "no-reusable-cache-state")
+        }
+
+        // Offset-alignment guard: if normalization shortened the stored
+        // conversation (whitespace-only assistant content → ""), we can only
+        // trim attention K/V — Mamba's recurrent state can't be unwound
+        // (`canTrimPromptCache` returns `false`). Trimming the cache and
+        // capturing it as a leaf produces a snapshot whose attention is
+        // aligned to `storedTokens.count` but whose Mamba state is from the
+        // full pre-trim offset. On Qwen3.5 the resulting leaf hit perturbs
+        // raw logits by ~10 even at trim=1: argmax stays stable (greedy
+        // decoding survives), but the rest of the distribution drifts in a
+        // way that affects sampled decoding. Since the HTTP server propagates
+        // the request's `temperature`/`top_p` and we can't predict future
+        // request sampling params at store time, the safe choice is to skip
+        // the leaf store entirely when normalization would require any trim.
+        // Lost cache hits on whitespace-normalized conversations are the
+        // trade-off for sampler-agnostic correctness. Verified by
+        // `HybridCacheCorrectnessRunner` test 9 — see the
+        // `leafHitWithNormalizationDivergence...` diagnostics for the
+        // empirical drift measurements.
+        let actualCacheOffset = httpPrefixCacheReportedTokenCount(finalCache)
+        let canonicalCount = context.storedTokens.count
+        if actualCacheOffset > canonicalCount {
+            diagnostics.logSkip(
+                stage: "leafStore",
+                reason: "normalization-trim",
+                extraFields: [
+                    ("trimAmount", "\(actualCacheOffset - canonicalCount)"),
+                    ("offsetBefore", "\(actualCacheOffset)"),
+                    ("canonicalCount", "\(canonicalCount)"),
+                ]
+            )
+            return LeafCapture(skipReason: "normalization-trim")
+        }
+
+        return await captureLiveLeaf(
+            sessions: sessions, mlxStartBox: mlxStartBox, context: context)
+    }
+
+    // MARK: - Boundary executor
+
+    /// Restore the boundary snapshot, prefill the residual stored-token
+    /// suffix, capture a `.leaf`, and admit it under the stored path. The
+    /// model-affine executor for a `.fromBoundary` **Leaf Capture Plan**,
+    /// shared by the direct-tool and canonical-user modes so both align to
+    /// the structured template render, not the raw generated bytes.
     ///
     /// The **Leaf Admission Builder** only emits `.fromBoundary` when
-    /// `storedTokens.count > boundary.tokenOffset`, so the residual is non-empty
-    /// and no caller-side trim is required. The leaf is captured at
-    /// `storedTokens.count` after a clean extension prefill, which works because
-    /// each cache type's `update(...)` extends its own state at the absolute
-    /// offset.
+    /// `storedTokens.count > boundary.tokenOffset`, so the residual is
+    /// non-empty and no caller-side trim is required. The leaf is captured
+    /// at `storedTokens.count` after a clean extension prefill, which works
+    /// because each cache type's `update(...)` extends its own state at the
+    /// absolute offset.
     static func captureStructuredLeafFromBoundary(
         sessions: any ModelSessionProviding,
-        storedTokens: [Int],
         boundarySnapshot: HybridCacheSnapshot,
         positionAnchorRopeDelta: Int?,
-        partitionKey: CachePartitionKey,
         prefillStepSize: Int,
         tokenNDim: Int,
-        requestID: UUID,
-        prefixCache: PrefixCacheManager,
-        diagnosticsContext: PrefixCacheDiagnostics.Context,
-        ssdEnabled: Bool,
-        storeStage: String,
-        captureStage: String,
-        admissionStage: String,
-        captureSource: String
+        context: LeafAdmissionContext
     ) async -> LeafCapture {
-        // swiftlint:enable function_parameter_count
-        // The residual is guaranteed non-empty by the builder's offset guard
-        // (it only emits `.fromBoundary` when `storedTokens.count > tokenOffset`).
         let boundaryOffset = boundarySnapshot.tokenOffset
-
-        let extensionBase = await ServerCompletion.resolveExtensionBase(
-            ssdEnabled: ssdEnabled,
-            tokens: storedTokens,
-            partitionKey: partitionKey,
-            prefixCache: prefixCache
-        )
+        let storedTokens = context.storedTokens
+        let extensionBase = await context.resolveExtensionBase()
 
         do {
             return try await sessions.withSession { session in
                 var timings = Timings()
                 let restoreStart = Date.timeIntervalSinceReferenceDate
                 let restoredCache = try session.restore(boundarySnapshot)
-                timings.restoreMs = millisecondsSince(restoreStart)
+                timings.restoreSeconds = secondsSince(restoreStart)
 
                 let residual = Array(storedTokens[boundaryOffset...])
                 let prefillStart = Date.timeIntervalSinceReferenceDate
@@ -243,7 +237,7 @@ nonisolated extension LeafStorePhase {
                     tokenNDim >= 2
                     ? flatInput.expandedDimensions(axis: 0)
                     : flatInput
-                _ = try prefixCache.storageActivityGate.withPrefillMarked {
+                _ = try context.prefixCache.storageActivityGate.withPrefillMarked {
                     try session.prefill(
                         text: .init(tokens: inputArr, mask: nil),
                         cache: restoredCache,
@@ -255,78 +249,100 @@ nonisolated extension LeafStorePhase {
                         evalPolicy: .pipelined
                     )
                 }
-                timings.prefillMs = millisecondsSince(prefillStart)
+                timings.prefillSeconds = secondsSince(prefillStart)
 
-                let captureStart = Date.timeIntervalSinceReferenceDate
-                guard
-                    let leaf = session.captureSnapshot(
-                        cache: restoredCache,
-                        offset: storedTokens.count,
-                        type: .leaf
-                    )
-                else {
-                    diagnosticsContext.logSkip(
-                        stage: captureStage,
-                        reason: "unsupported-cache-type"
-                    )
-                    return LeafCapture(
-                        leafStore: nil, admission: nil,
-                        residualTokens: residual.count, timings: timings)
-                }
-                timings.captureMs = millisecondsSince(captureStart)
-                Log.agent.info(
-                    "\(captureSource) captured — offset=\(leaf.tokenOffset) "
-                        + "residualTokens=\(residual.count) "
-                        + "prefillMs=\(String(format: "%.3f", timings.prefillMs)) "
-                        + "storedLen=\(storedTokens.count)"
-                )
-
-                let payloadStart = Date.timeIntervalSinceReferenceDate
-                let storage = ServerCompletion.snapshotAdmissionStorage(
-                    for: leaf,
-                    ssdEnabled: ssdEnabled,
-                    extending: extensionBase
-                )
-                timings.payloadMs = millisecondsSince(payloadStart)
-                let admitStart = Date.timeIntervalSinceReferenceDate
-                let admission = await ServerCompletion.admitStructuredLeaf(
-                    leaf,
-                    storedTokens: storedTokens,
-                    storage: storage,
-                    partitionKey: partitionKey,
-                    requestID: requestID,
-                    prefixCache: prefixCache,
-                    diagnostics: diagnosticsContext,
-                    admissionStage: admissionStage,
-                    captureSource: captureSource
-                )
-                timings.admitMs = millisecondsSince(admitStart)
-                Memory.clearCache()
-                guard admission.survived else {
-                    return LeafCapture(
-                        leafStore: nil, admission: admission.store,
-                        leafOffset: leaf.tokenOffset, residualTokens: residual.count,
-                        timings: timings)
-                }
-                return LeafCapture(
-                    leafStore: AlphaTuner.LeafStore(
-                        storedTokens: storedTokens,
-                        bytes: leaf.memoryBytes
-                    ),
-                    admission: admission.store,
-                    leafOffset: leaf.tokenOffset,
+                return await admitLeaf(
+                    cache: restoredCache,
+                    session: session,
                     residualTokens: residual.count,
+                    extensionBase: extensionBase,
+                    context: context,
                     timings: timings
                 )
             }
         } catch {
-            diagnosticsContext.logSkip(
-                stage: storeStage,
+            context.diagnosticsContext.logSkip(
+                stage: context.stages.store,
                 reason: "prefill-threw",
                 level: .warning,
                 extraFields: [("error", error.localizedDescription)]
             )
-            return LeafCapture(leafStore: nil, admission: nil)
+            return LeafCapture(skipReason: "prefill-threw")
         }
+    }
+
+    // MARK: - Shared tail
+
+    /// Inside a Model Session: snapshot `cache` at the stored path's length,
+    /// derive its admission storage (any per-array `asData()` runs on the
+    /// inference thread), admit through the one shared owner — the same path
+    /// the speculative pass uses — and release the MLX buffer pool so it
+    /// doesn't accumulate transient prefill intermediates across requests.
+    /// `timings` carries the stages the caller already ran.
+    private static func admitLeaf(
+        cache: [any KVCache],
+        session: any ModelSession,
+        residualTokens: Int,
+        extensionBase: SnapshotExtension?,
+        context: LeafAdmissionContext,
+        timings: Timings
+    ) async -> LeafCapture {
+        var timings = timings
+        let storedTokens = context.storedTokens
+        let captureStart = Date.timeIntervalSinceReferenceDate
+        guard
+            let leaf = session.captureSnapshot(
+                cache: cache,
+                offset: storedTokens.count,
+                type: .leaf
+            )
+        else {
+            context.diagnosticsContext.logSkip(
+                stage: context.stages.capture,
+                reason: "unsupported-cache-type"
+            )
+            return LeafCapture(
+                skipReason: "unsupported-cache-type",
+                residualTokens: residualTokens, timings: timings)
+        }
+        timings.captureSeconds = secondsSince(captureStart)
+        Log.agent.info(
+            "\(context.stages.source) captured — offset=\(leaf.tokenOffset) "
+                + "residualTokens=\(residualTokens) "
+                + "captureMs=\(PrefixCacheDiagnostics.milliseconds(timings.captureSeconds)) "
+                + "storedLen=\(storedTokens.count)"
+        )
+
+        let payloadStart = Date.timeIntervalSinceReferenceDate
+        let storage = ServerCompletion.snapshotAdmissionStorage(
+            for: leaf,
+            ssdEnabled: context.ssdEnabled,
+            extending: extensionBase
+        )
+        timings.payloadSeconds = secondsSince(payloadStart)
+
+        let admitStart = Date.timeIntervalSinceReferenceDate
+        let admission = await ServerCompletion.admitStructuredLeaf(
+            leaf,
+            storedTokens: storedTokens,
+            storage: storage,
+            partitionKey: context.partitionKey,
+            requestID: context.requestID,
+            prefixCache: context.prefixCache,
+            diagnostics: context.diagnosticsContext,
+            admissionStage: context.stages.admission,
+            captureSource: context.stages.source
+        )
+        timings.admitSeconds = secondsSince(admitStart)
+        Memory.clearCache()
+        return LeafCapture(
+            leafStore: admission.survived
+                ? AlphaTuner.LeafStore(storedTokens: storedTokens, bytes: leaf.memoryBytes)
+                : nil,
+            admission: admission.store,
+            leafOffset: leaf.tokenOffset,
+            residualTokens: residualTokens,
+            timings: timings
+        )
     }
 }

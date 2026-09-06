@@ -5,9 +5,10 @@ import Testing
 /// The **Live Leaf Capture** decision, pinned without a model: the live token
 /// path (prompt key path + the ids the loop fed) must be a prefix of the
 /// canonical stored path for the live final cache to become the leaf; every
-/// other outcome names a typed fallback reason with the numbers its log line
-/// prints. The rules are what make the zero-prefill tail safe, so each one
-/// gets a test that would fail if it were relaxed.
+/// other outcome names a typed fallback reason carrying the numbers its skip
+/// record prints (pinned in `ServerCompletionLeafSkipLogTests`). The rules
+/// are what make the zero-prefill tail safe, so each one gets a test that
+/// would fail if it were relaxed.
 struct LiveLeafCaptureTests {
 
     private let prompt = [1, 2, 3, 4]
@@ -58,27 +59,15 @@ struct LiveLeafCaptureTests {
     @Test func intervenedTurnFallsBackBeforeAnyComparison() {
         // Even a perfectly matching path is refused: the registered final
         // cache belongs to the cancelled phase.
-        let decision = decide(intervened: true)
-        #expect(decision == .boundary(.intervened))
-        guard case .boundary(let reason) = decision else { return }
-        #expect(reason.isEligibilityOnly)
-        #expect(reason.wireReason == "intervened")
-        #expect(reason.logFields.isEmpty)
+        #expect(decide(intervened: true) == .boundary(.intervened))
     }
 
     @Test func nonIdentityKeySpaceFallsBack() {
-        let decision = decide(identity: false)
-        #expect(decision == .boundary(.nonIdentityKeySpace))
-        guard case .boundary(let reason) = decision else { return }
-        #expect(reason.isEligibilityOnly)
-        #expect(reason.wireReason == "non-identity-key-space")
+        #expect(decide(identity: false) == .boundary(.nonIdentityKeySpace))
     }
 
     @Test func emptyGenerationFallsBack() {
-        let decision = decide(generated: [], cacheOffset: prompt.count)
-        #expect(decision == .boundary(.noGeneratedTokens))
-        guard case .boundary(let reason) = decision else { return }
-        #expect(reason.isEligibilityOnly)
+        #expect(decide(generated: [], cacheOffset: prompt.count) == .boundary(.noGeneratedTokens))
     }
 
     // MARK: cache offset vs live path
@@ -92,10 +81,6 @@ struct LiveLeafCaptureTests {
                     .cacheOffsetOutsideLivePath(
                         cacheOffset: prompt.count, promptCount: prompt.count,
                         liveCount: prompt.count + generated.count)))
-        guard case .boundary(let reason) = decision else { return }
-        #expect(!reason.isEligibilityOnly)
-        #expect(reason.wireReason == "cache-offset-outside-live-path")
-        #expect(reason.logFields.map(\.0) == ["cacheOffset", "promptCount", "liveCount"])
     }
 
     @Test func cacheOffsetPastTheLivePathIsOutsideTheLivePath() {
@@ -122,9 +107,6 @@ struct LiveLeafCaptureTests {
                     .liveLongerThanStored(
                         cacheOffset: prompt.count + generated.count,
                         storedLen: shortStored.count)))
-        guard case .boundary(let reason) = decision else { return }
-        #expect(!reason.isEligibilityOnly)
-        #expect(reason.wireReason == "live-longer-than-stored")
     }
 
     @Test func divergenceAtTheFirstGeneratedTokenNamesTheOffset() {
@@ -146,12 +128,6 @@ struct LiveLeafCaptureTests {
         // Four ids either side of the divergence, clipped to the paths.
         #expect(liveCtx == [1, 2, 3, 4, 10, 11, 12, 99])
         #expect(storedCtx == [1, 2, 3, 4, 500, 11, 12, 99])
-        guard case .boundary(let reason) = decision else { return }
-        #expect(!reason.isEligibilityOnly)
-        #expect(reason.wireReason == "divergence")
-        #expect(
-            reason.logFields.map(\.0)
-                == ["offset", "liveToken", "storedToken", "liveContext", "storedContext"])
     }
 
     @Test func divergenceInsideThePromptIsCaughtToo() {

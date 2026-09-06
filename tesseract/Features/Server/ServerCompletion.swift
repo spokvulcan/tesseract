@@ -868,8 +868,9 @@ nonisolated final class ServerCompletion {
             )
             // Everything from here to `continuation.finish()` is inside the
             // client-visible wait: the terminal SSE chunk goes out only after
-            // the drive finishes (Completion Delivery). The Leaf store notice
-            // below prints this span so a post-EOS stall is attributable.
+            // the drive finishes (Completion Delivery). The `leafStore`
+            // report below carries this span so a post-EOS stall is
+            // attributable.
             let generationEnded = Date.timeIntervalSinceReferenceDate
 
             if outcome.cancelled {
@@ -944,7 +945,7 @@ nonisolated final class ServerCompletion {
             // The leaf keys on what THIS client will echo back — see
             // `GenerationAccumulator.streamedThinking`.
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
-            let leafResult = try await LeafStorePhase.run(
+            var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
                 sessions: sessions,
@@ -955,12 +956,12 @@ nonisolated final class ServerCompletion {
                 assistantReasoning: clientStreams
                     ? accumulator.streamedThinking : accumulator.thinking,
                 toolCalls: toolCalls,
-                generatedTokens: mlxStart.generatedTokens.snapshot,
                 intervened: accumulator.safeguardTriggered,
                 diagnosticsContext: diagnosticsContext,
                 trace: &trace
             )
-            let leafStoreSeconds = Date.timeIntervalSinceReferenceDate - leafStoreStart
+            leafResult.report.leafStoreSeconds =
+                Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
             if let seed = leafResult.speculativeSeed {
                 speculativeSeed = seed
@@ -1005,13 +1006,8 @@ nonisolated final class ServerCompletion {
             // The persisted (notice-level) post-EOS account: which leaf path
             // ran, its stage breakdown, and the whole span from generation
             // end to here — the client sees its terminal chunk right after.
-            let postGenerationSeconds = Date.timeIntervalSinceReferenceDate - generationEnded
-            Log.agent.notice(
-                "Leaf store — request_id=\(requestID.uuidString) "
-                    + "\(leafResult.report.logFields) "
-                    + "leafStoreMs=\(String(format: "%.1f", leafStoreSeconds * 1000)) "
-                    + "postGenerationMs=\(String(format: "%.1f", postGenerationSeconds * 1000))"
-            )
+            leafResult.report.tailSeconds = Date.timeIntervalSinceReferenceDate - generationEnded
+            diagnosticsContext.log(leafResult.report, level: .notice)
 
             // Per-completion trace record (PRD #82, slice #83): one line in
             // the replay corpus for every finished cache-aware completion.
@@ -1041,8 +1037,8 @@ nonisolated final class ServerCompletion {
                     ramBudgetBytes: finalBudgetBytes,
                     residualPromptSeconds: completionInfo.promptTime,
                     deviceEstimates: finalEstimates,
-                    leafStoreSeconds: leafStoreSeconds,
-                    tailSeconds: postGenerationSeconds
+                    leafStoreSeconds: leafResult.report.leafStoreSeconds,
+                    tailSeconds: leafResult.report.tailSeconds
                 )
                 if let record {
                     traceLog.append(record)

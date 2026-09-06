@@ -375,20 +375,31 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         return try String(contentsOf: sourceFile, encoding: .utf8)
     }
 
+    /// The **Leaf Store** phase is one type across several files (the
+    /// phase, its executors, its report); the shape checks read all of them.
+    private func readLeafStorePhaseSources() throws -> String {
+        try [
+            "LeafStorePhase.swift", "LeafStorePhase+Executors.swift",
+            "LeafStorePhase+Report.swift",
+        ]
+        .map(readServerSource).joined(separator: "\n")
+    }
+
     @Test
     func structuredLeafAdmissionStaysWithItsSingleOwner() throws {
-        // Post ADR-0033: both Leaf Store phase capture modes (tool-loop
-        // direct and canonical-user boundary) plus the speculative
-        // executor route through the one `admitStructuredLeaf` owner,
-        // which alone constructs the leaf Snapshot Admission value. The
-        // older dedicated `strippedLeafPayload` path no longer exists
-        // under the single-leaf policy.
-        let leafPhase = try readServerSource("LeafStorePhase.swift")
+        // Post ADR-0033: every Leaf Store executor (live, direct, boundary)
+        // ends in the one shared `admitLeaf` tail, which — like the
+        // speculative executor — routes through the one
+        // `admitStructuredLeaf` owner, which alone constructs the leaf
+        // Snapshot Admission value. The older dedicated
+        // `strippedLeafPayload` path no longer exists under the single-leaf
+        // policy.
+        let leafPhase = try readLeafStorePhaseSources()
         let completion = try readServerSource("ServerCompletion.swift")
         let speculative = try readServerSource("SpeculativePrefill.swift")
         #expect(
-            leafPhase.contains("private static func captureStructuredLeafFromBoundary("),
-            "Structured leaf helper must exist so direct-tool and canonical-user modes share one leaf admission path"
+            leafPhase.contains("private static func admitLeaf("),
+            "The shared admit tail must exist so the live, direct and boundary executors share one leaf admission path"
         )
         #expect(
             completion.components(separatedBy: "SnapshotAdmission.leaf(").count - 1 == 1,
@@ -401,8 +412,8 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         )
         #expect(
             leafPhase.components(separatedBy: "await ServerCompletion.admitStructuredLeaf(").count
-                - 1 == 2,
-            "Both Leaf Store phase capture modes (direct + boundary) must route through the shared owner"
+                - 1 == 1,
+            "Every Leaf Store executor must reach the shared owner through the one admit tail"
         )
         #expect(
             speculative.components(separatedBy: "await ServerCompletion.admitStructuredLeaf(")
@@ -428,7 +439,7 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         // inside `admitStructuredLeaf` (every leaf path funnels there).
         let source =
             try readServerSource("ServerCompletion.swift")
-            + (try readServerSource("LeafStorePhase.swift"))
+            + (try readLeafStorePhaseSources())
         let bodies = extractMainActorRunBodies(
             source: source,
             containing: ["prefixCache.admit"]

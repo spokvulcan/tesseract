@@ -400,9 +400,11 @@ _Avoid_: **Prefill Plan** (the server path's richer pre-prefill value); chunking
 flag; VLM path (the model class is one input, not the route).
 
 **Leaf Admission Builder**:
-The GPU-free routing decision for storing one leaf snapshot — given a boundary
-mode, it returns either a capture-from-boundary plan or a typed skip reason. It
-decides; the actor-side execution does the Metal capture and admit.
+The GPU-free routing decision for storing one leaf snapshot, in two steps: the
+reusable-prefix probe that finds the token path a future continuation will share,
+then — only when the Live Leaf Capture is refused — a capture-from-boundary plan
+or a typed skip reason. It decides; the actor-side execution does the Metal
+capture and admit.
 _Avoid_: leaf store mode (one input, not the whole story); capture port (it returns
 a decision, not a capture).
 

@@ -191,12 +191,8 @@ nonisolated enum CompletionDelivery {
         /// The terminal Generation Accumulator plus captured completion
         /// metrics and whether the sink streamed tool-call fragments on the
         /// wire. The script builds one `CompletionProjection` from the first
-        /// two; the flag adjusts only the finish reason. `infoReceivedAt`
-        /// is when the terminal `.info` arrived (generation end), so the
-        /// finish log can print the client-visible tail to the terminal chunk.
-        case completed(
-            GenerationAccumulator, AgentGeneration.Info?, wireStreamedToolCalls: Bool,
-            infoReceivedAt: TimeInterval? = nil)
+        /// two; the flag adjusts only the finish reason.
+        case completed(GenerationAccumulator, AgentGeneration.Info?, wireStreamedToolCalls: Bool)
         case disconnected(DisconnectSource)
         case failed(String)
         case cancelled
@@ -277,7 +273,7 @@ nonisolated enum CompletionDelivery {
         )
 
         switch outcome {
-        case .completed(let accumulator, let info, let wireStreamedToolCalls, let infoReceivedAt):
+        case .completed(let accumulator, let info, let wireStreamedToolCalls):
             // One Generation Projection owns finish_reason, the malformed→text
             // fallback, the safeguard sidecar, and the diagnostic.
             let projection = CompletionProjection(
@@ -339,19 +335,13 @@ nonisolated enum CompletionDelivery {
                     }
                 ))
 
-            // Generation end → terminal chunk written: the wait the client
-            // sees after the last token (the drive's post-generation work).
-            let tailMs = infoReceivedAt.map {
-                (Date.timeIntervalSinceReferenceDate - $0) * 1000
-            }
             Log.server.notice(
                 "HTTP completion finished — completionID=\(completionID) "
                     + "stream=\(sink.isStreaming) finishReason=\(finishReason.rawValue) "
                     + "promptTokens=\(info?.promptTokenCount ?? 0) "
                     + "completionTokens=\(info?.generationTokenCount ?? 0) "
                     + "cachedTokens=\(generation.cachedTokenCount) "
-                    + "decodeTokS=\(String(format: "%.1f", info?.tokensPerSecond ?? 0)) "
-                    + "tailMs=\(tailMs.map { String(format: "%.1f", $0) } ?? "n/a")"
+                    + "decodeTokS=\(String(format: "%.1f", info?.tokensPerSecond ?? 0))"
             )
             await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
 
@@ -390,7 +380,6 @@ nonisolated enum CompletionDelivery {
     ) async -> StreamingOutcome {
         var accumulator = GenerationAccumulator()
         var info: AgentGeneration.Info?
-        var infoReceivedAt: TimeInterval?
 
         do {
             for try await event in stream {
@@ -408,7 +397,6 @@ nonisolated enum CompletionDelivery {
                     )
                 case .info(let i):
                     info = i
-                    infoReceivedAt = Date.timeIntervalSinceReferenceDate
                 default:
                     break
                 }
@@ -431,9 +419,7 @@ nonisolated enum CompletionDelivery {
             cancel()
             return .disconnected(.chunkWrite)
         case .closed(let wireStreamedToolCalls):
-            return .completed(
-                accumulator, info, wireStreamedToolCalls: wireStreamedToolCalls,
-                infoReceivedAt: infoReceivedAt)
+            return .completed(accumulator, info, wireStreamedToolCalls: wireStreamedToolCalls)
         }
     }
 

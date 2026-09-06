@@ -45,8 +45,9 @@ nonisolated enum LiveLeafCapture {
     }
 
     /// Why the live cache could not be used. Every case carries the numbers
-    /// the fallback log line prints, so a divergence on a render believed
-    /// append-stable is diagnosable from the log alone.
+    /// its skip record prints (`LeafStorePhase.liveFallbackLog`), so a
+    /// divergence on a render believed append-stable is diagnosable from the
+    /// log alone.
     enum FallbackReason: Equatable, Sendable {
         /// A thinking-safeguard continuation swapped the raw generation; the
         /// registered final cache is the cancelled phase's, not the turn's.
@@ -75,50 +76,6 @@ nonisolated enum LiveLeafCapture {
 
         /// Ids kept on each side of a divergence in the log fields.
         static let contextRadius = 4
-
-        /// Short wire token for `logSkip`'s `reason` field.
-        var wireReason: String {
-            switch self {
-            case .intervened: "intervened"
-            case .nonIdentityKeySpace: "non-identity-key-space"
-            case .noGeneratedTokens: "no-generated-tokens"
-            case .cacheOffsetOutsideLivePath: "cache-offset-outside-live-path"
-            case .liveLongerThanStored: "live-longer-than-stored"
-            case .divergence: "divergence"
-            }
-        }
-
-        /// The reason's payload as `logSkip` extra fields.
-        var logFields: [(String, String)] {
-            switch self {
-            case .intervened, .nonIdentityKeySpace, .noGeneratedTokens:
-                []
-            case .cacheOffsetOutsideLivePath(let cacheOffset, let promptCount, let liveCount):
-                [
-                    ("cacheOffset", "\(cacheOffset)"), ("promptCount", "\(promptCount)"),
-                    ("liveCount", "\(liveCount)"),
-                ]
-            case .liveLongerThanStored(let cacheOffset, let storedLen):
-                [("cacheOffset", "\(cacheOffset)"), ("storedLen", "\(storedLen)")]
-            case .divergence(let offset, let liveToken, let storedToken, let live, let stored):
-                [
-                    ("offset", "\(offset)"), ("liveToken", "\(liveToken)"),
-                    ("storedToken", "\(storedToken)"),
-                    ("liveContext", "\(live)"), ("storedContext", "\(stored)"),
-                ]
-            }
-        }
-
-        /// True for the reasons that say nothing about render fidelity — the
-        /// turn was simply not eligible. The others mean the re-render
-        /// disagreed with the emission, which on an append-stable render is
-        /// unexpected and worth a warning.
-        var isEligibilityOnly: Bool {
-            switch self {
-            case .intervened, .nonIdentityKeySpace, .noGeneratedTokens: true
-            case .cacheOffsetOutsideLivePath, .liveLongerThanStored, .divergence: false
-            }
-        }
     }
 
     /// Decide for one finished turn.

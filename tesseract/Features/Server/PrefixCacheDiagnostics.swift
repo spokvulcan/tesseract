@@ -14,10 +14,12 @@ nonisolated enum PrefixCacheDiagnostics {
             PrefixCacheDiagnostics.render(payload, context: self)
         }
 
-        func log(_ payload: some Payload) {
+        /// Emit a request-scope event at `level` — `.info` for the
+        /// diagnostics net, `.notice` for the few per-request accounts that
+        /// must survive in `log show` (the **Leaf Store** report).
+        func log(_ payload: some Payload, level: Level = .info) {
             let line = render(payload)
-            Log.agent.info(line)
-            PrefixCacheDiagnostics.forwardToSink(line)
+            PrefixCacheDiagnostics.emit(line, level: level)
             PrefixCacheDiagnostics.forwardTelemetryEvent(
                 PrefixCacheDiagnostics.telemetryEvent(payload, context: self)
             )
@@ -30,17 +32,7 @@ nonisolated enum PrefixCacheDiagnostics {
             extraFields: [(String, String)] = []
         ) {
             let line = render(SkipEvent(stage: stage, reason: reason, extraFields: extraFields))
-            switch level {
-            case .debug:
-                Log.agent.debug(line)
-            case .info:
-                Log.agent.info(line)
-            case .warning:
-                Log.agent.warning(line)
-            case .error:
-                Log.agent.error(line)
-            }
-            PrefixCacheDiagnostics.forwardToSink(line)
+            PrefixCacheDiagnostics.emit(line, level: level)
             PrefixCacheDiagnostics.forwardTelemetryEvent(
                 PrefixCacheDiagnostics.telemetryEvent(
                     SkipEvent(
@@ -55,8 +47,28 @@ nonisolated enum PrefixCacheDiagnostics {
     enum Level: Sendable, Equatable {
         case debug
         case info
+        /// Persisted by `os_log` (its default level), unlike `.info`.
+        case notice
         case warning
         case error
+    }
+
+    /// Write one rendered line to `Log.agent` at `level` and forward it to
+    /// the test sink — the single place a level maps to a logger call.
+    nonisolated static func emit(_ line: String, level: Level) {
+        switch level {
+        case .debug:
+            Log.agent.debug(line)
+        case .info:
+            Log.agent.info(line)
+        case .notice:
+            Log.agent.notice(line)
+        case .warning:
+            Log.agent.warning(line)
+        case .error:
+            Log.agent.error(line)
+        }
+        forwardToSink(line)
     }
 
     protocol Payload: Sendable {
@@ -792,17 +804,7 @@ nonisolated enum PrefixCacheDiagnostics {
     /// `Log.agent` and the sink hop internally as needed.
     nonisolated static func logSystem(_ payload: some Payload, level: Level = .info) {
         let line = renderSystem(payload)
-        switch level {
-        case .debug:
-            Log.agent.debug(line)
-        case .info:
-            Log.agent.info(line)
-        case .warning:
-            Log.agent.warning(line)
-        case .error:
-            Log.agent.error(line)
-        }
-        forwardToSink(line)
+        emit(line, level: level)
         forwardTelemetryEvent(telemetrySystemEvent(payload))
     }
 
@@ -977,7 +979,7 @@ nonisolated enum PrefixCacheDiagnostics {
         return "[\(parts.joined(separator: ","))]"
     }
 
-    private static func milliseconds(_ seconds: TimeInterval) -> String {
+    static func milliseconds(_ seconds: TimeInterval) -> String {
         String(format: "%.3f", max(0, seconds) * 1000)
     }
 
