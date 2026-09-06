@@ -111,6 +111,75 @@ struct MemoryHeadroomSampleTests {
         )
         #expect(recoveredCeiling > 8 * gib)
     }
+
+    // MARK: Working-Set Bound
+
+    @Test func workingSetBoundCapsTheKernelBuckets() {
+        // 30 GiB of "inactive" is the cache's own cold pages; the process
+        // has 5 GiB left before it reaches the recommended working set.
+        let sample = MemoryHeadroomSample(
+            freeBytes: 2 * gib, purgeableBytes: 1 * gib, reclaimableBytes: 30 * gib,
+            workingSetHeadroomBytes: 5 * gib
+        )
+        #expect(sample.headroomBytes == 5 * gib)
+    }
+
+    @Test func kernelBucketsWinBelowTheWorkingSetBound() {
+        let sample = MemoryHeadroomSample(
+            freeBytes: 3 * gib, purgeableBytes: 0, reclaimableBytes: 4 * gib,
+            workingSetHeadroomBytes: 40 * gib
+        )
+        #expect(sample.headroomBytes == 7 * gib)
+    }
+
+    @Test func exhaustedWorkingSetReadsAsZeroHeadroom() {
+        // The footprint already exceeds the working set: nothing is
+        // claimable, however the kernel classifies the pages.
+        let sample = MemoryHeadroomSample(
+            freeBytes: 3 * gib, purgeableBytes: 0, reclaimableBytes: 20 * gib,
+            workingSetHeadroomBytes: -2 * gib
+        )
+        #expect(sample.headroomBytes == 0)
+    }
+
+    /// The 2026-09-06 runaway, as arithmetic. Dead-end branches admitted a
+    /// 3 GiB leaf per turn; the cache's cold pages aged into "inactive", so
+    /// the kernel buckets stayed at ~30 GiB however large the cache grew
+    /// and the ceiling rose with the resident bytes it was meant to bound
+    /// (8.7 → 38.7 GB in 17 minutes, 48 GB machine, 16 GB model). Under
+    /// the Working-Set Bound each admitted byte is one byte less headroom,
+    /// so the ceiling converges at working set − footprint − 1.25 · reserve.
+    @Test func cacheGrowthShrinksItsOwnCeilingUnderTheWorkingSetBound() {
+        let reserve = 6 * gib  // two 3 GiB leaves, the measured lane size
+        let workingSetLeft = 20 * gib  // working set minus model + live KV
+        let leaf = 3 * gib
+
+        func resident(after rounds: Int, bounded: Bool) -> Int {
+            var resident = 0
+            for _ in 0..<rounds {
+                let sample = MemoryHeadroomSample(
+                    freeBytes: 1 * gib, purgeableBytes: 0, reclaimableBytes: 30 * gib,
+                    workingSetHeadroomBytes: bounded ? workingSetLeft - resident : .max
+                )
+                let ceiling = DynamicCeilingPolicy.ceilingBytes(
+                    residentBytes: resident,
+                    measuredHeadroomBytes: sample.headroomBytes,
+                    reserveBytes: reserve,
+                    capBytes: nil
+                )
+                // Admit one leaf, then drain to the ceiling.
+                resident = min(resident + leaf, ceiling)
+            }
+            return resident
+        }
+
+        // Buckets alone: the ceiling never binds, the cache takes a leaf a turn.
+        #expect(resident(after: 12, bounded: false) == 12 * leaf)
+        // Bounded: converges below working set − 1.25 · reserve (12.5 GiB).
+        let bounded = resident(after: 12, bounded: true)
+        #expect(bounded <= workingSetLeft - reserve * 5 / 4)
+        #expect(bounded >= 9 * gib)
+    }
 }
 
 // MARK: - Active-Inference Reserve (pure)
@@ -205,12 +274,36 @@ struct SSDBudgetPolicyTests {
     }
 
     @Test func flooredAtTheOldTwentyGiBDefault() {
+        // 40 GiB free: the fraction says 10 GiB, the floor lifts it to 20
+        // GiB, and the disk can hold that with the reserve to spare.
         let budget = SSDBudgetPolicy.budgetBytes(
-            freeDiskBytes: 8 * gib,
+            freeDiskBytes: 40 * gib,
             currentTierBytes: 0,
             capBytes: nil
         )
         #expect(budget == SSDBudgetPolicy.floorBytes)
+    }
+
+    /// The floor is a default, not a claim on disk the volume does not
+    /// have (2026-09-06: a 20 GiB floor kept writing into 5 GB of free
+    /// space while swap needed it). The tier never budgets past what it
+    /// holds plus the free space above the reserve.
+    @Test func neverBudgetsPastWhatTheDiskCanHold() {
+        // 16 GiB already ours, 5 GiB free: hold what we have, admit no more.
+        #expect(
+            SSDBudgetPolicy.budgetBytes(
+                freeDiskBytes: 5 * gib, currentTierBytes: 16 * gib, capBytes: nil
+            ) == 16 * gib)
+        // Empty tier, 12 GiB free: 2 GiB above the reserve is all there is.
+        #expect(
+            SSDBudgetPolicy.budgetBytes(
+                freeDiskBytes: 12 * gib, currentTierBytes: 0, capBytes: nil
+            ) == 2 * gib)
+        // Below the reserve with nothing held: zero, not the floor.
+        #expect(
+            SSDBudgetPolicy.budgetBytes(
+                freeDiskBytes: 8 * gib, currentTierBytes: 0, capBytes: nil
+            ) == 0)
     }
 
     @Test func cappedAtTheAbsoluteCeiling() {
@@ -438,7 +531,8 @@ struct DynamicBudgetCeilingManagerTests {
     /// `budgetChange reason=measurement` (PRD #149 item 5).
     @Test func measurementEmitsDiagnostics() {
         let headroom = InMemoryMemoryHeadroomSource(
-            next: MemoryHeadroomSample(freeBytes: 10 * gib, purgeableBytes: 0)
+            next: MemoryHeadroomSample(
+                freeBytes: 10 * gib, purgeableBytes: 0, workingSetHeadroomBytes: 40 * gib)
         )
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 3 * gib,
@@ -454,6 +548,7 @@ struct DynamicBudgetCeilingManagerTests {
         let measures = lines.filter { $0.contains("event=budgetMeasure") }
         #expect(measures.count == 1)
         #expect(measures[0].contains("headroomBytes=\(10 * gib)"))
+        #expect(measures[0].contains("workingSetHeadroomBytes=\(40 * gib)"))
         #expect(
             measures[0].contains(
                 "reserveBytes=\(ActiveInferenceReserve.bootstrapPerLaneBytes)"))

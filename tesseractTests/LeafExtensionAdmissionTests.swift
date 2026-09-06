@@ -136,7 +136,12 @@ struct LeafExtensionExtractionTests {
 
         #expect(payload.extending == extending)
         #expect(payload.tokenOffset == 8)
+        // Two float32 arrays of [1, 2, 3, 8] past the base: the byte total
+        // is fixed at extraction, the copy itself is owed to the SSD writer.
+        #expect(!payload.isMaterialized)
+        #expect(payload.totalBytes == 2 * (1 * 2 * 3 * 8) * MemoryLayout<Float>.size)
         let layer = try #require(payload.layers.first)
+        #expect(payload.isMaterialized)
         #expect(layer.suffixBaseOffset == 5)
         // Layer offset stays the absolute capture offset — only the
         // carried token range shrinks.

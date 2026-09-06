@@ -478,6 +478,10 @@ nonisolated enum PrefixCacheDiagnostics {
     /// `budgetChange reason=measurement` fires only on movement.
     struct BudgetMeasurementEvent: Payload {
         let headroomBytes: Int
+        /// The **Working-Set Bound** the sample carried — the one input
+        /// that says whether the process itself, not the machine, limited
+        /// the ceiling.
+        let workingSetHeadroomBytes: Int
         let reserveBytes: Int
         let lanes: Int
         let residentBytes: Int
@@ -490,6 +494,7 @@ nonisolated enum PrefixCacheDiagnostics {
         var fields: [(String, String)] {
             [
                 ("headroomBytes", "\(headroomBytes)"),
+                ("workingSetHeadroomBytes", "\(workingSetHeadroomBytes)"),
                 ("reserveBytes", "\(reserveBytes)"),
                 ("lanes", "\(lanes)"),
                 ("residentBytes", "\(residentBytes)"),
@@ -757,6 +762,27 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("offset", "\(offset)"),
                 ("bytes", "\(bytes)"),
                 ("hitCount", "\(hitCount)"),
+            ]
+        }
+    }
+
+    /// One **Deferred Payload Extraction** settled: the SSD writer copied
+    /// a payload's array bytes to the host right before its file write —
+    /// the full-KV memcpy that used to run on the MainActor for a
+    /// demotion and on the inference thread for a leaf. `durationMs` is
+    /// the copy alone, not the write.
+    struct SSDPayloadMaterializedEvent: Payload {
+        let id: String
+        let bytes: Int
+        let durationSeconds: TimeInterval
+
+        let eventName = "ssdPayloadMaterialize"
+
+        var fields: [(String, String)] {
+            [
+                ("id", id),
+                ("bytes", "\(bytes)"),
+                ("durationMs", PrefixCacheDiagnostics.milliseconds(durationSeconds)),
             ]
         }
     }

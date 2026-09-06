@@ -761,3 +761,46 @@ struct SnapshotManifestTests {
         #expect(a != c)
     }
 }
+
+/// **Deferred Payload Extraction**: a `SnapshotPayload` knows its byte total
+/// from construction and runs the host copy once, on the first reader.
+struct SnapshotPayloadDeferralTests {
+
+    @Test
+    func deferredPayloadOwesItsBytesUntilFirstRead() {
+        let materializations = Locked(0)
+        let layers = PrefixCacheTestFixtures.makeLeafPayload(bytes: 1_536).layers
+        let payload = SnapshotPayload(
+            tokenOffset: 4_096, checkpointType: .leaf, totalBytes: 1_536
+        ) {
+            materializations.value += 1
+            return layers
+        }
+
+        // The front door and the ledger read the byte total; nothing
+        // runs the copy until the writer asks for the layers.
+        #expect(payload.totalBytes == 1_536)
+        #expect(!payload.isMaterialized)
+        #expect(materializations.value == 0, "construction must not run the materializer")
+
+        // Copies share the one materialization: the copy runs it, the
+        // original sees the cached result.
+        let copy = payload
+        copy.materialize()
+        let first = payload.layers
+        let second = payload.layers
+        #expect(materializations.value == 1, "the materializer runs once; the result is cached")
+        #expect(payload.isMaterialized)
+        #expect(first.count == 1 && second.count == 1)
+        #expect(SnapshotPayload.byteCount(of: first) == payload.totalBytes)
+    }
+
+    @Test
+    func readyPayloadIsMaterializedFromConstruction() {
+        let payload = PrefixCacheTestFixtures.makeLeafPayload(bytes: 64)
+        #expect(payload.isMaterialized)
+        #expect(payload.totalBytes == 64)
+        payload.materialize()
+        #expect(payload.layers.count == 1)
+    }
+}

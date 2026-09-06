@@ -1096,6 +1096,63 @@ struct SSDSnapshotStoreTests {
     }
 
     @Test
+    func writerMaterializesADeferredPayloadBeforeTheWrite() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config,
+            onCommit: tracker.onCommit,
+            onDrop: tracker.onDrop
+        )
+
+        // Deferred Payload Extraction: the front door sees only the byte
+        // total; the writer's task runs the copy right before the write.
+        let ready = makePayload(bytes: 2_048)
+        // Where and how often the materializer ran.
+        let probe = Locked((calls: 0, onMainThread: false))
+        let deferred = SnapshotPayload(
+            tokenOffset: ready.tokenOffset,
+            checkpointType: ready.checkpointType,
+            totalBytes: ready.totalBytes
+        ) { [layers = ready.layers] in
+            probe.value = (
+                calls: probe.value.calls + 1,
+                onMainThread: probe.value.onMainThread || Thread.isMainThread
+            )
+            return layers
+        }
+        let descriptor = makeDescriptor(id: "deferred-test-000000", bytes: deferred.totalBytes)
+        #expect(!deferred.isMaterialized)
+
+        let result = store.tryEnqueue(payload: deferred, descriptor: descriptor)
+        guard case .accepted = result else {
+            #expect(Bool(false), "tryEnqueue rejected: \(result)")
+            return
+        }
+        let committed = await waitUntil { tracker.committed.contains(descriptor.snapshotID) }
+        #expect(committed)
+        #expect(deferred.isMaterialized)
+        #expect(probe.value.calls == 1)
+        #expect(!probe.value.onMainThread, "the host copy must run on the writer's task")
+
+        let fileURL = root.appendingPathComponent(
+            PersistedSnapshotDescriptor.relativeFilePath(
+                snapshotID: descriptor.snapshotID, partitionDigest: descriptor.partitionDigest
+            ))
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let size = try #require((attributes[.size] as? NSNumber)?.intValue)
+        #expect(size > 2_048, "the file carries the header plus the materialized bytes")
+
+        let lines = sink.lines(matching: "event=ssdPayloadMaterialize")
+            .filter { $0.contains("id=\(descriptor.snapshotID)") }
+        #expect(lines.count == 1)
+        #expect(lines.first?.contains("bytes=2048") == true)
+    }
+
+    @Test
     func ssdAdmitFiresDroppedTooLargeForBudgetSynchronously() {
         let (config, root) = makeConfig(maxPendingBytes: 1_024)
         defer { cleanup(root) }

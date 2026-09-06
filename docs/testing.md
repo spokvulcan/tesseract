@@ -169,7 +169,10 @@ the report to `benchmark/trace-replay/latest.log`.
 
 - `-only-testing` filters must target **suite** granularity. A method-granularity
   filter (`-only-testing:tesseractTests/<Suite>/<testName>`) runs zero Swift Testing
-  tests and still reports `** TEST SUCCEEDED **`.
+  tests and still reports `** TEST SUCCEEDED **`. The suite is the `struct` name, not
+  the file name: `tesseractTests/DynamicBudgetCeilingTests.swift` holds nine suites and no suite of
+  that name, so a filter on the file name also runs nothing and still succeeds. Check
+  the `.xcresult` for the suites that actually ran.
 - `xcodebuild test` hides `#expect` failure details from stdout. Read them from
   the `.xcresult` bundle:
   `xcrun xcresulttool get test-results tests --path <bundle>.xcresult`.

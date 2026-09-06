@@ -51,3 +51,33 @@ Decided in the 2026-07-04 grilling.
   Air); the continuous formula already decides by bytes left over, and the
   switch adds a settings surface with a behavior discontinuity. SSD-first
   behavior *emerges* when measured headroom is small.
+
+## Amendment 2026-09-06 — the Working-Set Bound
+
+The measured headroom was widened in issue #236 to the kernel's inactive and
+speculative buckets, because a free+purgeable sample read ~4.6 GB next to a
+35B model and zeroed the ceiling. Those buckets are not safe on their own: the
+cache's own cold snapshot pages age into "inactive", so a growing cache raised
+its own ceiling. Replaying a 65-turn agent session as dead-end branches (each
+turn admitting a ~3 GB leaf and a ~3 GB branch point that nothing superseded)
+moved the ceiling from 8.7 GB to 38.7 GB in 17 minutes on a 48 GB machine with
+a 16 GB model; the process reached ~70 GB, swap filled the disk, and the
+machine rebooted. The fast retreat could not save it: the pressure events
+arrive on the main actor, which was inside an admission drain that swapping
+had stretched to 25–50 s.
+
+- **Headroom is the smaller of the kernel buckets and the Working-Set Bound**:
+  the per-process working set the GPU driver recommends
+  (`recommendedMaxWorkingSetSize`, ~78% of physical memory on Apple Silicon)
+  minus this process's physical footprint. Footprint counts compressed pages
+  and Metal buffers, so growth cannot hide in the compressor. Each admitted
+  byte is one byte less headroom, and the ceiling converges at
+  working set − footprint − 1.25 × reserve instead of tracking the cache.
+  The #236 case keeps a usable ceiling: ~40 GB working set − 18.6 GB weights
+  − live KV leaves ~14 GB before the reserve.
+- **The SSD budget never exceeds what the disk can hold**: what the tier
+  already holds plus free space above a 10 GiB reserve. The 20 GiB floor
+  stays the default where the volume can keep it; it no longer writes the
+  last bytes of a full disk.
+- The `budgetMeasure` trace carries the bound (`workingSetHeadroomBytes`), so
+  a small ceiling is attributable to the process rather than the machine.

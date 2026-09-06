@@ -245,6 +245,24 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         }
     }
 
+    // MARK: - Deferred Payload Extraction
+
+    @Test
+    func extractionDefersTheHostCopyAndFixesTheByteTotal() throws {
+        let snapshot = makeMixedSnapshot(tokenOffset: 64)
+        let payload = try checkpointPayload(for: snapshot)
+
+        // The extraction edge reads shapes only; the memcpy belongs to the
+        // SSD writer's task (a demotion used to run it on the MainActor).
+        #expect(!payload.isMaterialized)
+        #expect(payload.totalBytes == snapshot.memoryBytes)
+
+        let layers = payload.layers
+        #expect(payload.isMaterialized)
+        #expect(SnapshotPayload.byteCount(of: layers) == payload.totalBytes)
+        #expect(layers.count == snapshot.layers.count)
+    }
+
     /// Literal pinning of the SSD on-disk wire-format contract. These
     /// strings are written verbatim into the snapshot header at
     /// `encodePlaceholderContainer` (in `PlaceholderContainer.swift`),

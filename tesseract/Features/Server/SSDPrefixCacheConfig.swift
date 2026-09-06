@@ -31,6 +31,12 @@ nonisolated enum SSDBudgetPolicy {
     /// time (phase 3's problem).
     static let absoluteCapBytes = 128 * 1024 * 1024 * 1024  // 128 GiB
 
+    /// Free disk the tier never claims, whatever the floor says. The
+    /// floor is a default, not a promise the volume can keep: on
+    /// 2026-09-06 a 20 GiB floor kept admitting into a disk with 5 GB
+    /// free while swap needed the same bytes, and the machine rebooted.
+    static let diskReserveBytes = 10 * 1024 * 1024 * 1024  // 10 GiB
+
     static func budgetBytes(
         freeDiskBytes: Int,
         currentTierBytes: Int,
@@ -41,7 +47,10 @@ nonisolated enum SSDBudgetPolicy {
             freeDiskBytes: freeDiskBytes, currentTierBytes: currentTierBytes
         )
         let measured = max(floorBytes, min(absoluteCapBytes, claimable))
-        return applyBudgetCap(measured, cap: capBytes)
+        // What the tier holds is already on disk; beyond it, only free
+        // space above the reserve is there to be budgeted.
+        let holdable = max(currentTierBytes, 0) + max(freeDiskBytes - diskReserveBytes, 0)
+        return applyBudgetCap(min(measured, holdable), cap: capBytes)
     }
 
     /// The disk's own contribution to the formula, pre-floor/pre-cap.
@@ -49,10 +58,12 @@ nonisolated enum SSDBudgetPolicy {
         Int(Double(max(freeDiskBytes + currentTierBytes, 0)) * freeDiskFraction)
     }
 
-    /// True when the floor, not the disk, is holding the budget up —
-    /// the panel's "disk low" signal (PRD #150). Deliberately distinct
-    /// from `budget == floor`: a *user cap* below the floor also drags
-    /// the budget down there, and that must not read as a full disk.
+    /// True when free disk, not policy, is what limits the budget — the
+    /// panel's "disk low" signal (PRD #150): the disk's share is under the
+    /// floor, so the budget sits at the floor or, once the reserve binds,
+    /// at whatever the disk can still hold. Deliberately distinct from
+    /// `budget <= floor`: a *user cap* below the floor also drags the
+    /// budget down there, and that must not read as a full disk.
     static func isFloorBound(
         freeDiskBytes: Int,
         currentTierBytes: Int,
