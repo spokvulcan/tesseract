@@ -275,8 +275,9 @@ nonisolated extension LeafStorePhase {
 
     /// Inside a Model Session: snapshot `cache` at the stored path's length,
     /// derive its admission storage (**Deferred Payload Extraction**: an
-    /// extension suffix is sliced and evaluated here, the host copy waits
-    /// for the SSD writer), admit through the one shared owner — the same path
+    /// extension payload's arrays — the attention suffix slices and the
+    /// whole recurrent state — are detached and evaluated here, the host
+    /// copy waits for the SSD writer), admit through the one shared owner — the same path
     /// the speculative pass uses — and release the MLX buffer pool so it
     /// doesn't accumulate transient prefill intermediates across requests.
     /// `timings` carries the stages the caller already ran.

@@ -42,7 +42,11 @@ suffix on the Metal-affine caller), and the host copy runs on the SSD writer's
 task right before the file write. **Snapshot Admission**, eviction and **Snapshot
 Demotion** on the MainActor and the **Leaf Store** tail on the inference thread
 never pay the full-KV memcpy; a deferred payload keeps its arrays alive until the
-writer materializes it, releasing each layer as it is copied.
+writer materializes it, releasing each layer as it is copied. A full payload's
+arrays are the body's own; an extension payload retains no body array — the
+extraction edge *detaches* every array it retains, the attention suffix slices
+and the whole-state (recurrent, rotating, chunked) layers alike, as deep copies
+evaluated there.
 _Avoid_: lazy payload, async extraction, background asData, payload streaming.
 
 **Snapshot Admission Path**:

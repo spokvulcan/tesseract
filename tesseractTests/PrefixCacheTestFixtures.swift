@@ -20,6 +20,27 @@ func waitUntil(
     return condition()
 }
 
+/// Physical address of an `MLXArray`'s backing buffer. Two arrays that
+/// share a Metal allocation report the same address; independent copies
+/// report different ones. `asData(access: .noCopy)` (after `eval`) wraps
+/// `mlx_array_data_uint8` directly, so the `Data`'s base address is the
+/// real backing pointer — not a fresh copy.
+///
+/// This is the only thing that distinguishes a deep copy from a
+/// copy-on-write *alias*: `MLXArray` is a reference type, and an
+/// `array[.ellipsis]` slice shares the source's buffer until a mutation
+/// forces a copy. A value-isolation test (mutate one, read the other) can
+/// **not** catch the alias because COW preserves the un-mutated party's
+/// values either way — see MLX's own `testCopyEllipsis`. Only the physical
+/// address discriminates. Shared by the buffer-isolation tests in
+/// `HybridCacheSnapshotTests` and the pending-payload tests in
+/// `LeafExtensionAdmissionTests`.
+nonisolated func backingAddress(_ array: MLXArray) -> UInt {
+    array.asData(access: .noCopy).data.withUnsafeBytes {
+        UInt(bitPattern: $0.baseAddress)
+    }
+}
+
 /// Shared snapshot factories for prefix-cache test files. Centralizes
 /// construction so eviction tests across `PrefixCacheManagerTests`,
 /// `EvictionPolicyTests`, and `AlphaTunerTests` produce the same shapes.
