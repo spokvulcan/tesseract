@@ -388,6 +388,14 @@ nonisolated final class ServerCompletion {
     /// host is short on free RAM (mirrors `SSDPrefixCacheConfig.measuresFreeDisk`).
     private(set) var headroomSource: (any MemoryHeadroomSource)?
 
+    /// The Emitted Path Index this module registers into and resolves
+    /// against (ADR-0063). Production installs the process-wide `.shared`
+    /// (the actor's unload clears that one); a test fixture hands each Server
+    /// Completion its own so hermetic scenarios — restart, eviction, two
+    /// generations under one key — see exactly the index they built and
+    /// no other suite's fingerprint resets.
+    private(set) var emittedPathIndex: EmittedPathIndex = .shared
+
     /// Whether the loaded model's template starts generation inside a
     /// `<think>` block. Installed after the container verify.
     private var promptStartsThinking = false
@@ -454,13 +462,15 @@ nonisolated final class ServerCompletion {
         fingerprint: String,
         ssdConfig: SSDPrefixCacheConfig?,
         ramBudgetCapBytes: Int? = nil,
-        headroomSource: (any MemoryHeadroomSource)? = nil
+        headroomSource: (any MemoryHeadroomSource)? = nil,
+        emittedPathIndex: EmittedPathIndex = .shared
     ) {
         self.modelIdentity = modelIdentity
         self.modelFingerprint = fingerprint
         self.ssdConfig = ssdConfig
         self.ramBudgetCapBytes = ramBudgetCapBytes
         self.headroomSource = headroomSource
+        self.emittedPathIndex = emittedPathIndex
     }
 
     /// Container-derived facts, installed by the actor's `verifyAndStore`
@@ -1154,6 +1164,7 @@ nonisolated final class ServerCompletion {
         // sync-read the actor-confined module.
         let promptStartsThinking = self.promptStartsThinking
         let modelFingerprint = self.modelFingerprint
+        let emittedPathIndex = self.emittedPathIndex
         let imageKeying = self.modelIdentity?.imageKeying
         let flopProfile = self.modelIdentity?.flopProfile ?? .fallback
         let fullAttentionScratchProfile = self.modelIdentity?.fullAttentionScratchProfile
@@ -1187,6 +1198,7 @@ nonisolated final class ServerCompletion {
                 modelID: modelID,
                 modelFingerprint: modelFingerprint,
                 imageKeying: imageKeying,
+                emittedPathIndex: emittedPathIndex,
                 diagnostics: diagnosticsContext
             ) {
             case .keyed(let identities):

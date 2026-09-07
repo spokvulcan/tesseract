@@ -55,13 +55,14 @@ nonisolated enum EmittedPathFidelity {
     }
 
     /// The assistant message the server would have stored for `contentIDs`
-    /// — the generated ids without the stop id — replayed token by token
-    /// through the stream pipeline: the streaming detokenizer, the vendor
-    /// processor (whose tag state machine handles one boundary per chunk,
-    /// so a whole turn in one chunk would not parse as the stream did), the
-    /// app parser, the accumulator. `startsInsideThinkBlock` is the
-    /// request's (the generation prompt opened a `<think>` block the model
-    /// closes).
+    /// — the generated ids without the stop id — replayed chunk by chunk
+    /// through the stream pipeline: the streaming detokenizer's chunks
+    /// (`LinearStreamingDetokenizer`, the live loop's naive chunks in linear
+    /// time), the vendor processor (whose tag state machine handles one
+    /// boundary per chunk, so a whole turn in one chunk would not parse as
+    /// the stream did), the app parser, the accumulator.
+    /// `startsInsideThinkBlock` is the request's (the generation prompt
+    /// opened a `<think>` block the model closes).
     static func replay(
         contentIDs: [Int],
         tokenizer: any Tokenizer,
@@ -69,7 +70,7 @@ nonisolated enum EmittedPathFidelity {
         tools: [ToolSpec]?,
         startsInsideThinkBlock: Bool
     ) -> HTTPPrefixCacheMessage {
-        var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+        var detokenizer = LinearStreamingDetokenizer(tokenizer: tokenizer)
         let processor = ToolCallProcessor(format: toolCallFormat, tools: tools)
         var deltaTracker = ToolCallDeltaTracker(format: toolCallFormat)
         let parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
@@ -98,13 +99,15 @@ nonisolated enum EmittedPathFidelity {
             }
         }
 
-        for id in contentIDs {
-            detokenizer.append(token: id)
-            guard let raw = detokenizer.next() else { continue }
+        func feed(_ raw: String) {
             if let text = processor.processChunk(raw) { emitChunk(text) }
             if deltaTracker.observe(raw) != nil { libraryParsedToolCalls = true }
             drainLibraryCalls()
         }
+        for id in contentIDs {
+            for raw in detokenizer.append(token: id) { feed(raw) }
+        }
+        for raw in detokenizer.finish() { feed(raw) }
         // End-of-stream recovery, as the loop does it: buffered content
         // parses as calls; the residual is text unless the delta stream
         // already carried exactly those bytes (an in-flight tagged block).

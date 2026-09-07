@@ -6,20 +6,29 @@ import Tokenizers
 
 @testable import Tesseract_Agent
 
-/// The Emitted Path Index replay gate (ADR-0063, tickets #475/#476): the
-/// recorded sessions walked through the **Canonical-Echo Fidelity** harness
-/// with a private index learning every echoed turn — the Leaf Store's
-/// registration simulated on the canonical encode — and every next request
-/// resolving at its edge. The claims, on real recordings with the real
-/// tokenizer and template:
+/// The Emitted Path Index replay gate (ADR-0063, tickets #475/#476/#477):
+/// the recorded sessions walked through the **Canonical-Echo Fidelity**
+/// harness with a private index learning every echoed turn — the Leaf
+/// Store's registration simulated on the canonical encode, the leaf source
+/// decided exactly as the live fast path decides it — and every next
+/// request resolving at its edge. The claims, on real recordings with the
+/// real tokenizer and template, judged per turn by `EmittedPathReplayGate`:
 ///
-/// - every boundary a live-stored turn would have produced registers (the
-///   only tolerated non-registration is a prompt that is not a token prefix
-///   of the stored render — a turn the fast path could not have stored
-///   under the emitted path, so no live turn exists to register);
-/// - every registered boundary's next request resolves with a non-zero
-///   indexed prefix, so it prefills only its new messages and the glue
-///   after the marker (the suffix totals print for the record).
+/// - in a tool stretch the leaf source is `live`; a stop turn is `live` or
+///   the explained think-stripping boundary;
+/// - every live turn registers (the only tolerated skip is a prompt that is
+///   not a token prefix of the stored render — a turn the harness cannot
+///   simulate fed ids for);
+/// - the fidelity gate rejected nothing and no key was registered twice
+///   (asserted on the index's own counters, not only logged);
+/// - every next request resolves the whole registered path and prefills
+///   its new messages plus at most the glue allowance;
+/// - the simulated post-EOS CPU tail stays under budget below 20k tokens.
+///
+/// Every recorded request renders under the context the server resolved
+/// for it (the request's `reasoning_effort` against the template's
+/// defaults, the app's preserve-thinking default), so the walk feeds the
+/// bytes the build fed.
 ///
 /// Opt-in like the fidelity corpus gate — same variables, see
 /// `docs/testing.md`:
@@ -38,7 +47,7 @@ struct EmittedPathReplayCorpusTests {
     }
 
     @Test(.enabled(if: corpusRoot != nil && modelRoot != nil))
-    func everyStoredTurnRegistersAndEveryNextRequestResolves() async throws {
+    func everyTurnPassesTheReplayGate() async throws {
         let corpus = URL(
             fileURLWithPath: NSString(string: Self.corpusRoot!).expandingTildeInPath)
         let modelDirectory = URL(
@@ -71,7 +80,8 @@ struct EmittedPathReplayCorpusTests {
                     recording.model,
                     CanonicalEchoFidelity.RecordedRequest(
                         messages: recording.body.messages,
-                        tools: recording.body.tools
+                        tools: recording.body.tools,
+                        renderContext: Self.resolveRenderContext(recording.body, identity: identity)
                     )
                 ))
         }
@@ -83,6 +93,11 @@ struct EmittedPathReplayCorpusTests {
             promptStartsThinking: identity.promptStartsThinking)
 
         var total = CanonicalEchoFidelity.EmittedPathSessionSummary()
+        var failures: [EmittedPathReplayGate.Failure] = []
+        var turns = 0
+        var exempt = 0
+        var slowestTail = 0.0
+        var longestPath = 0
         for key in sessionOrder {
             let entries = sessions[key] ?? []
             let report = await CanonicalEchoFidelity.walkSession(
@@ -93,6 +108,22 @@ struct EmittedPathReplayCorpusTests {
                 learning: learning
             )
             print(CanonicalEchoFidelity.renderText(report))
+            let sessionFailures = EmittedPathReplayGate.check(report)
+            for failure in sessionFailures { print("GATE \(failure)") }
+            failures += sessionFailures
+            for boundary in report.boundaries {
+                guard let turn = EmittedPathReplayGate.TurnAccount(boundary) else { continue }
+                turns += 1
+                // A turn the harness cannot simulate is exempt from the
+                // prefill, glue and tail rules; the total names how many.
+                if turn.verdict.registration == EmittedPathReplayGate.promptNotTokenPrefix {
+                    exempt += 1
+                }
+                slowestTail = max(slowestTail, turn.verdict.tailSeconds ?? 0)
+                longestPath = max(longestPath, turn.verdict.pathLength ?? 0)
+                print(
+                    "TURN request#\(turn.requestIndex) " + EmittedPathReplayGate.account(of: turn))
+            }
             guard let summary = report.emittedPathSummary else { continue }
             total.boundaries += summary.boundaries
             total.registered += summary.registered
@@ -100,25 +131,85 @@ struct EmittedPathReplayCorpusTests {
             total.nextResolved += summary.nextResolved
             total.nextMisses.merge(summary.nextMisses, uniquingKeysWith: +)
             total.nextSuffixTokens += summary.nextSuffixTokens
+            total.sources.merge(summary.sources, uniquingKeysWith: +)
+            total.overwrites += summary.overwrites
+            total.fidelityRejections += summary.fidelityRejections
         }
         let stats = learning.index.statsSnapshot()
         print(
-            "emitted-path corpus total: sessions=\(sessionOrder.count) "
-                + "boundaries=\(total.boundaries) registered=\(total.registered) "
-                + "skips=\(total.registrationSkips) nextResolved=\(total.nextResolved) "
+            "emitted-path corpus total: recordings=\(recordingFiles.count) "
+                + "sessions=\(sessionOrder.count) boundaries=\(total.boundaries) "
+                + "registered=\(total.registered) exempt=\(exempt) "
+                + "skips=\(total.registrationSkips) "
+                + "sources=\(total.sources) nextResolved=\(total.nextResolved) "
                 + "nextMisses=\(total.nextMisses) nextSuffixTokens=\(total.nextSuffixTokens) "
-                + "undecodable=\(undecodable.count) index=[\(EmittedPathIndex.summary(of: stats))]")
+                + "slowestTailMs=\(String(format: "%.1f", slowestTail * 1000)) "
+                + "longestPath=\(longestPath) undecodable=\(undecodable.count) "
+                + "index=[\(EmittedPathIndex.summary(of: stats))]")
 
         #expect(total.boundaries > 0, "corpus produced no checkable boundaries")
-        // Every simulated live-stored turn registers: the only tolerated
-        // skip is a prompt that is not a token prefix of the stored render.
-        let unexplained = total.registrationSkips.filter { $0.key != "promptNotTokenPrefix" }
-        #expect(unexplained.isEmpty, "registration skips: \(unexplained)")
+        #expect(turns == total.boundaries)
         #expect(total.registered > 0, "no boundary registered")
+        // The per-turn gate: every failure names its turn and account.
+        #expect(
+            failures.isEmpty,
+            Comment(
+                rawValue: "\(failures.count) gate failures:\n"
+                    + failures.map(\.description).joined(separator: "\n")))
+        // The index's own counters, not only the walk's log: nothing was
+        // rejected by the fidelity gate, no key was registered twice.
+        #expect(stats.fidelityRejections == 0, "fidelity rejections: \(stats.fidelityRejections)")
+        #expect(stats.overwrites == 0, "same-key overwrites: \(stats.overwrites)")
+        #expect(total.fidelityRejections == 0)
+        #expect(total.overwrites == 0)
         #expect(
             total.nextResolved == total.registered,
             "next requests that missed the index: \(total.nextMisses)")
-        #expect(stats.fidelityRejections == 0)
+
+        Self.checkLiveTails(in: corpus)
+    }
+
+    /// When the corpus directory carries the build's own completion traces
+    /// (`trace-*.jsonl`, the durable per-completion record), the live
+    /// post-EOS tail every registered turn paid is gated too: the offline
+    /// walk can only simulate the CPU half.
+    private static func checkLiveTails(in corpus: URL) {
+        let traceFiles = CompletionTraceLog.traceFiles(in: corpus)
+        guard !traceFiles.isEmpty else {
+            print(
+                "emitted-path corpus: no trace-*.jsonl beside the recordings; live tail unchecked")
+            return
+        }
+        let records = CompletionTraceLog.readRecords(at: traceFiles)
+        var over: [String] = []
+        var checked = 0
+        for record in records {
+            guard let emitted = record.emittedPath, emitted.registered,
+                let pathLength = emitted.pathLength,
+                pathLength < EmittedPathReplayGate.tailBudgetPathTokens,
+                let tail = record.tailSeconds
+            else { continue }
+            checked += 1
+            if tail >= EmittedPathReplayGate.tailBudgetSeconds {
+                over.append(
+                    "request=\(record.requestID) pathLength=\(pathLength) "
+                        + "tailMs=\(String(format: "%.1f", tail * 1000))")
+            }
+        }
+        print("emitted-path corpus: live tails checked=\(checked) over=\(over.count)")
+        #expect(
+            over.isEmpty,
+            Comment(rawValue: "live tails over budget:\n" + over.joined(separator: "\n")))
+    }
+
+    /// The render context the server resolved for the recorded request —
+    /// `CompletionHandler`'s own resolution, with the preserve-thinking
+    /// render on as the recorded sessions ran it.
+    private nonisolated static func resolveRenderContext(
+        _ body: OpenAI.ChatCompletionRequest, identity: ModelIdentity
+    ) -> TemplateRenderContext {
+        CompletionHandler.resolveRenderContext(
+            for: body, preserveThinking: true, template: identity)
     }
 
     /// The tool-call format the loaded model declares (the vendor's

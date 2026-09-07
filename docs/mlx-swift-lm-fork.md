@@ -92,6 +92,7 @@ Carried on top, in order:
 | `Keep the text before a possible tool-call tag when the tag does not complete in the chunk` (`a1bd36d`, cherry-pick of `ede8b3f`) | `ToolCallProcessor.processChunk` returned `nil` while buffering a possible `<tool_call>` start and lost the text split off before the `<` (" a `<memory>`" → " a<memory>`", `i < n` → `i< n`); the fix returns that text from the call that split it. Found because the mangled client echo broke **Live Leaf Capture**'s live-path equality. Four tests in `ToolTests` | Upstream issue [#609](https://github.com/ml-explore/mlx-swift-lm/issues/609) and PR [#610](https://github.com/ml-explore/mlx-swift-lm/pull/610) opened 2026-09-06 from fork branch `fix/tool-call-processor-leading-text` (`ede8b3f` = upstream `e3d4a20` + fix). Drop from the carry when it merges |
 | `Emit only the new scalars when a token extends the previous character` (`ed74418`, cherry-pick of `c3c12ed`) | `NaiveStreamingDetokenizer.next()` measured the common prefix between the previous decode and the new one in `Character`s, so a token that appended a combining scalar (U+FE0F, a zero-width joiner, an accent) to the previous character re-emitted the whole merged cluster: `🏳️‍🌈` streamed as `🏳🏳️🏳️‍🏳️‍🌈`, `'️` as `''️`. The prefix is now measured in Unicode scalars. Found because the duplicated characters reached Pi's tool arguments and the file it wrote, and broke **Live Leaf Capture**'s live-path equality on every emoji turn. Four tests in `StreamingDetokenizerTests` | Upstream issue [#612](https://github.com/ml-explore/mlx-swift-lm/issues/612) and PR [#613](https://github.com/ml-explore/mlx-swift-lm/pull/613) opened 2026-09-06 from fork branch `fix/streaming-detokenizer-grapheme` (`c3c12ed` = upstream `e3d4a20` + fix, CI replica green locally). Drop from the carry when it merges |
 | `fix(dflash2): compute in the drafter's dtype whatever the target hands over` (`40f026f`, tidied in `b902739`) | `DFlash2DraftModel.propose` casts the target's block embedding and captured hidden states to the drafter's checkpoint dtype (`computeDType`), runs the target's head in the target's dtype and scores in its own — no-ops on the bfloat16 pairing. The float16 ParoQuant Qwen3.8-27B beside the bfloat16 drafter promoted every mixed matmul to float32, and the fused residual norm's dtype precondition (`9f5f43e`) crashed the server on every `qwen3.8-27b-paro` request since 2026-09-05; the bench only ever ran the bfloat16 uniform-4-bit target. Test: `testDFlash2CompiledProposalMatchesEager` takes the pairing as an argument (float32 beside float32, bfloat16 drafter beside a float16 mock target), compiled == eager, context rows in the drafter's dtype | Follow-up PR candidate on #607 (fold into the drafter commit) |
+| `perf(tools): scan only the chunk for a collecting call's end tag` (`921c676`, local, unpushed) | `ToolCallProcessor.processChunk` checked the whole buffered call for the end tag on every chunk while collecting a tagged call — quadratic in the call's length: the live loop and the Emitted Path fidelity replay (tesseract ADR-0063 decision 9) each spent 3.3 s on one 13k-token `write` call of the 2026-09-06 corpus. The scan now covers the chunk plus the tag's overlap with what preceded it (an earlier occurrence would have left the collecting state when it arrived); the fall-through from a partial start tag still scans the then-short whole buffer. Four tests in `ToolCallProcessorLongCallTests`: a 40k-character call streamed one character at a time parses in linear time, and the end tag is found across every chunk boundary | Upstream candidate, deliberately not filed yet — issue and PR text in the status log entry of 2026-09-07 below. On `pin-upstream-mlx-swift` (and on `fix/tool-call-processor-end-tag-scan`, which branched from the pin, so an upstream PR branch still has to be rebuilt from upstream `main`), CI replica green locally |
 
 Earlier pin branches carried one `chore: pin mlx-swift to <rev>` commit per
 accepted Cmlx experiment (C4–C13 and the 2026-07-24 review round). That
@@ -254,6 +255,33 @@ four per-family `perf(qwen35|dflash2)` commits, tip `0647cf9`; mlx-side
 in spokvulcan/mlx `b6a5f3b6` and mlx-swift `6058402` (pushed). Section
 "2026-09-05 optimization loop — landed" below has the map. Upstream:
 these are follow-up PR candidates on #607, not filed.
+
+**Status 2026-09-07 (end-tag scan)** — `perf(tools): scan only the chunk
+for a collecting call's end tag` (`921c676`) is on `pin-upstream-mlx-swift`
+and pushed; tesseract's gitlink moves to it in the same batch. Upstream
+filing is deferred by choice, so the text is banked here for whoever posts
+it.
+
+*Issue* — "ToolCallProcessor rescans the whole collected call for its end
+tag on every chunk". While `state == .collectingToolCall`,
+`processTaggedChunk` evaluates `toolCallBuffer.contains(endTag)` per chunk
+over the entire buffered call, so a call costs time quadratic in its
+length. A tagged `write` call of ~13k tokens streamed one token per chunk
+(qwen35 format, `<tool_call>`/`</tool_call>`) spends seconds in that scan
+alone, on the thread that drives sampling; the same cost is paid again by
+anything that replays a stream. Repro: `ToolCallProcessorLongCallTests`'s
+`longCallStreamedByCharacterIsLinear` without the fix.
+
+*PR* — only the text a chunk appends can complete the end tag, because an
+earlier occurrence would have left the collecting state when it arrived, so
+the scan covers the chunk plus `endTag.count - 1` characters of overlap
+with what preceded it. The fall-through from a partial start tag keeps the
+whole-buffer scan, which then holds at most the start tag and that chunk.
+Four tests: the 40k-character call above, an end tag split across chunks,
+an end tag in the chunk that completes the start tag, and a second call
+following the end tag in one chunk. Branch it from upstream `main` — the
+fork branch of the same name sits on the pin and carries everything else
+the pin carries.
 
 ## Contributed back
 

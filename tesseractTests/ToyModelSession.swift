@@ -32,6 +32,10 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
     /// cache offset — the cancellation suites use it to pause the prefill at
     /// a deterministic point and land a cancel at a chunk boundary.
     let onForward: (@Sendable (Int) -> Void)?
+    /// Content-relative scripting (the Emitted Path suites): when set, the
+    /// queue — not `script` — answers what the toy predicts, keyed on the
+    /// tokens actually fed rather than on absolute positions.
+    let completions: ToyCompletionQueue?
 
     init(
         script: [Int],
@@ -47,7 +51,30 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             "script tokens must fit the toy vocabulary"
         )
         self.script = script
+        self.completions = nil
         self.eosTokenId = eosTokenId
+        self.vocabSize = vocabSize
+        self.kvHeads = Array(repeating: 1, count: layers)
+        self.headDim = headDim
+        super.init()
+    }
+
+    /// The content-relative toy: every forward records what it was fed, and
+    /// the prediction at a forward's last row comes from `completions` —
+    /// the next queued completion once the fed tokens end with the
+    /// generation prompt, then that completion token by token as long as
+    /// the loop feeds back exactly what was predicted.
+    init(
+        completions: ToyCompletionQueue,
+        vocabSize: Int = ToyVocabulary.size,
+        layers: Int = 2,
+        headDim: Int = 4,
+        onForward: (@Sendable (Int) -> Void)? = nil
+    ) {
+        self.onForward = onForward
+        self.script = []
+        self.completions = completions
+        self.eosTokenId = completions.eosTokenId
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
         self.headDim = headDim
@@ -87,10 +114,123 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         }
 
         var rows = [Float](repeating: 0, count: tokenCount * vocabSize)
-        for row in 0..<tokenCount {
-            rows[row * vocabSize + predictedToken(at: offset + row)] = 10
+        if let completions {
+            let fed = batched.asType(.int32).reshaped([tokenCount]).asArray(Int32.self).map(
+                Int.init)
+            completions.record(fed: fed, at: offset)
+            // Only the last row's logits are ever sampled; the rest predict
+            // EOS so a stray sample can never consume a queued completion.
+            for row in 0..<tokenCount {
+                let predicted =
+                    row == tokenCount - 1
+                    ? completions.predict(at: offset + row) : completions.eosTokenId
+                precondition(
+                    predicted < vocabSize, "completion token \(predicted) outside the vocabulary")
+                rows[row * vocabSize + predicted] = 10
+            }
+        } else {
+            for row in 0..<tokenCount {
+                rows[row * vocabSize + predictedToken(at: offset + row)] = 10
+            }
         }
         return MLXArray(rows, [1, tokenCount, vocabSize])
+    }
+}
+
+/// The content-relative script behind `ToyLanguageModel(completions:)`: a
+/// queue of completions, each served once the tokens fed so far end with
+/// the generation prompt — at whatever absolute position the request's
+/// restore and prefill put it — then continued token by token while the
+/// loop feeds back exactly the token predicted (a decode step), and closed
+/// with `eosTokenId`. Anything else predicts EOS.
+///
+/// Also the tape of everything the model was fed, in feed order, which the
+/// Emitted Path suites read to prove what a request prefilled: the served
+/// composition on a hit, the canonical encode on a miss, never a token
+/// outside the vocabulary.
+nonisolated final class ToyCompletionQueue: @unchecked Sendable {
+    /// The tokens the template's generation prompt encodes to; the
+    /// trigger is the fed tokens ending with them.
+    let generationPrompts: [[Int]]
+    let eosTokenId: Int
+
+    private let lock = NSLock()
+    private var queue: [[Int]] = []
+    private var tape: [Int: Int] = [:]
+    private var feeds: [(position: Int, id: Int)] = []
+    private var active: [Int] = []
+    private var activeIndex = 0
+    private var triggerPosition: Int?
+    private var expectedNext: (position: Int, id: Int)?
+
+    /// `generationPrompts`: every generation prompt the template can emit
+    /// (thinking and non-thinking), each as its token ids.
+    init(generationPrompts: [[Int]], eosTokenId: Int) {
+        self.generationPrompts = generationPrompts
+        self.eosTokenId = eosTokenId
+    }
+
+    /// Queue the next completion, without its EOS (the queue appends it).
+    func enqueue(_ completion: [Int]) {
+        lock.withLock { queue.append(completion) }
+    }
+
+    /// Everything fed since the last drain, in feed order.
+    func drainFeeds() -> [(position: Int, id: Int)] {
+        lock.withLock {
+            let drained = feeds
+            feeds.removeAll()
+            return drained
+        }
+    }
+
+    func record(fed: [Int], at offset: Int) {
+        lock.withLock {
+            for (row, id) in fed.enumerated() {
+                tape[offset + row] = id
+                feeds.append((offset + row, id))
+            }
+        }
+    }
+
+    func predict(at position: Int) -> Int {
+        lock.withLock {
+            if endsWithGenerationPrompt(at: position) {
+                // The same position forwarded twice (a prefill chunk and a
+                // prime forward both ending there) re-serves the same
+                // first token rather than consuming another completion.
+                if triggerPosition == position, activeIndex == 1, !active.isEmpty {
+                    return active[0]
+                }
+                guard !queue.isEmpty else { return eosTokenId }
+                active = queue.removeFirst() + [eosTokenId]
+                activeIndex = 0
+                triggerPosition = position
+                return advance(at: position)
+            }
+            if let expectedNext, expectedNext.position == position,
+                tape[position] == expectedNext.id, activeIndex < active.count
+            {
+                return advance(at: position)
+            }
+            return eosTokenId
+        }
+    }
+
+    private func advance(at position: Int) -> Int {
+        let token = active[activeIndex]
+        activeIndex += 1
+        expectedNext = (position + 1, token)
+        return token
+    }
+
+    private func endsWithGenerationPrompt(at position: Int) -> Bool {
+        generationPrompts.contains { prompt in
+            guard !prompt.isEmpty, position + 1 >= prompt.count else { return false }
+            return prompt.enumerated().allSatisfy { index, id in
+                tape[position - prompt.count + 1 + index] == id
+            }
+        }
     }
 }
 
@@ -122,6 +262,11 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
         let padTokenId: Int
         let padRunLength: Int
         let frame: THW
+        /// When set, the template already rendered each image's placeholder
+        /// run in place (the Qwen-VL shape, where text follows the image);
+        /// the stub then supplies only the frames. Off, the run is appended
+        /// after the render.
+        var inlineRuns = false
     }
 
     let tokenizer: any Tokenizer
@@ -147,7 +292,9 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
         }
         var frames: [THW] = []
         for _ in input.images {
-            tokens += Array(repeating: vision.padTokenId, count: vision.padRunLength)
+            if !vision.inlineRuns {
+                tokens += Array(repeating: vision.padTokenId, count: vision.padRunLength)
+            }
             frames.append(vision.frame)
         }
         // Image-bearing prepares emit the VLM 2D `[batch, seq]` token shape —
@@ -275,12 +422,16 @@ nonisolated struct RecordingModelSession: ModelSession {
     /// can express it directly: `ContextBackedModelSession` derives the fact
     /// from `model is any LLMModel`, and the toy is neither marker.
     var producesFlatTextTokensOverride: Bool?
+    /// The toy's own anchored vision `prepare` (the vision-container
+    /// feature the keyed image path requires), when the provider anchors
+    /// vision: the toy forward over the image span's tokens, no tower.
+    var anchoredVisionPrepareOverride: AnchoredVisionPrepare?
 
     var configuration: ModelConfiguration { base.configuration }
     var tokenizer: any Tokenizer { base.tokenizer }
     var anchoredVisionPrepare: AnchoredVisionPrepare? {
         recorder.record(.visionContinuationQuery)
-        return base.anchoredVisionPrepare
+        return anchoredVisionPrepareOverride ?? base.anchoredVisionPrepare
     }
     var producesFlatTextTokens: Bool {
         producesFlatTextTokensOverride ?? base.producesFlatTextTokens
@@ -393,15 +544,21 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     /// When true, sessions report the LLM-class `producesFlatTextTokens` —
     /// the text-only-fallback shape the instance-truth keying suites model.
     let reportsFlatTextTokens: Bool
+    /// When true, sessions expose the toy's anchored vision `prepare`, so
+    /// a keyed image-bearing request runs end to end over the toy (the
+    /// vision-container shape; the stub's pad run stands in for the tower).
+    let anchorsVision: Bool
 
     init(
         model: ToyLanguageModel,
         tokenizer: any Tokenizer = FakeChatMLTokenizer(),
         configuration: ModelConfiguration = ToyVocabulary.configuration(),
         vision: ToyUserInputProcessor.VisionStub? = nil,
-        reportsFlatTextTokens: Bool = false
+        reportsFlatTextTokens: Bool = false,
+        anchorsVision: Bool = false
     ) {
         self.reportsFlatTextTokens = reportsFlatTextTokens
+        self.anchorsVision = anchorsVision
         self.container = ModelContainer(
             context: ModelContext(
                 configuration: configuration,
@@ -418,15 +575,29 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     ) async throws -> R {
         let recorder = self.recorder
         let reportsFlatTextTokens = self.reportsFlatTextTokens
+        let anchorsVision = self.anchorsVision
         return try await container.perform(nonSendable: payload) { context, payload in
             return try await body(
                 RecordingModelSession(
                     base: ContextBackedModelSession(context: context),
                     recorder: recorder,
-                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil
+                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
+                    anchoredVisionPrepareOverride: anchorsVision
+                        ? Self.toyAnchoredVisionPrepare(context) : nil
                 ),
                 payload
             )
+        }
+    }
+
+    /// The toy's anchored `prepare`: the same single-shot forward its
+    /// `prepare` runs, over the image span's already-expanded tokens.
+    private static func toyAnchoredVisionPrepare(_ context: ModelContext) -> AnchoredVisionPrepare?
+    {
+        guard let model = context.model as? ToyLanguageModel else { return nil }
+        return { input, cache, state, windowSize in
+            try model.prepare(
+                input, cache: cache, state: state, prefill: .init(stepSize: windowSize))
         }
     }
 }
