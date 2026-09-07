@@ -68,7 +68,7 @@ nonisolated enum PrefixCacheDiagnostics {
         case .error:
             Log.agent.error(line)
         }
-        forwardToSink(line)
+        forwardToSink(line, level: level)
     }
 
     protocol Payload: Sendable {
@@ -852,12 +852,22 @@ nonisolated enum PrefixCacheDiagnostics {
         init(id: UUID) { self.id = id }
     }
 
-    nonisolated(unsafe) private static var _sinks: [(UUID, @Sendable (String) -> Void)] = []
+    nonisolated(unsafe) private static var _sinks: [(UUID, @Sendable (String, Level) -> Void)] =
+        []
     private static let _sinkLock = NSLock()
 
     @discardableResult
     nonisolated static func addTestSink(
         _ handler: @escaping @Sendable (String) -> Void
+    ) -> TestSinkHandle {
+        addTestSink(withLevel: { line, _ in handler(line) })
+    }
+
+    /// The sink with each line's level — for a test that asserts how loud
+    /// an event is, not only that it was emitted.
+    @discardableResult
+    nonisolated static func addTestSink(
+        withLevel handler: @escaping @Sendable (String, Level) -> Void
     ) -> TestSinkHandle {
         _sinkLock.lock()
         defer { _sinkLock.unlock() }
@@ -872,12 +882,12 @@ nonisolated enum PrefixCacheDiagnostics {
         _sinks.removeAll { $0.0 == handle.id }
     }
 
-    nonisolated static func forwardToSink(_ line: String) {
+    nonisolated static func forwardToSink(_ line: String, level: Level) {
         _sinkLock.lock()
         let snapshot = _sinks
         _sinkLock.unlock()
         for (_, handler) in snapshot {
-            handler(line)
+            handler(line, level)
         }
     }
 

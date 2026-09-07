@@ -68,6 +68,7 @@ nonisolated enum RequestKeyingPhase {
         modelID: String,
         modelFingerprint: String?,
         imageKeying: ModelIdentity.ImageKeying?,
+        emittedPathIndex: EmittedPathIndex = .shared,
         diagnostics: PrefixCacheDiagnostics.Context? = nil
     ) async throws -> Outcome {
         // 1. Tokenize the full conversation (BEFORE cache lookup). Images
@@ -139,6 +140,7 @@ nonisolated enum RequestKeyingPhase {
             hasMedia: !keyedImages.isEmpty,
             producesFlatTextTokens: producesFlatTextTokens,
             modelFingerprint: modelFingerprint,
+            emittedPathIndex: emittedPathIndex,
             diagnostics: diagnostics
         )
         let fullInput: LMInput

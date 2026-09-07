@@ -218,3 +218,20 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
         )
     }
 }
+
+// MARK: - Template Kwarg Declaring
+
+/// What a loaded model's template declares about its kwargs — the facts
+/// `TemplateRenderContext.resolve` needs: read off the model identity at
+/// load (`ModelIdentity`) and carried by the server's model state
+/// (`ServerInferenceModelState`), so the completion handler and the replay
+/// harnesses resolve a request's context through one call.
+nonisolated protocol TemplateKwargDeclaring: Sendable {
+    var declaredTemplateFlags: Set<TemplateRenderFlag> { get }
+    var templateFlagDefaults: [TemplateRenderFlag: Bool] { get }
+    var declaresReasoningEffort: Bool { get }
+    var reasoningEffortTemplateDefault: ReasoningEffort? { get }
+}
+
+extension ModelIdentity: TemplateKwargDeclaring {}
+extension ServerInferenceModelState: TemplateKwargDeclaring {}

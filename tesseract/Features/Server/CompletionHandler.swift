@@ -351,17 +351,10 @@ struct CompletionHandler: Sendable {
                     + "template does not declare the kwarg"
             )
         }
-        let renderContext = TemplateRenderContext.resolve(
-            requestKwargs: request.chat_template_kwargs?.booleanFlags,
-            appDesired: [
-                .preserveThinking: settings.preserveThinkingRender(modelID: modelState.modelID)
-            ],
-            declaredFlags: modelState.declaredTemplateFlags,
-            templateDefaults: modelState.templateFlagDefaults,
-            requestedReasoningEffort: requestedEffort,
-            declaresReasoningEffort: modelState.declaresReasoningEffort,
-            reasoningEffortTemplateDefault: modelState.reasoningEffortTemplateDefault
-        )
+        let renderContext = Self.resolveRenderContext(
+            for: request,
+            preserveThinking: settings.preserveThinkingRender(modelID: modelState.modelID),
+            template: modelState)
         let normalized = MessageConverter.normalizeRequest(
             repairedRequest.messages,
             tools: request.tools,
@@ -433,6 +426,29 @@ struct CompletionHandler: Sendable {
             Log.server.error("HTTP completion failed to start generation: \(error)")
             return .failure(error)
         }
+    }
+
+    /// The render context one request resolves to
+    /// (`TemplateRenderContext.resolve`): request kwargs first, then the
+    /// app's desired state — the preserve-thinking render — then the
+    /// template's own defaults; the request's `reasoning_effort` against the
+    /// template's declared default (ADR-0060). The replay harnesses resolve
+    /// through this same call, so they feed the bytes the build fed.
+    nonisolated static func resolveRenderContext(
+        for request: OpenAI.ChatCompletionRequest,
+        preserveThinking: Bool,
+        template: some TemplateKwargDeclaring
+    ) -> TemplateRenderContext {
+        TemplateRenderContext.resolve(
+            requestKwargs: request.chat_template_kwargs?.booleanFlags,
+            appDesired: [.preserveThinking: preserveThinking],
+            declaredFlags: template.declaredTemplateFlags,
+            templateDefaults: template.templateFlagDefaults,
+            requestedReasoningEffort: requestedReasoningEffortRaw(request)
+                .flatMap(OpenAI.nativeReasoningEffort(fromWire:)),
+            declaresReasoningEffort: template.declaresReasoningEffort,
+            reasoningEffortTemplateDefault: template.reasoningEffortTemplateDefault
+        )
     }
 
     /// The wire `reasoning_effort` for one request: the native

@@ -17,24 +17,35 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
     let cacheAdmin = PrefixCacheAdmin()
     let module: ServerCompletion
     let provider: ToyModelSessionProvider
+    let modelID: String
 
+    /// `promptStartsThinking` is the loaded-model fact the leaf-store mode
+    /// selection reads; `emittedPathIndex` the index this module registers
+    /// into and resolves against (the process-wide one unless a hermetic
+    /// suite hands it a private instance); `modelID` names the requests in
+    /// telemetry, so parallel suites can tell their events apart.
     init(
         provider: ToyModelSessionProvider,
         fingerprint: String? = nil,
         ssdConfig: SSDPrefixCacheConfig? = nil,
-        identity: ModelIdentity? = nil
+        identity: ModelIdentity? = nil,
+        promptStartsThinking: Bool = false,
+        emittedPathIndex: EmittedPathIndex = .shared,
+        modelID: String = "toy/model"
     ) {
         self.provider = provider
+        self.modelID = modelID
         self.module = ServerCompletion(cacheAdmin: cacheAdmin)
         if fingerprint != nil || identity != nil {
             module.installLoadTimeState(
                 modelIdentity: identity ?? ModelIdentity(configJSON: nil, chatTemplate: nil),
                 fingerprint: fingerprint ?? "toy-fingerprint",
-                ssdConfig: ssdConfig
+                ssdConfig: ssdConfig,
+                emittedPathIndex: emittedPathIndex
             )
         }
         module.installLoadedModelFacts(
-            promptStartsThinking: false,
+            promptStartsThinking: promptStartsThinking,
             modelWeightBytes: 0,
             prefixCacheBudgetBytes: 1 << 30
         )
@@ -42,15 +53,17 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
 
     func start(
         conversation: HTTPPrefixCacheConversation,
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext = .canonical
     ) async throws -> HTTPServerGenerationStart {
         try await module.start(
             on: actor,
             sessions: provider,
-            modelID: "toy/model",
+            modelID: modelID,
             conversation: conversation,
             toolSpecs: nil,
             parameters: parameters,
+            renderContext: renderContext,
             clientStreams: true
         )
     }

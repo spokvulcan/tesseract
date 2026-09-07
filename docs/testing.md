@@ -58,7 +58,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/EmittedPathFidelityTests \
   -only-testing:tesseractTests/EmittedPathRegistrationTests \
   -only-testing:tesseractTests/ConversationRenderEmittedPathTests \
-  -only-testing:tesseractTests/EmittedPathResolveRealTests
+  -only-testing:tesseractTests/EmittedPathResolveRealTests \
+  -only-testing:tesseractTests/EmittedPathReplayGateTests \
+  -only-testing:tesseractTests/EmittedPathSynthesizedReplayTests
 
 # Voice session + barge detector (quit the app first — its capture engine
 # starves test hosts; VoiceBargeReplayTests replays real-hardware traces from
@@ -130,19 +132,60 @@ include decoded windows around the fork.
 
 ## Emitted Path Index replay gate (corpus mode)
 
-`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476) walks the
-same recorded sessions through the canonical-echo harness with a private
-**Emitted Path Index** learning every echoed turn — the Leaf Store's
-registration simulated on the canonical encode of the stored render past
-request N's prompt — and every next request resolving at its edge through
-the Conversation Render, which serves the composition it resolves to. It
-fails when a simulated live-stored turn does not register (the one
-tolerated skip is `promptNotTokenPrefix`: request N's prompt is not a
-token prefix of the stored render, a turn the fast path could not have
-stored under the emitted path, so no live turn exists to register), or
-when a registered boundary's next request misses the index. Same
-variables as the fidelity gate; the reference corpus is
-`~/projects/tesseract-traces/2026-09-06-emitted-path`:
+`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476/#477) walks
+the same recorded sessions through the canonical-echo harness with a
+private **Emitted Path Index** learning every echoed turn — the Leaf
+Store's registration simulated on the canonical encode of the stored
+render past request N's prompt, the leaf source decided exactly as the
+live fast path decides it (`LiveLeafCapture.decide`) — and every next
+request resolving at its edge through the Conversation Render, which
+serves the composition it resolves to. Every recording renders under the
+context the server resolved for it (its `reasoning_effort` against the
+template's declared default, the preserve-thinking render on), so the walk
+feeds the bytes the build fed. `EmittedPathReplayGate` judges each turn;
+the suite asserts the failure list is empty and every failure names its
+turn with the whole account (kind, mode, leaf source and boundary reason,
+registration, path length, next indexed prefix, prefilled count, new
+message tokens, glue, tail):
+
+- in a tool stretch the leaf source is `live`; a stop turn is `live` or
+  the explained `thinkStrippingUserBoundary`;
+- every live turn registers (the one tolerated skip is
+  `promptNotTokenPrefix`: request N's prompt is not a token prefix of the
+  stored render, so the harness cannot simulate the fed ids the live fast
+  path registers directly — such a turn is exempt from the prefill, glue
+  and tail rules below, and the totals count it as `exempt=`; the
+  2026-09-06 corpus has none);
+- the fidelity gate rejected nothing and no key was registered twice —
+  asserted on the index's own counters, not only logged;
+- the next request's indexed prefix is the whole registered path, and it
+  prefills its new messages plus at most six glue tokens (the newline
+  closing the stored turn's marker line and the five-token Qwen3.8
+  thinking generation prompt; the ticket's three assumed a bare
+  `<|im_start|>assistant\n` prompt) — a shallow hit lands above it;
+- below 20k path tokens the simulated post-EOS CPU tail (the stored render
+  to bytes plus the registration, reported as `renderMs` and
+  `registerMs`) stays under 150 ms. When the corpus directory also holds
+  the build's `trace-*.jsonl` completion traces, the recorded live
+  `tailSeconds` of every registered turn is gated the same way; the
+  2026-09-06 corpus holds none.
+
+Every turn of the 2026-09-06 corpus passes every rule but the tail, which
+is a finding, not a harness artifact: the render is under 10 ms at every
+size, while the registration's fidelity replay grows quadratically with
+the turn's longest newline-free run (the streaming detokenizer re-decodes
+its whole segment per token) — a few hundred milliseconds for a 3–4k-token
+tool call, seconds for an 8k-token one, on a fast tokenizer too. In the
+reference corpus two turns sit below 20k path tokens and fail (request#1,
+289 ms over 18.4k tokens; request#18, 3.4 s over 17.7k); the longer turns
+are unguarded and slower still (14 s at 62.7k). Until the replay is made
+incremental the gate stays red on those turns; the `GATE … tail:` lines
+name them.
+
+Same variables as the fidelity gate; the reference corpus is
+`~/projects/tesseract-traces/2026-09-06-emitted-path` (85 recordings from
+the two 2026-09-06 Pi sessions — the ticket counted 45 — none carrying a
+session header, so the walk treats them as one session):
 
 ```bash
 TEST_RUNNER_TESSERACT_FIDELITY_CORPUS="$HOME/projects/tesseract-traces/2026-09-06-emitted-path" \
@@ -154,17 +197,50 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 ```
 
 Per-session totals print to the test log (`emitted-path boundaries=…
-registered=… nextResolved=… nextSuffixTokens=…`), with one line per
-boundary that did not register or resolve. The walk is CPU-bound on one
-core: every boundary renders and BPE-encodes the whole conversation
-through the Debug-build tokenizer (the hot frames are the byte-pair merge
-and the regex pretokenizer), about 4–5 s per 30k-token boundary — budget
-~2 min for the 2026-09-06 corpus and prefix the command with `nice -n 20`
-when the machine is in use. `EmittedPathResolveRealTests`
-(in the prefix-cache group above) covers the same claims on the local PARO
-tokenizer without a corpus: marker derivation, suffix-encode equality at
-every end-of-turn marker, and the request-edge invariant across a
-tool-call boundary.
+registered=… sources=… nextResolved=… nextSuffixTokens=…`), with one
+line per boundary that did not register or resolve and one `GATE …` line
+per failed rule. The walk is CPU-bound on one core: every boundary
+renders and BPE-encodes the whole conversation through the Debug-build
+tokenizer (the hot frames are the byte-pair merge and the regex
+pretokenizer), about 4–5 s per 30k-token boundary — budget ~2 min for the
+2026-09-06 corpus and prefix the command with `nice -n 20` when the
+machine is in use. `EmittedPathResolveRealTests` (in the prefix-cache
+group above) covers the same claims on the local PARO tokenizer without a
+corpus: marker derivation, suffix-encode equality at every end-of-turn
+marker, and the request-edge invariant across a tool-call boundary.
+
+### Synthesized cases (hermetic)
+
+`EmittedPathSynthesizedReplayTests` (prefix-cache group) runs the history
+shapes the recordings cannot show through the real Server Completion
+module — real prefix cache, Leaf Store fast path, Emitted Path Index, SSD
+tier — over the content-relative toy Model Session
+(`ToyLanguageModel(completions:)`, whose queue answers the generation
+prompt wherever the restore put it and keeps the tape of every id fed)
+and the Qwen3.8-shaped `EmittedPathToyTokenizer` (thinking template,
+effort sentence in the system block, single-token `<|im_end|>`). Each
+case reads the request's telemetry events, the handle's restored offset
+and the tape: the served composition on a hit, the canonical encode on a
+miss, never a wrong prompt. One case each for: the live baseline (the
+next request restores the whole path and prefills six glue tokens plus
+its new messages); an earlier user message edited; an assistant message
+edited; a compacted history; a reasoning-effort change (re-prefill from
+token 0, ADR-0060); an `enable_thinking` flip (partition miss, the
+closed-think prompt fed canonically); two generations from one parent
+with identical text and different splits (last writer wins, the later
+leaf hit while resident, the later split fed from token 0 on an empty
+cache); a response-conversion fault between model and client
+(`FaultyStreamTokenizer`: fidelity rejected, nothing registered, the
+warning event, re-prefill below the divergence next turn); an
+image-bearing request on a vision-container instance (neither registered
+nor resolved, the placeholder run fed, no pseudo-token); index eviction
+past the byte bound; a restart with a surviving SSD leaf; and a
+think-stripping template at a user boundary (the unchanged boundary
+path). The edit and fault cases restore at the deepest checkpoint below
+the divergence (**Chain-Prefix Restore**, ADR-0012), not at the token
+itself. The cancelled-partial-turn case belongs to ticket #480.
+`EmittedPathReplayGateTests` pins the gate's rules on hand-built
+accounts.
 
 ## Interrupt-readiness acceptance (corpus + live drill)
 
