@@ -537,58 +537,38 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         endOfTurnMarkerStatus(index: index, fingerprint: fingerprint, tokenizer: tokenizer).marker
     }
 
-    /// The marker's status for the fingerprint. Derivation renders one user
-    /// message and one assistant message with a sentinel content, without a
-    /// generation prompt, so the bytes after the sentinel are the template's
-    /// assistant-turn tail (`EndOfTurnMarker.derive`); then a three-message
-    /// probe — a user turn after the assistant's — checks that the marker is
-    /// a hard encoding boundary at every occurrence
-    /// (`EndOfTurnMarker.splitsEncoding`), the equality the served
-    /// composition rests on. A tokenizer that fails it is refused for good:
-    /// no path registers, no resolve runs, and the registration reports
-    /// `suffixEncodeUnstable`.
+    /// The marker's status for the fingerprint: the marker layer's
+    /// derivation (`EndOfTurnMarkerStatus.derive`, two probe renders and
+    /// the split check) over this module's render-to-text rung, memoized in
+    /// the index until the fingerprint changes. A tokenizer it refuses
+    /// registers no path and resolves nothing; the registration reports
+    /// the reason.
     static func endOfTurnMarkerStatus(
         index: EmittedPathIndex,
         fingerprint: String,
         tokenizer: any Tokenizer
     ) -> EndOfTurnMarkerStatus {
         index.endOfTurnMarker(fingerprint: fingerprint) {
-            guard let rendering = tokenizer as? any ChatTemplateRendering else {
-                return .unavailable(.noEndOfTurnMarker)
+            EndOfTurnMarkerStatus.derive(tokenizer: tokenizer) { messages, additionalContext in
+                try renderText(
+                    tokenizer: tokenizer, messages: messages, tools: nil,
+                    additionalContext: additionalContext)
             }
-            let user: [String: any Sendable] = ["role": "user", "content": "probe"]
-            let assistant: [String: any Sendable] = [
-                "role": "assistant", "content": EndOfTurnMarker.probeContent,
-            ]
-            let noGenerationPrompt: [String: any Sendable] = ["add_generation_prompt": false]
-            guard
-                let probe = try? rendering.renderChatTemplate(
-                    messages: [user, assistant], tools: nil,
-                    additionalContext: noGenerationPrompt),
-                let marker = EndOfTurnMarker.derive(probeRender: probe, tokenizer: tokenizer)
-            else { return .unavailable(.noEndOfTurnMarker) }
-            guard
-                let splitProbe = try? rendering.renderChatTemplate(
-                    messages: [user, assistant, user], tools: nil,
-                    additionalContext: noGenerationPrompt),
-                EndOfTurnMarker.splitsEncoding(
-                    of: Array(splitProbe.utf8), marker: marker.bytes, tokenizer: tokenizer)
-            else { return .unavailable(.suffixEncodeUnstable) }
-            return .available(marker)
         }
     }
 
     /// How the registration side reaches the index: the engaged index, its
-    /// fingerprint and the model's marker — or why this render never
-    /// consults the index.
+    /// fingerprint and the model's marker — or the registration skip this
+    /// render reports instead: `ineligibleRender` with the render's own
+    /// reason as its cause, or the marker's unavailability.
     enum EmittedPathEligibility {
         case eligible(index: EmittedPathIndex, fingerprint: String, marker: EndOfTurnMarker)
-        case ineligible(reason: String)
+        case ineligible(EmittedPathRegistration.SkipReason, cause: String?)
     }
 
     func emittedPathEligibility() -> EmittedPathEligibility {
         guard let index = emittedPathIndex, let fingerprint = emittedPathFingerprint else {
-            return .ineligible(reason: ineligibility?.rawValue ?? "noIndex")
+            return .ineligible(.ineligibleRender, cause: ineligibility?.rawValue ?? "noIndex")
         }
         switch Self.endOfTurnMarkerStatus(
             index: index, fingerprint: fingerprint, tokenizer: tokenizer)
@@ -596,7 +576,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         case .available(let marker):
             return .eligible(index: index, fingerprint: fingerprint, marker: marker)
         case .unavailable(let reason):
-            return .ineligible(reason: reason.rawValue)
+            return .ineligible(reason.skipReason, cause: nil)
         }
     }
 

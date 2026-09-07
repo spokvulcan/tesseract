@@ -218,16 +218,10 @@ struct EmittedPathIndexTests {
         var derivations = 0
         func derive() -> EndOfTurnMarkerStatus {
             derivations += 1
-            let probe = try? tokenizer.renderChatTemplate(
-                messages: [
-                    ["role": "user", "content": "probe"],
-                    ["role": "assistant", "content": EndOfTurnMarker.probeContent],
-                ],
-                tools: nil, additionalContext: ["add_generation_prompt": false])
-            guard let probe,
-                let marker = EndOfTurnMarker.derive(probeRender: probe, tokenizer: tokenizer)
-            else { return .unavailable(.noEndOfTurnMarker) }
-            return .available(marker)
+            return EndOfTurnMarkerStatus.derive(tokenizer: tokenizer) { messages, context in
+                try tokenizer.renderChatTemplate(
+                    messages: messages, tools: nil, additionalContext: context)
+            }
         }
         let first = index.endOfTurnMarker(fingerprint: "fp-a", derive: derive)
         let second = index.endOfTurnMarker(fingerprint: "fp-a", derive: derive)

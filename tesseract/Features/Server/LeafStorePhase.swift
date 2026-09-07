@@ -74,12 +74,11 @@ nonisolated enum LeafStorePhase {
         let mode: HTTPLeafStoreMode
         /// The assistant message appended to the stored conversation.
         let storedMessage: HTTPPrefixCacheMessage
+        /// Every id the decode loop fed past the prompt, in order, stop id
+        /// included (`GeneratedTokenRecorder`).
+        let generatedTokens: [Int]
         /// Whether the generation began inside a `<think>` block.
         let startsInsideThinkBlock: Bool
-
-        /// The narrower vocabulary of the boundary route; `nil` for the
-        /// render-trusting direct mode, which never enters the builder.
-        var boundaryMode: BoundaryLeafMode? { mode.boundaryMode }
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); the phase keeps the drive's
@@ -156,7 +155,8 @@ nonisolated enum LeafStorePhase {
             storedConversation: storedConversation,
             render: render,
             mode: leafStoreMode,
-            storedMessage: storedConversation.messages.last ?? storedMessage,
+            storedMessage: storedMessage,
+            generatedTokens: mlxStart.generatedTokens.snapshot,
             startsInsideThinkBlock: promptStartsThinking
         )
 
@@ -168,7 +168,7 @@ nonisolated enum LeafStorePhase {
             mode: leafStoreMode,
             preservesThinking: preservesThinking,
             promptKeyPath: mlxStart.keySpace.keyPath,
-            generatedTokens: mlxStart.generatedTokens.snapshot,
+            generatedTokens: turn.generatedTokens,
             cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache),
             intervened: inputs.intervened,
             keySpaceIsIdentity: mlxStart.keySpace.isIdentity
@@ -208,42 +208,21 @@ nonisolated enum LeafStorePhase {
         result: inout Result
     ) async {
         let mlxStart = inputs.mlxStart
-        let diagnostics = inputs.diagnosticsContext
 
-        // 1. Register: the one Jinja render of the stored conversation, to
-        // bytes; the key is hashed through its last end-of-turn marker.
-        let renderStart = Date.timeIntervalSinceReferenceDate
-        var storedRenderBytes: [UInt8]?
-        var renderFailure: String?
-        do {
-            storedRenderBytes = try turn.render.storedRenderBytes(
-                messages: turn.storedConversation.promptMessages)
-        } catch {
-            renderFailure = error.localizedDescription
-        }
-        result.report.renderSeconds = secondsSince(renderStart)
-        if let renderFailure {
-            Log.agent.warning("Stored render failed — error=\(renderFailure)")
-            result.report.recordEmittedPathSkip(
-                .renderUnavailable, fields: [("cause", "renderThrew")], in: diagnostics)
-        } else {
-            registerEmittedPath(
-                turn: turn, storedRenderBytes: storedRenderBytes, inputs: inputs,
-                report: &result.report)
-        }
+        // 1. Register the turn's Emitted Path.
+        registerEmittedPath(turn: turn, inputs: inputs, report: &result.report)
 
         // 2/3. Capture at the cache's offset, admit under the live path.
         let livePath = LiveLeafCapture.livePath(
             promptKeyPath: mlxStart.keySpace.keyPath,
-            generatedTokens: mlxStart.generatedTokens.snapshot,
+            generatedTokens: turn.generatedTokens,
             offset: offset)
         // A tool-call boundary under a think-stripping template still arms
         // **Stretch Abandonment** (ADR-0009): the next real user message
         // re-renders the stretch, and the pass pre-prefills that render
-        // while the GPU is idle. Nothing seeds under the preserve-thinking
-        // render, and a stop-finish turn only reaches the fast path under it.
-        let pendingSeed = speculativeSeed(
-            for: turn, inputs: inputs, canonicalLeafOffset: livePath.count)
+        // while the GPU is idle. No canonical leaf exists here for the
+        // immediate seed to extend — the live path is the future path.
+        let pendingSeed = speculativeSeed(for: turn, inputs: inputs, canonicalLeafOffset: nil)
         let stages = leafStages(for: turn.mode)
         let capture = await captureLiveLeaf(
             sessions: inputs.sessions, mlxStartBox: inputs.mlxStartBox,
@@ -303,7 +282,7 @@ nonisolated enum LeafStorePhase {
         }
         result.report.renderSeconds = secondsSince(renderStart)
 
-        guard let boundaryMode = turn.boundaryMode else {
+        guard let boundaryMode = turn.mode.boundaryMode else {
             // Non-thinking templates: the render-trusting direct executor
             // snapshots the live final cache under the stored path.
             let capture = await captureDirectLeaf(
@@ -459,40 +438,47 @@ nonisolated enum LeafStorePhase {
     // MARK: - Emitted Path registration (ADR-0063)
 
     /// Register the finished turn's Emitted Path: the fed prompt ids and
-    /// generated ids, the stop id, and the stored render's bytes through
-    /// its last end-of-turn marker (`storedRenderBytes`, `nil` when the
-    /// tokenizer cannot render to bytes). Every outcome lands in the
-    /// diagnostics net and the report.
-    static func registerEmittedPath(
-        turn: Turn,
-        storedRenderBytes: [UInt8]?,
-        inputs: Inputs,
-        report: inout Report
-    ) {
+    /// generated ids, the stop id, and the stored conversation's render to
+    /// bytes — the fast path's one Jinja render, no tokenization — hashed
+    /// through its last end-of-turn marker. Every outcome lands in the
+    /// diagnostics net and the report; an ineligible render never renders.
+    static func registerEmittedPath(turn: Turn, inputs: Inputs, report: inout Report) {
         let diagnostics = inputs.diagnosticsContext
         let mlxStart = inputs.mlxStart
         let render = turn.render
-        let start = Date.timeIntervalSinceReferenceDate
         let index: EmittedPathIndex
         let fingerprint: String
         let marker: EndOfTurnMarker
         switch render.emittedPathEligibility() {
-        case .ineligible(let reason):
-            let skip = EmittedPathRegistration.SkipReason(rawValue: reason)
+        case .ineligible(let reason, let cause):
             report.recordEmittedPathSkip(
-                skip ?? .ineligibleRender,
-                fields: skip == nil ? [("cause", reason)] : [],
-                in: diagnostics)
+                reason, fields: cause.map { [("cause", $0)] } ?? [], in: diagnostics)
             return
         case .eligible(let engaged, let scoped, let derived):
             index = engaged
             fingerprint = scoped
             marker = derived
         }
+
+        let renderStart = Date.timeIntervalSinceReferenceDate
+        let storedRenderBytes: [UInt8]?
+        do {
+            defer { report.renderSeconds = secondsSince(renderStart) }
+            storedRenderBytes = try render.storedRenderBytes(
+                messages: turn.storedConversation.promptMessages)
+        } catch {
+            Log.agent.warning("Stored render failed — error=\(error.localizedDescription)")
+            report.recordEmittedPathSkip(
+                .renderUnavailable, fields: [("cause", "renderThrew")], in: diagnostics)
+            return
+        }
         guard let storedRenderBytes else {
+            // A tokenizer that cannot render to bytes.
             report.recordEmittedPathSkip(.renderUnavailable, in: diagnostics)
             return
         }
+
+        let start = Date.timeIntervalSinceReferenceDate
         let outcome = EmittedPathRegistration.register(
             EmittedPathRegistration.Inputs(
                 index: index,
@@ -502,7 +488,7 @@ nonisolated enum LeafStorePhase {
                 storedRenderBytes: storedRenderBytes,
                 storedMessage: turn.storedMessage,
                 promptKeyPath: mlxStart.keySpace.keyPath,
-                generatedTokens: mlxStart.generatedTokens.snapshot,
+                generatedTokens: turn.generatedTokens,
                 stoppedOn: mlxStart.generatedTokens.stopToken,
                 toolCallFormat: mlxStart.toolCallFormat,
                 tools: render.toolSpecs,
@@ -554,17 +540,28 @@ nonisolated enum LeafStorePhase {
 
     /// The seed this turn arms, if its mode and render call for one (the
     /// trigger table below); `nil` under the preserve-thinking render and
-    /// for the direct mode.
+    /// for the direct mode. `canonicalLeafOffset` is where the boundary
+    /// path's canonical leaf ends — what the immediate seed extends — and
+    /// `nil` on the fast path, whose leaf is the live path: only Stretch
+    /// Abandonment can arm there, whatever the mode.
     private static func speculativeSeed(
         for turn: Turn,
         inputs: Inputs,
-        canonicalLeafOffset: Int
+        canonicalLeafOffset: Int?
     ) -> SpeculativeCanonicalPrefill.Seed? {
-        guard let boundaryMode = turn.boundaryMode,
+        guard let boundaryMode = turn.mode.boundaryMode,
             let plan = speculativeSeedPlan(
                 boundaryMode: boundaryMode, renderContext: turn.render.renderContext)
         else { return nil }
         let mlxStart = inputs.mlxStart
+        let leafOffset: Int
+        switch boundaryMode {
+        case .canonical:
+            guard let canonicalLeafOffset else { return nil }
+            leafOffset = canonicalLeafOffset
+        case .directTool:
+            leafOffset = mlxStart.transientLastUserBoundarySnapshot?.tokenOffset ?? 0
+        }
         return SpeculativeCanonicalPrefill.makeSeed(
             storedConversation: turn.storedConversation,
             render: turn.render,
@@ -573,9 +570,7 @@ nonisolated enum LeafStorePhase {
             prefillStepSize: mlxStart.prefillStepSize,
             ssdEnabled: mlxStart.ssdEnabled,
             seedsPositionAnchor: mlxStart.seedsPositionAnchor,
-            canonicalLeafOffset: boundaryMode == .canonical
-                ? canonicalLeafOffset
-                : mlxStart.transientLastUserBoundarySnapshot?.tokenOffset ?? 0,
+            canonicalLeafOffset: leafOffset,
             idleDelay: plan.idleDelay,
             ramOnlySpine: plan.ramOnlySpine,
             diagnostics: inputs.diagnosticsContext

@@ -15,9 +15,11 @@ struct LeafStoreFastPathTests {
     private let prompt = [1, 2, 3, 4]
     private let generated = [10, 11, 12, 99]  // 99 plays the stop token
 
+    /// Defaults to the shape every rule accepts — a tool-stretch turn under
+    /// the preserve-thinking render — so each test names only what it varies.
     private func decide(
         mode: HTTPLeafStoreMode = .directToolLeaf,
-        preservesThinking: Bool = false,
+        preservesThinking: Bool = true,
         generated: [Int]? = nil,
         cacheOffset: Int? = nil,
         intervened: Bool = false,

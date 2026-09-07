@@ -24,23 +24,15 @@ nonisolated final class LeafStoreCounters: @unchecked Sendable {
         lock.withLock { boundaryTurns[reason, default: 0] += 1 }
     }
 
-    /// Boundary reason (the `liveLeafCapture` skip token) → count.
-    func boundaryTurnsSnapshot() -> [String: Int] {
-        lock.withLock { boundaryTurns }
-    }
-
     func reset() {
         lock.withLock { boundaryTurns.removeAll() }
     }
 
+    /// The tally by boundary reason (the `liveLeafCapture` skip token).
     func logSummary(context: String) {
-        let snapshot = boundaryTurnsSnapshot()
-        Log.server.notice("leaf-store [\(context)] \(Self.summary(of: snapshot))")
-    }
-
-    static func summary(of boundaryTurns: [String: Int]) -> String {
-        let reasons = boundaryTurns.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }.joined(separator: ",")
-        return "boundaryTurns=\(boundaryTurns.values.reduce(0, +)) byReason=[\(reasons)]"
+        let counts = lock.withLock { boundaryTurns }
+        Log.server.notice(
+            "leaf-store [\(context)] boundaryTurns=\(counts.values.reduce(0, +))"
+                + " byReason=\(PrefixCacheDiagnostics.histogram(counts))")
     }
 }

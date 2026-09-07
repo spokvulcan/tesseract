@@ -148,30 +148,15 @@ nonisolated struct EndOfTurnMarker: Equatable, Sendable {
         of render: [UInt8], marker: [UInt8], tokenizer: any Tokenizer
     ) -> Bool {
         let whole = tokenizer.encode(text: Self.text(render[...]), addSpecialTokens: false)
-        for end in occurrenceEnds(of: marker, in: render) {
+        // The boundaries the index hashes at — one scan, shared with the
+        // registration key.
+        let ends = EmittedPathIndex.prefixHashes(renderedBytes: render, marker: marker).map(\.end)
+        for end in ends {
             let head = tokenizer.encode(text: Self.text(render[..<end]), addSpecialTokens: false)
             let tail = tokenizer.encode(text: Self.text(render[end...]), addSpecialTokens: false)
             guard head + tail == whole else { return false }
         }
         return true
-    }
-
-    /// The byte offsets just past every non-overlapping occurrence of
-    /// `needle`, in order — the same boundaries the index hashes at.
-    static func occurrenceEnds(of needle: [UInt8], in haystack: [UInt8]) -> [Int] {
-        guard !needle.isEmpty, haystack.count >= needle.count else { return [] }
-        var ends: [Int] = []
-        var offset = 0
-        let limit = haystack.count - needle.count
-        while offset <= limit {
-            if haystack[offset..<(offset + needle.count)].elementsEqual(needle) {
-                ends.append(offset + needle.count)
-                offset += needle.count
-            } else {
-                offset += 1
-            }
-        }
-        return ends
     }
 
     private static func text(_ bytes: ArraySlice<UInt8>) -> String {
@@ -198,13 +183,21 @@ nonisolated struct EndOfTurnMarker: Equatable, Sendable {
 /// A fingerprint's marker once derived: usable, or why the index never
 /// registers or resolves for that model.
 nonisolated enum EndOfTurnMarkerStatus: Equatable, Sendable {
-    enum Unavailability: String, Equatable, Sendable {
+    enum Unavailability: Equatable, Sendable {
         /// The template's assistant-turn tail is not one token.
         case noEndOfTurnMarker
         /// The marker is one token but not a hard encoding boundary: the
         /// standalone encode of the bytes after it differs from the
         /// in-context encode (see `EndOfTurnMarker.splitsEncoding`).
         case suffixEncodeUnstable
+
+        /// The registration skip the reason reports.
+        var skipReason: EmittedPathRegistration.SkipReason {
+            switch self {
+            case .noEndOfTurnMarker: .noEndOfTurnMarker
+            case .suffixEncodeUnstable: .suffixEncodeUnstable
+            }
+        }
     }
 
     case available(EndOfTurnMarker)
@@ -213,6 +206,37 @@ nonisolated enum EndOfTurnMarkerStatus: Equatable, Sendable {
     var marker: EndOfTurnMarker? {
         if case .available(let marker) = self { return marker }
         return nil
+    }
+
+    /// Derive the status for a tokenizer from two probe renders. `render`
+    /// applies the chat template to the messages with the extra context
+    /// given, `nil` for a tokenizer that cannot render to text. Both probes
+    /// render without a generation prompt: one user message and one
+    /// assistant message with a sentinel content, so the bytes after the
+    /// sentinel are the template's assistant-turn tail
+    /// (`EndOfTurnMarker.derive`); then a user turn after the assistant's,
+    /// to check that the marker is a hard encoding boundary at every
+    /// occurrence (`EndOfTurnMarker.splitsEncoding`) — the equality the
+    /// served composition rests on. A tokenizer that fails it is refused
+    /// for good: no path registers, no resolve runs.
+    static func derive(
+        tokenizer: any Tokenizer,
+        render: (_ messages: [[String: any Sendable]], _ additionalContext: [String: any Sendable])
+            throws -> String?
+    ) -> EndOfTurnMarkerStatus {
+        let user: [String: any Sendable] = ["role": "user", "content": "probe"]
+        let assistant: [String: any Sendable] = [
+            "role": "assistant", "content": EndOfTurnMarker.probeContent,
+        ]
+        let noGenerationPrompt: [String: any Sendable] = ["add_generation_prompt": false]
+        guard let probe = try? render([user, assistant], noGenerationPrompt),
+            let marker = EndOfTurnMarker.derive(probeRender: probe, tokenizer: tokenizer)
+        else { return .unavailable(.noEndOfTurnMarker) }
+        guard let splitProbe = try? render([user, assistant, user], noGenerationPrompt),
+            EndOfTurnMarker.splitsEncoding(
+                of: Array(splitProbe.utf8), marker: marker.bytes, tokenizer: tokenizer)
+        else { return .unavailable(.suffixEncodeUnstable) }
+        return .available(marker)
     }
 }
 
@@ -454,13 +478,11 @@ nonisolated final class EmittedPathIndex: @unchecked Sendable {
     }
 
     static func summary(of stats: Stats) -> String {
-        let misses = stats.missReasons.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }.joined(separator: ",")
-        return
-            "entries=\(stats.entryCount) idBytes=\(stats.idBytes)"
+        "entries=\(stats.entryCount) idBytes=\(stats.idBytes)"
             + " registrations=\(stats.registrations) overwrites=\(stats.overwrites)"
             + " evictions=\(stats.evictions) rejectedTooLarge=\(stats.rejectedTooLarge)"
-            + " resolves=\(stats.resolves) hits=\(stats.hits) misses=[\(misses)]"
+            + " resolves=\(stats.resolves) hits=\(stats.hits)"
+            + " misses=\(PrefixCacheDiagnostics.histogram(stats.missReasons))"
             + " fidelityRejections=\(stats.fidelityRejections)"
     }
 

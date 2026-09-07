@@ -302,10 +302,16 @@ nonisolated enum CanonicalEchoFidelity {
         render: ConversationRender,
         tokenizer: any Tokenizer
     ) -> (registration: String, pathLength: Int?, storedTokens: [Int]?) {
-        guard
-            case .eligible(let index, let fingerprint, let marker) = render.emittedPathEligibility()
-        else {
-            return (EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue, nil, nil)
+        let index: EmittedPathIndex
+        let fingerprint: String
+        let marker: EndOfTurnMarker
+        switch render.emittedPathEligibility() {
+        case .ineligible(let reason, _):
+            return (reason.rawValue, nil, nil)
+        case .eligible(let engaged, let scoped, let derived):
+            index = engaged
+            fingerprint = scoped
+            marker = derived
         }
         do {
             let rendered = try render.storedRender(messages: stored.promptMessages)

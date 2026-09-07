@@ -44,8 +44,16 @@ nonisolated extension LeafStorePhase {
         var mode = "unkeyed"
         var path: Path = .skipped
         var skipReason: String?
-        /// The leaf's source, once one was stored.
-        var source: Source?
+        /// The leaf's source, once one was stored: the live final cache
+        /// under the fast path and the direct route, a restored boundary
+        /// snapshot under the boundary route.
+        var source: Source? {
+            switch path {
+            case .live, .direct: .live
+            case .boundary: .boundary
+            case .skipped: nil
+            }
+        }
         /// Why the turn took the boundary route (the `liveLeafCapture` skip
         /// token), whether or not a leaf was stored there.
         var boundaryReason: String?
@@ -153,25 +161,13 @@ nonisolated extension LeafStorePhase {
         }
 
         /// Fold what an executor produced into the account. `path` is the
-        /// executor that ran; it reads `.skipped` when no leaf was captured,
-        /// and the source is named only once a leaf was.
+        /// executor that ran; it reads `.skipped` when no leaf was captured.
         mutating func absorb(_ capture: LeafCapture, path: Path) {
-            let stored = capture.leafOffset != nil
-            self.path = stored ? path : .skipped
-            source = stored ? Self.source(of: path) : nil
+            self.path = capture.leafOffset != nil ? path : .skipped
             skipReason = capture.skipReason
             leafOffset = capture.leafOffset
             residualTokens = capture.residualTokens
             timings = capture.timings
-        }
-
-        /// Where each executor's leaf comes from.
-        static func source(of path: Path) -> Source? {
-            switch path {
-            case .live, .direct: .live
-            case .boundary: .boundary
-            case .skipped: nil
-            }
         }
     }
 

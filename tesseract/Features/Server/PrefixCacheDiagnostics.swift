@@ -1009,6 +1009,15 @@ nonisolated enum PrefixCacheDiagnostics {
         String(format: "%.3f", max(0, seconds) * 1000)
     }
 
+    /// A counter histogram as `[key=count,...]`, keys sorted, so the unload
+    /// summaries diff across runs.
+    static func histogram<Key: Comparable>(_ counts: [Key: Int]) -> String {
+        "["
+            + counts.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ",") + "]"
+    }
+
     private static func scalar(_ value: Double) -> String {
         String(format: "%.6f", value)
     }

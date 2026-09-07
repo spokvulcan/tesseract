@@ -116,11 +116,9 @@ nonisolated enum LiveLeafCapture {
 
     /// The path a live leaf is admitted under: the prompt key path plus the
     /// fed ids, cut at the cache offset (an unfed bonus token past it has no
-    /// cache entry and is left for the next request to prefill).
+    /// cache entry and is left for the next request to prefill). `offset`
+    /// is `decide`'s `.live(offset:)`, inside the live path.
     static func livePath(promptKeyPath: [Int], generatedTokens: [Int], offset: Int) -> [Int] {
-        var path = promptKeyPath
-        path.reserveCapacity(offset)
-        path.append(contentsOf: generatedTokens.prefix(max(0, offset - promptKeyPath.count)))
-        return Array(path.prefix(offset))
+        promptKeyPath + generatedTokens.prefix(offset - promptKeyPath.count)
     }
 }
