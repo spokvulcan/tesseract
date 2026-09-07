@@ -54,25 +54,11 @@ struct HybridCacheSnapshotTests {
     }
 
     // MARK: - Buffer isolation (Invalid Resource crash)
-
-    /// Physical address of an `MLXArray`'s backing buffer. Two arrays that
-    /// share a Metal allocation report the same address; independent copies
-    /// report different ones. `asData(access: .noCopy)` (after `eval`) wraps
-    /// `mlx_array_data_uint8` directly, so the `Data`'s base address is the
-    /// real backing pointer — not a fresh copy.
-    ///
-    /// This is the only thing that distinguishes a deep copy from a
-    /// copy-on-write *alias*: `MLXArray` is a reference type, and an
-    /// `array[.ellipsis]` slice shares the source's buffer until a mutation
-    /// forces a copy. A value-isolation test (mutate one, read the other) can
-    /// **not** catch the alias because COW preserves the un-mutated party's
-    /// values either way — see MLX's own `testCopyEllipsis`. Only the physical
-    /// address discriminates.
-    private func backingAddress(_ array: MLXArray) -> UInt {
-        array.asData(access: .noCopy).data.withUnsafeBytes {
-            UInt(bitPattern: $0.baseAddress)
-        }
-    }
+    //
+    // Every check below compares backings by physical address through the
+    // shared `backingAddress(_:)` helper in `PrefixCacheTestFixtures.swift`,
+    // which explains why only the address tells a deep copy from a
+    // copy-on-write alias.
 
     /// Regression: a captured snapshot must own a private backing buffer, not
     /// alias the live cache it was captured from.

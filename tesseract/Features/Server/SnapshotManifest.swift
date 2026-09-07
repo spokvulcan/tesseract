@@ -631,11 +631,13 @@ nonisolated struct ChainPrefixRestorePoint: Sendable, Equatable {
 /// time `layers` is read, which in production is the SSD writer's task
 /// right before the file write. Admission, eviction and **Snapshot
 /// Demotion** on the MainActor and the **Leaf Store** tail on the
-/// inference thread never pay it. Until then the payload keeps the arrays
-/// alive (a leaf shares them with its RAM body; a demotion victim's live
-/// on only here), and the materializer releases each layer as it copies
-/// it. A payload built from ready `[LayerPayload]` (fixtures, hydration
-/// tests) is materialized from the start.
+/// inference thread never pay it. Until then the payload keeps its arrays
+/// alive — a full payload's are the body's own (a leaf shares them with
+/// its RAM body; a demotion victim's live on only here), an extension
+/// payload's are detached copies that reference no body array — and the
+/// materializer releases each layer as it copies it. A payload built from
+/// ready `[LayerPayload]` (fixtures, hydration tests) is materialized from
+/// the start.
 ///
 /// Not `Codable`. The payload is the input to the placeholder-container
 /// writer, which consumes it byte-for-byte inside the writer task and

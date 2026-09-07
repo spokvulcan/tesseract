@@ -2625,38 +2625,64 @@ nonisolated final class ServerCompletion {
 
     /// Build the SSD payload for `snapshot` — **Deferred Payload
     /// Extraction**, so this call moves no array bytes on the calling
-    /// thread. It settles the extension (a sliceable layer's suffix past
-    /// the base is sliced into its own contiguous device buffer and
-    /// evaluated here, on the Metal-affine caller, so the later copy is a
-    /// plain memcpy) and fixes the byte total; the host copies run when
-    /// the payload's `layers` are first read, on the SSD writer's task.
-    /// Callable from the MainActor too (**Snapshot Demotion**'s extractor
-    /// passes no extension, so that path reads shapes only): the arrays
-    /// are evaluated deep copies, never live model state.
+    /// thread. It settles the extension and fixes the byte total; the
+    /// host copies run when the payload's `layers` are first read, on
+    /// the SSD writer's task. Callable from the MainActor too (**Snapshot
+    /// Demotion**'s extractor passes no extension, so that path reads
+    /// shapes only): the arrays are evaluated deep copies, never live
+    /// model state.
     static func extractSnapshotPayload(
         _ snapshot: HybridCacheSnapshot,
         extending: SnapshotExtension? = nil
     ) -> SnapshotPayload {
+        deferredPayload(for: snapshot, extending: extending).payload
+    }
+
+    /// `extractSnapshotPayload` together with the box of arrays the
+    /// payload still owes the SSD writer. What a pending payload retains
+    /// is a memory-safety claim (ADR-0064: an extension payload retains
+    /// no body array) that only a physical-address comparison can check,
+    /// so the box is returned for tests; production reads the payload.
+    ///
+    /// For a **Leaf Extension Admission** every retained array is
+    /// detached here, on the Metal-affine caller: a sliceable layer's
+    /// suffix past the base is sliced into its own contiguous device
+    /// buffer, and every other layer (recurrent, rotating, chunked —
+    /// small next to the attention suffix) is deep-copied whole, all
+    /// evaluated in one sync, so the later host copy is a plain memcpy
+    /// and the payload never references the body it was built from. A
+    /// full payload retains the body's own arrays: copying them is what
+    /// the deferral exists to avoid.
+    static func deferredPayload(
+        for snapshot: HybridCacheSnapshot,
+        extending: SnapshotExtension? = nil
+    ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
         let activeExtension = validatedExtension(extending, for: snapshot)
 
         var owed: [DeferredLayers.Layer] = []
         owed.reserveCapacity(snapshot.layers.count)
-        var slices: [MLXArray] = []
+        var detached: [MLXArray] = []
         var totalBytes = 0
 
         for layer in snapshot.layers {
             var suffixBaseOffset: Int?
             var arrays = layer.state
-            if let activeExtension,
-                layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset)
-            {
-                suffixBaseOffset = activeExtension.baseOffset
-                arrays = layer.state.map { array in
-                    HybridCacheSnapshot.deepCopyState(
-                        array[.ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
-                    )
+            if let activeExtension {
+                if layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset) {
+                    suffixBaseOffset = activeExtension.baseOffset
+                    arrays = layer.state.map { array in
+                        HybridCacheSnapshot.deepCopyState(
+                            array[
+                                .ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
+                        )
+                    }
+                } else {
+                    // A whole-state layer (recurrent, rotating, chunked)
+                    // rides whole in the segment and is detached whole:
+                    // an extension payload retains no body array.
+                    arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
                 }
-                slices.append(contentsOf: arrays)
+                detached.append(contentsOf: arrays)
             }
             totalBytes += arrays.reduce(0) { $0 + $1.nbytes }
             owed.append(
@@ -2668,28 +2694,32 @@ nonisolated final class ServerCompletion {
                     suffixBaseOffset: suffixBaseOffset
                 ))
         }
-        // One sync for every slice, as `HybridCacheSnapshot.capture` does
-        // for its copies; a full payload has nothing to evaluate.
-        if !slices.isEmpty {
-            eval(slices)
+        // One sync for every detached array, as `HybridCacheSnapshot.capture`
+        // does for its copies; a full payload has nothing to evaluate.
+        if !detached.isEmpty {
+            eval(detached)
         }
 
         let deferred = DeferredLayers(owed)
-        return SnapshotPayload(
+        let payload = SnapshotPayload(
             tokenOffset: snapshot.tokenOffset,
             checkpointType: snapshot.checkpointType,
             extending: activeExtension,
             totalBytes: totalBytes,
             materialize: { deferred.materialize() }
         )
+        return (payload, deferred)
     }
 
     /// The arrays a deferred payload still owes the SSD writer.
     /// `materialize` copies them layer by layer and releases each as it
     /// goes, so a demotion victim — whose only remaining reference is this
     /// box once its RAM body dropped — never sits in memory twice. Runs
-    /// once, under the payload's own lock.
-    private final class DeferredLayers: @unchecked Sendable {
+    /// once, under the payload's own lock. The box's own lock guards the
+    /// layer list, so `retainedArrays` can be read while the writer pops
+    /// from it; the array handles it hands out are unsynchronized and safe
+    /// to inspect only because every retained array is already evaluated.
+    final class DeferredLayers: @unchecked Sendable {
         struct Layer {
             let className: String
             let arrays: [MLXArray]
@@ -2698,17 +2728,23 @@ nonisolated final class ServerCompletion {
             let suffixBaseOffset: Int?
         }
 
-        private var owed: [Layer]
+        private let owed: OSAllocatedUnfairLock<[Layer]>
 
         init(_ layers: [Layer]) {
-            owed = layers
+            owed = OSAllocatedUnfairLock(uncheckedState: layers)
+        }
+
+        /// Every array not yet copied to host, in layer order — empty once
+        /// the writer has materialized the payload. Read by tests that
+        /// check, by physical address, what a pending payload retains.
+        var retainedArrays: [MLXArray] {
+            owed.withLockUnchecked { $0.flatMap(\.arrays) }
         }
 
         func materialize() -> [SnapshotPayload.LayerPayload] {
             var layers: [SnapshotPayload.LayerPayload] = []
-            layers.reserveCapacity(owed.count)
-            while !owed.isEmpty {
-                let layer = owed.removeFirst()
+            layers.reserveCapacity(owed.withLockUnchecked { $0.count })
+            while let layer = owed.withLockUnchecked({ $0.isEmpty ? nil : $0.removeFirst() }) {
                 var arrays: [SnapshotPayload.ArrayPayload] = []
                 arrays.reserveCapacity(layer.arrays.count)
                 for array in layer.arrays {

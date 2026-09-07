@@ -798,6 +798,223 @@ struct LeafExtensionStoreTests {
                 atPath: root.appendingPathComponent(folded.fileRelativePath).path
             ))
     }
+
+    // MARK: Detached extension payloads (ADR-0064 decision 5, #474)
+
+    /// Hybrid base (offset 4) and head (offset 7) snapshots the way two
+    /// consecutive turns of one conversation produce them: one attention
+    /// layer whose head state extends the base's first four positions,
+    /// and one recurrent layer whose state differs between the two.
+    /// Position-dependent values so a wrong slice or a stale alias shows
+    /// up as a byte difference.
+    private func makeHybridBaseAndHead() -> (base: HybridCacheSnapshot, head: HybridCacheSnapshot) {
+        let count = 1 * 2 * 7 * 8
+        let keysFull = MLXArray((0..<count).map { Float($0) }).reshaped([1, 2, 7, 8])
+        let valuesFull = MLXArray((0..<count).map { Float($0) + 0.5 }).reshaped([1, 2, 7, 8])
+
+        let kvBase = KVCacheSimple()
+        kvBase.state = [keysFull[.ellipsis, ..<4, 0...], valuesFull[.ellipsis, ..<4, 0...]]
+        let mambaBase = MambaCache()
+        mambaBase.state = [MLXArray.zeros([1, 3, 16]), MLXArray.zeros([1, 4, 8, 8])]
+        let base = HybridCacheSnapshot.capture(
+            cache: [kvBase, mambaBase], offset: 4, type: .leaf
+        )!
+
+        let kvHead = KVCacheSimple()
+        kvHead.state = [keysFull, valuesFull]
+        let mambaHead = MambaCache()
+        mambaHead.state = [
+            MLXArray((0..<48).map { Float($0) * 0.25 }).reshaped([1, 3, 16]),
+            MLXArray((0..<256).map { Float($0) - 100 }).reshaped([1, 4, 8, 8]),
+        ]
+        let head = HybridCacheSnapshot.capture(
+            cache: [kvHead, mambaHead], offset: 7, type: .leaf
+        )!
+        return (base, head)
+    }
+
+    /// ADR-0064 decision 5: a pending extension payload retains no array
+    /// of the body it was built from — the attention suffix slices *and*
+    /// the recurrent state are detached copies — while a full payload
+    /// still aliases the attention body (the pending-full-payload copy
+    /// rule of #480 covers that one). The writer is held shut so both
+    /// payloads are observably pending when their backings are compared.
+    @Test func pendingExtensionPayloadRetainsNoBodyArray() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let gate = DrainGate()
+        let store = makeStoreWithPartition(
+            config: config,
+            writerDrainPreludeForTesting: { await gate.wait() }
+        )
+        let (base, head) = makeHybridBaseAndHead()
+
+        let (basePayload, baseOwed) = ServerCompletion.deferredPayload(for: base)
+        let (headPayload, headOwed) = ServerCompletion.deferredPayload(
+            for: head,
+            extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
+        )
+        try #require(headPayload.extending != nil)
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: basePayload,
+                descriptor: makeDescriptor(
+                    id: "base", bytes: basePayload.totalBytes, tokenOffset: 4)
+            )
+        else {
+            Issue.record("base enqueue rejected")
+            return
+        }
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: headPayload,
+                descriptor: makeDescriptor(
+                    id: "head", bytes: headPayload.totalBytes, tokenOffset: 7, segmentBaseOffset: 4
+                )
+            )
+        else {
+            Issue.record("extension enqueue rejected")
+            return
+        }
+        #expect(store.pendingWriteCount() == 2)
+        #expect(!headPayload.isMaterialized)
+
+        // The extension payload: every retained array — two attention
+        // suffix slices, two recurrent arrays — lives in its own backing.
+        let headBody = Set(head.layers.flatMap(\.state).map(backingAddress))
+        let headRetained = headOwed.retainedArrays
+        #expect(headRetained.count == 4)
+        for (index, array) in headRetained.enumerated() {
+            #expect(
+                !headBody.contains(backingAddress(array)),
+                "retained array \(index) shares a backing with the head body"
+            )
+        }
+
+        // The full payload: its attention arrays *are* the body's.
+        let baseRetained = baseOwed.retainedArrays
+        #expect(baseRetained.count == 4)
+        for (retained, body) in zip(baseRetained.prefix(2), base.layers[0].state) {
+            #expect(backingAddress(retained) == backingAddress(body))
+        }
+
+        // Once the writer has copied them, both boxes let go of every array.
+        await gate.open()
+        await store.flushAsync()
+        #expect(headPayload.isMaterialized)
+        #expect(headOwed.retainedArrays.isEmpty)
+        #expect(baseOwed.retainedArrays.isEmpty)
+        #expect(store.residency().descriptor(id: "head") != nil)
+    }
+
+    /// Detaching moves no byte of the wire format: the payload's byte
+    /// total and the written segment file are identical to what the
+    /// aliasing extraction produced for the same snapshot, and the ledger
+    /// round trip (fold, descriptor bytes, chain hydration) is unchanged.
+    @Test func detachedExtensionPayloadWritesTheSameBytes() async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let store = makeStoreWithPartition(config: config)
+        let (base, head) = makeHybridBaseAndHead()
+
+        let basePayload = ServerCompletion.extractSnapshotPayload(base)
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: basePayload,
+                descriptor: makeDescriptor(
+                    id: "base", bytes: basePayload.totalBytes, tokenOffset: 4)
+            )
+        else {
+            Issue.record("base enqueue rejected")
+            return
+        }
+        await store.flushAsync()
+
+        let extending = SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
+        let headPayload = ServerCompletion.extractSnapshotPayload(head, extending: extending)
+        try #require(headPayload.extending == extending)
+
+        // The reference is the pre-detach shape: the attention suffix
+        // sliced straight off the body and the recurrent state read
+        // whole, host-copied by the same `asData` call the writer uses.
+        // Layer offsets are the layers' own (the vendor's `MambaCache`
+        // reports 0), exactly as the extraction carries them.
+        func hostCopy(_ array: MLXArray) -> SnapshotPayload.ArrayPayload {
+            let copy = array.asData(access: .copy)
+            return SnapshotPayload.ArrayPayload(
+                data: copy.data,
+                dtype: ServerCompletion.dtypeWireString(copy.dType),
+                shape: copy.shape
+            )
+        }
+        let attention = head.layers[0]
+        let recurrent = head.layers[1]
+        let reference = SnapshotPayload(
+            tokenOffset: 7,
+            checkpointType: .leaf,
+            layers: [
+                SnapshotPayload.LayerPayload(
+                    className: attention.className,
+                    state: attention.state.map { hostCopy($0[.ellipsis, 4..<7, 0...]) },
+                    metaState: attention.metaState,
+                    offset: attention.offset,
+                    suffixBaseOffset: 4
+                ),
+                SnapshotPayload.LayerPayload(
+                    className: recurrent.className,
+                    state: recurrent.state.map(hostCopy),
+                    metaState: recurrent.metaState,
+                    offset: recurrent.offset
+                ),
+            ],
+            extending: extending
+        )
+        #expect(headPayload.totalBytes == reference.totalBytes)
+
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: headPayload,
+                descriptor: makeDescriptor(
+                    id: "head", bytes: headPayload.totalBytes, tokenOffset: 7, segmentBaseOffset: 4
+                )
+            )
+        else {
+            Issue.record("extension enqueue rejected")
+            return
+        }
+        await store.flushAsync()
+
+        // Ledger round trip: the folded descriptor carries the payload's
+        // bytes, and the segment file is byte-identical to the reference
+        // encoded under the descriptor the writer embedded in it.
+        let folded = try #require(store.residency().descriptor(id: "head"))
+        #expect(folded.bytes == headPayload.totalBytes)
+        let written = try Data(contentsOf: root.appendingPathComponent(folded.fileRelativePath))
+        let header = try PlaceholderContainerHeader.parse(from: written).header
+        let expected = try encodePlaceholderContainer(
+            payload: reference, descriptor: header.descriptor
+        )
+        #expect(written == expected)
+
+        let restored = try #require(
+            store.loadSync(
+                snapshotRef: SnapshotRef(
+                    snapshotID: "head",
+                    partitionDigest: testDigest,
+                    tokenOffset: 7,
+                    checkpointType: .leaf,
+                    bytesOnDisk: folded.totalBytes
+                ),
+                expectedFingerprint: testFingerprint
+            ))
+        #expect(restored.layers.count == 2)
+        for (restoredArray, body) in zip(restored.layers[0].state, attention.state) {
+            #expect(restoredArray.asData(access: .copy).data == body.asData(access: .copy).data)
+        }
+        for (restoredArray, body) in zip(restored.layers[1].state, recurrent.state) {
+            #expect(restoredArray.asData(access: .copy).data == body.asData(access: .copy).data)
+        }
+    }
 }
 
 // MARK: - 4. Manager: supersession policy + extension-base resolution
