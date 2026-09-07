@@ -392,7 +392,7 @@ struct RenderTokenCacheTruncatedFakeTests {
             tokenizer: tokenizer, messages: messages, tools: tools,
             baseAdditionalContext: baseContext,
             mergedAdditionalContext: Self.noGenPrompt,
-            modelFingerprint: fingerprint)
+            modelFingerprint: fingerprint)?.tokens
     }
 
     /// The common case: the conversation's last message is its last user
@@ -456,7 +456,7 @@ struct RenderTokenCacheTruncatedFakeTests {
                 baseAdditionalContext: nil,
                 mergedAdditionalContext: Self.noGenPrompt,
                 modelFingerprint: Self.fingerprint,
-                messagesAreEntryPrefix: true))
+                messagesAreEntryPrefix: true)?.tokens)
         let computed = try #require(
             try resolveTruncated(cache, tokenizer: tokenizer, messages: messages))
         #expect(asserted == computed)
@@ -483,7 +483,7 @@ struct RenderTokenCacheTruncatedFakeTests {
                 baseAdditionalContext: nil,
                 mergedAdditionalContext: Self.noGenPrompt,
                 modelFingerprint: Self.fingerprint,
-                messagesAreEntryPrefix: true))
+                messagesAreEntryPrefix: true)?.tokens)
         #expect(
             asserted
                 == (try tokenizer.applyChatTemplate(
@@ -505,7 +505,7 @@ struct RenderTokenCacheTruncatedFakeTests {
             baseAdditionalContext: nil,
             mergedAdditionalContext: Self.noGenPrompt,
             modelFingerprint: Self.fingerprint,
-            messagesAreEntryPrefix: true)
+            messagesAreEntryPrefix: true)?.tokens
         #expect(asserted == nil)
         let honest = try resolveTruncated(
             cache, tokenizer: tokenizer, messages: [user("The EDITED start.")])
@@ -528,7 +528,7 @@ struct RenderTokenCacheTruncatedFakeTests {
             baseAdditionalContext: nil,
             mergedAdditionalContext: Self.noGenPrompt,
             modelFingerprint: Self.fingerprint,
-            messagesAreEntryPrefix: true)
+            messagesAreEntryPrefix: true)?.tokens
         #expect(asserted == nil)
     }
 

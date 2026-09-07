@@ -108,7 +108,8 @@ nonisolated struct CompletionTraceAccumulator {
         residualPromptSeconds: Double,
         deviceEstimates: MeasuredSecondsEstimates?,
         leafStoreSeconds: Double? = nil,
-        tailSeconds: Double? = nil
+        tailSeconds: Double? = nil,
+        emittedPath: EmittedPathTraceTelemetry? = nil
     ) -> CompletionTraceRecord? {
         let restoredOffset = Self.restoredOffset(for: start.lookupReason)
         return CompletionTraceRecord.make(
@@ -150,7 +151,8 @@ nonisolated struct CompletionTraceAccumulator {
                 restoredOffset: restoredOffset
             ),
             leafStoreSeconds: leafStoreSeconds,
-            tailSeconds: tailSeconds
+            tailSeconds: tailSeconds,
+            emittedPath: emittedPath
         )
     }
 }

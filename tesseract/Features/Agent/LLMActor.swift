@@ -407,6 +407,11 @@ actor LLMActor {
         // the periodic summary only lands on a 256-resolve boundary.
         RenderTokenCache.shared.logSummary(context: "unload")
         RenderTokenCache.shared.reset()
+        // ADR-0063: the Emitted Path Index is scoped to the loaded model's
+        // fingerprint; its paths are fed ids and mean nothing to the next
+        // model. Summarize, then drop.
+        EmittedPathIndex.shared.logSummary(context: "unload")
+        EmittedPathIndex.shared.clear()
         // No model resident — restore the balanced commit policy so later
         // MLX work (TTS bursts, the next load's warmup) doesn't inherit a
         // MoE-tuned leg. Scheduling-only either way; this keeps the global
