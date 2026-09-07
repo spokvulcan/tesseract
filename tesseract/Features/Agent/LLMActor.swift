@@ -412,6 +412,10 @@ actor LLMActor {
         // model. Summarize, then drop.
         EmittedPathIndex.shared.logSummary(context: "unload")
         EmittedPathIndex.shared.clear()
+        // The Leaf Store's boundary-turn tally (ADR-0063 decision 11): how
+        // often each guard sent a turn to the boundary path this load.
+        LeafStoreCounters.shared.logSummary(context: "unload")
+        LeafStoreCounters.shared.reset()
         // No model resident — restore the balanced commit policy so later
         // MLX work (TTS bursts, the next load's warmup) doesn't inherit a
         // MoE-tuned leg. Scheduling-only either way; this keeps the global

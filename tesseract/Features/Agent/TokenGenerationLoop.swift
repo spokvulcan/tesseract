@@ -35,9 +35,9 @@ nonisolated enum RawGeneration: Sendable {
 /// turn. The iterators return a token only after feeding it (the AR loop
 /// feeds `previousY` to sample the next; DFlash2 drains verified positions),
 /// so this list is the live KV cache's token path past the prompt, up to the
-/// iterator's own unfed tail. The **Live Leaf Capture** compares it against
-/// the canonical re-render to decide whether the finished turn's leaf can be
-/// taken from the live cache instead of re-prefilled (`LiveLeafCapture`).
+/// iterator's own unfed tail — the tail of the turn's **Emitted Path**: the
+/// **Live Leaf Capture** keys the finished turn's leaf on it and the
+/// **Emitted Path Index** registers it for the next request (ADR-0063).
 ///
 /// A class so the producer task can append while the consumer holds the
 /// handle; read only after the generation task has completed.
@@ -182,7 +182,7 @@ nonisolated enum TokenGenerationLoop {
             while let token = iterator.next() {
                 // Every returned token has been fed (the stop token included)
                 // — record it before any exit so the live KV cache's token
-                // path stays reconstructible for the Live Leaf Capture.
+                // path stays reconstructible for the Leaf Store.
                 generatedTokens?.append(token)
                 if Task.isCancelled {
                     stopReason = .cancelled

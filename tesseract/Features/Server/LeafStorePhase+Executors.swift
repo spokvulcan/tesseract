@@ -5,9 +5,11 @@
 //  The model-affine executors of the **Leaf Store** phase — `LeafStorePhase.run`
 //  decides, these perform the Metal capture and admit. Three ways to bring
 //  the cache to snapshot, one shared tail (`admitLeaf`):
-//  - live: the finished turn's final cache, no prefill (**Live Leaf Capture**)
-//  - direct: the same live cache under a non-thinking template, behind the
-//    reusable-state and normalization-trim guards of the render-trusting path
+//  - live: the finished turn's final cache at its own offset, under the
+//    fed path, no prefill (**Live Leaf Capture** — the fast path)
+//  - direct: the same live cache under a non-thinking template's canonical
+//    stored path, behind the reusable-state and normalization-trim guards of
+//    the render-trusting path (the boundary route's non-thinking arm)
 //  - boundary: restore the boundary snapshot and re-prefill the canonical
 //    residual
 //
@@ -87,12 +89,12 @@ nonisolated extension LeafStorePhase {
 
     // MARK: - Live executor
 
-    /// Capture the live final cache at the stored path's length and admit it
-    /// under `context.storedTokens` (already proven equal to the fed path by
-    /// `LiveLeafCapture.decide`, or trusted by the direct mode's render). No
-    /// restore, no prefill: the generation loop has been awaited by the
-    /// drive, so the array is quiescent (ADR-0006), and the snapshot is a
-    /// deep copy inside a Metal-affine Model Session.
+    /// Capture the live final cache at the length of `context.storedTokens`
+    /// and admit it under those ids — the fed path cut at the cache's
+    /// offset, the fast path under every mode (**Live Leaf Capture**). No
+    /// restore, no prefill: the generation loop has been
+    /// awaited by the drive, so the array is quiescent (ADR-0006), and the
+    /// snapshot is a deep copy inside a Metal-affine Model Session.
     static func captureLiveLeaf(
         sessions: any ModelSessionProviding,
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,

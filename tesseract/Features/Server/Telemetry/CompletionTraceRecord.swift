@@ -169,8 +169,8 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
     let leafStoreSeconds: Double?
     let tailSeconds: Double?
 
-    /// Emitted Path Index telemetry (ADR-0063 dark launch): what the turn
-    /// registered and what the request resolved. Additive optional like
+    /// Emitted Path Index telemetry (ADR-0063): what the turn registered
+    /// and what the request resolved. Additive optional like
     /// `rewind` — `nil` on older records, no schema bump.
     let emittedPath: EmittedPathTraceTelemetry?
 
@@ -243,17 +243,18 @@ nonisolated struct CompletionTraceRecord: Codable, Sendable, Equatable {
 
 // MARK: - Emitted Path telemetry
 
-/// The per-completion Emitted Path account (ADR-0063 dark launch): whether
-/// the turn registered a path and its length, or the skip reason; the
-/// request-edge resolve's indexed prefix or miss reason; and the shadow
-/// differences the request's resolves found (expected zero).
+/// The per-completion Emitted Path account (ADR-0063): whether the turn
+/// registered a path and its length, or the skip reason; and the
+/// request-edge resolve's indexed prefix and suffix, or its miss reason.
 nonisolated struct EmittedPathTraceTelemetry: Codable, Sendable, Equatable {
     let registered: Bool
     let pathLength: Int?
     let skipReason: String?
     let resolvedPrefix: Int?
+    /// Tokens the request edge encoded past the resolved prefix — what it
+    /// prefilled beyond the stored leaf — when it hit.
+    let resolvedSuffix: Int?
     let resolveMissReason: String?
-    let shadowDifferences: Int
 
     static func make(
         report: LeafStorePhase.Report,
@@ -264,8 +265,8 @@ nonisolated struct EmittedPathTraceTelemetry: Codable, Sendable, Equatable {
             pathLength: report.emittedPathRegistered?.pathLength,
             skipReason: report.emittedPathSkip,
             resolvedPrefix: resolves?.requestEdgeIndexedPrefix,
-            resolveMissReason: resolves?.requestEdgeMissReason ?? resolves?.requestEdgeSkipReason,
-            shadowDifferences: resolves?.shadowDifferences ?? 0
+            resolvedSuffix: resolves?.requestEdgeSuffixTokens,
+            resolveMissReason: resolves?.requestEdgeMissReason ?? resolves?.requestEdgeSkipReason
         )
     }
 }

@@ -206,6 +206,55 @@ final class TemplateCallObservingTokenizer: ChatTemplateRendering, @unchecked Se
     }
 }
 
+// MARK: - Metaspace-prepending tokenizer
+
+/// A tokenizer whose standalone encode of any text not starting with a
+/// special token carries an extra leading id — the Metaspace
+/// `prepend_scheme: first` shape (Nanbeige), on which an end-of-turn marker
+/// still derives (a special token alone encodes to its id) but the
+/// standalone encode of the bytes after it is not the in-context encode.
+struct MetaspacePrependingTokenizer: ChatTemplateRendering {
+    let inner: GreedyTokenizer
+    static let boundaryID = 77_777
+
+    var bosToken: String? { inner.bosToken }
+    var eosToken: String? { inner.eosToken }
+    var unknownToken: String? { inner.unknownToken }
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        let ids = inner.encode(text: text, addSpecialTokens: addSpecialTokens)
+        guard !text.isEmpty, !text.hasPrefix("<|") else { return ids }
+        return [Self.boundaryID] + ids
+    }
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        inner.decode(
+            tokenIds: tokenIds.filter { $0 != Self.boundaryID },
+            skipSpecialTokens: skipSpecialTokens)
+    }
+    func convertTokenToId(_ token: String) -> Int? { inner.convertTokenToId(token) }
+    func convertIdToToken(_ id: Int) -> String? { inner.convertIdToToken(id) }
+
+    func renderChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> String {
+        try inner.renderChatTemplate(
+            messages: messages, tools: tools, additionalContext: additionalContext)
+    }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        encode(
+            text: try renderChatTemplate(
+                messages: messages, tools: tools, additionalContext: additionalContext),
+            addSpecialTokens: false)
+    }
+}
+
 /// A ChatML-shaped greedy vocabulary for the observing tokenizer: the
 /// template markers merge as whole pieces, everything else falls to
 /// per-scalar tokens.

@@ -31,6 +31,22 @@ struct EmittedPathResolveRealTests {
 
     private static let fingerprint = "real-emitted-path"
 
+    /// A template that honours `preserve_thinking` (Qwen3.8 declares it;
+    /// the PARO checkpoint's template strips prior thinking regardless),
+    /// when its directory is on disk.
+    private nonisolated static var preserveThinkingModelDirectory: URL {
+        URL(
+            fileURLWithPath: NSString(
+                string: "~/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit"
+            ).expandingTildeInPath)
+    }
+
+    private nonisolated static var preserveThinkingModelAvailable: Bool {
+        FileManager.default.fileExists(
+            atPath: preserveThinkingModelDirectory.appendingPathComponent("tokenizer_config.json")
+                .path)
+    }
+
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
         try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
     }
@@ -212,7 +228,6 @@ struct EmittedPathResolveRealTests {
             #expect(markerDepth == hashes.count - 1 - depth)
             #expect(markerCount == hashes.count)
             #expect(canonical[indexedPrefix - 1] == marker.tokenID)
-            #expect(EmittedPathResolve.shadow(composed: tokens, canonical: canonical) == nil)
         }
     }
 
@@ -296,9 +311,159 @@ struct EmittedPathResolveRealTests {
         let summary = try #require(requestNext.emittedPathTelemetry?.summary)
         #expect(summary.requestEdgeIndexedPrefix == path.count)
         #expect(summary.requestEdgeSuffixTokens == canonical.count - path.count)
-        #expect(summary.shadowDifferences == 0)
-        #expect(index.statsSnapshot().shadowDifferences == 0)
         #expect(index.statsSnapshot().fidelityRejections == 0)
+    }
+
+    /// The served composition on the real template: a registered path that
+    /// splits the echoed text differently from the canonical encode is what
+    /// the next request feeds — the index path, then the canonical encode of
+    /// the bytes after its marker — never the canonical re-encode of the
+    /// same bytes. A tool-stretch turn: the one boundary this template
+    /// renders verbatim for the next request (it strips prior thinking at
+    /// a user boundary, which takes the boundary path instead).
+    @Test(.enabled(if: modelAvailable))
+    func theRequestEdgeServesANonCanonicalSplit() async throws {
+        let tokenizer = try await Self.loadTokenizer()
+        let rendering = try #require(tokenizer as? any ChatTemplateRendering)
+        let index = EmittedPathIndex(byteBudget: 1 << 20)
+        let marker = try #require(
+            ConversationRender.endOfTurnMarker(
+                index: index, fingerprint: Self.fingerprint, tokenizer: tokenizer))
+        let context = TemplateRenderContext.canonical
+        let tools = [Self.readTool]
+        let previous = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [HTTPPrefixCacheMessage(role: .user, content: "Read /tmp/a")])
+        let stored = previous.appendingAssistant(
+            .assistant(
+                content: "Reading it now.", reasoning: "The user wants the file.",
+                toolCalls: [
+                    HTTPPrefixCacheToolCall(
+                        name: "read_file", argumentsJSON: "{\"path\": \"/tmp/a\", \"limit\": 10}")
+                ]))
+        let next = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: stored.messages + [HTTPPrefixCacheMessage(role: .tool, content: "line 1\n")]
+        ).promptMessages
+        var storedContext = context.additionalContext() ?? [:]
+        storedContext["add_generation_prompt"] = false
+        let storedBytes = Array(
+            try rendering.renderChatTemplate(
+                messages: stored.promptMessages, tools: tools, additionalContext: storedContext
+            ).utf8)
+        let last = try #require(
+            EmittedPathIndex.prefixHashes(renderedBytes: storedBytes, marker: marker.bytes).last)
+        let canonicalPath = Self.encode(tokenizer, bytes: storedBytes[..<last.end])
+        let respelled = try #require(Self.reSplit(canonicalPath, tokenizer: tokenizer))
+        #expect(respelled != canonicalPath)
+        #expect(
+            tokenizer.decode(tokenIds: respelled, skipSpecialTokens: false)
+                == tokenizer.decode(tokenIds: canonicalPath, skipSpecialTokens: false))
+        _ = index.register(fingerprint: Self.fingerprint, hash: last.hash, ids: respelled)
+
+        let render = ConversationRender.forTextOnlyRequest(
+            tokenizer: tokenizer, toolSpecs: tools, renderContext: context, hasMedia: false,
+            producesFlatTextTokens: true, modelFingerprint: Self.fingerprint,
+            cache: RenderTokenCache(), emittedPathIndex: index, diagnostics: nil)
+        let tokens = try #require(render.fullRender(messages: next))
+        let canonical = try tokenizer.applyChatTemplate(
+            messages: next, tools: tools, additionalContext: context.additionalContext())
+        #expect(Array(tokens.prefix(respelled.count)) == respelled)
+        #expect(
+            Array(tokens.dropFirst(respelled.count))
+                == Array(canonical.dropFirst(canonicalPath.count)))
+        #expect(tokens != canonical)
+        let summary = try #require(render.emittedPathTelemetry?.summary)
+        #expect(summary.requestEdgeIndexedPrefix == respelled.count)
+        #expect(summary.requestEdgeSuffixTokens == canonical.count - canonicalPath.count)
+    }
+
+    /// `ids` with its first token spelling three or more ASCII letters
+    /// replaced by the encodes of its two halves — the same text, a split
+    /// the canonical encode never produces.
+    private static func reSplit(_ ids: [Int], tokenizer: any MLXLMCommon.Tokenizer) -> [Int]? {
+        for (offset, id) in ids.enumerated() {
+            let piece = tokenizer.decode(tokenIds: [id], skipSpecialTokens: false)
+            let letters = piece.drop(while: { $0 == " " })
+            guard letters.count >= 3, letters.allSatisfy({ $0.isLetter && $0.isASCII })
+            else { continue }
+            let split =
+                encode(tokenizer, String(piece.dropLast()))
+                + encode(tokenizer, String(piece.suffix(1)))
+            guard split != [id],
+                tokenizer.decode(tokenIds: split, skipSpecialTokens: false) == piece
+            else { continue }
+            return Array(ids[..<offset]) + split + Array(ids[(offset + 1)...])
+        }
+        return nil
+    }
+
+    /// A stop-finish answer at a user boundary under the Preserve-Thinking
+    /// Render: the next request's render keeps the previous turn's think
+    /// block, so the whole previous turn — reasoning included — is the hit,
+    /// and the request encodes only its new message and the glue.
+    @Test(.enabled(if: preserveThinkingModelAvailable))
+    func theWholePreviousTurnHitsUnderThePreserveThinkingRender() async throws {
+        let directory = Self.preserveThinkingModelDirectory
+        let tokenizer = try await #huggingFaceTokenizerLoader().load(from: directory)
+        let identity = ModelIdentity(directory: directory)
+        let index = EmittedPathIndex(byteBudget: 1 << 20)
+        let context = TemplateRenderContext(flags: [.preserveThinking])
+        let fingerprint = "real-preserve-thinking"
+        func makeRender() -> ConversationRender {
+            ConversationRender.forTextOnlyRequest(
+                tokenizer: tokenizer, toolSpecs: nil, renderContext: context, hasMedia: false,
+                producesFlatTextTokens: true, modelFingerprint: fingerprint,
+                cache: RenderTokenCache(), emittedPathIndex: index, diagnostics: nil)
+        }
+
+        let previous = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [HTTPPrefixCacheMessage(role: .user, content: "Say something.")])
+        let echo = HTTPPrefixCacheMessage.assistant(
+            content: "Something memorable, then.",
+            reasoning: "A short thought about what to say.")
+        let stored = previous.appendingAssistant(echo)
+        let next = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: stored.messages + [HTTPPrefixCacheMessage(role: .user, content: "Again.")])
+
+        // Request N, its stored turn, and the path a live turn fed.
+        let requestN = makeRender()
+        let prompt = try #require(requestN.fullRender(messages: previous.promptMessages))
+        guard case .eligible(_, _, let marker) = requestN.emittedPathEligibility() else {
+            Issue.record("the real template must be eligible")
+            return
+        }
+        let storedRender = try requestN.storedRender(messages: stored.promptMessages)
+        let storedBytes = try #require(storedRender.bytes)
+        let markerIndex = try #require(storedRender.tokens.lastIndex(of: marker.tokenID))
+        let path = Array(storedRender.tokens[...markerIndex])
+        try #require(path.starts(with: prompt), "the prompt must be a token prefix of the path")
+        let generated = Array(path[prompt.count...])
+        #expect(
+            tokenizer.decode(tokenIds: generated, skipSpecialTokens: false)
+                .contains("A short thought"))
+        let outcome = EmittedPathRegistration.register(
+            EmittedPathRegistration.Inputs(
+                index: index, fingerprint: fingerprint, marker: marker, tokenizer: tokenizer,
+                storedRenderBytes: storedBytes, storedMessage: echo, promptKeyPath: prompt,
+                generatedTokens: generated, stoppedOn: marker.tokenID, toolCallFormat: .qwen35,
+                tools: nil,
+                startsInsideThinkBlock: context.startsInsideThinkBlock(
+                    promptStartsThinking: identity.promptStartsThinking)))
+        guard case .registered = outcome else {
+            Issue.record("expected a registration, got \(outcome)")
+            return
+        }
+
+        // Request N+1 at its edge: the whole previous turn is the hit.
+        let requestNext = makeRender()
+        let tokens = try #require(requestNext.fullRender(messages: next.promptMessages))
+        #expect(Array(tokens.prefix(path.count)) == path)
+        let summary = try #require(requestNext.emittedPathTelemetry?.summary)
+        #expect(summary.requestEdgeIndexedPrefix == path.count)
+        #expect(summary.requestEdgeSuffixTokens == tokens.count - path.count)
     }
 
     /// The fidelity gate on the real template's tool-call render: the

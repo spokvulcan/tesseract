@@ -6,21 +6,20 @@ import Tokenizers
 
 @testable import Tesseract_Agent
 
-/// The Emitted Path Index replay gate (ADR-0063, ticket #475): the recorded
-/// sessions walked through the **Canonical-Echo Fidelity** harness with a
-/// private index learning every echoed turn — the Leaf Store's registration
-/// simulated on the canonical encode — and every next request resolving at
-/// its edge. The dark launch's claims, on real recordings with the real
+/// The Emitted Path Index replay gate (ADR-0063, tickets #475/#476): the
+/// recorded sessions walked through the **Canonical-Echo Fidelity** harness
+/// with a private index learning every echoed turn — the Leaf Store's
+/// registration simulated on the canonical encode — and every next request
+/// resolving at its edge. The claims, on real recordings with the real
 /// tokenizer and template:
 ///
 /// - every boundary a live-stored turn would have produced registers (the
 ///   only tolerated non-registration is a prompt that is not a token prefix
-///   of the stored render — the junction merge the Live Leaf Capture would
-///   have refused, so no live turn exists to register);
+///   of the stored render — a turn the fast path could not have stored
+///   under the emitted path, so no live turn exists to register);
 /// - every registered boundary's next request resolves with a non-zero
-///   indexed prefix;
-/// - the shadow check finds zero differences between the composition and
-///   the canonical encode (special token = hard pretoken boundary).
+///   indexed prefix, so it prefills only its new messages and the glue
+///   after the marker (the suffix totals print for the record).
 ///
 /// Opt-in like the fidelity corpus gate — same variables, see
 /// `docs/testing.md`:
@@ -100,14 +99,14 @@ struct EmittedPathReplayCorpusTests {
             total.registrationSkips.merge(summary.registrationSkips, uniquingKeysWith: +)
             total.nextResolved += summary.nextResolved
             total.nextMisses.merge(summary.nextMisses, uniquingKeysWith: +)
-            total.shadowDifferences += summary.shadowDifferences
+            total.nextSuffixTokens += summary.nextSuffixTokens
         }
         let stats = learning.index.statsSnapshot()
         print(
             "emitted-path corpus total: sessions=\(sessionOrder.count) "
                 + "boundaries=\(total.boundaries) registered=\(total.registered) "
                 + "skips=\(total.registrationSkips) nextResolved=\(total.nextResolved) "
-                + "nextMisses=\(total.nextMisses) shadowDifferences=\(total.shadowDifferences) "
+                + "nextMisses=\(total.nextMisses) nextSuffixTokens=\(total.nextSuffixTokens) "
                 + "undecodable=\(undecodable.count) index=[\(EmittedPathIndex.summary(of: stats))]")
 
         #expect(total.boundaries > 0, "corpus produced no checkable boundaries")
@@ -119,8 +118,6 @@ struct EmittedPathReplayCorpusTests {
         #expect(
             total.nextResolved == total.registered,
             "next requests that missed the index: \(total.nextMisses)")
-        #expect(total.shadowDifferences == 0, "shadow check found differences")
-        #expect(stats.shadowDifferences == 0)
         #expect(stats.fidelityRejections == 0)
     }
 

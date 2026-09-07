@@ -1,0 +1,46 @@
+//
+//  LeafStoreCounters.swift
+//  tesseract
+//
+//  Lifetime tally of the turns the **Leaf Store** sent down the boundary
+//  path, by reason — the intervened-turn frequency ADR-0063 decision 11
+//  asks to know before deciding whether intervened turns need the fast
+//  path, and the other guards beside it at no extra cost. Logged (notice
+//  level, so it survives in `log show`) and reset at model unload, beside
+//  the Emitted Path Index summary.
+//
+
+import Foundation
+
+/// `@unchecked Sendable`: the tally is NSLock-guarded.
+nonisolated final class LeafStoreCounters: @unchecked Sendable {
+
+    nonisolated static let shared = LeafStoreCounters()
+
+    private let lock = NSLock()
+    private var boundaryTurns: [String: Int] = [:]
+
+    func noteBoundaryTurn(reason: String) {
+        lock.withLock { boundaryTurns[reason, default: 0] += 1 }
+    }
+
+    /// Boundary reason (the `liveLeafCapture` skip token) → count.
+    func boundaryTurnsSnapshot() -> [String: Int] {
+        lock.withLock { boundaryTurns }
+    }
+
+    func reset() {
+        lock.withLock { boundaryTurns.removeAll() }
+    }
+
+    func logSummary(context: String) {
+        let snapshot = boundaryTurnsSnapshot()
+        Log.server.notice("leaf-store [\(context)] \(Self.summary(of: snapshot))")
+    }
+
+    static func summary(of boundaryTurns: [String: Int]) -> String {
+        let reasons = boundaryTurns.sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        return "boundaryTurns=\(boundaryTurns.values.reduce(0, +)) byReason=[\(reasons)]"
+    }
+}

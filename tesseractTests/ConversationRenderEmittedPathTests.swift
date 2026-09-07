@@ -5,10 +5,12 @@ import Testing
 @testable import Tesseract_Agent
 
 /// The Emitted Path Resolve inside the Conversation Render (ADR-0063
-/// decisions 4/5), as a dark launch: every byte-producing verb resolves
-/// against the index and shadow-checks the composition, the verbs keep
-/// returning the canonical tokens, and renders that never consult the
-/// index — image-bearing (sealed non-identity) and uncached — say so.
+/// decisions 4/5), serving: every byte-producing verb resolves against the
+/// index and returns the deepest registered path plus the canonical encode
+/// of the bytes after its marker; an unregistered history renders
+/// canonically; renders that never consult the index — image-bearing
+/// (sealed non-identity), uncached, and a template whose marker is not a
+/// hard boundary — say so.
 struct ConversationRenderEmittedPathTests {
 
     private static let fingerprint = "fp-render"
@@ -36,7 +38,7 @@ struct ConversationRenderEmittedPathTests {
     /// Register the first turn's path under its stored render, with the
     /// emitted ids given (defaults to the canonical split).
     private func registerTurnOne(
-        into index: EmittedPathIndex, emitted: ((inout [Int]) -> Void)? = nil
+        into index: EmittedPathIndex, emitted: ((inout [Int]) throws -> Void)? = nil
     ) throws -> [Int] {
         let stored = try tokenizer.renderChatTemplate(
             messages: turnOne, tools: nil, additionalContext: ["add_generation_prompt": false])
@@ -44,7 +46,7 @@ struct ConversationRenderEmittedPathTests {
         let imEnd = try #require(tokenizer.convertTokenToId("<|im_end|>"))
         let canonical = tokenizer.encode(text: stored, addSpecialTokens: false)
         var path = Array(canonical[...(try #require(canonical.lastIndex(of: imEnd)))])
-        emitted?(&path)
+        try emitted?(&path)
         let hashes = EmittedPathIndex.prefixHashes(
             renderedBytes: bytes, marker: Array("<|im_end|>".utf8))
         _ = index.register(
@@ -52,86 +54,133 @@ struct ConversationRenderEmittedPathTests {
         return path
     }
 
-    @Test func theRequestEdgeResolvesAgainstTheIndexAndServesCanonical() throws {
+    /// The model's own split of `KNI`: `K`+`NI` where the canonical encode
+    /// says `KN`+`I` — the 2026-09-06 re-split class.
+    private func reSplit(_ path: inout [Int]) throws {
+        let kn = try #require(tokenizer.convertTokenToId("KN"))
+        let i = try #require(tokenizer.convertTokenToId("I"))
+        let k = try #require(tokenizer.convertTokenToId("K"))
+        let ni = try #require(tokenizer.convertTokenToId("NI"))
+        let at = try #require(path.firstIndex(of: kn))
+        #expect(path[at + 1] == i)
+        path.replaceSubrange(at...(at + 1), with: [k, ni])
+    }
+
+    @Test func theRequestEdgeServesTheRegisteredPathPlusTheCanonicalSuffix() throws {
         let index = EmittedPathIndex(byteBudget: 1 << 20)
-        let path = try registerTurnOne(into: index)
+        let path = try registerTurnOne(into: index, emitted: { try reSplit(&$0) })
         let render = makeRender(index: index)
         let tokens = try #require(render.fullRender(messages: turnTwo))
         let canonical = try tokenizer.applyChatTemplate(
             messages: turnTwo, tools: nil, additionalContext: nil)
-        #expect(tokens == canonical)
+        // The model input is the fed ids for the echoed turn — never the
+        // canonical re-encode of the same text — then the new message.
+        #expect(Array(tokens.prefix(path.count)) == path)
+        #expect(Array(tokens.dropFirst(path.count)) == Array(canonical.dropFirst(path.count)))
+        #expect(tokens != canonical)
         let summary = try #require(render.emittedPathTelemetry?.summary)
         #expect(summary.resolves == 1)
         #expect(summary.hits == 1)
         #expect(summary.requestEdgeIndexedPrefix == path.count)
         #expect(summary.requestEdgeSuffixTokens == canonical.count - path.count)
-        #expect(summary.shadowDifferences == 0)
-        #expect(index.statsSnapshot().shadowDifferences == 0)
     }
 
-    @Test func aDifferentEmittedSplitIsAShadowDifferenceAndStillServesCanonical() throws {
+    @Test func aCanonicalSplitRegisteredIsServedAsTheCanonicalEncode() throws {
         let index = EmittedPathIndex(byteBudget: 1 << 20)
-        let kn = try #require(tokenizer.convertTokenToId("KN"))
-        let i = try #require(tokenizer.convertTokenToId("I"))
-        let k = try #require(tokenizer.convertTokenToId("K"))
-        let ni = try #require(tokenizer.convertTokenToId("NI"))
-        _ = try registerTurnOne(into: index) { path in
-            let at = path.firstIndex(of: kn)!
-            #expect(path[at + 1] == i)
-            path.replaceSubrange(at...(at + 1), with: [k, ni])
-        }
+        _ = try registerTurnOne(into: index)
         let render = makeRender(index: index)
         let tokens = try #require(render.fullRender(messages: turnTwo))
-        let canonical = try tokenizer.applyChatTemplate(
-            messages: turnTwo, tools: nil, additionalContext: nil)
-        #expect(tokens == canonical)
-        let summary = try #require(render.emittedPathTelemetry?.summary)
-        #expect(summary.hits == 1)
-        #expect(summary.shadowDifferences == 1)
-        #expect(index.statsSnapshot().shadowDifferences == 1)
+        #expect(
+            tokens
+                == (try tokenizer.applyChatTemplate(
+                    messages: turnTwo, tools: nil, additionalContext: nil)))
     }
 
-    @Test func aColdIndexMissesWithAReason() throws {
+    @Test func aColdIndexMissesWithAReasonAndServesCanonical() throws {
         let index = EmittedPathIndex(byteBudget: 1 << 20)
         let render = makeRender(index: index)
-        _ = try #require(render.fullRender(messages: turnTwo))
+        let tokens = try #require(render.fullRender(messages: turnTwo))
+        #expect(
+            tokens
+                == (try tokenizer.applyChatTemplate(
+                    messages: turnTwo, tools: nil, additionalContext: nil)))
         let summary = try #require(render.emittedPathTelemetry?.summary)
         #expect(summary.resolves == 1)
         #expect(summary.hits == 0)
         #expect(summary.requestEdgeMissReason == "noEntry")
     }
 
-    @Test func theLeafStoreSpellingResolvesAndReturnsBytes() throws {
+    @Test func anUnregisteredTurnAfterARegisteredOneIsEncodedCanonicallyPastTheHit() throws {
+        // A fidelity-rejected turn registers nothing: the next request hits
+        // the turn before it and encodes the rejected turn canonically.
         let index = EmittedPathIndex(byteBudget: 1 << 20)
-        let path = try registerTurnOne(into: index)
+        let path = try registerTurnOne(into: index, emitted: { try reSplit(&$0) })
+        let render = makeRender(index: index)
+        let threeTurns =
+            turnTwo + [
+                ["role": "assistant", "content": "hello"],
+                ["role": "user", "content": "hi"],
+            ]
+        let tokens = try #require(render.fullRender(messages: threeTurns))
+        let canonical = try tokenizer.applyChatTemplate(
+            messages: threeTurns, tools: nil, additionalContext: nil)
+        #expect(Array(tokens.prefix(path.count)) == path)
+        #expect(Array(tokens.dropFirst(path.count)) == Array(canonical.dropFirst(path.count)))
+        let summary = try #require(render.emittedPathTelemetry?.summary)
+        #expect(summary.requestEdgeIndexedPrefix == path.count)
+    }
+
+    @Test func theBoundaryPathsStoredRenderComposesAndReturnsBytes() throws {
+        let index = EmittedPathIndex(byteBudget: 1 << 20)
+        let path = try registerTurnOne(into: index, emitted: { try reSplit(&$0) })
         let render = makeRender(index: index)
         let stored = try render.storedRender(messages: turnTwo)
         let expected = try tokenizer.renderChatTemplate(
             messages: turnTwo, tools: nil, additionalContext: ["add_generation_prompt": false])
+        let canonical = tokenizer.encode(text: expected, addSpecialTokens: false)
         #expect(stored.bytes == Array(expected.utf8))
-        #expect(stored.tokens == tokenizer.encode(text: expected, addSpecialTokens: false))
+        #expect(Array(stored.tokens.prefix(path.count)) == path)
+        #expect(
+            Array(stored.tokens.dropFirst(path.count)) == Array(canonical.dropFirst(path.count)))
         let summary = try #require(render.emittedPathTelemetry?.summary)
         #expect(summary.hits == 1)
         // Not the request edge: no request-edge prefix recorded.
         #expect(summary.requestEdgeIndexedPrefix == nil)
-        #expect(path.count < stored.tokens.count)
     }
 
-    @Test func everySpellingLandsOnTheOneRequestAccount() throws {
+    @Test func theFastPathsStoredRenderIsBytesOnlyAndConsultsNoIndex() throws {
         let index = EmittedPathIndex(byteBudget: 1 << 20)
         _ = try registerTurnOne(into: index)
         let render = makeRender(index: index)
-        _ = render.fullRender(messages: turnTwo)
-        _ = try render.lastUserPrefixRender(messages: turnTwo)
-        _ = try render.continuationRender(messages: turnTwo)
-        _ = try render.uncachedContinuationRender(messages: turnTwo)
+        let bytes = try #require(try render.storedRenderBytes(messages: turnTwo))
+        let expected = try tokenizer.renderChatTemplate(
+            messages: turnTwo, tools: nil, additionalContext: ["add_generation_prompt": false])
+        #expect(bytes == Array(expected.utf8))
+        #expect(index.statsSnapshot().resolves == 0)
+        #expect(render.emittedPathTelemetry?.summary.resolves == 0)
+    }
+
+    @Test func everySpellingLandsOnTheOneRequestAccountAndAgrees() throws {
+        let index = EmittedPathIndex(byteBudget: 1 << 20)
+        let path = try registerTurnOne(into: index, emitted: { try reSplit(&$0) })
+        let render = makeRender(index: index)
+        let full = try #require(render.fullRender(messages: turnTwo))
+        let lastUser = try render.lastUserPrefixRender(messages: turnTwo)
+        let continuation = try render.continuationRender(messages: turnTwo)
+        let uncached = try render.uncachedContinuationRender(messages: turnTwo)
+        // Every spelling of the same history serves the same fed ids, so a
+        // planner boundary measured on one is an offset into another.
+        for tokens in [full, lastUser, continuation, uncached] {
+            #expect(Array(tokens.prefix(path.count)) == path)
+        }
+        #expect(continuation == uncached)
+        #expect(full.starts(with: lastUser))
         let copy = render.carryingBaseRender([1, 2, 3])
         // The plumbed base render is served without a resolve.
         #expect(try copy.baseRender(messages: turnOne) == [1, 2, 3])
         let summary = try #require(render.emittedPathTelemetry?.summary)
         #expect(summary.resolves == 4)
         #expect(summary.hits == 4)
-        #expect(summary.shadowDifferences == 0)
         #expect(index.statsSnapshot().resolves == 4)
     }
 
@@ -139,7 +188,7 @@ struct ConversationRenderEmittedPathTests {
 
     @Test func aSealedNonIdentityRenderNeverConsultsTheIndex() throws {
         let index = EmittedPathIndex(byteBudget: 1 << 20)
-        _ = try registerTurnOne(into: index)
+        _ = try registerTurnOne(into: index, emitted: { try reSplit(&$0) })
         let render = makeRender(index: index)
         let pad = 248_056
         let imageSpace = try CacheKeySpace.make(
@@ -150,8 +199,11 @@ struct ConversationRenderEmittedPathTests {
         #expect(!imageSpace.isIdentity)
         let sealed = render.sealed(for: imageSpace)
         #expect(sealed.fullRender(messages: turnTwo) == nil)
-        // The leaf store's render runs in full; no resolve either.
-        _ = try sealed.storedRender(messages: turnTwo)
+        // The leaf store's render runs in full and canonically; no resolve.
+        let stored = try sealed.storedRender(messages: turnTwo)
+        let expected = try tokenizer.renderChatTemplate(
+            messages: turnTwo, tools: nil, additionalContext: ["add_generation_prompt": false])
+        #expect(stored.tokens == tokenizer.encode(text: expected, addSpecialTokens: false))
         #expect(index.statsSnapshot().resolves == 0)
         let summary = try #require(sealed.emittedPathTelemetry?.summary)
         #expect(summary.resolves == 0)
@@ -183,14 +235,14 @@ struct ConversationRenderEmittedPathTests {
 
         // The offline harness's spelling: a private index under a fingerprint.
         let index = EmittedPathIndex(byteBudget: 1 << 20)
-        _ = try registerTurnOne(into: index)
+        let path = try registerTurnOne(into: index, emitted: { try reSplit(&$0) })
         let telemetry = EmittedPathRequestTelemetry(diagnostics: nil)
         let learning = ConversationRender.uncached(
             tokenizer: tokenizer, emittedPathIndex: index,
             emittedPathFingerprint: Self.fingerprint, emittedPathTelemetry: telemetry)
-        _ = try learning.continuationRender(messages: turnTwo)
+        let tokens = try learning.continuationRender(messages: turnTwo)
+        #expect(Array(tokens.prefix(path.count)) == path)
         #expect(telemetry.summary.hits == 1)
-        #expect(telemetry.summary.shadowDifferences == 0)
     }
 
     @Test func aTemplateWithoutASingleTokenMarkerDisablesTheIndex() throws {
@@ -208,6 +260,34 @@ struct ConversationRenderEmittedPathTests {
             #expect(reason == "noEndOfTurnMarker")
         } else {
             Issue.record("a template without a marker must be ineligible")
+        }
+    }
+
+    @Test func aTokenizerWhoseSuffixEncodeIsNotInContextDisablesTheIndex() throws {
+        // A Metaspace-style pretokenizer that prepends a word-boundary
+        // token to the first pretoken of any standalone text (Nanbeige's
+        // `prepend_scheme: first`): the bytes after a marker encode
+        // differently on their own than inside the whole render, so no
+        // composition could reproduce the canonical input. The fingerprint
+        // is refused at marker derivation, before anything registers.
+        let prepending = MetaspacePrependingTokenizer(inner: tokenizer)
+        let index = EmittedPathIndex(byteBudget: 1 << 20)
+        let render = ConversationRender.forTextOnlyRequest(
+            tokenizer: prepending, toolSpecs: nil, renderContext: .canonical, hasMedia: false,
+            producesFlatTextTokens: true, modelFingerprint: Self.fingerprint,
+            cache: RenderTokenCache(), emittedPathIndex: index, diagnostics: nil)
+        let tokens = try #require(render.fullRender(messages: turnTwo))
+        #expect(
+            tokens
+                == prepending.encode(
+                    text: try prepending.renderChatTemplate(
+                        messages: turnTwo, tools: nil, additionalContext: nil),
+                    addSpecialTokens: false))
+        #expect(index.statsSnapshot().resolves == 0)
+        if case .ineligible(let reason) = render.emittedPathEligibility() {
+            #expect(reason == "suffixEncodeUnstable")
+        } else {
+            Issue.record("an unstable suffix encode must be ineligible")
         }
     }
 }

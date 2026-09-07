@@ -103,54 +103,39 @@ struct ServerCompletionLeafSkipLogTests {
 
     @Test func liveFallbackEligibilityReasonsAreInfoWithTheModeFields() {
         let log = LeafStorePhase.liveFallbackLog(
-            for: .intervened, mode: .directTool, preservesThinking: true)
+            for: .intervened, mode: .directToolLeaf, preservesThinking: true)
         #expect(log.stage == "liveLeafCapture")
         #expect(log.reason == "intervened")
         #expect(log.level == .info)
         #expect(fields(log) == [["mode", "directToolLeaf"], ["preservesThinking", "true"]])
         #expect(
             LeafStorePhase.liveFallbackLog(
-                for: .nonIdentityKeySpace, mode: .canonical, preservesThinking: false
+                for: .nonIdentityKeySpace, mode: .canonicalUserLeaf, preservesThinking: false
             ).reason == "non-identity-key-space")
         #expect(
             LeafStorePhase.liveFallbackLog(
-                for: .noGeneratedTokens, mode: .canonical, preservesThinking: false
+                for: .noGeneratedTokens, mode: .canonicalUserLeaf, preservesThinking: false
             ).level == .info)
     }
 
-    @Test func liveFallbackDisagreementWarnsOnAnAppendStableRender() {
-        let divergence = LiveLeafCapture.FallbackReason.divergence(
-            offset: 9, liveToken: 1, storedToken: 2, liveContext: [1], storedContext: [2])
-        let preserved = LeafStorePhase.liveFallbackLog(
-            for: divergence, mode: .canonical, preservesThinking: true)
-        #expect(preserved.level == .warning)
-        #expect(preserved.reason == "divergence")
-        #expect(
-            fields(preserved) == [
-                ["offset", "9"], ["liveToken", "1"], ["storedToken", "2"],
-                ["liveContext", "[1]"], ["storedContext", "[2]"],
-                ["mode", "canonicalLeaf"], ["preservesThinking", "true"],
-            ])
-        // A tool stretch is append-stable under every template.
-        let toolStretch = LeafStorePhase.liveFallbackLog(
-            for: .liveLongerThanStored(cacheOffset: 12, storedLen: 10),
-            mode: .directTool, preservesThinking: false)
-        #expect(toolStretch.level == .warning)
-        #expect(
-            fields(toolStretch) == [
-                ["cacheOffset", "12"], ["storedLen", "10"],
-                ["mode", "directToolLeaf"], ["preservesThinking", "false"],
-            ])
+    @Test func liveFallbackUnderANonThinkingTemplateNamesTheDirectMode() {
+        // An image-bearing request under a non-thinking template: the
+        // pre-existing direct labels, so dashboards keep their vocabulary.
+        let log = LeafStorePhase.liveFallbackLog(
+            for: .nonIdentityKeySpace, mode: .directLeaf, preservesThinking: false)
+        #expect(log.reason == "non-identity-key-space")
+        #expect(fields(log) == [["mode", "leaf"], ["preservesThinking", "false"]])
     }
 
-    @Test func liveFallbackDisagreementIsInfoUnderTheStripByDefaultCanonicalRender() {
-        // The strip-by-default render drops the emitted thinking, so the
-        // canonical path ends before the live one by design.
+    @Test func liveFallbackThinkStrippingUserBoundaryIsInfo() {
+        // The expected shape of a strip-by-default template at a stop
+        // finish — ADR-0009's boundary path, not a disagreement.
         let log = LeafStorePhase.liveFallbackLog(
-            for: .liveLongerThanStored(cacheOffset: 12, storedLen: 10),
-            mode: .canonical, preservesThinking: false)
+            for: .thinkStrippingUserBoundary, mode: .canonicalUserLeaf, preservesThinking: false)
+        #expect(log.stage == "liveLeafCapture")
+        #expect(log.reason == "think-stripping-user-boundary")
         #expect(log.level == .info)
-        #expect(log.reason == "live-longer-than-stored")
+        #expect(fields(log) == [["mode", "canonicalLeaf"], ["preservesThinking", "false"]])
     }
 
     @Test func liveFallbackCacheOffsetOutsideTheLivePathAlwaysWarns() {
@@ -158,7 +143,7 @@ struct ServerCompletionLeafSkipLogTests {
         // expected, whatever the render.
         let log = LeafStorePhase.liveFallbackLog(
             for: .cacheOffsetOutsideLivePath(cacheOffset: 4, promptCount: 4, liveCount: 8),
-            mode: .canonical, preservesThinking: false)
+            mode: .canonicalUserLeaf, preservesThinking: false)
         #expect(log.level == .warning)
         #expect(log.reason == "cache-offset-outside-live-path")
         #expect(
@@ -166,5 +151,56 @@ struct ServerCompletionLeafSkipLogTests {
                 ["cacheOffset", "4"], ["promptCount", "4"], ["liveCount", "8"],
                 ["mode", "canonicalLeaf"], ["preservesThinking", "false"],
             ])
+    }
+
+    // MARK: the leafStore event's source and boundary fields
+
+    private func reportFields(_ report: LeafStorePhase.Report) -> [String: String] {
+        Dictionary(report.fields, uniquingKeysWith: { first, _ in first })
+    }
+
+    @Test func aLiveLeafReportsItsSourceAndNoBoundary() {
+        var report = LeafStorePhase.Report()
+        report.mode = HTTPLeafStoreMode.directToolLeaf.rawValue
+        report.absorb(LeafStorePhase.LeafCapture(leafOffset: 120), path: .live)
+        let fields = reportFields(report)
+        #expect(fields["path"] == "live")
+        #expect(fields["source"] == "live")
+        #expect(fields["boundary"] == nil)
+        #expect(fields["leafOffset"] == "120")
+        #expect(fields["residualTokens"] == "0")
+    }
+
+    @Test func aBoundaryLeafReportsItsSourceAndTheBoundaryReason() {
+        var report = LeafStorePhase.Report()
+        report.boundaryReason = "think-stripping-user-boundary"
+        report.absorb(
+            LeafStorePhase.LeafCapture(leafOffset: 300, residualTokens: 42), path: .boundary)
+        let fields = reportFields(report)
+        #expect(fields["path"] == "boundary")
+        #expect(fields["source"] == "boundary")
+        #expect(fields["boundary"] == "think-stripping-user-boundary")
+        #expect(fields["residualTokens"] == "42")
+    }
+
+    @Test func aSkippedStoreReportsNoSourceButKeepsTheBoundaryReason() {
+        var report = LeafStorePhase.Report()
+        report.boundaryReason = "intervened"
+        report.absorb(LeafStorePhase.LeafCapture(skipReason: "prefill-threw"), path: .boundary)
+        let fields = reportFields(report)
+        #expect(fields["path"] == "skipped")
+        #expect(fields["source"] == nil)
+        #expect(fields["boundary"] == "intervened")
+        #expect(fields["skip"] == "prefill-threw")
+    }
+
+    @Test func theDirectExecutorsLeafIsLiveSourced() {
+        var report = LeafStorePhase.Report()
+        report.boundaryReason = "non-identity-key-space"
+        report.absorb(LeafStorePhase.LeafCapture(leafOffset: 9), path: .direct)
+        let fields = reportFields(report)
+        #expect(fields["path"] == "direct")
+        #expect(fields["source"] == "live")
+        #expect(fields["boundary"] == "non-identity-key-space")
     }
 }

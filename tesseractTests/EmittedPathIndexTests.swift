@@ -215,24 +215,76 @@ struct EmittedPathIndexTests {
     @Test func markerIsMemoizedPerFingerprintAndClearedWithIt() throws {
         let index = EmittedPathIndex(byteBudget: 1 << 20)
         let tokenizer = GreedyTokenizer(pieces: chatMLGreedyPieces)
-        var probes = 0
-        func probe() throws -> String {
-            probes += 1
-            return try tokenizer.renderChatTemplate(
+        var derivations = 0
+        func derive() -> EndOfTurnMarkerStatus {
+            derivations += 1
+            let probe = try? tokenizer.renderChatTemplate(
                 messages: [
                     ["role": "user", "content": "probe"],
                     ["role": "assistant", "content": EndOfTurnMarker.probeContent],
                 ],
                 tools: nil, additionalContext: ["add_generation_prompt": false])
+            guard let probe,
+                let marker = EndOfTurnMarker.derive(probeRender: probe, tokenizer: tokenizer)
+            else { return .unavailable(.noEndOfTurnMarker) }
+            return .available(marker)
         }
-        let first = index.endOfTurnMarker(
-            fingerprint: "fp-a", tokenizer: tokenizer, probe: probe)
-        let second = index.endOfTurnMarker(
-            fingerprint: "fp-a", tokenizer: tokenizer, probe: probe)
-        #expect(first?.tokenID == second?.tokenID)
-        #expect(probes == 1)
-        _ = index.endOfTurnMarker(fingerprint: "fp-b", tokenizer: tokenizer, probe: probe)
-        #expect(probes == 2)
+        let first = index.endOfTurnMarker(fingerprint: "fp-a", derive: derive)
+        let second = index.endOfTurnMarker(fingerprint: "fp-a", derive: derive)
+        #expect(first == second)
+        #expect(first.marker?.text == "<|im_end|>")
+        #expect(derivations == 1)
+        _ = index.endOfTurnMarker(fingerprint: "fp-b", derive: derive)
+        #expect(derivations == 2)
+    }
+
+    @Test func anUnavailableMarkerIsMemoizedWithItsReason() {
+        let index = EmittedPathIndex(byteBudget: 1 << 20)
+        var derivations = 0
+        func derive() -> EndOfTurnMarkerStatus {
+            derivations += 1
+            return .unavailable(.suffixEncodeUnstable)
+        }
+        #expect(
+            index.endOfTurnMarker(fingerprint: "fp-a", derive: derive)
+                == .unavailable(.suffixEncodeUnstable))
+        #expect(
+            index.endOfTurnMarker(fingerprint: "fp-a", derive: derive)
+                == .unavailable(.suffixEncodeUnstable))
+        #expect(derivations == 1)
+    }
+
+    // MARK: - The marker as a hard boundary
+
+    @Test func theSplitCheckAcceptsATokenizerThatEncodesTheSuffixInContext() throws {
+        let tokenizer = GreedyTokenizer(pieces: chatMLGreedyPieces + ["hello", "again"])
+        let render = try tokenizer.renderChatTemplate(
+            messages: [
+                ["role": "user", "content": "hi"],
+                ["role": "assistant", "content": "hello"],
+                ["role": "user", "content": "again"],
+            ],
+            tools: nil, additionalContext: ["add_generation_prompt": false])
+        #expect(
+            EndOfTurnMarker.splitsEncoding(
+                of: Array(render.utf8), marker: Self.marker, tokenizer: tokenizer))
+    }
+
+    @Test func theSplitCheckRefusesATokenizerWhoseSuffixEncodeDiffersStandalone() throws {
+        // Every suffix encode gets an extra leading id the whole encode
+        // never has (the Metaspace prepend-first shape).
+        let tokenizer = MetaspacePrependingTokenizer(
+            inner: GreedyTokenizer(pieces: chatMLGreedyPieces + ["hello", "again"]))
+        let render = try tokenizer.renderChatTemplate(
+            messages: [
+                ["role": "user", "content": "hi"],
+                ["role": "assistant", "content": "hello"],
+                ["role": "user", "content": "again"],
+            ],
+            tools: nil, additionalContext: ["add_generation_prompt": false])
+        #expect(
+            !EndOfTurnMarker.splitsEncoding(
+                of: Array(render.utf8), marker: Self.marker, tokenizer: tokenizer))
     }
 
     // MARK: - Terminal-token accounting (the Emitted Path itself)
