@@ -4,21 +4,25 @@
 //
 //  The **Leaf Store** phase of a cache-aware **Server Completion**: after the
 //  stream drive finishes, decide how (or whether) the finished turn's KV
-//  state is admitted as a leaf — the mode selection (direct vs boundary), the
-//  stored-conversation re-tokenization and key-space translation, the
-//  boundary routing (reusable-prefix probe → **Live Leaf Capture** decision →
-//  boundary plan only on its fallback), the **Speculative Canonical Prefill**
-//  seeding, and the dispatch to the model-affine executors
-//  (`LeafStorePhase+Executors.swift`). Previously the ~380-line `leafBlock`
-//  inside the completion drive; now a named phase whose skip ladder and
-//  decision rules are the module's interface.
+//  state is admitted as a leaf, and dispatch to the model-affine executors
+//  (`LeafStorePhase+Executors.swift`).
 //
-//  Canonical leaf policy:
-//  - thinking templates store one template-canonical leaf: from the live
-//    final cache when the fed path proves canonical (ADR-0062), otherwise
-//    synthesized from the transient boundary snapshot
-//  - non-thinking templates store the direct post-response leaf captured
-//    from the final cache
+//  Two routes (ADR-0063, decisions 10 to 13):
+//  - the fast path, for every turn the template renders verbatim for the
+//    next request and whose structural guards hold (`LiveLeafCapture`):
+//    register the turn's **Emitted Path** (one Jinja render to bytes, no
+//    tokenization), capture the leaf from the live final cache at the
+//    cache's own offset, admit it under the live path. No canonical
+//    render-and-tokenize, no continuation probe, no boundary lookup, no
+//    comparison against a re-render — the next request resolves to the
+//    same ids through the **Emitted Path Resolve**.
+//  - the boundary path, for a think-stripping template at a new-user-message
+//    boundary and for guard failures: the stored-conversation
+//    re-tokenization and key-space translation, the reusable-prefix probe,
+//    the boundary plan, the **Speculative Canonical Prefill** seeding, and
+//    the restore-and-re-prefill executor (or, under a non-thinking
+//    template, the render-trusting direct executor) — the pre-ADR-0063
+//    path, unchanged.
 //
 //  Isolation matches the drive that calls it (nonisolated, off-actor); every
 //  model-affine step hops through the **Model Session** (ADR-0016) and cache
@@ -38,6 +42,9 @@ nonisolated enum LeafStorePhase {
     struct Result: Sendable {
         var leafStore: AlphaTuner.LeafStore?
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
+        /// The admission's store diagnostics, for the per-request trace
+        /// (nil when no admission was attempted).
+        var admission: PrefixCacheManager.StoreDiagnostics?
         var report = Report()
     }
 
@@ -57,11 +64,28 @@ nonisolated enum LeafStorePhase {
         var mlxStart: HTTPPrefixCacheGeneration { mlxStartBox.value }
     }
 
+    /// The turn facts shared by both routes: the stored conversation (prompt
+    /// plus the generated assistant turn), the request's render, the
+    /// selected mode and the appended message the fidelity check compares
+    /// against.
+    struct Turn: Sendable {
+        let storedConversation: HTTPPrefixCacheConversation
+        let render: ConversationRender
+        let mode: HTTPLeafStoreMode
+        /// The assistant message appended to the stored conversation.
+        let storedMessage: HTTPPrefixCacheMessage
+        /// Every id the decode loop fed past the prompt, in order, stop id
+        /// included (`GeneratedTokenRecorder`).
+        let generatedTokens: [Int]
+        /// Whether the generation began inside a `<think>` block.
+        let startsInsideThinkBlock: Bool
+    }
+
     // Evolving MVP mid-refactor (see CLAUDE.md); the phase keeps the drive's
     // lenient structural limits — splitting further is deferred. The wide
     // parameter list is the phase's honest input set (the drive's request
     // context); `Inputs` carries its request-constant subset to the helpers.
-    // swiftlint:disable function_body_length function_parameter_count
+    // swiftlint:disable function_parameter_count
     /// `assistantReasoning` must be the wire-truth reasoning — what THIS
     /// client will echo back (the drive passes the streamed form for
     /// streaming clients). Intervened turns store like any other: the
@@ -81,7 +105,7 @@ nonisolated enum LeafStorePhase {
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         trace: inout CompletionTraceAccumulator
     ) async -> Result {
-        // swiftlint:enable function_body_length function_parameter_count
+        // swiftlint:enable function_parameter_count
         let inputs = Inputs(
             mlxStartBox: mlxStartBox, sessions: sessions, requestID: requestID,
             prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
@@ -101,66 +125,19 @@ nonisolated enum LeafStorePhase {
                 .ineligibleRender, fields: [("cause", "unkeyed")], in: diagnosticsContext)
             return result
         }
-
-        // 1. Build stored conversation (prompt + generated assistant turn).
-        let storedConversation = conversation.appendingAssistant(
-            .assistant(
-                content: assistantText,
-                reasoning: assistantReasoning ?? "",
-                toolCalls: toolCalls
-            ))
-
-        // 2. Re-tokenize stored conversation → flat render sequence, then
-        // translate into key space (identity for text-only). The translated
-        // path is what every capture offset and admission below keys on —
-        // length-equal to the prepared sequence, so key index == KV offset
-        // holds. The **Conversation Render** owns the whole C28 ladder
-        // (cache-eligibility, tail-replacement resolve, template fallback);
-        // the guard/nil diagnostics behavior is unchanged. Raw prompt
-        // messages, so assistant `reasoning_content` and `tool_calls`
-        // survive template rendering.
         guard let render = mlxStart.render else {
             // The render is nil exactly for an Unkeyed Completion, which the
             // guard above already returned on.
             return result
         }
-        let renderStart = Date.timeIntervalSinceReferenceDate
-        let storedRenderTokens: [Int]
-        let storedRenderBytes: [UInt8]?
-        do {
-            // The one Jinja render of the stored conversation: its tokens
-            // measure the leaf, its bytes key the Emitted Path registration.
-            let storedRender = try render.storedRender(
-                messages: storedConversation.promptMessages
-            )
-            storedRenderTokens = storedRender.tokens
-            storedRenderBytes = storedRender.bytes
-        } catch {
-            Log.agent.warning(
-                "Stored token sequence measurement failed — error=\(error.localizedDescription)"
-            )
-            result.report.recordSkip(
-                LeafSkipLog(
-                    stage: "leafStore", reason: "tokenization-failed", level: .warning,
-                    extraFields: []),
-                in: diagnosticsContext)
-            result.report.recordEmittedPathSkip(
-                .renderUnavailable, fields: [("cause", "renderThrew")], in: diagnosticsContext)
-            return result
-        }
-        let storedTokens: [Int]
-        switch mlxStart.keySpace.translate(renderTokens: storedRenderTokens) {
-        case .success(let translated):
-            storedTokens = translated
-        case .failure(let failure):
-            result.report.recordSkip(
-                LeafSkipLog(
-                    stage: "leafStore", reason: "render-translation-failed", level: .warning,
-                    extraFields: [("failure", "\(failure)")]),
-                in: diagnosticsContext)
-            return result
-        }
-        result.report.renderSeconds = secondsSince(renderStart)
+
+        // 1. Build the stored conversation (prompt + generated assistant turn).
+        let storedMessage = HTTPPrefixCacheMessage.assistant(
+            content: assistantText,
+            reasoning: assistantReasoning ?? "",
+            toolCalls: toolCalls
+        )
+        let storedConversation = conversation.appendingAssistant(storedMessage)
 
         let leafStoreMode = Self.selectHTTPLeafStoreMode(
             promptStartsThinking: promptStartsThinking,
@@ -174,190 +151,212 @@ nonisolated enum LeafStorePhase {
                     ? HTTPLeafContinuationKind.userTurn.rawValue
                     : HTTPLeafContinuationKind.toolResult.rawValue
             ))
-
-        // directLeaf snapshots the live final KV cache and needs none of the
-        // builder's probe/boundary/tokenizer work; only the boundary modes
-        // route through the GPU-free plan. This mapping is the one place
-        // that knows directLeaf is the render-trusting live path, so a
-        // future `HTTPLeafStoreMode` surfaces as a compile error here rather
-        // than a silently missed branch.
-        let boundaryMode: BoundaryLeafMode? =
-            switch leafStoreMode {
-            case .directToolLeaf: .directTool
-            case .canonicalUserLeaf: .canonical
-            case .directLeaf: nil
-            }
-
-        // The facts the Emitted Path registration needs beyond the request
-        // (ADR-0063): the stored render's bytes, the appended assistant
-        // message the fidelity check compares against, and whether the
-        // generation began inside a think block.
-        let emittedPathTurn = EmittedPathTurn(
-            storedRenderBytes: storedRenderBytes,
-            storedMessage: storedConversation.messages.last
-                ?? .assistant(
-                    content: assistantText, reasoning: assistantReasoning, toolCalls: toolCalls),
+        let turn = Turn(
+            storedConversation: storedConversation,
+            render: render,
+            mode: leafStoreMode,
+            storedMessage: storedMessage,
+            generatedTokens: mlxStart.generatedTokens.snapshot,
             startsInsideThinkBlock: promptStartsThinking
         )
 
-        let capture: LeafCapture
-        let path: Report.Path
-        var pendingSeed: SpeculativeCanonicalPrefill.Seed?
-        if let boundaryMode {
-            let planStart = Date.timeIntervalSinceReferenceDate
-            guard
-                let route = await routeBoundaryMode(
-                    boundaryMode,
-                    inputs: inputs,
-                    storedConversation: storedConversation,
-                    storedTokens: storedTokens,
-                    // C31: the stored render just computed above is the
-                    // identical computation the builder's base probe would
-                    // re-run (verified in C28) — carry it so the base render
-                    // runs once per request.
-                    probeRender: render.carryingBaseRender(storedRenderTokens),
-                    preservesThinking: render.renderContext.preservesThinking,
-                    emittedPath: emittedPathTurn,
-                    report: &result.report
-                )
-            else { return result }
-            result.report.planSeconds = secondsSince(planStart)
-
-            // Seed the **Speculative Canonical Prefill** before the GPU-side
-            // store: the seed spawns the future-path probe immediately, so
-            // its CPU render+tokenize overlaps the store (#76's earlier
-            // start). Kept only if the leaf store below succeeds. The
-            // worth-it floor differs by trigger: a canonical leaf IS the
-            // strip floor; a tool stretch measures its rewind span from the
-            // last-user boundary.
-            pendingSeed = Self.speculativeSeedPlan(
-                boundaryMode: boundaryMode,
-                renderContext: render.renderContext
-            ).map { plan in
-                SpeculativeCanonicalPrefill.makeSeed(
-                    storedConversation: storedConversation,
-                    render: render,
-                    keySpace: mlxStart.keySpace,
-                    partitionKey: mlxStart.partitionKey,
-                    prefillStepSize: mlxStart.prefillStepSize,
-                    ssdEnabled: mlxStart.ssdEnabled,
-                    seedsPositionAnchor: mlxStart.seedsPositionAnchor,
-                    canonicalLeafOffset: boundaryMode == .canonical
-                        ? route.leafOffset
-                        : mlxStart.transientLastUserBoundarySnapshot?.tokenOffset ?? 0,
-                    idleDelay: plan.idleDelay,
-                    ramOnlySpine: plan.ramOnlySpine,
-                    diagnostics: diagnosticsContext
-                )
-            }
-
-            let context = LeafAdmissionContext(
-                storedTokens: route.storedTokens, inputs: inputs,
-                stages: Self.leafStages(for: boundaryMode))
-            path = route.path
-            switch route {
-            case .live:
-                capture = await captureLiveLeaf(
-                    sessions: sessions, mlxStartBox: mlxStartBox, context: context)
-            case .boundary(let boundarySnapshot, let positionAnchorRopeDelta, _):
-                capture = await captureStructuredLeafFromBoundary(
-                    sessions: sessions,
-                    boundarySnapshot: boundarySnapshot,
-                    positionAnchorRopeDelta: positionAnchorRopeDelta,
-                    prefillStepSize: mlxStart.prefillStepSize,
-                    tokenNDim: mlxStart.tokenNDim,
-                    context: context
-                )
-            }
-        } else {
-            // Non-thinking templates: the pre-existing live path. The direct
-            // executor snapshots the live final cache under the stored path.
-            // The dark launch registers only turns the Live Leaf Capture
-            // proved canonical; the render-trusting direct path runs no
-            // comparison, so it registers nothing yet (#476). The ticket's
-            // own guards are still named first, so an image-bearing or
-            // intervened turn logs its real reason here as well.
-            let directSkip: (EmittedPathRegistration.SkipReason, [(String, String)]) =
-                if !mlxStart.keySpace.isIdentity {
-                    (.nonIdentityKeySpace, [])
-                } else if intervened {
-                    (.intervened, [])
-                } else if mlxStart.generatedTokens.snapshot.isEmpty {
-                    (.noGeneratedTokens, [])
-                } else {
-                    (.notProvenLive, [("cause", "directLeaf")])
-                }
+        // 2. The fast-path eligibility (GPU-free, no render): the live final
+        // cache is the leaf unless a structural guard or the render rule
+        // sends the turn to the boundary path.
+        let preservesThinking = render.renderContext.preservesThinking
+        let decision = LiveLeafCapture.decide(
+            mode: leafStoreMode,
+            preservesThinking: preservesThinking,
+            promptKeyPath: mlxStart.keySpace.keyPath,
+            generatedTokens: turn.generatedTokens,
+            cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache),
+            intervened: inputs.intervened,
+            keySpaceIsIdentity: mlxStart.keySpace.isIdentity
+        )
+        switch decision {
+        case .live(let offset):
+            await storeLive(offset: offset, turn: turn, inputs: inputs, result: &result)
+        case .boundary(let reason):
+            let record = liveFallbackLog(
+                for: reason, mode: leafStoreMode, preservesThinking: preservesThinking)
+            record.emit(in: diagnosticsContext)
+            result.report.boundaryReason = record.reason
+            LeafStoreCounters.shared.noteBoundaryTurn(reason: record.reason)
             result.report.recordEmittedPathSkip(
-                directSkip.0, fields: directSkip.1, in: diagnosticsContext)
-            path = .direct
-            capture = await captureDirectLeaf(
-                sessions: sessions, mlxStartBox: mlxStartBox,
-                context: LeafAdmissionContext(
-                    storedTokens: storedTokens, inputs: inputs, stages: .direct))
+                EmittedPathRegistration.skipReason(for: reason), in: diagnosticsContext)
+            await storeFromBoundary(turn: turn, inputs: inputs, result: &result)
         }
 
-        result.report.absorb(capture, path: path)
-        if let admission = capture.admission {
+        if let admission = result.admission {
             trace.ingest(evictions: admission.evictions, diagnostics: diagnosticsContext)
             trace.logSupersessions(admission.supersededLeaves, diagnostics: diagnosticsContext)
-        }
-        // A stored canonical leaf still ends at the think-strip divergence;
-        // everything past it would re-prefill interactively on the next user
-        // message — hand the seed to the post-finish hook so the pass can
-        // extend the leaf while the GPU is idle (#76).
-        result.leafStore = capture.leafStore
-        if capture.leafStore != nil {
-            result.speculativeSeed = pendingSeed
-        } else {
-            pendingSeed?.discard()
         }
         return result
     }
 
-    // MARK: - Boundary routing
+    // MARK: - The fast path
 
-    /// Where a boundary mode's leaf comes from, once the reusable-prefix
-    /// probe, the **Live Leaf Capture** decision and — only on its fallback —
-    /// the boundary plan have run.
-    enum BoundaryRoute {
-        /// **Live Leaf Capture**: the live final cache at the cache's own
-        /// offset, admitted under the probed path's prefix of that length.
-        case live(storedTokens: [Int])
-        /// Restore the boundary, re-prefill `storedTokens[boundary.tokenOffset...]`
-        /// (seeded with the position-anchor delta on the vision container),
-        /// capture at `storedTokens.count`.
-        case boundary(HybridCacheSnapshot, positionAnchorRopeDelta: Int?, storedTokens: [Int])
+    /// Register the turn's Emitted Path, capture the live final cache at
+    /// `offset` and admit it under the live path (decision 10). A fidelity
+    /// rejection registers nothing and still stores the leaf: the state
+    /// matches the fed ids by construction, and the next request renders
+    /// canonically and re-prefills from the first differing token, visibly.
+    private static func storeLive(
+        offset: Int,
+        turn: Turn,
+        inputs: Inputs,
+        result: inout Result
+    ) async {
+        let mlxStart = inputs.mlxStart
 
-        var storedTokens: [Int] {
-            switch self {
-            case .live(let tokens), .boundary(_, _, let tokens): tokens
-            }
+        // 1. Register the turn's Emitted Path.
+        registerEmittedPath(turn: turn, inputs: inputs, report: &result.report)
+
+        // 2/3. Capture at the cache's offset, admit under the live path.
+        let livePath = LiveLeafCapture.livePath(
+            promptKeyPath: mlxStart.keySpace.keyPath,
+            generatedTokens: turn.generatedTokens,
+            offset: offset)
+        // A tool-call boundary under a think-stripping template still arms
+        // **Stretch Abandonment** (ADR-0009): the next real user message
+        // re-renders the stretch, and the pass pre-prefills that render
+        // while the GPU is idle. No canonical leaf exists here for the
+        // immediate seed to extend — the live path is the future path.
+        let pendingSeed = speculativeSeed(for: turn, inputs: inputs, canonicalLeafOffset: nil)
+        let stages = leafStages(for: turn.mode)
+        let capture = await captureLiveLeaf(
+            sessions: inputs.sessions, mlxStartBox: inputs.mlxStartBox,
+            context: LeafAdmissionContext(storedTokens: livePath, inputs: inputs, stages: stages))
+        result.report.absorb(capture, path: .live)
+        result.conclude(capture, pendingSeed: pendingSeed)
+    }
+
+    // MARK: - The boundary path
+
+    /// The pre-ADR-0063 route: measure the stored conversation (render and
+    /// tokenize, translate into key space), then either the boundary
+    /// executor behind the reusable-prefix probe and the boundary plan, or
+    /// the render-trusting direct executor under a non-thinking template.
+    private static func storeFromBoundary(
+        turn: Turn,
+        inputs: Inputs,
+        result: inout Result
+    ) async {
+        let mlxStart = inputs.mlxStart
+        let diagnostics = inputs.diagnosticsContext
+
+        // The stored conversation's render-space tokens, translated into key
+        // space (identity for text-only). The translated path is what every
+        // capture offset and admission below keys on — length-equal to the
+        // prepared sequence, so key index == KV offset holds. Raw prompt
+        // messages, so assistant `reasoning_content` and `tool_calls`
+        // survive template rendering.
+        let renderStart = Date.timeIntervalSinceReferenceDate
+        let storedRenderTokens: [Int]
+        do {
+            storedRenderTokens = try turn.render.storedRender(
+                messages: turn.storedConversation.promptMessages
+            ).tokens
+        } catch {
+            Log.agent.warning(
+                "Stored token sequence measurement failed — error=\(error.localizedDescription)"
+            )
+            result.report.recordSkip(
+                LeafSkipLog(
+                    stage: "leafStore", reason: "tokenization-failed", level: .warning,
+                    extraFields: []),
+                in: diagnostics)
+            return
         }
+        let storedTokens: [Int]
+        switch mlxStart.keySpace.translate(renderTokens: storedRenderTokens) {
+        case .success(let translated):
+            storedTokens = translated
+        case .failure(let failure):
+            result.report.recordSkip(
+                LeafSkipLog(
+                    stage: "leafStore", reason: "render-translation-failed", level: .warning,
+                    extraFields: [("failure", "\(failure)")]),
+                in: diagnostics)
+            return
+        }
+        result.report.renderSeconds = secondsSince(renderStart)
+
+        guard let boundaryMode = turn.mode.boundaryMode else {
+            // Non-thinking templates: the render-trusting direct executor
+            // snapshots the live final cache under the stored path.
+            let capture = await captureDirectLeaf(
+                sessions: inputs.sessions, mlxStartBox: inputs.mlxStartBox,
+                context: LeafAdmissionContext(
+                    storedTokens: storedTokens, inputs: inputs, stages: .direct))
+            result.report.absorb(capture, path: .direct)
+            result.conclude(capture, pendingSeed: nil)
+            return
+        }
+
+        let planStart = Date.timeIntervalSinceReferenceDate
+        guard
+            let route = await routeBoundaryMode(
+                boundaryMode,
+                inputs: inputs,
+                storedConversation: turn.storedConversation,
+                storedTokens: storedTokens,
+                // C31: the stored render just computed above is the identical
+                // computation the builder's base probe would re-run — carry
+                // it so the base render runs once per request.
+                probeRender: turn.render.carryingBaseRender(storedRenderTokens),
+                report: &result.report
+            )
+        else { return }
+        result.report.planSeconds = secondsSince(planStart)
+
+        // Seed the **Speculative Canonical Prefill** before the GPU-side
+        // store: the seed spawns the future-path probe immediately, so its
+        // CPU render+tokenize overlaps the store (#76's earlier start). Kept
+        // only if the leaf store below succeeds. The worth-it floor differs
+        // by trigger: a canonical leaf IS the strip floor; a tool stretch
+        // measures its rewind span from the last-user boundary.
+        let pendingSeed = speculativeSeed(
+            for: turn, inputs: inputs, canonicalLeafOffset: route.leafOffset)
+        let capture = await captureStructuredLeafFromBoundary(
+            sessions: inputs.sessions,
+            boundarySnapshot: route.boundary,
+            positionAnchorRopeDelta: route.positionAnchorRopeDelta,
+            prefillStepSize: mlxStart.prefillStepSize,
+            tokenNDim: mlxStart.tokenNDim,
+            context: LeafAdmissionContext(
+                storedTokens: route.storedTokens, inputs: inputs,
+                stages: leafStages(for: boundaryMode))
+        )
+        result.report.absorb(capture, path: .boundary)
+        result.conclude(capture, pendingSeed: pendingSeed)
+    }
+
+    /// The restore boundary a boundary mode's leaf is synthesized from, once
+    /// the reusable-prefix probe and the boundary plan have run.
+    struct BoundaryRoute {
+        let boundary: HybridCacheSnapshot
+        /// The position-anchor delta the residual re-prefill is seeded with
+        /// on the vision container.
+        let positionAnchorRopeDelta: Int?
+        /// The canonical path the leaf is admitted under: restore `boundary`,
+        /// re-prefill `storedTokens[boundary.tokenOffset...]`, capture at
+        /// `storedTokens.count`.
+        let storedTokens: [Int]
 
         /// The leaf's offset — what the speculative seed measures from.
         var leafOffset: Int { storedTokens.count }
-
-        var path: Report.Path {
-            switch self {
-            case .live: .live
-            case .boundary: .boundary
-            }
-        }
     }
 
-    /// Route one boundary mode: probe the shared token path, decide the live
-    /// capture on it, and only when the live path is refused choose a restore
-    /// boundary (**Snapshot Resolution** may hydrate from SSD, and is never
-    /// paid for a leaf the live path already holds). Returns `nil` after
-    /// recording the decidable skip in `report`.
+    /// Route one boundary mode: probe the shared token path and choose a
+    /// restore boundary for it (**Snapshot Resolution** may hydrate from
+    /// SSD). Returns `nil` after recording the decidable skip in `report`.
     static func routeBoundaryMode(
         _ mode: BoundaryLeafMode,
         inputs: Inputs,
         storedConversation: HTTPPrefixCacheConversation,
         storedTokens: [Int],
         probeRender: ConversationRender,
-        preservesThinking: Bool,
-        emittedPath: EmittedPathTurn,
         report: inout Report
     ) async -> BoundaryRoute? {
         let mlxStart = inputs.mlxStart
@@ -375,38 +374,7 @@ nonisolated enum LeafStorePhase {
             probedTokens = tokens
         case .skip(let reason):
             report.recordSkip(leafSkipLog(for: reason, mode: mode), in: diagnostics)
-            report.recordEmittedPathSkip(
-                .notProvenLive, fields: [("cause", "probeSkipped")], in: diagnostics)
             return nil
-        }
-
-        // **Live Leaf Capture** (GPU-free): when the fed token path is a
-        // prefix of the canonical stored path, the live final cache already
-        // holds this leaf's state and the boundary restore + residual
-        // re-prefill would only recompute it — take the live cache instead.
-        // Any disagreement keeps the boundary executor, logged so an
-        // unexpected divergence on an append-stable render is visible.
-        switch LiveLeafCapture.decide(
-            promptKeyPath: mlxStart.keySpace.keyPath,
-            generatedTokens: mlxStart.generatedTokens.snapshot,
-            cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache),
-            storedTokens: probedTokens,
-            intervened: inputs.intervened,
-            keySpaceIsIdentity: mlxStart.keySpace.isIdentity
-        ) {
-        case .live(let offset):
-            // ADR-0063 dark launch: the fed path proved canonical up to the
-            // cache offset — register the turn's Emitted Path.
-            registerEmittedPath(emittedPath, inputs: inputs, render: probeRender, report: &report)
-            return .live(storedTokens: Array(probedTokens.prefix(offset)))
-        case .boundary(let reason):
-            let record = liveFallbackLog(
-                for: reason, mode: mode, preservesThinking: preservesThinking)
-            record.emit(in: diagnostics)
-            report.liveFallbackReason = record.reason
-            let skip = EmittedPathRegistration.skipReason(for: reason)
-            report.recordEmittedPathSkip(
-                skip.reason, fields: skip.detail.map { [("cause", $0)] } ?? [], in: diagnostics)
         }
 
         let transientBoundary: HybridCacheSnapshot? =
@@ -461,56 +429,56 @@ nonisolated enum LeafStorePhase {
                 }
                 positionAnchorRopeDelta = delta
             }
-            return .boundary(
-                boundary, positionAnchorRopeDelta: positionAnchorRopeDelta, storedTokens: tokens)
+            return BoundaryRoute(
+                boundary: boundary, positionAnchorRopeDelta: positionAnchorRopeDelta,
+                storedTokens: tokens)
         }
     }
 
-    // MARK: - Emitted Path registration (ADR-0063, dark launch)
+    // MARK: - Emitted Path registration (ADR-0063)
 
-    /// The turn facts the registration needs beyond the request itself.
-    struct EmittedPathTurn: Sendable {
-        /// The stored conversation's render bytes (no generation prompt);
-        /// `nil` when the tokenizer cannot render to bytes.
-        let storedRenderBytes: [UInt8]?
-        /// The assistant message appended to the stored conversation.
-        let storedMessage: HTTPPrefixCacheMessage
-        /// Whether the generation began inside a `<think>` block.
-        let startsInsideThinkBlock: Bool
-    }
-
-    /// Register the finished turn's Emitted Path, once the Live Leaf
-    /// Capture has decided live: the fed prompt ids and generated ids, the
-    /// stop id, and the stored render's bytes through its last end-of-turn
-    /// marker. Every outcome lands in the diagnostics net and the report.
-    static func registerEmittedPath(
-        _ turn: EmittedPathTurn,
-        inputs: Inputs,
-        render: ConversationRender,
-        report: inout Report
-    ) {
+    /// Register the finished turn's Emitted Path: the fed prompt ids and
+    /// generated ids, the stop id, and the stored conversation's render to
+    /// bytes — the fast path's one Jinja render, no tokenization — hashed
+    /// through its last end-of-turn marker. Every outcome lands in the
+    /// diagnostics net and the report; an ineligible render never renders.
+    static func registerEmittedPath(turn: Turn, inputs: Inputs, report: inout Report) {
         let diagnostics = inputs.diagnosticsContext
         let mlxStart = inputs.mlxStart
-        let start = Date.timeIntervalSinceReferenceDate
+        let render = turn.render
         let index: EmittedPathIndex
         let fingerprint: String
         let marker: EndOfTurnMarker
         switch render.emittedPathEligibility() {
-        case .ineligible(let reason):
-            let noMarker = EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue
+        case .ineligible(let reason, let cause):
             report.recordEmittedPathSkip(
-                reason == noMarker ? .noEndOfTurnMarker : .ineligibleRender,
-                fields: reason == noMarker ? [] : [("cause", reason)], in: diagnostics)
+                reason, fields: cause.map { [("cause", $0)] } ?? [], in: diagnostics)
             return
         case .eligible(let engaged, let scoped, let derived):
             index = engaged
             fingerprint = scoped
             marker = derived
         }
-        guard let storedRenderBytes = turn.storedRenderBytes else {
+
+        let renderStart = Date.timeIntervalSinceReferenceDate
+        let storedRenderBytes: [UInt8]?
+        do {
+            defer { report.renderSeconds = secondsSince(renderStart) }
+            storedRenderBytes = try render.storedRenderBytes(
+                messages: turn.storedConversation.promptMessages)
+        } catch {
+            Log.agent.warning("Stored render failed — error=\(error.localizedDescription)")
+            report.recordEmittedPathSkip(
+                .renderUnavailable, fields: [("cause", "renderThrew")], in: diagnostics)
+            return
+        }
+        guard let storedRenderBytes else {
+            // A tokenizer that cannot render to bytes.
             report.recordEmittedPathSkip(.renderUnavailable, in: diagnostics)
             return
         }
+
+        let start = Date.timeIntervalSinceReferenceDate
         let outcome = EmittedPathRegistration.register(
             EmittedPathRegistration.Inputs(
                 index: index,
@@ -520,7 +488,7 @@ nonisolated enum LeafStorePhase {
                 storedRenderBytes: storedRenderBytes,
                 storedMessage: turn.storedMessage,
                 promptKeyPath: mlxStart.keySpace.keyPath,
-                generatedTokens: mlxStart.generatedTokens.snapshot,
+                generatedTokens: turn.generatedTokens,
                 stoppedOn: mlxStart.generatedTokens.stopToken,
                 toolCallFormat: mlxStart.toolCallFormat,
                 tools: render.toolSpecs,
@@ -559,6 +527,86 @@ nonisolated enum LeafStorePhase {
             LeafStages(
                 store: "canonicalLeafStore", capture: "canonicalLeafCapture",
                 admission: "canonicalLeafAdmission", source: "canonicalLeaf")
+        }
+    }
+
+    /// The stage labels of a leaf-store mode: the boundary modes' own, and
+    /// the pre-existing direct labels for the non-thinking mode.
+    static func leafStages(for mode: HTTPLeafStoreMode) -> LeafStages {
+        mode.boundaryMode.map { leafStages(for: $0) } ?? .direct
+    }
+
+    // MARK: - Speculative seeding
+
+    /// The seed this turn arms, if its mode and render call for one (the
+    /// trigger table below); `nil` under the preserve-thinking render and
+    /// for the direct mode. `canonicalLeafOffset` is where the boundary
+    /// path's canonical leaf ends — what the immediate seed extends — and
+    /// `nil` on the fast path, whose leaf is the live path: only Stretch
+    /// Abandonment can arm there, whatever the mode.
+    private static func speculativeSeed(
+        for turn: Turn,
+        inputs: Inputs,
+        canonicalLeafOffset: Int?
+    ) -> SpeculativeCanonicalPrefill.Seed? {
+        guard let boundaryMode = turn.mode.boundaryMode,
+            let plan = speculativeSeedPlan(
+                boundaryMode: boundaryMode, renderContext: turn.render.renderContext)
+        else { return nil }
+        let mlxStart = inputs.mlxStart
+        let leafOffset: Int
+        switch boundaryMode {
+        case .canonical:
+            guard let canonicalLeafOffset else { return nil }
+            leafOffset = canonicalLeafOffset
+        case .directTool:
+            leafOffset = mlxStart.transientLastUserBoundarySnapshot?.tokenOffset ?? 0
+        }
+        return SpeculativeCanonicalPrefill.makeSeed(
+            storedConversation: turn.storedConversation,
+            render: turn.render,
+            keySpace: mlxStart.keySpace,
+            partitionKey: mlxStart.partitionKey,
+            prefillStepSize: mlxStart.prefillStepSize,
+            ssdEnabled: mlxStart.ssdEnabled,
+            seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+            canonicalLeafOffset: leafOffset,
+            idleDelay: plan.idleDelay,
+            ramOnlySpine: plan.ramOnlySpine,
+            diagnostics: inputs.diagnosticsContext
+        )
+    }
+
+    /// How a finished turn seeds the **Speculative Canonical Prefill** —
+    /// the trigger table (issues #76, #100):
+    /// - A canonical-user boundary (stop-finish answer) seeds immediately,
+    ///   durable — the original #76 trigger.
+    /// - A tool-call boundary arms **Stretch Abandonment**'s timer: the
+    ///   pass starts only if no follow-up request lands inside the idle
+    ///   window, and its spine admits RAM-only so a false alarm (the tool
+    ///   result arrives) costs zero SSD writes (ADR-0009).
+    /// - Under the **Preserve-Thinking Render** (issue #98) nothing seeds:
+    ///   the render is append-stable, so the canonical future path equals
+    ///   the live path and there is no Think-Strip Rewind span to
+    ///   pre-prefill.
+    struct SpeculativeSeedPlan: Equatable {
+        let idleDelay: Duration
+        let ramOnlySpine: Bool
+    }
+
+    static func speculativeSeedPlan(
+        boundaryMode: BoundaryLeafMode,
+        renderContext: TemplateRenderContext
+    ) -> SpeculativeSeedPlan? {
+        guard !renderContext.preservesThinking else { return nil }
+        switch boundaryMode {
+        case .canonical:
+            return SpeculativeSeedPlan(idleDelay: .zero, ramOnlySpine: false)
+        case .directTool:
+            return SpeculativeSeedPlan(
+                idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,
+                ramOnlySpine: true
+            )
         }
     }
 
@@ -647,24 +695,20 @@ nonisolated enum LeafStorePhase {
         }
     }
 
-    /// The wire record of a **Live Leaf Capture** refusal (stage
-    /// `liveLeafCapture`). Eligibility-only reasons — an intervened turn, an
-    /// image key space, no fed ids — are `.info` like every other expected
-    /// skip. A render that ended before or disagreed with the emission is
-    /// `.warning` when the render is expected to be append-stable (the
-    /// preserve-thinking render, and every tool stretch) and `.info` under
-    /// the strip-by-default canonical render, which drops the emitted
-    /// thinking by design. A cache offset outside the live path is the loop
-    /// and the cache disagreeing about what was fed, and is always
-    /// `.warning`. Pure, so `ServerCompletionLeafSkipLogTests` pins it beside
-    /// `leafSkipLog`.
+    /// The wire record of a turn the fast path did not take (stage
+    /// `liveLeafCapture`): why the turn took the boundary path. The
+    /// structural guards keep the reasons and levels ADR-0062 gave them —
+    /// an intervened turn, an image key space and no fed ids are `.info`
+    /// like every other expected skip; a cache offset outside the live path
+    /// is the loop and the cache disagreeing about what was fed, always
+    /// `.warning`. The render rule (a think-stripping template at a user
+    /// boundary) is the expected shape of that template, `.info`. Pure, so
+    /// `ServerCompletionLeafSkipLogTests` pins it beside `leafSkipLog`.
     static func liveFallbackLog(
         for reason: LiveLeafCapture.FallbackReason,
-        mode: BoundaryLeafMode,
+        mode: HTTPLeafStoreMode,
         preservesThinking: Bool
     ) -> LeafSkipLog {
-        let stripExpected = mode == .canonical && !preservesThinking
-        let disagreement: PrefixCacheDiagnostics.Level = stripExpected ? .info : .warning
         func record(
             _ token: String, _ level: PrefixCacheDiagnostics.Level,
             _ fields: [(String, String)] = []
@@ -690,53 +734,47 @@ nonisolated enum LeafStorePhase {
                     ("cacheOffset", "\(cacheOffset)"), ("promptCount", "\(promptCount)"),
                     ("liveCount", "\(liveCount)"),
                 ])
-        case .liveLongerThanStored(let cacheOffset, let storedLen):
-            return record(
-                "live-longer-than-stored", disagreement,
-                [("cacheOffset", "\(cacheOffset)"), ("storedLen", "\(storedLen)")])
-        case .divergence(let offset, let liveToken, let storedToken, let live, let stored):
-            return record(
-                "divergence", disagreement,
-                [
-                    ("offset", "\(offset)"), ("liveToken", "\(liveToken)"),
-                    ("storedToken", "\(storedToken)"),
-                    ("liveContext", "\(live)"), ("storedContext", "\(stored)"),
-                ])
+        case .thinkStrippingUserBoundary:
+            return record("think-stripping-user-boundary", .info)
         }
     }
+}
 
-    // MARK: - Speculative seeding
+// MARK: - Result assembly
 
-    /// How a finished turn seeds the **Speculative Canonical Prefill** —
-    /// the trigger table (issues #76, #100):
-    /// - A canonical-user boundary (stop-finish answer) seeds immediately,
-    ///   durable — the original #76 trigger.
-    /// - A tool-call boundary arms **Stretch Abandonment**'s timer: the
-    ///   pass starts only if no follow-up request lands inside the idle
-    ///   window, and its spine admits RAM-only so a false alarm (the tool
-    ///   result arrives) costs zero SSD writes (ADR-0009).
-    /// - Under the **Preserve-Thinking Render** (issue #98) nothing seeds:
-    ///   the render is append-stable, so the canonical future path equals
-    ///   the live path and there is no Think-Strip Rewind span to
-    ///   pre-prefill.
-    struct SpeculativeSeedPlan: Equatable {
-        let idleDelay: Duration
-        let ramOnlySpine: Bool
+nonisolated extension LeafStorePhase.Result {
+    /// Fold what an executor produced: the tuner record when the leaf
+    /// survived, and the seed only then — a stored canonical leaf still ends
+    /// at the think-strip divergence, and everything past it would re-prefill
+    /// interactively on the next user message, so the seed goes to the
+    /// post-finish hook to extend the leaf while the GPU is idle (#76).
+    fileprivate mutating func conclude(
+        _ capture: LeafStorePhase.LeafCapture,
+        pendingSeed: SpeculativeCanonicalPrefill.Seed?
+    ) {
+        leafStore = capture.leafStore
+        admission = capture.admission
+        if capture.leafStore != nil {
+            speculativeSeed = pendingSeed
+        } else {
+            pendingSeed?.discard()
+        }
     }
+}
 
-    static func speculativeSeedPlan(
-        boundaryMode: BoundaryLeafMode,
-        renderContext: TemplateRenderContext
-    ) -> SpeculativeSeedPlan? {
-        guard !renderContext.preservesThinking else { return nil }
-        switch boundaryMode {
-        case .canonical:
-            return SpeculativeSeedPlan(idleDelay: .zero, ramOnlySpine: false)
-        case .directTool:
-            return SpeculativeSeedPlan(
-                idleDelay: SpeculativeCanonicalPrefill.stretchAbandonmentIdleWindow,
-                ramOnlySpine: true
-            )
+// MARK: - Mode vocabulary
+
+nonisolated extension HTTPLeafStoreMode {
+    /// The boundary route's narrower vocabulary; `nil` for the
+    /// render-trusting direct mode, which never enters the builder. The one
+    /// place that knows `directLeaf` is that mode, so a future
+    /// `HTTPLeafStoreMode` surfaces as a compile error here rather than a
+    /// silently missed branch.
+    var boundaryMode: BoundaryLeafMode? {
+        switch self {
+        case .directToolLeaf: .directTool
+        case .canonicalUserLeaf: .canonical
+        case .directLeaf: nil
         }
     }
 }

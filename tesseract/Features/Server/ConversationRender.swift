@@ -21,15 +21,19 @@
 //  #475), the planner's generation-prompt measure, and the agent hand-off
 //  suffix — the last two plain-text encodes past the last end-of-turn marker.
 //
-//  Emitted Path Resolve (ticket #475, dark launch): every render that
-//  produces bytes — the cache's resolves and the split render+encode the
-//  fallbacks run — hands those bytes to `EmittedPathResolve.compose`
-//  against the **Emitted Path Index**, and the composition is shadow-
-//  checked against the canonical tokens the verb returns. The verbs still
-//  return the canonical tokens; #476 serves the composition. The index is
-//  consulted only under an engaged fingerprint, so an image-bearing (sealed
-//  non-identity) render, an unknown fingerprint, and the uncached replay
-//  renders never touch it; the request edge logs that skip once per request.
+//  Emitted Path Resolve (tickets #475/#476): every render that produces
+//  bytes — the cache's resolves and the split render+encode the fallbacks
+//  run — hands those bytes to `EmittedPathResolve.compose` against the
+//  **Emitted Path Index**, and the verb serves the composition on a hit:
+//  the fed ids for every registered turn, the canonical encode only for the
+//  bytes after the deepest hit. A miss serves the canonical tokens. Every
+//  spelling of one history serves the same ids, so a planner boundary
+//  measured on one is an offset into another. The index is consulted only
+//  under an engaged fingerprint, so an image-bearing (sealed non-identity)
+//  render, an unknown fingerprint, and the uncached replay renders never
+//  touch it; the request edge logs that skip once per request. The leaf
+//  store's fast path (`storedRenderBytes`) renders to bytes only and never
+//  resolves: the live leaf is stored under the ids that were fed.
 //
 //  Eligibility is decided at construction, from instance truth, once:
 //  a `nil` `cacheFingerprint` means "always render+encode in full" — the
@@ -277,10 +281,10 @@ nonisolated struct ConversationRender: @unchecked Sendable {
             emittedPathTelemetry?.recordSkip(spelling: .request, reason: "renderFallback")
             return nil
         }
-        shadowResolve(
-            spelling: .request, renderedBytes: resolution.renderedBytes,
-            canonical: resolution.tokens)
-        return resolution.tokens
+        return serve(
+            spelling: .request,
+            rendered: Rendered(tokens: resolution.tokens, bytes: resolution.renderedBytes)
+        ).tokens
     }
 
     /// The planner's last-user boundary render (C27): the conversation
@@ -310,13 +314,31 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         try storedRender(messages: messages).tokens
     }
 
-    /// The leaf store's spelling of `continuationRender`: the same ladder,
-    /// returning the render bytes too — the Emitted Path registration keys
-    /// on the stored conversation's bytes through its last end-of-turn
-    /// marker, and this is the one Jinja render the phase pays.
+    /// The leaf store's boundary-path spelling of `continuationRender`: the
+    /// same ladder, returning the render bytes too (the tokens served, the
+    /// bytes as rendered).
     func storedRender(messages: [[String: any Sendable]]) throws -> Rendered {
         try trimRecoveredRender(
             messages: messages, messagesAreEntryPrefix: false, spelling: .continuation)
+    }
+
+    /// The leaf store's fast-path render (ADR-0063 decision 10): the stored
+    /// conversation to bytes, without a generation prompt — one Jinja
+    /// render, no tokenization, no cache, no index resolve. The Emitted
+    /// Path registration keys on these bytes through their last end-of-turn
+    /// marker; nothing else on the fast path needs the render. `nil` when
+    /// the tokenizer cannot render to bytes (the fused fallback), which the
+    /// registration reports as `renderUnavailable`. Throws only what the
+    /// template render throws.
+    func storedRenderBytes(messages: [[String: any Sendable]]) throws -> [UInt8]? {
+        try Self.renderText(
+            tokenizer: tokenizer,
+            messages: messages,
+            tools: toolSpecs,
+            additionalContext: renderContext.additionalContext(
+                merging: ["add_generation_prompt": false]
+            )
+        ).map { Array($0.utf8) }
     }
 
     /// The base (stored) conversation's render: the C31 plumbed tokens when
@@ -335,7 +357,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     /// truncated form over the C28 tail-replacement), and the
     /// `applyChatTemplate` fallback — one spelling, so the two verbs cannot
     /// drift apart. Every rung produces the render bytes the Emitted Path
-    /// Resolve consumes.
+    /// Resolve serves from.
     private func trimRecoveredRender(
         messages: [[String: any Sendable]],
         messagesAreEntryPrefix: Bool,
@@ -375,8 +397,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
                 tools: toolSpecs,
                 additionalContext: merged
             )
-        shadowResolve(spelling: spelling, renderedBytes: rendered.bytes, canonical: rendered.tokens)
-        return rendered
+        return serve(spelling: spelling, rendered: rendered)
     }
 
     // MARK: - Cache-free probe renders
@@ -390,7 +411,9 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     /// bounding abandoned work to one render, and a resolve against the live
     /// entry could neither observe those checks nor be abandoned mid-render.
     /// Never counts against the Render+Token Cache's telemetry. The Emitted
-    /// Path Resolve still runs on its bytes (it is a lookup, not a store).
+    /// Path Resolve still serves from its bytes (it is a lookup, not a
+    /// store), so the probe's tokens are offsets into the same ids the
+    /// request edge fed.
     func uncachedContinuationRender(messages: [[String: any Sendable]]) throws -> [Int] {
         let rendered = try Self.applyTemplate(
             tokenizer: tokenizer,
@@ -400,9 +423,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
                 merging: ["add_generation_prompt": false]
             )
         )
-        shadowResolve(
-            spelling: .admissionProbe, renderedBytes: rendered.bytes, canonical: rendered.tokens)
-        return rendered.tokens
+        return serve(spelling: .admissionProbe, rendered: rendered).tokens
     }
 
     /// The stable-prefix detector's probe render, from raw ingredients: the
@@ -443,7 +464,14 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         tools: [ToolSpec]?,
         additionalContext: [String: any Sendable]?
     ) throws -> Rendered {
-        guard let rendering = tokenizer as? any ChatTemplateRendering else {
+        guard
+            let rendered = try renderText(
+                tokenizer: tokenizer,
+                messages: messages,
+                tools: tools,
+                additionalContext: additionalContext
+            )
+        else {
             return Rendered(
                 tokens: try tokenizer.applyChatTemplate(
                     messages: messages,
@@ -452,14 +480,26 @@ nonisolated struct ConversationRender: @unchecked Sendable {
                 ),
                 bytes: nil)
         }
-        let rendered = try rendering.renderChatTemplate(
+        return Rendered(
+            tokens: tokenizer.encode(text: rendered, addSpecialTokens: false),
+            bytes: Array(rendered.utf8))
+    }
+
+    /// The module's render-to-text rung: the template applied by a rendering
+    /// tokenizer, without encoding — `nil` for a tokenizer that cannot render
+    /// (the fused fallback), which `applyTemplate` sends to the fused call.
+    private static func renderText(
+        tokenizer: any Tokenizer,
+        messages: [[String: any Sendable]],
+        tools: [ToolSpec]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> String? {
+        guard let rendering = tokenizer as? any ChatTemplateRendering else { return nil }
+        return try rendering.renderChatTemplate(
             messages: messages,
             tools: tools,
             additionalContext: additionalContext
         )
-        return Rendered(
-            tokens: tokenizer.encode(text: rendered, addSpecialTokens: false),
-            bytes: Array(rendered.utf8))
     }
 
     /// The one spelling of the C25 resolve body, shared by `fullRender` and
@@ -486,71 +526,80 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     // MARK: - The Emitted Path Resolve
 
     /// The end-of-turn marker the index keys on for this render's model,
-    /// derived once per fingerprint from the module's probe render: one
-    /// user message and one assistant message with a sentinel content,
-    /// rendered without a generation prompt, so the bytes after the
-    /// sentinel are the template's assistant-turn tail. `nil` when the
-    /// template has no single-token marker, remembered until the
-    /// fingerprint changes.
+    /// derived once per fingerprint from the module's probe renders and
+    /// remembered until the fingerprint changes. `nil` when the marker is
+    /// unavailable — see `endOfTurnMarkerStatus` for the reason.
     static func endOfTurnMarker(
         index: EmittedPathIndex,
         fingerprint: String,
         tokenizer: any Tokenizer
     ) -> EndOfTurnMarker? {
-        index.endOfTurnMarker(fingerprint: fingerprint, tokenizer: tokenizer) {
-            guard let rendering = tokenizer as? any ChatTemplateRendering else {
-                throw TokenizerError.missingChatTemplate
+        endOfTurnMarkerStatus(index: index, fingerprint: fingerprint, tokenizer: tokenizer).marker
+    }
+
+    /// The marker's status for the fingerprint: the marker layer's
+    /// derivation (`EndOfTurnMarkerStatus.derive`, two probe renders and
+    /// the split check) over this module's render-to-text rung, memoized in
+    /// the index until the fingerprint changes. A tokenizer it refuses
+    /// registers no path and resolves nothing; the registration reports
+    /// the reason.
+    static func endOfTurnMarkerStatus(
+        index: EmittedPathIndex,
+        fingerprint: String,
+        tokenizer: any Tokenizer
+    ) -> EndOfTurnMarkerStatus {
+        index.endOfTurnMarker(fingerprint: fingerprint) {
+            EndOfTurnMarkerStatus.derive(tokenizer: tokenizer) { messages, additionalContext in
+                try renderText(
+                    tokenizer: tokenizer, messages: messages, tools: nil,
+                    additionalContext: additionalContext)
             }
-            return try rendering.renderChatTemplate(
-                messages: [
-                    ["role": "user", "content": "probe"],
-                    ["role": "assistant", "content": EndOfTurnMarker.probeContent],
-                ],
-                tools: nil,
-                additionalContext: ["add_generation_prompt": false]
-            )
         }
     }
 
     /// How the registration side reaches the index: the engaged index, its
-    /// fingerprint and the model's marker — or why this render never
-    /// consults the index.
+    /// fingerprint and the model's marker — or the registration skip this
+    /// render reports instead: `ineligibleRender` with the render's own
+    /// reason as its cause, or the marker's unavailability.
     enum EmittedPathEligibility {
         case eligible(index: EmittedPathIndex, fingerprint: String, marker: EndOfTurnMarker)
-        case ineligible(reason: String)
+        case ineligible(EmittedPathRegistration.SkipReason, cause: String?)
     }
 
     func emittedPathEligibility() -> EmittedPathEligibility {
         guard let index = emittedPathIndex, let fingerprint = emittedPathFingerprint else {
-            return .ineligible(reason: ineligibility?.rawValue ?? "noIndex")
+            return .ineligible(.ineligibleRender, cause: ineligibility?.rawValue ?? "noIndex")
         }
-        guard
-            let marker = Self.endOfTurnMarker(
-                index: index, fingerprint: fingerprint, tokenizer: tokenizer)
-        else {
-            return .ineligible(
-                reason: EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue)
+        switch Self.endOfTurnMarkerStatus(
+            index: index, fingerprint: fingerprint, tokenizer: tokenizer)
+        {
+        case .available(let marker):
+            return .eligible(index: index, fingerprint: fingerprint, marker: marker)
+        case .unavailable(let reason):
+            return .ineligible(reason.skipReason, cause: nil)
         }
-        return .eligible(index: index, fingerprint: fingerprint, marker: marker)
     }
 
-    /// The dark-launch resolve: compose against the index and shadow-check
-    /// the composition against the canonical tokens; the caller returns the
-    /// canonical tokens regardless. Silent when the render produced no
-    /// bytes, no index is engaged, or the template has no marker.
-    private func shadowResolve(
+    /// Serve a render: the composition against the index on a hit, the
+    /// canonical tokens otherwise — when the render produced no bytes, no
+    /// index is engaged, the marker is unavailable, or nothing registered
+    /// for the history.
+    private func serve(
         spelling: EmittedPathRequestTelemetry.Spelling,
-        renderedBytes: [UInt8]?,
-        canonical: [Int]
-    ) {
-        guard let renderedBytes, let emittedPathIndex, let emittedPathFingerprint else { return }
-        Self.shadowResolve(
-            index: emittedPathIndex, fingerprint: emittedPathFingerprint, tokenizer: tokenizer,
-            telemetry: emittedPathTelemetry, spelling: spelling, renderedBytes: renderedBytes,
-            canonical: canonical)
+        rendered: Rendered
+    ) -> Rendered {
+        guard let bytes = rendered.bytes, let emittedPathIndex, let emittedPathFingerprint else {
+            return rendered
+        }
+        return Rendered(
+            tokens: Self.serve(
+                index: emittedPathIndex, fingerprint: emittedPathFingerprint,
+                tokenizer: tokenizer, telemetry: emittedPathTelemetry, spelling: spelling,
+                renderedBytes: bytes, canonical: rendered.tokens),
+            bytes: bytes)
     }
 
-    private static func shadowResolve(
+    private static func serve(
         index: EmittedPathIndex,
         fingerprint: String,
         tokenizer: any Tokenizer,
@@ -558,21 +607,26 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         spelling: EmittedPathRequestTelemetry.Spelling,
         renderedBytes: [UInt8],
         canonical: [Int]
-    ) {
+    ) -> [Int] {
         guard
             let marker = endOfTurnMarker(
                 index: index, fingerprint: fingerprint, tokenizer: tokenizer)
-        else { return }
+        else { return canonical }
         let start = Date.timeIntervalSinceReferenceDate
         let composition = EmittedPathResolve.compose(
             index: index, fingerprint: fingerprint, marker: marker,
             renderedBytes: renderedBytes, tokenizer: tokenizer)
+        let served: [Int]
+        switch composition {
+        case .indexed(let tokens, _, _, _, _): served = tokens
+        case .miss: served = canonical
+        }
         (telemetry ?? EmittedPathRequestTelemetry(diagnostics: nil)).record(
             spelling: spelling,
             composition: composition,
-            canonical: canonical,
-            resolveSeconds: Date.timeIntervalSinceReferenceDate - start,
-            index: index)
+            tokens: served.count,
+            resolveSeconds: Date.timeIntervalSinceReferenceDate - start)
+        return served
     }
 
     // MARK: - The agent edge
@@ -615,12 +669,10 @@ nonisolated struct ConversationRender: @unchecked Sendable {
                 fingerprint: fingerprint
             )
         else { return nil }
-        if let emittedPathIndex {
-            shadowResolve(
-                index: emittedPathIndex, fingerprint: fingerprint, tokenizer: tokenizer,
-                telemetry: nil, spelling: .agentEdge, renderedBytes: resolution.renderedBytes,
-                canonical: resolution.tokens)
-        }
-        return resolution.tokens
+        guard let emittedPathIndex else { return resolution.tokens }
+        return serve(
+            index: emittedPathIndex, fingerprint: fingerprint, tokenizer: tokenizer,
+            telemetry: nil, spelling: .agentEdge, renderedBytes: resolution.renderedBytes,
+            canonical: resolution.tokens)
     }
 }

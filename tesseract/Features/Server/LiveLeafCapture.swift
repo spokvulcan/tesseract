@@ -2,32 +2,29 @@
 //  LiveLeafCapture.swift
 //  tesseract
 //
-//  The **Live Leaf Capture** decision: whether the finished turn's leaf can
-//  be taken straight from the live decode cache instead of restored-and-
-//  re-prefilled from a boundary snapshot.
+//  The **Live Leaf Capture** eligibility: whether the finished turn's leaf
+//  is taken straight from the live decode cache, at the cache's own offset,
+//  under the **Emitted Path** — the **Leaf Store** fast path of ADR-0063
+//  (decisions 10 to 13) — or whether the turn keeps the boundary path
+//  (restore a boundary snapshot, re-prefill the canonical residual).
 //
-//  Why the boundary path exists at all: a leaf must key on the template's
-//  re-render of the turn — the token path the client's next request will
-//  walk — and that re-render is not guaranteed to equal the ids the model
-//  emitted (tool calls are re-rendered from parsed arguments, content is
-//  trimmed, BPE can emit non-canonical splits, strip-by-default templates
-//  drop prior thinking). The live KV cache holds the *emitted* path, and the
-//  recurrent (GDN/Mamba) state cannot be rewound to an arbitrary offset, so
-//  the safe general answer was to restore a boundary and recompute the
-//  canonical residual — at prefill speed, for every generated token.
+//  Under ADR-0062 this decision proved, per turn and per token, that the
+//  fed path equalled the template's canonical re-render before trusting the
+//  live cache. The Emitted Path Index inverts the reference: for a turn the
+//  server generated, the ids the model fed are the truth and the next
+//  request resolves to them, so there is nothing to compare — the leaf is
+//  keyed on the fed path by construction. What survives of the old decision
+//  is its structural eligibility: an intervened turn (the registered final
+//  cache is the cancelled phase's), a non-identity key space (image
+//  placeholders make key space and model input differ), no fed ids, and a
+//  cache offset outside the live path (the loop and the cache disagree).
+//  Each keeps its log reason. One render rule joins them: a think-stripping
+//  template at a new-user-message boundary will not render the turn
+//  verbatim for the next request, so ADR-0009's boundary path and
+//  speculative seed remain its answer (decision 11).
 //
-//  On an append-stable render (Qwen3.8 with preserved thinking, every tool
-//  stretch under Qwen3-family templates) the re-render *is* the emitted path
-//  plus a couple of glue tokens, so that recomputation buys nothing: measured
-//  7.3 ms per generated token of post-EOS stall, 47 s on a 6.4k-token turn.
-//  This decision proves the equality per turn (prompt key path + fed ids is
-//  a prefix of the canonical stored path) and, when it holds, hands the drive
-//  a zero-prefill capture of the live cache at its fed offset. Any mismatch
-//  falls back to the boundary path unchanged — correctness never rests on
-//  the flag, only on the comparison.
-//
-//  Pure and GPU-free: plain token arrays in, a decision out, so the rules are
-//  unit-tested without a model (`LiveLeafCaptureTests`).
+//  Pure and GPU-free: plain values in, a decision out, so the rules are
+//  unit-tested without a model (`LeafStoreFastPathTests`).
 //
 
 import Foundation
@@ -37,23 +34,23 @@ nonisolated enum LiveLeafCapture {
     /// Where the finished turn's leaf comes from.
     enum Decision: Equatable, Sendable {
         /// Capture the live final cache at `offset` and admit it under the
-        /// stored path's first `offset` tokens. No prefill.
+        /// live path's first `offset` ids (`livePath`). No prefill.
         case live(offset: Int)
         /// Restore the boundary snapshot and re-prefill the canonical
-        /// residual — today's path — for the given reason.
+        /// residual — the pre-ADR-0063 path — for the given reason.
         case boundary(FallbackReason)
     }
 
-    /// Why the live cache could not be used. Every case carries the numbers
-    /// its skip record prints (`LeafStorePhase.liveFallbackLog`), so a
-    /// divergence on a render believed append-stable is diagnosable from the
-    /// log alone.
+    /// Why the live cache is not the leaf. Every case carries the numbers
+    /// its skip record prints (`LeafStorePhase.liveFallbackLog`) and names
+    /// the boundary reason the `leafStore` event reports.
     enum FallbackReason: Equatable, Sendable {
         /// A thinking-safeguard continuation swapped the raw generation; the
         /// registered final cache is the cancelled phase's, not the turn's.
+        /// Kept on the boundary path and counted (decision 11).
         case intervened
         /// Image placeholders make key-space and render-space differ; the
-        /// live comparison is defined over identity key spaces only.
+        /// fast path is defined over identity key spaces only.
         case nonIdentityKeySpace
         /// The loop recorded no fed ids (an empty turn, or an iterator that
         /// bypassed the recorder).
@@ -62,26 +59,19 @@ nonisolated enum LiveLeafCapture {
         /// (`promptCount < offset <= liveCount`) — the loop's accounting and
         /// the cache disagree, so nothing can be trusted.
         case cacheOffsetOutsideLivePath(cacheOffset: Int, promptCount: Int, liveCount: Int)
-        /// Every stored position matched, but the fed path runs past the
-        /// canonical stored path's end — the render dropped emitted tokens
-        /// (whitespace normalization, a stripped span); the live state past
-        /// the stored end has no key. A path that both differs and runs long
-        /// reports the divergence, which says where.
-        case liveLongerThanStored(cacheOffset: Int, storedLen: Int)
-        /// First position where the fed id and the re-rendered id differ,
-        /// with a few ids of context on each side so the *kind* of
-        /// divergence (a BPE re-split of identical text, a trimmed
-        /// newline, a re-rendered tool call) is readable from the log.
-        case divergence(
-            offset: Int, liveToken: Int, storedToken: Int,
-            liveContext: [Int], storedContext: [Int])
-
-        /// Ids kept on each side of a divergence in the log fields.
-        static let contextRadius = 4
+        /// A stop-finish turn under a template that strips the thinking of
+        /// earlier turns once a new user message arrives: the next request
+        /// renders this turn differently from what the model fed, so the
+        /// canonical-user leaf is synthesized from the boundary as before
+        /// and the ADR-0009 seed extends it.
+        case thinkStrippingUserBoundary
     }
 
     /// Decide for one finished turn.
     ///
+    /// - `mode`: the selected leaf-store mode (`selectHTTPLeafStoreMode`).
+    /// - `preservesThinking`: whether the request rendered under the
+    ///   **Preserve-Thinking Render**, which keeps every turn verbatim.
     /// - `promptKeyPath`: the request's **Cache Key Path** (the prompt as
     ///   prefilled, identity key space).
     /// - `generatedTokens`: every id the decode loop fed past the prompt, in
@@ -90,13 +80,16 @@ nonisolated enum LiveLeafCapture {
     ///   trail `promptKeyPath.count + generatedTokens.count` by the
     ///   iterator's unfed tail (DFlash2's bonus token has no cache entry
     ///   yet); the leaf is captured at the cache's own offset, never past it.
-    /// - `storedTokens`: the canonical stored path the boundary plan would
-    ///   admit under (the **Leaf Admission Builder**'s probe result).
+    ///
+    /// The structural guards are checked first, in the order ADR-0062
+    /// logged them, so an intervened or image-bearing turn names that
+    /// reason whatever the render; the render rule comes last.
     static func decide(
+        mode: HTTPLeafStoreMode,
+        preservesThinking: Bool,
         promptKeyPath: [Int],
         generatedTokens: [Int],
         cacheOffset: Int,
-        storedTokens: [Int],
         intervened: Bool,
         keySpaceIsIdentity: Bool
     ) -> Decision {
@@ -111,33 +104,21 @@ nonisolated enum LiveLeafCapture {
                 .cacheOffsetOutsideLivePath(
                     cacheOffset: cacheOffset, promptCount: promptCount, liveCount: liveCount))
         }
-        // The prompt prefix is the same render on both sides by construction,
-        // but the comparison is the proof — check every fed position the
-        // stored path covers. Divergence is reported before the length guard
-        // so a path that both differs and runs long names the first differing
-        // position instead of only its length.
-        func liveToken(_ index: Int) -> Int {
-            index < promptCount ? promptKeyPath[index] : generatedTokens[index - promptCount]
-        }
-        for index in 0..<min(cacheOffset, storedTokens.count) {
-            let live = liveToken(index)
-            let stored = storedTokens[index]
-            if live != stored {
-                let radius = FallbackReason.contextRadius
-                let window = max(0, index - radius)..<min(liveCount, index + radius + 1)
-                return .boundary(
-                    .divergence(
-                        offset: index, liveToken: live, storedToken: stored,
-                        liveContext: window.map(liveToken),
-                        storedContext: Array(
-                            storedTokens[window.clamped(to: 0..<storedTokens.count)])
-                    ))
-            }
-        }
-        guard cacheOffset <= storedTokens.count else {
-            return .boundary(
-                .liveLongerThanStored(cacheOffset: cacheOffset, storedLen: storedTokens.count))
+        // Every tool-stretch turn renders verbatim under the Qwen-family
+        // templates, and every turn does under the preserve-thinking render;
+        // only a stop-finish turn under a think-stripping template is
+        // re-rendered by the next user message.
+        if mode == .canonicalUserLeaf, !preservesThinking {
+            return .boundary(.thinkStrippingUserBoundary)
         }
         return .live(offset: cacheOffset)
+    }
+
+    /// The path a live leaf is admitted under: the prompt key path plus the
+    /// fed ids, cut at the cache offset (an unfed bonus token past it has no
+    /// cache entry and is left for the next request to prefill). `offset`
+    /// is `decide`'s `.live(offset:)`, inside the live path.
+    static func livePath(promptKeyPath: [Int], generatedTokens: [Int], offset: Int) -> [Int] {
+        promptKeyPath + generatedTokens.prefix(offset - promptKeyPath.count)
     }
 }

@@ -144,8 +144,14 @@ tesseract/
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
 │   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
+│   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application + Emitted Path Resolve
+│   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
+│   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
-│   │   ├── LiveLeafCapture.swift      # Pure live-vs-boundary leaf decision
+│   │   ├── LiveLeafCapture.swift      # Pure fast-path eligibility (live vs boundary)
+│   │   ├── EmittedPathIndex.swift     # Emitted Path Index: rendered-bytes hash → fed ids per fingerprint (ADR-0063)
+│   │   ├── EmittedPathResolve.swift   # Resolve composition + per-request Emitted Path telemetry
+│   │   ├── EmittedPathRegistration.swift # Register a finished turn's path behind the fidelity gate
 │   │   ├── EvictionPolicy.swift       # Pure eviction scoring + AlphaTuner
 │   │   └── Telemetry/                 # Prompt-cache telemetry store
 │   ├── Settings/

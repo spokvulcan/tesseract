@@ -3,7 +3,8 @@
 //  tesseract
 //
 //  The **Leaf Store** phase's per-request account: which path stored the
-//  leaf and where the post-EOS time went. A prefix-cache diagnostics payload
+//  leaf, where the leaf came from, why a turn took the boundary path, and
+//  where the post-EOS time went. A prefix-cache diagnostics payload
 //  (`leafStore`), so it renders like every other cache event, reaches the
 //  telemetry sinks and the events drawer, and is emitted at notice level by
 //  the drive — persisted, so a post-EOS stall is attributable from
@@ -17,31 +18,54 @@ nonisolated extension LeafStorePhase {
     /// `leafStore` event and folds its seconds into the trace corpus.
     struct Report: PrefixCacheDiagnostics.Payload {
         enum Path: String, Sendable {
-            /// **Live Leaf Capture**: the live final cache, no prefill.
+            /// The fast path: the live final cache under the fed path, no
+            /// prefill (**Live Leaf Capture**).
             case live
             /// Boundary restore + canonical residual re-prefill.
             case boundary
-            /// `directLeaf`: the live final cache under a non-thinking
-            /// template (the pre-existing live path).
+            /// `directLeaf` on the boundary route: the live final cache
+            /// under a non-thinking template's canonical stored path (the
+            /// pre-existing render-trusting path).
             case direct
             /// No leaf stored — `skipReason` says why.
             case skipped
         }
 
+        /// Where the stored leaf's cache state came from (ADR-0063 decision
+        /// 13; ADR-0064 adds `handoff`, `copy` and `rewind`).
+        enum Source: String, Sendable {
+            /// The live final cache, captured at its own offset.
+            case live
+            /// A restored boundary snapshot extended by the canonical
+            /// residual re-prefill.
+            case boundary
+        }
+
         var mode = "unkeyed"
         var path: Path = .skipped
         var skipReason: String?
-        /// The live fallback's skip reason when a boundary mode ran the
-        /// boundary executor because the live path was refused.
-        var liveFallbackReason: String?
+        /// The leaf's source, once one was stored: the live final cache
+        /// under the fast path and the direct route, a restored boundary
+        /// snapshot under the boundary route.
+        var source: Source? {
+            switch path {
+            case .live, .direct: .live
+            case .boundary: .boundary
+            case .skipped: nil
+            }
+        }
+        /// Why the turn took the boundary route (the `liveLeafCapture` skip
+        /// token), whether or not a leaf was stored there.
+        var boundaryReason: String?
         var leafOffset: Int?
         /// Tokens prefilled on the GPU after generation ended — the
         /// boundary residual, `0` on the live and direct paths.
         var residualTokens = 0
-        /// Stored-conversation re-render + tokenize (CPU).
+        /// The stored-conversation render (CPU): to bytes on the fast path,
+        /// render + tokenize on the boundary path.
         var renderSeconds: TimeInterval = 0
-        /// Routing: the reusable-prefix probe, the live decision and, on the
-        /// boundary arm only, **Snapshot Resolution** of the restore boundary.
+        /// Routing on the boundary path only: the reusable-prefix probe and
+        /// **Snapshot Resolution** of the restore boundary.
         var planSeconds: TimeInterval = 0
         /// The executor's stages.
         var timings = Timings()
@@ -50,8 +74,8 @@ nonisolated extension LeafStorePhase {
         /// chunk).
         var leafStoreSeconds: TimeInterval?
         var tailSeconds: TimeInterval?
-        /// Emitted Path registration (ADR-0063 dark launch): what the index
-        /// learned from this turn, or why it learned nothing.
+        /// Emitted Path registration (ADR-0063): what the index learned
+        /// from this turn, or why it learned nothing.
         var emittedPathRegistered: EmittedPathRegistration.Registered?
         var emittedPathSkip: String?
         var emittedPathRegisterSeconds: TimeInterval = 0
@@ -63,8 +87,9 @@ nonisolated extension LeafStorePhase {
         var fields: [(String, String)] {
             let ms = PrefixCacheDiagnostics.milliseconds
             var fields = [("mode", mode), ("path", path.rawValue)]
+            if let source { fields.append(("source", source.rawValue)) }
             if let skipReason { fields.append(("skip", skipReason)) }
-            if let liveFallbackReason { fields.append(("liveFallback", liveFallbackReason)) }
+            if let boundaryReason { fields.append(("boundary", boundaryReason)) }
             if let leafOffset { fields.append(("leafOffset", "\(leafOffset)")) }
             fields += [
                 ("residualTokens", "\(residualTokens)"),
@@ -95,7 +120,6 @@ nonisolated extension LeafStorePhase {
                 if let suffix = resolves.requestEdgeSuffixTokens {
                     fields.append(("emittedPathRequestSuffix", "\(suffix)"))
                 }
-                fields.append(("emittedPathShadowDifferences", "\(resolves.shadowDifferences)"))
             }
             return fields
         }
@@ -139,7 +163,7 @@ nonisolated extension LeafStorePhase {
         /// Fold what an executor produced into the account. `path` is the
         /// executor that ran; it reads `.skipped` when no leaf was captured.
         mutating func absorb(_ capture: LeafCapture, path: Path) {
-            self.path = capture.leafOffset == nil ? .skipped : path
+            self.path = capture.leafOffset != nil ? path : .skipped
             skipReason = capture.skipReason
             leafOffset = capture.leafOffset
             residualTokens = capture.residualTokens

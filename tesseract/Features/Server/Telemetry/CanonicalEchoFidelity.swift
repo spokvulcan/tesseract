@@ -123,9 +123,11 @@ nonisolated enum CanonicalEchoFidelity {
         /// continuation spelling — same bytes through the last marker as the
         /// request edge, so the same hit): the indexed prefix on a hit.
         let nextIndexedPrefix: Int?
+        /// The tokens request N+1 encoded past the hit — its new messages
+        /// plus the glue after the marker: what it would prefill beyond the
+        /// stored leaf.
+        let nextSuffixTokens: Int?
         let nextMissReason: String?
-        /// Shadow differences over every resolve this boundary ran.
-        let shadowDifferences: Int
 
         var registered: Bool { registration == "registered" }
     }
@@ -139,7 +141,8 @@ nonisolated enum CanonicalEchoFidelity {
         /// non-zero indexed prefix.
         var nextResolved = 0
         var nextMisses: [String: Int] = [:]
-        var shadowDifferences = 0
+        /// Suffix tokens summed over the resolved next requests.
+        var nextSuffixTokens = 0
     }
 
     /// Tokens of decoded context shown on each side of a fork.
@@ -225,8 +228,8 @@ nonisolated enum CanonicalEchoFidelity {
             return EmittedPathVerdict(
                 registration: learned.registration, pathLength: learned.pathLength,
                 nextIndexedPrefix: summary.lastIndexedPrefix,
-                nextMissReason: summary.lastMissReason,
-                shadowDifferences: summary.shadowDifferences)
+                nextSuffixTokens: summary.lastSuffixTokens,
+                nextMissReason: summary.lastMissReason)
         }
 
         // The boundary-leaf path. For `interruptRewind` this is the
@@ -286,8 +289,9 @@ nonisolated enum CanonicalEchoFidelity {
     /// request N's prompt is its full render (generation prompt included);
     /// the emitted ids are the canonical encode of the stored render past
     /// that prompt, through the last end-of-turn marker — what a live-stored
-    /// turn's path equals once the Live Leaf Capture has proved the fed path
-    /// canonical. Returns the stored render's tokens, for the probe render
+    /// turn's path equals when the model's split was the canonical one (a
+    /// recording keeps no fed ids; the live fast path registers the fed ids
+    /// themselves). Returns the stored render's tokens, for the probe render
     /// to carry as its base render (the harness renders `stored` once).
     private static func registerEmittedPath(
         _ learning: EmittedPathLearning,
@@ -298,10 +302,16 @@ nonisolated enum CanonicalEchoFidelity {
         render: ConversationRender,
         tokenizer: any Tokenizer
     ) -> (registration: String, pathLength: Int?, storedTokens: [Int]?) {
-        guard
-            case .eligible(let index, let fingerprint, let marker) = render.emittedPathEligibility()
-        else {
-            return (EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue, nil, nil)
+        let index: EmittedPathIndex
+        let fingerprint: String
+        let marker: EndOfTurnMarker
+        switch render.emittedPathEligibility() {
+        case .ineligible(let reason, _):
+            return (reason.rawValue, nil, nil)
+        case .eligible(let engaged, let scoped, let derived):
+            index = engaged
+            fingerprint = scoped
+            marker = derived
         }
         do {
             let rendered = try render.storedRender(messages: stored.promptMessages)
@@ -409,7 +419,6 @@ extension CanonicalEchoFidelity {
             var summary = EmittedPathSessionSummary()
             summary.boundaries = verdicts.count
             for verdict in verdicts {
-                summary.shadowDifferences += verdict.shadowDifferences
                 guard verdict.registered else {
                     summary.registrationSkips[verdict.registration, default: 0] += 1
                     continue
@@ -417,6 +426,7 @@ extension CanonicalEchoFidelity {
                 summary.registered += 1
                 if let prefix = verdict.nextIndexedPrefix, prefix > 0 {
                     summary.nextResolved += 1
+                    summary.nextSuffixTokens += verdict.nextSuffixTokens ?? 0
                 } else {
                     summary.nextMisses[verdict.nextMissReason ?? "noHit", default: 0] += 1
                 }
@@ -536,20 +546,18 @@ extension CanonicalEchoFidelity {
             lines.append(
                 "emitted-path boundaries=\(summary.boundaries) registered=\(summary.registered) "
                     + "skips=\(summary.registrationSkips) nextResolved=\(summary.nextResolved) "
-                    + "nextMisses=\(summary.nextMisses) shadowDifferences=\(summary.shadowDifferences)"
+                    + "nextMisses=\(summary.nextMisses) nextSuffixTokens=\(summary.nextSuffixTokens)"
             )
             for boundaryReport in report.boundaries {
                 guard let verdict = boundaryReport.emittedPath,
                     !verdict.registered || (verdict.nextIndexedPrefix ?? 0) == 0
-                        || verdict.shadowDifferences > 0
                 else { continue }
                 lines.append(
                     "emitted-path request#\(boundaryReport.boundary.requestIndex) "
                         + "kind=\(boundaryReport.boundary.kind.rawValue) "
                         + "registration=\(verdict.registration) "
                         + "nextPrefix=\(verdict.nextIndexedPrefix ?? 0) "
-                        + "nextMiss=\(verdict.nextMissReason ?? "-") "
-                        + "shadow=\(verdict.shadowDifferences)")
+                        + "nextMiss=\(verdict.nextMissReason ?? "-")")
             }
         }
         return lines.joined(separator: "\n")

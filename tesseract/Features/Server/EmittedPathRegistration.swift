@@ -6,11 +6,11 @@
 //  decisions 2/3/9): build the path from the fed prompt ids, the generated
 //  ids and the stop id; gate it on the fidelity check; hash the stored
 //  conversation's render through its last end-of-turn marker; register it.
-//  The Leaf Store phase calls this at the end of a stored turn. In this
-//  ticket's dark launch it runs only after the **Live Leaf Capture** has
-//  decided live — the fed path proved canonical — so the registered ids
-//  equal the canonical encode and the resolve's shadow check is expected to
-//  find no difference. #476 lifts that guard and serves the composition.
+//  The Leaf Store phase calls this first on its fast path: a turn the
+//  **Live Leaf Capture** stores live under the fed ids registers those ids
+//  under the stored render's key, and the next request resolves to them
+//  (`EmittedPathResolve`). A turn on the boundary path registers nothing —
+//  its leaf is keyed on the canonical re-render, not the fed path.
 //
 //  Skips are typed (`SkipReason`) and logged through the request's
 //  diagnostics net at stage `emittedPathRegister`, so the corpus replay and
@@ -24,43 +24,46 @@ nonisolated enum EmittedPathRegistration {
 
     static let stage = "emittedPathRegister"
 
-    /// Why a stored turn registered nothing. The first five are the ticket's
-    /// guards, mirrored from `LiveLeafCapture.FallbackReason`; the rest are
-    /// the dark launch's own and the render/template preconditions.
+    /// Why a stored turn registered nothing: the fast path's guards,
+    /// mirrored from `LiveLeafCapture.FallbackReason`, with the boundary
+    /// path's render rule beside them; the fidelity gate; and the render
+    /// and template preconditions.
     enum SkipReason: String, Sendable {
         case nonIdentityKeySpace
         case noGeneratedTokens
         case cacheOffsetOutsideLivePath
         case intervened
         case fidelityRejected
-        /// Dark launch: the Live Leaf Capture did not decide live (its
-        /// comparison diverged, the render was shorter, the template's
-        /// direct path skips the comparison, or the leaf store skipped
-        /// before the decision).
-        case notProvenLive
+        /// The turn took the boundary path under a think-stripping template
+        /// at a new-user-message boundary: the next request re-renders the
+        /// turn, so its fed ids are not what any later render resolves to.
+        case thinkStrippingUserBoundary
         /// No Emitted Path Index engaged for this render: an unkeyed
         /// completion, an unknown fingerprint, or an image-bearing render.
         case ineligibleRender
         /// The template has no single-token end-of-turn marker, or the
         /// stored render does not end on one.
         case noEndOfTurnMarker
+        /// The template's end-of-turn marker is not a hard boundary for
+        /// this tokenizer: encoding the bytes after it on their own differs
+        /// from encoding them in context, so no composition can be served.
+        case suffixEncodeUnstable
         /// The stored render produced no bytes (a non-rendering tokenizer).
         case renderUnavailable
         /// The path alone exceeds the index's byte budget.
         case pathTooLarge
     }
 
-    /// The registration guard a refused live capture maps to.
-    static func skipReason(for fallback: LiveLeafCapture.FallbackReason) -> (
-        reason: SkipReason, detail: String?
-    ) {
+    /// The registration skip a boundary-path turn logs: the same reason the
+    /// `leafStore` event's `boundary` field carries, as a camel-case wire
+    /// name.
+    static func skipReason(for fallback: LiveLeafCapture.FallbackReason) -> SkipReason {
         switch fallback {
-        case .intervened: (.intervened, nil)
-        case .nonIdentityKeySpace: (.nonIdentityKeySpace, nil)
-        case .noGeneratedTokens: (.noGeneratedTokens, nil)
-        case .cacheOffsetOutsideLivePath: (.cacheOffsetOutsideLivePath, nil)
-        case .liveLongerThanStored: (.notProvenLive, "liveLongerThanStored")
-        case .divergence: (.notProvenLive, "divergence")
+        case .intervened: .intervened
+        case .nonIdentityKeySpace: .nonIdentityKeySpace
+        case .noGeneratedTokens: .noGeneratedTokens
+        case .cacheOffsetOutsideLivePath: .cacheOffsetOutsideLivePath
+        case .thinkStrippingUserBoundary: .thinkStrippingUserBoundary
         }
     }
 

@@ -8,7 +8,7 @@ import Testing
 /// the fake tokenizer: the path built from the fed ids and the stop id,
 /// the fidelity gate, the key hashed from the stored render through its
 /// last end-of-turn marker, and the skip-reason vocabulary the Leaf Store
-/// logs — including the mapping from a refused live capture.
+/// logs — including the mapping from a boundary-path turn.
 struct EmittedPathRegistrationTests {
 
     private static let fingerprint = "fp-reg"
@@ -169,37 +169,37 @@ struct EmittedPathRegistrationTests {
 
     // MARK: - Skip vocabulary
 
-    @Test func refusedLiveCapturesMapToTheTicketsGuards() {
+    @Test func boundaryPathTurnsMapToTheFastPathsGuards() {
         typealias Reason = EmittedPathRegistration.SkipReason
-        #expect(EmittedPathRegistration.skipReason(for: .intervened).reason == .intervened)
+        #expect(EmittedPathRegistration.skipReason(for: .intervened) == .intervened)
         #expect(
-            EmittedPathRegistration.skipReason(for: .nonIdentityKeySpace).reason
-                == .nonIdentityKeySpace)
-        #expect(
-            EmittedPathRegistration.skipReason(for: .noGeneratedTokens).reason == .noGeneratedTokens
-        )
+            EmittedPathRegistration.skipReason(for: .nonIdentityKeySpace) == .nonIdentityKeySpace)
+        #expect(EmittedPathRegistration.skipReason(for: .noGeneratedTokens) == .noGeneratedTokens)
         #expect(
             EmittedPathRegistration.skipReason(
                 for: .cacheOffsetOutsideLivePath(cacheOffset: 9, promptCount: 3, liveCount: 4)
-            ).reason == .cacheOffsetOutsideLivePath)
-        let longer = EmittedPathRegistration.skipReason(
-            for: .liveLongerThanStored(cacheOffset: 9, storedLen: 8))
-        #expect(longer.reason == .notProvenLive)
-        #expect(longer.detail == "liveLongerThanStored")
-        let diverged = EmittedPathRegistration.skipReason(
-            for: .divergence(
-                offset: 3, liveToken: 1, storedToken: 2, liveContext: [1], storedContext: [2]))
-        #expect(diverged.reason == .notProvenLive)
-        #expect(diverged.detail == "divergence")
+            ) == .cacheOffsetOutsideLivePath)
+        // A think-stripping template at a user boundary keeps the boundary
+        // path and registers nothing: the next request re-renders the turn.
+        #expect(
+            EmittedPathRegistration.skipReason(for: .thinkStrippingUserBoundary)
+                == .thinkStrippingUserBoundary)
+        #expect(Reason.thinkStrippingUserBoundary.rawValue == "thinkStrippingUserBoundary")
     }
 
-    @Test func skipReasonsAreTheTicketsCamelCaseWireStrings() {
+    @Test func skipReasonsAreCamelCaseWireStrings() {
         typealias Reason = EmittedPathRegistration.SkipReason
         #expect(Reason.nonIdentityKeySpace.rawValue == "nonIdentityKeySpace")
         #expect(Reason.noGeneratedTokens.rawValue == "noGeneratedTokens")
         #expect(Reason.cacheOffsetOutsideLivePath.rawValue == "cacheOffsetOutsideLivePath")
         #expect(Reason.intervened.rawValue == "intervened")
         #expect(Reason.fidelityRejected.rawValue == "fidelityRejected")
+        #expect(Reason.thinkStrippingUserBoundary.rawValue == "thinkStrippingUserBoundary")
+        #expect(Reason.ineligibleRender.rawValue == "ineligibleRender")
+        #expect(Reason.noEndOfTurnMarker.rawValue == "noEndOfTurnMarker")
+        #expect(Reason.suffixEncodeUnstable.rawValue == "suffixEncodeUnstable")
+        #expect(Reason.renderUnavailable.rawValue == "renderUnavailable")
+        #expect(Reason.pathTooLarge.rawValue == "pathTooLarge")
         #expect(EmittedPathRegistration.stage == "emittedPathRegister")
     }
 

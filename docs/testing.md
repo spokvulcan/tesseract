@@ -25,7 +25,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ServerCompletionDrainTests \
   -only-testing:tesseractTests/ServerCompletionLeafStoreModeTests \
   -only-testing:tesseractTests/ServerCompletionLeafSkipLogTests \
-  -only-testing:tesseractTests/LiveLeafCaptureTests \
+  -only-testing:tesseractTests/LeafStoreFastPathTests \
   -only-testing:tesseractTests/CompletionProjectionTests \
   -only-testing:tesseractTests/MessageConverterTests \
   -only-testing:tesseractTests/OpenAITypesTests \
@@ -130,18 +130,18 @@ include decoded windows around the fork.
 
 ## Emitted Path Index replay gate (corpus mode)
 
-`EmittedPathReplayCorpusTests` (ADR-0063, ticket #475) walks the same
-recorded sessions through the canonical-echo harness with a private
+`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476) walks the
+same recorded sessions through the canonical-echo harness with a private
 **Emitted Path Index** learning every echoed turn — the Leaf Store's
 registration simulated on the canonical encode of the stored render past
 request N's prompt — and every next request resolving at its edge through
-the Conversation Render. It fails when a simulated live-stored turn does
-not register (the one tolerated skip is `promptNotTokenPrefix`: request N's
-prompt is not a token prefix of the stored render, the junction merge the
-Live Leaf Capture would have refused, so no live turn exists to register),
-when a registered boundary's next request misses the index, or when the
-shadow check finds a difference between the composition and the canonical
-encode. Same variables as the fidelity gate; the reference corpus is
+the Conversation Render, which serves the composition it resolves to. It
+fails when a simulated live-stored turn does not register (the one
+tolerated skip is `promptNotTokenPrefix`: request N's prompt is not a
+token prefix of the stored render, a turn the fast path could not have
+stored under the emitted path, so no live turn exists to register), or
+when a registered boundary's next request misses the index. Same
+variables as the fidelity gate; the reference corpus is
 `~/projects/tesseract-traces/2026-09-06-emitted-path`:
 
 ```bash
@@ -154,7 +154,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 ```
 
 Per-session totals print to the test log (`emitted-path boundaries=…
-registered=… nextResolved=… shadowDifferences=…`), with one line per
+registered=… nextResolved=… nextSuffixTokens=…`), with one line per
 boundary that did not register or resolve. The walk is CPU-bound on one
 core: every boundary renders and BPE-encodes the whole conversation
 through the Debug-build tokenizer (the hot frames are the byte-pair merge

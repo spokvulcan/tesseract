@@ -24,9 +24,9 @@
 //  least-recently-used eviction. Registration and the fidelity gate
 //  (`EmittedPathRegistration`, `EmittedPathFidelity`) and the resolve
 //  composition inside the Conversation Render (`EmittedPathResolve`) are the
-//  layers above. This ticket lands the whole thing as a dark launch: the
-//  resolve runs and is shadow-checked against the canonical encode, but the
-//  request still feeds the canonical tokens.
+//  layers above. Since ticket #476 the composition is what the request
+//  feeds: the fed ids for every registered turn, the canonical encode only
+//  for the bytes after the deepest hit.
 //
 //  Entry format (fingerprint, hash, path length, ids) is fixed so a later
 //  ticket can persist entries across launches without a schema change.
@@ -136,6 +136,35 @@ nonisolated struct EndOfTurnMarker: Equatable, Sendable {
         byte == 0x20 || byte == 0x0A || byte == 0x0D || byte == 0x09
     }
 
+    /// Whether `marker` is a hard encoding boundary in `render`: at every
+    /// occurrence, the encode of the bytes through it followed by the
+    /// standalone encode of the rest equals the encode of the whole. The
+    /// composition the resolve serves rests on exactly this equality, and
+    /// a pretokenizer that treats standalone text specially (Metaspace's
+    /// `prepend_scheme: first` prepends a word-boundary token to any text
+    /// it is handed) breaks it — such a fingerprint is refused outright
+    /// rather than served a path no render can reproduce.
+    static func splitsEncoding(
+        of render: [UInt8], marker: [UInt8], tokenizer: any Tokenizer
+    ) -> Bool {
+        let whole = tokenizer.encode(text: Self.text(render[...]), addSpecialTokens: false)
+        // The boundaries the index hashes at — one scan, shared with the
+        // registration key.
+        let ends = EmittedPathIndex.prefixHashes(renderedBytes: render, marker: marker).map(\.end)
+        for end in ends {
+            let head = tokenizer.encode(text: Self.text(render[..<end]), addSpecialTokens: false)
+            let tail = tokenizer.encode(text: Self.text(render[end...]), addSpecialTokens: false)
+            guard head + tail == whole else { return false }
+        }
+        return true
+    }
+
+    private static func text(_ bytes: ArraySlice<UInt8>) -> String {
+        // Render bytes are the template's own UTF-8: lossless by construction.
+        // swiftlint:disable:next optional_data_string_conversion
+        String(decoding: bytes, as: UTF8.self)
+    }
+
     /// The byte offset just past the last occurrence of `needle`, or `nil`:
     /// the marker scan the derivation and the registration key share.
     static func lastOccurrenceEnd(of needle: [UInt8], in haystack: [UInt8]) -> Int? {
@@ -148,6 +177,66 @@ nonisolated struct EndOfTurnMarker: Equatable, Sendable {
             start -= 1
         }
         return nil
+    }
+}
+
+/// A fingerprint's marker once derived: usable, or why the index never
+/// registers or resolves for that model.
+nonisolated enum EndOfTurnMarkerStatus: Equatable, Sendable {
+    enum Unavailability: Equatable, Sendable {
+        /// The template's assistant-turn tail is not one token.
+        case noEndOfTurnMarker
+        /// The marker is one token but not a hard encoding boundary: the
+        /// standalone encode of the bytes after it differs from the
+        /// in-context encode (see `EndOfTurnMarker.splitsEncoding`).
+        case suffixEncodeUnstable
+
+        /// The registration skip the reason reports.
+        var skipReason: EmittedPathRegistration.SkipReason {
+            switch self {
+            case .noEndOfTurnMarker: .noEndOfTurnMarker
+            case .suffixEncodeUnstable: .suffixEncodeUnstable
+            }
+        }
+    }
+
+    case available(EndOfTurnMarker)
+    case unavailable(Unavailability)
+
+    var marker: EndOfTurnMarker? {
+        if case .available(let marker) = self { return marker }
+        return nil
+    }
+
+    /// Derive the status for a tokenizer from two probe renders. `render`
+    /// applies the chat template to the messages with the extra context
+    /// given, `nil` for a tokenizer that cannot render to text. Both probes
+    /// render without a generation prompt: one user message and one
+    /// assistant message with a sentinel content, so the bytes after the
+    /// sentinel are the template's assistant-turn tail
+    /// (`EndOfTurnMarker.derive`); then a user turn after the assistant's,
+    /// to check that the marker is a hard encoding boundary at every
+    /// occurrence (`EndOfTurnMarker.splitsEncoding`) — the equality the
+    /// served composition rests on. A tokenizer that fails it is refused
+    /// for good: no path registers, no resolve runs.
+    static func derive(
+        tokenizer: any Tokenizer,
+        render: (_ messages: [[String: any Sendable]], _ additionalContext: [String: any Sendable])
+            throws -> String?
+    ) -> EndOfTurnMarkerStatus {
+        let user: [String: any Sendable] = ["role": "user", "content": "probe"]
+        let assistant: [String: any Sendable] = [
+            "role": "assistant", "content": EndOfTurnMarker.probeContent,
+        ]
+        let noGenerationPrompt: [String: any Sendable] = ["add_generation_prompt": false]
+        guard let probe = try? render([user, assistant], noGenerationPrompt),
+            let marker = EndOfTurnMarker.derive(probeRender: probe, tokenizer: tokenizer)
+        else { return .unavailable(.noEndOfTurnMarker) }
+        guard let splitProbe = try? render([user, assistant, user], noGenerationPrompt),
+            EndOfTurnMarker.splitsEncoding(
+                of: Array(splitProbe.utf8), marker: marker.bytes, tokenizer: tokenizer)
+        else { return .unavailable(.suffixEncodeUnstable) }
+        return .available(marker)
     }
 }
 
@@ -222,9 +311,6 @@ nonisolated final class EmittedPathIndex: @unchecked Sendable {
         var missReasons: [String: Int] = [:]
         /// Marker depth of a hit -> count.
         var depthHistogram: [Int: Int] = [:]
-        /// Resolve compositions that differed from the canonical encode
-        /// (the dark launch's shadow check; expected zero).
-        var shadowDifferences = 0
         /// Registrations the fidelity check refused.
         var fidelityRejections = 0
         var entryCount = 0
@@ -342,34 +428,28 @@ nonisolated final class EmittedPathIndex: @unchecked Sendable {
 
     // MARK: Marker memo
 
-    /// The end-of-turn marker for `fingerprint`, derived once from `probe`
-    /// (the module's probe render, run outside the lock) and remembered —
-    /// including a failed derivation — until the fingerprint changes.
+    /// The end-of-turn marker status for `fingerprint`: derived once by
+    /// `derive` (the module's probe renders and the split check, run
+    /// outside the lock) and remembered — an unavailable marker with its
+    /// reason included — until the fingerprint changes.
     func endOfTurnMarker(
         fingerprint: String,
-        tokenizer: any Tokenizer,
-        probe: () throws -> String
-    ) -> EndOfTurnMarker? {
-        let memo: EndOfTurnMarker?? = lock.withLock {
+        derive: () -> EndOfTurnMarkerStatus
+    ) -> EndOfTurnMarkerStatus {
+        let memo: EndOfTurnMarkerStatus? = lock.withLock {
             adoptLocked(fingerprint: fingerprint)
             return marker
         }
         if let memo { return memo }
-        let derived = (try? probe()).flatMap {
-            EndOfTurnMarker.derive(probeRender: $0, tokenizer: tokenizer)
-        }
+        let derived = derive()
         lock.withLock {
             guard activeFingerprint == fingerprint else { return }
-            marker = .some(derived)
+            marker = derived
         }
         return derived
     }
 
     // MARK: Counters owned by the layers above
-
-    func noteShadowDifference() {
-        lock.withLock { stats.shadowDifferences += 1 }
-    }
 
     func noteFidelityRejection() {
         lock.withLock { stats.fidelityRejections += 1 }
@@ -398,14 +478,11 @@ nonisolated final class EmittedPathIndex: @unchecked Sendable {
     }
 
     static func summary(of stats: Stats) -> String {
-        let misses = stats.missReasons.sorted { $0.key < $1.key }
-            .map { "\($0.key)=\($0.value)" }.joined(separator: ",")
-        return
-            "entries=\(stats.entryCount) idBytes=\(stats.idBytes)"
+        "entries=\(stats.entryCount) idBytes=\(stats.idBytes)"
             + " registrations=\(stats.registrations) overwrites=\(stats.overwrites)"
             + " evictions=\(stats.evictions) rejectedTooLarge=\(stats.rejectedTooLarge)"
-            + " resolves=\(stats.resolves) hits=\(stats.hits) misses=[\(misses)]"
-            + " shadowDifferences=\(stats.shadowDifferences)"
+            + " resolves=\(stats.resolves) hits=\(stats.hits)"
+            + " misses=\(PrefixCacheDiagnostics.histogram(stats.missReasons))"
             + " fidelityRejections=\(stats.fidelityRejections)"
     }
 
@@ -422,8 +499,8 @@ nonisolated final class EmittedPathIndex: @unchecked Sendable {
     private var idBytes = 0
     private var useCounter: UInt64 = 0
     private var activeFingerprint: String?
-    /// `.some(nil)` remembers a template without a usable marker.
-    private var marker: EndOfTurnMarker??
+    /// Remembers an unusable marker with its reason too.
+    private var marker: EndOfTurnMarkerStatus?
     private var stats = Stats()
 
     private static func cost(of ids: [Int]) -> Int {

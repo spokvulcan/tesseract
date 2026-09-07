@@ -68,13 +68,13 @@ nonisolated enum LeafSkipReason: Sendable, Equatable {
 /// live KV cache — the actor executes the Metal capture/`admit` from the
 /// decision this produces.
 ///
-/// Two steps, so the **Live Leaf Capture** can sit between them: `probe`
-/// finds the token path the mode's continuation will share (tokenizer only),
-/// `plan` chooses the restore boundary for it (**Snapshot Resolution** on the
-/// canonical fallback). A live capture takes the probe's path and never
-/// needs the boundary. Leaf-mode selection still lives on
-/// `LeafStorePhase.selectHTTPLeafStoreMode` (already a tested pure function),
-/// and the Metal capture stays in the actor.
+/// Only the **Leaf Store**'s boundary path runs the builder (ADR-0063): a
+/// turn on the fast path is keyed on the ids the model fed and needs neither
+/// probe nor boundary. Two steps: `probe` finds the token path the mode's
+/// continuation will share (tokenizer only), `plan` chooses the restore
+/// boundary for it (**Snapshot Resolution** on the canonical fallback).
+/// Leaf-mode selection still lives on `LeafStorePhase.selectHTTPLeafStoreMode`
+/// (already a tested pure function), and the Metal capture stays in the actor.
 nonisolated enum LeafAdmissionBuilder {
 
     /// The synthetic continuation a reusable-prefix probe appends to discover
@@ -275,7 +275,7 @@ nonisolated enum LeafAdmissionBuilder {
     /// `probe` result, the mode-relevant transient boundary snapshot, and a
     /// `resolveBoundary` closure-**peer** for the canonical fallback. No live
     /// KV cache, no Metal — the actor executes the capture/`admit` from the
-    /// decision. Only the boundary arm of the **Live Leaf Capture** needs it.
+    /// decision.
     static func plan(
         mode: BoundaryLeafMode,
         probedTokens: [Int],

@@ -126,8 +126,8 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let tokenNDim: Int
     /// The ids the decode loop fed past the prompt (stop token included),
     /// filled by the generation task and read by the **Leaf Store** phase
-    /// once `completion` has finished — the live cache's token path the
-    /// **Live Leaf Capture** compares against the canonical re-render.
+    /// once `completion` has finished — the tail of the turn's **Emitted
+    /// Path**, which the live leaf is keyed on and the index registers.
     let generatedTokens: GeneratedTokenRecorder
     /// The loaded model's tool-call format — what the generation loop's
     /// `ToolCallProcessor` parsed with, so the Emitted Path fidelity check
@@ -1011,8 +1011,8 @@ nonisolated final class ServerCompletion {
             // ran, its stage breakdown, and the whole span from generation
             // end to here — the client sees its terminal chunk right after.
             leafResult.report.tailSeconds = Date.timeIntervalSinceReferenceDate - generationEnded
-            // ADR-0063 dark launch: fold the request's Emitted Path resolves
-            // (request edge, planner, leaf store) into the same account.
+            // ADR-0063: fold the request's Emitted Path resolves (request
+            // edge, planner, leaf store) into the same account.
             let emittedPathSummary = mlxStart.render?.emittedPathTelemetry?.summary
             leafResult.report.emittedPathResolves = emittedPathSummary
             diagnosticsContext.log(leafResult.report, level: .notice)
