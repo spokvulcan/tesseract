@@ -398,14 +398,11 @@ final class PrefixCacheE2ERunner {
             messages: messages.map(\.prefixCacheMessage)
         )
         let startInstant = ContinuousClock.now
-        // The runner echoes the accumulator form (`applyThinkTruncate`
-        // mirrors the production consumers), not the streamed wire form.
         let start = try await engine.llmActor.startServerCompletion(
             modelID: modelID,
             conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
-            parameters: parameters,
-            clientStreams: false
+            parameters: parameters
         )
 
         var ttftSeconds: Double = 0
@@ -435,12 +432,6 @@ final class PrefixCacheE2ERunner {
                         argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(
                             call.function.arguments)
                     ))
-            case .thinkTruncate(let safePrefix):
-                Self.applyThinkTruncate(
-                    safePrefix: safePrefix,
-                    generatedText: &generatedText,
-                    assistantReasoning: &assistantReasoning
-                )
             case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta,
                 .info:
                 break
@@ -518,8 +509,7 @@ final class PrefixCacheE2ERunner {
                         systemPrompt: systemPrompt,
                         messages: messages,
                         toolSpecs: toolSpecs,
-                        prefixCacheConversation: nil,
-                        clientStreams: false
+                        prefixCacheConversation: nil
                     )),
                 parameters: toolLoopParams,
                 route: .standard
@@ -557,12 +547,6 @@ final class PrefixCacheE2ERunner {
                         argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(
                             call.function.arguments)
                     ))
-            case .thinkTruncate(let safePrefix):
-                Self.applyThinkTruncate(
-                    safePrefix: safePrefix,
-                    generatedText: &generatedText,
-                    assistantReasoning: &assistantReasoning
-                )
             case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta,
                 .info:
                 break
@@ -582,22 +566,6 @@ final class PrefixCacheE2ERunner {
 
     private static func elapsedSeconds(from start: ContinuousClock.Instant) -> Double {
         start.duration(to: .now).seconds
-    }
-
-    /// Apply `.thinkTruncate` to a running (text, reasoning) accumulator pair
-    /// in the same way the production consumers do. Drops any reasoning chars
-    /// that exceed the safe prefix and trims the mirror copy of those chars
-    /// from the aggregate `generatedText` buffer.
-    private static func applyThinkTruncate(
-        safePrefix: String,
-        generatedText: inout String,
-        assistantReasoning: inout String
-    ) {
-        let removed = assistantReasoning.count - safePrefix.count
-        if removed > 0 {
-            generatedText.removeLast(min(removed, generatedText.count))
-        }
-        assistantReasoning = safePrefix
     }
 
     // MARK: - Branch-point scenario
@@ -1312,10 +1280,7 @@ final class PrefixCacheE2ERunner {
                             systemPrompt: systemPrompt,
                             messages: llmHistory,
                             toolSpecs: []
-                        ),
-                        // Mirrors the production internal route: the agent
-                        // echoes the final-message form.
-                        clientStreams: false
+                        )
                     )),
                 parameters: params,
                 route: .serverCompatible

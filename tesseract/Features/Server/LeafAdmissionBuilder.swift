@@ -35,7 +35,7 @@ nonisolated enum LeafCapturePlan: Sendable {
 /// typed place instead of string literals scattered across the capture
 /// helpers. The live-`finalCache` skips (`no-final-cache`, `no-reusable-cache-state`,
 /// `normalization-trim`, `unsupported-cache-type`, `invalid-path`,
-/// `capturedThenEvicted`) and the `intervention` guard stay actor-side and are
+/// `capturedThenEvicted`) stay actor-side and are
 /// not represented here.
 nonisolated enum LeafSkipReason: Sendable, Equatable {
     /// The reusable-prefix probe's chat-template render threw.

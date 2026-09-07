@@ -63,8 +63,7 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
             conversation: conversation,
             toolSpecs: nil,
             parameters: parameters,
-            renderContext: renderContext,
-            clientStreams: true
+            renderContext: renderContext
         )
     }
 

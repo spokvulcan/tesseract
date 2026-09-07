@@ -117,7 +117,7 @@ between families and modes, so it gets its own column.
 - Both open a `<think>` block by default. Agentic-coding post-trains of
   Qwen3.5; the 9B card also names Gemma 4 as a base for other family members.
 - The 35B recipe's repetition penalty is the one the Qwen3 notes warn can end
-  think blocks early; kept by explicit decision, thinking-loop safeguard armed.
+  think blocks early; kept by explicit decision.
 - The cards give no output-length recommendation; their examples use 512
   (basic) and 2,048 (tool calls). The 35B checkpoint has `vision_config`;
   the 9B does not.

@@ -419,7 +419,7 @@ nonisolated enum CanonicalEchoFidelity {
     /// recording keeps no fed ids; the live fast path registers the fed ids
     /// themselves). The turn's leaf source is decided exactly as the live
     /// fast path decides it (`LiveLeafCapture.decide`, with the cache offset
-    /// at the end of the fed ids and no intervention — the recording keeps
+    /// at the end of the fed ids — the recording keeps
     /// neither): a boundary-decided turn registers nothing, as live.
     private static func registerEmittedPath(
         _ learning: EmittedPathLearning,
@@ -466,7 +466,7 @@ nonisolated enum CanonicalEchoFidelity {
             let decision = LiveLeafCapture.decide(
                 mode: mode, preservesThinking: renderContext.preservesThinking,
                 promptKeyPath: prompt, generatedTokens: generatedTokens,
-                cacheOffset: path.count, intervened: false, keySpaceIsIdentity: true)
+                cacheOffset: path.count, keySpaceIsIdentity: true)
             if case .boundary(let reason) = decision {
                 return SimulatedRegistration(
                     registration: EmittedPathRegistration.skipReason(for: reason).rawValue,

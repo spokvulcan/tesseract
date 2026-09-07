@@ -24,7 +24,7 @@ import MLXLMCommon
 ///   *semantically* and a mismatch increments `crossCheckMismatchCount` for
 ///   the caller to log — full arguments are never re-sent.
 /// - **Wire-Valid Close**: any termination after engagement (malformation,
-///   cancel, intervention, max-tokens) synthesizes closers so the accumulated
+///   cancel, max-tokens) synthesizes closers so the accumulated
 ///   fragments still parse as JSON.
 ///
 /// Formats without a transcodable dialect keep the atomic
@@ -116,7 +116,7 @@ nonisolated struct ArgumentTranscoder {
     }
 
     /// Wire-Valid Close for a stream that terminates (cancel, max-tokens,
-    /// intervention) while a call is engaged. Idempotent.
+    /// max-tokens) while a call is engaged. Idempotent.
     mutating func finish() -> [OpenAI.ToolCall] {
         guard machine?.isEngaged == true else { return [] }
         return closeCall(parsed: nil)

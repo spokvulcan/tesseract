@@ -90,7 +90,7 @@ nonisolated enum CompletionDelivery {
         }
 
         /// The terminal SSE chunk: empty delta, the finish reason, usage when
-        /// the client asked for it, and the safeguard sidecar.
+        /// the client asked for it.
         func finalChunk(
             projection: CompletionProjection,
             finishReason: OpenAI.FinishReason,
@@ -110,12 +110,10 @@ nonisolated enum CompletionDelivery {
             if includeUsage, let info = projection.info {
                 chunk.usage = Self.usage(info: info, cachedTokenCount: cachedTokenCount)
             }
-            chunk.tesseract_thinking_safeguard = projection.safeguardReport
             return chunk
         }
 
-        /// The single JSON body of a non-streaming completion, safeguard
-        /// sidecar included.
+        /// The single JSON body of a non-streaming completion.
         func response(
             projection: CompletionProjection,
             finishReason: OpenAI.FinishReason,
@@ -126,7 +124,7 @@ nonisolated enum CompletionDelivery {
                 ? nil
                 : ToolCallConverter.convertToOpenAI(projection.toolCalls)
 
-            var response = OpenAI.ChatCompletionResponse(
+            let response = OpenAI.ChatCompletionResponse(
                 id: completionID,
                 model: model,
                 created: created,
@@ -146,7 +144,6 @@ nonisolated enum CompletionDelivery {
                 ],
                 usage: Self.usage(info: projection.info, cachedTokenCount: cachedTokenCount)
             )
-            response.tesseract_thinking_safeguard = projection.safeguardReport
             return response
         }
 
@@ -275,7 +272,7 @@ nonisolated enum CompletionDelivery {
         switch outcome {
         case .completed(let accumulator, let info, let wireStreamedToolCalls):
             // One Generation Projection owns finish_reason, the malformed→text
-            // fallback, the safeguard sidecar, and the diagnostic.
+            // fallback and the diagnostic.
             let projection = CompletionProjection(
                 accumulator: accumulator,
                 info: info,
@@ -412,7 +409,7 @@ nonisolated enum CompletionDelivery {
         }
 
         // Wire-Valid Close for a stream that terminated (dashboard cancel,
-        // max-tokens, intervention) while a transcoded call was engaged: the
+        // max-tokens) while a transcoded call was engaged: the
         // sink must close the wire before the terminal envelope.
         switch await sink.closeStream() {
         case .disconnected:
@@ -639,7 +636,7 @@ actor SSEDeliverySink: CompletionDeliverySink {
             // applies to this call.
             return await sendToolCallDeltas(transcoder.ingest(event))
 
-        case .info, .thinkStart, .thinkEnd, .thinkReclassify, .thinkTruncate:
+        case .info, .thinkStart, .thinkEnd, .thinkReclassify:
             // No SSE side effect. text/thinking state is folded by the script's
             // accumulator; reclassify/truncate only adjust the final accumulated
             // content — deltas already sent to the client stand.

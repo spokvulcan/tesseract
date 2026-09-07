@@ -2,12 +2,8 @@ import Foundation
 import MLXLMCommon
 import os
 
-/// The streaming-generation spine: turns one raw model `AsyncStream<RawGeneration>`
-/// into the agent's `AgentGeneration` event stream under the thinking-loop
-/// safeguard. Owns the loop, the four-case switch, the `ToolCallParser` lifecycle,
-/// the `ThinkingSafeguardObserver` intervention triple, the continuation swap, and
-/// the cross-swap external cancel. Each caller keeps its own per-event ``Sink`` and
-/// its own post-loop projection of the returned ``Outcome``.
+/// Turns raw model output into agent events without rewriting reasoning.
+/// Owns parser finalization, external cancellation, and completion metrics.
 ///
 /// `nonisolated` so it can be driven from both an actor (`LLMActor`) and the
 /// MainActor (`AgentEngine`) with no isolation hop, and so the sink can fold a
@@ -31,11 +27,6 @@ nonisolated struct GenerationStreamLoop {
             self.waitForCompletion = waitForCompletion
         }
     }
-
-    /// The one real port: re-prefills from the safe prefix and returns a fresh
-    /// handle. A closure, not a protocol — it has a single requirement.
-    typealias ContinuationStarter =
-        @Sendable (_ safePrefix: String) async throws -> RawGenerationHandle
 
     /// Per-event push, called inline on the driving task. Deliberately not
     /// `@Sendable` so a caller can fold non-`Sendable` state; never sees `.info`.
@@ -74,8 +65,8 @@ nonisolated struct GenerationStreamLoop {
     }
 
     private struct HandleBox {
-        var handle: RawGenerationHandle
-        /// Per-handle dedup of `cancel()`; reset on a continuation swap.
+        let handle: RawGenerationHandle
+        /// Deduplicates calls to the raw handle’s `cancel()`.
         var cancelIssued = false
         /// Sticky once `cancelCurrent` was called; signals the loop to stop and
         /// report `cancelled`.
@@ -84,7 +75,6 @@ nonisolated struct GenerationStreamLoop {
 
     private let box: OSAllocatedUnfairLock<HandleBox>
     private let startsInsideThinkBlock: Bool
-    private let safeguardConfig: ThinkingRepetitionDetector.Config
 
     /// Pre-formatted `key=value` correlation token (e.g. `request_id=…` /
     /// `generation_id=…`) appended to the loop's own diagnostic warnings. The
@@ -98,16 +88,14 @@ nonisolated struct GenerationStreamLoop {
     init(
         initial: RawGenerationHandle,
         startsInsideThinkBlock: Bool,
-        safeguard: ThinkingRepetitionDetector.Config,
         logContext: String = ""
     ) {
         self.box = OSAllocatedUnfairLock(initialState: HandleBox(handle: initial))
         self.startsInsideThinkBlock = startsInsideThinkBlock
-        self.safeguardConfig = safeguard
         self.logContext = logContext
     }
 
-    /// Cancels whichever raw handle is currently live (across swaps); idempotent.
+    /// Cancels the raw handle; idempotent.
     /// Available before `run` so the caller can wire it into its own external
     /// cancel synchronously.
     var cancelCurrent: @Sendable () -> Void {
@@ -123,11 +111,8 @@ nonisolated struct GenerationStreamLoop {
         }
     }
 
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable:next function_body_length
-    func run(continuation: ContinuationStarter?, sink: Sink) async throws -> Outcome {
-        var parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
-        let safeguard = ThinkingSafeguardObserver(config: safeguardConfig)
+    func run(sink: Sink) async throws -> Outcome {
+        let parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
         var rawChunkParts: [String] = []
         var libraryParsedToolCalls = false
         // The ToolCallProcessor drops its in-flight buffer at EOS if it can't
@@ -142,19 +127,7 @@ nonisolated struct GenerationStreamLoop {
         var libraryToolCallName: String?
         var libraryToolCallEventCount = 0
         var completionInfo: AgentGeneration.Info?
-        // Terminal `.info` drained from a handle the intervention swap
-        // cancelled — phase-1 usage of a turn that continued after a
-        // truncation, folded into the outcome's completion info.
-        var interventionPriorInfo: AgentGeneration.Info?
         var cancelled = false
-        // Set when an intervention closed the think block but no continuation
-        // swapped in (no starter, or the starter threw). The truncation triple is
-        // already emitted and the parser was NOT re-init, so it still holds the
-        // degenerate post-trigger thinking — finalize must be skipped or it would
-        // forward that text AFTER `.thinkEnd`, re-polluting the truncated reasoning.
-        var interventionClosedWithoutSwap = false
-
-        typealias Intervention = (safePrefix: String, reason: ThinkingRepetitionDetector.Reason)
 
         // A stop is requested by either cooperative task cancellation or an
         // external `cancelCurrent()`.
@@ -172,20 +145,9 @@ nonisolated struct GenerationStreamLoop {
             toCancel?.cancel()
         }
 
-        // One completion, possibly two vendor generations (an intervention
-        // swap): fold the cancelled phase's drained usage into the final
-        // handle's. Merging only when both exist keeps the no-info warning
-        // path ("stream closed without .info") intact.
-        func resolvedCompletionInfo() -> AgentGeneration.Info? {
-            guard let prior = interventionPriorInfo, let final = completionInfo else {
-                return completionInfo
-            }
-            return .mergedAcrossContinuation(prior: prior, continuation: final)
-        }
-
         // Snapshot the loop's silent-close surface. Call AFTER `finalize()` on the
         // natural path so `finalizeState` reflects the flushed parser; on the
-        // cancel and intervention-without-swap paths finalize is skipped, so it
+        // cancel path finalize is skipped, so it
         // snapshots the un-finalized parser. The raw chunks are kept unjoined and
         // concatenated lazily by `Diagnostics.rawChunksJoined`.
         func makeDiagnostics() -> Diagnostics {
@@ -196,174 +158,54 @@ nonisolated struct GenerationStreamLoop {
             )
         }
 
-        // Forward a parser event to the sink under the safeguard. When the vendor
-        // library already parsed tool calls, its `<tool_call>` wrapper tags leak
-        // back as chunks; suppress the app parser's tool events. Returns the
-        // intervention payload when the safeguard fired.
-        func emitParserEvent(
-            _ event: ToolCallParser.Event,
-            allowToolEvents: Bool
-        ) -> Intervention? {
+        // Suppress app-parser tool events once the vendor owns tool parsing.
+        func emitParserEvent(_ event: ToolCallParser.Event, allowToolEvents: Bool) {
             if !allowToolEvents {
                 switch event {
                 case .toolCall, .malformedToolCall, .toolCallDelta:
-                    return nil
+                    return
                 default:
                     break
                 }
             }
-            switch safeguard.observe(parserEvent: event) {
-            case .forward:
-                sink(AgentGeneration(parserEvent: event))
-                return nil
-            case .intervene(let safe, let reason):
-                // Replace the degenerate thinking with the clean prefix, emit the
-                // hand-off phrase, close `</think>`. Downstream consumers reset
-                // their thinking accumulators on `.thinkTruncate`.
-                sink(.thinkTruncate(safePrefix: safe))
-                sink(.thinking(safeguardConfig.injectionMessage))
-                sink(.thinkEnd)
-                Log.agent.warning(
-                    "Thinking-loop intervention — reason=\(reason.rawValue) "
-                        + "safe_prefix_chars=\(safe.count)"
-                        + logSuffix
-                )
-                return (safe, reason)
-            }
+            sink(AgentGeneration(parserEvent: event))
         }
 
-        var currentStream = box.withLock { $0.handle.stream }
-
+        let stream = box.withLock { $0.handle.stream }
         if stopRequested() {
-            // Cancel arrived before `run` began consuming (the "available
-            // pre-`run`" contract). Stop before touching the stream.
             cancelled = true
         } else {
-            streamLoop: while true {
-                var intervention: Intervention?
-
-                // Explicit iterator (not `for await`): the intervention swap
-                // below keeps pulling from it after cancelling the handle, to
-                // drain the buffered tail for phase-1's terminal `.info`.
-                var streamIterator = currentStream.makeAsyncIterator()
-                while let item = await streamIterator.next() {
-                    if stopRequested() {
-                        cancelled = true
-                        break
-                    }
-
-                    switch item {
-                    case .chunk(let text):
-                        rawChunkParts.append(text)
-                        for event in parser.processChunk(text) {
-                            if let fired = emitParserEvent(
-                                event,
-                                allowToolEvents: !libraryParsedToolCalls
-                            ) {
-                                intervention = fired
-                                break
-                            }
-                        }
-
-                    case .toolCall(let call):
-                        libraryParsedToolCalls = true
-                        libraryToolCallEventCount += 1
-                        // The close-tag parse consumed whatever the deltas were
-                        // building toward — reset so a later interrupted call's
-                        // malformed surface doesn't include this parsed block.
-                        libraryToolCallBufferAccum = ""
-                        libraryToolCallName = nil
-                        sink(.toolCall(call))
-
-                    case .toolCallBufferDelta(let delta):
-                        libraryParsedToolCalls = true
-                        libraryToolCallBufferAccum += delta
-                        if libraryToolCallName == nil {
-                            libraryToolCallName = ToolCallNameLock.extract(
-                                from: libraryToolCallBufferAccum)
-                        }
-                        sink(
-                            .toolCallDelta(
-                                name: libraryToolCallName, argumentsDelta: delta))
-
-                    case .info(let vinfo):
-                        // Captured into the Outcome, never pushed to the sink.
-                        completionInfo = AgentGeneration.Info(vinfo)
-                    }
-
-                    if intervention != nil { break }
+            for await item in stream {
+                if stopRequested() {
+                    cancelled = true
+                    break
                 }
-
-                // An external cancel may have finished the stream with no item
-                // delivered to the body above — re-check once the iterator ends.
-                if stopRequested() { cancelled = true }
-                if cancelled { break streamLoop }
-
-                guard let fired = intervention else {
-                    break streamLoop  // natural end of the current stream
-                }
-
-                // Intervention fired; the truncation triple is already emitted.
-                guard let continuation else {
-                    // No starter ⇒ emit the truncation and stop. Don't flush the
-                    // parser afterward (it still holds the truncated thinking).
-                    interventionClosedWithoutSwap = true
-                    break streamLoop
-                }
-
-                // Cancel + drain the current (old) handle before swapping.
-                let old = box.withLock { state -> RawGenerationHandle in
-                    state.cancelIssued = true
-                    return state.handle
-                }
-                old.cancel()
-                // The cancelled handle still yields exactly one terminal
-                // `.info` (the producer synthesizes one when cancellation
-                // preceded the authoritative info, and always finishes the
-                // stream right after it) — drain the buffered tail for it, so
-                // the outcome's usage can span both phases. The degenerate
-                // post-trigger content in the same tail is dropped, never
-                // sunk.
-                while let item = await streamIterator.next() {
-                    if case .info(let vinfo) = item {
-                        interventionPriorInfo = AgentGeneration.Info(vinfo)
+                switch item {
+                case .chunk(let text):
+                    rawChunkParts.append(text)
+                    for event in parser.processChunk(text) {
+                        emitParserEvent(event, allowToolEvents: !libraryParsedToolCalls)
                     }
-                }
-                await old.waitForCompletion()
-
-                do {
-                    let newHandle = try await continuation(fired.safePrefix)
-                    // Install the continuation handle. If an external cancel landed
-                    // during the swap, honor it on the freshly-installed handle —
-                    // the cross-swap invariant: cancel whichever handle is live.
-                    let externalDuringSwap = box.withLock { state -> Bool in
-                        state.handle = newHandle
-                        state.cancelIssued = false
-                        return state.externalCancel
+                case .toolCall(let call):
+                    libraryParsedToolCalls = true
+                    libraryToolCallEventCount += 1
+                    libraryToolCallBufferAccum = ""
+                    libraryToolCallName = nil
+                    sink(.toolCall(call))
+                case .toolCallBufferDelta(let delta):
+                    libraryParsedToolCalls = true
+                    libraryToolCallBufferAccum += delta
+                    if libraryToolCallName == nil {
+                        libraryToolCallName = ToolCallNameLock.extract(
+                            from: libraryToolCallBufferAccum)
                     }
-                    if externalDuringSwap {
-                        cancelLiveHandleOnce()
-                        cancelled = true
-                        break streamLoop
-                    }
-                    // Continuation picks up AFTER `</think>` — re-init the parser in
-                    // out-of-think mode so its output is classified as text. Do NOT
-                    // reset the safeguard: the intervention limit must keep
-                    // blocking a re-fire.
-                    parser = ToolCallParser(startsInsideThinkBlock: false)
-                    currentStream = newHandle.stream
-                    continue streamLoop
-                } catch {
-                    Log.agent.error(
-                        "Thinking-safeguard continuation failed: "
-                            + "\(error.localizedDescription) — finishing with truncated response"
-                    )
-                    // Same as the no-starter case: the think block is closed and the
-                    // parser was never re-init, so skip the post-loop finalize flush.
-                    interventionClosedWithoutSwap = true
-                    break streamLoop
+                    sink(.toolCallDelta(name: libraryToolCallName, argumentsDelta: delta))
+                case .info(let vinfo):
+                    completionInfo = AgentGeneration.Info(vinfo)
                 }
             }
+            // External cancellation can finish a stream without yielding an item.
+            if stopRequested() { cancelled = true }
         }
 
         // On a stop, make sure the live handle is cancelled exactly once before we
@@ -381,22 +223,14 @@ nonisolated struct GenerationStreamLoop {
             // On cancel we skip the finalize flush and malformed-EOS surfacing —
             // the caller discards partial output and clears its cache.
             return Outcome(
-                completionInfo: resolvedCompletionInfo(),
+                completionInfo: completionInfo,
                 cancelled: true,
                 diagnostics: makeDiagnostics()
             )
         }
 
-        // Flush any remaining buffered text. A finalize-triggered safeguard event
-        // cannot swap (the loop is over), matching the server path's discipline.
-        // Skipped when an intervention closed the think block without a swap: the
-        // un-reinit parser still holds the degenerate post-trigger thinking, and
-        // flushing it would forward text AFTER the `.thinkEnd` already emitted —
-        // re-polluting the reasoning the safeguard just truncated.
-        if !interventionClosedWithoutSwap {
-            for event in parser.finalize() {
-                _ = emitParserEvent(event, allowToolEvents: !libraryParsedToolCalls)
-            }
+        for event in parser.finalize() {
+            emitParserEvent(event, allowToolEvents: !libraryParsedToolCalls)
         }
 
         // Surface the processor's dropped in-flight buffer: when the model
@@ -418,7 +252,7 @@ nonisolated struct GenerationStreamLoop {
         }
 
         return Outcome(
-            completionInfo: resolvedCompletionInfo(),
+            completionInfo: completionInfo,
             cancelled: false,
             diagnostics: makeDiagnostics()
         )

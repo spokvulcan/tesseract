@@ -63,7 +63,7 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
 
     /// Flat token sequence for the full prompt (1D extraction from potentially
     /// 2D VLM tensor). REAL prepared tokens — safe to re-forward through the
-    /// model (the thinking-safeguard continuation does). Radix-tree paths use
+    /// model. Radix-tree paths use
     /// `keySpace.keyPath` instead, which replaces image runs with
     /// digest-derived pseudo-tokens that must never reach an embedding lookup.
     let fullTokens: [Int]
@@ -344,8 +344,6 @@ nonisolated enum VisionPrefixMemoryGuard {
 /// server's sink: accumulator fold + tool-call projection) → **Snapshot
 /// Admission** at the MLX edge → **Leaf Capture Plan** execution, plus the
 /// prefix-cache admin entries and the snapshot-payload extraction statics.
-/// It composes the actor's thinking-continuation primitives for the
-/// safeguard's continuation swap.
 nonisolated final class ServerCompletion {
 
     /// The MainActor **current-cache accessor** this module publishes each
@@ -624,8 +622,7 @@ nonisolated final class ServerCompletion {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler? = nil,
-        clientStreams: Bool
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         Memory.cacheLimit = LLMActor.Defaults.cacheLimitMB * 1024 * 1024
 
@@ -688,30 +685,13 @@ nonisolated final class ServerCompletion {
         let loadedModelWeightBytes = modelWeightBytes
 
         let driver = ManagedGenerationDriver(
-            parameters: parameters,
             startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
                 promptStartsThinking: promptStartsThinking),
             logContext: "request_id=\(requestID.uuidString)"
         )
-        let fullTokensForContinuation = mlxStart.fullTokens
-        let tokenNDimForContinuation = mlxStart.tokenNDim
-        let continuationInjection = driver.safeguard.continuationHandOff
-        let continuationToolSpecs = canonicalTools
         let actorRef = actor
-        let continuationStarter: @Sendable (String) async throws -> HTTPServerRawGenerationStart = {
-            safePrefix in
-            try await actorRef.startRawGeneration(
-                prompt: .continuation(
-                    base: .tokens(fullTokensForContinuation, ndim: tokenNDimForContinuation),
-                    handoff: safePrefix + continuationInjection),
-                toolSpecs: continuationToolSpecs,
-                parameters: parameters,
-                progressHandler: progressHandler
-            )
-        }
 
-        // The loop owns the cross-swap cancel invariant (which raw handle is live
-        // after an intervention swap). Its `cancelCurrent` must be wired into
+        // The loop owns raw-handle cancellation. Its `cancelCurrent` must be wired into
         // `start.cancel` synchronously, but the loop isn't built until the task
         // starts — bridge through a late-bound cancel the task fills.
         let loopCancel = LateBoundCancel()
@@ -759,8 +739,6 @@ nonisolated final class ServerCompletion {
                 traceLog: traceLog,
                 driver: driver,
                 loopCancel: loopCancel,
-                clientStreams: clientStreams,
-                continuationStarter: continuationStarter,
                 continuation: continuation,
                 finishHook: { await actorRef.clearFinishedServerCompletion(requestID) },
                 scheduleSpeculative: { seed in
@@ -807,9 +785,6 @@ nonisolated final class ServerCompletion {
         traceLog: CompletionTraceLog,
         driver: ManagedGenerationDriver,
         loopCancel: LateBoundCancel,
-        clientStreams: Bool,
-        continuationStarter:
-            @escaping @Sendable (String) async throws -> HTTPServerRawGenerationStart,
         continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation,
         finishHook: @escaping @Sendable () async -> Void,
         scheduleSpeculative: @escaping @Sendable (SpeculativeCanonicalPrefill.Seed) async -> Void
@@ -832,7 +807,7 @@ nonisolated final class ServerCompletion {
 
         drive: do {
             func handle(_ event: AgentGeneration) {
-                // Fold shared accumulation (text/thinking/safeguard prefix)
+                // Fold shared accumulation (text/thinking)
                 // in one place. The leaf-store tool-call projection
                 // (raw `ToolCall` → `HTTPPrefixCacheToolCall`) stays here, as
                 // does the continuation yield that drives downstream
@@ -868,16 +843,10 @@ nonisolated final class ServerCompletion {
             // shared tail re-yields the terminal `.info` through it — so
             // CompletionHandler's non-streaming and SSE paths still read
             // final completion metrics from the stream — and emits the
-            // completion log and unparsed-tool-call warning. The server
-            // always supplies a continuation starter.
+            // completion log and unparsed-tool-call warning.
             let outcome = try await driver.run(
                 initial: .init(mlxStart),
                 cancelBridge: loopCancel,
-                continuationStarter: { safePrefix in
-                    GenerationStreamLoop.RawGenerationHandle(
-                        try await continuationStarter(safePrefix)
-                    )
-                },
                 sink: handle
             )
             // Everything from here to `continuation.finish()` is inside the
@@ -956,8 +925,6 @@ nonisolated final class ServerCompletion {
             // falls through to the request-end recordRequest call below — the
             // alpha tuner needs to see every request, not just the ones whose
             // leaf store completed.
-            // The leaf keys on what THIS client will echo back — see
-            // `GenerationAccumulator.streamedThinking`.
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
@@ -967,10 +934,8 @@ nonisolated final class ServerCompletion {
                 prefixCache: prefixCache,
                 promptStartsThinking: driver.startsInsideThinkBlock,
                 assistantText: accumulator.text,
-                assistantReasoning: clientStreams
-                    ? accumulator.streamedThinking : accumulator.thinking,
+                assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
-                intervened: accumulator.safeguardTriggered,
                 diagnosticsContext: diagnosticsContext,
                 trace: &trace
             )

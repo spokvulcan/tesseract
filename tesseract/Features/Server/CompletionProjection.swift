@@ -5,13 +5,13 @@ import MLXLMCommon
 /// `GenerationAccumulator` (plus the turn's completion `info`, the request's
 /// effective max-tokens, and the completion id) to the content both HTTP
 /// completion paths emit — the `finish_reason`, the malformed-fallback-applied
-/// text, the reasoning, the tool calls, the thinking-safeguard sidecar, and a
+/// text, the reasoning, the tool calls, and a
 /// finish-reason **diagnostic**.
 ///
 /// A pure `nonisolated Sendable` value: no logging, no I/O, no transport. Each
 /// completion path builds it **once** and keeps only its own framing — the
 /// streaming path chunks SSE, the non-streaming path encodes one JSON body. The
-/// shared rules (finish-reason, empty-payload diagnostic, safeguard sidecar) live
+/// shared rules (finish-reason, empty-payload diagnostic) live
 /// here, so changing one means editing one place instead of two mirrored paths;
 /// the malformed→text fallback *predicate* lives once on the accumulator
 /// (`surfacesMalformedBuffer`), shared with the agent path's
@@ -36,9 +36,6 @@ nonisolated struct CompletionProjection: Sendable {
 
     /// Finalized tool calls in arrival order.
     let toolCalls: [ToolCall]
-
-    /// The thinking-safeguard sidecar, present iff the safeguard fired.
-    let safeguardReport: OpenAI.ThinkingSafeguardReport?
 
     /// True when `textContent` is the surfaced malformed buffer. The streaming
     /// path emits one extra SSE content chunk on this flag; the non-streaming
@@ -92,9 +89,6 @@ nonisolated struct CompletionProjection: Sendable {
         self.textContent = surfaced ? malformedRaw : rawText
         self.thinkingContent = reasoning
         self.toolCalls = calls
-        self.safeguardReport = accumulator.safeguardSafePrefixChars.map {
-            OpenAI.ThinkingSafeguardReport(safePrefixChars: $0)
-        }
         self.malformedFallbackSurfaced = surfaced
         self.info = info
         self.diagnostic = FinishReasonDiagnostic(

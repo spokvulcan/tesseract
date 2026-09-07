@@ -103,9 +103,9 @@ struct ServerCompletionLeafSkipLogTests {
 
     @Test func liveFallbackEligibilityReasonsAreInfoWithTheModeFields() {
         let log = LeafStorePhase.liveFallbackLog(
-            for: .intervened, mode: .directToolLeaf, preservesThinking: true)
+            for: .noGeneratedTokens, mode: .directToolLeaf, preservesThinking: true)
         #expect(log.stage == "liveLeafCapture")
-        #expect(log.reason == "intervened")
+        #expect(log.reason == "no-generated-tokens")
         #expect(log.level == .info)
         #expect(fields(log) == [["mode", "directToolLeaf"], ["preservesThinking", "true"]])
         #expect(

@@ -41,9 +41,6 @@ nonisolated enum OpenAI {
         var reasoning_effort: String?
         var stream_options: StreamOptions?
         var stop: StopSequence?
-        /// Tesseract vendor extension: controls the thinking-loop safeguard.
-        /// Non-standard — clients that don't know about it can omit it.
-        var thinking_safeguard: ThinkingSafeguard?
         /// Per-request chat-template kwargs (issue #98), e.g.
         /// `{"preserve_thinking": true}`. Only boolean flags the loaded
         /// template declares are honored — everything else is ignored
@@ -53,24 +50,6 @@ nonisolated enum OpenAI {
         nonisolated var effectiveMaxTokens: Int? {
             max_completion_tokens ?? max_tokens
         }
-    }
-
-    /// Tesseract vendor extension configuring the thinking-loop safeguard.
-    /// Every field optional — omitted fields fall back to the model's preset
-    /// defaults set by ``AgentGenerateParameters/forModel(_:)``.
-    struct ThinkingSafeguard: Codable, Sendable {
-        /// Master switch. Defaults to `true` for thinking-capable models.
-        var enabled: Bool?
-        /// Optional hard backstop measured in **characters** of accumulated
-        /// thinking content (not tokens — see ``ThinkingRepetitionDetector``).
-        var max_thinking_chars: Int?
-        /// Grace period in accumulated thinking **characters** before any
-        /// repetition heuristic is allowed to fire.
-        var min_chars_before_intervention: Int?
-        /// Override the line-repeat trigger threshold.
-        var max_line_repeats: Int?
-        /// Text injected after the safe prefix when the safeguard fires.
-        var injection_message: String?
     }
 
     /// Lenient carrier for `chat_template_kwargs`: keeps the boolean flags
@@ -319,24 +298,6 @@ nonisolated enum OpenAI {
         var system_fingerprint: String?
         var choices: [ChatCompletionChoice]
         var usage: Usage?
-        /// Tesseract vendor extension: populated when the thinking-loop
-        /// safeguard intervened on this request. Absent when it did not fire.
-        var tesseract_thinking_safeguard: ThinkingSafeguardReport?
-    }
-
-    /// Surface-level info about a thinking-safeguard intervention. Surfaced on
-    /// the non-streaming response and on the final SSE chunk as a sidecar so
-    /// reasoning-aware clients can repair their buffered reasoning view.
-    /// Presence of the sidecar signals that the safeguard fired on this
-    /// request; absence signals it did not. We intentionally do NOT mutate
-    /// `finish_reason` — keeps the endpoint strictly compatible with clients
-    /// that enum-validate finish reasons.
-    struct ThinkingSafeguardReport: Codable, Sendable {
-        var safe_prefix_chars: Int?
-
-        init(safePrefixChars: Int? = nil) {
-            self.safe_prefix_chars = safePrefixChars
-        }
     }
 
     struct ChatCompletionChoice: Codable, Sendable {
@@ -380,9 +341,6 @@ nonisolated enum OpenAI {
         var system_fingerprint: String?
         var choices: [ChatCompletionChunkChoice]
         var usage: Usage?
-        /// Populated only on the final chunk when the thinking-loop safeguard
-        /// fired; absent on all other chunks and when it did not fire.
-        var tesseract_thinking_safeguard: ThinkingSafeguardReport?
     }
 
     struct ChatCompletionChunkChoice: Codable, Sendable {

@@ -119,9 +119,6 @@ private extension AgentGeneration {
     var isInfo: Bool {
         if case .info = self { return true } else { return false }
     }
-    var asThinkTruncate: String? {
-        if case .thinkTruncate(let s) = self { return s } else { return nil }
-    }
     var asThinking: String? {
         if case .thinking(let s) = self { return s } else { return nil }
     }
@@ -130,36 +127,42 @@ private extension AgentGeneration {
     }
 }
 
-/// Config that trips the line-repeat signal after three identical lines, with no
-/// grace period — used to drive an intervention hermetically.
-private let trippingSafeguard = ThinkingRepetitionDetector.Config(
-    minLineLength: 10, maxLineRepeats: 3, minCharsBeforeIntervention: 0
-)
-private let interventionPrelude = "Reasoning about the user's constraints first.\n"
-private let interventionRepeated = "Now I loop on the same thought forever.\n"
-
-/// Stream that trips `trippingSafeguard`: one legit line then the loop line ×3.
-private let trippingThinkingEvents: [RawGeneration] = [
-    .chunk(interventionPrelude),
-    .chunk(interventionRepeated),
-    .chunk(interventionRepeated),
-    .chunk(interventionRepeated),
-]
-
 // MARK: - Tests
 
 nonisolated struct GenerationStreamLoopTests {
+
+    @Test
+    func reasoningRunsToItsNaturalEndWithoutIntervention() async throws {
+        // Both old length thresholds, plus a repeated reasoning passage. Neither
+        // is permission to replace the model's reasoning or discard its answer.
+        let longReasoning = (0..<9_000).map { "step\($0)\n" }.joined()
+        let repeated = String(repeating: "Let me verify this constraint once more.\n", count: 250)
+        let recorder = SinkRecorder()
+        let cancelled = OSAllocatedUnfairLock(initialState: false)
+        let loop = GenerationStreamLoop(
+            initial: cannedHandle(
+                [
+                    .chunk(longReasoning), .chunk(repeated),
+                    .chunk("</think>Final answer."), info(generated: 25_000),
+                ], cancel: { cancelled.withLock { $0 = true } }),
+            startsInsideThinkBlock: true)
+        let outcome = try await loop.run(sink: recorder.sink)
+        #expect(recorder.events.compactMap(\.asThinking).joined() == longReasoning + repeated)
+        #expect(recorder.events.compactMap(\.asText).joined() == "Final answer.")
+        #expect(!cancelled.withLock { $0 })
+        #expect(outcome.completionInfo?.generationTokenCount == 25_000)
+        #expect(!outcome.cancelled)
+    }
 
     @Test
     func plainTextStreamForwardsTextCapturesInfoAndEndsNaturally() async throws {
         let recorder = SinkRecorder()
         let loop = GenerationStreamLoop(
             initial: cannedHandle([.chunk("hello world"), info(generated: 7)]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        let outcome = try await loop.run(continuation: nil, sink: recorder.sink)
+        let outcome = try await loop.run(sink: recorder.sink)
 
         // `.text` is forwarded to the sink; `.info` is captured, never sunk.
         #expect(recorder.events.compactMap(\.asText) == ["hello world"])
@@ -185,11 +188,10 @@ nonisolated struct GenerationStreamLoopTests {
                 .chunk("<tool_call>\n{\"name\":\"appcall\",\"arguments\":{}}</tool_call>"),
                 info(),
             ]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        let outcome = try await loop.run(continuation: nil, sink: recorder.sink)
+        let outcome = try await loop.run(sink: recorder.sink)
 
         // The vendor delta is forwarded; the app parser's body delta is not.
         #expect(recorder.events.compactMap(\.asToolCallDelta) == ["abc"])
@@ -215,11 +217,10 @@ nonisolated struct GenerationStreamLoopTests {
                 .toolCallBufferDelta(#"{"name": "wri"#),
                 info(),
             ]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        _ = try await loop.run(continuation: nil, sink: recorder.sink)
+        _ = try await loop.run(sink: recorder.sink)
 
         var deltaNames: [String?] = []
         for event in recorder.events {
@@ -237,11 +238,10 @@ nonisolated struct GenerationStreamLoopTests {
                 // before the close tag — no `.toolCall`, no `.info`.
                 .toolCallBufferDelta("<tool_call>\n<read>\n<file_path>/x</file_path>")
             ]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        _ = try await loop.run(continuation: nil, sink: recorder.sink)
+        _ = try await loop.run(sink: recorder.sink)
 
         let malformed = recorder.events.compactMap { e -> String? in
             if case .malformedToolCall(let raw) = e { return raw } else { return nil }
@@ -263,208 +263,34 @@ nonisolated struct GenerationStreamLoopTests {
                 // ...so EOS sees an empty dropped buffer — nothing malformed.
                 info(),
             ]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        _ = try await loop.run(continuation: nil, sink: recorder.sink)
+        _ = try await loop.run(sink: recorder.sink)
 
         #expect(!recorder.events.contains { $0.isMalformedToolCall })
         #expect(recorder.events.contains { $0.isToolCall })
     }
 
     @Test
-    func thinkingLoopTripsInterventionTripleInOrderWithoutContinuation() async throws {
-        let recorder = SinkRecorder()
-        let loop = GenerationStreamLoop(
-            initial: cannedHandle(trippingThinkingEvents),
-            startsInsideThinkBlock: true,
-            safeguard: trippingSafeguard
-        )
-
-        let outcome = try await loop.run(continuation: nil, sink: recorder.sink)
-
-        // The intervention replaces the degenerate thinking with the triple:
-        // .thinkTruncate(safe) → .thinking(injection) → .thinkEnd, in order.
-        guard let i = recorder.events.firstIndex(where: { $0.asThinkTruncate != nil }) else {
-            Issue.record("expected a .thinkTruncate")
-            return
-        }
-        #expect(recorder.events[i].asThinkTruncate == interventionPrelude)
-        #expect(recorder.events[i + 1].asThinking == trippingSafeguard.injectionMessage)
-        #expect(recorder.events[i + 2].isThinkEnd)
-        #expect(outcome.cancelled == false)
-    }
-
-    @Test
-    func noContinuationInterventionDoesNotFlushBufferedThinkingAfterThinkEnd() async throws {
-        let recorder = SinkRecorder()
-        let trailingReasoning = "and some trailing reasoning the safeguard truncated"
-        let loop = GenerationStreamLoop(
-            initial: cannedHandle([
-                .chunk(interventionPrelude),
-                .chunk(interventionRepeated),
-                // The third identical line trips the safeguard; the un-terminated
-                // tail after it stays buffered in the (un-reinit) parser at the
-                // moment of intervention.
-                .chunk(interventionRepeated + trailingReasoning),
-            ]),
-            startsInsideThinkBlock: true,
-            safeguard: trippingSafeguard
-        )
-
-        _ = try await loop.run(continuation: nil, sink: recorder.sink)
-
-        // The truncation triple's `.thinkEnd` closes the think block. A finalize()
-        // flush would forward the still-buffered `trailingReasoning` as
-        // `.thinkReclassify` + `.text` AFTER that `.thinkEnd`, re-polluting the
-        // reasoning the safeguard just truncated. Nothing text-bearing may follow.
-        guard let endIdx = recorder.events.firstIndex(where: { $0.isThinkEnd }) else {
-            Issue.record("expected a .thinkEnd from the truncation triple")
-            return
-        }
-        let afterThinkEnd = recorder.events[(endIdx + 1)...]
-        #expect(!afterThinkEnd.contains { $0.asText != nil || $0.asThinking != nil })
-        #expect(!recorder.events.contains { $0.asText == trailingReasoning })
-    }
-
-    @Test
-    func interventionSwapsToContinuationWithSafePrefixAndClassifiesPostThinkAsText() async throws {
-        let recorder = SinkRecorder()
-        let recordedPrefix = OSAllocatedUnfairLock<String?>(initialState: nil)
-        let starter: GenerationStreamLoop.ContinuationStarter = { safePrefix in
-            recordedPrefix.withLock { $0 = safePrefix }
-            return cannedHandle([.chunk("the answer"), info(generated: 5)])
-        }
-        let loop = GenerationStreamLoop(
-            initial: cannedHandle(trippingThinkingEvents),
-            startsInsideThinkBlock: true,
-            safeguard: trippingSafeguard
-        )
-
-        let outcome = try await loop.run(continuation: starter, sink: recorder.sink)
-
-        // The starter is invoked with the safe prefix captured before the loop.
-        #expect(recordedPrefix.withLock { $0 } == interventionPrelude)
-        // The continuation picks up after `</think>`, so its output is text.
-        #expect(recorder.events.compactMap(\.asText).contains("the answer"))
-        #expect(outcome.cancelled == false)
-        // The terminal `.info` comes from the continuation stream.
-        #expect(outcome.completionInfo?.generationTokenCount == 5)
-    }
-
-    @Test
-    func interventionSwapMergesCancelledPhaseUsageIntoOutcome() async throws {
-        let recorder = SinkRecorder()
-        let starter: GenerationStreamLoop.ContinuationStarter = { _ in
-            cannedHandle([
-                .chunk("the answer"),
-                info(prompt: 90, generated: 5, promptTime: 1.0, generateTime: 0.4),
-            ])
-        }
-        // The producer synthesizes a terminal `.info` even when cancelled —
-        // it sits buffered behind the trigger chunk, where only the swap's
-        // drain can reach it.
-        let loop = GenerationStreamLoop(
-            initial: cannedHandle(
-                trippingThinkingEvents + [
-                    info(prompt: 40, generated: 21, promptTime: 0.5, generateTime: 3.0)
-                ]),
-            startsInsideThinkBlock: true,
-            safeguard: trippingSafeguard
-        )
-
-        let outcome = try await loop.run(continuation: starter, sink: recorder.sink)
-
-        // One client-visible completion, two vendor generations: the prompt is
-        // the ORIGINAL request's (the continuation's prompt re-prefills context
-        // the client never sent), generated tokens span both phases, and the
-        // continuation's re-prefill time folds into generation latency.
-        let merged = try #require(outcome.completionInfo)
-        #expect(merged.promptTokenCount == 40)
-        #expect(merged.generationTokenCount == 26)
-        #expect(abs(merged.promptTime - 0.5) < 1e-9)
-        #expect(abs(merged.generateTime - (3.0 + 1.0 + 0.4)) < 1e-9)
-    }
-
-    @Test
-    func mergedAcrossContinuationSumsDraftTotalsNilPreserving() {
-        func makeInfo(proposed: Int?, accepted: Int?) -> AgentGeneration.Info {
-            GenerationFixtures.info(
-                draftTokensProposed: proposed, draftTokensAccepted: accepted)
-        }
-
-        // Two plain autoregressive phases stay "never speculated".
-        let neither = AgentGeneration.Info.mergedAcrossContinuation(
-            prior: makeInfo(proposed: nil, accepted: nil),
-            continuation: makeInfo(proposed: nil, accepted: nil)
-        )
-        #expect(neither.draftTokensProposed == nil)
-        #expect(neither.draftTokensAccepted == nil)
-
-        // One speculated phase makes the total real; the nil side counts as 0.
-        let mixed = AgentGeneration.Info.mergedAcrossContinuation(
-            prior: makeInfo(proposed: 100, accepted: 60),
-            continuation: makeInfo(proposed: nil, accepted: nil)
-        )
-        #expect(mixed.draftTokensProposed == 100)
-        #expect(mixed.draftTokensAccepted == 60)
-
-        let both = AgentGeneration.Info.mergedAcrossContinuation(
-            prior: makeInfo(proposed: 100, accepted: 60),
-            continuation: makeInfo(proposed: 40, accepted: 30)
-        )
-        #expect(both.draftTokensProposed == 140)
-        #expect(both.draftTokensAccepted == 90)
-    }
-
-    @Test
-    func continuationFailureEndsGracefullyWithTruncatedResponse() async throws {
-        struct StarterError: Error {}
-        let recorder = SinkRecorder()
-        let starter: GenerationStreamLoop.ContinuationStarter = { _ in throw StarterError() }
-        let loop = GenerationStreamLoop(
-            initial: cannedHandle(trippingThinkingEvents),
-            startsInsideThinkBlock: true,
-            safeguard: trippingSafeguard
-        )
-
-        // A throwing starter must not propagate out of `run`.
-        let outcome = try await loop.run(continuation: starter, sink: recorder.sink)
-
-        #expect(recorder.events.contains { $0.asThinkTruncate != nil })
-        #expect(outcome.cancelled == false)
-    }
-
-    @Test
-    func cancelAfterSwapCancelsContinuationHandleOnceAndReportsCancelled() async throws {
-        let recorder = LockedRecorder()
+    func externalCancelDuringThinkingStopsTheOriginalHandleOnce() async throws {
         let probe = StreamProbe()
-        let starter: GenerationStreamLoop.ContinuationStarter = { _ in
-            // Open stream with one item so we can observe the post-swap consume.
-            await probe.makeHandle(initial: [.chunk("continuing")])
-        }
+        let recorder = LockedRecorder()
         let loop = GenerationStreamLoop(
-            initial: cannedHandle(trippingThinkingEvents),
-            startsInsideThinkBlock: true,
-            safeguard: trippingSafeguard
-        )
-
-        let runTask = Task { [recorder] in
-            try await loop.run(continuation: starter, sink: recorder.sink)
+            initial: await probe.makeHandle(initial: [.chunk("Still reasoning.\n")]),
+            startsInsideThinkBlock: true)
+        let task = Task { try await loop.run(sink: recorder.sink) }
+        let received = await waitUntil {
+            recorder.snapshot().contains { $0.asThinking != nil }
         }
-
-        // Once the continuation output appears, the new handle is installed and
-        // being consumed — we are unambiguously after the swap.
-        #expect(await waitUntil { recorder.snapshot().compactMap(\.asText).contains("continuing") })
-
+        #expect(received)
         loop.cancelCurrent()
-
-        let outcome = try await runTask.value
-        #expect(outcome.cancelled == true)
-        // The continuation handle — not the original — is the one cancelled/waited.
-        #expect(await waitUntil { await probe.cancelCount() == 1 })
+        loop.cancelCurrent()
+        let outcome = try await task.value
+        #expect(outcome.cancelled)
+        #expect(await probe.cancelCount() == 1)
         #expect(await probe.waitCount() == 1)
+        #expect(recorder.snapshot().compactMap(\.asText).isEmpty)
     }
 
     @Test
@@ -474,14 +300,13 @@ nonisolated struct GenerationStreamLoopTests {
         let initial = await probe.makeHandle(initial: [.chunk("never consumed")])
         let loop = GenerationStreamLoop(
             initial: initial,
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
         // Cancel BEFORE `run` is awaited — the "available pre-`run`" contract.
         loop.cancelCurrent()
 
-        let outcome = try await loop.run(continuation: nil, sink: recorder.sink)
+        let outcome = try await loop.run(sink: recorder.sink)
 
         #expect(outcome.cancelled == true)
         #expect(await waitUntil { await probe.cancelCount() == 1 })
@@ -497,11 +322,10 @@ nonisolated struct GenerationStreamLoopTests {
             // Trailing `<` is held back by the parser as a possible partial tag;
             // it is only flushed by finalize(). No `.info` ⇒ silent close.
             initial: cannedHandle([.chunk("answer<")]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        let outcome = try await loop.run(continuation: nil, sink: recorder.sink)
+        let outcome = try await loop.run(sink: recorder.sink)
 
         #expect(outcome.completionInfo == nil)
         #expect(outcome.diagnostics.rawChunksJoined == "answer<")
@@ -516,11 +340,10 @@ nonisolated struct GenerationStreamLoopTests {
         let recorder = SinkRecorder()
         let loop = GenerationStreamLoop(
             initial: cannedHandle([.chunk("done"), info()]),
-            startsInsideThinkBlock: false,
-            safeguard: .init(enabled: false)
+            startsInsideThinkBlock: false
         )
 
-        let outcome = try await loop.run(continuation: nil, sink: recorder.sink)
+        let outcome = try await loop.run(sink: recorder.sink)
 
         #expect(outcome.completionInfo != nil)
         #expect(outcome.diagnostics.rawChunksJoined == "done")

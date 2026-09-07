@@ -14,8 +14,7 @@
 //  server generated, the ids the model fed are the truth and the next
 //  request resolves to them, so there is nothing to compare — the leaf is
 //  keyed on the fed path by construction. What survives of the old decision
-//  is its structural eligibility: an intervened turn (the registered final
-//  cache is the cancelled phase's), a non-identity key space (image
+//  is its structural eligibility: a non-identity key space (image
 //  placeholders make key space and model input differ), no fed ids, and a
 //  cache offset outside the live path (the loop and the cache disagree).
 //  Each keeps its log reason. One render rule joins them: a think-stripping
@@ -45,10 +44,6 @@ nonisolated enum LiveLeafCapture {
     /// its skip record prints (`LeafStorePhase.liveFallbackLog`) and names
     /// the boundary reason the `leafStore` event reports.
     enum FallbackReason: Equatable, Sendable {
-        /// A thinking-safeguard continuation swapped the raw generation; the
-        /// registered final cache is the cancelled phase's, not the turn's.
-        /// Kept on the boundary path and counted (decision 11).
-        case intervened
         /// Image placeholders make key-space and render-space differ; the
         /// fast path is defined over identity key spaces only.
         case nonIdentityKeySpace
@@ -82,7 +77,7 @@ nonisolated enum LiveLeafCapture {
     ///   yet); the leaf is captured at the cache's own offset, never past it.
     ///
     /// The structural guards are checked first, in the order ADR-0062
-    /// logged them, so an intervened or image-bearing turn names that
+    /// logged them, so an image-bearing turn names that
     /// reason whatever the render; the render rule comes last.
     static func decide(
         mode: HTTPLeafStoreMode,
@@ -90,10 +85,8 @@ nonisolated enum LiveLeafCapture {
         promptKeyPath: [Int],
         generatedTokens: [Int],
         cacheOffset: Int,
-        intervened: Bool,
         keySpaceIsIdentity: Bool
     ) -> Decision {
-        if intervened { return .boundary(.intervened) }
         guard keySpaceIsIdentity else { return .boundary(.nonIdentityKeySpace) }
         guard !generatedTokens.isEmpty else { return .boundary(.noGeneratedTokens) }
 

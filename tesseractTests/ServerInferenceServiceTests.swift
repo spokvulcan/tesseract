@@ -50,8 +50,7 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: nil,
-                        clientStreams: true
+                        prefixCacheConversation: nil
                     )),
                 parameters: .default
             )
@@ -93,8 +92,7 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: prefixConversation,
-                        clientStreams: true
+                        prefixCacheConversation: prefixConversation
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -162,8 +160,7 @@ struct ServerInferenceServiceTests {
                         progressHandler: CompletionHandler.makeProgressHandler(
                             activityLog: log,
                             logHandle: handle
-                        ),
-                        clientStreams: true
+                        )
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -199,8 +196,7 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: nil,
-                        clientStreams: true
+                        prefixCacheConversation: nil
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -242,8 +238,7 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: assistantLast,
-                        clientStreams: true
+                        prefixCacheConversation: assistantLast
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -273,8 +268,7 @@ struct ServerInferenceServiceTests {
                         systemPrompt: "System",
                         messages: [.user(content: "Hello")],
                         toolSpecs: nil,
-                        prefixCacheConversation: nil,
-                        clientStreams: true
+                        prefixCacheConversation: nil
                     )),
                 parameters: .default,
                 route: .serverCompatible
@@ -308,8 +302,7 @@ struct ServerInferenceServiceTests {
                             systemPrompt: "System",
                             messages: [.user(content: "Hello")],
                             toolSpecs: nil,
-                            prefixCacheConversation: prefixConversation,
-                            clientStreams: true
+                            prefixCacheConversation: prefixConversation
                         )),
                     parameters: .default,
                     route: .serverCompatible
@@ -659,8 +652,7 @@ private final class StubServerCompletionStarter: ServerCompletionStarting {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext,
-        progressHandler: ServerInferenceProgressHandler?,
-        clientStreams: Bool
+        progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPServerGenerationStart {
         calls.append(
             .init(

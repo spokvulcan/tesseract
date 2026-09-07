@@ -412,6 +412,12 @@ undownloaded IDs.
 the cache-aware **Server Completion** module (`ServerCompletion`, an
 actor-confined module stored in `LLMActor`; ADR-0015) and the agent engine's
 managed fallback.
+Both paths use `ManagedGenerationDriver` and `GenerationStreamLoop` to parse
+raw model output, forward reasoning and tool calls, honor cancellation, and
+publish terminal metrics. Reasoning stays as emitted by the model: native
+`reasoning_effort` shapes the prompt, while the ordinary generation-token limit
+bounds output. There is no thinking-length or repetition intervention, forced
+think closure, or continuation restart (ADR-0060 amendment).
 Repeated prompts are accelerated by a tiered KV prefix cache
 (`PrefixCacheManager`): a radix tree of KV-cache snapshots in RAM, spilled to SSD
 (`SSDSnapshotStore` + `SnapshotLedger`), with flop-aware LRU eviction

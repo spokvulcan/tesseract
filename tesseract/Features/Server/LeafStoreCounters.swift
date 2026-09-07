@@ -3,9 +3,7 @@
 //  tesseract
 //
 //  Lifetime tally of the turns the **Leaf Store** sent down the boundary
-//  path, by reason — the intervened-turn frequency ADR-0063 decision 11
-//  asks to know before deciding whether intervened turns need the fast
-//  path, and the other guards beside it at no extra cost. Logged (notice
+//  path, by reason. Logged (notice
 //  level, so it survives in `log show`) and reset at model unload, beside
 //  the Emitted Path Index summary.
 //

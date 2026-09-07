@@ -1,6 +1,6 @@
 # ADR-0060: Reasoning effort as a template kwarg; thinking-safeguard budget split
 
-- Status: Accepted
+- Status: Accepted; thinking-safeguard policy superseded on 2026-09-07
 - Date: 2026-08-24
 - Relates to: issue #98 / PRD #94 (template render kwargs, Preserve-Thinking
   Render), ADR-0033 (completion phase map), the thinking-loop safeguard
@@ -131,3 +131,26 @@ the flag was modeled.
 - **A server-side default-effort setting** — omitted means the template
   default, exactly OpenAI semantics; a default knob can layer on later
   without wire changes.
+
+## Amendment — 2026-09-07: remove forced thinking interventions
+
+A Pi session displayed the safeguard's injected “I have enough information.
+Responding now.” text instead of letting the model finish reasoning. A hermetic
+repro confirmed both the character-budget and repetition triggers force an
+intervention; the streaming-loop regression confirmed that the original raw
+handle is cancelled and its answer replaced by a continuation on both model
+capability paths. The screenshot alone does not identify which trigger fired
+in that session or establish the cause of Pi's subsequent “Operation aborted”.
+
+At the user's request, remove the entire thinking safeguard: both length caps,
+all repetition heuristics, truncation events, injected hand-off, continuation
+restart, settings, and request/response extensions. This supersedes decision 4,
+the ceiling portion of decision 5, and the related consequences above.
+Reasoning effort remains a native template kwarg. Model EOS, client cancellation,
+and the ordinary generation-token limit still end generation. The separate
+turn-level replay guard (ADR-0053) is unchanged.
+
+Old persisted cutoff keys are no longer read. Old `thinking_safeguard` request
+fields are ignored as unknown JSON fields and cannot re-enable intervention.
+Tests preserve long and repetitive reasoning through its natural closing tag,
+final answer, and terminal usage; existing cancellation tests remain in place.

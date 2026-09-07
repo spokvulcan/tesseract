@@ -23,28 +23,6 @@ nonisolated struct GenerationAccumulator: Sendable {
     /// Raw text of any `<tool_call>` blocks whose JSON failed to parse.
     private(set) var malformedToolCallRaw: String = ""
 
-    /// Character count of the safe prefix recorded when the thinking-loop
-    /// safeguard fired (`nil` if it never fired). Lets a consumer emit its
-    /// vendor sidecar without re-deriving the length.
-    private(set) var safeguardSafePrefixChars: Int?
-
-    /// The streamed-wire reasoning, maintained only once `.thinkTruncate`
-    /// fired (`nil` before, so ordinary turns pay nothing): seeded with the
-    /// pre-truncate buffer and appended to alongside `thinking` afterward.
-    private var streamedThinkingAfterTruncate: String?
-
-    /// Whether the thinking-loop safeguard intervened on this turn.
-    var safeguardTriggered: Bool { safeguardSafePrefixChars != nil }
-
-    /// The reasoning a *streaming* client assembled from forwarded deltas:
-    /// identical to `thinking` on an ordinary turn; on an intervened turn,
-    /// the pre-truncate buffer plus everything emitted after the truncate
-    /// (the safeguard's injection hand-off) — a truncate cannot retract
-    /// deltas the stream already forwarded. Non-streaming clients read the
-    /// final message, which is built from `thinking` — this is only the
-    /// streamed-wire form.
-    var streamedThinking: String? { streamedThinkingAfterTruncate ?? thinking }
-
     /// The single home of the malformed→text fallback predicate: true when the
     /// turn produced no text and no successful tool calls but did capture a
     /// malformed `<tool_call>` buffer — the one case where a **Generation
@@ -69,7 +47,6 @@ nonisolated struct GenerationAccumulator: Sendable {
             // rebuilt the whole accumulated string on every token.
             if thinking == nil { thinking = "" }
             thinking? += chunk
-            streamedThinkingAfterTruncate? += chunk
         case .thinkEnd:
             break
         case .thinkReclassify:
@@ -78,16 +55,6 @@ nonisolated struct GenerationAccumulator: Sendable {
             // (the streamed mirror follows — reclassified thinking is text).
             text += (thinking ?? "")
             thinking = nil
-            streamedThinkingAfterTruncate = nil
-        case .thinkTruncate(let safePrefix):
-            // Safeguard fired: the safe prefix becomes the canonical reasoning,
-            // discarding whatever was buffered up to the trigger. The discarded
-            // buffer seeds the streamed mirror — a streaming client already
-            // received it, and the leaf store keys the radix tree on what
-            // clients echo.
-            streamedThinkingAfterTruncate = thinking ?? ""
-            thinking = safePrefix
-            safeguardSafePrefixChars = safePrefix.count
         case .toolCall(let call):
             toolCalls.append(call)
         case .malformedToolCall(let raw):

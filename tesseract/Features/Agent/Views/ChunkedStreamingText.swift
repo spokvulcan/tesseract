@@ -66,7 +66,7 @@ extension StringProtocol {
 /// The chunking state behind `ChunkedStreamingText`, kept separately so the
 /// cut rules are unit-testable. Contract with the producers: the source text
 /// only ever *grows* by appending; every non-append rewrite upstream (the
-/// span cap's elision re-slice, the thinking-loop safeguard's truncate)
+/// span cap's elision re-slice)
 /// *shrinks* it, so a shrink is the reset signal.
 nonisolated struct ChunkedTextAccumulator {
     /// Frozen paragraph chunks — append-only, never mutated afterward, so a
@@ -84,9 +84,7 @@ nonisolated struct ChunkedTextAccumulator {
     private var newlineEndUTF8: Int = 0
 
     /// Freeze once the live tail outgrows this many UTF-8 bytes and contains
-    /// a newline to cut at. A pathological single-line stream never freezes,
-    /// but the thinking-loop safeguard bounds that case at the thinking
-    /// budget.
+    /// a newline to cut at. A single-line stream stays in the live tail.
     static let freezeThresholdUTF8 = 4096
 
     /// Everything past the frozen prefix — what the live `Text` renders.

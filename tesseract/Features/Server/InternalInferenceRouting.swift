@@ -14,17 +14,8 @@ private nonisolated func makeInternalInferenceStream(
     let task = Task { @MainActor in
         var start: ServerInferenceStart?
         do {
-            var parameters = parametersProvider()
-            // The internal edge's half of the ADR-0060 budget split: the
-            // provider set the non-native base from settings; an
-            // effort-native loaded model gets the fixed anti-runaway
-            // ceiling instead. The agent's own runs execute inside the GPU
-            // lease with the model loaded, so the state is present here; a
-            // `nil` state (defensive) keeps the non-native base.
+            let parameters = parametersProvider()
             let modelState = inferenceService.currentModelState()
-            if modelState?.declaresReasoningEffort == true {
-                parameters.thinkingSafeguard.applyNativeReasoningEffortCeiling()
-            }
             start = try await inferenceService.start(requestBuilder(parameters, modelState))
 
             if let cancel = start?.cancel {
@@ -103,12 +94,7 @@ nonisolated func makeServerInferenceGenerateClosure(
                                 toolSpecs: toolSpecs,
                                 templateContextDigest: renderContext.digest
                             ),
-                            templateRenderContext: renderContext,
-                            // The agent's own history keeps the safeguard's
-                            // truncated reasoning (`AssistantPartsBuilder`), so
-                            // its echo is the final-message form, not the
-                            // streamed wire form.
-                            clientStreams: false
+                            templateRenderContext: renderContext
                         )),
                     parameters: parameters,
                     route: .serverCompatible

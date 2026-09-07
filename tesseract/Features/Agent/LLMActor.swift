@@ -19,8 +19,7 @@ import os
 /// server's cache-aware path. The server execution itself lives in the
 /// actor-confined ``ServerCompletion`` module (CONTEXT.md → Server completion,
 /// ADR-0015), installed at model load and dropped at unload. The
-/// raw arm serves both the agent chat turn and the safeguard's continuation
-/// swap on either path, through the **Raw Generation Start** module.
+/// raw arm serves the agent chat turn through **Raw Generation Start**.
 actor LLMActor {
 
     /// Memory budget for the LLM stack.
@@ -213,8 +212,8 @@ actor LLMActor {
         )
     }
 
-    /// Start a raw whole-prompt generation — the agent chat turn or a
-    /// thinking-safeguard continuation — and surface the underlying vendor
+    /// Start a raw whole-prompt generation for the agent chat turn and
+    /// surface the underlying vendor
     /// task so callers can deterministically wait for model use to stop.
     ///
     /// The actor keeps the lifecycle: container guard, memory cap, speculative
@@ -286,8 +285,7 @@ actor LLMActor {
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler? = nil,
-        clientStreams: Bool
+        progressHandler: ServerInferenceProgressHandler? = nil
     ) async throws -> HTTPServerGenerationStart {
         guard let container = modelContainer else {
             throw AgentEngineError.modelNotLoaded
@@ -300,8 +298,7 @@ actor LLMActor {
             toolSpecs: toolSpecs,
             parameters: parameters,
             renderContext: renderContext,
-            progressHandler: progressHandler,
-            clientStreams: clientStreams
+            progressHandler: progressHandler
         )
     }
 

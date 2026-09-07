@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Presets override only the six sampling fields that differ across
 /// Qwen3.5/3.6 recommendations (temperature, topP, topK, minP,
-/// presencePenalty, repetitionPenalty). Everything else — thinkingSafeguard,
+/// presencePenalty, repetitionPenalty). Everything else —
 /// kvBits, prefillStepSize, maxTokens — continues to come from
 /// the model-derived base returned by `AgentGenerateParameters.forModel`.
 ///
