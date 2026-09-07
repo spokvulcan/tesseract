@@ -60,7 +60,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ConversationRenderEmittedPathTests \
   -only-testing:tesseractTests/EmittedPathResolveRealTests \
   -only-testing:tesseractTests/EmittedPathReplayGateTests \
-  -only-testing:tesseractTests/EmittedPathSynthesizedReplayTests
+  -only-testing:tesseractTests/EmittedPathSynthesizedReplayTests \
+  -only-testing:tesseractTests/LinearStreamingDetokenizerTests \
+  -only-testing:tesseractTests/LinearStreamingDetokenizerRealTests
 
 # Voice session + barge detector (quit the app first — its capture engine
 # starves test hosts; VoiceBargeReplayTests replays real-hardware traces from
@@ -170,17 +172,20 @@ message tokens, glue, tail):
   `tailSeconds` of every registered turn is gated the same way; the
   2026-09-06 corpus holds none.
 
-Every turn of the 2026-09-06 corpus passes every rule but the tail, which
-is a finding, not a harness artifact: the render is under 10 ms at every
-size, while the registration's fidelity replay grows quadratically with
-the turn's longest newline-free run (the streaming detokenizer re-decodes
-its whole segment per token) — a few hundred milliseconds for a 3–4k-token
-tool call, seconds for an 8k-token one, on a fast tokenizer too. In the
-reference corpus two turns sit below 20k path tokens and fail (request#1,
-289 ms over 18.4k tokens; request#18, 3.4 s over 17.7k); the longer turns
-are unguarded and slower still (14 s at 62.7k). Until the replay is made
-incremental the gate stays red on those turns; the `GATE … tail:` lines
-name them.
+Every turn of the 2026-09-06 corpus passes every rule. Two fixes were
+needed to get the tail there, both of work that grew quadratically with a
+turn's longest newline-free run, and both paid by the live loop as well as
+by the replay: the streaming detokenizer re-decoded its whole segment on
+every token (the replay reads the tokens through
+`LinearStreamingDetokenizer` instead, which reconstructs a byte-level
+vocabulary's text from the tokens' own bytes and verifies every segment
+against one full decode), and the vendor's `ToolCallProcessor` searched
+the whole collected call for its end tag on every chunk (fixed in the
+fork, see `docs/mlx-swift-lm-fork.md`). Together they took the corpus's
+slowest tail from 14 s to 90 ms: the worst turn is now request#18, 90 ms
+over 17.7k path tokens, and the corpus's longest path (91.4k tokens) costs
+44 ms, of which 10 ms is the render. The `GATE … tail:` lines name any
+turn that goes back over the budget.
 
 Same variables as the fidelity gate; the reference corpus is
 `~/projects/tesseract-traces/2026-09-06-emitted-path` (85 recordings from

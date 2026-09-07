@@ -34,7 +34,24 @@ struct FakeChatMLTokenizer: Tokenizer {
     }
     func tokenize(text: String) -> [String] { [] }
     func convertTokenToId(_ token: String) -> Int? { nil }
-    func convertIdToToken(_ id: Int) -> String? { nil }
+
+    /// A byte-level vocabulary spells each of its tokens as the bytes it
+    /// stands for, through the alphabet every byte-level BPE shares; this
+    /// fake, being one token per byte, spells one character per id. That
+    /// the alphabet is the one real vocabularies use is what
+    /// `LinearStreamingDetokenizerRealTests` checks against a real
+    /// tokenizer — here it only has to be the table the fake and its reader
+    /// agree on. Ids outside the byte range (the vision markers) have no
+    /// spelling, as a special token added after the vocabulary has none.
+    func convertIdToToken(_ id: Int) -> String? { Self.spellings[id] }
+
+    private static let spellings: [Int: String] = {
+        var spellings: [Int: String] = [:]
+        for (scalar, byte) in LinearStreamingDetokenizer.byteLevelAlphabet {
+            spellings[Int(byte)] = String(scalar)
+        }
+        return spellings
+    }()
 
     var bosToken: String? { nil }
     var bosTokenId: Int? { nil }
