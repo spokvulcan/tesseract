@@ -445,7 +445,7 @@ _Avoid_: prefill config; generation params (a separate notion); checkpoint plan
 
 **Prefill Strategy**:
 The chunked-vs-single-shot route for one raw-generation prompt (the agent chat
-arm and the thinking-continuation arm), decided once from the prompt's shape —
+arm), decided once from the prompt's shape —
 token dimensionality, sequence length, media presence, step size. 2D text-only
 prompts longer than one step chunk through the app driver; everything else goes
 single-shot to the token iterator (ADR-0044).
@@ -576,7 +576,7 @@ occupies context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
 
-### Reasoning effort and the thinking safeguard
+### Reasoning effort
 
 **Reasoning Effort**:
 The native thinking-depth level of an effort-declaring chat template
@@ -588,32 +588,8 @@ is emitted only when it differs from the template's own default (`xhigh` for
 Qwen3.8), so omitted-or-default keeps the canonical render. Capability is
 template introspection, never model name (ADR-0060).
 _Avoid_: thinking level (Pi's client-side vocabulary); a sampling parameter (it
-changes the prompt, not the sampler); **Thinking Budget Cutoff** (the
-non-native surrogate — a different mechanism); erroring on effort for a
+changes the prompt, not the sampler); erroring on effort for a
 non-declaring model (it is ignored with a log line).
-
-**Thinking Safeguard**:
-The in-stream guard on one turn's `<think>` content — three repetition
-triggers (duplicate line, duplicate starter, duplicate n-gram; always armed,
-every model) plus one budget trigger — whose intervention truncates to a safe
-prefix, injects a hand-off, force-closes the think block, and restarts the
-stream as a continuation. Measured in characters of decoded text, never
-tokens. Distinct from the Turn Replay Breaker (ADR-0053), its whole-turn
-sibling.
-_Avoid_: "hard cutoff" for the whole mechanism (that names only the budget
-trigger); loop breaker (collides with the turn-level ADR-0053 mechanism);
-token budget (chars only).
-
-**Thinking Budget Cutoff**:
-The **Thinking Safeguard**'s budget trigger as a user-facing setting — the
-legacy thinking-length limit for models *without* native **Reasoning Effort**
-(ADR-0060). Effort-native models ignore it and carry a fixed, hidden
-anti-runaway ceiling instead; the repetition triggers are outside its remit
-entirely. An absolute threshold: unlike the repetition triggers it does not
-wait out the detector's grace period.
-_Avoid_: applying it to effort-native models (their depth is the native
-kwarg's); disabling it as "safeguard off" (repetition triggers stay armed);
-token budget (chars).
 
 ### Server completion
 
@@ -671,16 +647,14 @@ concept); widening it before a second consumer needs a member.
 
 **Raw Generation Start**:
 The one script that starts a whole-prompt-from-zero generation over a **Model
-Session** — the agent chat turn and the thinking-safeguard continuation on either
-path: tokenize through the session's agent-edge verb (the **Conversation
+Session** for an agent chat turn: tokenize through the session's agent-edge verb (the **Conversation
 Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
 events, engage the DFlash2 raw arm on a text-only prompt when the session pairs a
 drafter, else run the **Prefill Strategy** route, start the token-event loop, wrap
 the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
 `LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
 _Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
-pre-cache name); thinking continuation as its own module (one prompt shape of
-this one).
+pre-cache name).
 
 **Stream Lifecycle Driver**:
 The module owning one streaming completion's transport-lifecycle race — the
@@ -743,7 +717,7 @@ _Avoid_: chunk (prefill vocabulary), delta (the internal parser event —
 
 **Wire-Valid Close**:
 The closure rule for a tool call already on the streamed wire: there is no
-retraction, so any termination — malformation, cancel, safeguard intervention,
+retraction, so any termination — malformation, cancel,
 max-tokens — synthesizes closers so the accumulated **Argument Fragment**s still
 parse as JSON, then the stream finishes with the appropriate finish reason. The
 malformed→text fallback survives only where nothing was streamed yet.
@@ -1018,8 +992,7 @@ _Avoid_: throttling, playhead clock (rejected design), lookahead buffer.
 **Generation Accumulator**:
 The one value that folds an `AgentGeneration` event stream into a single assistant
 turn's accumulated state — text, optional thinking, finalized tool calls, the raw
-malformed-tool-call buffer, the safeguard's safe-prefix length and the streamed-wire
-reasoning (`streamedThinking` — what a streaming client assembled). A pure value with no
+malformed-tool-call buffer. A pure value with no
 side effects and no output type; each caller supplies its own loop and its own
 **Generation Projection**. (`thinking == nil` means no `<think>` block ever opened;
 `""` means one opened but is empty so far — never collapse the optionality.) Its
@@ -1065,9 +1038,8 @@ _Avoid_: StreamResult, message builder, AssistantMessageFactory; CompletionProje
 
 **Generation Stream Loop**:
 The one home that consumes a single raw model generation stream into the agent's
-`AgentGeneration` event stream for one assistant turn, under the thinking-loop
-safeguard — owning the parser lifecycle and the safeguard's truncate-and-restart
-across stream swaps. Caller side effects and projections stay with the callers;
+`AgentGeneration` event stream for one assistant turn, preserving the model’s
+reasoning and owning the parser lifecycle and external cancellation. Caller side effects and projections stay with the callers;
 terminal info and diagnostics come back on its outcome.
 _Avoid_: managed generation (the **Managed Generation Driver** above it, not this
 loop); stream consumer / generation pump; GenerationFold (the fold is the
@@ -1078,8 +1050,7 @@ calls above it (say "stream loop" vs "agent loop").
 **Managed Generation Driver**:
 The one module that drives a raw model stream through the **Generation Stream
 Loop** for both consumers — the agent turn and the cache-aware **Server
-Completion**: safeguard derivation from the request's parameters, loop
-construction, late-bound cancel bridging, stream-termination cancel wiring, and
+Completion**: loop construction, late-bound cancel bridging, stream-termination cancel wiring, and
 the terminal-info re-yield into the caller's sink. Callers keep their own task
 envelopes, diagnostics, and projections.
 _Avoid_: wrapManagedGeneration (the `AgentEngine` call site); stream driver (the

@@ -249,13 +249,6 @@ final class ServerGenerationLog {
                 }
             }
             throttledStreamingVersionBump()
-        case .thinkTruncate(let safePrefix):
-            flushPending(handle: handle)
-            update(handle) { $0.replaceThinkingWithSafePrefix(safePrefix) }
-        // Suppress the scroll bump — the span just shrank from ~16K chars
-        // to safePrefix-size in a single tick, so an auto-scroll-to-bottom
-        // is meaningless and risks racing SwiftUI layout against stale
-        // ScrollView geometry.
         }
     }
 
@@ -680,20 +673,6 @@ struct RequestTrace: Identifiable, Equatable {
             )
         } else {
             spans.append(.thinking(id: UUID(), content: Self.cappedAppend("", chunk)))
-        }
-    }
-
-    /// Replace the most recent thinking span's content with `safePrefix`.
-    /// Called when the thinking-loop safeguard fires so the activity log
-    /// surface reflects the cleaned-up reasoning rather than the degen garbage.
-    mutating func replaceThinkingWithSafePrefix(_ safePrefix: String) {
-        if case .thinking(let id, _) = spans.last {
-            spans[spans.count - 1] = .thinking(
-                id: id,
-                content: Self.cappedAppend("", safePrefix)
-            )
-        } else {
-            spans.append(.thinking(id: UUID(), content: Self.cappedAppend("", safePrefix)))
         }
     }
 

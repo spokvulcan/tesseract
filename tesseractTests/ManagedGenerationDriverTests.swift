@@ -45,7 +45,6 @@ private func infoEvent(generated: Int = 3) -> RawGeneration {
 @MainActor
 private func makeDriver() -> ManagedGenerationDriver {
     ManagedGenerationDriver(
-        parameters: .default,
         startsInsideThinkBlock: false,
         logContext: "test_driver=1"
     )
@@ -64,8 +63,7 @@ struct ManagedGenerationDriverTests {
 
         let outcome = try await driver.run(
             initial: cannedHandle([.chunk("hello"), infoEvent(generated: 7)]),
-            cancelBridge: LateBoundCancel(),
-            continuationStarter: nil
+            cancelBridge: LateBoundCancel()
         ) { events.append($0) }
 
         #expect(outcome.completionInfo?.generationTokenCount == 7)
@@ -96,8 +94,7 @@ struct ManagedGenerationDriverTests {
         let runTask = Task {
             try await driver.run(
                 initial: handle,
-                cancelBridge: bridge,
-                continuationStarter: nil
+                cancelBridge: bridge
             ) { event in recorder.withLock { $0.append(event) } }
         }
         // Wait for the first chunk to prove the loop is consuming, then

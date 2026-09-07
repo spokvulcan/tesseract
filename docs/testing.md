@@ -30,6 +30,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/MessageConverterTests \
   -only-testing:tesseractTests/OpenAITypesTests \
   -only-testing:tesseractTests/AgentEngineToolSpecTests \
+  -only-testing:tesseractTests/GenerationStreamLoopTests \
+  -only-testing:tesseractTests/ManagedGenerationDriverTests \
+  -only-testing:tesseractTests/ReasoningEffortTests \
   -only-testing:tesseractTests/RawGenerationStartTests \
   -only-testing:tesseractTests/EditToolTests
 

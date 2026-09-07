@@ -102,17 +102,6 @@ nonisolated struct AssistantPartsBuilder: Sendable {
                 .textDelta(contentIndex: index, delta: t.thinking, partial: snapshot()),
             ])
 
-        case .thinkTruncate(let safePrefix):
-            // Thinking-loop safeguard fired: the safe prefix becomes the
-            // canonical reasoning; the part closes so any later thinking opens
-            // a fresh part.
-            guard let index = openIndex, case .thinking = parts[index] else { return .silent }
-            parts[index] = .thinking(ThinkingPart(thinking: safePrefix))
-            openIndex = nil
-            return .events([
-                .thinkingEnd(contentIndex: index, content: safePrefix, partial: snapshot())
-            ])
-
         case .toolCall(let call):
             let normalized = ToolArgumentNormalizer.encode(call.function.arguments)
             if let open = openToolCall {

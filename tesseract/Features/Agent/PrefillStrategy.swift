@@ -13,7 +13,7 @@ import MLXLMCommon
 /// `TokenIterator` chunks those internally.
 ///
 /// This rule used to live as three hand-written guards (the agent chat arm,
-/// the thinking-continuation arm, the parity bench) that had already drifted
+/// the parity bench) that had already drifted
 /// apart; `decide` is now its one home.
 nonisolated enum PrefillStrategy: Equatable, Sendable {
 

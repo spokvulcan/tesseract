@@ -30,10 +30,6 @@ struct AgentGenerateParameters: Sendable, Codable {
     var frequencyPenalty: Float?
     var frequencyContextSize: Int = 20
 
-    /// Thinking-loop safeguard. See ``ThinkingRepetitionDetector/Config``.
-    /// Applies only when the model uses a `<think>` chat template (Qwen3/3.5 thinking).
-    var thinkingSafeguard: ThinkingRepetitionDetector.Config = .init()
-
     /// The agent-side **Reasoning Effort** desire (ADR-0060): `nil` means
     /// Automatic — no kwarg is injected and the template's own default level
     /// applies. Consumed on the internal routing edge, where the loaded
@@ -102,16 +98,12 @@ struct AgentGenerateParameters: Sendable, Codable {
 
     /// Qwen3-4B-Instruct-2507 recommended parameters for non-thinking mode.
     /// See: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
-    static let qwen3: AgentGenerateParameters = {
-        var p = AgentGenerateParameters(
-            temperature: 0.7,
-            topP: 0.8,
-            topK: 20,
-            presencePenalty: 1.5
-        )
-        p.thinkingSafeguard.enabled = false  // no `<think>` block on instruct variant
-        return p
-    }()
+    static let qwen3 = AgentGenerateParameters(
+        temperature: 0.7,
+        topP: 0.8,
+        topK: 20,
+        presencePenalty: 1.5
+    )
 
     /// Qwen3-4B-Thinking-2507 recommended parameters for thinking mode.
     /// No repetition penalty — it causes premature EOS in think blocks,
@@ -162,8 +154,7 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// Ornith 1.0 9B (DeepReinforce; Qwen3.5-dense `qwen3_5`, text-only).
     /// Vendor-recommended sampling. Values coincide with `.qwen36Thinking`;
     /// kept as its own preset so Ornith is isolated from future Qwen-preset
-    /// changes. The thinking-loop safeguard stays at its default — it is inert
-    /// unless the shipped chat template opens a `<think>` block.
+    /// changes.
     static let ornith9b = AgentGenerateParameters(
         temperature: 0.6,
         topP: 0.95,
@@ -175,9 +166,7 @@ struct AgentGenerateParameters: Sendable, Codable {
     /// NOTE: this model ships the Qwen3.5 hybrid thinking template (it opens
     /// `<think>` by default), and the recipe sets `repetitionPenalty = 1.05` —
     /// exactly what ``qwen3Thinking``'s comment warns causes premature EOS in
-    /// think blocks. Honored here per an explicit decision; the thinking-loop
-    /// safeguard stays armed as the backstop. Revisit if generation truncates
-    /// mid-think.
+    /// think blocks. Honored here per an explicit decision.
     static let ornith35b = AgentGenerateParameters(
         temperature: 1.0,
         topP: 1.0,
@@ -211,18 +200,6 @@ struct AgentGenerateParameters: Sendable, Codable {
         return .default
     }
 
-    /// Emit a warning when sampling configuration is known to elevate
-    /// thinking-loop risk on the active preset. Called from both HTTP
-    /// prefix-cache and fallback paths right before starting generation.
-    nonisolated func warnIfThinkingLoopRiskElevated(startsThinking: Bool) {
-        guard thinkingSafeguard.enabled, startsThinking, temperature < 0.3 else {
-            return
-        }
-        Log.agent.warning(
-            "temperature=\(temperature) on thinking-capable model — Qwen docs "
-                + "advise against greedy decoding in thinking mode; loop risk elevated."
-        )
-    }
 }
 
 /// Events emitted during streaming text generation.
@@ -259,13 +236,6 @@ nonisolated enum AgentGeneration: Sendable {
     case thinkEnd
     /// Generation ended without `</think>` — reclassify thinking content as text.
     case thinkReclassify
-
-    /// Thinking-loop safeguard fired: discard accumulated thinking and treat
-    /// `safePrefix` as the canonical reasoning for this turn. Consumers that buffer
-    /// `.thinking` chunks (CompletionHandler, Path-A `handle()`) must reset their
-    /// accumulator to exactly `safePrefix` on receipt. Emitted only by the safeguard
-    /// intervention flow, never by `ToolCallParser`.
-    case thinkTruncate(safePrefix: String)
 
     /// Completion metrics emitted once generation finishes.
     case info(Info)
@@ -320,36 +290,6 @@ nonisolated enum AgentGeneration: Sendable {
             return Double(generationTokenCount) / generateTime
         }
 
-        /// Usage across a thinking-safeguard continuation swap: one
-        /// client-visible completion, two vendor generations. The original
-        /// request's prompt is the only client-billable prompt — the
-        /// continuation's prompt re-prefills context the client never sent,
-        /// so its prompt time folds into generation latency instead.
-        /// Generated tokens and draft totals span both phases; the stop
-        /// reason is the continuation's, the one the turn finished with.
-        static func mergedAcrossContinuation(prior: Info, continuation: Info) -> Info {
-            Info(
-                promptTokenCount: prior.promptTokenCount,
-                generationTokenCount: prior.generationTokenCount
-                    + continuation.generationTokenCount,
-                promptTime: prior.promptTime,
-                generateTime: prior.generateTime + continuation.promptTime
-                    + continuation.generateTime,
-                stopReason: continuation.stopReason,
-                draftTokensProposed: mergedDraftCount(
-                    prior.draftTokensProposed, continuation.draftTokensProposed),
-                draftTokensAccepted: mergedDraftCount(
-                    prior.draftTokensAccepted, continuation.draftTokensAccepted)
-            )
-        }
-
-        /// Sum that preserves "never speculated" as `nil`: only two plain
-        /// autoregressive phases merge to `nil`; one speculated phase makes
-        /// the total real.
-        private static func mergedDraftCount(_ a: Int?, _ b: Int?) -> Int? {
-            if a == nil && b == nil { return nil }
-            return (a ?? 0) + (b ?? 0)
-        }
     }
 
     /// Bridge from ``ToolCallParser/Event`` to ``AgentGeneration``.

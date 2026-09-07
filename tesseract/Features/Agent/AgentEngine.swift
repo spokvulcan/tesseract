@@ -435,11 +435,7 @@ final class AgentEngine {
 
         let actor = llmActor
         return wrapManagedGeneration(
-            input: input,
-            toolSpecs: toolSpecs,
-            parameters: parameters,
-            startsInsideThinkBlock: startsInsideThinkBlock,
-            progressHandler: progressHandler
+            startsInsideThinkBlock: startsInsideThinkBlock
         ) {
             try await actor.startRawGeneration(
                 prompt: .fresh(input),
@@ -452,11 +448,7 @@ final class AgentEngine {
 
     func wrapManagedGeneration(
         cachedTokenCount: Int = 0,
-        input: UserInput? = nil,
-        toolSpecs: [ToolSpec]? = nil,
-        parameters: AgentGenerateParameters = .default,
         startsInsideThinkBlock: Bool? = nil,
-        progressHandler: ServerInferenceProgressHandler? = nil,
         launch: @escaping @Sendable () async throws -> HTTPServerRawGenerationStart
     ) -> HTTPServerGenerationStart {
         isGenerating = true
@@ -464,18 +456,15 @@ final class AgentEngine {
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let generationID = UUID()
 
-        let actor = llmActor
         let driver = ManagedGenerationDriver(
-            parameters: parameters,
             // `nil` = the template's own default; a render context that
             // disables thinking passes an explicit `false` (the generation
             // prompt then holds a closed, empty think block).
             startsInsideThinkBlock: startsInsideThinkBlock ?? promptStartsThinking,
             logContext: "generation_id=\(generationID.uuidString)"
         )
-        let continuationInjection = driver.safeguard.continuationHandOff
 
-        // The loop owns the cross-swap cancel invariant. Its `cancelCurrent` must
+        // The loop owns raw-handle cancellation. Its `cancelCurrent` must
         // be wired into `start.cancel` synchronously, but the loop can't be built
         // until `launch` yields the initial handle — bridge through a late-bound
         // cancel the driver fills once the loop exists.
@@ -492,33 +481,12 @@ final class AgentEngine {
 
                 let initialStart = try await launch()
 
-                // The agent supplies a continuation starter only when it has an
-                // `originalInput` to re-prefill from; otherwise `nil` ⇒ the loop
-                // emits the truncation triple and stops.
-                let continuationStarter: GenerationStreamLoop.ContinuationStarter?
-                if let originalInput = input {
-                    continuationStarter = { safePrefix in
-                        let newStart = try await actor.startRawGeneration(
-                            prompt: .continuation(
-                                base: .input(originalInput),
-                                handoff: safePrefix + continuationInjection),
-                            toolSpecs: toolSpecs,
-                            parameters: parameters,
-                            progressHandler: progressHandler
-                        )
-                        return .init(newStart)
-                    }
-                } else {
-                    continuationStarter = nil
-                }
-
                 // The sink only yields — the agent keeps no per-event side
                 // effects; the driver's shared tail re-yields the terminal
                 // `.info` through the same sink.
                 _ = try await driver.run(
                     initial: .init(initialStart),
-                    cancelBridge: loopCancel,
-                    continuationStarter: continuationStarter
+                    cancelBridge: loopCancel
                 ) { event in
                     continuation.yield(event)
                 }

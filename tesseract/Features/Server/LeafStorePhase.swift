@@ -56,11 +56,6 @@ nonisolated enum LeafStorePhase {
         let requestID: UUID
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
-        /// Whether a thinking-safeguard continuation swapped the raw
-        /// generation — the registered final cache is then the cancelled
-        /// phase's, so the live path is refused.
-        let intervened: Bool
-
         var mlxStart: HTTPPrefixCacheGeneration { mlxStartBox.value }
     }
 
@@ -86,11 +81,6 @@ nonisolated enum LeafStorePhase {
     // parameter list is the phase's honest input set (the drive's request
     // context); `Inputs` carries its request-constant subset to the helpers.
     // swiftlint:disable function_parameter_count
-    /// `assistantReasoning` must be the wire-truth reasoning — what THIS
-    /// client will echo back (the drive passes the streamed form for
-    /// streaming clients). Intervened turns store like any other: the
-    /// boundary capture never reuses the raw continuation's live KV — it
-    /// restores the boundary snapshot and re-prefills the canonical render.
     static func run(
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
@@ -101,15 +91,13 @@ nonisolated enum LeafStorePhase {
         assistantText: String,
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
-        intervened: Bool,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         trace: inout CompletionTraceAccumulator
     ) async -> Result {
         // swiftlint:enable function_parameter_count
         let inputs = Inputs(
             mlxStartBox: mlxStartBox, sessions: sessions, requestID: requestID,
-            prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
-            intervened: intervened)
+            prefixCache: prefixCache, diagnosticsContext: diagnosticsContext)
         let mlxStart = inputs.mlxStart
         var result = Result()
 
@@ -170,7 +158,6 @@ nonisolated enum LeafStorePhase {
             promptKeyPath: mlxStart.keySpace.keyPath,
             generatedTokens: turn.generatedTokens,
             cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache),
-            intervened: inputs.intervened,
             keySpaceIsIdentity: mlxStart.keySpace.isIdentity
         )
         switch decision {
@@ -698,7 +685,7 @@ nonisolated enum LeafStorePhase {
     /// The wire record of a turn the fast path did not take (stage
     /// `liveLeafCapture`): why the turn took the boundary path. The
     /// structural guards keep the reasons and levels ADR-0062 gave them —
-    /// an intervened turn, an image key space and no fed ids are `.info`
+    /// an image key space and no fed ids are `.info`
     /// like every other expected skip; a cache offset outside the live path
     /// is the loop and the cache disagreeing about what was fed, always
     /// `.warning`. The render rule (a think-stripping template at a user
@@ -721,8 +708,6 @@ nonisolated enum LeafStorePhase {
                 ])
         }
         switch reason {
-        case .intervened:
-            return record("intervened", .info)
         case .nonIdentityKeySpace:
             return record("non-identity-key-space", .info)
         case .noGeneratedTokens:

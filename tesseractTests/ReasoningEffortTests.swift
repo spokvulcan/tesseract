@@ -5,9 +5,7 @@
 //  **Reasoning Effort** (ADR-0060): native template-kwarg effort control for
 //  effort-declaring models (Qwen3.8), the wire vocabulary mapping, the
 //  render-context emission and digest rules, the `enable_thinking` flag it
-//  ships alongside, and the thinking-safeguard budget split — the legacy
-//  cutoff for non-native models, the fixed anti-runaway ceiling for native
-//  ones, repetition triggers untouched for all.
+//  ships alongside. The retired thinking-safeguard extension is ignored.
 //
 
 import Foundation
@@ -269,106 +267,24 @@ struct ReasoningEffortTests {
         #expect(resolved.digest != HTTPPrefixCacheConversation.defaultTemplateContextDigest)
     }
 
-    // MARK: - Safeguard budget split (ADR-0060)
-
-    @Test func budgetPolicySplitsNativeFromLegacy() {
-        var config = ThinkingRepetitionDetector.Config()
-
-        config.applyNativeReasoningEffortCeiling()
-        #expect(
-            config.maxThinkingChars
-                == ThinkingRepetitionDetector.Config.nativeReasoningEffortBudgetChars)
-
-        config.applyLegacyThinkingCutoff(enabled: true, chars: 4_096)
-        #expect(config.maxThinkingChars == 4_096)
-
-        config.applyLegacyThinkingCutoff(enabled: false, chars: 4_096)
-        #expect(config.maxThinkingChars == nil)
-        // The repetition triggers are not the budget's business.
-        #expect(config.enabled)
-        #expect(config.maxLineRepeats == 6)
-    }
-
-    @Test func serverParametersApplyThePolicyBeforeVendorOverrides() throws {
-        let base = """
-            {"messages": [{"role": "user", "content": "hi"}]}
-            """
+    @Test func retiredSafeguardRequestDoesNotChangeGenerationParameters() throws {
         let request = try JSONDecoder().decode(
-            OpenAI.ChatCompletionRequest.self, from: Data(base.utf8))
-
-        let nativeState = ServerInferenceModelState(
-            modelID: "qwen3.8-27b", visionMode: false,
-            declaresReasoningEffort: true, reasoningEffortTemplateDefault: .xhigh)
-        let native = CompletionHandler.makeGenerateParameters(
-            from: request, modelState: nativeState,
-            thinkingCutoffEnabled: true, thinkingCutoffChars: 4_096)
-        #expect(
-            native.thinkingSafeguard.maxThinkingChars
-                == ThinkingRepetitionDetector.Config.nativeReasoningEffortBudgetChars)
-
-        let legacyState = ServerInferenceModelState(modelID: "qwen3.6-27b", visionMode: false)
-        let legacy = CompletionHandler.makeGenerateParameters(
-            from: request, modelState: legacyState,
-            thinkingCutoffEnabled: true, thinkingCutoffChars: 4_096)
-        #expect(legacy.thinkingSafeguard.maxThinkingChars == 4_096)
-
-        let off = CompletionHandler.makeGenerateParameters(
-            from: request, modelState: legacyState,
-            thinkingCutoffEnabled: false, thinkingCutoffChars: 4_096)
-        #expect(off.thinkingSafeguard.maxThinkingChars == nil)
-
-        // The per-request vendor extension stays authoritative over the policy.
-        let withOverride = """
-            {"messages": [{"role": "user", "content": "hi"}],
-             "thinking_safeguard": {"max_thinking_chars": 300}}
-            """
-        let overrideRequest = try JSONDecoder().decode(
-            OpenAI.ChatCompletionRequest.self, from: Data(withOverride.utf8))
-        let overridden = CompletionHandler.makeGenerateParameters(
-            from: overrideRequest, modelState: nativeState,
-            thinkingCutoffEnabled: true, thinkingCutoffChars: 4_096)
-        #expect(overridden.thinkingSafeguard.maxThinkingChars == 300)
-    }
-
-    @Test func budgetTriggerIgnoresTheRepetitionGrace() {
-        // A cutoff configured below the grace period still cuts at the
-        // configured length — the budget is its own absolute threshold.
-        let detector = ThinkingRepetitionDetector(
-            config: .init(maxThinkingChars: 300, minCharsBeforeIntervention: 8_192))
-        let filler = String(repeating: "reasoning step by step here\n", count: 20)
-        let decision = detector.ingest(chunk: filler)
-        guard case .intervene(let reason, _) = decision else {
-            Issue.record("expected budget intervention, got \(decision)")
-            return
+            OpenAI.ChatCompletionRequest.self,
+            from: Data(
+                #"{"messages":[{"role":"user","content":"hi"}],"max_tokens":100000,"reasoning_effort":"xhigh","thinking_safeguard":{"enabled":true,"max_thinking_chars":1,"max_line_repeats":1,"injection_message":"Forced answer"}}"#
+                    .utf8))
+        for nativeEffort in [false, true] {
+            let parameters = CompletionHandler.makeGenerateParameters(
+                from: request,
+                modelState: ServerInferenceModelState(
+                    modelID: nativeEffort ? "qwen3.8-27b" : "qwen3.6-27b",
+                    visionMode: false, declaresReasoningEffort: nativeEffort))
+            #expect(parameters.maxTokens == 100_000)
+            let encoded =
+                try JSONSerialization.jsonObject(with: JSONEncoder().encode(parameters))
+                as? [String: Any]
+            #expect(encoded?["thinkingSafeguard"] == nil)
         }
-        #expect(reason == .budgetExceeded)
-    }
-
-    @Test func repetitionRewindWinsWhenBudgetCrossesInTheSameChunk() {
-        // Past the grace, the budget stays the *last* trigger checked: a loop
-        // that crosses both the n-gram threshold and the budget in one chunk
-        // must intervene as repetition (rewinding past the looped content),
-        // not as a budget cut that keeps it.
-        let config = ThinkingRepetitionDetector.Config(
-            enabled: true,
-            minLineLength: 9999,  // line signal off
-            maxLineRepeats: 999,
-            ngramSize: 20,
-            maxNgramRepeats: 5,
-            windowChars: 2_000,
-            maxThinkingChars: 100,
-            minCharsBeforeIntervention: 0
-        )
-        let detector = ThinkingRepetitionDetector(config: config)
-        // 6 × 20 chars = 120: over the 100-char budget AND 6 identical
-        // 20-char ngrams, above the 5-repeat threshold.
-        let chunk = String(repeating: "abcdefghijklmnopqrst", count: 6)
-        let decision = detector.ingest(chunk: chunk)
-        guard case .intervene(let reason, let safe) = decision else {
-            Issue.record("expected an intervention, got \(decision)")
-            return
-        }
-        #expect(reason == .duplicateNgram)
-        #expect(safe.isEmpty)  // rewound to before the loop's first occurrence
+        #expect(request.reasoning_effort == "xhigh")
     }
 }

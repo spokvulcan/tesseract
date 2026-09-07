@@ -367,9 +367,7 @@ struct CompletionHandler: Sendable {
         let params = Self.makeGenerateParameters(
             from: request,
             modelState: modelState,
-            userPreset: settings.samplingPreset,
-            thinkingCutoffEnabled: settings.thinkingBudgetCutoffEnabled,
-            thinkingCutoffChars: settings.thinkingBudgetCutoffChars
+            userPreset: settings.samplingPreset
         )
 
         Log.server.info(
@@ -399,8 +397,7 @@ struct CompletionHandler: Sendable {
                         progressHandler: Self.makeProgressHandler(
                             activityLog: activityLog,
                             logHandle: logHandle
-                        ),
-                        clientStreams: request.stream == true
+                        )
                     )),
                 parameters: params,
                 route: .serverCompatible
@@ -477,20 +474,10 @@ struct CompletionHandler: Sendable {
     static func makeGenerateParameters(
         from request: OpenAI.ChatCompletionRequest,
         modelState: ServerInferenceModelState,
-        userPreset: SamplingPreset = .automatic,
-        thinkingCutoffEnabled: Bool = SettingsCatalogue.thinkingBudgetCutoffEnabled.default,
-        thinkingCutoffChars: Int = SettingsCatalogue.thinkingBudgetCutoffChars.default
+        userPreset: SamplingPreset = .automatic
     ) -> AgentGenerateParameters {
         var params = AgentGenerateParameters.forModel(modelState.modelID)
         params = userPreset.apply(to: params)
-        // ADR-0060 budget split — before the vendor extension below, so an
-        // explicit per-request `thinking_safeguard` stays authoritative.
-        if modelState.declaresReasoningEffort {
-            params.thinkingSafeguard.applyNativeReasoningEffortCeiling()
-        } else {
-            params.thinkingSafeguard.applyLegacyThinkingCutoff(
-                enabled: thinkingCutoffEnabled, chars: thinkingCutoffChars)
-        }
         if let maxTokens = request.effectiveMaxTokens { params.maxTokens = maxTokens }
         if let temp = request.temperature { params.temperature = Float(temp) }
         if let topP = request.top_p { params.topP = Float(topP) }
@@ -506,15 +493,6 @@ struct CompletionHandler: Sendable {
         if let frequencyPenalty = request.frequency_penalty {
             let penalty = Float(frequencyPenalty)
             params.frequencyPenalty = penalty == 0 ? nil : penalty
-        }
-        if let sg = request.thinking_safeguard {
-            if let enabled = sg.enabled { params.thinkingSafeguard.enabled = enabled }
-            if let m = sg.max_thinking_chars { params.thinkingSafeguard.maxThinkingChars = m }
-            if let g = sg.min_chars_before_intervention {
-                params.thinkingSafeguard.minCharsBeforeIntervention = g
-            }
-            if let r = sg.max_line_repeats { params.thinkingSafeguard.maxLineRepeats = r }
-            if let msg = sg.injection_message { params.thinkingSafeguard.injectionMessage = msg }
         }
         return params
     }

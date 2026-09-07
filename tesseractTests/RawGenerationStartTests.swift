@@ -6,8 +6,8 @@ import Testing
 @testable import Tesseract_Agent
 
 /// The **Raw Generation Start** module (ADR-0016 amendment) driven through
-/// the **Model Session** seam over the toy model — the agent chat turn and
-/// both thinking-continuation shapes run the same script with no weights:
+/// the **Model Session** seam over the toy model — the agent chat turn
+/// runs the same script with no weights:
 /// tokenize through the session's agent-edge verb, the progress-event
 /// sequence, the **Prefill Strategy** route, the loop start, the handle
 /// wrap. These paths had no test reach before the seam.
@@ -132,103 +132,6 @@ struct RawGenerationStartTests {
         #expect(prefill.prefillMs != nil)
     }
 
-    // MARK: - Continuations
-
-    /// The server's continuation shape: the captured token list extended
-    /// with the hand-off encoded as plain text — the prompt count is the
-    /// original plus the appended tokens, and decode picks up right after
-    /// the hand-off.
-    @Test func continuationFromTokensAppendsTheHandoff() async throws {
-        let render = try Self.render()
-        let handoff = "</think>"
-        let provider = Self.toy(script: render + Self.bytes(handoff) + Self.bytes("After"))
-        let log = ProgressEventLog()
-
-        let text = try await Self.run(
-            provider: provider,
-            prompt: .continuation(base: .tokens(render, ndim: 1), handoff: handoff),
-            parameters: Self.parameters(),
-            log: log
-        )
-
-        #expect(text == "After")
-        // No tokenize verb: the base is already tokens.
-        #expect(provider.recorder.verbs == [.makeRawDecodeIterator])
-        guard case .cacheLookupFinished(let lookup) = log.events[1] else {
-            Issue.record("expected a lookup-finished event")
-            return
-        }
-        #expect(lookup.reason == "thinkingContinuationNoPrefixCache")
-        #expect(lookup.promptTokens == render.count + handoff.utf8.count)
-    }
-
-    /// The two continuation shapes are one arm: re-tokenizing the original
-    /// input yields the same prompt, the same stream, and the same count as
-    /// the captured token list. This is the drift guard the old hand copies
-    /// needed, expressed as the module's contract.
-    @Test func continuationFromInputMatchesContinuationFromTokens() async throws {
-        let render = try Self.render()
-        let handoff = "</think>"
-        let script = render + Self.bytes(handoff) + Self.bytes("Same")
-        let fromTokensLog = ProgressEventLog()
-        let fromInputLog = ProgressEventLog()
-
-        let fromTokens = try await Self.run(
-            provider: Self.toy(script: script),
-            prompt: .continuation(base: .tokens(render, ndim: 1), handoff: handoff),
-            parameters: Self.parameters(),
-            log: fromTokensLog
-        )
-        let fromInputProvider = Self.toy(script: script)
-        let fromInput = try await Self.run(
-            provider: fromInputProvider,
-            prompt: .continuation(
-                base: .input(UserInput(messages: Self.messages)), handoff: handoff),
-            parameters: Self.parameters(),
-            log: fromInputLog
-        )
-
-        #expect(fromTokens == "Same")
-        #expect(fromInput == fromTokens)
-        #expect(fromInputProvider.recorder.verbs == [.prepare, .makeRawDecodeIterator])
-        guard case .cacheLookupFinished(let a) = fromTokensLog.events[1],
-            case .cacheLookupFinished(let b) = fromInputLog.events[1]
-        else {
-            Issue.record("expected lookup-finished events")
-            return
-        }
-        #expect(a.promptTokens == b.promptTokens)
-    }
-
-    // MARK: - Prefill route
-
-    /// The **Prefill Strategy** route (ADR-0044), observed through the toy's
-    /// forward offsets: a 2D text-only prompt longer than one step chunks
-    /// through the app driver — forwards at each chunk boundary, then the
-    /// remainder priming the iterator — while the same prompt as a flat 1D
-    /// list goes single-shot, one forward over the whole prompt inside the
-    /// vendor iterator's init. 21 prompt tokens at step 8.
-    @Test(arguments: [(ndim: 2, forwards: [0, 8, 16]), (ndim: 1, forwards: [0, 21])])
-    func prefillRouteFollowsThePromptRank(ndim: Int, forwards expected: [Int]) async throws {
-        let base = Self.bytes(String(repeating: "a", count: 20))
-        let forwards = ForwardLog()
-        let provider = Self.toy(
-            script: base + Self.bytes("!") + Self.bytes("ok"), onForward: forwards.onForward)
-
-        let text = try await Self.run(
-            provider: provider,
-            prompt: .continuation(base: .tokens(base, ndim: ndim), handoff: "!"),
-            parameters: Self.parameters(prefillStepSize: 8)
-        )
-
-        #expect(text == "ok")
-        #expect(Array(forwards.offsets.prefix(expected.count)) == expected)
-    }
-
-    // MARK: - Cancellation
-
-    /// The wrapped handle's `cancel` stops the loop mid-decode and
-    /// `waitForCompletion` returns once the model is no longer touched.
     @Test func cancelStopsGenerationAndCompletionSettles() async throws {
         let render = try Self.render()
         let scripted = String(repeating: "x", count: 64)

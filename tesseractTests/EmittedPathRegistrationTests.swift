@@ -171,7 +171,6 @@ struct EmittedPathRegistrationTests {
 
     @Test func boundaryPathTurnsMapToTheFastPathsGuards() {
         typealias Reason = EmittedPathRegistration.SkipReason
-        #expect(EmittedPathRegistration.skipReason(for: .intervened) == .intervened)
         #expect(
             EmittedPathRegistration.skipReason(for: .nonIdentityKeySpace) == .nonIdentityKeySpace)
         #expect(EmittedPathRegistration.skipReason(for: .noGeneratedTokens) == .noGeneratedTokens)
@@ -192,7 +191,6 @@ struct EmittedPathRegistrationTests {
         #expect(Reason.nonIdentityKeySpace.rawValue == "nonIdentityKeySpace")
         #expect(Reason.noGeneratedTokens.rawValue == "noGeneratedTokens")
         #expect(Reason.cacheOffsetOutsideLivePath.rawValue == "cacheOffsetOutsideLivePath")
-        #expect(Reason.intervened.rawValue == "intervened")
         #expect(Reason.fidelityRejected.rawValue == "fidelityRejected")
         #expect(Reason.thinkStrippingUserBoundary.rawValue == "thinkStrippingUserBoundary")
         #expect(Reason.ineligibleRender.rawValue == "ineligibleRender")

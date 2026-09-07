@@ -32,7 +32,6 @@ nonisolated enum EmittedPathRegistration {
         case nonIdentityKeySpace
         case noGeneratedTokens
         case cacheOffsetOutsideLivePath
-        case intervened
         case fidelityRejected
         /// The turn took the boundary path under a think-stripping template
         /// at a new-user-message boundary: the next request re-renders the
@@ -59,7 +58,6 @@ nonisolated enum EmittedPathRegistration {
     /// name.
     static func skipReason(for fallback: LiveLeafCapture.FallbackReason) -> SkipReason {
         switch fallback {
-        case .intervened: .intervened
         case .nonIdentityKeySpace: .nonIdentityKeySpace
         case .noGeneratedTokens: .noGeneratedTokens
         case .cacheOffsetOutsideLivePath: .cacheOffsetOutsideLivePath

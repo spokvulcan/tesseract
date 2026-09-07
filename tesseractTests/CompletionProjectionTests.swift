@@ -187,29 +187,6 @@ struct CompletionProjectionTests {
         #expect(p2.thinkingContent.isEmpty)
     }
 
-    // MARK: - Safeguard sidecar
-
-    /// The safeguard sidecar is present with the recorded safe-prefix length when
-    /// the thinking-loop safeguard fired, and absent when it did not.
-    @Test func safeguardReportPresentOnlyWhenSafeguardFired() {
-        var fired = GenerationAccumulator()
-        fired.ingest(.thinkStart)
-        fired.ingest(.thinking("loop loop"))
-        fired.ingest(.thinkTruncate(safePrefix: "Step 1."))
-
-        var quiet = GenerationAccumulator()
-        quiet.ingest(.text("done"))
-
-        let info = GenerationFixtures.info(generationTokenCount: 3)
-        let firedP = CompletionProjection(
-            accumulator: fired, info: info, maxTokens: 256, completionID: "f")
-        let quietP = CompletionProjection(
-            accumulator: quiet, info: info, maxTokens: 256, completionID: "q")
-
-        #expect(firedP.safeguardReport?.safe_prefix_chars == "Step 1.".count)
-        #expect(quietP.safeguardReport == nil)
-    }
-
     // MARK: - Missing metrics
 
     /// With no terminal `.info` and no max-tokens, the turn stops and the

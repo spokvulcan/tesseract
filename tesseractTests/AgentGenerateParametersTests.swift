@@ -21,7 +21,6 @@ struct AgentGenerateParametersTests {
         #expect(params.topP == AgentGenerateParameters.qwen36Thinking.topP)
         #expect(params.topK == AgentGenerateParameters.qwen36Thinking.topK)
         #expect(params.presencePenalty == nil)
-        #expect(params.thinkingSafeguard.enabled == true)
     }
 
     @MainActor
@@ -31,7 +30,6 @@ struct AgentGenerateParametersTests {
         #expect(params.topP == AgentGenerateParameters.qwen36Thinking.topP)
         #expect(params.topK == AgentGenerateParameters.qwen36Thinking.topK)
         #expect(params.presencePenalty == nil)
-        #expect(params.thinkingSafeguard.enabled == true)
     }
 
     @MainActor
@@ -46,7 +44,6 @@ struct AgentGenerateParametersTests {
             #expect(params.topK == 20, "\(id)")
             #expect(params.presencePenalty == nil, "\(id)")
             #expect(params.repetitionPenalty == nil, "\(id)")
-            #expect(params.thinkingSafeguard.enabled == true, "\(id)")
         }
     }
 
@@ -58,7 +55,6 @@ struct AgentGenerateParametersTests {
         #expect(params.topK == AgentGenerateParameters.ornith9b.topK)
         #expect(params.presencePenalty == nil)
         #expect(params.repetitionPenalty == nil)
-        #expect(params.thinkingSafeguard.enabled == true)
     }
 
     @MainActor
@@ -73,7 +69,6 @@ struct AgentGenerateParametersTests {
         #expect(params.minP == 0.01)
         #expect(params.repetitionPenalty == 1.05)
         #expect(params.presencePenalty == nil)
-        #expect(params.thinkingSafeguard.enabled == true)
     }
 
     @MainActor
@@ -87,7 +82,6 @@ struct AgentGenerateParametersTests {
         #expect(params.topK == 20)
         #expect(params.presencePenalty == nil)
         #expect(params.repetitionPenalty == nil)
-        #expect(params.thinkingSafeguard.enabled == true)
     }
 
     @MainActor
@@ -186,8 +180,6 @@ struct AgentGenerateParametersTests {
         base.kvBits = 4
         base.kvGroupSize = 128
         base.prefillStepSize = 2048
-        base.thinkingSafeguard.enabled = false
-        base.thinkingSafeguard.maxThinkingChars = 12_345
         base.frequencyPenalty = 0.7
 
         let out = SamplingPreset.qwenThinkingCoding.apply(to: base)
@@ -196,8 +188,6 @@ struct AgentGenerateParametersTests {
         #expect(out.kvBits == 4)
         #expect(out.kvGroupSize == 128)
         #expect(out.prefillStepSize == 2048)
-        #expect(out.thinkingSafeguard.enabled == false)
-        #expect(out.thinkingSafeguard.maxThinkingChars == 12_345)
         #expect(out.frequencyPenalty == 0.7)
     }
 

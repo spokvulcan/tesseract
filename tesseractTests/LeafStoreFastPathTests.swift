@@ -22,7 +22,6 @@ struct LeafStoreFastPathTests {
         preservesThinking: Bool = true,
         generated: [Int]? = nil,
         cacheOffset: Int? = nil,
-        intervened: Bool = false,
         identity: Bool = true
     ) -> LiveLeafCapture.Decision {
         let gen = generated ?? self.generated
@@ -32,7 +31,6 @@ struct LeafStoreFastPathTests {
             promptKeyPath: prompt,
             generatedTokens: gen,
             cacheOffset: cacheOffset ?? prompt.count + gen.count,
-            intervened: intervened,
             keySpaceIsIdentity: identity
         )
     }
@@ -84,12 +82,6 @@ struct LeafStoreFastPathTests {
                 == .boundary(.thinkStrippingUserBoundary))
     }
 
-    @Test func intervenedTurnFallsBackBeforeAnythingElse() {
-        // The registered final cache belongs to the cancelled phase, so
-        // even a preserve-thinking turn is refused (decision 11).
-        #expect(decide(preservesThinking: true, intervened: true) == .boundary(.intervened))
-    }
-
     @Test func nonIdentityKeySpaceFallsBack() {
         #expect(decide(preservesThinking: true, identity: false) == .boundary(.nonIdentityKeySpace))
     }
@@ -121,12 +113,6 @@ struct LeafStoreFastPathTests {
     }
 
     @Test func theStructuralGuardsAreNamedBeforeTheRenderRule() {
-        // An intervened turn under a think-stripping template at a user
-        // boundary logs `intervened` — the guard reasons are unchanged and
-        // the intervened counter sees every intervened turn.
-        #expect(
-            decide(mode: .canonicalUserLeaf, preservesThinking: false, intervened: true)
-                == .boundary(.intervened))
         #expect(
             decide(mode: .canonicalUserLeaf, preservesThinking: false, identity: false)
                 == .boundary(.nonIdentityKeySpace))
