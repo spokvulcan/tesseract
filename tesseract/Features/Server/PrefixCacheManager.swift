@@ -2288,6 +2288,20 @@ final class PrefixCacheManager {
         store.totalSnapshotBytes
     }
 
+    /// Compact phase telemetry: no topology construction, tensor reads, or
+    /// SSD waits. Queue bytes describe payload accounting, not extra physical
+    /// memory (full payloads may share a snapshot's backing).
+    func memoryTelemetryFacts() -> [String: String] {
+        let ssd = store.ssdDiagnosticsSnapshot()
+        return [
+            "treeSnapshotBytes": "\(totalSnapshotBytes)",
+            "treeBudgetBytes": "\(memoryBudgetBytes)",
+            "treeBudgetFloorBytes": "\(budgetFloorBytes())",
+            "ssdPendingPayloadBytes": "\(ssd.pendingBytes)",
+            "ssdPendingPayloadCount": "\(ssd.pendingCount)",
+        ]
+    }
+
     func makeTelemetrySnapshot(now: Date = Date()) -> PromptCacheTelemetrySnapshot {
         let cacheStats = stats
         let clockNow: ContinuousClock.Instant = .now

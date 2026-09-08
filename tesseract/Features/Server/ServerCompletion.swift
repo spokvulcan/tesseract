@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import MLX
 import MLXLMCommon
+import MLXNN
 import Tokenizers
 import os
 
@@ -671,27 +672,50 @@ nonisolated final class ServerCompletion {
 
         let prefixCache = await ensurePrefixCache(on: actor)
         let requestID = UUID()
+        let memory = RequestMemoryTelemetry(
+            context: PrefixCacheDiagnostics.Context(
+                requestID: requestID, modelID: modelID,
+                kvBits: parameters.kvBits, kvGroupSize: parameters.kvGroupSize))
+        let memorySampler = memory.startSampling()
+        memory.mark(.preparing, facts: ["modelWeightBytes": "\(modelWeightBytes)"])
+        var handedToDrive = false
+        var startOutcome = "startFailed"
+        defer {
+            if !handedToDrive {
+                memory.finish(outcome: Task.isCancelled ? "cancelledDuringStart" : startOutcome)
+                memorySampler.cancel()
+                Task.detached(priority: .utility) { await memory.sampleAfterRelease() }
+            }
+        }
         let genParams = LLMActor.makeGenerateParameters(from: parameters)
         // Canonicalize tools once so the leaf re-tokenization uses the same dict
         // iteration order as the prefill path inside makeHTTPPrefixCacheGeneration.
         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
-        let mlxStart = try await makeHTTPPrefixCacheGeneration(
-            on: actor,
-            sessions: sessions,
-            conversation: conversation,
-            requestID: requestID,
-            modelID: modelID,
-            parameters: genParams,
-            toolSpecs: canonicalTools,
-            prefixCache: prefixCache,
-            renderContext: renderContext,
-            progressHandler: progressHandler
-        )
+        let mlxStart: HTTPPrefixCacheGeneration
+        do {
+            mlxStart = try await makeHTTPPrefixCacheGeneration(
+                on: actor,
+                sessions: sessions,
+                conversation: conversation,
+                requestID: requestID,
+                modelID: modelID,
+                parameters: genParams,
+                toolSpecs: canonicalTools,
+                prefixCache: prefixCache,
+                renderContext: renderContext,
+                progressHandler: progressHandler,
+                memory: memory
+            )
+        } catch {
+            if error is CancellationError { startOutcome = "cancelledDuringStart" }
+            throw error
+        }
 
         // A drain ran while restore/prefill was suspended: the model is
         // tearing down, so stop the freshly started generation and bail
         // before wiring up a handle nothing would ever drain.
         if drainGeneration != entryDrainGeneration {
+            startOutcome = "cancelledDuringStart"
             mlxStart.completion.cancel()
             await mlxStart.completion.value
             Memory.clearCache()
@@ -751,6 +775,7 @@ nonisolated final class ServerCompletion {
                 canonicalTools: canonicalTools,
                 requestID: requestID,
                 loadedModelWeightBytes: loadedModelWeightBytes,
+                memory: memory,
                 prefixCache: prefixCache,
                 renderContext: renderContext,
                 traceLog: traceLog,
@@ -768,7 +793,10 @@ nonisolated final class ServerCompletion {
         })
         let task = Task {
             await driveBox.value()
+            memorySampler.cancel()
+            Task.detached(priority: .utility) { await memory.sampleAfterRelease() }
         }
+        handedToDrive = true
 
         let completionStart = ManagedGenerationDriver.makeStart(
             stream: stream,
@@ -776,7 +804,8 @@ nonisolated final class ServerCompletion {
             cachedTokenCount: cachedTokenCount,
             diagnostics: completionDiagnostics,
             cancelBridge: loopCancel,
-            task: task
+            task: task,
+            cancellationObserver: { memory.recordCancellationSignal(origin: $0) }
         )
         activeCompletion = (id: requestID, handle: completionStart)
         return completionStart
@@ -797,6 +826,7 @@ nonisolated final class ServerCompletion {
         canonicalTools: [ToolSpec]?,
         requestID: UUID,
         loadedModelWeightBytes: Int64,
+        memory: RequestMemoryTelemetry,
         prefixCache: PrefixCacheManager,
         renderContext: TemplateRenderContext,
         traceLog: CompletionTraceLog,
@@ -821,6 +851,8 @@ nonisolated final class ServerCompletion {
         // tallies (with their correlated diagnostics events), the
         // restored-offset rule, and the admitted-snapshot projections.
         var trace = CompletionTraceAccumulator()
+        var terminalOutcome = "completed"
+        memory.mark(.decoding)
 
         drive: do {
             func handle(_ event: AgentGeneration) {
@@ -872,8 +904,19 @@ nonisolated final class ServerCompletion {
             // report below carries this span so a post-EOS stall is
             // attributable.
             let generationEnded = Date.timeIntervalSinceReferenceDate
+            memory.mark(
+                .generationQuiescent, facts: ["generationCancelled": "\(outcome.cancelled)"])
 
             if outcome.cancelled {
+                terminalOutcome = "cancelled"
+                // The driver has awaited generation. Sample its final cache
+                // on-session even though cancellation bypasses leaf capture.
+                if let facts = try? await sessions.withSession({ _ in
+                    RequestMemoryTelemetry.cacheFacts(mlxStartBox.value.finalCache)
+                }) {
+                    memory.mark(.generationQuiescent, facts: facts)
+                }
+                memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
                 break drive
@@ -921,6 +964,7 @@ nonisolated final class ServerCompletion {
             // These are captured during prefill and independent of the leaf path — if
             // final-cache recovery or leaf capture fails, the stable-prefix checkpoint
             // still saves future requests from a full re-prefill.
+            memory.mark(.admittingCheckpoints)
             var storedSnapshotsForTuner: [HybridCacheSnapshot] = []
             if !Task.isCancelled, let admission = mlxStart.snapshotAdmission {
                 let diagnostics = await MainActor.run {
@@ -931,6 +975,8 @@ nonisolated final class ServerCompletion {
             }
 
             if Task.isCancelled {
+                terminalOutcome = "cancelled"
+                memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
                 break drive
@@ -942,6 +988,8 @@ nonisolated final class ServerCompletion {
             // falls through to the request-end recordRequest call below — the
             // alpha tuner needs to see every request, not just the ones whose
             // leaf store completed.
+            memory.mark(
+                .storingLeaf, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
@@ -954,7 +1002,8 @@ nonisolated final class ServerCompletion {
                 assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
                 diagnosticsContext: diagnosticsContext,
-                trace: &trace
+                trace: &trace,
+                memory: memory
             )
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
@@ -963,6 +1012,12 @@ nonisolated final class ServerCompletion {
                 speculativeSeed = seed
             }
 
+            memory.mark(
+                .recordingRequest,
+                facts: [
+                    "leafSource": leafResult.report.source?.rawValue ?? "skipped",
+                    "leafCopyReason": leafResult.report.copyReason?.rawValue ?? "none",
+                ])
             // Record the request lifecycle for the alpha tuner. Fires
             // for every request, including the leaf-skipped paths
             // — the tuner needs the full workload trace, not just
@@ -1047,10 +1102,16 @@ nonisolated final class ServerCompletion {
                 }
             }
 
+            memory.mark(
+                .finishingStream, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
             continuation.finish()
         } catch is CancellationError {
+            terminalOutcome = "cancelled"
+            memory.mark(.finishingStream)
             continuation.finish()
         } catch {
+            terminalOutcome = "failed"
+            memory.mark(.finishingStream)
             continuation.finish(
                 throwing: AgentEngineError.generationFailed(
                     error.localizedDescription
@@ -1098,7 +1159,12 @@ nonisolated final class ServerCompletion {
         // error alike — same guarantee as `finishHook`). From here on the
         // turn's protection is the freshest-leaf floor member, not the
         // in-flight pin (ADR-0019).
-        await MainActor.run { prefixCache.completeRequest(requestID: requestID) }
+        memory.mark(.releasingRequest)
+        let releasedFacts = await MainActor.run {
+            prefixCache.completeRequest(requestID: requestID)
+            return prefixCache.memoryTelemetryFacts()
+        }
+        memory.mark(.releasingRequest, facts: releasedFacts)
         await finishHook()
         // After the registry slot is released: hand the speculative seed to
         // the actor, which schedules it only if the module is still quiescent
@@ -1106,6 +1172,7 @@ nonisolated final class ServerCompletion {
         if let speculativeSeed {
             await scheduleSpeculative(speculativeSeed)
         }
+        memory.finish(outcome: terminalOutcome)
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
@@ -1132,7 +1199,8 @@ nonisolated final class ServerCompletion {
         toolSpecs: [ToolSpec]?,
         prefixCache: PrefixCacheManager,
         renderContext: TemplateRenderContext = .canonical,
-        progressHandler: ServerInferenceProgressHandler?
+        progressHandler: ServerInferenceProgressHandler?,
+        memory: RequestMemoryTelemetry
     ) async throws -> HTTPPrefixCacheGeneration {
         // swiftlint:enable function_body_length function_parameter_count
         // Canonicalize tools once so the stable-prefix detector and the real
@@ -1160,6 +1228,16 @@ nonisolated final class ServerCompletion {
         )
 
         return try await sessions.withSession { session in
+            let draftBytes =
+                session.dflash2Drafter?.parameters().flattened()
+                .reduce(0) { $0 + $1.1.nbytes } ?? 0
+            memory.mark(
+                .preparing,
+                facts: [
+                    "dflash2WeightArrayBytes": "\(draftBytes)",
+                    "dflash2Loaded": "\(session.dflash2Drafter != nil)",
+                    "mtpLoaded": "\(session.mtpDrafter != nil)",
+                ])
             func measure<T>(_ work: () throws -> T) rethrows -> (T, TimeInterval) {
                 let started = Date.timeIntervalSinceReferenceDate
                 let value = try work()
@@ -1372,6 +1450,16 @@ nonisolated final class ServerCompletion {
                 textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
                 kvBits: parameters.kvBits
             )
+            memory.mark(
+                .restoring, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
+            memory.mark(
+                .restoring,
+                facts: [
+                    "promptTokens": "\(fullTokenCount)",
+                    "dflash2Engaged": "\(dflash2Engages)",
+                    "restoreSnapshotBytes": "\(lookupResult.snapshot?.memoryBytes ?? 0)",
+                    "restoreMode": lookupResult.snapshot == nil ? "cold" : "copy",
+                ])
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
                 let (restoredCache, measuredRestoreMs) = measure {
@@ -1379,6 +1467,11 @@ nonisolated final class ServerCompletion {
                 }
                 cacheToUse = restoredCache
                 restoreMs = measuredRestoreMs
+                memory.mark(
+                    .restored,
+                    facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? []).merging([
+                        "restoreMode": restoredCache == nil ? "failedCopy" : "copy"
+                    ]) { _, new in new })
                 if !keySpace.isIdentity,
                     cacheOffset < keySpace.minimumWarmOffset,
                     let span = imageSpan(from: cacheOffset)
@@ -1562,6 +1655,7 @@ nonisolated final class ServerCompletion {
                 progressHandler: progressHandler
             )
             var liveCache = begin.cache
+            memory.mark(.prefilling, facts: RequestMemoryTelemetry.cacheFacts(liveCache))
             let prefillResult: (iterator: KeyedDecodeIterator, snapshots: [HybridCacheSnapshot])
             do {
                 prefillResult =
@@ -1664,6 +1758,9 @@ nonisolated final class ServerCompletion {
                             try error.check()
                             var iteratorParams = genParams
                             iteratorParams.kvBits = nil
+                            memory.mark(
+                                .dflashPreparing,
+                                facts: RequestMemoryTelemetry.cacheFacts(liveCache))
                             let iterator = try session.makeDFlash2DecodeIterator(
                                 fullInput,
                                 cache: liveCache,
@@ -1734,6 +1831,12 @@ nonisolated final class ServerCompletion {
                 throw CancellationError()
             }
             let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+            memory.mark(
+                .prefilled,
+                facts: RequestMemoryTelemetry.cacheFacts(liveCache).merging([
+                    "prefillCheckpointArrayBytes":
+                        "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })"
+                ]) { _, new in new })
             let iterator = prefillResult.iterator
             if case .dflash2 = iterator {
                 // The iterator exists — the request will decode speculatively.
@@ -1812,6 +1915,7 @@ nonisolated final class ServerCompletion {
 
             // 11. Start the app-owned generation stream.
             let generatedTokens = GeneratedTokenRecorder()
+            memory.mark(.decoding)
             let (stream, task) = iterator.startGeneration(
                 promptTokenCount: fullTokenCount,
                 modelConfiguration: session.configuration,

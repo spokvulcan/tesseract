@@ -310,6 +310,73 @@ the report to `benchmark/trace-replay/latest.log`.
 
 ## Gotchas
 
+### Request memory timeline (#471)
+
+`event=requestMemory` records the HTTP completion's memory timeline in the
+existing durable `Application Support/CacheDiagnostics/<yyyy-MM-dd>.jsonl`
+sink. Phase transitions, cancellation signals, and terminal samples also
+use notice-level unified logging. Periodic samples run once per second
+while the request is preparing, generating, or cleaning up; they use info
+level and remain available in the JSONL sink. The existing retention and
+rotation limits apply. No prompt text, token IDs, tensor data, or file paths
+are recorded.
+
+Filter by `requestID`, then order by `sequence`. `elapsedMs` and
+`phaseElapsedMs` use a monotonic clock. A phase-end sample belongs to the
+operation that just ran; a phase-begin sample includes the new phase's
+component facts. A periodic sample during a stall preserves its phase.
+
+| Fields / phases | What they distinguish |
+| --- | --- |
+| `activeMlxBytes`, `cachedMlxBytes` | Live MLX allocations versus reusable allocator buffers. |
+| `processFootprintBytes`, `processResidentBytes`, `processCompressedBytes`, `systemSwapUsedBytes` | Process footprint versus residency/compression and system-wide swap. Failed OS queries omit the affected fields. |
+| `processLifetimePeakMlxBytes`, `sampledRequestPeakActiveMlxBytes`, `sampledRequestPeakFootprintBytes` | The allocator's historical high-water mark versus maxima actually observed during this request. No process-global peak reset is performed. |
+| `restoring` → `restored` | Snapshot size, current restore mode (`cold`, `copy`, `failedCopy`), and the resulting cache's attention/recurrent array sizes. |
+| `prefilling` → `dflashPreparing` → `prefilled` | Ordinary suffix prefill versus DFlash2's iterator preparation; loaded draft weight bytes, engagement, prompt length, and checkpoint array bytes. |
+| `capturingLeaf` → `preparingPayload` → `admittingLeaf` | Capture copy versus handoff, request cache count after capture, actual SSD payload mode/bytes, and admission overhead. |
+| `recordingRequest` → `finishingStream` → `releasingRequest` → `finished` | Post-generation bookkeeping, stream delivery boundary, and registry/pin release. `outcome` includes successful, cancelled, failed, and failed/cancelled-start exits. |
+| `sampleKind=cancelSignal` | The first cancellation signal and its origin. `streamFinished` is the driver's normal completion cleanup, not a user abort; `caller` / `streamCancelled` distinguish abort signals. |
+| `phase=settled sampleKind=afterRelease` | One scalar sample one second after the drive returns. It can overlap a new request and is not an idle-memory claim or part of this request's sampled maximum. |
+
+Component byte counts are observations, **not additive physical ownership
+accounting**. Cache `innerState` includes backing capacity; snapshot/payload
+views can overlap it; full SSD payloads can share the tree's arrays.
+`requestCacheMeasuredAtPhase` and `treeMeasuredAtPhase` identify where the
+carried-forward component facts were last read. Tree facts include the
+budget, protected floor, and pending SSD payload bytes/count. The sampler
+holds only scalars and never reads mutable cache objects off-session,
+evaluates a graph, clears memory, or waits for SSD work.
+
+SSD counters preserve the writer's existing accounting:
+`ssdPendingPayloadBytes` includes the active writer item's outstanding
+budget charge, while `ssdPendingPayloadCount` counts waiting queue entries
+only. Nonzero bytes with a zero count can therefore mean a write is already
+in progress; neither counter measures exclusively retained physical arrays.
+
+Process counters include co-resident work. One-second samples can miss
+short spikes; the process lifetime peak can expose a new spike but cannot
+attribute an old one to this request. DFlash2's internal round/capture
+buffers are opaque to the app: its preparation interval and process
+samples expose their impact, not an exact tensor-by-tensor breakdown.
+Unkeyed and MTP preparation retain coarse `preparing` coverage.
+
+Flatten a day's events for inspection (substitute the sandbox's Application
+Support path when running the sandboxed distribution):
+
+```bash
+jq -c 'select(.eventName == "requestMemory") | {timestamp, requestID, modelID} + (.fields | map({(.key): .value}) | add)' \
+  "$HOME/Library/Application Support/CacheDiagnostics/$(date +%F).jsonl"
+```
+
+Join `requestID` with the existing `lookup`, `leafStore`, and SSD admission
+events to explain restore offsets, fallbacks, and payload completion.
+
+Focused regression suites: `RequestMemoryTelemetryTests`,
+`ManagedGenerationDriverTests`, `ServerCompletionKeyedSequencingTests`,
+`ServerCompletionDrainTests`, and `PromptCacheDiagnosticsFileSinkTests`.
+
+### Test-runner caveats
+
 - `-only-testing` filters must target **suite** granularity. A method-granularity
   filter (`-only-testing:tesseractTests/<Suite>/<testName>`) runs zero Swift Testing
   tests and still reports `** TEST SUCCEEDED **`. The suite is the `struct` name, not

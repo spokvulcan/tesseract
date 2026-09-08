@@ -57,6 +57,7 @@ nonisolated enum LeafStorePhase {
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
         let containsImages: Bool
+        let memory: RequestMemoryTelemetry?
         var mlxStart: HTTPPrefixCacheGeneration { mlxStartBox.value }
     }
 
@@ -93,13 +94,14 @@ nonisolated enum LeafStorePhase {
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
         diagnosticsContext: PrefixCacheDiagnostics.Context,
-        trace: inout CompletionTraceAccumulator
+        trace: inout CompletionTraceAccumulator,
+        memory: RequestMemoryTelemetry? = nil
     ) async -> Result {
         // swiftlint:enable function_parameter_count
         let inputs = Inputs(
             mlxStartBox: mlxStartBox, sessions: sessions, requestID: requestID,
             prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
-            containsImages: conversation.messages.contains { !$0.images.isEmpty })
+            containsImages: conversation.messages.contains { !$0.images.isEmpty }, memory: memory)
         let mlxStart = inputs.mlxStart
         var result = Result()
 

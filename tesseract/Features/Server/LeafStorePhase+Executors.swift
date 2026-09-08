@@ -47,6 +47,7 @@ nonisolated extension LeafStorePhase {
         let diagnosticsContext: PrefixCacheDiagnostics.Context
         let stages: LeafStages
         let copyReason: Report.CopyReason?
+        let memory: RequestMemoryTelemetry?
 
         init(storedTokens: [Int], inputs: Inputs, stages: LeafStages) {
             let mlxStart = inputs.mlxStart
@@ -57,6 +58,7 @@ nonisolated extension LeafStorePhase {
             prefixCache = inputs.prefixCache
             diagnosticsContext = inputs.diagnosticsContext
             self.stages = stages
+            memory = inputs.memory
             copyReason =
                 inputs.containsImages || !mlxStart.keySpace.isIdentity
                 ? .imageKeySpace
@@ -307,6 +309,8 @@ nonisolated extension LeafStorePhase {
     ) async -> LeafCapture {
         var timings = timings
         let storedTokens = context.storedTokens
+        context.memory?.mark(
+            .capturingLeaf, facts: RequestMemoryTelemetry.cacheFacts(moving?.cache ?? cache))
         let captureStart = Date.timeIntervalSinceReferenceDate
         guard
             let leaf = moving != nil
@@ -333,6 +337,13 @@ nonisolated extension LeafStorePhase {
                 + "storedLen=\(storedTokens.count)"
         )
 
+        context.memory?.mark(
+            .preparingPayload,
+            facts: [
+                "leafSnapshotArrayBytes": "\(leaf.memoryBytes)",
+                "leafCaptureMode": moving == nil ? "copy" : "handoff",
+                "requestCacheLayerCountAfterCapture": "\(moving?.cache.count ?? cache.count)",
+            ])
         let payloadStart = Date.timeIntervalSinceReferenceDate
         let storage = ServerCompletion.snapshotAdmissionStorage(
             for: leaf,
@@ -341,6 +352,14 @@ nonisolated extension LeafStorePhase {
         )
         timings.payloadSeconds = secondsSince(payloadStart)
 
+        var payloadFacts = ["ssdPayloadMode": "none", "ssdPayloadArrayBytes": "0"]
+        if case .ramAndSSD(let payload) = storage {
+            payloadFacts = [
+                "ssdPayloadMode": payload.extending == nil ? "full" : "extension",
+                "ssdPayloadArrayBytes": "\(payload.totalBytes)",
+            ]
+        }
+        context.memory?.mark(.admittingLeaf, facts: payloadFacts)
         let admitStart = Date.timeIntervalSinceReferenceDate
         let admission = await ServerCompletion.admitStructuredLeaf(
             leaf,
