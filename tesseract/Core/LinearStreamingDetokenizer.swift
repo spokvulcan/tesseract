@@ -30,17 +30,34 @@
 //  from one full decode when they are not.
 //
 //  Both ways, every segment is verified against one full decode before its
-//  chunks are released, and recomputed with the naive algorithm itself when
-//  the two disagree — so a decoder that reaches further back, or rewrites
-//  text it already emitted, costs a recomputation and never a chunk. Chunks
-//  are therefore released per segment rather than per token; the chunk
-//  sequence, which is all the stream pipeline folds, is unchanged.
+//  chunks are released (or at stream end), and recomputed with the naive
+//  algorithm itself when the two disagree — so a decoder that reaches
+//  further back, or rewrites text it already emitted, costs a
+//  recomputation and never a chunk.
+//
+//  In `.live` mode (the live generation loop), chunks are released per
+//  token on the byte path (holding back only incomplete trailing multi-byte
+//  UTF-8 scalars) and within a bounded window on the window path, ensuring
+//  delivery latency to the client does not regress on newline-free runs.
+//  In `.perSegment` mode (the fidelity replay gate), chunks are held until
+//  segment close and verified as a batch.
 //
 
 import Foundation
 import MLXLMCommon
 
 nonisolated struct LinearStreamingDetokenizer {
+    /// How chunks are released during streaming.
+    enum ReleaseBoundary: Equatable, Sendable {
+        /// Releases all chunks of a segment together once the segment verifies
+        /// at a newline or end of stream (used by the fidelity replay).
+        case perSegment
+        /// Releases chunks per token on the byte path (0 hold when scalars are complete),
+        /// and keeps a bounded release window (holding up to `windowHold` chunks)
+        /// on the window path.
+        case live(windowHold: Int = 12)
+    }
+
     /// Trailing tokens decoded per step on the window path; the window
     /// restarts on `windowKeep` tokens when it reaches this length.
     static let windowLength = 12
@@ -57,6 +74,7 @@ nonisolated struct LinearStreamingDetokenizer {
     }
 
     private let tokenizer: any Tokenizer
+    private let releaseBoundary: ReleaseBoundary
     private var mode = Mode.bytes
 
     // The naive algorithm's state, mirrored.
@@ -83,7 +101,8 @@ nonisolated struct LinearStreamingDetokenizer {
     private var windowTokens: [Int] = []
     private var windowScalars: [Unicode.Scalar] = []
 
-    /// The open segment's chunks, released when the segment verifies.
+    /// The open segment's chunks, released when the segment verifies
+    /// or when the bounded release window slides.
     private var pending: [String] = []
     /// The first segment starts from nothing; every later one opens on the
     /// previous segment's last token, as the naive restart does.
@@ -97,11 +116,12 @@ nonisolated struct LinearStreamingDetokenizer {
     /// Whether the tokens so far were decoded from their own bytes.
     var decodesFromBytes: Bool { mode == .bytes }
 
-    init(tokenizer: any Tokenizer) {
+    init(tokenizer: any Tokenizer, releaseBoundary: ReleaseBoundary = .live()) {
         self.tokenizer = tokenizer
+        self.releaseBoundary = releaseBoundary
     }
 
-    /// Feed one token; returns the chunks of the segment it closed, if any.
+    /// Feed one token; returns the chunks released on this step, if any.
     mutating func append(token: Int) -> [String] {
         segmentTokens.append(token)
         advance(token)
@@ -116,14 +136,46 @@ nonisolated struct LinearStreamingDetokenizer {
         // An incomplete scalar at the end: nothing released, nothing committed.
         if chunk.last == "\u{fffd}" { return [] }
 
-        pending.append(chunk)
-        if chunk.hasSuffix("\n") {
-            let released = closeSegment()
-            restart(with: token)
-            return released
+        switch releaseBoundary {
+        case .perSegment:
+            pending.append(chunk)
+            if chunk.hasSuffix("\n") {
+                let released = closeSegment()
+                restart(with: token)
+                return released
+            }
+            commit()
+            return []
+
+        case .live(let windowHold):
+            switch mode {
+            case .bytes:
+                // On the byte path, each token's bytes are resolved and checked once.
+                // Complete chunks are released per token with zero delay.
+                commit()
+                if chunk.hasSuffix("\n") {
+                    _ = closeSegment()
+                    restart(with: token)
+                }
+                return [chunk]
+
+            case .window:
+                pending.append(chunk)
+                if chunk.hasSuffix("\n") {
+                    let released = closeSegment()
+                    restart(with: token)
+                    return released
+                }
+                commit()
+                if pending.count > windowHold {
+                    let overflow = pending.count - windowHold
+                    let released = Array(pending.prefix(overflow))
+                    pending.removeFirst(overflow)
+                    return released
+                }
+                return []
+            }
         }
-        commit()
-        return []
     }
 
     /// The end of the stream: the chunks of the open segment.
@@ -334,7 +386,17 @@ nonisolated struct LinearStreamingDetokenizer {
             pending = []
             firstSegment = false
         }
-        guard !pending.isEmpty else { return [] }
+        guard !pending.isEmpty else {
+            // Even if pending is empty (e.g. live byte path), verify segment correctness
+            if !segmentTokens.isEmpty {
+                let truth = Self.scalars(tokenizer.decode(tokenIds: segmentTokens))
+                if truth != full {
+                    fallbacks += 1
+                    mode = .window
+                }
+            }
+            return []
+        }
         let truth = Self.scalars(tokenizer.decode(tokenIds: segmentTokens))
         if truth == full { return pending }
         fallbacks += 1

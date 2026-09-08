@@ -292,7 +292,7 @@ nonisolated enum TokenGenerationLoop {
         let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
 
         let task = Task {
-            var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+            var detokenizer = LinearStreamingDetokenizer(tokenizer: tokenizer, releaseBoundary: .live())
             let format = modelConfiguration.toolCallFormat ?? .json
             let processor = ToolCallProcessor(format: format, tools: tools)
             var deltaTracker = ToolCallDeltaTracker(format: format)
@@ -328,8 +328,7 @@ nonisolated enum TokenGenerationLoop {
                 switch event {
                 case .token(let token):
                     generatedTokens += 1
-                    detokenizer.append(token: token)
-                    if let chunk = detokenizer.next() {
+                    for chunk in detokenizer.append(token: token) {
                         if !emitChunkEvents(chunk) {
                             consumerTerminated = true
                             break tokenLoop
@@ -337,6 +336,16 @@ nonisolated enum TokenGenerationLoop {
                     }
                 case .info(let completion):
                     info = completion
+                }
+            }
+
+            // Flush any held open segment or bounded window chunks at end of stream.
+            if !consumerTerminated {
+                for chunk in detokenizer.finish() {
+                    if !emitChunkEvents(chunk) {
+                        consumerTerminated = true
+                        break
+                    }
                 }
             }
 

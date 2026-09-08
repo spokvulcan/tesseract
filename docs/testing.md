@@ -34,6 +34,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ManagedGenerationDriverTests \
   -only-testing:tesseractTests/ReasoningEffortTests \
   -only-testing:tesseractTests/RawGenerationStartTests \
+  -only-testing:tesseractTests/TokenGenerationLoopTests \
   -only-testing:tesseractTests/EditToolTests
 
 # Prefix cache suites (radix tree + hybrid snapshot + stable prefix detector):
