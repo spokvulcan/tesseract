@@ -81,21 +81,31 @@ nonisolated struct ManagedGenerationDriver: Sendable {
         cachedTokenCount: Int,
         diagnostics: HTTPServerGenerationStart.Diagnostics = .unavailable,
         cancelBridge: LateBoundCancel,
-        task: Task<Void, Never>
+        task: Task<Void, Never>,
+        cancellationObserver: @escaping @Sendable (String) -> Void = { _ in }
     ) -> HTTPServerGenerationStart {
+        let cancel: @Sendable (String) -> Void = { origin in
+            cancellationObserver(origin)
+            cancelBridge()
+            task.cancel()
+        }
         let start = HTTPServerGenerationStart(
             stream: stream,
             cachedTokenCount: cachedTokenCount,
-            cancel: {
-                cancelBridge()
-                task.cancel()
-            },
+            cancel: { cancel("caller") },
             waitForCompletion: {
                 _ = await task.result
             },
             diagnostics: diagnostics
         )
-        continuation.onTermination = { _ in start.cancel() }
+        continuation.onTermination = { termination in
+            switch termination {
+            case .cancelled: cancel("streamCancelled")
+            case .finished(let error):
+                cancel(error == nil ? "streamFinished" : "streamFailed")
+            @unknown default: cancel("streamTerminated")
+            }
+        }
         return start
     }
 }
