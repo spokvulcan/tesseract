@@ -46,6 +46,7 @@ nonisolated extension LeafStorePhase {
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
         let stages: LeafStages
+        let copyReason: Report.CopyReason?
 
         init(storedTokens: [Int], inputs: Inputs, stages: LeafStages) {
             let mlxStart = inputs.mlxStart
@@ -56,6 +57,10 @@ nonisolated extension LeafStorePhase {
             prefixCache = inputs.prefixCache
             diagnosticsContext = inputs.diagnosticsContext
             self.stages = stages
+            copyReason =
+                inputs.containsImages || !mlxStart.keySpace.isIdentity
+                ? .imageKeySpace
+                : mlxStart.partitionKey.kvBits != nil ? .quantized : nil
         }
 
         /// The SSD extension base for `storedTokens`, resolved before the
@@ -84,6 +89,8 @@ nonisolated extension LeafStorePhase {
         /// Tokens re-prefilled from the boundary; `0` on the live and
         /// direct paths.
         var residualTokens = 0
+        var handedOff = false
+        var copyReason: Report.CopyReason?
         var timings = Timings()
     }
 
@@ -94,19 +101,25 @@ nonisolated extension LeafStorePhase {
     /// offset, the fast path under every mode (**Live Leaf Capture**). No
     /// restore, no prefill: the generation loop has been
     /// awaited by the drive, so the array is quiescent (ADR-0006), and the
-    /// snapshot is a deep copy inside a Metal-affine Model Session.
+    /// eligible text leaf takes ownership inside a Metal-affine Model Session.
     static func captureLiveLeaf(
         sessions: any ModelSessionProviding,
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
-        context: LeafAdmissionContext
+        context: LeafAdmissionContext,
+        move: Bool = true
     ) async -> LeafCapture {
         let extensionBase = await context.resolveExtensionBase()
         do {
             return try await sessions.withSession { session in
                 // `finalCache` is non-`Sendable` `[any KVCache]` — reached
                 // through the boxed generation instead of a direct capture.
-                await admitLeaf(
-                    cache: mlxStartBox.value.finalCache,
+                let generation = mlxStartBox.value
+                let moving =
+                    move && context.copyReason == nil && session.mtpDrafter == nil
+                    ? generation.finalCacheOwner : nil
+                return await admitLeaf(
+                    cache: moving == nil ? generation.finalCache : [],
+                    moving: moving,
                     session: session,
                     residualTokens: 0,
                     extensionBase: extensionBase,
@@ -189,7 +202,7 @@ nonisolated extension LeafStorePhase {
         }
 
         return await captureLiveLeaf(
-            sessions: sessions, mlxStartBox: mlxStartBox, context: context)
+            sessions: sessions, mlxStartBox: mlxStartBox, context: context, move: false)
     }
 
     // MARK: - Boundary executor
@@ -285,6 +298,7 @@ nonisolated extension LeafStorePhase {
     /// `timings` carries the stages the caller already ran.
     private static func admitLeaf(
         cache: [any KVCache],
+        moving: FinalGenerationCache? = nil,
         session: any ModelSession,
         residualTokens: Int,
         extensionBase: SnapshotExtension?,
@@ -295,11 +309,13 @@ nonisolated extension LeafStorePhase {
         let storedTokens = context.storedTokens
         let captureStart = Date.timeIntervalSinceReferenceDate
         guard
-            let leaf = session.captureSnapshot(
-                cache: cache,
-                offset: storedTokens.count,
-                type: .leaf
-            )
+            let leaf = moving != nil
+                ? moving?.moveSnapshot(offset: storedTokens.count)
+                : session.captureSnapshot(
+                    cache: cache,
+                    offset: storedTokens.count,
+                    type: .leaf
+                )
         else {
             context.diagnosticsContext.logSkip(
                 stage: context.stages.capture,
@@ -346,6 +362,8 @@ nonisolated extension LeafStorePhase {
             admission: admission.store,
             leafOffset: leaf.tokenOffset,
             residualTokens: residualTokens,
+            handedOff: moving != nil,
+            copyReason: context.copyReason,
             timings: timings
         )
     }

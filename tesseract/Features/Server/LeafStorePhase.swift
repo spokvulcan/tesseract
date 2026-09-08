@@ -56,6 +56,7 @@ nonisolated enum LeafStorePhase {
         let requestID: UUID
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
+        let containsImages: Bool
         var mlxStart: HTTPPrefixCacheGeneration { mlxStartBox.value }
     }
 
@@ -97,7 +98,8 @@ nonisolated enum LeafStorePhase {
         // swiftlint:enable function_parameter_count
         let inputs = Inputs(
             mlxStartBox: mlxStartBox, sessions: sessions, requestID: requestID,
-            prefixCache: prefixCache, diagnosticsContext: diagnosticsContext)
+            prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
+            containsImages: conversation.messages.contains { !$0.images.isEmpty })
         let mlxStart = inputs.mlxStart
         var result = Result()
 

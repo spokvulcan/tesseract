@@ -35,13 +35,37 @@ struct EmittedPathSynthesizedReplayTests {
 
     // MARK: - Cases
 
+    @Test func quantizedPartitionKeepsCaptureCopyAndReportsWhy() async throws {
+        let session = Session()
+        var parameters = Self.parameters()
+        parameters.kvBits = 8
+        let turn = try await session.turn(
+            Self.conversation([Self.user("hi")]),
+            generated: session.completion(thinking: "plan", text: "hello world"),
+            parameters: parameters)
+        #expect(turn.leafStore["source"] == "live")
+        #expect(turn.leafStore["copyReason"] == "quantized")
+        #expect(turn.leafStore["emittedPath"] == "registered")
+    }
+
+    @Test func imageBearingRequestKeepsCopyEvenWhenTheTextProcessorDropsImages() async throws {
+        let session = Session()
+        let image = HTTPPrefixCacheImage(data: try Self.tinyPNG())
+        let turn = try await session.turn(
+            Self.conversation([
+                HTTPPrefixCacheMessage(role: .user, content: "hi", images: [image])
+            ]))
+        #expect(turn.leafStore["source"] == "live")
+        #expect(turn.leafStore["copyReason"] == "imageKeySpace")
+    }
+
     @Test func liveTurnRegistersAndTheNextRequestServesTheWholePath() async throws {
         let session = Session()
         let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
         #expect(turn1.text == "hello world")
         #expect(turn1.thinking == "plan")
         #expect(turn1.leafStore["path"] == "live")
-        #expect(turn1.leafStore["source"] == "live")
+        #expect(turn1.leafStore["source"] == "handoff")
         #expect(turn1.leafStore["emittedPath"] == "registered")
         let pathLength = try #require(turn1.registeredPathLength)
         // The path: the prompt and the fed ids, the marker the model
@@ -252,7 +276,7 @@ struct EmittedPathSynthesizedReplayTests {
         let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
         #expect(turn1.text.contains("wor1d"), "stream text: \(turn1.text)")
         #expect(turn1.leafStore["path"] == "live")
-        #expect(turn1.leafStore["source"] == "live")
+        #expect(turn1.leafStore["source"] == "handoff")
         #expect(turn1.leafStore["emittedPath"] == "skipped")
         #expect(turn1.leafStore["emittedPathSkip"] == "fidelityRejected")
         let fidelity = try #require(turn1.event("emittedPathFidelity"))
@@ -549,7 +573,8 @@ struct EmittedPathSynthesizedReplayTests {
         func turn(
             _ conversation: HTTPPrefixCacheConversation,
             generated: [Int],
-            context: TemplateRenderContext = EmittedPathSynthesizedReplayTests.preserving
+            context: TemplateRenderContext = EmittedPathSynthesizedReplayTests.preserving,
+            parameters: AgentGenerateParameters? = nil
         ) async throws -> Turn {
             queue.enqueue(generated)
             _ = queue.drainFeeds()
@@ -557,7 +582,7 @@ struct EmittedPathSynthesizedReplayTests {
             _ = capture.drainLines()
             let handle = try await fixture.start(
                 conversation: conversation,
-                parameters: EmittedPathSynthesizedReplayTests.parameters(),
+                parameters: parameters ?? EmittedPathSynthesizedReplayTests.parameters(),
                 renderContext: context)
             var text = ""
             var thinking = ""

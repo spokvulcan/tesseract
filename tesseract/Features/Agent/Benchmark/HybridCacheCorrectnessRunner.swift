@@ -160,6 +160,11 @@ final class HybridCacheCorrectnessRunner {
                 context: context, tokens: shortPrompt, fullLogits: shortFullLogits
             )
         }
+        runTest("movedLeafRestoredByCopyMatchesBitwise") {
+            try test10_leafHitWithoutTrim(
+                context: context, tokens: shortPrompt, fullLogits: shortFullLogits,
+                moving: true)
+        }
         runTest("twoPassLogitsMatchFullPrefill") {
             try test11_twoPassAlignmentPrefill(
                 context: context, tokens: shortPrompt, fullLogits: shortFullLogits
@@ -436,9 +441,10 @@ final class HybridCacheCorrectnessRunner {
     private nonisolated static func test10_leafHitWithoutTrim(
         context: ModelContext,
         tokens: [Int],
-        fullLogits: MLXArray
+        fullLogits: MLXArray,
+        moving: Bool = false
     ) throws -> (passed: Bool, detail: String, lines: [String]) {
-        let setupCache = try context.model.newCache(parameters: nil)
+        var setupCache = try context.model.newCache(parameters: nil)
         try prefill(
             context: context,
             tokens: Array(tokens.dropLast()),
@@ -447,9 +453,11 @@ final class HybridCacheCorrectnessRunner {
         )
         let leafOffset = tokens.count - 1
         guard
-            let leafSnap = HybridCacheSnapshot.capture(
-                cache: setupCache, offset: leafOffset, type: .leaf
-            )
+            let leafSnap = moving
+                ? HybridCacheSnapshot.captureMoving(cache: &setupCache, offset: leafOffset)
+                : HybridCacheSnapshot.capture(
+                    cache: setupCache, offset: leafOffset, type: .leaf
+                )
         else {
             return (false, "leaf capture nil", [])
         }

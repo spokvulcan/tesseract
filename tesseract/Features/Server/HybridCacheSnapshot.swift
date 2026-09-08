@@ -18,7 +18,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         /// Cache class name matching savePromptCache convention.
         /// "KVCache" (not "KVCacheSimple") for Python compat.
         let className: String
-        /// Deep-copied cache.state arrays.
+        /// Immutable cache.state arrays, copied or owned by a moved body.
         let state: [MLXArray]
         /// cache.metaState strings.
         let metaState: [String]
@@ -28,15 +28,74 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         let offset: Int
     }
 
-    let layers: [LayerState]
+    private enum Body {
+        case copied([LayerState])
+        // Keep the objects themselves for the later check-out step (ADR-0064).
+        // The frozen serialization view lets every existing tier consumer
+        // read metadata and arrays without calling a live cache's getters.
+        case moved(cache: [any KVCache], layers: [LayerState])
+    }
+
+    private let body: Body
+    var layers: [LayerState] {
+        switch body {
+        case .copied(let layers), .moved(_, let layers): layers
+        }
+    }
     let checkpointType: CheckpointType
     /// Pre-computed sum of all state array nbytes, for eviction decisions.
     let memoryBytes: Int
     let createdAt: ContinuousClock.Instant
 
-    // Relies on the compiler-synthesized memberwise initializer. Task 4.1.9 lazy
-    // hydration reads raw payload bytes and rebuilds a snapshot in
-    // `SSDSnapshotStore.loadSync`.
+    /// Copy captures and SSD hydration use the same immutable layer form.
+    init(
+        tokenOffset: Int, layers: [LayerState], checkpointType: CheckpointType,
+        memoryBytes: Int, createdAt: ContinuousClock.Instant
+    ) {
+        self.init(
+            tokenOffset: tokenOffset, body: .copied(layers), checkpointType: checkpointType,
+            memoryBytes: memoryBytes, createdAt: createdAt)
+    }
+
+    private init(
+        tokenOffset: Int, body: Body, checkpointType: CheckpointType,
+        memoryBytes: Int, createdAt: ContinuousClock.Instant
+    ) {
+        self.tokenOffset = tokenOffset
+        self.body = body
+        self.checkpointType = checkpointType
+        self.memoryBytes = memoryBytes
+        self.createdAt = createdAt
+    }
+
+    /// Transfer a finished generation's cache objects, clearing its reference.
+    /// Called only inside a Model Session after awaiting the generation task;
+    /// its stream has already synchronized every pending device operation.
+    /// Unsupported/quantized layers leave the caller's cache untouched.
+    static func captureMoving(cache: inout [any KVCache], offset: Int) -> HybridCacheSnapshot? {
+        var layers: [LayerState] = []
+        var totalBytes = 0
+        for layer in cache {
+            guard !(layer is QuantizedKVCache), let className = classNameForCache(layer) else {
+                return nil
+            }
+            let state = layer.state
+            totalBytes += state.reduce(0) { $0 + $1.nbytes }
+            layers.append(
+                LayerState(
+                    className: className, state: state, metaState: layer.metaState,
+                    offset: layer.offset))
+        }
+        // Cache state getters can return lazy prefix views over evaluated
+        // buffers. Settle those views here so a full SSD payload's writer
+        // only reads detached-from-generation, already evaluated arrays.
+        eval(layers.flatMap(\.state))
+        let snapshot = HybridCacheSnapshot(
+            tokenOffset: offset, body: .moved(cache: cache, layers: layers), checkpointType: .leaf,
+            memoryBytes: totalBytes, createdAt: .now)
+        cache = []
+        return snapshot
+    }
 
     enum CheckpointType: Comparable, Sendable {
         case system  // stable-prefix reuse (system + tools)

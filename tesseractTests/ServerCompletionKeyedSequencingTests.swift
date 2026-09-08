@@ -102,7 +102,8 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
 
     /// The keyed spine, cold then warm. Round 1 (cold miss) must run
     /// prepare → newCache → chunked prefill → (no-op) quantize → decode
-    /// iterator, then capture the post-generation leaf. Round 2 extends the
+    /// iterator, then hand off the post-generation leaf without a copy.
+    /// Round 2 extends the
     /// conversation, must resolve the admitted leaf, restore it *before*
     /// prefilling only the suffix, and decode the scripted continuation —
     /// proving the restored rows landed where the script expects them.
@@ -145,7 +146,6 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(
             round1Verbs == [
                 .prepare, .newCache, .prefill, .quantizeKVCache, .makeDecodeIterator,
-                .captureSnapshot,
             ]
         )
 
@@ -171,7 +171,6 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(
             round2Verbs == [
                 .prepare, .restore, .prefill, .quantizeKVCache, .makeDecodeIterator,
-                .captureSnapshot,
             ]
         )
 

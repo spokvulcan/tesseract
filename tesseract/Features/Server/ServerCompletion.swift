@@ -39,7 +39,8 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// which makes this array the live final cache once `completion`
     /// finishes — the post-generation leaf capture reads it directly.
     /// Replaces the fork's `FinalizedKVCacheHandle` (ADR-0006).
-    let finalCache: [any KVCache]
+    let finalCacheOwner: FinalGenerationCache
+    var finalCache: [any KVCache] { finalCacheOwner.cache }
     let diagnosticsContext: PrefixCacheDiagnostics.Context
     let lookupMs: TimeInterval
     let restoreMs: TimeInterval
@@ -133,6 +134,22 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// `ToolCallProcessor` parsed with, so the Emitted Path fidelity check
     /// replays the emitted ids through the same parser (ADR-0063).
     let toolCallFormat: ToolCallFormat
+}
+
+/// All copies of the generation handle share this one reference. Handoff
+/// empties it for every phase, including the drive's retained start handle.
+/// Access follows the generation's existing discipline: inspect only after
+/// awaiting completion; transfer only inside the Metal-affine Model Session.
+nonisolated final class FinalGenerationCache: @unchecked Sendable {
+    private(set) var cache: [any KVCache]
+
+    init(_ cache: [any KVCache]) {
+        self.cache = cache
+    }
+
+    func moveSnapshot(offset: Int) -> HybridCacheSnapshot? {
+        HybridCacheSnapshot.captureMoving(cache: &cache, offset: offset)
+    }
 }
 
 extension GenerationStreamLoop.RawGenerationHandle {
@@ -1806,7 +1823,7 @@ nonisolated final class ServerCompletion {
             return HTTPPrefixCacheGeneration(
                 stream: stream,
                 completion: task,
-                finalCache: liveCache,
+                finalCacheOwner: FinalGenerationCache(liveCache),
                 diagnosticsContext: diagnosticsContext,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
@@ -2084,7 +2101,7 @@ nonisolated final class ServerCompletion {
         return HTTPPrefixCacheGeneration(
             stream: stream,
             completion: task,
-            finalCache: cache,
+            finalCacheOwner: FinalGenerationCache(cache),
             diagnosticsContext: diagnosticsContext,
             lookupMs: 0,
             restoreMs: 0,
@@ -2254,7 +2271,7 @@ nonisolated final class ServerCompletion {
         return HTTPPrefixCacheGeneration(
             stream: stream,
             completion: task,
-            finalCache: cache,
+            finalCacheOwner: FinalGenerationCache(cache),
             diagnosticsContext: diagnosticsContext,
             lookupMs: lookupMs,
             restoreMs: 0,

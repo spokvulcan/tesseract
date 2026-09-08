@@ -36,11 +36,20 @@ nonisolated extension LeafStorePhase {
         enum Source: String, Sendable {
             /// The live final cache, captured at its own offset.
             case live
+            /// Original cache objects transferred from the finished generation.
+            case handoff
             /// A restored boundary snapshot extended by the canonical
             /// residual re-prefill.
             case boundary
         }
 
+        enum CopyReason: String, Sendable {
+            case quantized
+            case imageKeySpace
+        }
+
+        var handedOff = false
+        var copyReason: CopyReason?
         var mode = "unkeyed"
         var path: Path = .skipped
         var skipReason: String?
@@ -49,7 +58,7 @@ nonisolated extension LeafStorePhase {
         /// snapshot under the boundary route.
         var source: Source? {
             switch path {
-            case .live, .direct: .live
+            case .live, .direct: handedOff ? .handoff : .live
             case .boundary: .boundary
             case .skipped: nil
             }
@@ -88,6 +97,7 @@ nonisolated extension LeafStorePhase {
             let ms = PrefixCacheDiagnostics.milliseconds
             var fields = [("mode", mode), ("path", path.rawValue)]
             if let source { fields.append(("source", source.rawValue)) }
+            if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if let skipReason { fields.append(("skip", skipReason)) }
             if let boundaryReason { fields.append(("boundary", boundaryReason)) }
             if let leafOffset { fields.append(("leafOffset", "\(leafOffset)")) }
@@ -167,6 +177,8 @@ nonisolated extension LeafStorePhase {
             skipReason = capture.skipReason
             leafOffset = capture.leafOffset
             residualTokens = capture.residualTokens
+            handedOff = capture.handedOff
+            copyReason = capture.copyReason
             timings = capture.timings
         }
     }

@@ -40,6 +40,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/HybridCacheSnapshotTests \
+  -only-testing:tesseractTests/LeafCaptureHandoffTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
@@ -219,6 +220,16 @@ marker, and the request-edge invariant across a tool-call boundary.
 
 ### Synthesized cases (hermetic)
 
+`LeafCaptureHandoffTests` covers the capture-side ownership change (#478):
+the tree retains the original hybrid cache objects and physical arrays, every
+request reference is emptied, a system checkpoint still copies, and clearing
+RAM releases the objects. Copy restore matches the previous capture's bytes
+and owns independent buffers. Eviction demotes a moved leaf to SSD; a delayed
+extension writer retains only detached arrays and hydrates correctly after
+RAM is cleared. The synthesized replay below now expects `source=handoff`
+for eligible text turns and `source=live copyReason=quantized` for quantized
+partitions. Check-out by move and leases remain a later ticket.
+
 `EmittedPathSynthesizedReplayTests` (prefix-cache group) runs the history
 shapes the recordings cannot show through the real Server Completion
 module — real prefix cache, Leaf Store fast path, Emitted Path Index, SSD
@@ -286,6 +297,8 @@ or `StablePrefixDetector`. The correctness runner is the stronger gate (bitwise
 tensor comparison via raw `ModelContainer.perform` access); the e2e runner
 exercises the full HTTP path and is the right shape for catching pipeline
 regressions the correctness runner can't see.
+The correctness runner also compares a moved leaf restored by copy against
+cold-prefill logits bitwise (`movedLeafRestoredByCopyMatchesBitwise`).
 
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.

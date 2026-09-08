@@ -101,11 +101,11 @@ import Testing
 
         // The hydrated snapshot went through the session's restore verb onto
         // the model — the #136 crash site — before the suffix prefill.
+        // The finished generation hands off its next leaf without a copy.
         let verbs = Array(provider.recorder.verbs.dropFirst(verbsBefore))
         #expect(
             verbs == [
                 .prepare, .restore, .prefill, .quantizeKVCache, .makeDecodeIterator,
-                .captureSnapshot,
             ]
         )
         await sessionB.drain()

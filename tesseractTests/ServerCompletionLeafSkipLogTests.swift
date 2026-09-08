@@ -171,6 +171,15 @@ struct ServerCompletionLeafSkipLogTests {
         #expect(fields["residualTokens"] == "0")
     }
 
+    @Test func aCopiedImageLeafReportsItsCopyReason() {
+        var report = LeafStorePhase.Report()
+        report.absorb(
+            LeafStorePhase.LeafCapture(leafOffset: 120, copyReason: .imageKeySpace), path: .direct)
+        let fields = reportFields(report)
+        #expect(fields["source"] == "live")
+        #expect(fields["copyReason"] == "imageKeySpace")
+    }
+
     @Test func aBoundaryLeafReportsItsSourceAndTheBoundaryReason() {
         var report = LeafStorePhase.Report()
         report.boundaryReason = "think-stripping-user-boundary"

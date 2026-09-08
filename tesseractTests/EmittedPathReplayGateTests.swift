@@ -50,6 +50,15 @@ struct EmittedPathReplayGateTests {
         #expect(EmittedPathReplayGate.check([Self.turn(Self.verdict())]).isEmpty)
     }
 
+    @Test func aHandedOffTurnPassesAndStillRequiresRegistration() {
+        #expect(Self.rules(Self.turn(Self.verdict(source: .handoff))).isEmpty)
+        #expect(
+            Self.rules(
+                Self.turn(
+                    Self.verdict(
+                        registration: "ineligibleRender", source: .handoff))) == [.registration])
+    }
+
     @Test func aToolStretchTurnFromTheBoundaryFailsTheLeafSource() throws {
         let turn = Self.turn(
             Self.verdict(

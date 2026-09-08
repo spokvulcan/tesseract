@@ -114,7 +114,9 @@ nonisolated enum EmittedPathReplayGate {
                     account: account(of: turn)))
         }
 
-        let live = verdict.source == LeafStorePhase.Report.Source.live.rawValue
+        let live =
+            verdict.source == LeafStorePhase.Report.Source.live.rawValue
+            || verdict.source == LeafStorePhase.Report.Source.handoff.rawValue
         if !live {
             let explained =
                 verdict.boundaryReason
