@@ -81,6 +81,7 @@ tesseract/
 │   ├── Permissions/
 │   │   └── PermissionsManager.swift   # Mic & Accessibility checks
 │   ├── ViewModifiers.swift      # Scoped dependency injection
+│   ├── LinearStreamingDetokenizer.swift # Shared O(N) streaming detokenizer (live + fidelity replay)
 │   └── Logging.swift            # Unified logging (Log enum)
 │
 ├── Platform/                    # AppKit bridge code

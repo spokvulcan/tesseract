@@ -70,7 +70,7 @@ nonisolated enum EmittedPathFidelity {
         tools: [ToolSpec]?,
         startsInsideThinkBlock: Bool
     ) -> HTTPPrefixCacheMessage {
-        var detokenizer = LinearStreamingDetokenizer(tokenizer: tokenizer)
+        var detokenizer = LinearStreamingDetokenizer(tokenizer: tokenizer, releaseBoundary: .perSegment)
         let processor = ToolCallProcessor(format: toolCallFormat, tools: tools)
         var deltaTracker = ToolCallDeltaTracker(format: toolCallFormat)
         let parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)

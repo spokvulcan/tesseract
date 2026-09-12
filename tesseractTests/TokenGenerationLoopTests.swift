@@ -43,15 +43,17 @@ private func scriptedTokenStream(
 private func collectEvents(
     script: [Int],
     stopReason: GenerateStopReason = .stop,
-    promptTime: TimeInterval = 0
+    promptTime: TimeInterval = 0,
+    tokenizer: any Tokenizer = FakeChatMLTokenizer(),
+    modelConfiguration: ModelConfiguration = makeConfiguration()
 ) async -> [RawGeneration] {
     let (stream, task) = TokenGenerationLoop.events(
         from: scriptedTokenStream(
             script: script, stopReason: stopReason, promptTime: promptTime),
         generationTask: nil,
         promptTokenCount: 7,
-        modelConfiguration: makeConfiguration(),
-        tokenizer: FakeChatMLTokenizer()
+        modelConfiguration: modelConfiguration,
+        tokenizer: tokenizer
     )
     var events: [RawGeneration] = []
     for await event in stream { events.append(event) }
@@ -60,8 +62,11 @@ private func collectEvents(
 }
 
 private extension [RawGeneration] {
+    var chunks: [String] {
+        compactMap { if case .chunk(let t) = $0 { return t } else { return nil } }
+    }
     var joinedChunks: String {
-        compactMap { if case .chunk(let t) = $0 { return t } else { return nil } }.joined()
+        chunks.joined()
     }
     var joinedDeltas: String {
         compactMap { if case .toolCallBufferDelta(let d) = $0 { return d } else { return nil } }
@@ -365,5 +370,229 @@ struct ToolCallDeltaTrackerTests {
         // Object closes; trailing tagged call is picked up.
         #expect(tracker.observe("}<tool_call>") == "<tool_call>")
         #expect(tracker.deltasCarriedBuffer)
+    }
+
+    // MARK: - Live detokenizer streaming parity & delivery latency
+
+    private static func naiveDetokenizedText(script: [Int], tokenizer: any Tokenizer) -> String {
+        var detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+        var text = ""
+        for token in script {
+            detokenizer.append(token: token)
+            if let chunk = detokenizer.next() {
+                text += chunk
+            }
+        }
+        return text
+    }
+
+    @Test func streamedChunksMatchNaiveDetokenizerAcrossFidelityShapes() async {
+        let tokenizer = FakeChatMLTokenizer()
+        let shapes: [(name: String, text: String)] = [
+            ("prose", "The quick brown fox jumps over the lazy dog.\n\nSecond paragraph here with some numbers: 12345."),
+            ("cjk and emoji", "Hello 😀 🏳️‍🌈 日本語テキスト 中文测试 🇺🇸 and more text"),
+            ("code", "```swift\nfunc greet(name: String) -> String {\n    return \"Hello, \\(name)!\"\n}\n```"),
+            ("long newline-free run", String(repeating: "abcdefghijklmnopqrstuvwxyz0123456789", count: 25)),
+        ]
+
+        for shape in shapes {
+            let script = tokens(for: shape.text)
+            let events = await collectEvents(script: script, tokenizer: tokenizer)
+            let naive = Self.naiveDetokenizedText(script: script, tokenizer: tokenizer)
+            #expect(
+                events.joinedChunks == naive,
+                "shape '\(shape.name)' mismatch: got \(events.joinedChunks), expected \(naive)"
+            )
+        }
+
+        // Ill-formed UTF-8 bytes shape
+        let illFormedTokens = [0xE0, 0x80, 0x80, 0xED, 0xA0, 0x80, 0xC3, 0xFF]
+        let illEvents = await collectEvents(script: illFormedTokens, tokenizer: tokenizer)
+        let illNaive = Self.naiveDetokenizedText(script: illFormedTokens, tokenizer: tokenizer)
+        #expect(illEvents.joinedChunks == illNaive)
+
+        // Tagged tool call shape: live loop extracts the tool call and text
+        let toolCallText = "Let me check.\n<tool_call>{\"name\": \"test_tool\", \"arguments\": {\"param\": 123}}</tool_call>\nDone."
+        let tcScript = tokens(for: toolCallText)
+        let tcEvents = await collectEvents(script: tcScript, tokenizer: tokenizer)
+        #expect(tcEvents.toolCallNames == ["test_tool"])
+        #expect(tcEvents.joinedChunks == "Let me check.\n\nDone.")
+    }
+
+    @Test func deliveryLatencyEmitsChunksImmediatelyForNewlineFreeRun() async {
+        // Assert that chunks are emitted incrementally during token iteration,
+        // rather than held until end-of-stream or a newline.
+        let (inStream, inContinuation) = AsyncStream<TokenGeneration>.makeStream()
+        let (outStream, task) = TokenGenerationLoop.events(
+            from: inStream,
+            generationTask: nil,
+            promptTokenCount: 7,
+            modelConfiguration: makeConfiguration(),
+            tokenizer: FakeChatMLTokenizer()
+        )
+
+        var iterator = outStream.makeAsyncIterator()
+
+        // Feed first token of a newline-free string: "a"
+        inContinuation.yield(.token(Int(Character("a").asciiValue!)))
+
+        // Next event on outStream should arrive immediately without waiting for stream finish
+        let firstEvent = await iterator.next()
+        guard case .chunk(let text) = firstEvent else {
+            Issue.record("expected .chunk on first token, got \(String(describing: firstEvent))")
+            return
+        }
+        #expect(text == "a")
+
+        // Feed second token: "b"
+        inContinuation.yield(.token(Int(Character("b").asciiValue!)))
+        let secondEvent = await iterator.next()
+        guard case .chunk(let text2) = secondEvent else {
+            Issue.record("expected .chunk on second token, got \(String(describing: secondEvent))")
+            return
+        }
+        #expect(text2 == "b")
+
+        // Close stream
+        inContinuation.yield(.info(GenerateCompletionInfo(
+            promptTokenCount: 7,
+            generationTokenCount: 2,
+            promptTime: 0,
+            generationTime: 0.1,
+            stopReason: .stop
+        )))
+        inContinuation.finish()
+
+        let thirdEvent = await iterator.next()
+        guard case .info = thirdEvent else {
+            Issue.record("expected .info terminal event, got \(String(describing: thirdEvent))")
+            return
+        }
+        await task.value
+    }
+
+    @Test func deliveryLatencyHoldsIncompleteScalarUntilCompleted() async {
+        // A multi-byte scalar (4-byte 😀 = 0xF0, 0x9F, 0x98, 0x80)
+        let (inStream, inContinuation) = AsyncStream<TokenGeneration>.makeStream()
+        let (outStream, task) = TokenGenerationLoop.events(
+            from: inStream,
+            generationTask: nil,
+            promptTokenCount: 7,
+            modelConfiguration: makeConfiguration(),
+            tokenizer: FakeChatMLTokenizer()
+        )
+
+        var iterator = outStream.makeAsyncIterator()
+
+        // Yield first 3 bytes of emoji: incomplete scalar, must not emit
+        inContinuation.yield(.token(0xF0))
+        inContinuation.yield(.token(0x9F))
+        inContinuation.yield(.token(0x98))
+
+        // Yield 4th byte: completes the emoji
+        inContinuation.yield(.token(0x80))
+
+        let completedEvent = await iterator.next()
+        guard case .chunk(let text) = completedEvent else {
+            Issue.record("expected completed emoji chunk, got \(String(describing: completedEvent))")
+            return
+        }
+        #expect(text == "😀")
+
+        inContinuation.yield(.info(GenerateCompletionInfo(
+            promptTokenCount: 7,
+            generationTokenCount: 4,
+            promptTime: 0,
+            generationTime: 0.1,
+            stopReason: .stop
+        )))
+        inContinuation.finish()
+        await task.value
+    }
+
+    @Test func windowPathTokenizerStreamsThroughLiveLoop() async {
+        let tokenizer = TestWindowPathTokenizer()
+        let text = "First line here.\nSecond line with some words."
+        let script = tokenizer.encode(text: text, addSpecialTokens: false)
+        let events = await collectEvents(script: script, tokenizer: tokenizer)
+        #expect(events.joinedChunks == text)
+    }
+
+    @Test func verificationFallbackTokenizerStreamsThroughLiveLoop() async {
+        let tokenizer = TestCollapsingTokenizer()
+        let text = "a  b\ncd ef\ngh"
+        let script = tokenizer.encode(text: text, addSpecialTokens: false)
+        let events = await collectEvents(script: script, tokenizer: tokenizer)
+        // CollapsingTokenizer collapses doubled spaces to single space
+        #expect(events.joinedChunks == "a b\ncd ef\ngh")
+    }
+}
+
+// MARK: - Test tokenizers for Window Path & Fallbacks
+
+private struct TestWindowPathTokenizer: Tokenizer {
+    enum Rule {
+        case farLookbehind
+        case countCase
+    }
+    var rule: Rule?
+    private let bytes = FakeChatMLTokenizer()
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        bytes.encode(text: text, addSpecialTokens: addSpecialTokens)
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        let text = bytes.decode(tokenIds: tokenIds, skipSpecialTokens: skipSpecialTokens)
+        switch rule {
+        case nil:
+            return text
+        case .farLookbehind:
+            return text.replacingOccurrences(of: "Q", with: text.contains("P") ? "p" : "q")
+        case .countCase:
+            guard tokenIds.count % 3 == 1, let last = text.last else { return text }
+            return String(text.dropLast()) + String(last).uppercased()
+        }
+    }
+
+    func convertTokenToId(_ token: String) -> Int? { nil }
+    func convertIdToToken(_ id: Int) -> String? { nil }
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        []
+    }
+}
+
+private struct TestCollapsingTokenizer: Tokenizer {
+    private let bytes = FakeChatMLTokenizer()
+
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] {
+        bytes.encode(text: text, addSpecialTokens: addSpecialTokens)
+    }
+
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
+        bytes.decode(tokenIds: tokenIds, skipSpecialTokens: skipSpecialTokens)
+            .replacingOccurrences(of: "  ", with: " ")
+    }
+
+    func convertTokenToId(_ token: String) -> Int? { bytes.convertTokenToId(token) }
+    func convertIdToToken(_ id: Int) -> String? { bytes.convertIdToToken(id) }
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        []
     }
 }

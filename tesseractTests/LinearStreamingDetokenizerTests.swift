@@ -25,9 +25,11 @@ struct LinearStreamingDetokenizerTests {
     }
 
     private static func linearChunks(
-        _ tokens: [Int], tokenizer: any Tokenizer
+        _ tokens: [Int], tokenizer: any Tokenizer,
+        releaseBoundary: LinearStreamingDetokenizer.ReleaseBoundary = .perSegment
     ) -> (chunks: [String], detokenizer: LinearStreamingDetokenizer) {
-        var detokenizer = LinearStreamingDetokenizer(tokenizer: tokenizer)
+        var detokenizer = LinearStreamingDetokenizer(
+            tokenizer: tokenizer, releaseBoundary: releaseBoundary)
         var chunks: [String] = []
         for token in tokens { chunks += detokenizer.append(token: token) }
         chunks += detokenizer.finish()
@@ -196,6 +198,62 @@ struct LinearStreamingDetokenizerTests {
         let detokenizer = Self.expectSameChunks(
             Self.byteTokens(text), tokenizer: tokenizer, viaBytes: false, guardsFire: true)
         #expect(detokenizer.fallbacks == 1)
+    }
+
+    // MARK: - Live streaming & delivery latency
+
+    @Test func liveStreamingBytePathReleasesChunksPerTokenWithoutHoldingForNewline() {
+        // In .live mode on the byte path, chunks are released on every step
+        // that completes a scalar; no chunk is buffered waiting for a newline.
+        let text = #"{"name": "write", "arguments": {"path": "test.txt", "content": "xyz"}}"#
+        let tokens = Self.byteTokens(text)
+        var detokenizer = LinearStreamingDetokenizer(
+            tokenizer: Self.bytes, releaseBoundary: .live())
+        var releasedPerStep: [String] = []
+        for token in tokens {
+            let chunks = detokenizer.append(token: token)
+            #expect(!chunks.isEmpty, "token should have emitted chunk immediately on byte path")
+            releasedPerStep.append(contentsOf: chunks)
+        }
+        let finishChunks = detokenizer.finish()
+        #expect(finishChunks.isEmpty, "finish should have nothing left to flush on byte path")
+        #expect(releasedPerStep.joined() == text)
+        #expect(releasedPerStep.count == tokens.count)
+    }
+
+    @Test func liveStreamingDeliveryLatencyDoesNotHoldMultiByteScalarsBeyondCompletion() {
+        // A 4-byte emoji scalar fed byte-by-byte:
+        // steps 1-3 yield [] (incomplete scalar held back); step 4 immediately releases the emoji.
+        let emojiBytes = [0xF0, 0x9F, 0x98, 0x80] // 😀
+        var detokenizer = LinearStreamingDetokenizer(
+            tokenizer: Self.bytes, releaseBoundary: .live())
+        #expect(detokenizer.append(token: emojiBytes[0]) == [])
+        #expect(detokenizer.append(token: emojiBytes[1]) == [])
+        #expect(detokenizer.append(token: emojiBytes[2]) == [])
+        let completed = detokenizer.append(token: emojiBytes[3])
+        #expect(completed == ["😀"])
+        #expect(detokenizer.finish() == [])
+    }
+
+    @Test func liveStreamingWindowPathBoundedReleaseWindowDoesNotHoldPastBound() {
+        // On the window path with windowHold = 4, chunks beyond the hold
+        // limit are released incrementally as new tokens arrive.
+        let tokenizer = WindowPathTokenizer()
+        let text = "abcdefghijklmnopqrstuvwxyz"
+        let tokens = Self.byteTokens(text)
+        var detokenizer = LinearStreamingDetokenizer(
+            tokenizer: tokenizer, releaseBoundary: .live(windowHold: 4))
+        var emitted: [String] = []
+        for (index, token) in tokens.enumerated() {
+            let chunks = detokenizer.append(token: token)
+            emitted.append(contentsOf: chunks)
+            // Once we have fed more than windowHold tokens, older chunks must be releasing
+            if index >= 4 {
+                #expect(!emitted.isEmpty, "older chunks must be released as window slides")
+            }
+        }
+        emitted.append(contentsOf: detokenizer.finish())
+        #expect(emitted.joined() == text)
     }
 
     // MARK: - Cost

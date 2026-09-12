@@ -31,7 +31,7 @@ import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expans
 ///    C27 eliminates, and the digest chain is the entry's stored head since
 ///    C31), and the identity `translatedLength`.
 /// 5. `p5 detok`        — the production streaming detokenizer
-///    (`NaiveStreamingDetokenizer`, the same one `TokenGenerationLoop` drives
+///    (`LinearStreamingDetokenizer`, the same one `TokenGenerationLoop` drives
 ///    per generated token) over a ~700-token assistant reply; reported as
 ///    ms/turn and ms/token.
 /// 6. `p6 digests`      — the `RenderTokenCache` per-message SHA-256 digest
@@ -162,11 +162,9 @@ final class AgentCpuBenchRunner {
 
         // The ~700-token assistant reply the detok phase streams (starter +
         // filler in the trajectory's shape; the encode is untimed setup).
-        // Paragraph breaks matter: `NaiveStreamingDetokenizer.next()`
-        // re-decodes the whole segment accumulated since the last "\n", so a
-        // reply's cost is O(segment²) between newlines — the markdown-ish
-        // shape here is the realistic case; a newline-free variant is logged
-        // alongside as the worst case (tool-call JSON buffers, etc.).
+        // The production loop drives `LinearStreamingDetokenizer`, which is
+        // O(N) even across newline-free runs; a flat newline-free variant is logged
+        // alongside the realistic markdown reply to confirm linear cost on both shapes.
         let replyFiller =
             "I read the file, compared it against the expected output, and "
             + "recorded the difference in the working notes before moving on. "
@@ -443,15 +441,15 @@ final class AgentCpuBenchRunner {
     }
 
     /// Stream one token list through the production detokenizer exactly as
-    /// `TokenGenerationLoop` drives it — `append` + `next` per token — and
+    /// `TokenGenerationLoop` drives it — `append` folding per token + `finish` — and
     /// return the total milliseconds.
     private static func timeDetok(tokens: [Int], tokenizer: any MLXLMCommon.Tokenizer) -> Double {
-        var detok = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+        var detok = LinearStreamingDetokenizer(tokenizer: tokenizer, releaseBoundary: .live())
         let start = ContinuousClock.now
         for token in tokens {
-            detok.append(token: token)
-            _ = detok.next()
+            _ = detok.append(token: token)
         }
+        _ = detok.finish()
         return ms(since: start)
     }
 
