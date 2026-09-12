@@ -74,3 +74,11 @@ it the single-owner memory shape without a page kernel. The Restore Pin
 consequence above ("dissolves into refcounts") is about the paged design;
 under ADR-0064 the pin remains for copy restores and the lease is its strong
 counterpart.
+
+As built in #480 (2026-09-12), checkout empties the tree's body and the shared
+snapshot views before decode. Only independent recurrent rewind state remains
+beside the live cache; a pending full SSD payload forces a copied restore.
+This exclusion, with address/identity and cancellation tests, is the concrete
+boundary that keeps the rejected alias out of the sequential path. The
+production-model footprint comparison remains pending; acceptance of the
+ownership design does not claim that measurement has passed.

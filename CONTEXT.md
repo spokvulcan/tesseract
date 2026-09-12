@@ -102,7 +102,7 @@ The claim a running generation holds on the leaf it took by **Leaf Handoff**,
 from check-out to check-in: while it holds, the tree may not drop the body,
 demote it, clear the RAM tier of it, promote it into an SSD write, or let the
 SSD writer read from it. Ends only at check-in or **Leaf Rewind**, never by
-age-out; the leased bytes stay counted.
+age-out; the leased bytes stay counted even while the tree holds no body.
 _Avoid_: **Restore Pin** (the weak claim of a copy restore — it protects a path,
 it does not own a body); GPU lease (the inference arbiter's turn-taking, a
 different resource); lock, refcount (one owner needs neither).
@@ -111,7 +111,8 @@ different resource); lock, refcount (one owner needs neither).
 Returning a leaf taken by **Leaf Handoff** to its exact pre-check-out state when
 the turn is cancelled, fails, or is intervened: the attention layers are trimmed
 back to the leaf offset and the recurrent layers' state is restored from the
-independent copy saved at check-out, then the leaf is checked back in unchanged.
+independent copy saved at check-out, including lengths, padding and state-slot
+metadata, then the leaf is checked back in unchanged.
 _Avoid_: **Think-Strip Rewind** (a render-caused prefix invalidation,
 unrelated); rollback (the vendor's speculative-decoding checkpoint, which aliases
 and is not used here); discard (the pre-handoff cancel outcome, which loses the

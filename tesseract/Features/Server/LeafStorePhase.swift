@@ -168,6 +168,11 @@ nonisolated enum LeafStorePhase {
         case .live(let offset):
             await storeLive(offset: offset, turn: turn, inputs: inputs, result: &result)
         case .boundary(let reason):
+            // A boundary or intervened turn must return the original leaf
+            // before running the existing restore-and-re-prefill strategy.
+            _ = try? await sessions.withSession { _ in
+                await mlxStartBox.value.finalCacheOwner.rewindIfNeeded(memory: memory)
+            }
             let record = liveFallbackLog(
                 for: reason, mode: leafStoreMode, preservesThinking: preservesThinking)
             record.emit(in: diagnosticsContext)

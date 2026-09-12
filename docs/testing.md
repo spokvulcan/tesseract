@@ -451,7 +451,7 @@ image gate. Use an actual vision-loaded model for image-specific validation.
 age-out, RAM clear, demotion and queued promotion, same-path replacement,
 ancestor supersession, check-in growth, both writer/acquisition race orders,
 writer failures, and base/suffix ordering. All caches are small, real MLX
-caches; production checkout remains #480 work.
+caches; production checkout is covered by the #480 suites below.
 
 Review regressions also cover pending-only return destinations, a tombstoned
 writer still reading an empty structural destination, request/lease identity
@@ -524,3 +524,32 @@ approval requirement in the capture baseline still applies to #480.
   traps: `memory_pressure` free-% lags the helper's real footprint, and `ps`
   RSS misses IOSurface/shared GPU memory. If you must guard, watch
   `vmmap -summary <pid>` "Physical footprint" of the testing helper itself.
+
+
+### Production Leaf Checkout and Rewind evidence (#480)
+
+`LeafCheckoutTests` checks object identity and physical array independence,
+body removal/accounting, exact recurrent state and metadata after growth,
+every intentional fallback, and pending-full-payload materialization.
+`EmittedPathSynthesizedReplayTests` covers cancellation during decode and warm
+prefill followed by a resend that hits the original leaf. Run these alongside
+`LeafLeaseTests`, `ServerCompletionDrainTests`, and
+`ServerCompletionKeyedSequencingTests`; the latter includes real quantized
+cache replacement so the copy path cannot accidentally retain stale objects.
+
+Run `LeafCheckoutMemoryEvidenceTests` alone with the Xcode flags above and
+`-only-testing:tesseractTests/LeafCheckoutMemoryEvidenceTests`. It uses a 2 MiB
+attention body and a 64-byte recurrent state, retains 24 retired request
+owners, and verifies that check-in/rewind releases their cache references.
+`LEAF_CHECKOUT_EVIDENCE=` contains active/cached MLX, process footprint, system
+swap, and tree/lease facts for each request. These are small-cache mechanism
+measurements, with no model weights loaded by the test. The full unit target
+may run this test among others; use only the isolated run for process-memory
+comparisons.
+
+[Preserved #480 evidence](../benchmarks/leaf-checkout/2026-09-12/README.md)
+contains the scalar records, baseline table, 85-recording tokenizer replay
+summary and pending large-model validation plan. The tokenizer-only corpus
+test does not measure live HTTP tail or Qwen3.8/DFlash2 memory. Do not repeat
+45k/75k/93k workloads or model reload loops on the 48 GiB Mac without explicit
+owner approval of a bounded resource plan and a suitable environment.

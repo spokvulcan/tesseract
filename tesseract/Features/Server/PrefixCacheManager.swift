@@ -393,6 +393,26 @@ final class PrefixCacheManager {
         }
     }
 
+    /// Reserve only the exact resident leaf selected by this request's lookup.
+    func claimLeaf(
+        snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey,
+        context: PrefixCacheDiagnostics.Context
+    ) -> LeafCheckout.ClaimResult {
+        guard let tree = store.tree(for: partitionKey),
+            let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
+            hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
+            let body = hit.node.state.body, body.sharesMovedBody(with: snapshot)
+        else { return .copy(.checkpoint) }
+        guard
+            let lease = tree.beginLeafLease(
+                on: hit.node, context: context, requireDetachedPayload: true)
+        else { return .copy(.pendingFullPayload) }
+        guard tree.takeLeasedBody(lease, on: hit.node) != nil else {
+            preconditionFailure("a newly leased resident leaf must have a body")
+        }
+        return .claimed(LeafCheckout.Claim(tree: tree, node: hit.node, lease: lease))
+    }
+
     enum LookupReason: CustomStringConvertible, Sendable {
         case hit(snapshotOffset: Int, totalTokens: Int, type: HybridCacheSnapshot.CheckpointType)
         /// State 5 — body absent, committed SSD ref present. LLMActor

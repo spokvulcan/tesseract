@@ -35,6 +35,90 @@ struct EmittedPathSynthesizedReplayTests {
 
     // MARK: - Cases
 
+    @Test func cancelledWarmPrefillReturnsTheLeaseAndReleasesRequestPins() async throws {
+        let gate = ForwardGate(threshold: 0, armed: false)
+        let session = Session(onForward: gate.onForward)
+        let first = try await session.turn(Self.conversation([Self.user("hi")]))
+        let request = Self.conversation([
+            Self.user("hi"), Self.assistant("hello world"),
+            Self.user(String(repeating: "more ", count: 400)),
+        ])
+        _ = session.capture.drain()
+        gate.arm()
+        let starting = Task {
+            try await session.fixture.start(
+                conversation: request, parameters: Self.parameters(),
+                renderContext: Self.preserving)
+        }
+        await gate.reached()
+        starting.cancel()
+        gate.open()
+        do {
+            let handle = try await starting.value
+            handle.cancel()
+            await handle.waitForCompletion()
+            Issue.record("cancelled prefill must throw")
+        } catch is CancellationError {}
+        let events = session.capture.drain()
+        let terminal = try #require(
+            events.last {
+                $0.eventName == "requestMemory" && Self.fields($0)["sampleKind"] == "terminal"
+            }
+        ).fields
+        let facts = Dictionary(uniqueKeysWithValues: terminal.map { ($0.key, $0.value) })
+        #expect(facts["outcome"] == "cancelledDuringStart")
+        #expect(facts["treeLeaseCount"] == "0")
+        #expect(facts["recurrentRewindStateBytes"] == "0")
+        let rewind = try #require(
+            events.first { $0.eventName == "leafStore" && Self.fields($0)["source"] == "rewind" })
+        #expect(Self.fields(rewind)["restoreMode"] == "handoff")
+        let resend = try await session.turn(request, text: "again")
+        #expect(resend.cached == first.registeredPathLength)
+        #expect(resend.event("lookup").map(Self.fields)?["restoreMode"] == "handoff")
+        #expect(resend.text == "again")
+    }
+
+    @Test func cancelledPartialTurnRewindsAndResendHitsTheOriginalLeaf() async throws {
+        let request = Self.conversation([
+            Self.user("hi"), Self.assistant("hello world"), Self.user("more"),
+        ])
+        let tokenizer = EmittedPathToyTokenizer()
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: request.promptMessages, tools: nil,
+            additionalContext: Self.preserving.additionalContext())
+        let gate = ForwardGate(threshold: prompt.count + 8, armed: false)
+        let session = Session(onForward: gate.onForward)
+        let first = try await session.turn(Self.conversation([Self.user("hi")]))
+        let offset = try #require(first.registeredPathLength)
+        _ = session.capture.drain()
+        gate.arm()
+        session.queue.enqueue(
+            session.completion(thinking: "plan", text: String(repeating: "x", count: 128)))
+        let cancelled = try await session.fixture.start(
+            conversation: request, parameters: Self.parameters(), renderContext: Self.preserving)
+        await gate.reached()
+        cancelled.cancel()
+        gate.open()
+        for try await _ in cancelled.stream {}
+        await cancelled.waitForCompletion()
+        let events = session.capture.drain()
+        #expect(events.contains { $0.eventName == "leafRewind" })
+        #expect(
+            events.contains { $0.eventName == "leafStore" && Self.fields($0)["source"] == "rewind" }
+        )
+        #expect(
+            events.first { $0.eventName == "lookup" }.map(Self.fields)?["restoreMode"] == "handoff")
+        #expect(
+            events.contains {
+                $0.eventName == "leafLeaseEnd" && Self.fields($0)["reason"] == "rewind"
+            })
+        let resend = try await session.turn(request, text: "again")
+        #expect(resend.cached == offset)
+        #expect(resend.event("lookup").map(Self.fields)?["restoreMode"] == "handoff")
+        #expect(resend.text == "again")
+        #expect(resend.fedPrompt == Array(resend.render[offset...]), resend.account)
+    }
+
     @Test func quantizedPartitionKeepsCaptureCopyAndReportsWhy() async throws {
         let session = Session()
         var parameters = Self.parameters()
@@ -484,7 +568,8 @@ struct EmittedPathSynthesizedReplayTests {
             vision: ToyUserInputProcessor.VisionStub? = nil,
             identity: ModelIdentity? = nil,
             ssdConfig: SSDPrefixCacheConfig? = nil,
-            hasMTPDrafter: Bool = false
+            hasMTPDrafter: Bool = false,
+            onForward: (@Sendable (Int) -> Void)? = nil
         ) {
             let uuid = UUID().uuidString
             let fingerprint = "toy-emitted-path-\(uuid)"
@@ -496,7 +581,7 @@ struct EmittedPathSynthesizedReplayTests {
             configuration.eosTokenIds = [tokenizer.endOfTurnID]
             let streamTokenizer: any Tokenizer = fault.map { $0(tokenizer) } ?? tokenizer
             let provider = ToyModelSessionProvider(
-                model: ToyLanguageModel(completions: queue),
+                model: ToyLanguageModel(completions: queue, onForward: onForward),
                 tokenizer: streamTokenizer,
                 configuration: configuration,
                 vision: vision,

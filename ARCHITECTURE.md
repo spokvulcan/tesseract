@@ -140,6 +140,8 @@ tesseract/
 │   │   ├── ServerInferenceService.swift   # Dispatcher: Completion Route → two arms
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
+│   │   ├── LeafCheckout.swift        # Model Session checkout eligibility, ownership transfer and recurrent rewind (ADR-0064)
+│   │   ├── LeafLease.swift           # Scalar lease identity and shared tree/writer exclusion
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority

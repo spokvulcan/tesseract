@@ -33,13 +33,23 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         // Keep the objects themselves for the later check-out step (ADR-0064).
         // The frozen serialization view lets every existing tier consumer
         // read metadata and arrays without calling a live cache's getters.
-        case moved(cache: [any KVCache], layers: [LayerState])
+        case moved(MovedBody)
+    }
+
+    private final class MovedBody {
+        var cache: [any KVCache]
+        var layers: [LayerState]
+        init(cache: [any KVCache], layers: [LayerState]) {
+            self.cache = cache
+            self.layers = layers
+        }
     }
 
     private let body: Body
     var layers: [LayerState] {
         switch body {
-        case .copied(let layers), .moved(_, let layers): layers
+        case .copied(let layers): layers
+        case .moved(let owner): owner.layers
         }
     }
     let checkpointType: CheckpointType
@@ -91,10 +101,40 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         // only reads detached-from-generation, already evaluated arrays.
         eval(layers.flatMap(\.state))
         let snapshot = HybridCacheSnapshot(
-            tokenOffset: offset, body: .moved(cache: cache, layers: layers), checkpointType: .leaf,
+            tokenOffset: offset, body: .moved(MovedBody(cache: cache, layers: layers)),
+            checkpointType: .leaf,
             memoryBytes: totalBytes, createdAt: .now)
         cache = []
         return snapshot
+    }
+
+    /// Inspect/consume only in the Model Session, after the tree grants a lease.
+    func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
+        guard checkpointType == .leaf, case .moved(let owner) = body,
+            !owner.cache.isEmpty
+        else { return .checkpoint }
+        for layer in owner.cache {
+            if layer is QuantizedKVCache { return .quantized }
+            if layer is RotatingKVCache || layer is ChunkedKVCache { return .rotating }
+            if layer is ArraysCache { continue }
+            guard layer is KVCacheSimple, layer.offset == tokenOffset,
+                maximumAdvance >= 0, layer.isTrimmable(after: maximumAdvance)
+            else { return .untrimmable }
+        }
+        return nil
+    }
+
+    func takeMovingCache() -> [any KVCache]? {
+        guard case .moved(let owner) = body, !owner.cache.isEmpty else { return nil }
+        let cache = owner.cache
+        owner.cache = []
+        owner.layers = []
+        return cache
+    }
+
+    func sharesMovedBody(with other: HybridCacheSnapshot) -> Bool {
+        guard case .moved(let lhs) = body, case .moved(let rhs) = other.body else { return false }
+        return lhs === rhs
     }
 
     enum CheckpointType: Comparable, Sendable {
@@ -496,15 +536,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// subscript. metaState format:
     /// `[slotCount, presentSlots (comma-separated), leftPadding (comma-separated, optional)]`;
     /// the legacy format (`[""]`) restores compacted state via the `state` setter.
-    private static func makeArraysCache(
+    static func makeArraysCache(
         mamba: Bool, state: [MLXArray], metaState: [String], offset: Int,
-        copyStrategy: CopyStrategy = .device,
+        copyStrategy: CopyStrategy? = .device,
         copiedArrays: inout [MLXArray]
     ) -> ArraysCache {
         // Deep copy, not an alias (see ``deepCopyState(_:)``): the rebuilt
         // ArraysCache/MambaCache must own private buffers.
         let copied = state.map { array -> MLXArray in
-            let copy = deepCopyState(array, strategy: copyStrategy)
+            let copy = copyStrategy.map { deepCopyState(array, strategy: $0) } ?? array
             copiedArrays.append(copy)
             return copy
         }
@@ -514,12 +554,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 metaState[1].isEmpty
                 ? [] : metaState[1].split(separator: ",").compactMap { Int($0) }
             let leftPadding: [Int]? =
-                metaState.count >= 3
+                metaState.count >= 3 && !metaState[2].isEmpty
                 ? metaState[2].split(separator: ",").compactMap { Int($0) } : nil
             cache =
                 mamba
                 ? MambaCache(leftPadding: leftPadding)
                 : ArraysCache(size: slotCount, leftPadding: leftPadding)
+            if metaState.count >= 4, !metaState[3].isEmpty {
+                cache.prepare(lengths: metaState[3].split(separator: ",").compactMap { Int($0) })
+            }
             for (arrayIdx, slotIdx) in presentSlots.enumerated()
             where slotIdx < slotCount && arrayIdx < copied.count {
                 cache[slotIdx] = copied[arrayIdx]

@@ -255,6 +255,9 @@ nonisolated struct EmittedPathTraceTelemetry: Codable, Sendable, Equatable {
     /// prefilled beyond the stored leaf — when it hit.
     let resolvedSuffix: Int?
     let resolveMissReason: String?
+    var restoreMode: String?
+    var copyReason: String?
+    var leafSource: String?
 
     static func make(
         report: LeafStorePhase.Report,
@@ -266,7 +269,10 @@ nonisolated struct EmittedPathTraceTelemetry: Codable, Sendable, Equatable {
             skipReason: report.emittedPathSkip,
             resolvedPrefix: resolves?.requestEdgeIndexedPrefix,
             resolvedSuffix: resolves?.requestEdgeSuffixTokens,
-            resolveMissReason: resolves?.requestEdgeMissReason ?? resolves?.requestEdgeSkipReason
+            resolveMissReason: resolves?.requestEdgeMissReason ?? resolves?.requestEdgeSkipReason,
+            restoreMode: report.restoreMode,
+            copyReason: (report.restoreCopyReason ?? report.copyReason)?.rawValue,
+            leafSource: report.source?.rawValue
         )
     }
 }

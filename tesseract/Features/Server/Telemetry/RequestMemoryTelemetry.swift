@@ -9,7 +9,7 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
     enum Phase: String, Sendable {
         case preparing, restoring, restored, prefilling, dflashPreparing, prefilled
         case decoding, generationQuiescent, admittingCheckpoints, storingLeaf
-        case capturingLeaf, preparingPayload, admittingLeaf
+        case capturingLeaf, preparingPayload, admittingLeaf, rewindingLeaf, rewoundLeaf
         case recordingRequest, finishingStream, releasingRequest, finished, settled
     }
 

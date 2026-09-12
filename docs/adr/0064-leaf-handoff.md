@@ -1,8 +1,7 @@
 # ADR-0064: Leaf Handoff — the finished turn's live cache is the leaf, moved between exactly one owner and the next
 
-- Status: Proposed (documents-first, ticket #472 of
-  [issue #471](https://github.com/spokvulcan/tesseract/issues/471); flips
-  to Accepted with as-built notes at ticket #480)
+- Status: Accepted (as built through #480; large-model memory and latency
+  acceptance remain open, as recorded below)
 - Date: 2026-09-06
 - Relates to: ADR-0023 (its rejection of copy-on-write restore stands; this
   ADR explains why a move is not that alias), ADR-0019 (the Restore Pin is
@@ -122,11 +121,52 @@ offset afterwards cannot bring them back; the vendor exposes
    back; the `lookup` event gains the restore mode; new events for lease
    begin and end and for rewind.
 
-The change lands in four steps so each ownership boundary is reviewed on its
-own: the extractor detaches every retained array (safe on today's copy
-paths); capture by move while the next request still restores by copy; the
-Leaf Lease as a tree-side state every release path honours, proven by tests
-before anything checks a leaf out; then check-out by move with the rewind.
+### As built — 2026-09-12
+
+The implementation landed in stages: detached extension payloads (#474),
+capture by move (#478), tree-side leases (#479), then checkout and rewind
+(#480). `LeafCheckout` runs in the Model Session. It transfers the movable
+resident leaf body out of `HybridCacheSnapshot` and the tree under the lease;
+all retained snapshot views lose their arrays. The tree keeps the original
+logical byte charge and floor membership until return. Immutable captured or
+hydrated checkpoints continue to restore by copy; a completed eligible turn
+produces a movable leaf for its next extension.
+
+Eligibility checks topology, full-offset extension, identity key space,
+unquantized full-attention caches, and `isTrimmable(after:)` with the suffix,
+output ceiling and DFlash2 allowance. Weak full-payload materialization probes
+reject checkout without retaining payloads or host data; detached extensions
+do not block it. Recurrent rewind copies include state-slot metadata,
+lengths and padding. Rewind trims the same attention objects and reconstructs
+recurrent layers from that saved independent state after the generation has
+quiesced. The request relinquishes all cache references on return.
+
+Startup cancellation, decode cancellation/failure, and boundary intervention
+return the original leaf before releasing request pins. Successful check-in
+is the ownership commit point; normal RAM/SSD admission follows the return.
+Cancellation observed before that point rewinds. Cancellation after the return
+cannot undo the committed leaf and follows ordinary admission/cleanup rules.
+Quantized copy paths retain the post-quantization cache array, because that
+step replaces attention objects before decode.
+
+Preserve-thinking, text-only identity requests no longer capture unused
+last-message/last-user transient boundary helpers. Planned checkpoints,
+image-bearing boundaries, think-stripping paths and ADR-0009 seeds remain.
+`lookup`, `leafStore` and `requestMemory` report actual handoff/copy mode and
+fallback reasons; rewind emits both `leafRewind` and `leafStore source=rewind`.
+Request memory includes recurrent backup bytes and lease lifecycle facts.
+
+Small-cache identity, growth, recurrent replacement/metadata, pending-payload,
+fallback, pressure, cancellation/resend and release tests pass. In 24 bounded
+success/cancel/failure cycles, checkout allocated only the 64-byte recurrent
+backup for a 2 MiB attention body; copied restore allocated 2,097,232 bytes.
+This proves the ownership mechanism, not production footprint. Trimming may
+retain attention allocation capacity above the logical offset; #501 tracks
+that lifetime. Large-model parity, peak/retained footprint and tail latency
+remain unmeasured here. The owner constraint prohibits automatically repeating
+the prior crash workload on this 48 GiB Mac. The [evidence report](../../benchmarks/leaf-checkout/2026-09-12/README.md)
+records baseline comparisons and a bounded plan awaiting approval.
+`ActiveInferenceReserve` remains unchanged.
 
 ### Amendments this ADR makes
 

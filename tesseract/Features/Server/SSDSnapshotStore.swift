@@ -477,6 +477,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             transferClaim = claim
         }
 
+        bodyAccess?.observeFullPayload(payload)
         enqueueApplyingBackPressure(
             PendingWrite(
                 payload: payload,

@@ -361,6 +361,15 @@ nonisolated extension LeafStorePhase {
         }
         context.memory?.mark(.admittingLeaf, facts: payloadFacts)
         let admitStart = Date.timeIntervalSinceReferenceDate
+        if let moving, !(await moving.checkIn(leaf, tokens: storedTokens)) {
+            moving.recoverUnadmitted(leaf)
+            return LeafCapture(skipReason: Task.isCancelled ? "cancelled" : "lease-return-refused")
+        }
+        context.memory?.mark(
+            .admittingLeaf,
+            facts: [
+                "leafLeaseActive": "false", "recurrentRewindStateBytes": "0",
+            ])
         let admission = await ServerCompletion.admitStructuredLeaf(
             leaf,
             storedTokens: storedTokens,

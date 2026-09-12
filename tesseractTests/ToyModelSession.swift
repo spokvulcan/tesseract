@@ -109,7 +109,11 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             let content = batched.asType(.float32).reshaped([1, 1, tokenCount, 1])
             let keysValues = broadcast(content, to: [1, 1, tokenCount, headDim])
             for layer in cache {
-                _ = layer.update(keys: keysValues, values: keysValues)
+                if let quantized = layer as? any QuantizedKVCacheProtocol {
+                    _ = quantized.updateQuantized(keys: keysValues, values: keysValues)
+                } else {
+                    _ = layer.update(keys: keysValues, values: keysValues)
+                }
             }
         }
 

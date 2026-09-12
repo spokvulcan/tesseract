@@ -76,21 +76,17 @@ Admission**, slices and evaluates the suffix on the Metal-affine caller); the
 SSD writer's task materializes the host copy right before the file write and
 logs it as `event=ssdPayloadMaterialize`. Nothing on the MainActor or the
 inference thread copies KV bytes any more. Until the writer gets to it, the
-payload keeps the arrays alive — a leaf shares them with its RAM body, a
+payload keeps the arrays alive — a full payload shares them with its RAM body, a
 demotion victim's live on only there — and the materializer releases each
 layer as it copies it, so a demotion never doubles in RAM. The front door's
 `maxPendingBytes` accounting is unchanged: it always counted the byte total,
 which the payload still knows up front.
 
-## Amendment 2026-09-06 (proposed with ADR-0064) — Leaf Lease, and extension payloads that retain no body array
+## Amendment 2026-09-12 — Leaf Lease, and extension payloads that retain no body array
 
-Takes effect when ADR-0064 is Accepted
-([issue #471](https://github.com/spokvulcan/tesseract/issues/471)).
-
-Implementation staging: #479 establishes the tree-side protection below,
-with small real-cache ownership and lifecycle tests. Production check-out
-and the recurrent-state rewind remain #480 work; ADR-0064 stays Proposed
-until that integration and its acceptance gates are complete.
+Accepted with ADR-0064. #479 established tree-side protection; #480 integrates
+production checkout, exact recurrent rewind and lifecycle telemetry. See
+ADR-0064's as-built notes for the remaining production measurement gates.
 
 The **Restore Pin** above is the weak claim of a request that restored *by
 copy*: it protects a restore path in the Budget Floor, it owns nothing, and
@@ -120,7 +116,7 @@ array it retains, the recurrent layers' state as well as the attention
 suffix slices, deep-copied and evaluated on the Metal-affine caller, so a
 pending suffix payload never references a body a generation may own. A full
 payload still aliases the attention body. Under ADR-0064, a pending full
-payload makes move checkout ineligible: #480 must fall back to copy restore
+payload makes move checkout ineligible: production falls back to copy restore
 until materialization releases the body arrays. The tree-side gate below
 is a second exclusion boundary, not the production checkout eligibility
 decision: it can protect a queued payload with a lease but refuses lease
@@ -128,9 +124,11 @@ acquisition while the writer is already reading.
 
 ### Tree-side implementation (#479)
 
-The lease token and the writer's shared access state contain only scalars;
-acquisition keeps the existing body in place and adds no cache copy. Tree
-byte/count accounting includes that body once throughout the lease. An
+The lease token contains only scalars. The writer's shared access state adds
+weak payload probes that retain no cache arrays or payloads. Tree-side lease
+acquisition adds no cache copy; production then removes the body and transfers
+its objects into the request. Tree byte/count accounting still includes the
+leased body once throughout the lease. An
 explicit quiescent return reconciles the supplied body's bytes and, for an
 extended path, moves the tree entry to the returned offset. Invalid or stale
 returns leave the current lease intact. `completeRequest` releases Restore
@@ -160,7 +158,9 @@ membership before changing topology or accounting.
 `leafLeaseDeferred` carry request and lease identity, leaf offset and bytes;
 end events record release reason and reconciled growth. `requestMemory`
 tree facts also carry lease bytes/count. These are logical ownership
-counters, not additional physical allocations. The #480 checkout must
-still refuse move checkout for pending full payloads (falling back to copy)
-and perform the actual object transfer and recurrent-state rewind inside the
-Model Session. It must return the lease before end-of-turn admission.
+counters, not additional physical allocations. Production refuses move
+checkout for pending full payloads (falling back to copy), performs object
+transfer and recurrent-state rewind inside the Model Session, and returns
+the lease before end-of-turn admission. Materialization probes become eligible
+only after every array source is detached or released; file I/O over host
+bytes need not finish before checkout.

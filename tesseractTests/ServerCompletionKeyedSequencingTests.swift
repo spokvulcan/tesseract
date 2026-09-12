@@ -91,12 +91,12 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     }
 
     @MainActor
-    private static func parameters() -> AgentGenerateParameters {
+    private static func parameters(kvBits: Int? = nil) -> AgentGenerateParameters {
         var parameters = AgentGenerateParameters()
         parameters.temperature = 0
-        // The toy's head dimension is far below any quantization group size;
-        // KV quantization stays a recorded no-op verb in these suites.
-        parameters.kvBits = nil
+        // Quantized cases use headDim 64 so the real quantizer can replace
+        // the attention cache objects before decode.
+        parameters.kvBits = kvBits
         return parameters
     }
 
@@ -107,7 +107,8 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     /// conversation, must resolve the admitted leaf, restore it *before*
     /// prefilling only the suffix, and decode the scripted continuation —
     /// proving the restored rows landed where the script expects them.
-    @Test func keyedSpineRestoresAdmittedLeafAndPrefillsOnlyTheSuffix() async throws {
+    @Test(arguments: [nil, 4] as [Int?])
+    func keyedSpineRestoresAdmittedLeafAndPrefillsOnlyTheSuffix(kvBits: Int?) async throws {
         let tokenizer = ToySequencingTokenizer()
         let round1 = Self.conversation([HTTPPrefixCacheMessage(role: .user, content: "Hi")])
         let round2 = Self.conversation([
@@ -129,14 +130,15 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         let script = render2 + Array("Sure.".utf8).map(Int.init)
         let fixture = ServerCompletionFixture(
             provider: ToyModelSessionProvider(
-                model: ToyLanguageModel(script: script),
+                model: ToyLanguageModel(script: script, headDim: 64),
                 tokenizer: tokenizer
             )
         )
+        let parameters = await Self.parameters(kvBits: kvBits)
 
         // -- Round 1: cold.
         let handle1 = try await fixture.start(
-            conversation: round1, parameters: Self.parameters()
+            conversation: round1, parameters: parameters
         )
         #expect(handle1.cachedTokenCount == 0)
         let (text1, info1) = try await collectServerText(handle1)
@@ -146,7 +148,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(
             round1Verbs == [
                 .prepare, .newCache, .prefill, .quantizeKVCache, .makeDecodeIterator,
-            ]
+            ] + (kvBits == nil ? [] : [.captureSnapshot])
         )
 
         // Row-consistency: the drive left prompt + completion + forwarded
@@ -158,10 +160,12 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         )
         #expect(storedTokens1.count == render1.count + "Hello!".utf8.count + 1)
 
-        // -- Round 2: warm. The admitted leaf must be restored, then only
-        // the suffix prefilled.
+        // -- Round 2: warm. Unquantized leaves move; quantized leaves copy.
+        // Both must retain the post-decode cache. Quantization replaces cache
+        // objects, so retaining the array before that step would lose the
+        // generated rows and this exact cached-token count would fail.
         let handle2 = try await fixture.start(
-            conversation: round2, parameters: Self.parameters()
+            conversation: round2, parameters: parameters
         )
         #expect(handle2.cachedTokenCount == storedTokens1.count)
         let (text2, info2) = try await collectServerText(handle2)
@@ -169,9 +173,15 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(try #require(info2).promptTokenCount == render2.count)
         let round2Verbs = Array(fixture.provider.recorder.verbs.dropFirst(round1Verbs.count))
         #expect(
-            round2Verbs == [
-                .prepare, .restore, .prefill, .quantizeKVCache, .makeDecodeIterator,
-            ]
+            round2Verbs
+                == (kvBits == nil
+                    ? [
+                        .prepare, .prefill, .quantizeKVCache, .makeDecodeIterator,
+                    ]
+                    : [
+                        .prepare, .restore, .prefill, .quantizeKVCache, .makeDecodeIterator,
+                        .captureSnapshot,
+                    ])
         )
 
         await fixture.drain()

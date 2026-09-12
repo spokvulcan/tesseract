@@ -631,7 +631,7 @@ final class TokenRadixTree {
     /// Restore** point is never healed away — its state is empty but the
     /// boundary it addresses is still backed by the owning chain.
     private func selfHeal(_ node: RadixTreeNode) {
-        guard node.chainPrefixRestorePoint == nil else { return }
+        guard node.chainPrefixRestorePoint == nil, node.leafLease == nil else { return }
         if node.isLeaf {
             detachEmptyLeaf(node)
         } else if node.childCount == 1 {
@@ -655,7 +655,7 @@ final class TokenRadixTree {
             // only reaches here on `.becameEmpty`, so this holds today — the
             // guard makes `canEvictNode` the load-bearing barrier for any
             // future removal caller instead of a convention.
-            guard target.state.canEvictNode else {
+            guard target.state.canEvictNode, target.leafLease == nil else {
                 Log.agent.fault(
                     "TokenRadixTree.detachEmptyLeaf refused to unlink a node that still "
                         + "owns an SSD ref (state \(target.state.label)); leaving it in the tree"
@@ -838,7 +838,7 @@ final class TokenRadixTree {
     }
 
     private func collectAllSnapshots(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if node.state.body != nil {
+        if node.state.body != nil || node.leafLease != nil {
             result.append(node)
         }
         for child in node.children.values {
@@ -847,7 +847,7 @@ final class TokenRadixTree {
     }
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if node.state.body != nil {
+        if node.state.body != nil || node.leafLease != nil {
             result.append(node)
         }
         for child in node.children.values {
@@ -971,10 +971,11 @@ final class TokenRadixTree {
 }
 
 extension TokenRadixTree {
-    // MARK: - Leaf Lease (no production checkout until #480)
+    // MARK: - Leaf Lease
 
     func beginLeafLease(
-        on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context
+        on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context,
+        requireDetachedPayload: Bool = false
     ) -> LeafLease? {
         func refuse(_ reason: LeafLeaseRefusedEvent.Reason) -> LeafLease? {
             let active = node.leafLease
@@ -990,13 +991,26 @@ extension TokenRadixTree {
             return refuse(.notLeaf)
         }
         let lease = LeafLease(context: context, offset: node.tokenOffset, bytes: body.memoryBytes)
-        guard node.bodyAccess.begin(lease) else {
-            return refuse(node.leafLease == nil ? .writerReading : .alreadyLeased)
+        guard node.bodyAccess.begin(lease, requireDetachedPayload: requireDetachedPayload) else {
+            return refuse(
+                node.leafLease != nil
+                    ? .alreadyLeased : requireDetachedPayload ? .pendingFullPayload : .writerReading
+            )
         }
         leasedBytes += lease.bytes
         leaseCount += 1
         context.log(LeafLeaseBeginEvent(lease: lease, accounting: leaseAccounting), level: .notice)
         return lease
+    }
+
+    /// Remove the immutable body without retiring its lease's budget charge.
+    func takeLeasedBody(_ lease: LeafLease, on node: RadixTreeNode) -> HybridCacheSnapshot? {
+        guard node.leafLease?.id == lease.id, let body = node.state.body else { return nil }
+        let old = node.state
+        let (next, _) = old.droppingBody()
+        commit(next, on: node, from: old)
+        totalSnapshotBytes += lease.bytes
+        return body
     }
 
     /// Caller must return a quiescent body; cancellation/error callers rewind
@@ -1042,11 +1056,12 @@ extension TokenRadixTree {
             if let existing, existing !== node { _ = existing.bodyAccess.end(lease) }
             return refuse(.staleLease)
         }
+        if node.state.body == nil { totalSnapshotBytes -= lease.bytes }
         let destination = insertPath(tokens: tokens)
         leasedBytes -= lease.bytes
         leaseCount -= 1
         if destination !== node {
-            dropBody(node: node)
+            if node.state.body != nil { dropBody(node: node) }
             if let existing { _ = existing.bodyAccess.end(lease) }
             destination.bodyAccess = node.bodyAccess
             node.bodyAccess = LeafBodyAccess()

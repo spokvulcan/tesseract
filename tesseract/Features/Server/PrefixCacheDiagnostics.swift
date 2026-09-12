@@ -100,6 +100,9 @@ nonisolated enum PrefixCacheDiagnostics {
         /// the pinned divergence-free wire lines stay byte-stable.
         let divergence: PrefixDivergenceProbe?
 
+        let restoreMode: String?
+        let copyReason: LeafStorePhase.Report.CopyReason?
+
         init(
             reason: PrefixCacheManager.LookupReason,
             promptTokens: Int,
@@ -111,7 +114,8 @@ nonisolated enum PrefixCacheDiagnostics {
             plannedCheckpoints: [(offset: Int, type: HybridCacheSnapshot.CheckpointType)],
             hydratedFromSSD: Bool = false,
             chainPrefixRestore: Bool = false,
-            divergence: PrefixDivergenceProbe? = nil
+            divergence: PrefixDivergenceProbe? = nil,
+            restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -146,6 +150,8 @@ nonisolated enum PrefixCacheDiagnostics {
             self.hydratedFromSSD = hydratedFromSSD
             self.chainPrefixRestore = chainPrefixRestore
             self.divergence = divergence
+            self.restoreMode = restoreMode
+            self.copyReason = copyReason
         }
 
         let eventName = "lookup"
@@ -165,6 +171,8 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("hydratedFromSSD", hydratedFromSSD ? "true" : "false"),
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
+            if let restoreMode { fields.append(("restoreMode", restoreMode)) }
+            if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if let divergence {
                 fields.append(("divergenceOffset", "\(divergence.offset)"))
                 fields.append(("abandonedCachedTokens", "\(divergence.abandonedTokens)"))
