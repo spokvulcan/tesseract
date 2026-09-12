@@ -1,0 +1,25 @@
+{
+  "algorithm": "SHA-256",
+  "files": {
+    "README.md": {
+      "bytes": 5468,
+      "sha256": "9aaceb3700320ccc8f01b6e0c70da2c57b07db0a783af8cf8d7d6a12fff022ea"
+    },
+    "environment.json": {
+      "bytes": 819,
+      "sha256": "6069997d0ce68962707c71a81fa1e59d1aa5f0d1e809970c9a2216b2070fae1d"
+    },
+    "small-cache-diagnostics.log": {
+      "bytes": 222000,
+      "sha256": "0768e29f4fdc71451e32e2d598770dce1314067cd468fb62ffb1a44fd873bd23"
+    },
+    "small-cache.json": {
+      "bytes": 41213,
+      "sha256": "fe40f736cb2cde81129b2090363c81e7130bc91d531a803973ca198d9e123a8d"
+    },
+    "validation.json": {
+      "bytes": 3198,
+      "sha256": "681cf42ecd9ca891f17399a08900ffe06600722619d9518b597df3015084f660"
+    }
+  }
+}

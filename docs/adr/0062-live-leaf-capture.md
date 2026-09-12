@@ -1,11 +1,9 @@
 # ADR-0062: Live Leaf Capture — the finished turn's leaf comes from the live cache when the fed path proves canonical
 
-- Status: Accepted; to be superseded by ADR-0063 and ADR-0064
-  ([issue #471](https://github.com/spokvulcan/tesseract/issues/471)) once
-  they are Accepted. The per-turn comparison below is retired by the
-  Emitted Path Index; its structural guards survive as the fast path's
-  eligibility, and the history of the two bugs the comparison found is
-  carried in ADR-0063's context.
+- Status: Superseded by ADR-0063 and ADR-0064 (2026-09-12, #480).
+  The per-turn comparison is retired by the Emitted Path Index; its
+  structural guards survive as fast-path eligibility. ADR-0063 carries
+  the history of the two bugs the comparison found.
 - Date: 2026-09-06
 - Relates to: ADR-0009 (speculative canonical prefill; its rejected
   alternative "capture from the final cache" is adopted here for the

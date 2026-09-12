@@ -101,3 +101,22 @@ tuned`; there is no per-fingerprint persistence or sidecar (the proposed
 scope."), `EvictionPolicy.swift` (`alpha: Double = 0.0`). The redesign's other
 decisions (band, demotion, recovery-cost F, SSD α-blend, survival gate) are
 implemented as written.
+
+## Safety amendment (2026-09-12)
+
+Production AlphaTuner is disabled, with its implementation retained but no
+instance attached to a production cache. The existing static `alpha = 0`
+remains in effect; this temporarily supersedes the proposed offline seed and
+online tuning above. A captured 82k-token request strongly tied the old replay's
+real synthetic MLX arrays and deep copies to approximately 15.57 GiB of extra
+allocation and a 65-second MainActor stall after generation had finished.
+See [the incident evidence](../../benchmarks/incidents/2026-09-12-alpha-tuner/README.md).
+
+[#504](https://github.com/spokvulcan/tesseract/issues/504) reopens the choice
+between a measured static alpha, removing online tuning, and bounded
+metadata-only diagnostics/replay. Any replacement must justify its benefit
+against a frozen-alpha baseline and avoid tensor allocation and MainActor
+stalls before production enablement. The continuous/persisted proposal in
+[#92](https://github.com/spokvulcan/tesseract/issues/92) remains subject to that
+decision and its existing ablation gate. Pressure budgets, demotion, the
+Budget Floor and SSD survival/eviction policy remain in place.

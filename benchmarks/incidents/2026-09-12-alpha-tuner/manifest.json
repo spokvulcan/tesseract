@@ -1,0 +1,33 @@
+{
+  "algorithm": "SHA-256",
+  "files": {
+    "README.md": {
+      "bytes": 11528,
+      "sha256": "fa55e79001a672678d97866ea88d798692aa4f181d8be71d796e0683e82a8ec6"
+    },
+    "incident-events.jsonl": {
+      "bytes": 219317,
+      "sha256": "073a20bf3872e480c4bd155e3bef05e51c6acf82fc916d78b708ecec6a004b80"
+    },
+    "memory-timeline.csv": {
+      "bytes": 628510,
+      "sha256": "35f2f72da2fec233054b750fa1114da0937ca8af4027e54809af4b87471cddfc"
+    },
+    "provenance.json": {
+      "bytes": 995,
+      "sha256": "39938ab1a053cc9aa3461b2acad6e8e5cfc35cf526301cfca8c5e86414a3a260"
+    },
+    "requests.csv": {
+      "bytes": 6415,
+      "sha256": "82418dbbdfcdd1f0afd5cdd468efb85fe332b7597ad0881303992b1d68cf696d"
+    },
+    "summary.json": {
+      "bytes": 925,
+      "sha256": "9b6e6ca244523cd7a5381e214a4660d3f7bfe79c2f3c76695320e84a7e98b5c6"
+    },
+    "validation.json": {
+      "bytes": 2453,
+      "sha256": "66db1a4326826e68bbc07806da314aa6daea0f52e661ee4e47b2f52c877e31b9"
+    }
+  }
+}

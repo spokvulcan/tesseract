@@ -87,8 +87,8 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
 /// The eviction policy's load-bearing inputs, owned per-cache by
 /// `PrefixCacheManager` instead of published as process globals.
 /// `flopProfile` is read once from **Model Identity** when the cache is
-/// built and never changes for that model; `alpha` starts at the LRU
-/// default and is adapted at runtime by the **AlphaTuner**.
+/// built and never changes for that model; production `alpha` stays at the
+/// static LRU default while **AlphaTuner** is disabled (#504).
 /// `EvictionPolicy`'s scorers take this by value, so every caller — and
 /// every test — crosses the same global-free seam.
 ///

@@ -1,0 +1,68 @@
+{
+  "date": "2026-09-12",
+  "scope": "Production AlphaTuner disabled; retained replay implementation is unchanged apart from comments.",
+  "seam": "Toy-backed Server Completion, observed through PrefixCacheAdmin; no loaded Qwen generation.",
+  "red": {
+    "summary": {
+      "totalTestCount": 19,
+      "passedTests": 18,
+      "failedTests": 1,
+      "skippedTests": 0,
+      "startTime": 1789250402.606,
+      "finishTime": 1789250421.545,
+      "result": "Failed"
+    },
+    "expectedFailure": "productionCacheKeepsAlphaTunerDisabled failed in both identityInstalled=false and true cases before removing the production attachment.",
+    "log": "/tmp/tesseract-504-red-suite.log"
+  },
+  "green": {
+    "summary": {
+      "totalTestCount": 19,
+      "passedTests": 19,
+      "failedTests": 0,
+      "skippedTests": 0,
+      "startTime": 1789250452.304,
+      "finishTime": 1789250473.847,
+      "result": "Passed"
+    },
+    "log": "/tmp/tesseract-504-green.log"
+  },
+  "fullUnitTarget": {
+    "summary": {
+      "totalTestCount": 2894,
+      "passedTests": 2879,
+      "failedTests": 0,
+      "skippedTests": 15,
+      "startTime": 1789250538.025,
+      "finishTime": 1789250703.822,
+      "result": "Passed"
+    },
+    "log": "/tmp/tesseract-504-full.log",
+    "xcresult": "/tmp/tesseract-504-full.xcresult"
+  },
+  "counts": "xcresult declaration totals; the new parameterized regression has two test cases. The earlier abbreviated-method selection ran zero tests and is excluded from validation.",
+  "checks": {
+    "swiftFormat": "passed",
+    "swiftLint": "passed; seven warnings, zero serious violations",
+    "documentationReferences": "passed",
+    "diffWhitespace": "passed"
+  },
+  "review": {
+    "spec": "No findings",
+    "standards": "No code findings; two stale documentation comments corrected after review"
+  },
+  "limitations": [
+    "No controlled high-memory replay or peak-memory acceptance measurement; the mitigation prevents production tuner construction.",
+    "Full unit run covers all behavior changes. Subsequent Swift edits only corrected comments; the final Release build validates those sources."
+  ],
+  "releaseBuild": {
+    "result": "BUILD SUCCEEDED",
+    "log": "/tmp/tesseract-504-release.log",
+    "binarySHA256": "65e3ac011882c3e5348bf61789931bfa8892e34e1b087113b96aa8c07483a8ca",
+    "binaryModifiedUTC": "2026-09-12T22:09:31.546846+00:00",
+    "restarted": true,
+    "health": {
+      "status": "ok"
+    }
+  }
+}

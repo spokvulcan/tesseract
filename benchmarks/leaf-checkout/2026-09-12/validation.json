@@ -1,0 +1,50 @@
+{
+  "fullUnitRun": {
+    "result": "Failed",
+    "totalTestCount": 2890,
+    "passedTests": 2874,
+    "failedTests": 1,
+    "skippedTests": 15
+  },
+  "fullUnitFailure": "One pre-checkout expectation still required restoreMode=copy. Updated to handoff and added active/released lease assertions; the affected suite passed in the final focused run.",
+  "finalFocusedRun": {
+    "result": "Passed",
+    "tests": 26,
+    "suites": 3,
+    "suiteNames": [
+      "EmittedPathSynthesizedReplayTests",
+      "RequestMemoryTelemetryTests",
+      "LeafCheckoutTests"
+    ],
+    "totalTestCount": 26,
+    "passedTests": 26,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "quantizedRegressionRun": {
+    "result": "Passed",
+    "tests": 23,
+    "suites": 3,
+    "suiteNames": [
+      "EmittedPathSynthesizedReplayTests",
+      "ServerCompletionKeyedSequencingTests",
+      "LeafCheckoutTests"
+    ],
+    "redEvidence": "Real quantized KV two-turn replay produced More? instead of Sure. before owner construction moved after quantization."
+  },
+  "isolatedMemoryRun": {
+    "result": "Passed",
+    "tests": 1
+  },
+  "corpusRun": {
+    "result": "Passed",
+    "tests": 1,
+    "recordings": 85,
+    "boundaries": 66,
+    "durationSeconds": 184.008
+  },
+  "documentationReferences": "Passed",
+  "swiftFormat": "Passed",
+  "swiftLint": "Passed with size/complexity and existing directive/comment warnings; no errors; --no-cache used because sandbox disallowed the default cache.",
+  "releaseBuild": "Passed (xcodebuild build -configuration Release)"
+}

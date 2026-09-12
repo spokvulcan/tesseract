@@ -243,6 +243,21 @@ struct HybridCacheSnapshotTests {
         #expect(restored[0].maxSize == 512)
     }
 
+    @Test(arguments: [false, true])
+    func copyRestorePreservesRecurrentSlotsLengthsAndPadding(hasPadding: Bool) throws {
+        let original = MambaCache(leftPadding: hasPadding ? [2] : nil)
+        original[1] = MLXArray([Float(3), 4])
+        original.prepare(lengths: [7])
+        original.offset = 8
+        let snapshot = try #require(
+            HybridCacheSnapshot.capture(cache: [original], offset: 8, type: .system))
+        let restored = try #require(try snapshot.restore().first as? MambaCache)
+        #expect(restored.offset == 8)
+        #expect(restored.metaState == ["2", "1", hasPadding ? "2" : "", "7"])
+        #expect(restored.state[0].asArray(Float.self) == [3, 4])
+        #expect(backingAddress(restored.state[0]) != backingAddress(snapshot.layers[0].state[0]))
+    }
+
     @Test func restoreCreatesMambaCache() throws {
         let mamba = MambaCache()
         mamba.state = [MLXArray.zeros([1, 3, 14336]), MLXArray.zeros([1, 64, 128, 192])]

@@ -744,6 +744,11 @@ nonisolated struct SnapshotPayload: Sendable {
     /// for a deferred one.
     var isMaterialized: Bool { source.isMaterialized }
 
+    /// Observes pending array ownership without retaining the payload or its Data.
+    var materializationProbe: @Sendable () -> Bool {
+        { [weak source] in source?.isMaterialized ?? true }
+    }
+
     /// Run the deferred host copy now: `true` when this call did the copy,
     /// `false` when the bytes were already in hand. The SSD writer calls
     /// it before the file write so the copy is timed and attributed there

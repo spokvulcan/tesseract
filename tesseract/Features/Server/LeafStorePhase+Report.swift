@@ -27,6 +27,8 @@ nonisolated extension LeafStorePhase {
             /// under a non-thinking template's canonical stored path (the
             /// pre-existing render-trusting path).
             case direct
+            /// An aborted request returned its unchanged original leaf.
+            case rewind
             /// No leaf stored — `skipReason` says why.
             case skipped
         }
@@ -38,17 +40,20 @@ nonisolated extension LeafStorePhase {
             case live
             /// Original cache objects transferred from the finished generation.
             case handoff
+            case copy, rewind
             /// A restored boundary snapshot extended by the canonical
             /// residual re-prefill.
             case boundary
         }
 
         enum CopyReason: String, Sendable {
-            case quantized
-            case imageKeySpace
+            case quantized, imageKeySpace, checkpoint, immutableBody, pendingFullPayload,
+                untrimmable, rotating
         }
 
         var handedOff = false
+        var restoreMode: String?
+        var restoreCopyReason: CopyReason?
         var copyReason: CopyReason?
         var mode = "unkeyed"
         var path: Path = .skipped
@@ -58,8 +63,11 @@ nonisolated extension LeafStorePhase {
         /// snapshot under the boundary route.
         var source: Source? {
             switch path {
-            case .live, .direct: handedOff ? .handoff : .live
+            case .live, .direct:
+                restoreMode == "copy" || restoreMode == "failedCopy"
+                    ? .copy : handedOff ? .handoff : .live
             case .boundary: .boundary
+            case .rewind: .rewind
             case .skipped: nil
             }
         }
@@ -97,7 +105,10 @@ nonisolated extension LeafStorePhase {
             let ms = PrefixCacheDiagnostics.milliseconds
             var fields = [("mode", mode), ("path", path.rawValue)]
             if let source { fields.append(("source", source.rawValue)) }
-            if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
+            if let copyReason = restoreCopyReason ?? copyReason {
+                fields.append(("copyReason", copyReason.rawValue))
+            }
+            if let restoreMode { fields.append(("restoreMode", restoreMode)) }
             if let skipReason { fields.append(("skip", skipReason)) }
             if let boundaryReason { fields.append(("boundary", boundaryReason)) }
             if let leafOffset { fields.append(("leafOffset", "\(leafOffset)")) }

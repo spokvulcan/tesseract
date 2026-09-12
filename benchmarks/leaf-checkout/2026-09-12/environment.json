@@ -1,0 +1,35 @@
+{
+  "sourceBase": "fef2ee55ab6b65a302ca5e60fbe45dfe3d87e3e5",
+  "sourceDescription": "Initial #480 implementation at sourceRevision; subsequent review evidence is in ../2026-09-12-review.",
+  "machine": "Apple M3 Max",
+  "physicalMemoryBytes": 51539607552,
+  "macOS": "26.6.2 (25G83)",
+  "xcode": "26.6 (17F113)",
+  "configuration": "Debug, macOS hosted unit tests, serial",
+  "loadedModelWeights": false,
+  "smallCache": {
+    "attentionShape": [
+      1,
+      1,
+      4096,
+      64
+    ],
+    "attentionArrays": 2,
+    "dtype": "float32",
+    "recurrentBytes": 64,
+    "iterations": 24
+  },
+  "corpus": {
+    "recordings": 85,
+    "replayableBoundaries": 66,
+    "tokenizer": "mlx-community/Qwen3.8-27B-4bit",
+    "longestPath": 92759,
+    "liveTraceAvailable": false,
+    "tokenizerSHA256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+  },
+  "baselineEnvironment": "../../capture-handoff/2026-09-08/environment.json",
+  "hardwareModel": "Mac15,9",
+  "swiftDiffSHA256": "a37bb8594f653a691eeda30b73ee2caea4ff2a88b2cd27608eba9e0aa09827e1",
+  "releaseBinarySHA256": "9b222ba606772eae61aa54523d956b1b29239d98046b86b7240ea62b5e6a5ea5",
+  "sourceRevision": "46c59e6bed159562a08625b805edf0ed6c0936db"
+}

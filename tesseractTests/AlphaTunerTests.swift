@@ -255,9 +255,9 @@ struct AlphaTunerTests {
     /// cache-construction path (`ensurePrefixCache`) runs, then read the
     /// built cache's **Eviction Configuration** off the current-cache
     /// accessor the module publishes into.
-    private func evictionConfigAfterOneCompletion(
+    private func cacheStateAfterOneCompletion(
         identity: ModelIdentity?
-    ) async throws -> EvictionConfiguration? {
+    ) async throws -> (config: EvictionConfiguration?, tuner: PromptCacheTunerSnapshot?) {
         let tokenizer = ToySequencingTokenizer()
         let render = try tokenizer.applyChatTemplate(
             messages: [["role": "user", "content": "Hi"]], tools: nil, additionalContext: nil
@@ -284,7 +284,9 @@ struct AlphaTunerTests {
         for try await _ in handle.stream {}
         await handle.waitForCompletion()
         await fixture.drain()
-        return await fixture.cacheAdmin.evictionConfig
+        return (
+            fixture.cacheAdmin.evictionConfig, fixture.cacheAdmin.makeTelemetrySnapshot()?.tuner
+        )
     }
 
     /// The module's cache construction folds the model's `flopProfile` into
@@ -292,7 +294,7 @@ struct AlphaTunerTests {
     /// (no model loaded) the cache gets the shared `ModelFlopProfile.fallback`
     /// and the LRU default `alpha`.
     @Test func ensurePrefixCacheUsesFallbackProfileBeforeLoad() async throws {
-        let config = try await evictionConfigAfterOneCompletion(identity: nil)
+        let (config, _) = try await cacheStateAfterOneCompletion(identity: nil)
         #expect(config?.flopProfile == .fallback)
         #expect(config?.alpha == 0.0)
     }
@@ -317,8 +319,19 @@ struct AlphaTunerTests {
         )
         #expect(identity.flopProfile != .fallback)  // sanity: distinct profile
 
-        let config = try await evictionConfigAfterOneCompletion(identity: identity)
+        let (config, _) = try await cacheStateAfterOneCompletion(identity: identity)
         #expect(config?.flopProfile == identity.flopProfile)
+    }
+
+    /// Exercise production cache construction both before model identity is
+    /// known and after load. A disabled tuner cannot collect a bootstrap
+    /// window or allocate replay caches after a later eviction.
+    @Test(arguments: [false, true])
+    func productionCacheKeepsAlphaTunerDisabled(identityInstalled: Bool) async throws {
+        let identity = identityInstalled ? ModelIdentity(configJSON: nil, chatTemplate: nil) : nil
+        let (config, tuner) = try await cacheStateAfterOneCompletion(identity: identity)
+        #expect(try #require(tuner) == .unavailable)
+        #expect(config?.alpha == 0.0)
     }
 
     // MARK: - 5. recordRequest no-op after .tuned

@@ -1,0 +1,29 @@
+{
+  "algorithm": "SHA-256",
+  "files": {
+    "README.md": {
+      "bytes": 10512,
+      "sha256": "922b418f867ce7f0133c9775ab7d8ec9b1d0632a7de871f69bc4ad97cf5082d9"
+    },
+    "corpus-summary.log": {
+      "bytes": 15325,
+      "sha256": "c6d16caa385e79df878832fd400e9d6a726194405a8a744f33af9cddd5145b8c"
+    },
+    "environment.json": {
+      "bytes": 1224,
+      "sha256": "3b03014b7e2ff1bd2651e04fed4fa89f8b0e1b2617861e0f877cf9fe7cb611ec"
+    },
+    "small-cache-diagnostics.log": {
+      "bytes": 216576,
+      "sha256": "0af2f119dac18cd4e103706a08c2dde254a07796711feaab8f8c9c7f5fa8545f"
+    },
+    "small-cache.json": {
+      "bytes": 41174,
+      "sha256": "4ff860c8cf970b6ff9007be517b8894f5524f0a93b5fdbb36cf3bd1bfc4e1364"
+    },
+    "validation.json": {
+      "bytes": 1538,
+      "sha256": "0c1c681f8066ff14e07fb24fbb6dbfe356c4b4a1ba442a351889e4c789adcee6"
+    }
+  }
+}

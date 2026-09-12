@@ -90,7 +90,8 @@ struct RequestMemoryTelemetryTests {
         let warmID = try #require(terminals.last?.requestID)
         let warm = events.filter { $0.requestID == warmID }
         let restored = try #require(warm.first { $0.field("phase") == "restored" })
-        #expect(restored.field("restoreMode") == "copy")
+        #expect(restored.field("restoreMode") == "handoff")
+        #expect(restored.field("leafLeaseActive") == "true")
         #expect(try #require(Int(restored.field("restoreSnapshotBytes") ?? "")) > 0)
         let captured = try #require(warm.first { $0.field("phase") == "preparingPayload" })
         #expect(captured.field("leafCaptureMode") == "handoff")
@@ -98,6 +99,8 @@ struct RequestMemoryTelemetryTests {
         #expect(warm.contains { $0.field("phase") == "generationQuiescent" })
         #expect(warm.contains { $0.field("phase") == "releasingRequest" })
         #expect(terminals.last?.field("treeSnapshotBytes") != nil)
+        #expect(terminals.last?.field("treeLeaseCount") == "0")
+        #expect(terminals.last?.field("leafLeaseActive") == "false")
         #expect(terminals.last?.field("ssdPendingPayloadBytes") != nil)
     }
 
@@ -159,23 +162,23 @@ struct RequestMemoryTelemetryTests {
         let module = ServerCompletion(cacheAdmin: PrefixCacheAdmin())
         do {
             _ = try await module.start(
-                on: actor, sessions: UnavailableMemoryTestSession(), modelID: modelID,
+                on: actor,
+                sessions: ToyModelSessionProvider(
+                    model: ToyLanguageModel(script: []), processor: FailingMemoryTestProcessor()),
+                modelID: modelID,
                 conversation: .init(
                     systemPrompt: nil, messages: [.init(role: .user, content: "Hi")]),
                 toolSpecs: nil, parameters: AgentGenerateParameters())
-            Issue.record("the unavailable session must fail the start")
-        } catch is UnavailableMemoryTestSession.Failure {}
+            Issue.record("the failing prepare verb must fail the start")
+        } catch is FailingMemoryTestProcessor.Failure {}
         let terminal = try #require(capture.drain().last { $0.field("sampleKind") == "terminal" })
         #expect(terminal.field("outcome") == "startFailed")
     }
 }
 
-private nonisolated struct UnavailableMemoryTestSession: ModelSessionProviding {
+private nonisolated struct FailingMemoryTestProcessor: UserInputProcessor {
     struct Failure: Error {}
-    func withSession<V, R: Sendable>(
-        nonSendable payload: sending V,
-        _ body: @Sendable (any ModelSession, V) async throws -> R
-    ) async throws -> R { throw Failure() }
+    func prepare(input: UserInput) async throws -> LMInput { throw Failure() }
 }
 
 private nonisolated final class ScriptedMemorySample: @unchecked Sendable {

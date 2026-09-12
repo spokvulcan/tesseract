@@ -14,19 +14,29 @@ nonisolated struct LeafLease: Sendable {
 }
 
 /// The small cross-thread exclusion boundary between the tree's owner and
-/// the SSD writer. No cache references live here. The lock protects scalars
-/// only and is never held while copying arrays or performing I/O.
+/// the SSD writer. It retains scalar lease state and weak payload probes,
+/// never cache objects or payloads. The lock is never held while copying
+/// arrays or performing I/O.
 nonisolated final class LeafBodyAccess: @unchecked Sendable {
     private let lock = NSLock()
     private var current: LeafLease?
     private var readers = 0
     private var reportedDeferral: UUID?
+    private var payloadMaterialized: [@Sendable () -> Bool] = []
+
+    func observeFullPayload(_ payload: SnapshotPayload) {
+        lock.withLock { payloadMaterialized.append(payload.materializationProbe) }
+    }
 
     var lease: LeafLease? { lock.withLock { current } }
 
-    func begin(_ lease: LeafLease) -> Bool {
+    func begin(_ lease: LeafLease, requireDetachedPayload: Bool = false) -> Bool {
         lock.withLock {
             guard current == nil, readers == 0 else { return false }
+            if requireDetachedPayload {
+                payloadMaterialized.removeAll { $0() }
+                guard payloadMaterialized.isEmpty else { return false }
+            }
             current = lease
             return true
         }
@@ -125,7 +135,7 @@ nonisolated struct LeafLeaseRefusedEvent: PrefixCacheDiagnostics.Payload {
     enum Reason: String, Sendable {
         case bodyReplacement, ssdAdmission, supersession, ramClear, demotion, writePromotion,
             dropBody
-        case wrongTree, notLeaf, alreadyLeased, writerReading, staleLease
+        case wrongTree, notLeaf, alreadyLeased, writerReading, pendingFullPayload, staleLease
         case invalidBody, invalidPath, invalidRewind, occupiedDestination, destinationBusy
     }
 
@@ -151,5 +161,14 @@ nonisolated struct LeafLeaseDeferredEvent: PrefixCacheDiagnostics.Payload {
     let eventName = "leafLeaseDeferred"
     var fields: [(String, String)] {
         lease.fields + [("reason", "writerMaterialization"), ("snapshotID", snapshotID)]
+    }
+}
+
+nonisolated struct LeafRewindEvent: PrefixCacheDiagnostics.Payload {
+    let lease: LeafLease
+    let recurrentBytes: Int
+    let eventName = "leafRewind"
+    var fields: [(String, String)] {
+        lease.fields + [("recurrentRewindStateBytes", "\(recurrentBytes)")]
     }
 }

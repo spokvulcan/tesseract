@@ -1,8 +1,7 @@
 # ADR-0063: Emitted Path Index — the ids the model fed are the truth for server-generated turns
 
-- Status: Proposed (documents-first, ticket #472 of
-  [issue #471](https://github.com/spokvulcan/tesseract/issues/471); flips
-  to Accepted with as-built notes at ticket #480)
+- Status: Accepted (as built through #480; production-model performance
+  acceptance remains open, as recorded below)
 - Date: 2026-09-06
 - Relates to: ADR-0062 (superseded by this ADR together with ADR-0064 once
   both are Accepted), ADR-0009 (speculative canonical prefill; stays for
@@ -192,11 +191,28 @@ exactly as today.
     The trace corpus gains optional fields for the same without a schema
     bump.
 
-The change lands as a dark launch first (the index registers only turns the
-ADR-0062 comparison already proves equal, and a shadow comparison proves on
-real traffic that the resolved path equals the canonical encode) and as the
-fast path second, so the special-token boundary claim of decision 4 is
-verified in production before anything depends on it.
+### As built — 2026-09-12
+
+The dark launch (#475) preceded the fast path (#476). `ConversationRender`
+resolves indexed prefixes, and `EmittedPathRegistration` gates registration
+on the text-level fidelity check. `LeafStorePhase` captures the fed path at
+the live cache offset and reports registration and boundary reasons. Optional
+trace fields preserve compatibility with older recordings.
+
+The tokenizer-only replay passed all 66 replayable boundaries in 85 recorded
+requests, including a 92,759-token path: 66 registrations, 66 next-request
+prefix hits, no fidelity rejections. Synthesized server tests exercise actual
+small KV caches, copied and moved restore, and cancel/resend. Tokenizer timing
+is not the HTTP tail gate: no live trace accompanied this corpus. Loaded
+Qwen3.8 + DFlash2 parity, the below-20k 150 ms tail bound, and the 45k/75k/93k
+memory comparison remain pending explicit owner approval on a suitable
+machine. See [the #480 evidence report](../../benchmarks/leaf-checkout/2026-09-12/README.md).
+
+The required follow-ups are [index persistence (#499)](https://github.com/spokvulcan/tesseract/issues/499),
+[optional lineage (#500)](https://github.com/spokvulcan/tesseract/issues/500),
+[warm-prefill/DFlash2 profiling (#501)](https://github.com/spokvulcan/tesseract/issues/501),
+and [generation-prompt-only partitioning (#502)](https://github.com/spokvulcan/tesseract/issues/502).
+Issue #466 was already closed as superseded by #471.
 
 ## Consequences
 

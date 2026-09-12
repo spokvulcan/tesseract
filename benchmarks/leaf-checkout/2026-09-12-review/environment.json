@@ -1,0 +1,16 @@
+{
+  "sourceBase": "46c59e6bed159562a08625b805edf0ed6c0936db",
+  "sourceDescription": "PR #503 review follow-up; source changes are identified by swiftDiffSHA256 and the containing commit.",
+  "swiftDiffSHA256": "c11f96bdf9dbdb15d7bc3b13d3e4cc03f6fce746a18b4dbc9e134628f5128ef1",
+  "machine": "Apple M3 Max",
+  "hardwareModel": "Mac15,9",
+  "physicalMemoryBytes": 51539607552,
+  "macOS": "26.6.2 (25G83)",
+  "xcode": "26.6 (17F113)",
+  "configuration": "Debug, macOS hosted unit tests; Xcode parallel testing disabled",
+  "isolatedAllocationFlag": "TEST_RUNNER_TESSERACT_ISOLATED_LEAF_CHECKOUT_EVIDENCE=1",
+  "fullTargetAllocationFlag": "unset",
+  "loadedModelWeights": false,
+  "originalEvidence": "../2026-09-12/README.md",
+  "releaseBinarySHA256": "1cfdfd4f5186a425120433ddc2972e78068125d7e958934c10b8e3400ae2cb15"
+}

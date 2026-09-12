@@ -109,7 +109,11 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             let content = batched.asType(.float32).reshaped([1, 1, tokenCount, 1])
             let keysValues = broadcast(content, to: [1, 1, tokenCount, headDim])
             for layer in cache {
-                _ = layer.update(keys: keysValues, values: keysValues)
+                if let quantized = layer as? any QuantizedKVCacheProtocol {
+                    _ = quantized.updateQuantized(keys: keysValues, values: keysValues)
+                } else {
+                    _ = layer.update(keys: keysValues, values: keysValues)
+                }
             }
         }
 
@@ -555,6 +559,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         model: ToyLanguageModel,
         tokenizer: any Tokenizer = FakeChatMLTokenizer(),
         configuration: ModelConfiguration = ToyVocabulary.configuration(),
+        processor: (any UserInputProcessor)? = nil,
         vision: ToyUserInputProcessor.VisionStub? = nil,
         reportsFlatTextTokens: Bool = false,
         anchorsVision: Bool = false,
@@ -567,7 +572,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
             context: ModelContext(
                 configuration: configuration,
                 model: model,
-                processor: ToyUserInputProcessor(tokenizer: tokenizer, vision: vision),
+                processor: processor ?? ToyUserInputProcessor(tokenizer: tokenizer, vision: vision),
                 tokenizer: tokenizer
             )
         )
@@ -576,7 +581,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     func withSession<V, R: Sendable>(
         nonSendable payload: sending V,
         _ body: @Sendable (any ModelSession, V) async throws -> R
-    ) async throws -> R {
+    ) async rethrows -> R {
         let recorder = self.recorder
         let reportsFlatTextTokens = self.reportsFlatTextTokens
         let anchorsVision = self.anchorsVision

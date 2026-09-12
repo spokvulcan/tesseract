@@ -102,7 +102,7 @@ The claim a running generation holds on the leaf it took by **Leaf Handoff**,
 from check-out to check-in: while it holds, the tree may not drop the body,
 demote it, clear the RAM tier of it, promote it into an SSD write, or let the
 SSD writer read from it. Ends only at check-in or **Leaf Rewind**, never by
-age-out; the leased bytes stay counted.
+age-out; the leased bytes stay counted even while the tree holds no body.
 _Avoid_: **Restore Pin** (the weak claim of a copy restore — it protects a path,
 it does not own a body); GPU lease (the inference arbiter's turn-taking, a
 different resource); lock, refcount (one owner needs neither).
@@ -111,7 +111,8 @@ different resource); lock, refcount (one owner needs neither).
 Returning a leaf taken by **Leaf Handoff** to its exact pre-check-out state when
 the turn is cancelled, fails, or is intervened: the attention layers are trimmed
 back to the leaf offset and the recurrent layers' state is restored from the
-independent copy saved at check-out, then the leaf is checked back in unchanged.
+independent copy saved at check-out, including lengths, padding and state-slot
+metadata, then the leaf is checked back in unchanged.
 _Avoid_: **Think-Strip Rewind** (a render-caused prefix invalidation,
 unrelated); rollback (the vendor's speculative-decoding checkpoint, which aliases
 and is not used here); discard (the pre-handoff cancel outcome, which loses the
@@ -2126,8 +2127,9 @@ concept).
 **Eviction Configuration**:
 The `(flopProfile, alpha)` pair the prefix cache scores eviction against — the single
 mutable cell owned by `PrefixCacheManager`, passed to the pure-function scorers by
-value. `flopProfile` is fixed from **Model Identity** at cache build; `alpha` starts
-at the LRU default and adapts at runtime via the **AlphaTuner**.
+value. `flopProfile` is fixed from **Model Identity** at cache build; production
+`alpha` stays at the static LRU default (`0`), with **AlphaTuner** disabled
+pending [#504](https://github.com/spokvulcan/tesseract/issues/504).
 _Avoid_: `EvictionPolicy.modelProfile` / `.alpha` (retired statics), eviction settings
 (not a user **Setting**), model profile as a global. ("Flop profile" = the immutable
 per-architecture cost model; the config is the pair whose `alpha` half is mutable.)
@@ -2144,8 +2146,8 @@ private homes), eviction policy (unqualified — `EvictionPolicy` is the scorer 
 composes, not the selection).
 
 **AlphaTuner inversion**:
-The dependency direction between tuner and cache: the **AlphaTuner** is constructed
-with the production `flopProfile`, replays each grid-search candidate in its own
+The retained, production-disabled dependency direction between tuner and cache:
+an explicitly attached **AlphaTuner** takes a `flopProfile`, replays each grid-search candidate in its own
 sandbox, and *returns* the winning `alpha` for the manager to assign — holding no
 back-reference to the manager and writing no global. The inversion is that the manager
 pulls the result, not that the tuner pushes it.
