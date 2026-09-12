@@ -41,6 +41,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/HybridCacheSnapshotTests \
   -only-testing:tesseractTests/LeafCaptureHandoffTests \
+  -only-testing:tesseractTests/LeafLeaseTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
@@ -443,6 +444,56 @@ runner's config-based image scenario is therefore not real VLM coverage;
 its different-image assertion also fails on the unchanged baseline. The
 comparison report retains that failure instead of presenting it as a green
 image gate. Use an actual vision-loaded model for image-specific validation.
+
+### Tree-side Leaf Lease evidence (#479)
+
+`LeafLeaseTests` exercises body-drop refusal, pressure and Restore Pin
+age-out, RAM clear, demotion and queued promotion, same-path replacement,
+ancestor supersession, check-in growth, both writer/acquisition race orders,
+writer failures, and base/suffix ordering. All caches are small, real MLX
+caches; production checkout remains #480 work.
+
+Review regressions also cover pending-only return destinations, a tombstoned
+writer still reading an empty structural destination, request/lease identity
+on refusal, and mandatory SSD admission after explicit return. An admission
+attempted during a lease reports `StoreDiagnostics.leaseRefusals`; its retry
+after return still bypasses the pending-byte cap. Run
+`StorageActivityGateSchedulingTests` alongside this suite when changing the
+writer drain so ordinary forced flush remains covered too.
+
+Run `LeafLeaseMemoryEvidenceTests` **alone** for process-memory observations:
+
+```bash
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract \
+  -destination 'platform=macOS' -skipPackagePluginValidation \
+  -parallel-testing-enabled NO \
+  -only-testing:tesseractTests/LeafLeaseMemoryEvidenceTests
+```
+
+Quit the app before testing and relaunch it afterward. This test loads no
+model weights itself. It performs 24 success/cancellation/error simulations
+with a 4,160-byte hybrid body, checks cache-object and array release while
+retired lease tokens remain alive, and prints a `LEAF_LEASE_EVIDENCE=` JSON
+record. Correlate its request IDs with the `leafLease*` and `requestMemory`
+events in the test log. Lease acquisition should add no active MLX bytes;
+after return the freshest leaf still belongs to the Budget Floor until an
+explicit RAM clear. Allocator cache bytes can remain after live arrays die.
+Hosted-app process footprint includes startup work, logging and other
+components, so these small-cache checks do not establish the #480
+long-context footprint reduction.
+
+`treeLeasedBytes` and `treeLeaseCount` accompany the existing tree/floor and
+SSD pending counters in `requestMemory`. Lease events carry the request ID,
+lease ID, original offset and bytes; end events add returned offset/bytes,
+growth, and `checkIn` or `rewind`. Writer deferral includes the snapshot ID.
+Only explicit quiescent check-in/rewind ends a lease; `completeRequest`, the
+pin age-out limit, forced SSD flush and write-eagerness timeout cannot do so.
+
+See the [preserved small-cache evidence](../benchmarks/leaf-lease/2026-09-12/README.md)
+for the before/after ownership table, request IDs, diagnostic extracts and
+limits, and the [review follow-up](../benchmarks/leaf-lease/2026-09-12-review/README.md)
+for the additional return, admission and flush regressions. The large-model
+approval requirement in the capture baseline still applies to #480.
 
 ### Test-runner caveats
 

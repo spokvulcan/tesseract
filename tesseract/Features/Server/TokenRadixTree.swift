@@ -4,6 +4,10 @@ import MLXLMCommon
 /// Node in a token-level radix (compressed trie) tree.
 /// Edge tokens represent the compressed path segment from parent to this node.
 final class RadixTreeNode {
+    /// Follows a returned body when check-in advances its token path. Only
+    /// the tree swaps this reference; pending writers retain the same guard.
+    fileprivate(set) var bodyAccess = LeafBodyAccess()
+    var leafLease: LeafLease? { bodyAccess.lease }
     var edgeTokens: [Int]
     var children: [Int: RadixTreeNode]
     /// The node's snapshot lifecycle — owns both the RAM body and the
@@ -115,6 +119,8 @@ final class TokenRadixTree {
     private let root: RadixTreeNode
     private(set) var nodeCount: Int = 1
     private(set) var totalSnapshotBytes: Int = 0
+    private(set) var leasedBytes: Int = 0
+    private(set) var leaseCount: Int = 0
     /// Per-checkpoint-type RAM-body counts. Reconciled incrementally at
     /// the single mutation chokepoint (every transition method) from each
     /// state's resident body, so callers don't have to walk the tree to
@@ -350,11 +356,14 @@ final class TokenRadixTree {
     /// Attach (or replace) a RAM body on a node. Use the node returned by
     /// `insertPath`. Routes through the `storingBody` transition so the
     /// byte/count budgets reconcile at the single chokepoint.
-    func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) {
+    @discardableResult
+    func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) -> Bool {
+        guard !node.bodyAccess.blocks(.bodyReplacement) else { return false }
         let old = node.state
         let (next, _) = old.storingBody(snapshot)
         commit(next, on: node, from: old)
         node.lastAccessTime = .now
+        return true
     }
 
     /// Attach a snapshot at a specific offset on an already-inserted token path.
@@ -375,8 +384,7 @@ final class TokenRadixTree {
         let node = insertPath(tokens: Array(tokens[0..<offset]))
         guard node.tokenOffset == offset else { return false }
 
-        storeSnapshot(snapshot, on: node)
-        return true
+        return storeSnapshot(snapshot, on: node)
     }
 
     // MARK: - Snapshot-state transitions (the sole mutator)
@@ -396,6 +404,7 @@ final class TokenRadixTree {
     /// delete its backing before it orphans a file + manifest entry.
     @discardableResult
     func admit(node: RadixTreeNode, ref: SnapshotRef) -> String? {
+        guard !node.bodyAccess.blocks(.ssdAdmission) else { return nil }
         let old = node.state
         let (next, effect, supersededID) = old.admitting(ref)
         precondition(
@@ -443,6 +452,11 @@ final class TokenRadixTree {
     /// (state 2/4) settles in place.
     @discardableResult
     func dropBody(node: RadixTreeNode) -> DropBodyResult {
+        guard !node.bodyAccess.blocks(.dropBody) else {
+            return DropBodyResult(
+                droppedCheckpointType: nil, droppedBodyBytes: 0, refID: nil,
+                effect: .ignored(.leased))
+        }
         let old = node.state
         let (next, result) = old.droppingBody()
         if case .ignored = result.effect {
@@ -673,7 +687,7 @@ final class TokenRadixTree {
     /// victims first), and `.system` protection lives where loss is
     /// actually expensive — the SSD ledger's type-protected cut. The
     /// remaining RAM protection is the **Budget Floor** (in-flight
-    /// restore pins + the freshest leaf), applied by the caller.
+    /// Restore Pins, Leaf Leases and the freshest leaf), applied by the caller.
     /// The **Eviction Candidate Policy**'s oldest-first fallback still backstops
     /// the degenerate case where utility scoring yields no victim.
     func eligibleEvictionNodes() -> [RadixTreeNode] {
@@ -953,6 +967,127 @@ final class TokenRadixTree {
             TraceBlockDigest.fold(token: token, into: &hash)
         }
         return TraceBlockDigest.hexDigest(hash)
+    }
+}
+
+extension TokenRadixTree {
+    // MARK: - Leaf Lease (no production checkout until #480)
+
+    func beginLeafLease(
+        on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context
+    ) -> LeafLease? {
+        func refuse(_ reason: LeafLeaseRefusedEvent.Reason) -> LeafLease? {
+            let active = node.leafLease
+            context.log(
+                LeafLeaseRefusedEvent(
+                    reason: reason, offset: node.tokenOffset, bytes: node.state.residentBodyBytes,
+                    leaseID: active?.id, activeLeaseID: active?.id,
+                    activeRequestID: active?.context.requestID), level: .notice)
+            return nil
+        }
+        guard contains(node) else { return refuse(.wrongTree) }
+        guard let body = node.state.body, body.checkpointType == .leaf else {
+            return refuse(.notLeaf)
+        }
+        let lease = LeafLease(context: context, offset: node.tokenOffset, bytes: body.memoryBytes)
+        guard node.bodyAccess.begin(lease) else {
+            return refuse(node.leafLease == nil ? .writerReading : .alreadyLeased)
+        }
+        leasedBytes += lease.bytes
+        leaseCount += 1
+        context.log(LeafLeaseBeginEvent(lease: lease, accounting: leaseAccounting), level: .notice)
+        return lease
+    }
+
+    /// Caller must return a quiescent body; cancellation/error callers rewind
+    /// first. Neither completeRequest nor the Restore Pin backstop ends a lease.
+    @discardableResult
+    func endLeafLease(
+        _ lease: LeafLease, on node: RadixTreeNode,
+        returning body: HybridCacheSnapshot, tokens: [Int], reason: LeafLease.ReleaseReason
+    ) -> Bool {
+        func refuse(_ reason: LeafLeaseRefusedEvent.Reason) -> Bool {
+            let active = node.leafLease
+            lease.context.log(
+                LeafLeaseRefusedEvent(
+                    reason: reason, offset: lease.offset, bytes: lease.bytes, leaseID: lease.id,
+                    activeLeaseID: active?.id, activeRequestID: active?.context.requestID),
+                level: .notice)
+            return false
+        }
+        guard contains(node) else { return refuse(.wrongTree) }
+        guard node.leafLease?.id == lease.id else { return refuse(.staleLease) }
+        guard body.checkpointType == .leaf, body.tokenOffset == tokens.count else {
+            return refuse(.invalidBody)
+        }
+        guard tokens.starts(with: pathToNode(node)), tokens.count >= lease.offset else {
+            return refuse(.invalidPath)
+        }
+        guard reason == .checkIn || tokens.count == lease.offset else {
+            return refuse(.invalidRewind)
+        }
+        // An occupied destination is a competing admission, not permission to
+        // replace another body/ref. Leave the lease intact for a rewind.
+        let existing = exactNode(tokens: tokens)
+        if let existing, existing !== node {
+            guard case .empty = existing.state, existing.chainPrefixRestorePoint == nil else {
+                return refuse(.occupiedDestination)
+            }
+            // Even an empty structural node may have a tombstoned writer
+            // still reading its former body. Reserve its gate atomically so
+            // we never replace an active reader's or owner's exclusion state.
+            guard existing.bodyAccess.begin(lease) else { return refuse(.destinationBusy) }
+        }
+        guard node.bodyAccess.end(lease) else {
+            if let existing, existing !== node { _ = existing.bodyAccess.end(lease) }
+            return refuse(.staleLease)
+        }
+        let destination = insertPath(tokens: tokens)
+        leasedBytes -= lease.bytes
+        leaseCount -= 1
+        if destination !== node {
+            dropBody(node: node)
+            if let existing { _ = existing.bodyAccess.end(lease) }
+            destination.bodyAccess = node.bodyAccess
+            node.bodyAccess = LeafBodyAccess()
+        }
+        storeSnapshot(body, on: destination)
+        lease.context.log(
+            LeafLeaseEndEvent(
+                lease: lease, reason: reason, returnedOffset: body.tokenOffset,
+                returnedBytes: body.memoryBytes, accounting: leaseAccounting), level: .notice)
+        return true
+    }
+
+    private var leaseAccounting: LeafLeaseAccounting {
+        LeafLeaseAccounting(
+            treeSnapshotBytes: totalSnapshotBytes, leasedBytes: leasedBytes, leaseCount: leaseCount)
+    }
+
+    /// Membership follows the owned parent links, including structural nodes;
+    /// snapshot lookup intentionally omits empty nodes and pending-only refs.
+    private func contains(_ node: RadixTreeNode) -> Bool {
+        var current = node
+        while let parent = current.parent {
+            guard let first = current.edgeTokens.first, parent.children[first] === current else {
+                return false
+            }
+            current = parent
+        }
+        return current === root
+    }
+
+    private func exactNode(tokens: [Int]) -> RadixTreeNode? {
+        var current = root
+        var offset = 0
+        while offset < tokens.count {
+            guard let child = current.children[tokens[offset]],
+                tokens[offset...].starts(with: child.edgeTokens)
+            else { return nil }
+            offset += child.edgeTokens.count
+            current = child
+        }
+        return current
     }
 }
 

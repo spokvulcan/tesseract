@@ -1,0 +1,22 @@
+{
+  "README.md": {
+    "bytes": 7662,
+    "sha256": "535b156b3ac56ee65d391e61cbfd31162c64a995f5673e41d6e09aa3ae0d182d"
+  },
+  "lifecycle-diagnostics.jsonl": {
+    "bytes": 16983,
+    "sha256": "3c9c7930bd8979e76429cfa862ff6519b6c1bcb5e4ee24e07d5950c82a4275f6"
+  },
+  "measurements.json": {
+    "bytes": 8337,
+    "sha256": "a958d577f4bd462c057492106c4e7459f197658175b76a2374c6548e9914817f"
+  },
+  "memory-diagnostics.jsonl": {
+    "bytes": 76604,
+    "sha256": "6850f244f69c1abe016f6c2e2e855f5d3bf5b4b0cee79ea5b56c460e055ee547"
+  },
+  "validation.json": {
+    "bytes": 5595,
+    "sha256": "3243679ab9f695095fb31a400a8b671a72036f031338691cc34ad52239edc3b5"
+  }
+}

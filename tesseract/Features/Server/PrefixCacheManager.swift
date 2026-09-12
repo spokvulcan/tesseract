@@ -277,6 +277,9 @@ final class PrefixCacheManager {
         let evictions: [EvictionEvent]
         let supersededLeaves: [LeafSupersession]
         let stats: CacheStats
+        /// Entries rejected by active ownership. Return these leases before
+        /// retrying admission; no RAM replacement or SSD write was accepted.
+        let leaseRefusals: [UUID]
     }
 
     struct LeafSupersession: Sendable {
@@ -1096,6 +1099,7 @@ final class PrefixCacheManager {
         }
         let tree = store.getOrCreateTree(for: admission.partitionKey)
         var supersededLeaves: [LeafSupersession] = []
+        var leaseRefusals: [UUID] = []
         let hasSSDEntry = admission.entries.contains { entry in
             if case .ramAndSSD = entry.storage { return true }
             return false
@@ -1111,10 +1115,14 @@ final class PrefixCacheManager {
             return Array(admission.fullPromptTokens.prefix(entry.path.offset))
         }
 
-        func storeRAMEntry(_ entry: SnapshotAdmission.Entry) -> (node: RadixTreeNode, path: [Int]) {
+        func storeRAMEntry(_ entry: SnapshotAdmission.Entry) -> (node: RadixTreeNode, path: [Int])?
+        {
             let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
-            tree.storeSnapshot(entry.snapshot, on: node)
+            guard tree.storeSnapshot(entry.snapshot, on: node) else {
+                if let lease = node.leafLease { leaseRefusals.append(lease.id) }
+                return nil
+            }
 
             return (node, path)
         }
@@ -1200,12 +1208,16 @@ final class PrefixCacheManager {
         case .checkpoints:
             tree.insertPath(tokens: admission.fullPromptTokens)
             for entry in admission.entries {
-                let stored = storeRAMEntry(entry)
+                guard let stored = storeRAMEntry(entry) else { continue }
                 admitSSDEntry(entry, node: stored.node, path: stored.path)
             }
         case .leaf:
             let entry = admission.entries.first
-            let stored = storeRAMEntry(entry)
+            // A Leaf Lease must be returned before end-of-turn admission.
+            // Rejection here is an ownership-order error, logged by the tree,
+            // and the caller must retry after check-in/rewind (ADR-0019).
+            // #480 wires that ordering; no production checkout exists yet.
+            guard let stored = storeRAMEntry(entry) else { break }
             // Enqueue-before-delete (ADR-0019; vLLM's offload-safety
             // invariant: never free the source until the save is
             // durable). Every leaf admission enqueues its SSD write
@@ -1258,7 +1270,8 @@ final class PrefixCacheManager {
         return StoreDiagnostics(
             evictions: evictions,
             supersededLeaves: supersededLeaves,
-            stats: stats
+            stats: stats,
+            leaseRefusals: leaseRefusals
         )
     }
 
@@ -1267,6 +1280,8 @@ final class PrefixCacheManager {
     /// enqueue so the writer's admission cut can consume these residents
     /// first (its Pass 0) instead of evicting an unrelated one. Shielded
     /// transfer bases are excluded: a still-pending extension owns them.
+    /// Leased ancestors are excluded too, matching the supersession walk:
+    /// that admission must not condemn backing for a body it cannot supersede.
     /// Read-only; the authoritative fate of each backing is decided by
     /// `supersedeAncestorLeaves` after the enqueue outcome is known.
     private func condemnedAncestorRefIDs(for node: RadixTreeNode) -> Set<String> {
@@ -1274,6 +1289,7 @@ final class PrefixCacheManager {
         var current = node.parent
         while let ancestor = current {
             if ancestor.state.checkpointType == .leaf,
+                ancestor.leafLease == nil,
                 let refID = ancestor.state.refID,
                 !store.isTransferringBase(refID)
             {
@@ -1294,6 +1310,10 @@ final class PrefixCacheManager {
 
         while let ancestor = current {
             let nextAncestor = ancestor.parent
+            guard !ancestor.bodyAccess.blocks(.supersession) else {
+                current = nextAncestor
+                continue
+            }
             let state = ancestor.state
             guard state.checkpointType == .leaf else {
                 current = nextAncestor
@@ -2015,7 +2035,8 @@ final class PrefixCacheManager {
     /// The floor's membership and cost in one walk (ADR-0019): the
     /// in-flight requests' pinned restore-path nodes plus the single
     /// most-recently-extended `.leaf` body across all partitions (the
-    /// snapshot that buys the next turn's near-instant TTFT).
+    /// snapshot that buys the next turn's near-instant TTFT), plus every
+    /// explicitly held Leaf Lease. Overlapping membership is counted once.
     /// Deliberately minimal and dumb — a last-resort survival set,
     /// never the protection mechanism (ADR-0011). `.system` bodies are
     /// *not* members: their loss is a hydration on the next cold
@@ -2027,6 +2048,11 @@ final class PrefixCacheManager {
         var freshestLeaf: RadixTreeNode?
         for (_, tree) in store.orderedPartitions() {
             for node in tree.allSnapshotNodes() {
+                if let lease = node.leafLease,
+                    nodes.insert(ObjectIdentifier(node)).inserted
+                {
+                    bytes += lease.bytes
+                }
                 guard let body = node.state.body, body.checkpointType == .leaf
                 else { continue }
                 if freshestLeaf == nil
@@ -2130,8 +2156,8 @@ final class PrefixCacheManager {
     /// before touching other partitions. When `nil`, behaves globally
     /// (Marconi default).
     ///
-    /// The **Budget Floor** members (in-flight restore pins + the single
-    /// most-recently-extended leaf) are never victims — on *every*
+    /// The **Budget Floor** members (in-flight restore pins, explicit Leaf
+    /// Leases and the single most-recently-extended leaf) are never victims — on *every*
     /// drain, admission included (ADR-0019). The admission drain was the
     /// one most likely to kill the just-captured leaf: it used to run
     /// unconditionally, so the fresh leaf could be evicted by its own
@@ -2222,8 +2248,8 @@ final class PrefixCacheManager {
 
     /// User-initiated RAM-tier wipe (the status-bar menu's "Clear Memory
     /// Cache"): drops every resident snapshot body through the `dropBody`
-    /// chokepoint. Only the in-flight restore pins survive — a running
-    /// request's restore path is a correctness floor (ADR-0019). Unlike a
+    /// chokepoint. In-flight Restore Pins and explicit Leaf Leases survive —
+    /// running requests retain their correctness floor (ADR-0019). Unlike a
     /// budget drain this deliberately drops the freshest-leaf floor member
     /// (the user asked for the memory back, not a TTFT guarantee) and never
     /// touches the budget band — `setMemoryBudget` would suspend dynamic
@@ -2247,6 +2273,7 @@ final class PrefixCacheManager {
             // `selfHeal` only detaches emptied nodes, so every remaining
             // body-bearing entry stays a valid `dropBody` target.
             for node in tree.allSnapshotNodes() {
+                guard !node.bodyAccess.blocks(.ramClear) else { continue }
                 guard node.state.body != nil,
                     !pinned.contains(ObjectIdentifier(node))
                 else { continue }
@@ -2297,6 +2324,9 @@ final class PrefixCacheManager {
             "treeSnapshotBytes": "\(totalSnapshotBytes)",
             "treeBudgetBytes": "\(memoryBudgetBytes)",
             "treeBudgetFloorBytes": "\(budgetFloorBytes())",
+            "treeLeasedBytes":
+                "\(store.orderedPartitions().reduce(0) { $0 + $1.tree.leasedBytes })",
+            "treeLeaseCount": "\(store.orderedPartitions().reduce(0) { $0 + $1.tree.leaseCount })",
             "ssdPendingPayloadBytes": "\(ssd.pendingBytes)",
             "ssdPendingPayloadCount": "\(ssd.pendingCount)",
         ]
@@ -2394,6 +2424,7 @@ final class PrefixCacheManager {
         _ candidate: EvictionCandidatePolicy.Candidate,
         now: ContinuousClock.Instant
     ) {
+        guard !candidate.node.bodyAccess.blocks(.demotion) else { return }
         // A chain-prefix-backed node (ADR-0012) skips demotion outright:
         // its bytes already exist on SSD as the owning chain's leading
         // segments, and writing a duplicate copy is exactly the write
@@ -2457,8 +2488,14 @@ final class PrefixCacheManager {
             node.state.body != nil
         else { return }
 
+        guard !node.bodyAccess.blocks(.writePromotion) else { return }
+
         node.ssdPromotionAttempted = true
         Task { @MainActor [weak self] in
+            guard !node.bodyAccess.blocks(.writePromotion) else {
+                node.ssdPromotionAttempted = false
+                return
+            }
             guard let self,
                 node.state.ref == nil,
                 node.chainPrefixRestorePoint == nil,

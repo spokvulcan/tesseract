@@ -253,6 +253,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// Guards against stacking re-wake tasks while a deferred item
     /// waits out the gate.
     private var deferredRewakeScheduled = false
+    /// Last drain could not finish because an active lease excluded a reader.
+    /// Under queueLock; only this case suppresses flush's normal re-pump.
+    private var drainBlockedByLease = false
 
     // MARK: - Public API
 
@@ -363,7 +366,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         scoringConfig: EvictionConfiguration = EvictionConfiguration(),
         condemnedResidentIDs: Set<String> = [],
         mandatory: Bool = false,
-        deferrable: Bool = false
+        deferrable: Bool = false,
+        bodyAccess: LeafBodyAccess? = nil
     ) -> TryEnqueueResult {
         // Parse the wire-format checkpoint type before taking the lock;
         // no sense holding the lock for a parse that can fail.
@@ -476,6 +480,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         enqueueApplyingBackPressure(
             PendingWrite(
                 payload: payload,
+                bodyAccess: bodyAccess,
                 descriptor: descriptor,
                 extendingBaseID: extendingBaseID,
                 transferClaim: transferClaim,
@@ -745,11 +750,17 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         }
         // Stream closed (deinit). Fail any straggling waiters by
         // resuming them so `flushAsync` callers do not leak.
-        resumeDrainWaiters()
+        resumeDrainWaiters(force: true)
     }
 
-    private func resumeDrainWaiters() {
+    private func resumeDrainWaiters(force: Bool = false) {
         queueLock.lock()
+        // A flush may override write eagerness, never a Leaf Lease. Keep
+        // its continuation asleep while leased work remains in the queue.
+        guard force || !drainBlockedByLease else {
+            queueLock.unlock()
+            return
+        }
         let waiters = drainWaiters
         drainWaiters.removeAll(keepingCapacity: false)
         queueLock.unlock()
@@ -772,6 +783,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     private func popNextPending() -> PendingWrite? {
         queueLock.lock()
         defer { queueLock.unlock() }
+        drainBlockedByLease = false
         guard !pending.isEmpty else {
             inFlightSnapshotID = nil
             return nil
@@ -783,28 +795,44 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         // non-deferrable items — write-order between unrelated
         // snapshots carries no invariant (extension bases are promoted
         // to non-deferrable at the extension's enqueue, so base-before-
-        // suffix is preserved the FIFO way).
+        // suffix is preserved the FIFO way). A lease can additionally
+        // block a non-deferrable base; track skipped IDs in this pass to
+        // keep its dependent suffixes behind it, transitively.
         let gateBusy = activityGate?.isBusy ?? false
         let now: ContinuousClock.Instant = .now
+        var blockedIDs: Set<String> = []
         for index in pending.indices {
             let item = pending[index]
             if item.deferrable, !forceDrainDeferred, gateBusy,
                 now - item.enqueuedAt < Self.maxDeferredHoldup
             {
+                blockedIDs.insert(item.descriptor.snapshotID)
+                continue
+            }
+            if let baseID = item.extendingBaseID, blockedIDs.contains(baseID) {
+                blockedIDs.insert(item.descriptor.snapshotID)
+                continue
+            }
+            if let access = item.bodyAccess,
+                !access.beginRead(snapshotID: item.descriptor.snapshotID)
+            {
+                drainBlockedByLease = true
+                blockedIDs.insert(item.descriptor.snapshotID)
                 continue
             }
             let selected = pending.remove(at: index)
             inFlightSnapshotID = selected.descriptor.snapshotID
             return selected
         }
-        // Only gate-blocked deferrable items remain — leave them queued
-        // and let a delayed re-wake retry once the gate quiets down.
+        // Only gate/lease-blocked items and their dependents remain. The
+        // bounded recheck also resumes work after a lease return without
+        // retaining a writer or wakeup callback in the scalar access gate.
         inFlightSnapshotID = nil
         scheduleDeferredRewakeLocked()
         return nil
     }
 
-    /// Schedule a one-shot delayed wakeup so gate-blocked deferrable
+    /// Schedule a one-shot delayed wakeup so gate/lease-blocked
     /// items are re-checked without busy-spinning. Must be called with
     /// `queueLock` held.
     private func scheduleDeferredRewakeLocked() {
@@ -829,6 +857,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable:next function_body_length
     private func processPendingItem(_ item: PendingWrite) async {
+        var holdsBodyRead = item.bodyAccess != nil
+        defer { if holdsBodyRead { item.bodyAccess?.endRead() } }
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
             item.transferClaim?.release()
             releasePendingBytes(item.payload.totalBytes)
@@ -918,6 +948,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                     bytes: item.payload.totalBytes,
                     durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
                 ))
+        }
+        // The materializer has dropped every body array. Subsequent file I/O
+        // reads independent Data and no longer excludes a lease.
+        if holdsBodyRead {
+            item.bodyAccess?.endRead()
+            holdsBodyRead = false
         }
         do {
             try writePayload(item.payload, descriptor: descriptorToWrite)
@@ -1293,6 +1329,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
 
     private struct PendingWrite: Sendable {
         let payload: SnapshotPayload
+        let bodyAccess: LeafBodyAccess?
         let descriptor: PersistedSnapshotDescriptor
         /// Non-nil for a **Leaf Extension Admission**: the base whose
         /// chain the commit folds.

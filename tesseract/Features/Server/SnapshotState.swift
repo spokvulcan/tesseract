@@ -60,6 +60,8 @@ nonisolated enum StateEffect: Equatable {
 /// keep today's diagnostic fidelity (`notPending` / `idMismatch` /
 /// `alreadyCommitted`).
 nonisolated enum IgnoreReason: Equatable {
+    /// A running request owns the resident body until check-in or rewind.
+    case leased
     /// No pending write to act on (the state holds no pending ref).
     case notPending
     /// The current ref's ID does not match the expected ID — a later
