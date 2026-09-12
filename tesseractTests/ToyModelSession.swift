@@ -429,6 +429,7 @@ nonisolated struct RecordingModelSession: ModelSession {
 
     var configuration: ModelConfiguration { base.configuration }
     var tokenizer: any Tokenizer { base.tokenizer }
+    var mtpDrafter: (any MTPDrafterModel)? { base.mtpDrafter }
     var anchoredVisionPrepare: AnchoredVisionPrepare? {
         recorder.record(.visionContinuationQuery)
         return anchoredVisionPrepareOverride ?? base.anchoredVisionPrepare
@@ -548,6 +549,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     /// a keyed image-bearing request runs end to end over the toy (the
     /// vision-container shape; the stub's pad run stands in for the tower).
     let anchorsVision: Bool
+    let hasMTPDrafter: Bool
 
     init(
         model: ToyLanguageModel,
@@ -555,10 +557,12 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         configuration: ModelConfiguration = ToyVocabulary.configuration(),
         vision: ToyUserInputProcessor.VisionStub? = nil,
         reportsFlatTextTokens: Bool = false,
-        anchorsVision: Bool = false
+        anchorsVision: Bool = false,
+        hasMTPDrafter: Bool = false
     ) {
         self.reportsFlatTextTokens = reportsFlatTextTokens
         self.anchorsVision = anchorsVision
+        self.hasMTPDrafter = hasMTPDrafter
         self.container = ModelContainer(
             context: ModelContext(
                 configuration: configuration,
@@ -576,10 +580,12 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let recorder = self.recorder
         let reportsFlatTextTokens = self.reportsFlatTextTokens
         let anchorsVision = self.anchorsVision
+        let hasMTPDrafter = self.hasMTPDrafter
         return try await container.perform(nonSendable: payload) { context, payload in
             return try await body(
                 RecordingModelSession(
-                    base: ContextBackedModelSession(context: context),
+                    base: ContextBackedModelSession(
+                        context: context, mtpDrafter: hasMTPDrafter ? InactiveMTPDrafter() : nil),
                     recorder: recorder,
                     producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
                     anchoredVisionPrepareOverride: anchorsVision
@@ -599,5 +605,22 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
             try model.prepare(
                 input, cache: cache, state: state, prefill: .init(stepSize: windowSize))
         }
+    }
+}
+
+/// Presence-only drafter for requests whose policy must select ordinary
+/// decoding. Any attempt to use the MTP path fails at the model boundary.
+nonisolated final class InactiveMTPDrafter: Module, MTPDrafterModel {
+    func draftBlock(
+        target: any LanguageModel,
+        lastToken: MLXArray,
+        lastHidden: MLXArray,
+        sharedKV: [String: (MLXArray, MLXArray)],
+        positionDeltas: MLXArray?,
+        queryOffset: Int,
+        blockSize: Int,
+        sampler: any LogitSampler
+    ) -> MLXArray {
+        preconditionFailure("MTP must not engage in this fixture")
     }
 }

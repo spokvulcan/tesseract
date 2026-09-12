@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import MLX
 import MLXLMCommon
@@ -36,9 +37,25 @@ final class HybridCacheCorrectnessRunner {
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded.")
 
+        let args = CommandLine.arguments
+        let replay: RecordedReplay?
+        if let index = args.firstIndex(of: "--bench-replay-request") {
+            guard index + 1 < args.count else {
+                throw HybridCacheCorrectnessError.verificationFailed(
+                    failedChecks: ["--bench-replay-request requires a recording path"])
+            }
+            replay = try Self.readRecordedReplay(
+                recording: URL(fileURLWithPath: args[index + 1]),
+                identity: ModelIdentity(directory: modelDir))
+        } else {
+            replay = nil
+        }
         let testRun = try await engine.llmActor.withModelContainer { container in
-            await container.perform { context in
-                Self.runAllTests(context: context)
+            try await container.perform { context in
+                if let replay {
+                    return try Self.runRecordedHandoff(context: context, replay: replay)
+                }
+                return Self.runAllTests(context: context)
             }
         }
 
@@ -70,6 +87,95 @@ final class HybridCacheCorrectnessRunner {
     private struct TestRunResult: Sendable {
         let logs: [String]
         let checks: [CheckResult]
+    }
+
+    private struct RecordedReplay: Sendable {
+        let hash: String
+        let messages: [[String: any Sendable]]
+        let tools: [ToolSpec]?
+        let renderContext: TemplateRenderContext
+    }
+
+    /// HTTP normalization stays on the MainActor, as it does at the real
+    /// request edge; only its values enter the model-affine check.
+    private static func readRecordedReplay(
+        recording: URL, identity: ModelIdentity
+    ) throws -> RecordedReplay {
+        let data = try Data(contentsOf: recording)
+        guard var raw = String(data: data, encoding: .utf8) else {
+            throw HybridCacheCorrectnessError.verificationFailed(
+                failedChecks: ["recording must be UTF-8"])
+        }
+        if raw.hasPrefix("//"), let newline = raw.firstIndex(of: "\n") {
+            raw = String(raw[raw.index(after: newline)...])
+        }
+        let request = try JSONDecoder().decode(
+            OpenAI.ChatCompletionRequest.self, from: Data(raw.utf8))
+        let renderContext = CompletionHandler.resolveRenderContext(
+            for: request, preserveThinking: true, template: identity)
+        guard
+            let conversation = MessageConverter.normalizeRequest(
+                request.messages, tools: request.tools, templateContextDigest: renderContext.digest
+            ).prefixCacheEligibility.conversation,
+            conversation.messages.allSatisfy({ $0.images.isEmpty })
+        else {
+            throw HybridCacheCorrectnessError.verificationFailed(
+                failedChecks: ["recording must be a cache-eligible text conversation"])
+        }
+        return RecordedReplay(
+            hash: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+            messages: conversation.promptMessages,
+            tools: LLMActor.canonicalizeToolSpecs(
+                MessageConverter.convertToolDefinitions(request.tools)),
+            renderContext: renderContext)
+    }
+
+    /// An opt-in loaded-model gate on private HTTPRequestLogger recordings.
+    /// It compares actual continuation logit bytes after restoring a copied
+    /// versus moved leaf. This is an ownership/restore correctness check;
+    /// it does not run speculative decoding or measure HTTP tail latency.
+    private nonisolated static func runRecordedHandoff(
+        context: ModelContext, replay: RecordedReplay
+    ) throws -> TestRunResult {
+        let tokens = try ConversationRender.stablePrefixProbeRender(
+            tokenizer: context.tokenizer, messages: replay.messages,
+            tools: replay.tools,
+            additionalContext: replay.renderContext.additionalContext())
+        guard tokens.count > 16 else {
+            throw HybridCacheCorrectnessError.verificationFailed(
+                failedChecks: ["recording needs more than 16 prompt tokens"])
+        }
+        let offset = tokens.count - 16
+        var cache = try context.model.newCache(parameters: nil)
+        try prefill(
+            context: context, tokens: Array(tokens.prefix(offset)), checkpoints: [:], cache: cache)
+        guard let copied = HybridCacheSnapshot.capture(cache: cache, offset: offset, type: .leaf),
+            let moved = HybridCacheSnapshot.captureMoving(cache: &cache, offset: offset)
+        else {
+            throw HybridCacheCorrectnessError.snapshotCaptureFailed
+        }
+        func continuation(from snapshot: HybridCacheSnapshot) throws -> Data {
+            let restored = try snapshot.restore()
+            try prefill(
+                context: context, tokens: Array(tokens[offset..<(tokens.count - 1)]),
+                checkpoints: [:], checkpointBaseOffset: offset, cache: restored)
+            return lastTokenLogits(context: context, tokens: tokens, cache: restored)
+                .asData(access: .copy).data
+        }
+        let expected = try continuation(from: copied)
+        let actual = try continuation(from: moved)
+        let passed = cache.isEmpty && !expected.isEmpty && expected == actual
+        let detail =
+            "recordingSHA256=\(replay.hash) promptTokens=\(tokens.count) leafOffset=\(offset) "
+            + "continuationTokens=16 snapshotBytes=\(moved.memoryBytes) logitsBytes=\(actual.count) "
+            + "requestCacheLayers=\(cache.count) bitwiseEqual=\(expected == actual)"
+        return TestRunResult(
+            logs: [detail],
+            checks: [
+                CheckResult(
+                    name: "movedRecordingContinuationMatchesCopyBitwise", passed: passed,
+                    detail: detail)
+            ])
     }
 
     private nonisolated static func runAllTests(context: ModelContext) -> TestRunResult {

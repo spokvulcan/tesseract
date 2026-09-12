@@ -1,0 +1,588 @@
+{
+  "schemaVersion": 1,
+  "measurementDate": "2026-09-08",
+  "environment": "environment.json",
+  "artifact": {
+    "url": "https://github.com/spokvulcan/tesseract/releases/download/evidence-478-2026-09-08/capture-handoff-2026-09-08.zip",
+    "page": "https://github.com/spokvulcan/tesseract/releases/tag/evidence-478-2026-09-08",
+    "sha256": "2944ddec10464fb1ad2d367ff6a2a7dd9079237180293b4a5152164414b00c23",
+    "bytes": 124734,
+    "sourceCommit": "519e55e91fd14d4b2b8c7560166e4f6b9dc195b0",
+    "sourceFiles": 32,
+    "sourceBytes": 1256181,
+    "manifest": "manifest.json",
+    "detailDirectory": "capture-handoff-2026-09-08/"
+  },
+  "units": {
+    "memory": "bytes",
+    "durations": "milliseconds"
+  },
+  "pairedRuns": [
+    {
+      "case": "short-cold",
+      "comparativePerformanceEligible": false,
+      "requestSHA256": "7c8dc126c15fd3e7bd23df9527f9899fdfd035cede973acc2149d1bd0b16755e",
+      "cachePlan": {
+        "snapshotOffset": "nil",
+        "sharedPrefixLength": "0",
+        "plannedCheckpoints": "[2735:system]",
+        "hydratedFromSSD": "false"
+      },
+      "copy": {
+        "requestID": "A20BE1F0-450C-45FF-B096-BC3B0A5A1157",
+        "usage": {
+          "completion_tokens": 16,
+          "prompt_tokens": 2749,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2765
+        },
+        "responseSHA256": "3ad38aaa2b0603f86ad4e8ab0a2c3bd13d26fcb67451b8021939aab55b6d606f",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 5.288,
+          "postGenerationMs": 43.177,
+          "captureActiveDeltaBytes": 336019456,
+          "restoreSnapshotBytes": 0,
+          "restoreActiveDeltaBytes": null,
+          "checkpointArrayBytes": 666959872,
+          "leafSnapshotBytes": 335151104,
+          "payloadMode": "full",
+          "payloadBytes": 335151104,
+          "sampledPeakActiveBytes": 18013882532,
+          "sampledPeakFootprintBytes": 19199863680,
+          "afterReleaseActiveBytes": 17341204644,
+          "afterReleaseFootprintBytes": 18932297104,
+          "treeSnapshotBytesAtRelease": 668336128
+        }
+      },
+      "handoff": {
+        "requestID": "804AFAEC-7FF6-4ACF-AB9F-DD60ADA03E20",
+        "usage": {
+          "completion_tokens": 16,
+          "prompt_tokens": 2749,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          },
+          "total_tokens": 2765
+        },
+        "responseSHA256": "3ad38aaa2b0603f86ad4e8ab0a2c3bd13d26fcb67451b8021939aab55b6d606f",
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 0.207,
+          "postGenerationMs": 38.069,
+          "captureActiveDeltaBytes": 0,
+          "restoreSnapshotBytes": 0,
+          "restoreActiveDeltaBytes": null,
+          "checkpointArrayBytes": 666959872,
+          "leafSnapshotBytes": 335151104,
+          "payloadMode": "full",
+          "payloadBytes": 335151104,
+          "sampledPeakActiveBytes": 17828121452,
+          "sampledPeakFootprintBytes": 19603401216,
+          "afterReleaseActiveBytes": 17343908224,
+          "afterReleaseFootprintBytes": 18684963976,
+          "treeSnapshotBytesAtRelease": 668336128
+        }
+      }
+    },
+    {
+      "case": "46k-cold",
+      "comparativePerformanceEligible": true,
+      "requestSHA256": "fbc3bfc6c5702352058ce3d0e96a3a913152b95e63c98fccc50fe9bf701bd571",
+      "cachePlan": {
+        "snapshotOffset": "2735",
+        "sharedPrefixLength": "2735",
+        "plannedCheckpoints": "[]",
+        "hydratedFromSSD": "false"
+      },
+      "copy": {
+        "requestID": "CA8F4B5B-1487-4AEA-A12D-12E8975A122C",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 46154,
+          "prompt_tokens_details": {
+            "cached_tokens": 2735
+          },
+          "total_tokens": 46282
+        },
+        "responseSHA256": "c3e500346544ef8fdb57b53652b8a4411914ac3328660a01cedc72275c30cc3b",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 156.685,
+          "postGenerationMs": 176.762,
+          "captureActiveDeltaBytes": 3160653628,
+          "restoreSnapshotBytes": 333185024,
+          "restoreActiveDeltaBytes": 333971456,
+          "checkpointArrayBytes": 3178364928,
+          "leafSnapshotBytes": 3187081216,
+          "payloadMode": "full",
+          "payloadBytes": 3187081216,
+          "sampledPeakActiveBytes": 26899040432,
+          "sampledPeakFootprintBytes": 29899943384,
+          "afterReleaseActiveBytes": 20193134768,
+          "afterReleaseFootprintBytes": 29696067944,
+          "treeSnapshotBytesAtRelease": 3520266240
+        }
+      },
+      "handoff": {
+        "requestID": "4B9C3B76-4934-43AB-9A21-8D4E9E7E81C5",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 46154,
+          "prompt_tokens_details": {
+            "cached_tokens": 2735
+          },
+          "total_tokens": 46282
+        },
+        "responseSHA256": "c3e500346544ef8fdb57b53652b8a4411914ac3328660a01cedc72275c30cc3b",
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 1.805,
+          "postGenerationMs": 9.361,
+          "captureActiveDeltaBytes": -8831148,
+          "restoreSnapshotBytes": 333185024,
+          "restoreActiveDeltaBytes": 333971456,
+          "checkpointArrayBytes": 3178364928,
+          "leafSnapshotBytes": 3187081216,
+          "payloadMode": "full",
+          "payloadBytes": 3187081216,
+          "sampledPeakActiveBytes": 25375247024,
+          "sampledPeakFootprintBytes": 27885137032,
+          "afterReleaseActiveBytes": 20534725004,
+          "afterReleaseFootprintBytes": 29978626264,
+          "treeSnapshotBytesAtRelease": 3855417344
+        }
+      }
+    },
+    {
+      "case": "46k-warm",
+      "comparativePerformanceEligible": true,
+      "requestSHA256": "64220d97c27b530c23d6ecf15a41a7c7b014921afbf4acef32272816db786761",
+      "cachePlan": {
+        "snapshotOffset": "46282",
+        "sharedPrefixLength": "46282",
+        "plannedCheckpoints": "[]",
+        "hydratedFromSSD": "false"
+      },
+      "copy": {
+        "requestID": "C0221A7E-6C4F-4249-8C81-EA7D844CFBE6",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 46299,
+          "prompt_tokens_details": {
+            "cached_tokens": 46282
+          },
+          "total_tokens": 46427
+        },
+        "responseSHA256": "adbe6f2df7aebe8d6bbff50c81612ff1cb18d424becdf7993415a56f807fccf0",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 2287.015,
+          "postGenerationMs": 2651.606,
+          "captureActiveDeltaBytes": 3169566524,
+          "restoreSnapshotBytes": 3187081216,
+          "restoreActiveDeltaBytes": 3187867648,
+          "checkpointArrayBytes": 3187867648,
+          "leafSnapshotBytes": 3196583936,
+          "payloadMode": "extension",
+          "payloadBytes": 163446784,
+          "sampledPeakActiveBytes": 29947776842,
+          "sampledPeakFootprintBytes": 33867218472,
+          "afterReleaseActiveBytes": 20202295074,
+          "afterReleaseFootprintBytes": 23152241824,
+          "treeSnapshotBytesAtRelease": 3529768960
+        }
+      },
+      "handoff": {
+        "requestID": "34A5430C-D57B-4512-B7C8-1DDBAD4A33EE",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 46299,
+          "prompt_tokens_details": {
+            "cached_tokens": 46282
+          },
+          "total_tokens": 46427
+        },
+        "responseSHA256": "adbe6f2df7aebe8d6bbff50c81612ff1cb18d424becdf7993415a56f807fccf0",
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 1.85,
+          "postGenerationMs": 192.294,
+          "captureActiveDeltaBytes": -27541700,
+          "restoreSnapshotBytes": 3187081216,
+          "restoreActiveDeltaBytes": 3187671040,
+          "checkpointArrayBytes": 3187867648,
+          "leafSnapshotBytes": 3196583936,
+          "payloadMode": "extension",
+          "payloadBytes": 163446784,
+          "sampledPeakActiveBytes": 27558121560,
+          "sampledPeakFootprintBytes": 36271769816,
+          "afterReleaseActiveBytes": 20548358109,
+          "afterReleaseFootprintBytes": 25159266736,
+          "treeSnapshotBytesAtRelease": 3864920064
+        }
+      }
+    },
+    {
+      "case": "46k-resend",
+      "comparativePerformanceEligible": true,
+      "requestSHA256": "b1add7a05c165c4cb2232698c4d4ae05780a74cb97445df002ad20478920ce0c",
+      "cachePlan": {
+        "snapshotOffset": "46427",
+        "sharedPrefixLength": "46427",
+        "plannedCheckpoints": "[]",
+        "hydratedFromSSD": "false"
+      },
+      "copy": {
+        "requestID": "FDC755FF-7F47-4FFD-A5E3-156DCA2BA3A4",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 46444,
+          "prompt_tokens_details": {
+            "cached_tokens": 46427
+          },
+          "total_tokens": 46572
+        },
+        "responseSHA256": "adbe6f2df7aebe8d6bbff50c81612ff1cb18d424becdf7993415a56f807fccf0",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 167.775,
+          "postGenerationMs": 217.051,
+          "captureActiveDeltaBytes": 3187998524,
+          "restoreSnapshotBytes": 3196583936,
+          "restoreActiveDeltaBytes": 3197108224,
+          "checkpointArrayBytes": 3197370368,
+          "leafSnapshotBytes": 3206086656,
+          "payloadMode": "extension",
+          "payloadBytes": 163446784,
+          "sampledPeakActiveBytes": 29985248620,
+          "sampledPeakFootprintBytes": 31475313800,
+          "afterReleaseActiveBytes": 20211783020,
+          "afterReleaseFootprintBytes": 23414992008,
+          "treeSnapshotBytesAtRelease": 3539271680
+        }
+      },
+      "handoff": {
+        "requestID": "A4ADD4FE-769C-485E-B024-94A6D3908BC6",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 46444,
+          "prompt_tokens_details": {
+            "cached_tokens": 46427
+          },
+          "total_tokens": 46572
+        },
+        "responseSHA256": "adbe6f2df7aebe8d6bbff50c81612ff1cb18d424becdf7993415a56f807fccf0",
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 1.897,
+          "postGenerationMs": 34.07,
+          "captureActiveDeltaBytes": -18661572,
+          "restoreSnapshotBytes": 3196583936,
+          "restoreActiveDeltaBytes": 3197108224,
+          "checkpointArrayBytes": 3197370368,
+          "leafSnapshotBytes": 3206086656,
+          "payloadMode": "extension",
+          "payloadBytes": 163446784,
+          "sampledPeakActiveBytes": 27583469233,
+          "sampledPeakFootprintBytes": 31537000784,
+          "afterReleaseActiveBytes": 20557796907,
+          "afterReleaseFootprintBytes": 25316176232,
+          "treeSnapshotBytesAtRelease": 3874422784
+        }
+      }
+    },
+    {
+      "case": "77k-restart",
+      "comparativePerformanceEligible": true,
+      "requestSHA256": "486a2b8296a3c19dee5d6dee766e93063643feb689c58d54ee646d94c774a047",
+      "cachePlan": {
+        "snapshotOffset": "2735",
+        "sharedPrefixLength": "46155",
+        "plannedCheckpoints": "[46155:branchPoint]",
+        "hydratedFromSSD": "true"
+      },
+      "copy": {
+        "requestID": "03BAE730-1402-41E2-BD5D-2C982D8FE224",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 76714,
+          "prompt_tokens_details": {
+            "cached_tokens": 2735
+          },
+          "total_tokens": 76842
+        },
+        "responseSHA256": "51d1f56393942ae679520acb614ef649487c437c5d91a844d78a3a47dd4d5028",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 242.508,
+          "postGenerationMs": 292.761,
+          "captureActiveDeltaBytes": 5163056952,
+          "restoreSnapshotBytes": 333185024,
+          "restoreActiveDeltaBytes": 333447168,
+          "checkpointArrayBytes": 12677414912,
+          "leafSnapshotBytes": 5189861376,
+          "payloadMode": "full",
+          "payloadBytes": 5189861376,
+          "sampledPeakActiveBytes": 40078821760,
+          "sampledPeakFootprintBytes": 40808524768,
+          "afterReleaseActiveBytes": 24371906904,
+          "afterReleaseFootprintBytes": 28177952528,
+          "treeSnapshotBytesAtRelease": 5523046400
+        }
+      },
+      "handoff": {
+        "requestID": "5A091F08-D4F8-4C74-90A3-6979D45BB031",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 76714,
+          "prompt_tokens_details": {
+            "cached_tokens": 2735
+          },
+          "total_tokens": 76842
+        },
+        "responseSHA256": "51d1f56393942ae679520acb614ef649487c437c5d91a844d78a3a47dd4d5028",
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 2.449,
+          "postGenerationMs": 40.553,
+          "captureActiveDeltaBytes": -27525320,
+          "restoreSnapshotBytes": 333185024,
+          "restoreActiveDeltaBytes": 333447168,
+          "checkpointArrayBytes": 12677414912,
+          "leafSnapshotBytes": 5189861376,
+          "payloadMode": "full",
+          "payloadBytes": 5189861376,
+          "sampledPeakActiveBytes": 37546508464,
+          "sampledPeakFootprintBytes": 38946302848,
+          "afterReleaseActiveBytes": 22209333368,
+          "afterReleaseFootprintBytes": 31106989584,
+          "treeSnapshotBytesAtRelease": 5523046400
+        }
+      }
+    },
+    {
+      "case": "77k-warm",
+      "comparativePerformanceEligible": true,
+      "requestSHA256": "4365bf243e94e5beb56c30ac5c1aa5908c8eb5263f0bb4d3df487ba1224ba838",
+      "cachePlan": {
+        "snapshotOffset": "76842",
+        "sharedPrefixLength": "76842",
+        "plannedCheckpoints": "[]",
+        "hydratedFromSSD": "false"
+      },
+      "copy": {
+        "requestID": "7E7C48E5-7FAB-4B8C-9E7A-11AF16E65F18",
+        "usage": {
+          "completion_tokens": 110,
+          "prompt_tokens": 76859,
+          "prompt_tokens_details": {
+            "cached_tokens": 76842
+          },
+          "total_tokens": 76969
+        },
+        "responseSHA256": "b9cd8cf3f95811302c04d8fdf9e66d5ec692569e61a26b9724f1d5311fe5e76d",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 302.618,
+          "postGenerationMs": 668.552,
+          "captureActiveDeltaBytes": 5199216640,
+          "restoreSnapshotBytes": 5189861376,
+          "restoreActiveDeltaBytes": 5190549504,
+          "checkpointArrayBytes": 5190647808,
+          "leafSnapshotBytes": 5198249984,
+          "payloadMode": "extension",
+          "payloadBytes": 162332672,
+          "sampledPeakActiveBytes": 37956290936,
+          "sampledPeakFootprintBytes": 39033420488,
+          "afterReleaseActiveBytes": 21871004006,
+          "afterReleaseFootprintBytes": 25132755888,
+          "treeSnapshotBytesAtRelease": 5198249984
+        }
+      },
+      "handoff": {
+        "requestID": "08C55D68-02B4-44AC-88D3-48A844065584",
+        "usage": {
+          "completion_tokens": 110,
+          "prompt_tokens": 76859,
+          "prompt_tokens_details": {
+            "cached_tokens": 76842
+          },
+          "total_tokens": 76969
+        },
+        "responseSHA256": "3f9ee2e4b987204599b8cdb7b5d531afc950ce539e78042ff9040bd9f8efecd6",
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 0.222,
+          "postGenerationMs": 102.28,
+          "captureActiveDeltaBytes": 0,
+          "restoreSnapshotBytes": 5189861376,
+          "restoreActiveDeltaBytes": 5190451200,
+          "checkpointArrayBytes": 5190647808,
+          "leafSnapshotBytes": 5198249984,
+          "payloadMode": "extension",
+          "payloadBytes": 162332672,
+          "sampledPeakActiveBytes": 33243516708,
+          "sampledPeakFootprintBytes": 41821295760,
+          "afterReleaseActiveBytes": 22042445957,
+          "afterReleaseFootprintBytes": 37861135336,
+          "treeSnapshotBytesAtRelease": 5198249984
+        }
+      }
+    },
+    {
+      "case": "93k-matched",
+      "comparativePerformanceEligible": true,
+      "requestSHA256": "10440b2ce311f066da41793215aac161486472168c175781be7588ab9fc12a02",
+      "cachePlan": {
+        "snapshotOffset": "46155",
+        "sharedPrefixLength": "92777",
+        "plannedCheckpoints": "[]",
+        "hydratedFromSSD": "true"
+      },
+      "copy": {
+        "requestID": "C1046C03-3DB3-443C-8A65-404E0BC7EDAA",
+        "usage": {
+          "completion_tokens": 128,
+          "prompt_tokens": 92777,
+          "prompt_tokens_details": {
+            "cached_tokens": 46155
+          },
+          "total_tokens": 92905
+        },
+        "responseSHA256": "c883a0657af5fa287b97f73bc90e4f9df0d22ee4bfe4303e11c9b93f1ee9645c",
+        "metrics": {
+          "captureMode": "copy",
+          "requestCacheLayerCountAfterCapture": 64,
+          "captureMs": 1118.323,
+          "postGenerationMs": 1153.306,
+          "captureActiveDeltaBytes": 6242697216,
+          "restoreSnapshotBytes": 3178758144,
+          "restoreActiveDeltaBytes": 3179282432,
+          "checkpointArrayBytes": 11608915968,
+          "leafSnapshotBytes": 6242500608,
+          "payloadMode": "full",
+          "payloadBytes": 6242500608,
+          "sampledPeakActiveBytes": 43951609587,
+          "sampledPeakFootprintBytes": 44562854584,
+          "afterReleaseActiveBytes": 26093770443,
+          "afterReleaseFootprintBytes": 37246852592,
+          "treeSnapshotBytesAtRelease": 9421258752
+        }
+      },
+      "handoff": {
+        "requestID": "31026874-06BB-43D7-B70B-CC246CE9CD26",
+        "usage": {
+          "prompt_tokens": 92777,
+          "completion_tokens": 128,
+          "total_tokens": 92905,
+          "prompt_tokens_details": {
+            "cached_tokens": 46155
+          }
+        },
+        "responseSHA256": null,
+        "metrics": {
+          "captureMode": "handoff",
+          "requestCacheLayerCountAfterCapture": 0,
+          "captureMs": 0.204,
+          "postGenerationMs": 17.399,
+          "captureActiveDeltaBytes": 0,
+          "restoreSnapshotBytes": 3178758144,
+          "restoreActiveDeltaBytes": 3179282432,
+          "checkpointArrayBytes": 11608915968,
+          "leafSnapshotBytes": 6242500608,
+          "payloadMode": "full",
+          "payloadBytes": 6242500608,
+          "sampledPeakActiveBytes": 41005661912,
+          "sampledPeakFootprintBytes": 41496818144,
+          "afterReleaseActiveBytes": 26099013055,
+          "afterReleaseFootprintBytes": 39656645592,
+          "treeSnapshotBytesAtRelease": 9421258752
+        }
+      }
+    }
+  ],
+  "cancellation": [
+    {
+      "mode": "copy",
+      "requestID": "4E12D3E1-0434-49C5-9719-4D2E4BC6B812",
+      "cancelSignalToTerminalMs": 99.35799999999995,
+      "afterReleaseActiveBytes": 20202295074,
+      "afterReleaseFootprintBytes": 23347604640
+    },
+    {
+      "mode": "handoff",
+      "requestID": "E4623A44-AE27-4EB7-ABD4-01B31BB860DE",
+      "cancelSignalToTerminalMs": 154.44899999999996,
+      "afterReleaseActiveBytes": 20548358109,
+      "afterReleaseFootprintBytes": 25243857232
+    }
+  ],
+  "verification": {
+    "focused": {
+      "passedTests": 794,
+      "skippedTests": 2,
+      "failedTests": 0,
+      "suiteCount": 59
+    },
+    "corpus": {
+      "recordings": 85,
+      "sessions": 1,
+      "checkableBoundaries": 66,
+      "noCleanEchoPairs": 18,
+      "registered": 66,
+      "nextResolved": 66,
+      "fidelityRejections": 0,
+      "exempt": 0,
+      "undecodable": 0,
+      "longestPathTokens": 92759,
+      "slowestSimulatedTailMs": 86.4
+    },
+    "recorded": {
+      "result": "passed",
+      "promptTokens": 46154,
+      "leafOffset": 46138,
+      "continuationTokens": 16,
+      "logitsBytes": 496640,
+      "rawLogitBytesEqual": true,
+      "requestCacheLayersAfterMove": 0,
+      "recordingSHA256": "8907895cf8c5db92876147ba82685828d3d6d4c39e62ace2dc0c5a3b0e6532a3"
+    },
+    "matrix": {
+      "passed": 12,
+      "failed": 0
+    },
+    "http": {
+      "passed": 31,
+      "failed": 1,
+      "failure": "different_image_same_size_never_hits: cachedTokens=177, expected 0"
+    },
+    "additionalFinal18kSmoke": "not run",
+    "finalDevReleaseRerun": "not run",
+    "manualTesting": "User subsequently reported successful testing"
+  },
+  "limits": [
+    "Single observations with bounded 128-token output; short control overlapped compilation and is excluded from performance claims.",
+    "afterRelease is an approximately one-second scalar observation, not an idle/SSD-drained state; component facts are carried from releasingRequest and overlap physical allocations.",
+    "Process footprint does not fall uniformly; allocator/OS/writer state and initial idle gaps differ.",
+    "Matched 93k handoff usage-shaped counts are diagnostic-derived. Its response hash and client wall times are unavailable after diagnostics rotation. No matched warm result exists.",
+    "77k warm response hashes differ and include generated tool-call IDs; semantic parity was not established from those hashes.",
+    "Original unequal-plan 93k trials are archived, excluded from paired comparisons.",
+    "A later baseline HTTP rerun was interrupted before the user reported a memory-pressure crash. Do not automatically repeat high-memory/model-reload runs on that Mac.",
+    "Original temporary result bundles and raw /tmp evidence are unavailable after restart; the archive preserves the surviving extracts and reports only."
+  ]
+}
