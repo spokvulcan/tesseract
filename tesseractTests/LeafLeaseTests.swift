@@ -241,6 +241,45 @@ struct LeafLeaseTests {
                 next, on: returned, returning: grown, tokens: Array(1...12), reason: .rewind))
     }
 
+    @Test func mandatoryAdmissionReportsLeaseRefusalThenPersistsAfterReturn() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = TieredSnapshotStore(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true, rootURL: root, budgetBytes: 1_000_000, maxPendingBytes: 1))
+        let manager = PrefixCacheManager(memoryBudgetBytes: 0, tieredStore: store)
+        let tokens = Array(1...8)
+        let body = try snapshot()
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: tokens, snapshot: body, storage: .ramOnly, partitionKey: key)))
+        let tree = try #require(store.tree(for: key))
+        let node = try #require(tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node)
+        let lease = try #require(
+            tree.beginLeafLease(
+                on: node,
+                context: .init(
+                    requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)))
+        let payload = ServerCompletion.deferredPayload(for: body)
+        let admission = try #require(
+            SnapshotAdmission.leaf(
+                storedTokens: tokens, snapshot: body, storage: .ramAndSSD(payload.payload),
+                partitionKey: key))
+        let refused = manager.admit(admission)
+        #expect(refused.leaseRefusals == [lease.id])
+        #expect(node.state.ref == nil)
+        #expect(!payload.payload.isMaterialized)
+        #expect(node.leafLease?.id == lease.id)
+        #expect(
+            tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: .checkIn))
+        #expect(manager.admit(admission).leaseRefusals.isEmpty)
+        await store.flush()
+        #expect(await waitUntil { node.state.committed })
+        #expect(payload.payload.isMaterialized)
+        #expect(manager.memoryTelemetryFacts()["ssdPendingPayloadBytes"] == "0")
+    }
+
     @Test func admissionCannotReplaceOrSupersedeALeasedBody() throws {
         let store = TieredSnapshotStore(ssdConfig: nil)
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
@@ -287,6 +326,68 @@ struct LeafLeaseTests {
         #expect(after.supersededLeaves.count == 1)
         #expect(node.state.body == nil)
         #expect(tree.totalSnapshotBytes == 6_208)
+    }
+
+    @Test func growthReturnPreservesAPendingDestinationAndItsLease() throws {
+        let tree = TokenRadixTree()
+        let body = try snapshot()
+        let node = tree.insertPath(tokens: Array(1...8))
+        tree.storeSnapshot(body, on: node)
+        let destination = tree.insertPath(tokens: Array(1...12))
+        tree.storeSnapshot(try snapshot(offset: 12), on: destination)
+        let ref = PrefixCacheTestFixtures.makeRef(tokenOffset: 12)
+        tree.admit(node: destination, ref: ref)
+        tree.dropBody(node: destination)
+        let lease = try #require(
+            tree.beginLeafLease(
+                on: node,
+                context: .init(
+                    requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)))
+        let count = tree.nodeCount
+        #expect(
+            !tree.endLeafLease(
+                lease, on: node, returning: try snapshot(offset: 12), tokens: Array(1...12),
+                reason: .checkIn))
+        #expect(destination.state.body == nil)
+        #expect(destination.state.refID == ref.snapshotID)
+        #expect(node.leafLease?.id == lease.id)
+        #expect(tree.nodeCount == count)
+        #expect(tree.totalSnapshotBytes == 4_160)
+        #expect(
+            tree.endLeafLease(
+                lease, on: node, returning: body, tokens: Array(1...8), reason: .rewind))
+    }
+
+    @Test func refusedAcquisitionAndReturnsReportRealLeaseIdentity() throws {
+        let sink = LeafLeaseLineSink()
+        let handle = PrefixCacheDiagnostics.addTestSink(sink.handler)
+        defer { PrefixCacheDiagnostics.removeTestSink(handle) }
+        let tree = TokenRadixTree()
+        let body = try snapshot()
+        let node = tree.insertPath(tokens: Array(1...8))
+        tree.storeSnapshot(body, on: node)
+        let owner = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)
+        let contender = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)
+        let lease = try #require(tree.beginLeafLease(on: node, context: owner))
+        _ = sink.drain()
+        #expect(tree.beginLeafLease(on: node, context: contender) == nil)
+        let refusal = try #require(sink.drain().first { $0.contains("reason=alreadyLeased") })
+        #expect(refusal.contains("leaseID=\(lease.id.uuidString)"))
+        #expect(refusal.contains(contender.requestID.uuidString))
+        #expect(refusal.contains("activeRequestID=\(owner.requestID.uuidString)"))
+        let wrongTree = TokenRadixTree()
+        #expect(
+            !wrongTree.endLeafLease(
+                lease, on: node, returning: body, tokens: Array(1...8), reason: .rewind))
+        let rejectedReturn = try #require(sink.drain().first { $0.contains("reason=wrongTree") })
+        #expect(rejectedReturn.contains("leaseID=\(lease.id.uuidString)"))
+        #expect(rejectedReturn.contains(owner.requestID.uuidString))
+        #expect(tree.leaseCount == 1)
+        #expect(
+            tree.endLeafLease(
+                lease, on: node, returning: body, tokens: Array(1...8), reason: .rewind))
     }
 
     @Test func returnThroughAnotherTreeLeavesTheOwnerAndLeaseUntouched() throws {
@@ -407,6 +508,61 @@ struct LeafLeaseTests {
         let lease = try #require(tree.beginLeafLease(on: node, context: context))
         #expect(
             tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: .rewind))
+    }
+
+    @Test func growthReturnWaitsForATombstonedDestinationReader() async throws {
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "lease-destination-reader", ramBudgetBytes: 1_000_000)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let body = try snapshot()
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: Array(1...8), snapshot: body, storage: .ramOnly,
+                    partitionKey: key)))
+        let tree = try #require(store.tree(for: key))
+        let source = try #require(tree.findBestSnapshot(tokens: Array(1...8))?.node)
+        let lease = try #require(
+            tree.beginLeafLease(
+                on: source,
+                context: .init(
+                    requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)))
+        let grown = try snapshot(offset: 12)
+        let barrier = LeafWriterBarrier()
+        defer { barrier.open() }
+        let deferred = ServerCompletion.deferredPayload(for: grown)
+        let payload = SnapshotPayload(tokenOffset: 12, checkpointType: .leaf, totalBytes: 6_208) {
+            barrier.wait()
+            return deferred.payload.layers
+        }
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: Array(1...12), snapshot: grown, storage: .ramAndSSD(payload),
+                    partitionKey: key)))
+        let destination = try #require(tree.findBestSnapshot(tokens: Array(1...12))?.node)
+        // Keep this boundary structural after its body and backing are removed.
+        tree.insertPath(tokens: Array(1...12) + [20])
+        tree.insertPath(tokens: Array(1...12) + [30])
+        #expect(await waitUntil { barrier.started })
+        store.deleteSnapshot(snapshotID: try #require(destination.state.refID))
+        tree.dropBody(node: destination)
+        tree.discardSnapshotRefAfterExplicitDelete(node: destination)
+        let count = tree.nodeCount
+        #expect(
+            !tree.endLeafLease(
+                lease, on: source, returning: grown, tokens: Array(1...12), reason: .checkIn))
+        #expect(source.leafLease?.id == lease.id)
+        #expect(destination.state.body == nil)
+        #expect(tree.nodeCount == count)
+        #expect(tree.totalSnapshotBytes == 4_160)
+        barrier.open()
+        await store.flush()
+        #expect(
+            tree.endLeafLease(
+                lease, on: source, returning: grown, tokens: Array(1...12), reason: .checkIn))
+        #expect(tree.leaseCount == 0)
+        #expect(tree.totalSnapshotBytes == 6_208)
     }
 
     @Test(arguments: [false, true])

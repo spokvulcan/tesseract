@@ -98,7 +98,14 @@ the pin table's age-out backstop may end it. ADR-0064 adds a second, strong
 claim beside it. A request that takes a leaf's cache objects by **Leaf
 Handoff** holds a **Leaf Lease** on that body from check-out to check-in:
 while it holds, no eviction drain, **Snapshot Demotion**, RAM-tier clear,
-write-eagerness promotion or SSD-writer materialization may touch the body.
+write-eagerness promotion, replacement admission or SSD-writer materialization
+may touch the body. This ownership exclusion also applies to mandatory SSD
+admission: the caller must first check in or rewind the lease, then submit
+the finished leaf through normal admission. An out-of-order admission is
+refused with diagnostics (`StoreDiagnostics.leaseRefusals` identifies the
+blocking leases) and must be retried after return; it is not a
+completed end-of-turn admission. The Leaf Home Guarantee and its cap bypass
+apply once ownership has returned, without weakening enqueue-before-delete.
 The lease ends only at check-in or **Leaf Rewind**, never by age-out; the
 backstop stays for pins and is exempt for leases. Leased bytes stay counted
 in the tree total, and check-in reconciles the growth. Budget Floor
@@ -112,8 +119,12 @@ That sharing narrows to full payloads. An extension payload detaches every
 array it retains, the recurrent layers' state as well as the attention
 suffix slices, deep-copied and evaluated on the Metal-affine caller, so a
 pending suffix payload never references a body a generation may own. A full
-payload still aliases the attention body, which is why ADR-0064 makes the
-next check-out of that leaf copy until the writer has materialized it.
+payload still aliases the attention body. Under ADR-0064, a pending full
+payload makes move checkout ineligible: #480 must fall back to copy restore
+until materialization releases the body arrays. The tree-side gate below
+is a second exclusion boundary, not the production checkout eligibility
+decision: it can protect a queued payload with a lease but refuses lease
+acquisition while the writer is already reading.
 
 ### Tree-side implementation (#479)
 
@@ -134,6 +145,11 @@ then uses independent host bytes. Unrelated writes can proceed, but an
 extension never overtakes a queued base. Detached extensions and already
 materialized payloads need no body read claim.
 
+A lease-blocked flush waits for the existing 500 ms writer recheck; return
+does not retain or invoke a writer callback. Ordinary drains keep their
+flush wake/resume behavior. The bounded delay is a scheduling cost, not an
+extension of the lease after return.
+
 When check-in advances the leaf to another node, its exclusion state follows
 the returned body. A pending full payload may retain prefix views of backing
 reused by the grown body; a later lease must still exclude that writer. The
@@ -145,5 +161,6 @@ membership before changing topology or accounting.
 end events record release reason and reconciled growth. `requestMemory`
 tree facts also carry lease bytes/count. These are logical ownership
 counters, not additional physical allocations. The #480 checkout must
-still refuse pending full payloads and perform the actual object transfer
-and recurrent-state rewind inside the Model Session.
+still refuse move checkout for pending full payloads (falling back to copy)
+and perform the actual object transfer and recurrent-state rewind inside the
+Model Session. It must return the lease before end-of-turn admission.

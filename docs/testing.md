@@ -453,6 +453,14 @@ ancestor supersession, check-in growth, both writer/acquisition race orders,
 writer failures, and base/suffix ordering. All caches are small, real MLX
 caches; production checkout remains #480 work.
 
+Review regressions also cover pending-only return destinations, a tombstoned
+writer still reading an empty structural destination, request/lease identity
+on refusal, and mandatory SSD admission after explicit return. An admission
+attempted during a lease reports `StoreDiagnostics.leaseRefusals`; its retry
+after return still bypasses the pending-byte cap. Run
+`StorageActivityGateSchedulingTests` alongside this suite when changing the
+writer drain so ordinary forced flush remains covered too.
+
 Run `LeafLeaseMemoryEvidenceTests` **alone** for process-memory observations:
 
 ```bash
@@ -483,8 +491,9 @@ pin age-out limit, forced SSD flush and write-eagerness timeout cannot do so.
 
 See the [preserved small-cache evidence](../benchmarks/leaf-lease/2026-09-12/README.md)
 for the before/after ownership table, request IDs, diagnostic extracts and
-limits. The large-model approval requirement in the capture baseline still
-applies to #480.
+limits, and the [review follow-up](../benchmarks/leaf-lease/2026-09-12-review/README.md)
+for the additional return, admission and flush regressions. The large-model
+approval requirement in the capture baseline still applies to #480.
 
 ### Test-runner caveats
 

@@ -55,11 +55,7 @@ nonisolated final class LeafBodyAccess: @unchecked Sendable {
         }
         if let lease = result.report {
             lease.context.log(
-                LeafLeaseEvent(
-                    name: "leafLeaseDeferred", lease: lease,
-                    facts: [
-                        "reason": "writerMaterialization", "snapshotID": snapshotID,
-                    ]), level: .notice)
+                LeafLeaseDeferredEvent(lease: lease, snapshotID: snapshotID), level: .notice)
         }
         return result.allowed
     }
@@ -72,26 +68,88 @@ nonisolated final class LeafBodyAccess: @unchecked Sendable {
     }
 
     @discardableResult
-    func refuse(_ operation: String) -> Bool {
+    func blocks(_ operation: LeafLeaseRefusedEvent.Reason) -> Bool {
         guard let lease else { return false }
         lease.context.log(
-            LeafLeaseEvent(name: "leafLeaseRefused", lease: lease, facts: ["reason": operation]),
+            LeafLeaseRefusedEvent(
+                reason: operation, offset: lease.offset, bytes: lease.bytes, leaseID: lease.id),
             level: .notice)
         return true
     }
 }
 
-nonisolated struct LeafLeaseEvent: PrefixCacheDiagnostics.Payload {
-    let name: String
-    let lease: LeafLease
-    var facts: [String: String] = [:]
+/// Typed scalar telemetry; a refused acquisition has no new lease identity.
+nonisolated struct LeafLeaseAccounting: Sendable {
+    let treeSnapshotBytes: Int
+    let leasedBytes: Int
+    let leaseCount: Int
 
-    var eventName: String { name }
     var fields: [(String, String)] {
-        var values = facts
-        values.merge([
-            "leaseID": lease.id.uuidString, "offset": "\(lease.offset)", "bytes": "\(lease.bytes)",
-        ]) { _, value in value }
-        return values.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
+        [
+            ("treeSnapshotBytes", "\(treeSnapshotBytes)"), ("leasedBytes", "\(leasedBytes)"),
+            ("leaseCount", "\(leaseCount)"),
+        ]
+    }
+}
+
+extension LeafLease {
+    nonisolated var fields: [(String, String)] {
+        [("leaseID", id.uuidString), ("offset", "\(offset)"), ("bytes", "\(bytes)")]
+    }
+}
+
+nonisolated struct LeafLeaseBeginEvent: PrefixCacheDiagnostics.Payload {
+    let lease: LeafLease
+    let accounting: LeafLeaseAccounting
+    let eventName = "leafLeaseBegin"
+    var fields: [(String, String)] { lease.fields + accounting.fields }
+}
+
+nonisolated struct LeafLeaseEndEvent: PrefixCacheDiagnostics.Payload {
+    let lease: LeafLease
+    let reason: LeafLease.ReleaseReason
+    let returnedOffset: Int
+    let returnedBytes: Int
+    let accounting: LeafLeaseAccounting
+    let eventName = "leafLeaseEnd"
+    var fields: [(String, String)] {
+        lease.fields + [
+            ("reason", reason.rawValue), ("returnedOffset", "\(returnedOffset)"),
+            ("returnedBytes", "\(returnedBytes)"),
+            ("growthBytes", "\(returnedBytes - lease.bytes)"),
+        ] + accounting.fields
+    }
+}
+
+nonisolated struct LeafLeaseRefusedEvent: PrefixCacheDiagnostics.Payload {
+    enum Reason: String, Sendable {
+        case bodyReplacement, ssdAdmission, supersession, ramClear, demotion, writePromotion,
+            dropBody
+        case wrongTree, notLeaf, alreadyLeased, writerReading, staleLease
+        case invalidBody, invalidPath, invalidRewind, occupiedDestination, destinationBusy
+    }
+
+    let reason: Reason
+    let offset: Int
+    let bytes: Int
+    var leaseID: UUID?
+    var activeLeaseID: UUID?
+    var activeRequestID: UUID?
+    let eventName = "leafLeaseRefused"
+    var fields: [(String, String)] {
+        var fields = [("reason", reason.rawValue), ("offset", "\(offset)"), ("bytes", "\(bytes)")]
+        if let leaseID { fields.append(("leaseID", leaseID.uuidString)) }
+        if let activeLeaseID { fields.append(("activeLeaseID", activeLeaseID.uuidString)) }
+        if let activeRequestID { fields.append(("activeRequestID", activeRequestID.uuidString)) }
+        return fields
+    }
+}
+
+nonisolated struct LeafLeaseDeferredEvent: PrefixCacheDiagnostics.Payload {
+    let lease: LeafLease
+    let snapshotID: String
+    let eventName = "leafLeaseDeferred"
+    var fields: [(String, String)] {
+        lease.fields + [("reason", "writerMaterialization"), ("snapshotID", snapshotID)]
     }
 }

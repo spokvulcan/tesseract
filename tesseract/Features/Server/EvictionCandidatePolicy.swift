@@ -73,7 +73,7 @@ enum EvictionCandidatePolicy {
         config: EvictionConfiguration
     ) -> Candidate? {
         func unprotected(_ nodes: [RadixTreeNode]) -> [RadixTreeNode] {
-            nodes.filter { $0.leafLease == nil && !protected.contains(ObjectIdentifier($0)) }
+            nodes.filter { !protected.contains(ObjectIdentifier($0)) }
         }
 
         // 1. Preferred utility — writing-partition-first.

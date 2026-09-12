@@ -253,6 +253,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// Guards against stacking re-wake tasks while a deferred item
     /// waits out the gate.
     private var deferredRewakeScheduled = false
+    /// Last drain could not finish because an active lease excluded a reader.
+    /// Under queueLock; only this case suppresses flush's normal re-pump.
+    private var drainBlockedByLease = false
 
     // MARK: - Public API
 
@@ -754,7 +757,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         queueLock.lock()
         // A flush may override write eagerness, never a Leaf Lease. Keep
         // its continuation asleep while leased work remains in the queue.
-        guard force || pending.isEmpty else {
+        guard force || !drainBlockedByLease else {
             queueLock.unlock()
             return
         }
@@ -780,6 +783,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     private func popNextPending() -> PendingWrite? {
         queueLock.lock()
         defer { queueLock.unlock() }
+        drainBlockedByLease = false
         guard !pending.isEmpty else {
             inFlightSnapshotID = nil
             return nil
@@ -791,39 +795,44 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         // non-deferrable items — write-order between unrelated
         // snapshots carries no invariant (extension bases are promoted
         // to non-deferrable at the extension's enqueue, so base-before-
-        // suffix is preserved the FIFO way).
+        // suffix is preserved the FIFO way). A lease can additionally
+        // block a non-deferrable base; track skipped IDs in this pass to
+        // keep its dependent suffixes behind it, transitively.
         let gateBusy = activityGate?.isBusy ?? false
         let now: ContinuousClock.Instant = .now
+        var blockedIDs: Set<String> = []
         for index in pending.indices {
             let item = pending[index]
             if item.deferrable, !forceDrainDeferred, gateBusy,
                 now - item.enqueuedAt < Self.maxDeferredHoldup
             {
+                blockedIDs.insert(item.descriptor.snapshotID)
                 continue
             }
-            // A suffix must not overtake a base held by a Leaf Lease.
-            if let baseID = item.extendingBaseID,
-                pending.contains(where: { $0.descriptor.snapshotID == baseID })
-            {
+            if let baseID = item.extendingBaseID, blockedIDs.contains(baseID) {
+                blockedIDs.insert(item.descriptor.snapshotID)
                 continue
             }
             if let access = item.bodyAccess,
                 !access.beginRead(snapshotID: item.descriptor.snapshotID)
             {
+                drainBlockedByLease = true
+                blockedIDs.insert(item.descriptor.snapshotID)
                 continue
             }
             let selected = pending.remove(at: index)
             inFlightSnapshotID = selected.descriptor.snapshotID
             return selected
         }
-        // Only gate-blocked deferrable items remain — leave them queued
-        // and let a delayed re-wake retry once the gate quiets down.
+        // Only gate/lease-blocked items and their dependents remain. The
+        // bounded recheck also resumes work after a lease return without
+        // retaining a writer or wakeup callback in the scalar access gate.
         inFlightSnapshotID = nil
         scheduleDeferredRewakeLocked()
         return nil
     }
 
-    /// Schedule a one-shot delayed wakeup so gate-blocked deferrable
+    /// Schedule a one-shot delayed wakeup so gate/lease-blocked
     /// items are re-checked without busy-spinning. Must be called with
     /// `queueLock` held.
     private func scheduleDeferredRewakeLocked() {

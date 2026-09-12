@@ -349,7 +349,9 @@ final class TieredSnapshotStore {
         mandatory: Bool = false,
         deferrable: Bool = false
     ) -> SnapshotRef? {
-        guard !node.bodyAccess.refuse("ssdAdmission") else { return nil }
+        // Mandatory writes bypass policy caps, never active ownership.
+        // Return the lease before retrying admission (ADR-0019 / #480).
+        guard !node.bodyAccess.blocks(.ssdAdmission) else { return nil }
         guard let ssdStore else { return nil }
 
         // A non-nil `demotionLastAccessAt` marks a **Snapshot Demotion**:
