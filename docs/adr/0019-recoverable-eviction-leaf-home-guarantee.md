@@ -87,6 +87,11 @@ which the payload still knows up front.
 Takes effect when ADR-0064 is Accepted
 ([issue #471](https://github.com/spokvulcan/tesseract/issues/471)).
 
+Implementation staging: #479 establishes the tree-side protection below,
+with small real-cache ownership and lifecycle tests. Production check-out
+and the recurrent-state rewind remain #480 work; ADR-0064 stays Proposed
+until that integration and its acceptance gates are complete.
+
 The **Restore Pin** above is the weak claim of a request that restored *by
 copy*: it protects a restore path in the Budget Floor, it owns nothing, and
 the pin table's age-out backstop may end it. ADR-0064 adds a second, strong
@@ -109,3 +114,36 @@ suffix slices, deep-copied and evaluated on the Metal-affine caller, so a
 pending suffix payload never references a body a generation may own. A full
 payload still aliases the attention body, which is why ADR-0064 makes the
 next check-out of that leaf copy until the writer has materialized it.
+
+### Tree-side implementation (#479)
+
+The lease token and the writer's shared access state contain only scalars;
+acquisition keeps the existing body in place and adds no cache copy. Tree
+byte/count accounting includes that body once throughout the lease. An
+explicit quiescent return reconciles the supplied body's bytes and, for an
+extended path, moves the tree entry to the returned offset. Invalid or stale
+returns leave the current lease intact. `completeRequest` releases Restore
+Pins only; it cannot establish that a mutable body has been rewound.
+
+A full deferred payload and its node share an exclusion state. Before
+removing the payload from the queue, the writer atomically claims read
+access. If a lease holds, the item stays queued and charged; flush and the
+write-eagerness timeout cannot override it. If the writer wins, lease
+acquisition fails until materialization releases the body arrays. File I/O
+then uses independent host bytes. Unrelated writes can proceed, but an
+extension never overtakes a queued base. Detached extensions and already
+materialized payloads need no body read claim.
+
+When check-in advances the leaf to another node, its exclusion state follows
+the returned body. A pending full payload may retain prefix views of backing
+reused by the grown body; a later lease must still exclude that writer. The
+vacated node receives a fresh exclusion state. Returns also validate tree
+membership before changing topology or accounting.
+
+`leafLeaseBegin`, `leafLeaseEnd`, `leafLeaseRefused`, and
+`leafLeaseDeferred` carry request and lease identity, leaf offset and bytes;
+end events record release reason and reconciled growth. `requestMemory`
+tree facts also carry lease bytes/count. These are logical ownership
+counters, not additional physical allocations. The #480 checkout must
+still refuse pending full payloads and perform the actual object transfer
+and recurrent-state rewind inside the Model Session.

@@ -4,6 +4,10 @@ import MLXLMCommon
 /// Node in a token-level radix (compressed trie) tree.
 /// Edge tokens represent the compressed path segment from parent to this node.
 final class RadixTreeNode {
+    /// Follows a returned body when check-in advances its token path. Only
+    /// the tree swaps this reference; pending writers retain the same guard.
+    fileprivate(set) var bodyAccess = LeafBodyAccess()
+    var leafLease: LeafLease? { bodyAccess.lease }
     var edgeTokens: [Int]
     var children: [Int: RadixTreeNode]
     /// The node's snapshot lifecycle — owns both the RAM body and the
@@ -115,6 +119,8 @@ final class TokenRadixTree {
     private let root: RadixTreeNode
     private(set) var nodeCount: Int = 1
     private(set) var totalSnapshotBytes: Int = 0
+    private(set) var leasedBytes: Int = 0
+    private(set) var leaseCount: Int = 0
     /// Per-checkpoint-type RAM-body counts. Reconciled incrementally at
     /// the single mutation chokepoint (every transition method) from each
     /// state's resident body, so callers don't have to walk the tree to
@@ -350,11 +356,14 @@ final class TokenRadixTree {
     /// Attach (or replace) a RAM body on a node. Use the node returned by
     /// `insertPath`. Routes through the `storingBody` transition so the
     /// byte/count budgets reconcile at the single chokepoint.
-    func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) {
+    @discardableResult
+    func storeSnapshot(_ snapshot: HybridCacheSnapshot, on node: RadixTreeNode) -> Bool {
+        guard !node.bodyAccess.refuse("bodyReplacement") else { return false }
         let old = node.state
         let (next, _) = old.storingBody(snapshot)
         commit(next, on: node, from: old)
         node.lastAccessTime = .now
+        return true
     }
 
     /// Attach a snapshot at a specific offset on an already-inserted token path.
@@ -375,8 +384,7 @@ final class TokenRadixTree {
         let node = insertPath(tokens: Array(tokens[0..<offset]))
         guard node.tokenOffset == offset else { return false }
 
-        storeSnapshot(snapshot, on: node)
-        return true
+        return storeSnapshot(snapshot, on: node)
     }
 
     // MARK: - Snapshot-state transitions (the sole mutator)
@@ -396,6 +404,7 @@ final class TokenRadixTree {
     /// delete its backing before it orphans a file + manifest entry.
     @discardableResult
     func admit(node: RadixTreeNode, ref: SnapshotRef) -> String? {
+        guard !node.bodyAccess.refuse("ssdAdmission") else { return nil }
         let old = node.state
         let (next, effect, supersededID) = old.admitting(ref)
         precondition(
@@ -443,6 +452,11 @@ final class TokenRadixTree {
     /// (state 2/4) settles in place.
     @discardableResult
     func dropBody(node: RadixTreeNode) -> DropBodyResult {
+        guard !node.bodyAccess.refuse("dropBody") else {
+            return DropBodyResult(
+                droppedCheckpointType: nil, droppedBodyBytes: 0, refID: nil,
+                effect: .ignored(.leased))
+        }
         let old = node.state
         let (next, result) = old.droppingBody()
         if case .ignored = result.effect {
@@ -953,6 +967,80 @@ final class TokenRadixTree {
             TraceBlockDigest.fold(token: token, into: &hash)
         }
         return TraceBlockDigest.hexDigest(hash)
+    }
+}
+
+extension TokenRadixTree {
+    // MARK: - Leaf Lease (no production checkout until #480)
+
+    func beginLeafLease(
+        on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context
+    ) -> LeafLease? {
+        guard let body = node.state.body, body.checkpointType == .leaf,
+            allSnapshotNodes().contains(where: { $0 === node })
+        else { return nil }
+        let lease = LeafLease(context: context, offset: node.tokenOffset, bytes: body.memoryBytes)
+        guard node.bodyAccess.begin(lease) else {
+            var facts = leaseFacts
+            facts["reason"] = node.leafLease == nil ? "writerReading" : "alreadyLeased"
+            context.log(
+                LeafLeaseEvent(name: "leafLeaseRefused", lease: lease, facts: facts), level: .notice
+            )
+            return nil
+        }
+        leasedBytes += lease.bytes
+        leaseCount += 1
+        context.log(
+            LeafLeaseEvent(name: "leafLeaseBegin", lease: lease, facts: leaseFacts), level: .notice)
+        return lease
+    }
+
+    /// Caller must return a quiescent body; cancellation/error callers rewind
+    /// first. Neither completeRequest nor the Restore Pin backstop ends a lease.
+    @discardableResult
+    func endLeafLease(
+        _ lease: LeafLease, on node: RadixTreeNode,
+        returning body: HybridCacheSnapshot, tokens: [Int], reason: LeafLease.ReleaseReason
+    ) -> Bool {
+        guard allSnapshotNodes().contains(where: { $0 === node }),
+            node.leafLease?.id == lease.id,
+            body.checkpointType == .leaf, body.tokenOffset == tokens.count,
+            tokens.starts(with: pathToNode(node)), tokens.count >= lease.offset,
+            reason == .checkIn || tokens.count == lease.offset
+        else { return false }
+        // An occupied destination is a competing admission, not permission to
+        // replace another body. Leave the lease intact so the caller can rewind.
+        if let existing = findBestSnapshot(
+            tokens: tokens, updateAccess: false, includeSnapshotRefs: true)?.node,
+            existing !== node, existing.tokenOffset == tokens.count
+        {
+            return false
+        }
+        let destination = insertPath(tokens: tokens)
+        guard node.bodyAccess.end(lease) else { return false }
+        leasedBytes -= lease.bytes
+        leaseCount -= 1
+        if destination !== node {
+            dropBody(node: node)
+            destination.bodyAccess = node.bodyAccess
+            node.bodyAccess = LeafBodyAccess()
+        }
+        storeSnapshot(body, on: destination)
+        var facts = leaseFacts
+        facts["reason"] = reason.rawValue
+        facts["returnedOffset"] = "\(body.tokenOffset)"
+        facts["returnedBytes"] = "\(body.memoryBytes)"
+        facts["growthBytes"] = "\(body.memoryBytes - lease.bytes)"
+        lease.context.log(
+            LeafLeaseEvent(name: "leafLeaseEnd", lease: lease, facts: facts), level: .notice)
+        return true
+    }
+
+    private var leaseFacts: [String: String] {
+        [
+            "treeSnapshotBytes": "\(totalSnapshotBytes)", "leasedBytes": "\(leasedBytes)",
+            "leaseCount": "\(leaseCount)",
+        ]
     }
 }
 

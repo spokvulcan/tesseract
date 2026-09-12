@@ -349,6 +349,7 @@ final class TieredSnapshotStore {
         mandatory: Bool = false,
         deferrable: Bool = false
     ) -> SnapshotRef? {
+        guard !node.bodyAccess.refuse("ssdAdmission") else { return nil }
         guard let ssdStore else { return nil }
 
         // A non-nil `demotionLastAccessAt` marks a **Snapshot Demotion**:
@@ -373,7 +374,9 @@ final class TieredSnapshotStore {
                 scoringConfig: scoringConfig,
                 condemnedResidentIDs: condemnedResidentIDs,
                 mandatory: mandatory,
-                deferrable: deferrable
+                deferrable: deferrable,
+                bodyAccess: payload.extending == nil && !payload.isMaterialized
+                    ? node.bodyAccess : nil
             )
         else {
             return nil

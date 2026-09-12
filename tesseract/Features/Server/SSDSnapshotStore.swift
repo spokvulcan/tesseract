@@ -363,7 +363,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         scoringConfig: EvictionConfiguration = EvictionConfiguration(),
         condemnedResidentIDs: Set<String> = [],
         mandatory: Bool = false,
-        deferrable: Bool = false
+        deferrable: Bool = false,
+        bodyAccess: LeafBodyAccess? = nil
     ) -> TryEnqueueResult {
         // Parse the wire-format checkpoint type before taking the lock;
         // no sense holding the lock for a parse that can fail.
@@ -476,6 +477,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         enqueueApplyingBackPressure(
             PendingWrite(
                 payload: payload,
+                bodyAccess: bodyAccess,
                 descriptor: descriptor,
                 extendingBaseID: extendingBaseID,
                 transferClaim: transferClaim,
@@ -745,11 +747,17 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         }
         // Stream closed (deinit). Fail any straggling waiters by
         // resuming them so `flushAsync` callers do not leak.
-        resumeDrainWaiters()
+        resumeDrainWaiters(force: true)
     }
 
-    private func resumeDrainWaiters() {
+    private func resumeDrainWaiters(force: Bool = false) {
         queueLock.lock()
+        // A flush may override write eagerness, never a Leaf Lease. Keep
+        // its continuation asleep while leased work remains in the queue.
+        guard force || pending.isEmpty else {
+            queueLock.unlock()
+            return
+        }
         let waiters = drainWaiters
         drainWaiters.removeAll(keepingCapacity: false)
         queueLock.unlock()
@@ -793,6 +801,17 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             {
                 continue
             }
+            // A suffix must not overtake a base held by a Leaf Lease.
+            if let baseID = item.extendingBaseID,
+                pending.contains(where: { $0.descriptor.snapshotID == baseID })
+            {
+                continue
+            }
+            if let access = item.bodyAccess,
+                !access.beginRead(snapshotID: item.descriptor.snapshotID)
+            {
+                continue
+            }
             let selected = pending.remove(at: index)
             inFlightSnapshotID = selected.descriptor.snapshotID
             return selected
@@ -829,6 +848,8 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable:next function_body_length
     private func processPendingItem(_ item: PendingWrite) async {
+        var holdsBodyRead = item.bodyAccess != nil
+        defer { if holdsBodyRead { item.bodyAccess?.endRead() } }
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
             item.transferClaim?.release()
             releasePendingBytes(item.payload.totalBytes)
@@ -918,6 +939,12 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                     bytes: item.payload.totalBytes,
                     durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
                 ))
+        }
+        // The materializer has dropped every body array. Subsequent file I/O
+        // reads independent Data and no longer excludes a lease.
+        if holdsBodyRead {
+            item.bodyAccess?.endRead()
+            holdsBodyRead = false
         }
         do {
             try writePayload(item.payload, descriptor: descriptorToWrite)
@@ -1293,6 +1320,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
 
     private struct PendingWrite: Sendable {
         let payload: SnapshotPayload
+        let bodyAccess: LeafBodyAccess?
         let descriptor: PersistedSnapshotDescriptor
         /// Non-nil for a **Leaf Extension Admission**: the base whose
         /// chain the commit folds.

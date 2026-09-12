@@ -1,0 +1,160 @@
+{
+  "baseRevision": "9e10dc5f2427c3fa480b2452613e000a850f7291",
+  "configuration": "Debug, hosted macOS tests; parallel-testing-enabled NO; one xcodebuild process at a time",
+  "fixture": {
+    "attentionLayers": 1,
+    "attentionShape": [
+      1,
+      1,
+      8,
+      64
+    ],
+    "dtype": "float32",
+    "inferenceModelLoadedByFixture": false,
+    "kvQuantization": null,
+    "logicalBytes": 4160,
+    "modelFingerprint": null,
+    "recurrentArrayShapes": [
+      [
+        8
+      ],
+      [
+        8
+      ]
+    ],
+    "recurrentLayers": 1,
+    "speculation": "none"
+  },
+  "focused": {
+    "failedTests": 0,
+    "finishTime": 1789228378.065,
+    "passedTests": 886,
+    "result": "Passed",
+    "skippedTests": 2,
+    "startTime": 1789228314.721,
+    "totalTestCount": 888
+  },
+  "focusedSuites": [
+    "HTTPPrefixCacheSpikeTests",
+    "HTTPPrefixCacheSessionReplayTests",
+    "CompletionHandlerTests",
+    "CompletionDeliveryTests",
+    "SSEDeliverySinkTests",
+    "SSEDeliveryPumpTests",
+    "StreamLifecycleDriverTests",
+    "CompletionRouteTests",
+    "ServerInferenceServiceTests",
+    "ServerCompletionDrainTests",
+    "ServerCompletionLeafStoreModeTests",
+    "ServerCompletionLeafSkipLogTests",
+    "LeafStoreFastPathTests",
+    "CompletionProjectionTests",
+    "MessageConverterTests",
+    "OpenAITypesTests",
+    "AgentEngineToolSpecTests",
+    "GenerationStreamLoopTests",
+    "ManagedGenerationDriverTests",
+    "ReasoningEffortTests",
+    "RawGenerationStartTests",
+    "EditToolTests",
+    "HybridCacheSnapshotTests",
+    "LeafCaptureHandoffTests",
+    "TokenRadixTreeTests",
+    "StablePrefixDetectorTests",
+    "PrefixCacheManagerTests",
+    "PrefixCacheIntegrationTests",
+    "CheckpointCaptureTests",
+    "CacheKeySpaceTests",
+    "PrefillPlannerTests",
+    "LeafAdmissionBuilderTests",
+    "ConversationRenderSourceShapeTests",
+    "ConversationRenderProbeParityTests",
+    "ConversationRenderProbeParityRealTests",
+    "SnapshotResolutionTests",
+    "SnapshotLedgerTests",
+    "SnapshotStateTests",
+    "LeafHomeGuaranteeTests",
+    "StablePrefixDetectorNonDeterminismTests",
+    "JinjaNonDeterminismReproTests",
+    "EmittedPathIndexTests",
+    "EmittedPathFidelityTests",
+    "EmittedPathRegistrationTests",
+    "ConversationRenderEmittedPathTests",
+    "EmittedPathResolveRealTests",
+    "EmittedPathReplayGateTests",
+    "EmittedPathSynthesizedReplayTests",
+    "LinearStreamingDetokenizerTests",
+    "LinearStreamingDetokenizerRealTests",
+    "LeafLeaseTests",
+    "SnapshotDemotionTests",
+    "EvictionCandidatePolicyTests",
+    "TieredSnapshotStoreTests",
+    "SSDSnapshotStoreTests",
+    "LeafExtensionExtractionTests",
+    "LeafExtensionLedgerTests",
+    "LeafExtensionStoreTests",
+    "LeafExtensionSupersessionPolicyTests",
+    "SSDWriteEagernessTests",
+    "SSDWriteEagernessPolicyTests",
+    "StorageActivityGateSchedulingTests",
+    "RequestMemoryTelemetryTests",
+    "ServerCompletionKeyedSequencingTests",
+    "PromptCacheDiagnosticsFileSinkTests",
+    "DynamicBudgetCeilingManagerTests",
+    "PrefixCacheBudgetBandTests",
+    "PressureReactiveBudgetManagerTests",
+    "EvictionPolicyTests"
+  ],
+  "machine": {
+    "cpu": "Apple M3 Max",
+    "macOS": "26.6.2 (25G83)",
+    "physicalMemoryBytes": 51539607552,
+    "xcode": "26.6 (17F113)"
+  },
+  "memory": {
+    "failedTests": 0,
+    "finishTime": 1789228411.649,
+    "passedTests": 1,
+    "result": "Passed",
+    "skippedTests": 0,
+    "startTime": 1789228407.909,
+    "totalTestCount": 1
+  },
+  "reviews": {
+    "spec": {
+      "remainingFindings": 0,
+      "resolved": [
+        "Cross-tree return accounting.",
+        "Writer exclusion must follow a grown body across nodes when pending payloads share backing."
+      ]
+    },
+    "standards": {
+      "remainingFindings": 0,
+      "resolved": [
+        "Cross-tree return must validate ownership before mutation."
+      ]
+    }
+  },
+  "scopeLimits": [
+    "No production checkout yet (#480).",
+    "No large-model replay or repeated model reload experiment.",
+    "Simulated aborts return an unchanged quiescent body; actual recurrent rewind is #480.",
+    "Hosted-app process/MLX samples contain concurrent non-fixture activity; no whole-process footprint reduction is claimed."
+  ],
+  "staticChecks": {
+    "gitDiffCheck": "passed",
+    "swiftFormat": "passed, strict lint",
+    "swiftLint": "passed; file_length warning in SSDSnapshotStore and function_body_length warning in PrefixCacheManager.admit"
+  },
+  "swiftSourceSHA256": {
+    "tesseract/Features/Server/EvictionCandidatePolicy.swift": "736a441905e172a389462f01eebc945ffeec3ee920105d036b51dd84904cd5d0",
+    "tesseract/Features/Server/LeafLease.swift": "5d2a98f1757cb5d71bb9dc0d7e6ef3e48fdbf5b9a885b0c4d499e04548bc79fb",
+    "tesseract/Features/Server/PrefixCacheManager.swift": "03d069acef3ec73045104222b894939fbbe395944adc7433168fa8111bddfc3f",
+    "tesseract/Features/Server/SSDSnapshotStore.swift": "0f961db60ab05c449a38b18e962da8580fb2a98715bf1bae37912200191caacc",
+    "tesseract/Features/Server/SnapshotState.swift": "87f7918709b6e4d74ef56a01a2b6abc1f5a85e5528477c2caf06de91d762dac4",
+    "tesseract/Features/Server/TieredSnapshotStore.swift": "0af0152c6e4bba34aaae9ecaa132fb89eb7655174069a2c8441a3ef670f6a620",
+    "tesseract/Features/Server/TokenRadixTree.swift": "d09525d3eb8b9ec24e17ef11034ac43b8b551b1e14ba4423769d73ef7f65671b",
+    "tesseractTests/LeafLeaseMemoryEvidenceTests.swift": "065757b33a3d5c67248b8c4b8d6b81839058d1697d9546f769ffc16cbcd17a2a",
+    "tesseractTests/LeafLeaseTests.swift": "4b5341489373e71919a30c7a34aae6855685511440a7aa7c19888886f03c1052"
+  }
+}
