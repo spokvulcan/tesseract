@@ -5,6 +5,13 @@ before committing changes to server, caching, or agent engine code.
 
 ## Unit / integration suites
 
+`AlphaTunerTests.productionCacheKeepsAlphaTunerDisabled` drives toy-backed
+Server Completion through production cache construction, both with and without
+Model Identity, and checks the published tuner state is unavailable with static
+`alpha = 0`. The other tuner tests exercise the retained implementation only;
+they do not enable it in the app. See [#504](https://github.com/spokvulcan/tesseract/issues/504)
+and the [captured incident](../benchmarks/incidents/2026-09-12-alpha-tuner/README.md).
+
 The suite lists below are recommended *focused* runs for the hottest areas;
 there are ~100 suites in total — discover the rest with
 `grep -r "@Suite" tesseractTests/`.

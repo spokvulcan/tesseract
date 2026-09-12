@@ -154,7 +154,8 @@ tesseract/
 │   │   ├── EmittedPathIndex.swift     # Emitted Path Index: rendered-bytes hash → fed ids per fingerprint (ADR-0063)
 │   │   ├── EmittedPathResolve.swift   # Resolve composition + per-request Emitted Path telemetry
 │   │   ├── EmittedPathRegistration.swift # Register a finished turn's path behind the fidelity gate
-│   │   ├── EvictionPolicy.swift       # Pure eviction scoring + AlphaTuner
+│   │   ├── EvictionPolicy.swift       # Pure eviction scoring (production alpha = 0)
+│   │   ├── AlphaTuner.swift           # Retained replay implementation; disabled in production (#504)
 │   │   └── Telemetry/                 # Prompt-cache telemetry store
 │   ├── Settings/
 │   │   ├── SettingsManager.swift      # @Observable Settings Facade
@@ -422,8 +423,12 @@ bounds output. There is no thinking-length or repetition intervention, forced
 think closure, or continuation restart (ADR-0060 amendment).
 Repeated prompts are accelerated by a tiered KV prefix cache
 (`PrefixCacheManager`): a radix tree of KV-cache snapshots in RAM, spilled to SSD
-(`SSDSnapshotStore` + `SnapshotLedger`), with flop-aware LRU eviction
-(`EvictionPolicy`, `AlphaTuner`). Vocabulary: CONTEXT.md → Prefix cache snapshot
+(`SSDSnapshotStore` + `SnapshotLedger`), with eviction scoring
+(`EvictionPolicy`) fixed at `alpha = 0` (recency within the eligible set).
+`AlphaTuner` remains in source but is not attached to production caches: its
+replay allocated multi-gigabyte synthetic arrays and blocked MainActor
+([#504](https://github.com/spokvulcan/tesseract/issues/504)). The Budget Floor,
+pressure response and SSD demotion remain active. Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
 `Features/Server/Integrations/` configures external clients against the live

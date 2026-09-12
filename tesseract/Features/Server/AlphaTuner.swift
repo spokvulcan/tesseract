@@ -8,6 +8,10 @@ import MLXLMCommon
 /// it into its **Eviction Configuration** — the tuner holds no global and
 /// no back-reference to the manager. Continuous retuning is out of scope.
 ///
+/// Disabled in production pending #504. Retained for bounded tests and
+/// redesign: current replay creates full-size synthetic MLX arrays and runs
+/// synchronously on MainActor. Do not attach it to production caches.
+///
 /// Tie-break rule for the grid search: highest cumulative
 /// parent-relative FLOPs saved wins, breaking ties on cached-token
 /// count, then on first-in-iteration order under strict `>`.
@@ -109,10 +113,10 @@ final class AlphaTuner {
     /// grid search to discriminate between alpha candidates.
     static let maximumBootstrapWindow = 60
 
-    /// Production FLOP profile, injected at construction. The grid-search
+    /// Model FLOP profile, injected at construction. The grid-search
     /// sandbox replays and the direct FLOP tally score against this
-    /// instead of a process global. Immutable — a model swap builds a new
-    /// tuner alongside a new cache.
+    /// instead of a process global. Immutable for this tuner's lifetime;
+    /// production model swaps do not construct a tuner while #504 is open.
     let flopProfile: ModelFlopProfile
 
     private(set) var phase: Phase = .waitingForFirstEviction

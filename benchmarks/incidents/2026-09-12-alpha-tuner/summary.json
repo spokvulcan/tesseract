@@ -1,0 +1,32 @@
+{
+  "incidentRequestID": "9BF54598-956E-4925-977E-96C1AC30239F",
+  "requests": 33,
+  "maxInputContextTokens": 91103,
+  "maxContextIncludingOutput": 91294,
+  "totalGeneratedTokens": 67283,
+  "totalNewInputTokens": 21260,
+  "totalCachedInputTokensAcrossRequests": 2134529,
+  "restoreModes": {
+    "copy": 1,
+    "handoff": 32
+  },
+  "outcomes": {
+    "completed": 33
+  },
+  "allTerminalLeasesZero": true,
+  "medianTailMsExcludingIncident": 29.552500000000002,
+  "incidentTailMs": 64636.499,
+  "recordingRequestMs": 64770.423,
+  "peakProcessFootprintBytes": 42547637240,
+  "peakActiveBytes": 39031058131,
+  "peakSystemSwapBytes": 13958643712,
+  "allocationMatch": {
+    "postTuningBaseline": 22301257411,
+    "previousSyntheticLeaf": 5538643968,
+    "sourceZeroArrays": 5589172224,
+    "deepCopiedSyntheticLeaf": 5589172224,
+    "predictedActive": 39018245827,
+    "observedActive": 39018245843,
+    "differenceBytes": 16
+  }
+}

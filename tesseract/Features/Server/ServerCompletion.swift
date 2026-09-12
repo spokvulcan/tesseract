@@ -2557,10 +2557,9 @@ nonisolated final class ServerCompletion {
 
     /// Lazily creates and returns the `PrefixCacheManager`. Initialization requires
     /// a MainActor hop because PrefixCacheManager is `@MainActor`.
-    /// The production cache attaches an `AlphaTuner` so eviction `alpha`
-    /// adapts to the workload after the first eviction fires. Each cache
-    /// owns its **Eviction Configuration**, so a fresh cache starts at the
-    /// LRU default (`alpha = 0`) and reads the model's `flopProfile` from
+    /// Production leaves `AlphaTuner` detached (#504). Each cache owns its
+    /// **Eviction Configuration**, keeps the static LRU default (`alpha = 0`),
+    /// and reads the model's `flopProfile` from
     /// **Model Identity** — there is no global to reset or leak.
     ///
     /// When `ssdConfig?.enabled == true` the manager is composed over
@@ -2605,7 +2604,10 @@ nonisolated final class ServerCompletion {
             let cache = PrefixCacheManager(
                 memoryBudgetBytes: budget,
                 evictionConfig: EvictionConfiguration(flopProfile: flopProfile),
-                alphaTuner: AlphaTuner(flopProfile: flopProfile),
+                // Disabled pending #504: replay allocates full-size synthetic
+                // MLX caches and blocks MainActor. No instance means no tuning
+                // history or replay; eviction keeps its static alpha = 0.
+                alphaTuner: nil,
                 tieredStore: tieredStore,
                 // Snapshot Demotion's write-through extraction: **Deferred
                 // Payload Extraction**, so this MainActor call reads shapes

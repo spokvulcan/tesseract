@@ -2127,8 +2127,9 @@ concept).
 **Eviction Configuration**:
 The `(flopProfile, alpha)` pair the prefix cache scores eviction against — the single
 mutable cell owned by `PrefixCacheManager`, passed to the pure-function scorers by
-value. `flopProfile` is fixed from **Model Identity** at cache build; `alpha` starts
-at the LRU default and adapts at runtime via the **AlphaTuner**.
+value. `flopProfile` is fixed from **Model Identity** at cache build; production
+`alpha` stays at the static LRU default (`0`), with **AlphaTuner** disabled
+pending [#504](https://github.com/spokvulcan/tesseract/issues/504).
 _Avoid_: `EvictionPolicy.modelProfile` / `.alpha` (retired statics), eviction settings
 (not a user **Setting**), model profile as a global. ("Flop profile" = the immutable
 per-architecture cost model; the config is the pair whose `alpha` half is mutable.)
@@ -2145,8 +2146,8 @@ private homes), eviction policy (unqualified — `EvictionPolicy` is the scorer 
 composes, not the selection).
 
 **AlphaTuner inversion**:
-The dependency direction between tuner and cache: the **AlphaTuner** is constructed
-with the production `flopProfile`, replays each grid-search candidate in its own
+The retained, production-disabled dependency direction between tuner and cache:
+an explicitly attached **AlphaTuner** takes a `flopProfile`, replays each grid-search candidate in its own
 sandbox, and *returns* the winning `alpha` for the manager to assign — holding no
 back-reference to the manager and writing no global. The inversion is that the manager
 pulls the result, not that the tuner pushes it.

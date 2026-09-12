@@ -117,14 +117,15 @@ final class PrefixCacheManager {
     /// measurement until the cache is rebuilt — a scripted budget
     /// scenario must not be silently re-measured out from under.
     private var budgetOverrideActive = false
-    /// Optional adaptive `alpha` tuner. Production caches attach one;
-    /// test/replay caches pass `nil` to avoid recursive recording when
-    /// the tuner itself spins up sandboxed caches during grid search.
+    /// Optional adaptive `alpha` tuner, retained for explicit tests/research.
+    /// Production leaves this nil (#504), so it retains no tuning history
+    /// and cannot allocate replay caches. Replay caches also pass nil to
+    /// avoid recursive tuning.
     let alphaTuner: AlphaTuner?
     /// The one mutable cell holding the eviction weighting. `flopProfile`
-    /// is fixed for this cache's model; `alpha` rides the LRU default
-    /// until the attached `AlphaTuner` returns a tuned winner from
-    /// `recordRequest`, and external overrides go through
+    /// is fixed for this cache's model; production `alpha` stays at the LRU
+    /// default. An explicitly attached test tuner can return a winner from
+    /// `recordRequest`; external overrides go through
     /// `setEvictionAlpha(_:)`. Every eviction and telemetry score reads it
     /// by value — there is no process global. See `CONTEXT.md` → Eviction
     /// tuning (**Eviction Configuration**).
@@ -2050,8 +2051,8 @@ final class PrefixCacheManager {
     /// Override the eviction weighting (`alpha`) in the **Eviction
     /// Configuration**. Used by the loaded-model E2E runner to force
     /// F/B-weighted eviction for the branch-point survival check.
-    /// Production code should not call this; the `AlphaTuner` owns
-    /// `alpha` after warmup and overwrites overrides on its next tune.
+    /// Production uses the static LRU default while AlphaTuner is disabled
+    /// (#504); this override is reserved for explicit test scenarios.
     func setEvictionAlpha(_ alpha: Double) {
         evictionConfig.alpha = alpha
     }

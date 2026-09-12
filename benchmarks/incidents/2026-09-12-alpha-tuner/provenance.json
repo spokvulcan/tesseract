@@ -1,0 +1,16 @@
+{
+  "sourceCheckout": "13ea4462b562c2c0521711e54df4a2840d9edf8e",
+  "processID": 92396,
+  "processStart": "2026-09-12 20:29:12 UTC",
+  "diagnosticsOriginal": "~/Library/Application Support/CacheDiagnostics/2026-09-12.jsonl",
+  "diagnosticsCaptureSHA256": "68216cb40350fcace98f2536ebeb216fd06823513ace2e49d5fc9a952ee2c1dc",
+  "diagnosticEvents": 3986,
+  "requestMemorySamples": 3374,
+  "piSessionID": "01a09754-2a80-77eb-98c2-f30aa0fe1b44",
+  "piSourceSHA256": "4642583103a45f9cda2d89a363a4a520f0f0b7a6944aed002922fb750430c198",
+  "traceCaptureSHA256": "b7e969db75a7efb25a03753ef42ef9be192ab70e45fadc8fc0e66ba11f054e77",
+  "appSourceRevisionEmbedded": false,
+  "scope": "Read-only incident analysis. No inference or high-memory reproduction; no source changes. Exports contain scalar metadata, no prompts, response text, headers or tool arguments.",
+  "observedReleaseBinarySHA256": "18d9c2096435c900bcf8408bbe0f20bea12d0536b6f91212d6c9f61e218a0232",
+  "binaryMatchesEarlierReviewBuild": false
+}

@@ -75,8 +75,8 @@ final class PrefixCacheAdmin {
         current?.setMemoryBudget(bytes)
     }
 
-    /// Override the eviction weighting (`alpha`). Production code should
-    /// not call this; the `AlphaTuner` owns `alpha` after warmup.
+    /// Override the eviction weighting (`alpha`) for E2E tooling. Production
+    /// uses the static LRU default while AlphaTuner is disabled (#504).
     func setEvictionAlpha(_ alpha: Double) {
         current?.setEvictionAlpha(alpha)
     }
