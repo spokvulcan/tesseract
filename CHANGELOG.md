@@ -1,5 +1,51 @@
 # Changelog
 
+## [1.13.0](https://github.com/spokvulcan/tesseract/compare/v1.12.0...v1.13.0) (2026-09-12)
+
+
+### Features
+
+* **cache:** protect leaf bodies with request leases ([#498](https://github.com/spokvulcan/tesseract/issues/498)) ([fef2ee5](https://github.com/spokvulcan/tesseract/commit/fef2ee55ab6b65a302ca5e60fbe45dfe3d87e3e5))
+* **server:** register, resolve and fidelity-gate the Emitted Path Index as a dark launch ([8a94379](https://github.com/spokvulcan/tesseract/commit/8a94379cef4d1ac97fae7e43cba0ab569c25a3cf))
+* **server:** store every eligible turn live under its emitted path and serve the composition ([#486](https://github.com/spokvulcan/tesseract/issues/486)) ([9518d70](https://github.com/spokvulcan/tesseract/commit/9518d70e068b6a0e070205bf337f12a2937672d3))
+* **telemetry:** trace request memory and cleanup phases ([#496](https://github.com/spokvulcan/tesseract/issues/496)) ([cb3c591](https://github.com/spokvulcan/tesseract/commit/cb3c591f5604b70ca94469a7bf07d405ab86bbf3))
+
+
+### Bug Fixes
+
+* **cache:** preserve leaf handoff with inactive MTP ([#497](https://github.com/spokvulcan/tesseract/issues/497)) ([ddbbec3](https://github.com/spokvulcan/tesseract/commit/ddbbec383ebae7a64237d168e7378e1be136f5cb))
+* **deps:** move the vendor to b902739 so the DFlash2 drafter computes in its own dtype beside the float16 PARO target ([4fa58ec](https://github.com/spokvulcan/tesseract/commit/4fa58ecbb36ca90882e48a2a90ad31b14d3ad700))
+* remove forced thinking interventions ([#494](https://github.com/spokvulcan/tesseract/issues/494)) ([0c66298](https://github.com/spokvulcan/tesseract/commit/0c66298fbd0b9d8688df7be80926428669d74e2f))
+* **server:** bound the prefix-cache ceiling by the working set and defer the SSD payload copy ([494dd39](https://github.com/spokvulcan/tesseract/commit/494dd39a5be9f9ebfeba1d61f34fb07dd6ff8249))
+* **server:** detach every array an extension payload retains, recurrent state included ([#485](https://github.com/spokvulcan/tesseract/issues/485)) ([34ca828](https://github.com/spokvulcan/tesseract/commit/34ca8289e5068db9cb85aeb1d81ca22368165e0a))
+
+
+### Performance Improvements
+
+* **cache:** capture finished leaves by moving cache ownership ([fc66f59](https://github.com/spokvulcan/tesseract/commit/fc66f5996b483e9d4feda40e79f7773d112f59d7))
+* **server:** capture the finished turn's leaf from the live cache instead of re-prefilling ([#465](https://github.com/spokvulcan/tesseract/issues/465)) ([be647f8](https://github.com/spokvulcan/tesseract/commit/be647f8a017c1aa932b0e432665b785a55a4679b))
+* **server:** replay the Emitted Path fidelity check in linear time and gate registration on the recorded corpus ([#488](https://github.com/spokvulcan/tesseract/issues/488)) ([cc6393f](https://github.com/spokvulcan/tesseract/commit/cc6393f7b31da6d698385c927a50c72f0e456eb2))
+
+
+### Code Refactoring
+
+* **server:** route the admission builder and stable-prefix probe renders through the Conversation Render module ([774a284](https://github.com/spokvulcan/tesseract/commit/774a2846782c0a09c0945b5b53a5328d7c2b8716))
+
+
+### Documentation
+
+* **adr:** propose ADR-0063 Emitted Path Index and ADR-0064 Leaf Handoff with their glossary terms ([5eb55c0](https://github.com/spokvulcan/tesseract/commit/5eb55c09004542d06cfc3b5086495f5491030698)), closes [#472](https://github.com/spokvulcan/tesseract/issues/472)
+
+
+### Continuous Integration
+
+* make PR builds and tests opt-in ([9e10dc5](https://github.com/spokvulcan/tesseract/commit/9e10dc5f2427c3fa480b2452613e000a850f7291))
+
+
+### Miscellaneous Chores
+
+* **deps:** move the vendor to ed74418 and swift-transformers to 08933b6 for the detokenizer and tojson fixes ([0f002a0](https://github.com/spokvulcan/tesseract/commit/0f002a066be36e5e3212588c0004464a36bce499))
+
 ## [1.12.0](https://github.com/spokvulcan/tesseract/compare/v1.11.1...v1.12.0) (2026-09-05)
 
 ### Highlights
