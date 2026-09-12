@@ -42,6 +42,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// Replaces the fork's `FinalizedKVCacheHandle` (ADR-0006).
     let finalCacheOwner: FinalGenerationCache
     var finalCache: [any KVCache] { finalCacheOwner.cache }
+    /// The iterator this request actually used. Loaded drafter capability
+    /// alone does not imply engagement (warm or sampled MTP requests, for
+    /// example, decode ordinarily and remain eligible for leaf handoff).
+    let speculativeArm: SpeculativeArm?
     let diagnosticsContext: PrefixCacheDiagnostics.Context
     let lookupMs: TimeInterval
     let restoreMs: TimeInterval
@@ -1928,6 +1932,7 @@ nonisolated final class ServerCompletion {
                 stream: stream,
                 completion: task,
                 finalCacheOwner: FinalGenerationCache(liveCache),
+                speculativeArm: dflash2Engages ? .dflash2 : nil,
                 diagnosticsContext: diagnosticsContext,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
@@ -2206,6 +2211,7 @@ nonisolated final class ServerCompletion {
             stream: stream,
             completion: task,
             finalCacheOwner: FinalGenerationCache(cache),
+            speculativeArm: nil,
             diagnosticsContext: diagnosticsContext,
             lookupMs: 0,
             restoreMs: 0,
@@ -2376,6 +2382,7 @@ nonisolated final class ServerCompletion {
             stream: stream,
             completion: task,
             finalCacheOwner: FinalGenerationCache(cache),
+            speculativeArm: arm,
             diagnosticsContext: diagnosticsContext,
             lookupMs: lookupMs,
             restoreMs: 0,

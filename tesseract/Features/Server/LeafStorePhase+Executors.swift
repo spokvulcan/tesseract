@@ -117,7 +117,7 @@ nonisolated extension LeafStorePhase {
                 // through the boxed generation instead of a direct capture.
                 let generation = mlxStartBox.value
                 let moving =
-                    move && context.copyReason == nil && session.mtpDrafter == nil
+                    move && context.copyReason == nil && generation.speculativeArm != .mtp
                     ? generation.finalCacheOwner : nil
                 return await admitLeaf(
                     cache: moving == nil ? generation.finalCache : [],

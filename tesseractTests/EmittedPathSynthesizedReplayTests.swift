@@ -59,8 +59,11 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn.leafStore["copyReason"] == "imageKeySpace")
     }
 
-    @Test func liveTurnRegistersAndTheNextRequestServesTheWholePath() async throws {
-        let session = Session()
+    @Test(arguments: [false, true])
+    func liveTurnRegistersAndTheNextRequestServesTheWholePath(mtpLoaded: Bool) async throws {
+        // A loaded but ineligible drafter must not turn an ordinary cold
+        // or warm generation's leaf handoff into a full capture copy.
+        let session = Session(hasMTPDrafter: mtpLoaded)
         let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
         #expect(turn1.text == "hello world")
         #expect(turn1.thinking == "plan")
@@ -78,6 +81,7 @@ struct EmittedPathSynthesizedReplayTests {
         ])
         let turn2 = try await session.turn(request2, text: "again")
         #expect(turn2.text == "again")
+        #expect(turn2.leafStore["source"] == "handoff")
         #expect(turn2.requestResolve["result"] == "hit")
         #expect(turn2.requestResolve["indexedPrefix"] == "\(pathLength)")
         // The leaf was captured at the cache's offset, the whole path: the
@@ -479,7 +483,8 @@ struct EmittedPathSynthesizedReplayTests {
             fault: ((EmittedPathToyTokenizer) -> FaultyStreamTokenizer)? = nil,
             vision: ToyUserInputProcessor.VisionStub? = nil,
             identity: ModelIdentity? = nil,
-            ssdConfig: SSDPrefixCacheConfig? = nil
+            ssdConfig: SSDPrefixCacheConfig? = nil,
+            hasMTPDrafter: Bool = false
         ) {
             let uuid = UUID().uuidString
             let fingerprint = "toy-emitted-path-\(uuid)"
@@ -496,7 +501,8 @@ struct EmittedPathSynthesizedReplayTests {
                 configuration: configuration,
                 vision: vision,
                 reportsFlatTextTokens: vision == nil,
-                anchorsVision: vision != nil)
+                anchorsVision: vision != nil,
+                hasMTPDrafter: hasMTPDrafter)
             self.tokenizer = tokenizer
             self.queue = queue
             self.provider = provider

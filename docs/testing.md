@@ -375,6 +375,75 @@ Focused regression suites: `RequestMemoryTelemetryTests`,
 `ManagedGenerationDriverTests`, `ServerCompletionKeyedSequencingTests`,
 `ServerCompletionDrainTests`, and `PromptCacheDiagnosticsFileSinkTests`.
 
+### Controlled capture comparison (#478)
+
+`scripts/capture_memory_replay.py` sends one private HTTPRequestLogger
+recording to an isolated loopback server and saves scalar diagnostics, usage,
+request/response hashes, and the request ID. It uses greedy decoding with a
+128-token output ceiling by default; use **the same settings and request
+bytes on both builds**. This is a bounded capture experiment, not a replay
+of every historical generated token or the full #480 long-session gate.
+
+```bash
+python3 scripts/capture_memory_replay.py \
+  --request /private/path/to/recording-request.json \
+  --output /private/path/to/handoff.json \
+  --label handoff --source-revision BUILD_REVISION \
+  --expect-capture-mode handoff \
+  --next-request /private/path/to/warm-request.json
+```
+
+The default endpoint is `127.0.0.1:18321`. Launch the app with
+`-serverPort 18321 -prefixCacheSSDDirectoryOverride /private/path/to/cache`
+to isolate the experiment from ordinary clients and their disk cache. These
+launch arguments override preferences for that process. Use fresh processes
+and equivalent SSD/RAM/index state for the comparison; record any restarts.
+Quit the app before running Xcode tests and relaunch it afterwards.
+
+The optional continuation file contains **private request and response
+content** and is created with mode `0600`; keep it outside the repository.
+Tool calls receive a synthetic tool result and are never executed. Reuse
+the same continuation fixture on the other build. For cancel/resend, send
+that fixture once with `--cancel-after-first-delta`, then again without it.
+Response hashes include tool-call IDs, so generated IDs can differ even if
+function names and arguments match.
+
+The script fails on concurrent request timelines, diagnostics rotation,
+missing release telemetry, or an unexpected capture mode. Its observation
+window ends at `afterRelease`; that is **not** an SSD-drain or idle-memory
+guarantee. System-scoped SSD materialization events observed in that window
+are retained separately in `systemEventsObserved`, with snapshot IDs, and
+must not automatically be attributed to the current request. Later writer
+events remain in the durable diagnostics sink. Honor the component facts'
+measurement phases when reading the carried-forward fields.
+
+The [2026-09-08 capture comparison](../benchmarks/capture-handoff/2026-09-08/README.md)
+includes paired request IDs, a compact machine-readable baseline, and a
+checksum-verified download of the detailed diagnostic extracts and generated
+reports. It documents an explicit recovery from diagnostics rotation. Recovery requires the retained old and current
+files to contain a continuous sequence from the first request sample through
+terminal and after-release observations. Missing response metadata must stay
+unavailable; a complete memory timeline does not recover response parity.
+
+For a bitwise correctness check on a real recording, the loaded-model
+runner also accepts `--bench-replay-request <recording>`, together with
+`--hybrid-cache-correctness` and the usual `--bench-model`, `--bench-model-id`,
+and `--bench-output` arguments. This selects one check instead of the default
+correctness matrix: prefill the recorded prompt through all but its final
+16 tokens, capture it both by copy and by move, restore each by copy, and
+compare the continuation's final logit **bytes**. It uses the production
+normalization and template context with preserved thinking, rejects image
+requests, and logs only the input hash and counts. It tests unquantized
+capture/restore correctness; DFlash2 and HTTP timing are covered by the
+separate live replay.
+
+The Qwen3.8 community checkpoint used by this comparison loads as a text
+instance even when vision is requested (ADR-0056). The current HTTP E2E
+runner's config-based image scenario is therefore not real VLM coverage;
+its different-image assertion also fails on the unchanged baseline. The
+comparison report retains that failure instead of presenting it as a green
+image gate. Use an actual vision-loaded model for image-specific validation.
+
 ### Test-runner caveats
 
 - `-only-testing` filters must target **suite** granularity. A method-granularity
