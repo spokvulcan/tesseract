@@ -1,4 +1,6 @@
-# CI — build, test, lint on every PR and every push to main.
+# CI — lint on PRs; also build Release and test on pushes to main.
+# Request a one-off PR build and test run by adding the run-build label, or
+# run the full workflow manually from Actions on a selected branch.
 #
 # The release pipeline (release-build.yml) gates on these exact check names
 # for the released commit: build-release, test, lint. Rename them only in
@@ -16,6 +18,7 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - version.txt
       - CHANGELOG.md
@@ -26,6 +29,10 @@ on:
       - version.txt
       - CHANGELOG.md
       - .release-please-manifest.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   # Semver range so a runner-image refresh doesn't brick CI; keep the floor
@@ -33,12 +40,17 @@ env:
   XCODE_VERSION: "^26.4"
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Label requests must not cancel the normal PR lint, and manual runs must
+  # not queue ahead of the main-branch checks used by the release gate.
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'checks' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-release:
     name: build-release
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'run-build')
     runs-on: macos-26
     timeout-minutes: 90
     steps:
@@ -77,6 +89,9 @@ jobs:
 
   test:
     name: test
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'run-build')
     runs-on: macos-26
     timeout-minutes: 120
     steps:
@@ -129,6 +144,7 @@ jobs:
 
   lint:
     name: lint
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     container: ghcr.io/realm/swiftlint:0.63.2 # keep in sync with local `swiftlint version`
     steps:

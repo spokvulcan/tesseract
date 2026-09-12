@@ -33,6 +33,28 @@ The version is injected at build time (`MARKETING_VERSION` from the tag,
 a dummy — never bump it by hand; `version.txt` is the source of truth and
 Release Please maintains it.
 
+## CI builds on pull requests
+
+`CI` runs SwiftLint automatically on PRs. The macOS jobs, `build-release`
+and `test`, are skipped by default; both run automatically when code lands
+on `main`. Version-only changes still skip CI as described above.
+
+- **Build from a PR:** add the `run-build` label in the PR sidebar. This
+  requests one Release build and Debug test run of the PR's merge commit,
+  including for fork PRs. New commits do not automatically request another
+  run; remove and re-add the label when you want to build and test again.
+  Other labels do not request builds or tests, and label changes do not
+  rerun lint. GitHub may require approval for fork runs.
+- **Run full CI manually:** open **Actions → CI → Run workflow**, select
+  the branch, and click **Run workflow**. The CLI equivalent is
+  `gh workflow run ci.yml --ref BRANCH`. This runs the build, tests, and
+  lint. The Actions button becomes available after this workflow reaches
+  `main`; use the PR label for branches in forks.
+- **Merge requirements:** keep `build-release` and `test` out of required
+  status checks in branch protection and rulesets. Both are optional before merge;
+  the release pipeline still requires `build-release`, `test`, and `lint`
+  to pass for the released code on `main`.
+
 ## One-time setup (before the first release)
 
 ### 1. Developer ID Application certificate
