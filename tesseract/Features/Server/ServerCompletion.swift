@@ -192,7 +192,10 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
 
     func recoverUnadmitted(_ snapshot: HybridCacheSnapshot) {
         precondition(cache.isEmpty)
-        cache = snapshot.takeMovingCache() ?? []
+        guard let returnedCache = snapshot.takeMovingCache() else {
+            preconditionFailure("an unadmitted moved snapshot must still own its cache")
+        }
+        cache = returnedCache
     }
 
     func checkIn(_ snapshot: HybridCacheSnapshot, tokens: [Int]) async -> Bool {
@@ -1263,11 +1266,9 @@ nonisolated final class ServerCompletion {
     ) async {
         guard owner.checkout != nil else { return }
         let cleanup = Task.detached {
-            try await sessions.withSession { _ in await owner.rewindIfNeeded(memory: memory) }
+            await sessions.withSession { _ in await owner.rewindIfNeeded(memory: memory) }
         }
-        do { try await cleanup.value } catch {
-            Log.server.fault("Leaf rewind could not enter Model Session: \(error)")
-        }
+        await cleanup.value
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
@@ -1540,6 +1541,9 @@ nonisolated final class ServerCompletion {
             // deeper blocks (8 vs 2 effective), it engages under sampling
             // presets, and it decodes over restored caches. The policy lives
             // on `DFlash2Support.shouldEngage`.
+            let textOnlyIdentityKeySpace =
+                keySpace.isIdentity
+                && !conversation.messages.contains { !$0.images.isEmpty }
             let dflash2Engages = DFlash2Support.shouldEngage(
                 hasDrafter: session.dflash2Drafter != nil,
                 textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
@@ -1570,8 +1574,7 @@ nonisolated final class ServerCompletion {
                             newPromptTokens: fullTokenCount - cacheOffset,
                             outputCeiling: parameters.maxTokens,
                             speculativeAllowance: dflash2Engages ? DFlash2Support.blockSize : 0),
-                        identityKeySpace: keySpace.isIdentity
-                            && !conversation.messages.contains { !$0.images.isEmpty },
+                        identityKeySpace: textOnlyIdentityKeySpace,
                         prefixCache: prefixCache, context: diagnosticsContext)
                     checkedOutOwner = attempt.owner
                     restoreCopyReason = attempt.copyReason
@@ -1737,8 +1740,7 @@ nonisolated final class ServerCompletion {
                 // Preserve-thinking turns never synthesize boundary leaves or
                 // abandonment seeds. Their full-prefix helper copies serve no consumer.
                 let transientOffsets =
-                    renderContext.preservesThinking && keySpace.isIdentity
-                        && !conversation.messages.contains { !$0.images.isEmpty }
+                    renderContext.preservesThinking && textOnlyIdentityKeySpace
                     ? Set<Int>() : prefillPlan.transientCheckpointOffsets
                 let helperCheckpoints = Dictionary(
                     uniqueKeysWithValues: transientOffsets.map {
@@ -2812,6 +2814,10 @@ nonisolated final class ServerCompletion {
         captureSource: String
     ) async -> StructuredLeafAdmission {
         // swiftlint:enable function_parameter_count
+        guard !leaf.layers.isEmpty else {
+            diagnostics.logSkip(stage: admissionStage, reason: "empty-cache-body")
+            return StructuredLeafAdmission(survived: false, store: nil)
+        }
         guard
             let admission = SnapshotAdmission.leaf(
                 storedTokens: storedTokens,

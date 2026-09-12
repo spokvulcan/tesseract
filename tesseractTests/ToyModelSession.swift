@@ -559,6 +559,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         model: ToyLanguageModel,
         tokenizer: any Tokenizer = FakeChatMLTokenizer(),
         configuration: ModelConfiguration = ToyVocabulary.configuration(),
+        processor: (any UserInputProcessor)? = nil,
         vision: ToyUserInputProcessor.VisionStub? = nil,
         reportsFlatTextTokens: Bool = false,
         anchorsVision: Bool = false,
@@ -571,7 +572,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
             context: ModelContext(
                 configuration: configuration,
                 model: model,
-                processor: ToyUserInputProcessor(tokenizer: tokenizer, vision: vision),
+                processor: processor ?? ToyUserInputProcessor(tokenizer: tokenizer, vision: vision),
                 tokenizer: tokenizer
             )
         )
@@ -580,7 +581,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     func withSession<V, R: Sendable>(
         nonSendable payload: sending V,
         _ body: @Sendable (any ModelSession, V) async throws -> R
-    ) async throws -> R {
+    ) async rethrows -> R {
         let recorder = self.recorder
         let reportsFlatTextTokens = self.reportsFlatTextTokens
         let anchorsVision = self.anchorsVision

@@ -73,7 +73,7 @@ offset afterwards cannot bring them back; the vendor exposes
    configures a bounded KV plan, so rotating layers arise only from
    sliding-window architectures; they restore by copy. Otherwise the hit
    restores by copy exactly as today, with the reason recorded:
-   `checkpoint`, `pendingFullPayload`, `untrimmable`, `rotating`,
+   `checkpoint`, `immutableBody`, `pendingFullPayload`, `untrimmable`, `rotating`,
    `quantized`, `imageKeySpace`.
 
 3. **Leaf Lease.** From check-out to check-in the tree may not drop the body,
@@ -129,12 +129,16 @@ capture by move (#478), tree-side leases (#479), then checkout and rewind
 resident leaf body out of `HybridCacheSnapshot` and the tree under the lease;
 all retained snapshot views lose their arrays. The tree keeps the original
 logical byte charge and floor membership until return. Immutable captured or
-hydrated checkpoints continue to restore by copy; a completed eligible turn
-produces a movable leaf for its next extension.
+hydrated leaf bodies continue to restore by copy and report `immutableBody`;
+structural checkpoint/branch/chain-prefix hits report `checkpoint`. A completed
+eligible turn produces a movable leaf for its next extension.
 
 Eligibility checks topology, full-offset extension, identity key space,
 unquantized full-attention caches, and `isTrimmable(after:)` with the suffix,
-output ceiling and DFlash2 allowance. Weak full-payload materialization probes
+output ceiling and DFlash2 allowance. The currently accepted plain
+`KVCacheSimple` always permits that advance; this is a conservative capability
+contract, not a measured bound or support for rotating/windowed caches. Those
+remain excluded. Weak full-payload materialization probes
 reject checkout without retaining payloads or host data; detached extensions
 do not block it. Recurrent rewind copies include state-slot metadata,
 lengths and padding. Rewind trims the same attention objects and reconstructs
@@ -142,7 +146,13 @@ recurrent layers from that saved independent state after the generation has
 quiesced. The request relinquishes all cache references on return.
 
 Startup cancellation, decode cancellation/failure, and boundary intervention
-return the original leaf before releasing request pins. Successful check-in
+return the original leaf before releasing request pins. Session providers
+retain their container and expose `async rethrows` entry: nonthrowing cache
+cleanup cannot independently fail on entry, even after cancellation. Unload
+drains starts/completions before dropping its container reference. A checked-out
+direct (non-thinking) turn rejected by a structural live-path guard concludes with
+the original leaf rewound; it does not stamp uncertain current state with a
+canonical path or try to capture the already-returned cache. Successful check-in
 is the ownership commit point; normal RAM/SSD admission follows the return.
 Cancellation observed before that point rewinds. Cancellation after the return
 cannot undo the committed leaf and follows ordinary admission/cleanup rules.
@@ -155,6 +165,9 @@ image-bearing boundaries, think-stripping paths and ADR-0009 seeds remain.
 `lookup`, `leafStore` and `requestMemory` report actual handoff/copy mode and
 fallback reasons; rewind emits both `leafRewind` and `leafStore source=rewind`.
 Request memory includes recurrent backup bytes and lease lifecycle facts.
+Rewind trimming executes independently of assertion settings; zero-layer
+caches cannot be captured or admitted as completed leaves. Recurrent lengths
+and absent/present padding are also restored correctly on the copy path.
 
 Small-cache identity, growth, recurrent replacement/metadata, pending-payload,
 fallback, pressure, cancellation/resend and release tests pass. In 24 bounded

@@ -44,11 +44,12 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         self.claim = claim
         originalTokens = Array(tokens.prefix(claim.lease.offset))
         recurrent = cache.enumerated().compactMap { index, entry in
-            guard entry is ArraysCache else { return nil }
+            guard entry is ArraysCache, let className = HybridCacheSnapshot.classNameForCache(entry)
+            else { return nil }
             return RecurrentState(
                 index: index,
                 layer: .init(
-                    className: entry is MambaCache ? "MambaCache" : "ArraysCache",
+                    className: className,
                     state: entry.state.map { HybridCacheSnapshot.deepCopyState($0) },
                     metaState: entry.metaState, offset: entry.offset))
         }
@@ -61,7 +62,9 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         eval(cache)
         for layer in cache where !(layer is ArraysCache) {
             let advance = layer.offset - claim.lease.offset
-            precondition(advance >= 0 && layer.trim(advance) == advance)
+            precondition(advance >= 0)
+            let trimmed = layer.trim(advance)
+            precondition(trimmed == advance)
         }
         for saved in recurrent {
             var arrays: [MLXArray] = []
@@ -98,12 +101,11 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             resolved.lookup.snapshotTokenOffset == snapshot.tokenOffset,
             tokens.count > snapshot.tokenOffset
         else { return Attempt(copyReason: .checkpoint) }
-        if let reason = snapshot.checkoutCopyReason(maximumAdvance: maximumAdvance) {
-            return Attempt(copyReason: reason)
-        }
+        let bodyCopyReason = snapshot.checkoutCopyReason(maximumAdvance: maximumAdvance)
         let claim: Claim
         switch await prefixCache.claimLeaf(
-            snapshot: snapshot, tokens: tokens, partitionKey: key, context: context)
+            snapshot: snapshot, tokens: tokens, partitionKey: key,
+            bodyCopyReason: bodyCopyReason, context: context)
         {
         case .claimed(let acquired): claim = acquired
         case .copy(let reason): return Attempt(copyReason: reason)

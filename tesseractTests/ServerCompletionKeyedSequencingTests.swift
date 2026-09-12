@@ -84,6 +84,45 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
 /// public entry with the toy-model-backed **Model Session**.
 @Suite struct ServerCompletionKeyedSequencingTests {
 
+    @MainActor
+    @Test func emptyDirectTurnReturnsItsLeafWithoutTryingToCaptureTheRewoundCache() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let first = Self.conversation([.init(role: .user, content: "Hi")])
+        let next = Self.conversation([
+            .init(role: .user, content: "Hi"), .assistant(content: "Hello!"),
+            .init(role: .user, content: "More?"),
+        ])
+        let render = try tokenizer.applyChatTemplate(
+            messages: next.promptMessages, tools: nil, additionalContext: nil)
+        let modelID = "direct-rewind-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(script: render + Array("Sure.".utf8).map(Int.init)),
+                tokenizer: tokenizer), modelID: modelID)
+        let firstHandle = try await fixture.start(
+            conversation: first, parameters: Self.parameters())
+        #expect(try await collectServerText(firstHandle).text == "Hello!")
+        _ = capture.drain()
+        var empty = Self.parameters()
+        empty.maxTokens = 0
+        let handle = try await fixture.start(conversation: next, parameters: empty)
+        #expect(handle.cachedTokenCount > 0)
+        #expect(try await collectServerText(handle).text.isEmpty)
+        let events = capture.drain()
+        let leaf = try #require(events.last { $0.eventName == "leafStore" })
+        #expect(leaf.field("source") == "rewind")
+        #expect(leaf.field("boundary") == "no-generated-tokens")
+        #expect(!events.contains { $0.field("reason") == "no-reusable-cache-state" })
+        let terminal = try #require(events.last { $0.field("sampleKind") == "terminal" })
+        #expect(terminal.field("treeLeaseCount") == "0")
+        let resend = try await fixture.start(conversation: next, parameters: Self.parameters())
+        #expect(resend.cachedTokenCount == handle.cachedTokenCount)
+        #expect(try await collectServerText(resend).text == "Sure.")
+        await fixture.drain()
+    }
+
     private static func conversation(
         _ messages: [HTTPPrefixCacheMessage]
     ) -> HTTPPrefixCacheConversation {

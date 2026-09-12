@@ -532,20 +532,29 @@ approval requirement in the capture baseline still applies to #480.
 body removal/accounting, exact recurrent state and metadata after growth,
 every intentional fallback, and pending-full-payload materialization.
 `EmittedPathSynthesizedReplayTests` covers cancellation during decode and warm
-prefill followed by a resend that hits the original leaf. Run these alongside
+prefill, including the unload drain, followed by a resend that hits the original
+leaf. `ServerCompletionKeyedSequencingTests` also covers a zero-output direct
+turn that returns its original leaf and reports rewind without capturing an
+empty cache. `HybridCacheSnapshotTests` covers copied recurrent metadata,
+including lengths and nil/present padding. Run these alongside
 `LeafLeaseTests`, `ServerCompletionDrainTests`, and
 `ServerCompletionKeyedSequencingTests`; the latter includes real quantized
 cache replacement so the copy path cannot accidentally retain stale objects.
 
 Run `LeafCheckoutMemoryEvidenceTests` alone with the Xcode flags above and
-`-only-testing:tesseractTests/LeafCheckoutMemoryEvidenceTests`. It uses a 2 MiB
+`-only-testing:tesseractTests/LeafCheckoutMemoryEvidenceTests`, prefixed with
+`TEST_RUNNER_TESSERACT_ISOLATED_LEAF_CHECKOUT_EVIDENCE=1`. The flag enables
+process-global allocator thresholds; leave it unset for the full target or any
+run with other MLX suites. Suite serialization cannot exclude allocations from
+other suites. Identity/state/release assertions always run. It uses a 2 MiB
 attention body and a 64-byte recurrent state, retains 24 retired request
 owners, and verifies that check-in/rewind releases their cache references.
 `LEAF_CHECKOUT_EVIDENCE=` contains active/cached MLX, process footprint, system
 swap, and tree/lease facts for each request. These are small-cache mechanism
 measurements, with no model weights loaded by the test. The full unit target
-may run this test among others; use only the isolated run for process-memory
-comparisons.
+may run this test among others with allocator thresholds disabled; use only
+the isolated run for process-memory comparisons. The JSON records whether
+allocation assertions were enabled.
 
 [Preserved #480 evidence](../benchmarks/leaf-checkout/2026-09-12/README.md)
 contains the scalar records, baseline table, 85-recording tokenizer replay
@@ -553,3 +562,8 @@ summary and pending large-model validation plan. The tokenizer-only corpus
 test does not measure live HTTP tail or Qwen3.8/DFlash2 memory. Do not repeat
 45k/75k/93k workloads or model reload loops on the 48 GiB Mac without explicit
 owner approval of a bounded resource plan and a suitable environment.
+
+
+[PR #503 review follow-up evidence](../benchmarks/leaf-checkout/2026-09-12-review/README.md)
+records each external finding's disposition, the final clean full-target run,
+and the explicitly isolated allocation run after these hardening changes.

@@ -246,10 +246,13 @@ nonisolated protocol ModelSessionProviding: Sendable {
     /// container's `perform(nonSendable:)` shape, so a non-`Sendable`
     /// value (the agent's `UserInput`: images, tool dicts) crosses without
     /// a box at the caller. Payload-free callers use the extension form.
+    /// A provider retains its session for the request lifetime and may only
+    /// rethrow errors from `body`; entry itself cannot fail or reject a
+    /// cancelled caller. This guarantees quiescent cache cleanup can enter.
     func withSession<V, R: Sendable>(
         nonSendable payload: sending V,
         _ body: @Sendable (any ModelSession, V) async throws -> R
-    ) async throws -> R
+    ) async rethrows -> R
 }
 
 extension ModelSessionProviding {
@@ -257,7 +260,7 @@ extension ModelSessionProviding {
     /// inside the session, so nothing crosses in.
     nonisolated func withSession<R: Sendable>(
         _ body: @Sendable (any ModelSession) async throws -> R
-    ) async throws -> R {
+    ) async rethrows -> R {
         try await withSession(nonSendable: ()) { session, _ in try await body(session) }
     }
 }
@@ -475,7 +478,7 @@ nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
     func withSession<V, R: Sendable>(
         nonSendable payload: sending V,
         _ body: @Sendable (any ModelSession, V) async throws -> R
-    ) async throws -> R {
+    ) async rethrows -> R {
         try await container.perform(nonSendable: payload) { context, payload in
             try await body(
                 ContextBackedModelSession(

@@ -87,6 +87,10 @@ array (which produced incorrect second-turn output).
 
 ## Validation and review
 
+The following counts describe the initial implementation. The
+[PR #503 review follow-up](../2026-09-12-review/README.md) records later fixes,
+a clean full-target run and an explicitly isolated allocation run.
+
 The full unit target ran once: 2,874 passed, 15 skipped, one failed out of
 2,890 tests. The failure was the old telemetry assertion expecting `copy`
 on an eligible warm restore; it was updated to require `handoff` and verify
@@ -107,7 +111,10 @@ loaded-model acceptance gaps below remain open.
 ## Reproduction
 
 Follow `docs/testing.md` for quitting/relaunching the app and Xcode flags.
-Run `LeafCheckoutMemoryEvidenceTests` alone for memory evidence. Its JSON
+Run `LeafCheckoutMemoryEvidenceTests` alone for memory evidence. On the reviewed
+implementation, enable allocator thresholds with
+`TEST_RUNNER_TESSERACT_ISOLATED_LEAF_CHECKOUT_EVIDENCE=1`; leave that flag unset
+for all combined-suite runs. Its JSON
 marker is `LEAF_CHECKOUT_EVIDENCE=`. Run `EmittedPathReplayCorpusTests` with
 `TEST_RUNNER_TESSERACT_FIDELITY_CORPUS` pointing to the private recordings and
 `TEST_RUNNER_TESSERACT_FIDELITY_MODEL` pointing to the tokenizer directory.

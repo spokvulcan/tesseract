@@ -105,3 +105,16 @@ Still rejected: a separate `AgentSession` protocol over the same
 `ModelContext` (two seams for one variation), and moving the agent arm onto
 the Unkeyed Completion's `StateThreadedTokenIterator` (a decode-path change
 that deserves its own perf-gated decision).
+
+
+## Clarification (2026-09-12): cleanup entry cannot independently fail
+
+A provider retains its session/container for the request lifetime.
+`ModelSessionProviding.withSession` is `async rethrows`, matching the underlying
+`ModelContainer.perform`: model verbs may throw, but entering the scoped
+session cannot independently reject cleanup or a cancelled caller. The
+completion module can therefore enter with a nonthrowing recurrent rewind
+closure after quiescence, and await its return before releasing request pins.
+Unload drains both registered completions and in-flight starts before dropping
+the actor's own container reference. Forced lease release from `completeRequest`
+would lose the exact-return guarantee and remains disallowed.

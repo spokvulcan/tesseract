@@ -936,8 +936,9 @@ final class TokenRadixTree {
         now: ContinuousClock.Instant,
         config: EvictionConfiguration
     ) -> EvictionScore? {
-        // Mirrors `collectEligible`: every body scores (no type or
-        // topology shielding, ADR-0019 / PRD #149).
+        // Score resident bodies without type/topology shielding (ADR-0019).
+        // Unlike `collectEligible`, omit bodyless leases: they carry a logical
+        // charge and floor protection, but no resident eviction candidate.
         guard node.state.body != nil else { return nil }
         return EvictionPolicy.computeScores(
             candidates: [node], now: now, config: config

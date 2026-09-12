@@ -396,13 +396,17 @@ final class PrefixCacheManager {
     /// Reserve only the exact resident leaf selected by this request's lookup.
     func claimLeaf(
         snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey,
+        bodyCopyReason: LeafStorePhase.Report.CopyReason?,
         context: PrefixCacheDiagnostics.Context
     ) -> LeafCheckout.ClaimResult {
         guard let tree = store.tree(for: partitionKey),
             let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
             hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
-            let body = hit.node.state.body, body.sharesMovedBody(with: snapshot)
+            let body = hit.node.state.body
         else { return .copy(.checkpoint) }
+        // Structural checkpoints take precedence over the body's representation.
+        if let bodyCopyReason { return .copy(bodyCopyReason) }
+        guard body.sharesMovedBody(with: snapshot) else { return .copy(.checkpoint) }
         guard
             let lease = tree.beginLeafLease(
                 on: hit.node, context: context, requireDetachedPayload: true)

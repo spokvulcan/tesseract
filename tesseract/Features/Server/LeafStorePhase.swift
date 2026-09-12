@@ -168,9 +168,10 @@ nonisolated enum LeafStorePhase {
         case .live(let offset):
             await storeLive(offset: offset, turn: turn, inputs: inputs, result: &result)
         case .boundary(let reason):
+            let checkedOutOffset = mlxStart.finalCacheOwner.checkout?.claim.lease.offset
             // A boundary or intervened turn must return the original leaf
             // before running the existing restore-and-re-prefill strategy.
-            _ = try? await sessions.withSession { _ in
+            await sessions.withSession { _ in
                 await mlxStartBox.value.finalCacheOwner.rewindIfNeeded(memory: memory)
             }
             let record = liveFallbackLog(
@@ -180,7 +181,15 @@ nonisolated enum LeafStorePhase {
             LeafStoreCounters.shared.noteBoundaryTurn(reason: record.reason)
             result.report.recordEmittedPathSkip(
                 EmittedPathRegistration.skipReason(for: reason), in: diagnosticsContext)
-            await storeFromBoundary(turn: turn, inputs: inputs, result: &result)
+            if let checkedOutOffset, turn.mode.boundaryMode == nil {
+                // A structural guard rejected the direct live path. Its
+                // rendered tokens cannot prove the cache's current state;
+                // preserve the original leaf instead of capturing after rewind.
+                result.report.path = .rewind
+                result.report.leafOffset = checkedOutOffset
+            } else {
+                await storeFromBoundary(turn: turn, inputs: inputs, result: &result)
+            }
         }
 
         if let admission = result.admission {

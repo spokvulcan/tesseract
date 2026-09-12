@@ -35,7 +35,8 @@ struct EmittedPathSynthesizedReplayTests {
 
     // MARK: - Cases
 
-    @Test func cancelledWarmPrefillReturnsTheLeaseAndReleasesRequestPins() async throws {
+    @Test(arguments: [false, true])
+    func cancelledWarmPrefillReturnsTheLeaseAndReleasesRequestPins(drain: Bool) async throws {
         let gate = ForwardGate(threshold: 0, armed: false)
         let session = Session(onForward: gate.onForward)
         let first = try await session.turn(Self.conversation([Self.user("hi")]))
@@ -51,7 +52,13 @@ struct EmittedPathSynthesizedReplayTests {
                 renderContext: Self.preserving)
         }
         await gate.reached()
-        starting.cancel()
+        let draining: Task<Void, Never>?
+        if drain {
+            draining = await Self.beginDrain(session.fixture, on: session.fixture.actor)
+        } else {
+            draining = nil
+            starting.cancel()
+        }
         gate.open()
         do {
             let handle = try await starting.value
@@ -59,6 +66,7 @@ struct EmittedPathSynthesizedReplayTests {
             await handle.waitForCompletion()
             Issue.record("cancelled prefill must throw")
         } catch is CancellationError {}
+        await draining?.value
         let events = session.capture.drain()
         let terminal = try #require(
             events.last {
@@ -76,6 +84,15 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(resend.cached == first.registeredPathLength)
         #expect(resend.event("lookup").map(Self.fields)?["restoreMode"] == "handoff")
         #expect(resend.text == "again")
+    }
+
+    private static func beginDrain(
+        _ fixture: ServerCompletionFixture, on actor: isolated LLMActor
+    ) -> Task<Void, Never> {
+        // Start on the actor synchronously through its first suspension:
+        // drainGeneration is incremented and the in-flight-start waiter is
+        // registered before this helper returns and the test opens the gate.
+        Task.immediate { await fixture.module.drainActiveCompletion(on: actor) }
     }
 
     @Test func cancelledPartialTurnRewindsAndResendHitsTheOriginalLeaf() async throws {

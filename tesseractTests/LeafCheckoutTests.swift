@@ -10,6 +10,25 @@ import Testing
 struct LeafCheckoutTests {
     private let key = CachePartitionKey(modelID: "checkout", kvBits: nil, kvGroupSize: 64)
 
+    @Test func emptyCachesCannotBeCapturedOrAdmittedAsCompletedLeaves() async throws {
+        var cache: [any KVCache] = []
+        #expect(HybridCacheSnapshot.captureMoving(cache: &cache, offset: 8) == nil)
+        #expect(HybridCacheSnapshot.capture(cache: [], offset: 8, type: .leaf) == nil)
+        let empty = HybridCacheSnapshot(
+            tokenOffset: 8, layers: [], checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000)
+        let requestID = UUID()
+        let admission = await ServerCompletion.admitStructuredLeaf(
+            empty, storedTokens: Array(1...8), storage: .ramOnly, partitionKey: key,
+            requestID: requestID, prefixCache: manager,
+            diagnostics: .init(
+                requestID: requestID, modelID: key.modelID, kvBits: nil, kvGroupSize: 64),
+            admissionStage: "leafAdmission", captureSource: "leaf")
+        #expect(!admission.survived)
+        #expect(admission.store == nil)
+        #expect(manager.lookup(tokens: Array(1...9), partitionKey: key).snapshot == nil)
+    }
+
     @Test func pendingFullPayloadCopiesUntilItsArraysAreReleased() async throws {
         let gate = DrainGate()
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
@@ -53,7 +72,7 @@ struct LeafCheckoutTests {
     }
 
     @Test(arguments: [
-        "system", "branch", "rotating", "window", "untrimmable", "quantized", "image",
+        "system", "branch", "immutable", "rotating", "window", "untrimmable", "quantized", "image",
     ])
     func unsafeRestorePointsKeepTheCopyPath(reason: String) async throws {
         let store = TieredSnapshotStore(ssdConfig: nil)
@@ -71,8 +90,9 @@ struct LeafCheckoutTests {
         eval(layer)
         let previous = FinalGenerationCache([layer])
         let body = try #require(
-            reason == "system"
-                ? HybridCacheSnapshot.capture(cache: previous.cache, offset: 8, type: .system)
+            reason == "system" || reason == "immutable"
+                ? HybridCacheSnapshot.capture(
+                    cache: previous.cache, offset: 8, type: reason == "system" ? .system : .leaf)
                 : previous.moveSnapshot(offset: 8))
         let tokens = Array(1...8)
         let tree = store.getOrCreateTree(for: key)
@@ -87,16 +107,17 @@ struct LeafCheckoutTests {
             identityKeySpace: reason != "image", prefixCache: manager,
             context: .init(
                 requestID: UUID(), modelID: key.modelID, kvBits: key.kvBits, kvGroupSize: 64))
-        let expected: LeafStorePhase.Report.CopyReason
+        let expected: String
         switch reason {
-        case "system", "branch": expected = .checkpoint
-        case "window", "untrimmable": expected = .untrimmable
-        case "image": expected = .imageKeySpace
-        case "quantized": expected = .quantized
-        default: expected = .rotating
+        case "system", "branch": expected = "checkpoint"
+        case "immutable": expected = "immutableBody"
+        case "window", "untrimmable": expected = "untrimmable"
+        case "image": expected = "imageKeySpace"
+        case "quantized": expected = "quantized"
+        default: expected = "rotating"
         }
         #expect(attempt.owner == nil)
-        #expect(attempt.copyReason == expected)
+        #expect(attempt.copyReason?.rawValue == expected)
         #expect(tree.leaseCount == 0)
         let copy = try #require(resolved.lookup.restoreCache())
         #expect(copy[0] as AnyObject !== layer as AnyObject)

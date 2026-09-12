@@ -83,6 +83,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// its stream has already synchronized every pending device operation.
     /// Unsupported/quantized layers leave the caller's cache untouched.
     static func captureMoving(cache: inout [any KVCache], offset: Int) -> HybridCacheSnapshot? {
+        guard !cache.isEmpty else { return nil }
         var layers: [LayerState] = []
         var totalBytes = 0
         for layer in cache {
@@ -110,9 +111,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
     /// Inspect/consume only in the Model Session, after the tree grants a lease.
     func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
-        guard checkpointType == .leaf, case .moved(let owner) = body,
-            !owner.cache.isEmpty
-        else { return .checkpoint }
+        guard checkpointType == .leaf else { return .checkpoint }
+        guard case .moved(let owner) = body else { return .immutableBody }
+        guard !owner.cache.isEmpty else { return .checkpoint }
         for layer in owner.cache {
             if layer is QuantizedKVCache { return .quantized }
             if layer is RotatingKVCache || layer is ChunkedKVCache { return .rotating }
@@ -216,6 +217,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         type: CheckpointType,
         copyStrategy: CopyStrategy = .device
     ) -> HybridCacheSnapshot? {
+        guard !cache.isEmpty else { return nil }
         var totalBytes = 0
         var layers: [LayerState] = []
         layers.reserveCapacity(cache.count)
@@ -455,7 +457,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// Determine className via type check. Subclass before superclass order
     /// matching upstream savePromptCache(). Returns nil for unsupported
     /// types (CacheList).
-    private static func classNameForCache(_ cache: any KVCache) -> String? {
+    static func classNameForCache(_ cache: any KVCache) -> String? {
         switch cache {
         case is ChunkedKVCache:
             return "ChunkedKVCache"

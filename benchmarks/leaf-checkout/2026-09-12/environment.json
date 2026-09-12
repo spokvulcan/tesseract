@@ -1,6 +1,6 @@
 {
   "sourceBase": "fef2ee55ab6b65a302ca5e60fbe45dfe3d87e3e5",
-  "sourceDescription": "#480 working tree; see containing git commit",
+  "sourceDescription": "Initial #480 implementation at sourceRevision; subsequent review evidence is in ../2026-09-12-review.",
   "machine": "Apple M3 Max",
   "physicalMemoryBytes": 51539607552,
   "macOS": "26.6.2 (25G83)",
@@ -30,5 +30,6 @@
   "baselineEnvironment": "../../capture-handoff/2026-09-08/environment.json",
   "hardwareModel": "Mac15,9",
   "swiftDiffSHA256": "a37bb8594f653a691eeda30b73ee2caea4ff2a88b2cd27608eba9e0aa09827e1",
-  "releaseBinarySHA256": "9b222ba606772eae61aa54523d956b1b29239d98046b86b7240ea62b5e6a5ea5"
+  "releaseBinarySHA256": "9b222ba606772eae61aa54523d956b1b29239d98046b86b7240ea62b5e6a5ea5",
+  "sourceRevision": "46c59e6bed159562a08625b805edf0ed6c0936db"
 }

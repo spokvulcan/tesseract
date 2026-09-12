@@ -47,7 +47,8 @@ nonisolated extension LeafStorePhase {
         }
 
         enum CopyReason: String, Sendable {
-            case quantized, imageKeySpace, checkpoint, pendingFullPayload, untrimmable, rotating
+            case quantized, imageKeySpace, checkpoint, immutableBody, pendingFullPayload,
+                untrimmable, rotating
         }
 
         var handedOff = false

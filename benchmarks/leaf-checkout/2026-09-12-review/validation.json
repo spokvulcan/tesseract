@@ -1,0 +1,79 @@
+{
+  "focusedRun": {
+    "result": "Passed",
+    "totalTestCount": 78,
+    "passedTests": 78,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "focusedRunScope": [
+    "LeafCheckoutTests",
+    "EmittedPathSynthesizedReplayTests",
+    "ServerCompletionKeyedSequencingTests",
+    "RequestMemoryTelemetryTests",
+    "HybridCacheSnapshotTests",
+    "ServerCompletionDrainTests"
+  ],
+  "focusedRunNote": "Before replacing the warm-prefill drain test timing delay with an actor-isolated Task.immediate helper. The final full-target run covers that helper.",
+  "isolatedMemoryRun": {
+    "result": "Passed",
+    "totalTestCount": 1,
+    "passedTests": 1,
+    "failedTests": 0,
+    "skippedTests": 0
+  },
+  "isolatedMemoryRunAllocationAssertionsEnabled": true,
+  "redRegressions": [
+    {
+      "case": "immutable full leaf",
+      "observedBeforeFix": "Reported checkpoint instead of immutableBody."
+    },
+    {
+      "case": "zero-output direct warm turn",
+      "observedBeforeFix": "Final leaf event lacked rewind source and emitted no-reusable-cache-state after returning the original leaf."
+    },
+    {
+      "case": "zero-layer cache",
+      "observedBeforeFix": "Both capture forms returned snapshots; structured leaf admission survived and lookup returned the zero-layer body."
+    }
+  ],
+  "preconditionCompilerCheck": {
+    "before": "var trims = 0\nfunc trim() -> Bool { trims += 1; return true }\nprecondition(trim())\nprint(\"trimCalls=\\(trims)\")\n",
+    "after": "var trims = 0\nfunc trim() -> Bool { trims += 1; return true }\nlet trimmed = trim()\nprecondition(trimmed)\nprint(\"trimCalls=\\(trims)\")\n",
+    "command": "xcrun swiftc <optimization> -module-cache-path /tmp/tesseract-503-swift-cache <source.swift> -o <binary>; run the resulting binary",
+    "observed": [
+      {
+        "source": "before",
+        "optimization": "-O",
+        "stdout": "trimCalls=1"
+      },
+      {
+        "source": "before",
+        "optimization": "-Ounchecked",
+        "stdout": "trimCalls=0"
+      },
+      {
+        "source": "after",
+        "optimization": "-Ounchecked",
+        "stdout": "trimCalls=1"
+      }
+    ],
+    "scope": "Small standalone compiler check; the app Release configuration remains -O."
+  },
+  "documentationReferences": "Passed",
+  "swiftFormat": "Passed (strict lint on 15 changed Swift files)",
+  "swiftLint": "Passed; 11 warnings, 0 errors on 15 changed Swift files, --no-cache.",
+  "standardsReview": "No remaining code findings; deterministic drain coordination verified.",
+  "specReview": "No remaining implementation findings; loaded-model performance acceptance remains pending.",
+  "fullUnitRun": {
+    "result": "Passed",
+    "totalTestCount": 2893,
+    "passedTests": 2878,
+    "failedTests": 0,
+    "skippedTests": 15,
+    "allocationAssertionsEnabled": false,
+    "command": "nice -n 20 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests",
+    "isolatedAllocationFlagVerifiedUnset": true
+  },
+  "releaseBuild": "Passed (xcodebuild build -configuration Release -destination platform=macOS -skipPackagePluginValidation)"
+}
