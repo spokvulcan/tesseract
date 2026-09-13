@@ -124,6 +124,9 @@ decoder eligibility, cleanup and unknown-tokenizer fallback, added-token
 boundaries (including empty tokens and incomplete UTF-8), template forwarding,
 and newline-free work counts. The long malformed-byte test also catches
 rebuilding a growing withheld chunk on every token.
+`ConversationRenderSourceShapeTests` keeps server template calls at the
+Conversation Render boundary, with an explicit exception for the tokenizer
+bridge's forwarding methods.
 `LiveTokenGenerationLoopTests` drives the production loop one token at a time:
 the producer waits for text or an Argument Fragment's source delta before
 advancing. A complete tagged call through a recognized byte tokenizer must emit
@@ -149,6 +152,7 @@ Quit the running app before this focused group and relaunch it afterward:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/LiveStreamingDetokenizerTests \
+  -only-testing:tesseractTests/ConversationRenderSourceShapeTests \
   -only-testing:tesseractTests/LinearStreamingDetokenizerTests \
   -only-testing:tesseractTests/LinearStreamingDetokenizerRealTests \
   -only-testing:tesseractTests/LiveTokenGenerationLoopTests \

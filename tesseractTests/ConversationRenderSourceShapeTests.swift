@@ -16,7 +16,11 @@ import Testing
 /// "the implementation below it" per the glossary), whose miss path renders
 /// to bytes and encodes.
 ///
-/// Excluded by name — the ticket's "benchmarks and non-server processors":
+/// Excluded by name — the tokenizer bridge and the ticket's "benchmarks and
+/// non-server processors":
+/// - `AppTokenizerLoader.swift` — delegates the tokenizer interface to the
+///   vendor. These forwarding methods replace the macro-generated bridge;
+///   they do not choose or assemble a server prompt.
 /// - `Features/Agent/Benchmark/` — standalone benchmarks that time the
 ///   fused call against the split on purpose.
 /// - `ParoQuantLoader.swift` — the in-tree PARO `UserInputProcessor`, whose
@@ -37,8 +41,9 @@ import Testing
     /// The module: the verbs plus the resolve arm below them.
     private static let moduleFiles: Set<String> = [moduleFile, "RenderTokenCache.swift"]
 
-    /// Non-server processors and inspectors allowed their own call, by name.
+    /// The tokenizer bridge, non-server processors, and inspectors, by name.
     private static let excludedByName: Set<String> = [
+        "AppTokenizerLoader.swift",
         "ParoQuantLoader.swift",
         "ProofreadModel.swift",
         "LLMActor.swift",
