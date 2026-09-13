@@ -1,0 +1,33 @@
+[
+  {
+    "name": "cancellation-red",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO \"-only-testing:tesseractTests/CompletionDeliveryTests\" -resultBundlePath /private/tmp/tesseract-501-start-red-suite.xcresult",
+    "rawLogSHA256": "5fe0392f096185ae5194ec4a334c9b5acdc027b05781ef3f83abb3b398f5b5d3"
+  },
+  {
+    "name": "cancellation-green",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO \"-only-testing:tesseractTests/CompletionDeliveryTests\" \"-only-testing:tesseractTests/StreamLifecycleDriverTests\" \"-only-testing:tesseractTests/ServerCompletionDrainTests\" \"-only-testing:tesseractTests/RequestMemoryTelemetryTests\" -resultBundlePath /private/tmp/tesseract-501-start-green.xcresult",
+    "rawLogSHA256": "dcf5c9a11ac7fe6d013fb997ffb7e9efbae1e727677c1e5c12ee56e66f5d7a5c"
+  },
+  {
+    "name": "encoding-red",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO \"-only-testing:tesseractTests/PlaceholderContainerEncodingTests\" -resultBundlePath /private/tmp/tesseract-ssd-encoding-red.xcresult",
+    "rawLogSHA256": "eba3cf6bf78007103d338dc9ce213dd2e4b6c394ca54bccef09ed663856603be"
+  },
+  {
+    "name": "encoding-green",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO \"-only-testing:tesseractTests/PlaceholderContainerEncodingTests\" \"-only-testing:tesseractTests/SSDSnapshotStoreTests\" \"-only-testing:tesseractTests/LeafExtensionAdmissionTests\" \"-only-testing:tesseractTests/SnapshotLedgerTests\" -resultBundlePath /private/tmp/tesseract-ssd-encoding-green.xcresult",
+    "rawLogSHA256": "bbe2670811c564b0de49197b1b5602c79431ca4a9c0a91d30af3247ab22db326"
+  },
+  {
+    "name": "extension-validation",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO \"-only-testing:tesseractTests/LeafExtensionExtractionTests\" \"-only-testing:tesseractTests/LeafExtensionLedgerTests\" \"-only-testing:tesseractTests/LeafExtensionStoreTests\" \"-only-testing:tesseractTests/SSDSnapshotStoreTests\" -resultBundlePath /private/tmp/tesseract-ssd-extension-validation.xcresult",
+    "rawLogSHA256": "3d55489972bf4826e30bd65e6b07b8425bda961718d4d3f1ba5ce527fd119e01"
+  },
+  {
+    "name": "cancellation-final",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/CompletionDeliveryTests -only-testing:tesseractTests/StreamLifecycleDriverTests -resultBundlePath /private/tmp/tesseract-investigations-final-cancellation.xcresult",
+    "rawLogSHA256": "f28d12a232273ffd18d3938f69605a2f3d4059e0c46efb3483e86ac411295d3e",
+    "reason": "Rerun after equivalent nested-optional expression cleanup."
+  }
+]

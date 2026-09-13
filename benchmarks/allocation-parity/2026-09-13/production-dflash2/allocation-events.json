@@ -1,0 +1,1183 @@
+[
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "9.186"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262229.829346"
+      },
+      {
+        "key": "phase",
+        "value": "modelLoadBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "0"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "143328456"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "208568320"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      },
+      {
+        "key": "visionMode",
+        "value": "false"
+      }
+    ],
+    "id": "A3E61BF9-25BC-4267-A159-584F88023164",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:09Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "15557882532"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "4678425165"
+      },
+      {
+        "key": "modelWeightBytes",
+        "value": "15132802048"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.038"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262234.908505"
+      },
+      {
+        "key": "phase",
+        "value": "modelTargetLoaded"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "16538091520"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "20920039752"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "17836862638"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "1743962112"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "CECCAC55-3F87-42C2-BB02-24BD259F5A87",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:14Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "15557882532"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "4678425165"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.029"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262234.909627"
+      },
+      {
+        "key": "phase",
+        "value": "modelDFlash2LoadBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "16538058752"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "20920088904"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "17836862638"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "1744125952"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "15BB49F3-8BAB-4A6A-8AEB-D4982AD820AF",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:14Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "16644005028"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "7928298061"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.100"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262236.045927"
+      },
+      {
+        "key": "phase",
+        "value": "modelDFlash2Loaded"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "17970266112"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "25260704376"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "20102372516"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "3599007744"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "2A6F2A2B-0B97-4AFD-B93C-C139CC3EF950",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:16Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "16641383588"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.054"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262236.300306"
+      },
+      {
+        "key": "phase",
+        "value": "modelTargetStackingBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "14331297792"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "21157069120"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "20102372516"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "3540238336"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "A9AA130C-2830-4B2F-8422-8CE6458F0686",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:16Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "16641383896"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.041"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262236.746517"
+      },
+      {
+        "key": "phase",
+        "value": "modelTargetStackingEnd"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "11290460160"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "22891509152"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "1241235456"
+      },
+      {
+        "key": "stackedBlocks",
+        "value": "80"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "8223D112-947E-415B-B692-6AAB17A31BAC",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:16Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "16641383896"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.012"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262236.746612"
+      },
+      {
+        "key": "phase",
+        "value": "modelDraftStackingBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "11290460160"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "22891509152"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "1241235456"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "6588D0EE-2627-4401-A7A3-B3E0761003B5",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:16Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "16670875196"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.037"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262236.778654"
+      },
+      {
+        "key": "phase",
+        "value": "modelProjectionStackingEnd"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "8917745664"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "21111353512"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "1215365120"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      }
+    ],
+    "id": "55DF8528-534D-4368-BF05-FBB7A51DB5F3",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:16Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "16670875196"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "0"
+      },
+      {
+        "key": "loadSeconds",
+        "value": "6.959597"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.009"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262236.778761"
+      },
+      {
+        "key": "phase",
+        "value": "modelLoadCompleted"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "8917745664"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "21111353512"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "1215365120"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8441888768"
+      },
+      {
+        "key": "visionMode",
+        "value": "false"
+      }
+    ],
+    "id": "1C753ACD-E080-4590-99A3-BAB400DDEFAD",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:16Z"
+  },
+  {
+    "eventName": "leafLeaseBegin",
+    "fields": [
+      {
+        "key": "leaseID",
+        "value": "897E1B56-DEB5-4D9D-9BA1-E39724A536AB"
+      },
+      {
+        "key": "offset",
+        "value": "1024"
+      },
+      {
+        "key": "bytes",
+        "value": "221052928"
+      },
+      {
+        "key": "treeSnapshotBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "leasedBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "leaseCount",
+        "value": "1"
+      }
+    ],
+    "id": "B6AD0E8D-EB46-46C9-A7AC-349A663BD724",
+    "kvGroupSize": 64,
+    "modelID": "bounded-parity",
+    "requestID": "805B464D-21D6-4FD1-B902-2DEB7A8898ED",
+    "scope": "request",
+    "timestamp": "2026-09-13T01:17:36Z"
+  },
+  {
+    "eventName": "leafLeaseEnd",
+    "fields": [
+      {
+        "key": "leaseID",
+        "value": "897E1B56-DEB5-4D9D-9BA1-E39724A536AB"
+      },
+      {
+        "key": "offset",
+        "value": "1024"
+      },
+      {
+        "key": "bytes",
+        "value": "221052928"
+      },
+      {
+        "key": "reason",
+        "value": "rewind"
+      },
+      {
+        "key": "returnedOffset",
+        "value": "1024"
+      },
+      {
+        "key": "returnedBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "growthBytes",
+        "value": "0"
+      },
+      {
+        "key": "treeSnapshotBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "leasedBytes",
+        "value": "0"
+      },
+      {
+        "key": "leaseCount",
+        "value": "0"
+      }
+    ],
+    "id": "19DE2273-E05F-48DC-842A-3003C3C61FED",
+    "kvGroupSize": 64,
+    "modelID": "bounded-parity",
+    "requestID": "805B464D-21D6-4FD1-B902-2DEB7A8898ED",
+    "scope": "request",
+    "timestamp": "2026-09-13T01:17:41Z"
+  },
+  {
+    "eventName": "leafRewind",
+    "fields": [
+      {
+        "key": "leaseID",
+        "value": "897E1B56-DEB5-4D9D-9BA1-E39724A536AB"
+      },
+      {
+        "key": "offset",
+        "value": "1024"
+      },
+      {
+        "key": "bytes",
+        "value": "221052928"
+      },
+      {
+        "key": "recurrentRewindStateBytes",
+        "value": "153944064"
+      }
+    ],
+    "id": "D53F49EA-EA87-4EF3-8D0D-4FC4A0AC6D11",
+    "kvGroupSize": 64,
+    "modelID": "bounded-parity",
+    "requestID": "805B464D-21D6-4FD1-B902-2DEB7A8898ED",
+    "scope": "request",
+    "timestamp": "2026-09-13T01:17:41Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17469334460"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "366029190"
+      },
+      {
+        "key": "mandatory",
+        "value": "false"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.038"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262266.896177"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "payloadMode",
+        "value": "full"
+      },
+      {
+        "key": "phase",
+        "value": "ssdMaterializeBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141755392"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19283455952"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2225405952"
+      },
+      {
+        "key": "snapshotID",
+        "value": "base"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "2268F376-D6B2-4B72-B227-42628F40C53C",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:46Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17469334460"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "366029190"
+      },
+      {
+        "key": "mandatory",
+        "value": "false"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.021"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262266.919512"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "payloadMode",
+        "value": "full"
+      },
+      {
+        "key": "phase",
+        "value": "ssdMaterializeEnd"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141755392"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19361886232"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2525052928"
+      },
+      {
+        "key": "snapshotID",
+        "value": "base"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "EF4D1F1A-3BC5-408B-A5F1-44224613A124",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:46Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17469334460"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "366029190"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.009"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262266.919799"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "phase",
+        "value": "ssdEncodeBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141722624"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19361886232"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2525085696"
+      },
+      {
+        "key": "snapshotID",
+        "value": "base"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "364645CA-1EC8-4EE1-A9E3-E2F724DA4E77",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:46Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17469334460"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "366029190"
+      },
+      {
+        "key": "encodedBytes",
+        "value": "221074141"
+      },
+      {
+        "key": "encodedStagingBytes",
+        "value": "21213"
+      },
+      {
+        "key": "encodingMode",
+        "value": "borrowedChunks"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.009"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262266.920933"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "phase",
+        "value": "ssdEncodeEnd"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141640704"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19361886232"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2525167616"
+      },
+      {
+        "key": "snapshotID",
+        "value": "base"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "31B4E795-6A3D-4D05-A195-E9BEBA9277A1",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:46Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17469334460"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "366029190"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.050"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262266.962112"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "phase",
+        "value": "ssdWriteCompleted"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141640704"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19361886232"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2525167616"
+      },
+      {
+        "key": "snapshotID",
+        "value": "base"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "DAC3DD02-0E09-417D-A056-EBE7F5199454",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:46Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17912128444"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "207989728"
+      },
+      {
+        "key": "mandatory",
+        "value": "false"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.048"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262272.613964"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "payloadMode",
+        "value": "extension"
+      },
+      {
+        "key": "phase",
+        "value": "ssdMaterializeBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141591552"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19322810368"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2424209408"
+      },
+      {
+        "key": "snapshotID",
+        "value": "head"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "A5D2FB0B-6863-47F4-B610-E0F0A96EC9D8",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:52Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17690583996"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "429534176"
+      },
+      {
+        "key": "mandatory",
+        "value": "false"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.029"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262272.628209"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "payloadMode",
+        "value": "extension"
+      },
+      {
+        "key": "phase",
+        "value": "ssdMaterializeEnd"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141591552"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19393622064"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2587852800"
+      },
+      {
+        "key": "snapshotID",
+        "value": "head"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "43A2D2F4-019A-495B-9D77-9BB7D164983A",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:52Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17690583996"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "429534176"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.009"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262272.628461"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "phase",
+        "value": "ssdEncodeBegin"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141575168"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19393622064"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2587869184"
+      },
+      {
+        "key": "snapshotID",
+        "value": "head"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "B3650AC7-32F9-45FB-9AB6-7EF96AF38E35",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:52Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17690583996"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "429534176"
+      },
+      {
+        "key": "encodedBytes",
+        "value": "221079920"
+      },
+      {
+        "key": "encodedStagingBytes",
+        "value": "26992"
+      },
+      {
+        "key": "encodingMode",
+        "value": "borrowedChunks"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.013"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262272.629642"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "phase",
+        "value": "ssdEncodeEnd"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141509632"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19393622064"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2587934720"
+      },
+      {
+        "key": "snapshotID",
+        "value": "head"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "50B35318-0ED8-46D7-92AA-A46BEB4BC566",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:52Z"
+  },
+  {
+    "eventName": "allocationMemory",
+    "fields": [
+      {
+        "key": "activeMlxBytes",
+        "value": "17690583996"
+      },
+      {
+        "key": "cachedMlxBytes",
+        "value": "429534176"
+      },
+      {
+        "key": "observationMilliseconds",
+        "value": "0.040"
+      },
+      {
+        "key": "observedUnixSeconds",
+        "value": "1789262272.807464"
+      },
+      {
+        "key": "payloadBytes",
+        "value": "221052928"
+      },
+      {
+        "key": "phase",
+        "value": "ssdWriteCompleted"
+      },
+      {
+        "key": "processCompressedBytes",
+        "value": "6141509632"
+      },
+      {
+        "key": "processFootprintBytes",
+        "value": "19393622064"
+      },
+      {
+        "key": "processLifetimePeakMlxBytes",
+        "value": "23719272292"
+      },
+      {
+        "key": "processResidentBytes",
+        "value": "2587934720"
+      },
+      {
+        "key": "snapshotID",
+        "value": "head"
+      },
+      {
+        "key": "systemSwapUsedBytes",
+        "value": "8324448256"
+      }
+    ],
+    "id": "E1CD8867-B266-402A-98F3-33D1B9EB1FA7",
+    "scope": "system",
+    "timestamp": "2026-09-13T01:17:52Z"
+  }
+]

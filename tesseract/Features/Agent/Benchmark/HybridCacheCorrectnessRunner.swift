@@ -31,10 +31,27 @@ final class HybridCacheCorrectnessRunner {
         setupLogging()
         log("HybridCacheCorrectness starting — model=\(runner.resolvedModelName)")
 
+        let bounded = CommandLine.arguments.contains("--bench-bounded-cache-parity")
+        guard !bounded || !CommandLine.arguments.contains("--bench-replay-request") else {
+            throw HybridCacheCorrectnessError.verificationFailed(
+                failedChecks: ["bounded parity and recorded replay are mutually exclusive"])
+        }
+        let diskRoot = reportDir.appendingPathComponent("scratch-\(UUID().uuidString)")
+        if bounded {
+            log("Bounded parity: 2048 tokens, 1024-token leaf, unquantized KV, raw bytes.")
+        }
+
         let engine = AgentEngine()
         let modelDir = try runner.resolveModelDirectory()
         log("Loading model from: \(modelDir.path)")
-        try await engine.loadModel(from: modelDir, visionMode: false)
+        if bounded {
+            // Match the measured server load. An engine without SettingsManager
+            // defaults to automatic and would also load the unused MTP head.
+            try await engine.llmActor.loadModel(
+                from: modelDir, visionMode: false, speculation: .dflash2)
+        } else {
+            try await engine.loadModel(from: modelDir, visionMode: false)
+        }
         log("Model loaded.")
 
         let args = CommandLine.arguments
@@ -52,6 +69,12 @@ final class HybridCacheCorrectnessRunner {
         }
         let testRun = try await engine.llmActor.withModelContainer { container in
             try await container.perform { context in
+                if bounded {
+                    return TestRunResult(
+                        logs: [],
+                        checks: try await BoundedCacheParity.run(
+                            context: context, diskRoot: diskRoot))
+                }
                 if let replay {
                     return try Self.runRecordedHandoff(context: context, replay: replay)
                 }

@@ -1,0 +1,51 @@
+[
+  {
+    "beginMonotonicSeconds": 195333.379424458,
+    "cancelAfterSeconds": null,
+    "label": "cold",
+    "requestBytes": 10395,
+    "requestSHA256": "18582a299cce3a5ca36fcc31825a03934a83ebe511f6b58d2b3a4dfffa01255e"
+  },
+  {
+    "beginMonotonicSeconds": 195367.552350875,
+    "cancelAfterSeconds": null,
+    "label": "warm",
+    "requestBytes": 11008,
+    "requestSHA256": "7dc3ed8d0428ee21c913a02b5c7b0d0f51f11ae24701d1ea826cad92952cf70e"
+  },
+  {
+    "beginMonotonicSeconds": 195375.330839416,
+    "cancelAfterSeconds": null,
+    "label": "grow",
+    "requestBytes": 21458,
+    "requestSHA256": "03a9aa51a4b0645554c38c8097cc8bd0ed0a17d37dd89ff94f050d3ba0ccab3b"
+  },
+  {
+    "beginMonotonicSeconds": 195400.015112333,
+    "cancelAfterSeconds": 3.0,
+    "label": "cancel-growth",
+    "requestBytes": 36500,
+    "requestSHA256": "f92aa9e5606838e3dd764a4d681b04aba097efb46a457e355e59a24cff2b29a5"
+  },
+  {
+    "beginMonotonicSeconds": 195411.256277958,
+    "cancelAfterSeconds": null,
+    "label": "resend-growth",
+    "requestBytes": 36500,
+    "requestSHA256": "f92aa9e5606838e3dd764a4d681b04aba097efb46a457e355e59a24cff2b29a5"
+  },
+  {
+    "beginMonotonicSeconds": 195445.758356583,
+    "cancelAfterSeconds": null,
+    "label": "warm-repeat-1",
+    "requestBytes": 37047,
+    "requestSHA256": "6c7c40ba46258eb59f42feefe6b48cc16b991dfacbc3b6aa6905b6352b450a1c"
+  },
+  {
+    "beginMonotonicSeconds": 195453.721124708,
+    "cancelAfterSeconds": null,
+    "label": "warm-repeat-2",
+    "requestBytes": 37514,
+    "requestSHA256": "bd44f0e60a720cfae8acdeaa45b834185a6c3969eb0e3aceda8e36869d10bb82"
+  }
+]

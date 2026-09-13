@@ -1,0 +1,642 @@
+[
+  {
+    "monotonicSeconds": 192988.617856833,
+    "pressureLevel": 1,
+    "probeNanoseconds": 155584,
+    "processFootprintBytes": 81992,
+    "processResidentBytes": 32768,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256660.88326
+  },
+  {
+    "monotonicSeconds": 192988.873038375,
+    "pressureLevel": 1,
+    "probeNanoseconds": 77500,
+    "processFootprintBytes": 81992,
+    "processResidentBytes": 32768,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256661.138444
+  },
+  {
+    "monotonicSeconds": 192989.125035291,
+    "pressureLevel": 1,
+    "probeNanoseconds": 43042,
+    "processFootprintBytes": 81992,
+    "processResidentBytes": 32768,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256661.390443
+  },
+  {
+    "monotonicSeconds": 192989.380205458,
+    "pressureLevel": 1,
+    "probeNanoseconds": 129250,
+    "processFootprintBytes": 81992,
+    "processResidentBytes": 32768,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256661.645617
+  },
+  {
+    "monotonicSeconds": 192989.630655583,
+    "pressureLevel": 1,
+    "probeNanoseconds": 41250,
+    "processFootprintBytes": 16991096,
+    "processResidentBytes": 55525376,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256661.896069
+  },
+  {
+    "monotonicSeconds": 192989.885754083,
+    "pressureLevel": 1,
+    "probeNanoseconds": 58917,
+    "processFootprintBytes": 59966544,
+    "processResidentBytes": 119111680,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256662.15117
+  },
+  {
+    "monotonicSeconds": 192990.14083475,
+    "pressureLevel": 1,
+    "probeNanoseconds": 43500,
+    "processFootprintBytes": 99026024,
+    "processResidentBytes": 161153024,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256662.406253
+  },
+  {
+    "monotonicSeconds": 192990.395912375,
+    "pressureLevel": 1,
+    "probeNanoseconds": 51333,
+    "processFootprintBytes": 102483072,
+    "processResidentBytes": 165199872,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256662.661333
+  },
+  {
+    "monotonicSeconds": 192990.651029208,
+    "pressureLevel": 1,
+    "probeNanoseconds": 65834,
+    "processFootprintBytes": 148096248,
+    "processResidentBytes": 216104960,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256662.9164531
+  },
+  {
+    "monotonicSeconds": 192990.906120333,
+    "pressureLevel": 1,
+    "probeNanoseconds": 52709,
+    "processFootprintBytes": 1197197184,
+    "processResidentBytes": 1039007744,
+    "stage": "launch",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256663.1715462
+  },
+  {
+    "monotonicSeconds": 192991.161213583,
+    "pressureLevel": 1,
+    "probeNanoseconds": 68541,
+    "processFootprintBytes": 1364805648,
+    "processResidentBytes": 1204699136,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256663.426642
+  },
+  {
+    "monotonicSeconds": 192991.414899625,
+    "pressureLevel": 1,
+    "probeNanoseconds": 63583,
+    "processFootprintBytes": 1296533520,
+    "processResidentBytes": 1189822464,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256663.680331
+  },
+  {
+    "monotonicSeconds": 192991.670014,
+    "pressureLevel": 1,
+    "probeNanoseconds": 83208,
+    "processFootprintBytes": 1336821800,
+    "processResidentBytes": 1237336064,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256663.9354482
+  },
+  {
+    "monotonicSeconds": 192991.925137,
+    "pressureLevel": 1,
+    "probeNanoseconds": 55084,
+    "processFootprintBytes": 1282951208,
+    "processResidentBytes": 1222082560,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256664.190573
+  },
+  {
+    "monotonicSeconds": 192992.180222666,
+    "pressureLevel": 1,
+    "probeNanoseconds": 44000,
+    "processFootprintBytes": 1125337176,
+    "processResidentBytes": 1233911808,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256664.445662
+  },
+  {
+    "monotonicSeconds": 192992.432793958,
+    "pressureLevel": 1,
+    "probeNanoseconds": 147833,
+    "processFootprintBytes": 1125353536,
+    "processResidentBytes": 1234042880,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256664.6982348
+  },
+  {
+    "monotonicSeconds": 192992.686631083,
+    "pressureLevel": 1,
+    "probeNanoseconds": 153375,
+    "processFootprintBytes": 1125386304,
+    "processResidentBytes": 1234075648,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256664.9520772
+  },
+  {
+    "monotonicSeconds": 192992.94124475,
+    "pressureLevel": 1,
+    "probeNanoseconds": 139542,
+    "processFootprintBytes": 1125386304,
+    "processResidentBytes": 1234075648,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256665.2066932
+  },
+  {
+    "monotonicSeconds": 192993.193784958,
+    "pressureLevel": 1,
+    "probeNanoseconds": 91458,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234010112,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256665.459235
+  },
+  {
+    "monotonicSeconds": 192993.449043208,
+    "pressureLevel": 1,
+    "probeNanoseconds": 191458,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234010112,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256665.714498
+  },
+  {
+    "monotonicSeconds": 192993.702516291,
+    "pressureLevel": 1,
+    "probeNanoseconds": 173708,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256665.967972
+  },
+  {
+    "monotonicSeconds": 192993.95703075,
+    "pressureLevel": 1,
+    "probeNanoseconds": 164208,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256666.22249
+  },
+  {
+    "monotonicSeconds": 192994.210593583,
+    "pressureLevel": 1,
+    "probeNanoseconds": 105708,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256666.476054
+  },
+  {
+    "monotonicSeconds": 192994.462345541,
+    "pressureLevel": 1,
+    "probeNanoseconds": 386250,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256666.727811
+  },
+  {
+    "monotonicSeconds": 192994.717794333,
+    "pressureLevel": 1,
+    "probeNanoseconds": 140750,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256666.9832609
+  },
+  {
+    "monotonicSeconds": 192994.970005625,
+    "pressureLevel": 1,
+    "probeNanoseconds": 181625,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256667.2354748
+  },
+  {
+    "monotonicSeconds": 192995.224504166,
+    "pressureLevel": 1,
+    "probeNanoseconds": 177084,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256667.4899788
+  },
+  {
+    "monotonicSeconds": 192995.478981458,
+    "pressureLevel": 1,
+    "probeNanoseconds": 1055958,
+    "processFootprintBytes": 1125320768,
+    "processResidentBytes": 1234026496,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256667.744457
+  },
+  {
+    "monotonicSeconds": 192995.734869833,
+    "pressureLevel": 1,
+    "probeNanoseconds": 193666,
+    "processFootprintBytes": 1125238848,
+    "processResidentBytes": 1233944576,
+    "stage": "server-ready-idle",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256668.000347
+  },
+  {
+    "monotonicSeconds": 192995.989564875,
+    "pressureLevel": 1,
+    "probeNanoseconds": 93000,
+    "processFootprintBytes": 1125206080,
+    "processResidentBytes": 1234059264,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256668.255043
+  },
+  {
+    "monotonicSeconds": 192996.240862708,
+    "pressureLevel": 1,
+    "probeNanoseconds": 55458,
+    "processFootprintBytes": 6378739496,
+    "processResidentBytes": 6485950464,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256668.506343
+  },
+  {
+    "monotonicSeconds": 192996.495985125,
+    "pressureLevel": 1,
+    "probeNanoseconds": 77292,
+    "processFootprintBytes": 8972131912,
+    "processResidentBytes": 9077964800,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256668.761469
+  },
+  {
+    "monotonicSeconds": 192996.746137291,
+    "pressureLevel": 1,
+    "probeNanoseconds": 76958,
+    "processFootprintBytes": 11918304904,
+    "processResidentBytes": 11029495808,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256669.011623
+  },
+  {
+    "monotonicSeconds": 192996.997837833,
+    "pressureLevel": 1,
+    "probeNanoseconds": 52334,
+    "processFootprintBytes": 12957559176,
+    "processResidentBytes": 10090856448,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256669.263326
+  },
+  {
+    "monotonicSeconds": 192997.248212958,
+    "pressureLevel": 1,
+    "probeNanoseconds": 54334,
+    "processFootprintBytes": 13940108328,
+    "processResidentBytes": 9119858688,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256669.5137038
+  },
+  {
+    "monotonicSeconds": 192997.502013375,
+    "pressureLevel": 1,
+    "probeNanoseconds": 69625,
+    "processFootprintBytes": 14583033328,
+    "processResidentBytes": 7567638528,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256669.7675068
+  },
+  {
+    "monotonicSeconds": 192997.756668041,
+    "pressureLevel": 1,
+    "probeNanoseconds": 48916,
+    "processFootprintBytes": 15204511624,
+    "processResidentBytes": 5965479936,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256670.0221639
+  },
+  {
+    "monotonicSeconds": 192998.00677375,
+    "pressureLevel": 1,
+    "probeNanoseconds": 70834,
+    "processFootprintBytes": 15996105184,
+    "processResidentBytes": 4778967040,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256670.2722719
+  },
+  {
+    "monotonicSeconds": 192998.26092675,
+    "pressureLevel": 1,
+    "probeNanoseconds": 58042,
+    "processFootprintBytes": 16945575064,
+    "processResidentBytes": 3975446528,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256670.526428
+  },
+  {
+    "monotonicSeconds": 192998.5160345,
+    "pressureLevel": 1,
+    "probeNanoseconds": 55334,
+    "processFootprintBytes": 17820448568,
+    "processResidentBytes": 2952052736,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256670.781538
+  },
+  {
+    "monotonicSeconds": 192998.7712045,
+    "pressureLevel": 1,
+    "probeNanoseconds": 104042,
+    "processFootprintBytes": 18676987848,
+    "processResidentBytes": 2122366976,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256671.036711
+  },
+  {
+    "monotonicSeconds": 192999.026331541,
+    "pressureLevel": 1,
+    "probeNanoseconds": 65041,
+    "processFootprintBytes": 20167276488,
+    "processResidentBytes": 1946910720,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256671.291841
+  },
+  {
+    "monotonicSeconds": 192999.281436833,
+    "pressureLevel": 1,
+    "probeNanoseconds": 59500,
+    "processFootprintBytes": 20619475080,
+    "processResidentBytes": 1957478400,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256671.5469491
+  },
+  {
+    "monotonicSeconds": 192999.535802958,
+    "pressureLevel": 1,
+    "probeNanoseconds": 81666,
+    "processFootprintBytes": 20756854944,
+    "processResidentBytes": 1958084608,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256671.801318
+  },
+  {
+    "monotonicSeconds": 192999.790924791,
+    "pressureLevel": 1,
+    "probeNanoseconds": 70916,
+    "processFootprintBytes": 20842870968,
+    "processResidentBytes": 1958166528,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256672.056442
+  },
+  {
+    "monotonicSeconds": 193000.04413175,
+    "pressureLevel": 1,
+    "probeNanoseconds": 84375,
+    "processFootprintBytes": 20866152632,
+    "processResidentBytes": 1958199296,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256672.3096519
+  },
+  {
+    "monotonicSeconds": 193000.2950575,
+    "pressureLevel": 1,
+    "probeNanoseconds": 57459,
+    "processFootprintBytes": 20893989048,
+    "processResidentBytes": 1958215680,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256672.56058
+  },
+  {
+    "monotonicSeconds": 193000.550164291,
+    "pressureLevel": 1,
+    "probeNanoseconds": 60541,
+    "processFootprintBytes": 20923234512,
+    "processResidentBytes": 1960706048,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256672.8156888
+  },
+  {
+    "monotonicSeconds": 193000.8016885,
+    "pressureLevel": 1,
+    "probeNanoseconds": 60000,
+    "processFootprintBytes": 20941633744,
+    "processResidentBytes": 1961099264,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256673.067216
+  },
+  {
+    "monotonicSeconds": 193001.056781,
+    "pressureLevel": 1,
+    "probeNanoseconds": 50291,
+    "processFootprintBytes": 20984789200,
+    "processResidentBytes": 1961132032,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256673.322311
+  },
+  {
+    "monotonicSeconds": 193001.307372833,
+    "pressureLevel": 1,
+    "probeNanoseconds": 63667,
+    "processFootprintBytes": 21089171760,
+    "processResidentBytes": 2302443520,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256673.572905
+  },
+  {
+    "monotonicSeconds": 193001.560409666,
+    "pressureLevel": 1,
+    "probeNanoseconds": 90083,
+    "processFootprintBytes": 22405414176,
+    "processResidentBytes": 3477946368,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256673.8259451
+  },
+  {
+    "monotonicSeconds": 193001.814022166,
+    "pressureLevel": 1,
+    "probeNanoseconds": 67208,
+    "processFootprintBytes": 23918772496,
+    "processResidentBytes": 3548069888,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256674.079561
+  },
+  {
+    "monotonicSeconds": 193002.069272791,
+    "pressureLevel": 1,
+    "probeNanoseconds": 105500,
+    "processFootprintBytes": 24940102168,
+    "processResidentBytes": 3048046592,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256674.3348129
+  },
+  {
+    "monotonicSeconds": 193002.324405291,
+    "pressureLevel": 1,
+    "probeNanoseconds": 53750,
+    "processFootprintBytes": 26020430360,
+    "processResidentBytes": 2561130496,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256674.589948
+  },
+  {
+    "monotonicSeconds": 193002.579522583,
+    "pressureLevel": 1,
+    "probeNanoseconds": 74166,
+    "processFootprintBytes": 26784301592,
+    "processResidentBytes": 2537897984,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256674.845068
+  },
+  {
+    "monotonicSeconds": 193002.833528,
+    "pressureLevel": 1,
+    "probeNanoseconds": 60875,
+    "processFootprintBytes": 27136197144,
+    "processResidentBytes": 2491957248,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256675.099076
+  },
+  {
+    "monotonicSeconds": 193003.086179375,
+    "pressureLevel": 1,
+    "probeNanoseconds": 49875,
+    "processFootprintBytes": 28805497368,
+    "processResidentBytes": 2230632448,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256675.3517299
+  },
+  {
+    "monotonicSeconds": 193003.339979166,
+    "pressureLevel": 1,
+    "probeNanoseconds": 81125,
+    "processFootprintBytes": 28896772632,
+    "processResidentBytes": 2208530432,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256675.605532
+  },
+  {
+    "monotonicSeconds": 193003.595089041,
+    "pressureLevel": 2,
+    "probeNanoseconds": 56709,
+    "processFootprintBytes": 29015671320,
+    "processResidentBytes": 2178482176,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256675.860645
+  },
+  {
+    "monotonicSeconds": 193003.845814083,
+    "pressureLevel": 2,
+    "probeNanoseconds": 59458,
+    "processFootprintBytes": 29024010776,
+    "processResidentBytes": 983515136,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256676.111373
+  },
+  {
+    "monotonicSeconds": 193004.098273875,
+    "pressureLevel": 2,
+    "probeNanoseconds": 64625,
+    "processFootprintBytes": 29250994712,
+    "processResidentBytes": 627884032,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6121848832,
+    "unixSeconds": 1789256676.3638349
+  },
+  {
+    "monotonicSeconds": 193004.349236625,
+    "pressureLevel": 2,
+    "probeNanoseconds": 68959,
+    "processFootprintBytes": 29793665560,
+    "processResidentBytes": 453541888,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6158286848,
+    "unixSeconds": 1789256676.614801
+  },
+  {
+    "monotonicSeconds": 193004.604346458,
+    "pressureLevel": 2,
+    "probeNanoseconds": 56125,
+    "processFootprintBytes": 30809981464,
+    "processResidentBytes": 321683456,
+    "stage": "cold",
+    "systemSwapUsedBytes": 6869876736,
+    "unixSeconds": 1789256676.869913
+  }
+]

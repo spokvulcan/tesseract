@@ -49,6 +49,35 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
         let fields: [(String, String)]
     }
 
+    private struct AllocationEvent: PrefixCacheDiagnostics.Payload {
+        let eventName = "allocationMemory"
+        let fields: [(String, String)]
+    }
+
+    static let allocationDiagnosticsEnabled =
+        ProcessInfo.processInfo.environment["TESSERACT_ALLOCATION_DIAGNOSTICS"] == "1"
+
+    /// Opt-in operation boundaries; samples scalars without evaluating or retaining arrays.
+    static func recordAllocation(phase: String, facts: [String: String]) {
+        guard allocationDiagnosticsEnabled else { return }
+        let observationStarted = ContinuousClock.now
+        let sample = Sample.current()
+        var fields = facts
+        fields["phase"] = phase
+        fields["observedUnixSeconds"] = String(
+            format: "%.6f", Date().timeIntervalSince1970)
+        fields["activeMlxBytes"] = "\(sample.activeBytes)"
+        fields["cachedMlxBytes"] = "\(sample.cacheBytes)"
+        fields["processLifetimePeakMlxBytes"] = "\(sample.lifetimePeakBytes)"
+        if let bytes = sample.footprintBytes { fields["processFootprintBytes"] = "\(bytes)" }
+        if let bytes = sample.residentBytes { fields["processResidentBytes"] = "\(bytes)" }
+        if let bytes = sample.compressedBytes { fields["processCompressedBytes"] = "\(bytes)" }
+        if let bytes = sample.systemSwapUsedBytes { fields["systemSwapUsedBytes"] = "\(bytes)" }
+        fields["observationMilliseconds"] = milliseconds(observationStarted.duration(to: .now))
+        PrefixCacheDiagnostics.logSystem(
+            AllocationEvent(fields: fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }))
+    }
+
     private let context: PrefixCacheDiagnostics.Context
     private let sample: @Sendable () -> Sample
     private let lock = NSLock()
@@ -101,6 +130,9 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
                 phaseStarted = .now
             }
             phase = next
+            if updates["requestCacheLayerCount"] == "0" {
+                facts.merge(Self.cacheFacts([])) { _, new in new }
+            }
             facts.merge(updates) { _, new in new }
             if updates["requestCacheLayerCount"] != nil {
                 facts["requestCacheMeasuredAtPhase"] = next.rawValue
@@ -192,8 +224,23 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
         var attention = 0
         var recurrent = 0
         var other = 0
+        var fullAttentionLogical = 0
+        var fullAttentionArrays = 0
+        var fullAttentionLayers = 0
         for entry in cache {
-            let bytes = entry.innerState().reduce(0) { $0 + $1.nbytes }
+            let arrays = entry.innerState()
+            let bytes = arrays.reduce(0) { $0 + $1.nbytes }
+            // Only the plain full-attention layout has this offset/capacity relation.
+            // Array extents exclude allocator padding and larger backing retained by views.
+            if type(of: entry) == KVCacheSimple.self, arrays.count == 2,
+                arrays.allSatisfy({ $0.ndim == 4 && $0.dim(2) > 0 && entry.offset <= $0.dim(2) })
+            {
+                fullAttentionLayers += 1
+                fullAttentionArrays += bytes
+                fullAttentionLogical += arrays.reduce(0) {
+                    $0 + ($1.nbytes / $1.dim(2)) * entry.offset
+                }
+            }
             if entry is MambaCache {
                 recurrent += bytes
             } else if entry is KVCacheSimple || entry is RotatingKVCache
@@ -209,6 +256,10 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
             "requestCacheRecurrentArrayBytes": "\(recurrent)",
             "requestCacheOtherArrayBytes": "\(other)",
             "requestCacheLayerCount": "\(cache.count)",
+            "requestFullAttentionLayerCount": "\(fullAttentionLayers)",
+            "requestFullAttentionLogicalBytes": "\(fullAttentionLogical)",
+            "requestFullAttentionArrayBytes": "\(fullAttentionArrays)",
+            "requestFullAttentionUnusedArrayBytes": "\(fullAttentionArrays - fullAttentionLogical)",
         ]
     }
 }

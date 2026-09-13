@@ -1,0 +1,3 @@
+[01:12:19.480] HybridCacheCorrectness starting — model=Qwen3.8-27B (MLX 4bit)
+[01:12:19.480] Bounded parity: 2048 tokens, 1024-token leaf, unquantized KV, raw bytes.
+[01:12:19.480] Loading model from: /Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit

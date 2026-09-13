@@ -193,60 +193,92 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
 
 // MARK: - Encode
 
-/// Serialize a payload into a single byte blob following the
-/// placeholder container layout. The header carries the full descriptor
-/// so warm start can rebuild the manifest from a directory walk when
-/// `manifest.json` is corrupt. Shared by the store's `writePayload`.
+/// Header metadata plus borrowed payload buffers, consumed without a second
+/// full-container allocation. Chunk pointers are valid only inside `consume`.
+nonisolated struct PlaceholderContainerEncoding {
+    private let header: Data
+    private let blobs: [Data]
+    let byteCount: Int
+    var headerByteCount: Int { header.count }
+
+    init(payload: SnapshotPayload, descriptor: PersistedSnapshotDescriptor) throws {
+        var layerHeaders: [PlaceholderContainerHeader.Layer] = []
+        layerHeaders.reserveCapacity(payload.layers.count)
+        var blobs: [Data] = []
+        var runningByteOffset = 0
+
+        for layer in payload.layers {
+            var arrayEntries: [PlaceholderContainerHeader.ArrayEntry] = []
+            arrayEntries.reserveCapacity(layer.state.count)
+            for array in layer.state {
+                arrayEntries.append(
+                    .init(
+                        dtype: array.dtype,
+                        shape: array.shape,
+                        byteOffset: runningByteOffset,
+                        byteSize: array.data.count
+                    ))
+                runningByteOffset += array.data.count
+                blobs.append(array.data)
+            }
+            layerHeaders.append(
+                .init(
+                    className: layer.className,
+                    metaState: layer.metaState,
+                    offset: layer.offset,
+                    suffixBaseOffset: layer.suffixBaseOffset,
+                    arrays: arrayEntries
+                ))
+        }
+
+        let header = PlaceholderContainerHeader(
+            formatKind: "tesseract-cache-v1",
+            schemaVersion: SnapshotManifestSchema.currentVersion,
+            descriptor: descriptor,
+            layers: layerHeaders
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let headerData = try encoder.encode(header)
+
+        var prefix = Data(capacity: 8 + headerData.count)
+        var headerLength = UInt64(headerData.count).littleEndian
+        withUnsafeBytes(of: &headerLength) { prefix.append(contentsOf: $0) }
+        prefix.append(headerData)
+        self.header = prefix
+        self.blobs = blobs
+        self.byteCount = prefix.count + runningByteOffset
+    }
+
+    func withChunks(
+        maximumBytes: Int,
+        _ consume: (UnsafeRawBufferPointer) throws -> Void
+    ) rethrows {
+        precondition(maximumBytes > 0)
+        func emit(_ data: Data) throws {
+            try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                var offset = 0
+                while offset < buffer.count {
+                    let end = offset + min(maximumBytes, buffer.count - offset)
+                    try consume(UnsafeRawBufferPointer(rebasing: buffer[offset..<end]))
+                    offset = end
+                }
+            }
+        }
+        try emit(header)
+        for blob in blobs { try emit(blob) }
+    }
+}
+
+/// Contiguous form for in-memory consumers and fixtures. The SSD writer uses
+/// `PlaceholderContainerEncoding.withChunks` to avoid this payload-sized copy.
 nonisolated func encodePlaceholderContainer(
     payload: SnapshotPayload,
     descriptor: PersistedSnapshotDescriptor
 ) throws -> Data {
-    var layerHeaders: [PlaceholderContainerHeader.Layer] = []
-    layerHeaders.reserveCapacity(payload.layers.count)
-    var blobs: [Data] = []
-    var runningByteOffset = 0
-
-    for layer in payload.layers {
-        var arrayEntries: [PlaceholderContainerHeader.ArrayEntry] = []
-        arrayEntries.reserveCapacity(layer.state.count)
-        for array in layer.state {
-            arrayEntries.append(
-                .init(
-                    dtype: array.dtype,
-                    shape: array.shape,
-                    byteOffset: runningByteOffset,
-                    byteSize: array.data.count
-                ))
-            runningByteOffset += array.data.count
-            blobs.append(array.data)
-        }
-        layerHeaders.append(
-            .init(
-                className: layer.className,
-                metaState: layer.metaState,
-                offset: layer.offset,
-                suffixBaseOffset: layer.suffixBaseOffset,
-                arrays: arrayEntries
-            ))
-    }
-
-    let header = PlaceholderContainerHeader(
-        formatKind: "tesseract-cache-v1",
-        schemaVersion: SnapshotManifestSchema.currentVersion,
-        descriptor: descriptor,
-        layers: layerHeaders
-    )
-
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.sortedKeys]
-    let headerData = try encoder.encode(header)
-
-    var out = Data(capacity: 8 + headerData.count + runningByteOffset)
-    var headerLength = UInt64(headerData.count).littleEndian
-    withUnsafeBytes(of: &headerLength) { out.append(contentsOf: $0) }
-    out.append(headerData)
-    for blob in blobs {
-        out.append(blob)
-    }
+    let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
+    var out = Data(capacity: encoding.byteCount)
+    encoding.withChunks(maximumBytes: Int.max) { out.append(contentsOf: $0) }
     return out
 }

@@ -1,0 +1,51 @@
+[
+  {
+    "beginMonotonicSeconds": 193090.044262833,
+    "cancelAfterSeconds": null,
+    "label": "cold",
+    "requestBytes": 10395,
+    "requestSHA256": "18582a299cce3a5ca36fcc31825a03934a83ebe511f6b58d2b3a4dfffa01255e"
+  },
+  {
+    "beginMonotonicSeconds": 193121.751770208,
+    "cancelAfterSeconds": null,
+    "label": "warm",
+    "requestBytes": 11008,
+    "requestSHA256": "7dc3ed8d0428ee21c913a02b5c7b0d0f51f11ae24701d1ea826cad92952cf70e"
+  },
+  {
+    "beginMonotonicSeconds": 193129.466590541,
+    "cancelAfterSeconds": null,
+    "label": "grow",
+    "requestBytes": 21458,
+    "requestSHA256": "03a9aa51a4b0645554c38c8097cc8bd0ed0a17d37dd89ff94f050d3ba0ccab3b"
+  },
+  {
+    "beginMonotonicSeconds": 193154.4528975,
+    "cancelAfterSeconds": 3.0,
+    "label": "cancel-growth",
+    "requestBytes": 36503,
+    "requestSHA256": "71e658eaf363e81bd9336767be1f4c67ad7d35872982d4660927a7ab01f854bb"
+  },
+  {
+    "beginMonotonicSeconds": 193186.687219958,
+    "cancelAfterSeconds": null,
+    "label": "resend-growth",
+    "requestBytes": 36503,
+    "requestSHA256": "71e658eaf363e81bd9336767be1f4c67ad7d35872982d4660927a7ab01f854bb"
+  },
+  {
+    "beginMonotonicSeconds": 193220.764563875,
+    "cancelAfterSeconds": null,
+    "label": "warm-repeat-1",
+    "requestBytes": 37071,
+    "requestSHA256": "dc4cf0b9bd763c522af58b9af15a66a93bbcc908085204807e84216378a1c462"
+  },
+  {
+    "beginMonotonicSeconds": 193229.154085958,
+    "cancelAfterSeconds": null,
+    "label": "warm-repeat-2",
+    "requestBytes": 37598,
+    "requestSHA256": "fd7c2f7c93b4cf7a365630b8bd2ce56585fde94b86eb23e31c4fd7dd3ad6aa1b"
+  }
+]

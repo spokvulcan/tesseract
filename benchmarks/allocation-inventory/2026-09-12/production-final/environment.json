@@ -1,0 +1,34 @@
+{
+  "baselineSystemSwapUsedBytes": 6747062272,
+  "binarySHA256": "a298126d523bb11369a824e5442758bdd49a2a8e9fc64a31a9cecb63d345495e",
+  "instrumentationEnabled": true,
+  "launchArguments": [
+    "-serverPort",
+    "18321",
+    "-isServerEnabled",
+    "YES"
+  ],
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83\n",
+  "physicalMemoryBytes": 51539607552,
+  "plan": {
+    "allowedPressureLevels": [
+      1,
+      2
+    ],
+    "footprintStopBytes": 34359738368,
+    "largeContextCampaign": false,
+    "maxCampaignSeconds": 900,
+    "maxOutputTokens": 128,
+    "maxRequestSeconds": 180,
+    "maxRequests": 7,
+    "model": "qwen3.8-27b",
+    "optimizationComparison": false,
+    "sampleIntervalSeconds": 0.25,
+    "settleSeconds": 5,
+    "swapGrowthStopBytes": 2147483648,
+    "temperature": 0
+  },
+  "sourceDiffSHA256": "6931c5792b7f08c47b2c6c386bcd2c65ab795efc8903df37d5b60fc8a09beee5",
+  "sourceRevision": "b1f0dca32ec9baead778221a8001fe4aa59e1850",
+  "startUTC": "2026-09-12T23:45:47.522699+00:00"
+}

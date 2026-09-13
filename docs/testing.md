@@ -383,6 +383,93 @@ Focused regression suites: `RequestMemoryTelemetryTests`,
 `ManagedGenerationDriverTests`, `ServerCompletionKeyedSequencingTests`,
 `ServerCompletionDrainTests`, and `PromptCacheDiagnosticsFileSinkTests`.
 
+For the allocation inventory (#506), `requestFullAttentionLogicalBytes`,
+`requestFullAttentionArrayBytes` and `requestFullAttentionUnusedArrayBytes`
+separate valid rows from unused array extent for plain `KVCacheSimple` layers.
+`requestFullAttentionLayerCount` states coverage. These do not measure allocator
+padding or larger backings retained by views; zero owned layers resets all carried
+cache-byte facts. Other cache layouts retain the existing coarse byte counters.
+
+`TESSERACT_ALLOCATION_DIAGNOSTICS=1` enables scalar `allocationMemory` events at
+target/drafter loading and SSD materialization/container-encoding boundaries.
+SSD events identify the snapshot and payload/encoded byte counts; they do not
+claim exclusive request attribution or physical release. `observedUnixSeconds`
+allows external sample alignment. `observationMilliseconds` measures OS sampling
+and field assembly, excluding event dispatch, serialization and disk I/O.
+The switch is off by default and never evaluates/retains model arrays.
+
+`scripts/allocation_inventory_probe.py` prints its bounded plan by default and
+requires `--run` to launch an isolated Release process. It samples process
+footprint and OS pressure/swap every 250 ms, enforces response/campaign
+deadlines and a bounded release wait, and stops without retry on its resource triggers. Those triggers are
+sampled abort conditions, not guaranteed peak ceilings. Follow the
+[allocation inventory](research/2026-09-12-local-inference-allocation-inventory.md)
+and its recorded attempts before another loaded-model run. Defaults stop at
+warning pressure, 28 GiB footprint and 512 MiB additional swap. The maintainer's
+September 12 campaign used `--allow-pressure-warning`, `--footprint-stop-gib 32`
+and `--swap-growth-stop-gib 2` and completed seven scenarios on the 48 GiB Mac.
+All final OS samples reported normal pressure; earlier attempts hit resource
+stops. Preserve both results rather than treating changed VM state as an
+optimization comparison. Do not treat a five-second quiet interval as SSD drain.
+
+The [September 13 follow-up](research/2026-09-13-allocation-investigations.md)
+investigates startup cancellation, loading transients and SSD encoding. The
+current loading path clears reusable MLX buffers before DFlash2 projection
+stacking. Allocation events now separate target/draft stacking and report
+`encodedStagingBytes` independently from total `encodedBytes`; borrowed payload
+chunks avoid a second full encoded buffer. Startup watches disconnects before
+the generation handle exists and drains any handle returned after cancellation.
+
+Focused coverage includes `CompletionDeliveryTests` for startup cancellation and
+handle ownership, `PlaceholderContainerEncodingTests` for borrowed addresses,
+golden full/suffix bytes and write failure, and the SSD store, snapshot-ledger
+and leaf-extension suites for real commits/restores. The
+[evidence archive](../benchmarks/allocation-investigations/2026-09-13/README.md)
+records 107 distinct passing test functions, the final Release build and two
+seven-scenario production captures. Both captures matched request/output hashes
+and usage, but persisted cache topology differed; only the loading portion was
+the cache-clear experiment. These results do not replace loaded-model bitwise
+cache/logit parity or long-context gates.
+
+The probe accepts `--comparison-label` to label a capture and
+`--max-cancel-signal-delay-seconds 1` to check prompt cancellation signaling.
+The delay subtracts client and server elapsed clocks with slightly different
+start points, so small negative values reflect clock alignment. The temporary
+loading experiment switch exists only in archived sources and runners.
+
+### Bounded production parity and projection lifetime
+
+`--hybrid-cache-correctness --bench-bounded-cache-parity` selects a fixed
+2,048-token, unquantized-KV gate instead of the full matrix. It loads the target
+and DFlash2 with an explicit `.dflash2` policy; a bare benchmark `AgentEngine`
+otherwise defaults to `.automatic` and also loads MTP. This matches the measured
+server configuration without changing preferences. It checks raw cache bytes,
+metadata, logits, checkout/rewind ownership and real full/extension SSD restores.
+The gate does not run speculative decoding; use the separate HTTP replay for
+that behavior. It cannot be combined with `--bench-replay-request`.
+
+`scripts/bounded_cache_parity.py` prints the fixed plan without `--run` and
+wraps this gate in the maintainer-approved resource stops. Use a Release binary,
+a new output directory and one validation process. Quit the app first and
+restore it afterward. The [evidence archive](../benchmarks/allocation-parity/2026-09-13/README.md)
+includes all 18 passing production checks and the preserved MTP-loading stop.
+
+`CacheStateBytesTests` checks that the exact-byte observer detects mutations and
+structural differences. `ProjectionStackingLifetimeTests` is a separate small,
+model-free traversal experiment. Its peak counter is process-global, so it is
+disabled by default and must run alone:
+
+```bash
+TEST_RUNNER_TESSERACT_PROJECTION_LIFETIME_EVIDENCE=1 xcodebuild test \
+  -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation -parallel-testing-enabled NO \
+  -only-testing:tesseractTests/ProjectionStackingLifetimeTests
+```
+
+The incremental visitor exists only in that test. See the
+[parity and lifetime report](research/2026-09-13-cache-parity-and-projection-lifetime.md)
+for measurements and the remaining production validation boundary.
+
 ### Controlled capture comparison (#478)
 
 `scripts/capture_memory_replay.py` sends one private HTTPRequestLogger

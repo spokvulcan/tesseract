@@ -1,0 +1,7 @@
+{
+  "appExitCode": -15,
+  "completedRequests": 0,
+  "elapsedSeconds": 189.5455755419971,
+  "failure": "Model did not load before the startup deadline",
+  "resourceStops": []
+}

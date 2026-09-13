@@ -1,0 +1,15 @@
+{
+  "total": 107,
+  "suites": {
+    "CompletionDeliveryTests": 7,
+    "LeafExtensionExtractionTests": 5,
+    "LeafExtensionLedgerTests": 7,
+    "LeafExtensionStoreTests": 7,
+    "PlaceholderContainerEncodingTests": 3,
+    "RequestMemoryTelemetryTests": 8,
+    "SSDSnapshotStoreTests": 31,
+    "ServerCompletionDrainTests": 7,
+    "SnapshotLedgerTests": 27,
+    "StreamLifecycleDriverTests": 5
+  }
+}

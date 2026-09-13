@@ -1,0 +1,6 @@
+{
+  "testLogSHA256": "e4fb4fa865de9b1d4ffa264b5e75d98b11b4693d876e5bbfcbf8dcd709dde355",
+  "testCommand": "TEST_RUNNER_TESSERACT_ALLOCATION_DIAGNOSTICS=1 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/RequestMemoryTelemetryTests -only-testing:tesseractTests/SSDSnapshotStoreTests -only-testing:tesseractTests/AgentEngineLoadStateTests -resultBundlePath /private/tmp/tesseract-506-final-tests.xcresult",
+  "sourceRevision": "b1f0dca32ec9baead778221a8001fe4aa59e1850",
+  "validation": "40 tests in 3 suites passed; production load phases and SSD allocation diagnostics enabled"
+}

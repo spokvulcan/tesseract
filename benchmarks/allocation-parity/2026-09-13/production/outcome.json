@@ -1,0 +1,8 @@
+{
+  "elapsedSeconds": 15.34978320801747,
+  "exitCode": -15,
+  "maxSampledFootprintBytes": 30678717728,
+  "maxSystemSwapGrowthBytes": 1215299584,
+  "passed": false,
+  "resourceStop": "memory pressure"
+}

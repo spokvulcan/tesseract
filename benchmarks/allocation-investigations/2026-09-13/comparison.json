@@ -1,0 +1,97 @@
+{
+  "captures": [
+    {
+      "capture": "preserve-cache",
+      "binary": "c4422b71f1395ba5928e3d7a6f33f99c6cb5e79db822beb1ffe54e8978fe4c5a",
+      "loadPeakBytes": 31294652904,
+      "loadSeconds": 9.410635832999999,
+      "targetStackSeconds": 3.417834997177124,
+      "os": {
+        "firstFootprintBytes": 81992,
+        "lastFootprintBytes": 18590608160,
+        "maxFootprintBytes": 31294652904,
+        "maxSwapGrowthBytes": 1397358592,
+        "pressureCounts": {
+          "1": 565,
+          "2": 6
+        },
+        "sampleCount": 571
+      },
+      "activeAfterDraft": 16643980196,
+      "cachedAfterDraft": 7936496812,
+      "activeBeforeStack": 16641358756,
+      "cachedBeforeStack": 7939118252,
+      "footprintBeforeStack": 25367708136,
+      "activeAfterLoad": 16670850524,
+      "lifetimePeakAfterLoad": 23719247460
+    },
+    {
+      "capture": "clear-cache",
+      "binary": "c4422b71f1395ba5928e3d7a6f33f99c6cb5e79db822beb1ffe54e8978fe4c5a",
+      "loadPeakBytes": 24868323816,
+      "loadSeconds": 5.136389416999999,
+      "targetStackSeconds": 0.34798502922058105,
+      "os": {
+        "firstFootprintBytes": 39617376,
+        "lastFootprintBytes": 18438892464,
+        "maxFootprintBytes": 24868323816,
+        "maxSwapGrowthBytes": 0,
+        "pressureCounts": {
+          "1": 542
+        },
+        "sampleCount": 542
+      },
+      "activeAfterDraft": 16643980196,
+      "cachedAfterDraft": 7936478892,
+      "activeBeforeStack": 16641358756,
+      "cachedBeforeStack": 0,
+      "footprintBeforeStack": 20917059688,
+      "activeAfterLoad": 16670850284,
+      "lifetimePeakAfterLoad": 23719247460
+    }
+  ],
+  "requests": [
+    {
+      "label": "cold",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    },
+    {
+      "label": "warm",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    },
+    {
+      "label": "grow",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    },
+    {
+      "label": "cancel-growth",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    },
+    {
+      "label": "resend-growth",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    },
+    {
+      "label": "warm-repeat-1",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    },
+    {
+      "label": "warm-repeat-2",
+      "sameRequest": true,
+      "sameAssistantMessage": true,
+      "sameUsage": true
+    }
+  ]
+}
