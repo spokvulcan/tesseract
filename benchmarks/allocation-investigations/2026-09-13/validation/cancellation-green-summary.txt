@@ -1,0 +1,33 @@
+✔ Test disconnectCancelsBeforeGenerationStartReturns() passed after 0.001 seconds.
+✔ Test disconnectedStartDrainsAHandleReturnedAfterCancellation() passed after 0.001 seconds.
+✔ Test connectedStartTransfersHandleWithoutCancellingIt() passed after 0.001 seconds.
+✔ Test deliversInOrderThenRecordsReplayAndCompletes() passed after 0.001 seconds.
+✔ Test undeliveredFinishCancelsLogAndSkipsReplay() passed after 0.001 seconds.
+✔ Test clientDisconnectCancelsGenerationOnNonStreamingTransport() passed after 0.057 seconds.
+✔ Test streamFailureFailsTheRequest() passed after 0.001 seconds.
+✔ Suite CompletionDeliveryTests passed after 0.060 seconds.
+✔ Test phaseSamplesSeparateLifetimeAndObservedRequestPeaksAndStopAtFinish() passed after 0.001 seconds.
+✔ Test recordingCacheFactsDoesNotKeepItsObjectsAlive() passed after 0.001 seconds.
+✔ Test attentionFactsDistinguishTrimmedLengthFromRetainedArrayExtent() passed after 0.001 seconds.
+✔ Test releasingCacheClearsCarriedByteFacts() passed after 0.001 seconds.
+✔ Test coldAndWarmCompletionExposeRestoreHandoffAndRelease() passed after 0.042 seconds.
+✔ Test cancelledDecodeStillEmitsTerminalMemory() passed after 0.029 seconds.
+✔ Test cancellationDuringCleanupIsDistinctFromNaturalStreamFinish(origin:) with 3 test cases passed after 0.006 seconds.
+✔ Test failedStartStillEmitsTerminalMemory() passed after 0.002 seconds.
+✔ Suite RequestMemoryTelemetryTests passed after 0.087 seconds.
+✔ Test drainCancelsAndAwaitsTheActiveCompletion() passed after 0.065 seconds.
+✔ Test concurrentDrainsBothAwaitTheActiveCompletion() passed after 0.065 seconds.
+✔ Test naturalFinishLeavesTheDrainNothingToAwait() passed after 0.015 seconds.
+✔ Test staleFinishDoesNotDropANewerSlot() passed after 0.067 seconds.
+✔ Test drainCancelsAndAwaitsTheSpeculativePrefill() passed after 0.101 seconds.
+✔ Test staleSpeculativeFinishDoesNotDropANewerSlot() passed after 0.100 seconds.
+✔ Test preemptAwaitsTheSpeculativePrefillSettle() passed after 0.104 seconds.
+✔ Suite ServerCompletionDrainTests passed after 0.520 seconds.
+✔ Test disconnectMidDriveCancelsDrivePromptly() passed after 0.001 seconds.
+✔ Test idleDriveEmitsKeepalivesThenStopsWhenDriveEnds() passed after 0.044 seconds.
+✔ Test normalCompletionTearsDownBothWatchers() passed after 0.042 seconds.
+✔ Test driveErrorPropagatesUnchanged() passed after 0.001 seconds.
+✔ Test runCancellationPropagates() passed after 0.011 seconds.
+✔ Suite StreamLifecycleDriverTests passed after 0.098 seconds.
+✔ Test run with 27 tests in 4 suites passed after 0.767 seconds.
+** TEST SUCCEEDED **

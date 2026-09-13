@@ -1,0 +1,6 @@
+Building tesseract (Release)...
+Build description signature: 7a641dfe2d9d48b197526e5f7cbc8000
+Build description path: /Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Intermediates.noindex/XCBuildData/7a641dfe2d9d48b197526e5f7cbc8000.xcbuilddata
+** BUILD SUCCEEDED **
+
+Build succeeded.

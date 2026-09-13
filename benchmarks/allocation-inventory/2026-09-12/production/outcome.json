@@ -1,0 +1,9 @@
+{
+  "appExitCode": -15,
+  "completedRequests": 0,
+  "elapsedSeconds": 24.048685250018025,
+  "failure": "Remote end closed connection without response",
+  "resourceStops": [
+    "memory pressure stop"
+  ]
+}

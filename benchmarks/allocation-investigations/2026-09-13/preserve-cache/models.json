@@ -1,0 +1,93 @@
+{
+  "data": [
+    {
+      "id": "qwen3.5-4b-paro",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.5-9b-paro",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.6-27b-paro",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.6-35b-a3b-paro",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.6-35b-a3b-ud",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.6-27b",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.8-27b-paro",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.8-27b",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "qwen3.5-2b",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "nanbeige4.2-3b-8bit",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    },
+    {
+      "id": "ornith-35b",
+      "max_context_length": 262144,
+      "object": "model",
+      "owned_by": "tesseract",
+      "state": "available",
+      "type": "llm"
+    }
+  ],
+  "object": "list"
+}

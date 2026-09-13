@@ -1,0 +1,97 @@
+{
+  "checks" : [
+    {
+      "detail" : "layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true",
+      "name" : "copiedPrefix",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true",
+      "name" : "movedPrefixRestoredByCopy",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true",
+      "name" : "copiedContinuationState",
+      "passed" : true
+    },
+    {
+      "detail" : "logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4",
+      "name" : "copiedContinuationLogits",
+      "passed" : true
+    },
+    {
+      "detail" : "sourceLayers=0 treeBodyLayers=0",
+      "name" : "checkoutOwnership",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true",
+      "name" : "checkedOutPrefix",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true",
+      "name" : "handoffContinuationState",
+      "passed" : true
+    },
+    {
+      "detail" : "logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4",
+      "name" : "handoffContinuationLogits",
+      "passed" : true
+    },
+    {
+      "detail" : "requestLayers=0 rewindBytes=0",
+      "name" : "rewindOwnership",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true",
+      "name" : "rewoundPrefix",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true",
+      "name" : "rewoundContinuationState",
+      "passed" : true
+    },
+    {
+      "detail" : "logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4",
+      "name" : "rewoundContinuationLogits",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true",
+      "name" : "ssdFullPrefix",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true",
+      "name" : "ssdFullContinuationState",
+      "passed" : true
+    },
+    {
+      "detail" : "logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4",
+      "name" : "ssdFullContinuationLogits",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true",
+      "name" : "ssdExtensionState",
+      "passed" : true
+    },
+    {
+      "detail" : "layers=64 stateBytes=288227328 expectedBytes=288227328 metadataAndBytesEqual=true",
+      "name" : "ssdExtensionSentinelState",
+      "passed" : true
+    },
+    {
+      "detail" : "logitsBytes=496640 bitwiseEqual=true sha256=dae6e021e62201f4050419d094d93ba0e0d2e4995424219fee1c57c88a1d26fb",
+      "name" : "ssdExtensionSentinelLogits",
+      "passed" : true
+    }
+  ],
+  "date" : "2026-09-13T01:17:53Z",
+  "model" : "Qwen3.8-27B (MLX 4bit)",
+  "passed" : true
+}

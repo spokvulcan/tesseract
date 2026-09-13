@@ -1,0 +1,7 @@
+✘ Test chunksBorrowPayloadStorageWithinTheWriteBound() recorded an issue at PlaceholderContainerEncodingTests.swift:36:21: Expectation failed: (chunk.baseAddress → 0x0000000cfaa77000) == (source.baseAddress?.advanced(by: payloadOffset) → 0x0000000cf8213e14)
+✘ Test chunksBorrowPayloadStorageWithinTheWriteBound() recorded an issue at PlaceholderContainerEncodingTests.swift:36:21: Expectation failed: (chunk.baseAddress → 0x0000000cfaa78000) == (source.baseAddress?.advanced(by: payloadOffset) → 0x0000000cf8214e14)
+✘ Test chunksBorrowPayloadStorageWithinTheWriteBound() failed after 0.001 seconds with 2 issues.
+✔ Test layoutMatchesExistingContainer(suffix:) with 2 test cases passed after 0.001 seconds.
+✘ Suite PlaceholderContainerEncodingTests failed after 0.002 seconds with 2 issues.
+✘ Test run with 2 tests in 1 suite failed after 0.002 seconds with 2 issues.
+** TEST FAILED **

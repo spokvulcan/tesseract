@@ -143,6 +143,103 @@ private func hasPhase(_ log: ServerGenerationLog, _ expected: RequestTrace.Phase
 /// rules the two hand-written arms used to disagree on.
 struct CompletionDeliveryTests {
 
+    @Test func disconnectCancelsBeforeGenerationStartReturns() async {
+        let connection = HTTPConnectionLifecycle()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let observedCancel = LeaseAcquiredSignal()
+        let dropper = Task {
+            for await _ in started { break }
+            await connection.markDisconnected()
+        }
+        let result = await StreamLifecycleDriver.startGeneration(
+            waitForDisconnect: { await connection.waitForDisconnect() },
+            start: {
+                signal.yield(())
+                signal.finish()
+                do {
+                    try await Task.sleep(for: .milliseconds(500))
+                    return .failure(ScriptedFailure())
+                } catch {
+                    observedCancel.set()
+                    return .failure(error)
+                }
+            })
+        await dropper.value
+        #expect(observedCancel.isSet, "disconnect must cancel the in-flight start")
+        guard case .failure(let error) = result else {
+            Issue.record("expected cancelled start")
+            return
+        }
+        #expect(error is CancellationError)
+    }
+
+    @Test func disconnectedStartDrainsAHandleReturnedAfterCancellation() async {
+        let connection = HTTPConnectionLifecycle()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let scripted = scriptedGeneration([], hangAfterEvents: true)
+        let dropper = Task {
+            for await _ in started { break }
+            await connection.markDisconnected()
+        }
+        let result = await StreamLifecycleDriver.startGeneration(
+            waitForDisconnect: { await connection.waitForDisconnect() },
+            start: {
+                signal.yield(())
+                signal.finish()
+                try? await Task.sleep(for: .seconds(1))
+                return .success(scripted.generation)
+            })
+        await dropper.value
+        guard case .failure(let error) = result else {
+            Issue.record("disconnected start must not deliver a late handle")
+            return
+        }
+        #expect(error is CancellationError)
+        #expect(scripted.cancelled.isSet)
+        #expect(scripted.drained.isSet)
+    }
+
+    @Test func parentCancellationDrainsLateHandleWhileClientRemainsConnected() async {
+        let connection = HTTPConnectionLifecycle()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let scripted = scriptedGeneration([], hangAfterEvents: true)
+        let task = Task {
+            await StreamLifecycleDriver.startGeneration(
+                waitForDisconnect: { await connection.waitForDisconnect() },
+                start: {
+                    signal.yield(())
+                    signal.finish()
+                    try? await Task.sleep(for: .seconds(1))
+                    return .success(scripted.generation)
+                })
+        }
+        for await _ in started { break }
+        task.cancel()
+        guard case .failure(let error) = await task.value else {
+            Issue.record("parent cancellation must drain the late handle")
+            return
+        }
+        #expect(error is CancellationError)
+        #expect(scripted.cancelled.isSet)
+        #expect(scripted.drained.isSet)
+        #expect(await !connection.isDisconnected())
+    }
+
+    @Test func connectedStartTransfersHandleWithoutCancellingIt() async {
+        let connection = HTTPConnectionLifecycle()
+        let scripted = scriptedGeneration([.text("ready")])
+        let result = await StreamLifecycleDriver.startGeneration(
+            waitForDisconnect: { await connection.waitForDisconnect() },
+            start: { .success(scripted.generation) })
+        guard case .success(let generation) = result else {
+            Issue.record("connected start must succeed")
+            return
+        }
+        #expect(generation.completionID == scripted.generation.completionID)
+        #expect(!scripted.cancelled.isSet)
+        #expect(!scripted.drained.isSet)
+    }
+
     /// The script's fixed order: open, one ingest per event, close, then
     /// finish with the projected text and finish reason. The replay record
     /// and the log's `complete` follow a delivered finish.

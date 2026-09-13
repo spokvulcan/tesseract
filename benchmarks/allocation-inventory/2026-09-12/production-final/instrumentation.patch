@@ -1,0 +1,194 @@
+diff --git a/tesseract/Features/Agent/LLMActor.swift b/tesseract/Features/Agent/LLMActor.swift
+index 8c60a5e8..7ad2d19d 100644
+--- a/tesseract/Features/Agent/LLMActor.swift
++++ b/tesseract/Features/Agent/LLMActor.swift
+@@ -126,6 +126,8 @@ actor LLMActor {
+         let loadClock = ContinuousClock()
+         let loadStart = loadClock.now
+         let identity = ModelIdentity(directory: directory)
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "modelLoadBegin", facts: ["visionMode": "\(visionMode)"])
+         Log.agent.info("Loading model — visionMode=\(visionMode)")
+ 
+         if let ssdConfig {
+@@ -207,6 +209,9 @@ actor LLMActor {
+         since start: ContinuousClock.Instant, clock: ContinuousClock, visionMode: Bool
+     ) {
+         let seconds = (clock.now - start) / .seconds(1)
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "modelLoadCompleted",
++            facts: ["visionMode": "\(visionMode)", "loadSeconds": "\(seconds)"])
+         Log.agent.notice(
+             "Model load completed in \(String(format: "%.2f", seconds))s — visionMode=\(visionMode)"
+         )
+@@ -615,6 +620,8 @@ actor LLMActor {
+             }
+         }
+         let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "modelTargetLoaded", facts: ["modelWeightBytes": "\(modelWeightBytes)"])
+         let prefixCacheBudgetBytes = Self.autoSizedPrefixCacheMemoryBudgetBytes(
+             totalMemoryBytes: totalMemoryBytes,
+             modelMemoryBytes: modelWeightBytes
+@@ -750,9 +757,11 @@ extension LLMActor {
+             return
+         }
+         do {
++            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoadBegin", facts: [:])
+             let context = try await MTPDrafterSupport.loadDrafter(
+                 directory: directory, pairing: pairing)
+             mtpDrafter = UnsafeSendableBox(context.model)
++            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoaded", facts: [:])
+             Log.agent.notice(
+                 "MTP drafter loaded — pairing=\(pairing.rawValue) "
+                     + "blockSize=\(MTPDrafterSupport.blockSize)")
+@@ -798,7 +807,9 @@ extension LLMActor {
+                         + "loaded target has \(targetLayers) layers — off")
+                 return
+             }
++            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2LoadBegin", facts: [:])
+             let draft = try DFlash2Support.loadDrafter(directory: directory)
++            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2Loaded", facts: [:])
+             // Same-input QMM stacking (bitwise-exact, ledger R40/R47) on both
+             // sides of the speculative pair. Only plain QuantizedLinear folds;
+             // a PARO target stacks fewer blocks.
+@@ -813,6 +824,7 @@ extension LLMActor {
+                 "DFlash2 same-input stacking: target=\(stackedTarget) draft=\(stackedDraft) blocks"
+             )
+             dflash2Drafter = UnsafeSendableBox(draft)
++            RequestMemoryTelemetry.recordAllocation(phase: "modelProjectionStackingEnd", facts: [:])
+             Log.agent.notice(
+                 "DFlash2 draft loaded (4-bit) — blockSize=\(DFlash2Support.blockSize)")
+         } catch {
+diff --git a/tesseract/Features/Server/SSDSnapshotStore.swift b/tesseract/Features/Server/SSDSnapshotStore.swift
+index 16da1367..89920100 100644
+--- a/tesseract/Features/Server/SSDSnapshotStore.swift
++++ b/tesseract/Features/Server/SSDSnapshotStore.swift
+@@ -941,6 +941,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+         //    rename). On disk-full, run a single eviction-retry pass — its
+         //    victim is also cleaned up outside the lock. Any other error
+         //    drops the incoming and fires the drop callback.
++        let allocationFacts = [
++            "snapshotID": item.descriptor.snapshotID,
++            "payloadBytes": "\(item.payload.totalBytes)",
++            "payloadMode": item.extendingBaseID == nil ? "full" : "extension",
++            "mandatory": "\(item.mandatory)",
++        ]
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "ssdMaterializeBegin", facts: allocationFacts)
+         let materializeStart = Date.timeIntervalSinceReferenceDate
+         if item.payload.materialize() {
+             PrefixCacheDiagnostics.logSystem(
+@@ -950,6 +958,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+                     durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
+                 ))
+         }
++        RequestMemoryTelemetry.recordAllocation(phase: "ssdMaterializeEnd", facts: allocationFacts)
+         // The materializer has dropped every body array. Subsequent file I/O
+         // reads independent Data and no longer excludes a lease.
+         if holdsBodyRead {
+@@ -1187,11 +1196,18 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+         }
+ 
+         let data: Data
++        let allocationFacts = [
++            "snapshotID": descriptor.snapshotID, "payloadBytes": "\(payload.totalBytes)",
++        ]
++        RequestMemoryTelemetry.recordAllocation(phase: "ssdEncodeBegin", facts: allocationFacts)
+         do {
+             data = try encodePlaceholderContainer(payload: payload, descriptor: descriptor)
+         } catch {
+             throw WriteError.ioError(underlying: error)
+         }
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "ssdEncodeEnd",
++            facts: allocationFacts.merging(["encodedBytes": "\(data.count)"]) { _, new in new })
+ 
+         // Remove any stale temp file from a previous aborted run
+         // before we create the new handle, so the write is an
+diff --git a/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift b/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift
+index f0aca334..e3a9253a 100644
+--- a/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift
++++ b/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift
+@@ -49,6 +49,35 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+         let fields: [(String, String)]
+     }
+ 
++    private struct AllocationEvent: PrefixCacheDiagnostics.Payload {
++        let eventName = "allocationMemory"
++        let fields: [(String, String)]
++    }
++
++    static let allocationDiagnosticsEnabled =
++        ProcessInfo.processInfo.environment["TESSERACT_ALLOCATION_DIAGNOSTICS"] == "1"
++
++    /// Opt-in operation boundaries; samples scalars without evaluating or retaining arrays.
++    static func recordAllocation(phase: String, facts: [String: String]) {
++        guard allocationDiagnosticsEnabled else { return }
++        let observationStarted = ContinuousClock.now
++        let sample = Sample.current()
++        var fields = facts
++        fields["phase"] = phase
++        fields["observedUnixSeconds"] = String(
++            format: "%.6f", Date().timeIntervalSince1970)
++        fields["activeMlxBytes"] = "\(sample.activeBytes)"
++        fields["cachedMlxBytes"] = "\(sample.cacheBytes)"
++        fields["processLifetimePeakMlxBytes"] = "\(sample.lifetimePeakBytes)"
++        if let bytes = sample.footprintBytes { fields["processFootprintBytes"] = "\(bytes)" }
++        if let bytes = sample.residentBytes { fields["processResidentBytes"] = "\(bytes)" }
++        if let bytes = sample.compressedBytes { fields["processCompressedBytes"] = "\(bytes)" }
++        if let bytes = sample.systemSwapUsedBytes { fields["systemSwapUsedBytes"] = "\(bytes)" }
++        fields["observationMilliseconds"] = milliseconds(observationStarted.duration(to: .now))
++        PrefixCacheDiagnostics.logSystem(
++            AllocationEvent(fields: fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }))
++    }
++
+     private let context: PrefixCacheDiagnostics.Context
+     private let sample: @Sendable () -> Sample
+     private let lock = NSLock()
+@@ -101,6 +130,9 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+                 phaseStarted = .now
+             }
+             phase = next
++            if updates["requestCacheLayerCount"] == "0" {
++                facts.merge(Self.cacheFacts([])) { _, new in new }
++            }
+             facts.merge(updates) { _, new in new }
+             if updates["requestCacheLayerCount"] != nil {
+                 facts["requestCacheMeasuredAtPhase"] = next.rawValue
+@@ -192,8 +224,23 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+         var attention = 0
+         var recurrent = 0
+         var other = 0
++        var fullAttentionLogical = 0
++        var fullAttentionArrays = 0
++        var fullAttentionLayers = 0
+         for entry in cache {
+-            let bytes = entry.innerState().reduce(0) { $0 + $1.nbytes }
++            let arrays = entry.innerState()
++            let bytes = arrays.reduce(0) { $0 + $1.nbytes }
++            // Only the plain full-attention layout has this offset/capacity relation.
++            // Array extents exclude allocator padding and larger backing retained by views.
++            if type(of: entry) == KVCacheSimple.self, arrays.count == 2,
++                arrays.allSatisfy({ $0.ndim == 4 && $0.dim(2) > 0 && entry.offset <= $0.dim(2) })
++            {
++                fullAttentionLayers += 1
++                fullAttentionArrays += bytes
++                fullAttentionLogical += arrays.reduce(0) {
++                    $0 + ($1.nbytes / $1.dim(2)) * entry.offset
++                }
++            }
+             if entry is MambaCache {
+                 recurrent += bytes
+             } else if entry is KVCacheSimple || entry is RotatingKVCache
+@@ -209,6 +256,10 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+             "requestCacheRecurrentArrayBytes": "\(recurrent)",
+             "requestCacheOtherArrayBytes": "\(other)",
+             "requestCacheLayerCount": "\(cache.count)",
++            "requestFullAttentionLayerCount": "\(fullAttentionLayers)",
++            "requestFullAttentionLogicalBytes": "\(fullAttentionLogical)",
++            "requestFullAttentionArrayBytes": "\(fullAttentionArrays)",
++            "requestFullAttentionUnusedArrayBytes": "\(fullAttentionArrays - fullAttentionLogical)",
+         ]
+     }
+ }

@@ -1,0 +1,754 @@
+diff --git a/tesseract/Features/Agent/LLMActor.swift b/tesseract/Features/Agent/LLMActor.swift
+index 8c60a5e8..e61f4cc4 100644
+--- a/tesseract/Features/Agent/LLMActor.swift
++++ b/tesseract/Features/Agent/LLMActor.swift
+@@ -126,6 +126,8 @@ actor LLMActor {
+         let loadClock = ContinuousClock()
+         let loadStart = loadClock.now
+         let identity = ModelIdentity(directory: directory)
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "modelLoadBegin", facts: ["visionMode": "\(visionMode)"])
+         Log.agent.info("Loading model — visionMode=\(visionMode)")
+ 
+         if let ssdConfig {
+@@ -207,6 +209,9 @@ actor LLMActor {
+         since start: ContinuousClock.Instant, clock: ContinuousClock, visionMode: Bool
+     ) {
+         let seconds = (clock.now - start) / .seconds(1)
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "modelLoadCompleted",
++            facts: ["visionMode": "\(visionMode)", "loadSeconds": "\(seconds)"])
+         Log.agent.notice(
+             "Model load completed in \(String(format: "%.2f", seconds))s — visionMode=\(visionMode)"
+         )
+@@ -615,6 +620,8 @@ actor LLMActor {
+             }
+         }
+         let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "modelTargetLoaded", facts: ["modelWeightBytes": "\(modelWeightBytes)"])
+         let prefixCacheBudgetBytes = Self.autoSizedPrefixCacheMemoryBudgetBytes(
+             totalMemoryBytes: totalMemoryBytes,
+             modelMemoryBytes: modelWeightBytes
+@@ -750,9 +757,11 @@ extension LLMActor {
+             return
+         }
+         do {
++            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoadBegin", facts: [:])
+             let context = try await MTPDrafterSupport.loadDrafter(
+                 directory: directory, pairing: pairing)
+             mtpDrafter = UnsafeSendableBox(context.model)
++            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoaded", facts: [:])
+             Log.agent.notice(
+                 "MTP drafter loaded — pairing=\(pairing.rawValue) "
+                     + "blockSize=\(MTPDrafterSupport.blockSize)")
+@@ -798,7 +807,13 @@ extension LLMActor {
+                         + "loaded target has \(targetLayers) layers — off")
+                 return
+             }
++            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2LoadBegin", facts: [:])
+             let draft = try DFlash2Support.loadDrafter(directory: directory)
++            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2Loaded", facts: [:])
++            // Loading leaves reusable buffers that need not overlap the
++            // evaluated old/new weights during projection stacking.
++            Memory.clearCache()
++            RequestMemoryTelemetry.recordAllocation(phase: "modelTargetStackingBegin", facts: [:])
+             // Same-input QMM stacking (bitwise-exact, ledger R40/R47) on both
+             // sides of the speculative pair. Only plain QuantizedLinear folds;
+             // a PARO target stacks fewer blocks.
+@@ -807,12 +822,16 @@ extension LLMActor {
+                 if n > 0 { MLX.GPU.clearCache() }
+                 return n
+             }
++            RequestMemoryTelemetry.recordAllocation(
++                phase: "modelTargetStackingEnd", facts: ["stackedBlocks": "\(stackedTarget)"])
++            RequestMemoryTelemetry.recordAllocation(phase: "modelDraftStackingBegin", facts: [:])
+             let stackedDraft = stackSameInputProjections(in: draft)
+             if stackedDraft > 0 { MLX.GPU.clearCache() }
+             Log.agent.notice(
+                 "DFlash2 same-input stacking: target=\(stackedTarget) draft=\(stackedDraft) blocks"
+             )
+             dflash2Drafter = UnsafeSendableBox(draft)
++            RequestMemoryTelemetry.recordAllocation(phase: "modelProjectionStackingEnd", facts: [:])
+             Log.agent.notice(
+                 "DFlash2 draft loaded (4-bit) — blockSize=\(DFlash2Support.blockSize)")
+         } catch {
+diff --git a/tesseract/Features/Server/CompletionHandler.swift b/tesseract/Features/Server/CompletionHandler.swift
+index a77497a4..b20a7acc 100644
+--- a/tesseract/Features/Server/CompletionHandler.swift
++++ b/tesseract/Features/Server/CompletionHandler.swift
+@@ -255,14 +255,22 @@ struct CompletionHandler: Sendable {
+         logHandle: TraceHandle
+     ) async {
+         let generation: CompletionDelivery.Generation
+-        switch await startGeneration(
+-            request,
+-            sessionAffinity: sessionAffinity,
+-            completionID: completionID,
+-            logHandle: logHandle
++        switch await StreamLifecycleDriver.startGeneration(
++            waitForDisconnect: { await writer.waitForDisconnect() },
++            start: {
++                await startGeneration(
++                    request,
++                    sessionAffinity: sessionAffinity,
++                    completionID: completionID,
++                    logHandle: logHandle
++                )
++            }
+         ) {
+         case .success(let started):
+             generation = started
++        case .failure(let error) where error is CancellationError:
++            await activityLog.cancel(handle: logHandle)
++            return
+         case .failure(let error):
+             Log.server.error("Generation failed to start: \(error)")
+             await activityLog.fail(handle: logHandle, error: error.localizedDescription)
+diff --git a/tesseract/Features/Server/PlaceholderContainer.swift b/tesseract/Features/Server/PlaceholderContainer.swift
+index ea5de1b1..f9a2db64 100644
+--- a/tesseract/Features/Server/PlaceholderContainer.swift
++++ b/tesseract/Features/Server/PlaceholderContainer.swift
+@@ -193,60 +193,92 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
+ 
+ // MARK: - Encode
+ 
+-/// Serialize a payload into a single byte blob following the
+-/// placeholder container layout. The header carries the full descriptor
+-/// so warm start can rebuild the manifest from a directory walk when
+-/// `manifest.json` is corrupt. Shared by the store's `writePayload`.
+-nonisolated func encodePlaceholderContainer(
+-    payload: SnapshotPayload,
+-    descriptor: PersistedSnapshotDescriptor
+-) throws -> Data {
+-    var layerHeaders: [PlaceholderContainerHeader.Layer] = []
+-    layerHeaders.reserveCapacity(payload.layers.count)
+-    var blobs: [Data] = []
+-    var runningByteOffset = 0
+-
+-    for layer in payload.layers {
+-        var arrayEntries: [PlaceholderContainerHeader.ArrayEntry] = []
+-        arrayEntries.reserveCapacity(layer.state.count)
+-        for array in layer.state {
+-            arrayEntries.append(
++/// Header metadata plus borrowed payload buffers, consumed without a second
++/// full-container allocation. Chunk pointers are valid only inside `consume`.
++nonisolated struct PlaceholderContainerEncoding {
++    private let header: Data
++    private let blobs: [Data]
++    let byteCount: Int
++    var headerByteCount: Int { header.count }
++
++    init(payload: SnapshotPayload, descriptor: PersistedSnapshotDescriptor) throws {
++        var layerHeaders: [PlaceholderContainerHeader.Layer] = []
++        layerHeaders.reserveCapacity(payload.layers.count)
++        var blobs: [Data] = []
++        var runningByteOffset = 0
++
++        for layer in payload.layers {
++            var arrayEntries: [PlaceholderContainerHeader.ArrayEntry] = []
++            arrayEntries.reserveCapacity(layer.state.count)
++            for array in layer.state {
++                arrayEntries.append(
++                    .init(
++                        dtype: array.dtype,
++                        shape: array.shape,
++                        byteOffset: runningByteOffset,
++                        byteSize: array.data.count
++                    ))
++                runningByteOffset += array.data.count
++                blobs.append(array.data)
++            }
++            layerHeaders.append(
+                 .init(
+-                    dtype: array.dtype,
+-                    shape: array.shape,
+-                    byteOffset: runningByteOffset,
+-                    byteSize: array.data.count
++                    className: layer.className,
++                    metaState: layer.metaState,
++                    offset: layer.offset,
++                    suffixBaseOffset: layer.suffixBaseOffset,
++                    arrays: arrayEntries
+                 ))
+-            runningByteOffset += array.data.count
+-            blobs.append(array.data)
+         }
+-        layerHeaders.append(
+-            .init(
+-                className: layer.className,
+-                metaState: layer.metaState,
+-                offset: layer.offset,
+-                suffixBaseOffset: layer.suffixBaseOffset,
+-                arrays: arrayEntries
+-            ))
++
++        let header = PlaceholderContainerHeader(
++            formatKind: "tesseract-cache-v1",
++            schemaVersion: SnapshotManifestSchema.currentVersion,
++            descriptor: descriptor,
++            layers: layerHeaders
++        )
++
++        let encoder = JSONEncoder()
++        encoder.outputFormatting = [.sortedKeys]
++        let headerData = try encoder.encode(header)
++
++        var prefix = Data(capacity: 8 + headerData.count)
++        var headerLength = UInt64(headerData.count).littleEndian
++        withUnsafeBytes(of: &headerLength) { prefix.append(contentsOf: $0) }
++        prefix.append(headerData)
++        self.header = prefix
++        self.blobs = blobs
++        self.byteCount = prefix.count + runningByteOffset
+     }
+ 
+-    let header = PlaceholderContainerHeader(
+-        formatKind: "tesseract-cache-v1",
+-        schemaVersion: SnapshotManifestSchema.currentVersion,
+-        descriptor: descriptor,
+-        layers: layerHeaders
+-    )
+-
+-    let encoder = JSONEncoder()
+-    encoder.outputFormatting = [.sortedKeys]
+-    let headerData = try encoder.encode(header)
+-
+-    var out = Data(capacity: 8 + headerData.count + runningByteOffset)
+-    var headerLength = UInt64(headerData.count).littleEndian
+-    withUnsafeBytes(of: &headerLength) { out.append(contentsOf: $0) }
+-    out.append(headerData)
+-    for blob in blobs {
+-        out.append(blob)
++    func withChunks(
++        maximumBytes: Int,
++        _ consume: (UnsafeRawBufferPointer) throws -> Void
++    ) rethrows {
++        precondition(maximumBytes > 0)
++        func emit(_ data: Data) throws {
++            try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
++                var offset = 0
++                while offset < buffer.count {
++                    let end = offset + min(maximumBytes, buffer.count - offset)
++                    try consume(UnsafeRawBufferPointer(rebasing: buffer[offset..<end]))
++                    offset = end
++                }
++            }
++        }
++        try emit(header)
++        for blob in blobs { try emit(blob) }
+     }
++}
++
++/// Contiguous form for in-memory consumers and fixtures. The SSD writer uses
++/// `PlaceholderContainerEncoding.withChunks` to avoid this payload-sized copy.
++nonisolated func encodePlaceholderContainer(
++    payload: SnapshotPayload,
++    descriptor: PersistedSnapshotDescriptor
++) throws -> Data {
++    let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
++    var out = Data(capacity: encoding.byteCount)
++    encoding.withChunks(maximumBytes: Int.max) { out.append(contentsOf: $0) }
+     return out
+ }
+diff --git a/tesseract/Features/Server/SSDSnapshotStore.swift b/tesseract/Features/Server/SSDSnapshotStore.swift
+index 16da1367..677375e7 100644
+--- a/tesseract/Features/Server/SSDSnapshotStore.swift
++++ b/tesseract/Features/Server/SSDSnapshotStore.swift
+@@ -941,6 +941,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+         //    rename). On disk-full, run a single eviction-retry pass — its
+         //    victim is also cleaned up outside the lock. Any other error
+         //    drops the incoming and fires the drop callback.
++        let allocationFacts = [
++            "snapshotID": item.descriptor.snapshotID,
++            "payloadBytes": "\(item.payload.totalBytes)",
++            "payloadMode": item.extendingBaseID == nil ? "full" : "extension",
++            "mandatory": "\(item.mandatory)",
++        ]
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "ssdMaterializeBegin", facts: allocationFacts)
+         let materializeStart = Date.timeIntervalSinceReferenceDate
+         if item.payload.materialize() {
+             PrefixCacheDiagnostics.logSystem(
+@@ -950,6 +958,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+                     durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
+                 ))
+         }
++        RequestMemoryTelemetry.recordAllocation(phase: "ssdMaterializeEnd", facts: allocationFacts)
+         // The materializer has dropped every body array. Subsequent file I/O
+         // reads independent Data and no longer excludes a lease.
+         if holdsBodyRead {
+@@ -1186,12 +1195,23 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+             throw classifyWriteError(error)
+         }
+ 
+-        let data: Data
++        let encoding: PlaceholderContainerEncoding
++        let allocationFacts = [
++            "snapshotID": descriptor.snapshotID, "payloadBytes": "\(payload.totalBytes)",
++        ]
++        RequestMemoryTelemetry.recordAllocation(phase: "ssdEncodeBegin", facts: allocationFacts)
+         do {
+-            data = try encodePlaceholderContainer(payload: payload, descriptor: descriptor)
++            encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
+         } catch {
+             throw WriteError.ioError(underlying: error)
+         }
++        RequestMemoryTelemetry.recordAllocation(
++            phase: "ssdEncodeEnd",
++            facts: allocationFacts.merging([
++                "encodedBytes": "\(encoding.byteCount)",
++                "encodedStagingBytes": "\(encoding.headerByteCount)",
++                "encodingMode": "borrowedChunks",
++            ]) { _, new in new })
+ 
+         // Remove any stale temp file from a previous aborted run
+         // before we create the new handle, so the write is an
+@@ -1219,21 +1239,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+ 
+         do {
+             // write(2) rejects a single call past INT_MAX with EINVAL —
+-            // observed live on a 2.5 GB leaf (35K-context KV, issue #441
+-            // smoke). Chunk at 1 GiB; Data(bytesNoCopy:) keeps it zero-copy.
+-            try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
++            // observed live on a 2.5 GB leaf (issue #441). Borrow each
++            // header/blob chunk without constructing a full encoded Data.
++            try encoding.withChunks(maximumBytes: Self.maxWriteChunkBytes) { buffer in
+                 guard let baseAddress = buffer.baseAddress else { return }
+-                var remaining = buffer.count
+-                var base = baseAddress
+-                while remaining > 0 {
+-                    let n = min(remaining, Self.maxWriteChunkBytes)
+-                    try handle.write(
+-                        Data(
+-                            bytesNoCopy: UnsafeMutableRawPointer(mutating: base),
+-                            count: n, deallocator: .none))
+-                    base += n
+-                    remaining -= n
+-                }
++                try handle.write(
++                    contentsOf: Data(
++                        bytesNoCopy: UnsafeMutableRawPointer(mutating: baseAddress),
++                        count: buffer.count, deallocator: .none))
+             }
+             try handle.synchronize()
+             try handle.close()
+@@ -1256,6 +1269,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
+             try? FileManager.default.removeItem(at: tempURL)
+             throw classifyWriteError(error)
+         }
++        RequestMemoryTelemetry.recordAllocation(phase: "ssdWriteCompleted", facts: allocationFacts)
+     }
+ 
+     /// Map Foundation errors to our `WriteError`. ENOSPC / EDQUOT
+diff --git a/tesseract/Features/Server/ServerCompletion.swift b/tesseract/Features/Server/ServerCompletion.swift
+index 6eaaae33..3209f2b1 100644
+--- a/tesseract/Features/Server/ServerCompletion.swift
++++ b/tesseract/Features/Server/ServerCompletion.swift
+@@ -748,19 +748,23 @@ nonisolated final class ServerCompletion {
+         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
+         let mlxStart: HTTPPrefixCacheGeneration
+         do {
+-            mlxStart = try await makeHTTPPrefixCacheGeneration(
+-                on: actor,
+-                sessions: sessions,
+-                conversation: conversation,
+-                requestID: requestID,
+-                modelID: modelID,
+-                parameters: genParams,
+-                toolSpecs: canonicalTools,
+-                prefixCache: prefixCache,
+-                renderContext: renderContext,
+-                progressHandler: progressHandler,
+-                memory: memory
+-            )
++            mlxStart = try await withTaskCancellationHandler {
++                try await makeHTTPPrefixCacheGeneration(
++                    on: actor,
++                    sessions: sessions,
++                    conversation: conversation,
++                    requestID: requestID,
++                    modelID: modelID,
++                    parameters: genParams,
++                    toolSpecs: canonicalTools,
++                    prefixCache: prefixCache,
++                    renderContext: renderContext,
++                    progressHandler: progressHandler,
++                    memory: memory
++                )
++            } onCancel: {
++                memory.recordCancellationSignal(origin: "caller")
++            }
+         } catch {
+             if error is CancellationError { startOutcome = "cancelledDuringStart" }
+             memory.mark(
+diff --git a/tesseract/Features/Server/StreamLifecycleDriver.swift b/tesseract/Features/Server/StreamLifecycleDriver.swift
+index 6b58bd2c..ad11c843 100644
+--- a/tesseract/Features/Server/StreamLifecycleDriver.swift
++++ b/tesseract/Features/Server/StreamLifecycleDriver.swift
+@@ -21,6 +21,37 @@ import Foundation
+ /// zero isolation change; every closure it holds is `@Sendable`.
+ nonisolated enum StreamLifecycleDriver {
+ 
++    /// Observe disconnects while tokenization, restore and prefill are still
++    /// building the generation handle, before delivery can open its response.
++    static func startGeneration(
++        waitForDisconnect: @escaping @Sendable () async -> Void,
++        start: @escaping @Sendable () async -> Result<CompletionDelivery.Generation, Error>
++    ) async -> Result<CompletionDelivery.Generation, Error> {
++        await withTaskGroup(of: Result<CompletionDelivery.Generation, Error>?.self) { group in
++            group.addTask {
++                await waitForDisconnect()
++                return nil
++            }
++            group.addTask { await start() }
++            let first = (await group.next()).flatMap { $0 }
++            group.cancelAll()
++
++            // A start may finish just as the connection drops, or return a
++            // handle despite cancellation. Drain that handle before the
++            // handler can release its GPU lease; never abandon a live owner.
++            var started = first
++            for await remaining in group {
++                if let remaining { started = remaining }
++            }
++            if let first, !Task.isCancelled { return first }
++            if case .success(let generation) = started {
++                generation.cancel()
++                await generation.waitForCompletion()
++            }
++            return .failure(CancellationError())
++        }
++    }
++
+     /// The transport probes the driver races against the drive. In production
+     /// these wrap the request's `HTTPResponseWriter` and `SSEWriter`; in tests
+     /// they are scripted, so the race runs without a socket.
+diff --git a/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift b/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift
+index f0aca334..e3a9253a 100644
+--- a/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift
++++ b/tesseract/Features/Server/Telemetry/RequestMemoryTelemetry.swift
+@@ -49,6 +49,35 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+         let fields: [(String, String)]
+     }
+ 
++    private struct AllocationEvent: PrefixCacheDiagnostics.Payload {
++        let eventName = "allocationMemory"
++        let fields: [(String, String)]
++    }
++
++    static let allocationDiagnosticsEnabled =
++        ProcessInfo.processInfo.environment["TESSERACT_ALLOCATION_DIAGNOSTICS"] == "1"
++
++    /// Opt-in operation boundaries; samples scalars without evaluating or retaining arrays.
++    static func recordAllocation(phase: String, facts: [String: String]) {
++        guard allocationDiagnosticsEnabled else { return }
++        let observationStarted = ContinuousClock.now
++        let sample = Sample.current()
++        var fields = facts
++        fields["phase"] = phase
++        fields["observedUnixSeconds"] = String(
++            format: "%.6f", Date().timeIntervalSince1970)
++        fields["activeMlxBytes"] = "\(sample.activeBytes)"
++        fields["cachedMlxBytes"] = "\(sample.cacheBytes)"
++        fields["processLifetimePeakMlxBytes"] = "\(sample.lifetimePeakBytes)"
++        if let bytes = sample.footprintBytes { fields["processFootprintBytes"] = "\(bytes)" }
++        if let bytes = sample.residentBytes { fields["processResidentBytes"] = "\(bytes)" }
++        if let bytes = sample.compressedBytes { fields["processCompressedBytes"] = "\(bytes)" }
++        if let bytes = sample.systemSwapUsedBytes { fields["systemSwapUsedBytes"] = "\(bytes)" }
++        fields["observationMilliseconds"] = milliseconds(observationStarted.duration(to: .now))
++        PrefixCacheDiagnostics.logSystem(
++            AllocationEvent(fields: fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }))
++    }
++
+     private let context: PrefixCacheDiagnostics.Context
+     private let sample: @Sendable () -> Sample
+     private let lock = NSLock()
+@@ -101,6 +130,9 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+                 phaseStarted = .now
+             }
+             phase = next
++            if updates["requestCacheLayerCount"] == "0" {
++                facts.merge(Self.cacheFacts([])) { _, new in new }
++            }
+             facts.merge(updates) { _, new in new }
+             if updates["requestCacheLayerCount"] != nil {
+                 facts["requestCacheMeasuredAtPhase"] = next.rawValue
+@@ -192,8 +224,23 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+         var attention = 0
+         var recurrent = 0
+         var other = 0
++        var fullAttentionLogical = 0
++        var fullAttentionArrays = 0
++        var fullAttentionLayers = 0
+         for entry in cache {
+-            let bytes = entry.innerState().reduce(0) { $0 + $1.nbytes }
++            let arrays = entry.innerState()
++            let bytes = arrays.reduce(0) { $0 + $1.nbytes }
++            // Only the plain full-attention layout has this offset/capacity relation.
++            // Array extents exclude allocator padding and larger backing retained by views.
++            if type(of: entry) == KVCacheSimple.self, arrays.count == 2,
++                arrays.allSatisfy({ $0.ndim == 4 && $0.dim(2) > 0 && entry.offset <= $0.dim(2) })
++            {
++                fullAttentionLayers += 1
++                fullAttentionArrays += bytes
++                fullAttentionLogical += arrays.reduce(0) {
++                    $0 + ($1.nbytes / $1.dim(2)) * entry.offset
++                }
++            }
+             if entry is MambaCache {
+                 recurrent += bytes
+             } else if entry is KVCacheSimple || entry is RotatingKVCache
+@@ -209,6 +256,10 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
+             "requestCacheRecurrentArrayBytes": "\(recurrent)",
+             "requestCacheOtherArrayBytes": "\(other)",
+             "requestCacheLayerCount": "\(cache.count)",
++            "requestFullAttentionLayerCount": "\(fullAttentionLayers)",
++            "requestFullAttentionLogicalBytes": "\(fullAttentionLogical)",
++            "requestFullAttentionArrayBytes": "\(fullAttentionArrays)",
++            "requestFullAttentionUnusedArrayBytes": "\(fullAttentionArrays - fullAttentionLogical)",
+         ]
+     }
+ }
+diff --git a/tesseractTests/CompletionDeliveryTests.swift b/tesseractTests/CompletionDeliveryTests.swift
+index 7df5bc87..c09fd0f2 100644
+--- a/tesseractTests/CompletionDeliveryTests.swift
++++ b/tesseractTests/CompletionDeliveryTests.swift
+@@ -143,6 +143,77 @@ private func hasPhase(_ log: ServerGenerationLog, _ expected: RequestTrace.Phase
+ /// rules the two hand-written arms used to disagree on.
+ struct CompletionDeliveryTests {
+ 
++    @Test func disconnectCancelsBeforeGenerationStartReturns() async {
++        let connection = HTTPConnectionLifecycle()
++        let (started, signal) = AsyncStream<Void>.makeStream()
++        let observedCancel = LeaseAcquiredSignal()
++        let dropper = Task {
++            for await _ in started { break }
++            await connection.markDisconnected()
++        }
++        let result = await StreamLifecycleDriver.startGeneration(
++            waitForDisconnect: { await connection.waitForDisconnect() },
++            start: {
++                signal.yield(())
++                signal.finish()
++                do {
++                    try await Task.sleep(for: .milliseconds(500))
++                    return .failure(ScriptedFailure())
++                } catch {
++                    observedCancel.set()
++                    return .failure(error)
++                }
++            })
++        await dropper.value
++        #expect(observedCancel.isSet, "disconnect must cancel the in-flight start")
++        guard case .failure(let error) = result else {
++            Issue.record("expected cancelled start")
++            return
++        }
++        #expect(error is CancellationError)
++    }
++
++    @Test func disconnectedStartDrainsAHandleReturnedAfterCancellation() async {
++        let connection = HTTPConnectionLifecycle()
++        let (started, signal) = AsyncStream<Void>.makeStream()
++        let scripted = scriptedGeneration([], hangAfterEvents: true)
++        let dropper = Task {
++            for await _ in started { break }
++            await connection.markDisconnected()
++        }
++        let result = await StreamLifecycleDriver.startGeneration(
++            waitForDisconnect: { await connection.waitForDisconnect() },
++            start: {
++                signal.yield(())
++                signal.finish()
++                try? await Task.sleep(for: .seconds(1))
++                return .success(scripted.generation)
++            })
++        await dropper.value
++        guard case .failure(let error) = result else {
++            Issue.record("disconnected start must not deliver a late handle")
++            return
++        }
++        #expect(error is CancellationError)
++        #expect(scripted.cancelled.isSet)
++        #expect(scripted.drained.isSet)
++    }
++
++    @Test func connectedStartTransfersHandleWithoutCancellingIt() async {
++        let connection = HTTPConnectionLifecycle()
++        let scripted = scriptedGeneration([.text("ready")])
++        let result = await StreamLifecycleDriver.startGeneration(
++            waitForDisconnect: { await connection.waitForDisconnect() },
++            start: { .success(scripted.generation) })
++        guard case .success(let generation) = result else {
++            Issue.record("connected start must succeed")
++            return
++        }
++        #expect(generation.completionID == scripted.generation.completionID)
++        #expect(!scripted.cancelled.isSet)
++        #expect(!scripted.drained.isSet)
++    }
++
+     /// The script's fixed order: open, one ingest per event, close, then
+     /// finish with the projected text and finish reason. The replay record
+     /// and the log's `complete` follow a delivered finish.
+diff --git a/tesseractTests/Fixtures/PlaceholderContainer/README.md b/tesseractTests/Fixtures/PlaceholderContainer/README.md
+new file mode 100644
+index 00000000..ee5bcd57
+--- /dev/null
++++ b/tesseractTests/Fixtures/PlaceholderContainer/README.md
+@@ -0,0 +1 @@
++Golden full and suffix container bytes emitted by the original contiguous encoder before the streaming change (baseline b1f0dca32ec9baead778221a8001fe4aa59e1850). The fixed fixture uses schema 9, snapshot ID fixed, four uint8 payload bytes, and timestamps 100/101. Generated by PlaceholderContainerEncodingTests during the red run on 2026-09-13.
+diff --git a/tesseractTests/Fixtures/PlaceholderContainer/full.bin b/tesseractTests/Fixtures/PlaceholderContainer/full.bin
+new file mode 100644
+index 0000000000000000000000000000000000000000..4de7ef8bb3476afe804beaaec94fa7a80543c031
+GIT binary patch
+literal 487
+zcmYL_%TB{E5Jh=?$*covAPdM2sE`l~5Fj=ciUwywtR{Bk87fNEFXd;rAu4zkJNGej
+zzW4Wj&xUGIm;7KcQMsYFwTV($WaL_L%OUz;&+9>`q)xaYyeDCk`qHS(XS0kN-^rtN
+zY<?vVY%P?H|CIVfxe=3~F)3_5w30lGPx9VNFqAA_GwN9F(m7F`0`rUpPUg+WF!%4G
+zs3CrHb$)tQAZ9?rO^W?vjQF$2v(xM>D-fiZx91m03MZ8pc$tc>SmnNHRG`PW8hFq)
+z+U<NdC{ishCG14S7E8s{vsFtUYRG^@C9$(($EZ18<?wX8Mj2+<5U0fJ>2u^)#s9kB
+zyZSEx1k>6klpmmajtp&iM7t<nw^+dehE{?5k@nro_1N{~`=Jv^doixmfF61(2>M-3
+RF`B3StJNQX?f${x(GSvWq7MK7
+
+literal 0
+HcmV?d00001
+
+diff --git a/tesseractTests/Fixtures/PlaceholderContainer/suffix.bin b/tesseractTests/Fixtures/PlaceholderContainer/suffix.bin
+new file mode 100644
+index 0000000000000000000000000000000000000000..b370a89e21c31e592198dda93a7105946fe9f2bc
+GIT binary patch
+literal 510
+zcmX|-%}&HH421c65}ymAOApW+KSDwrK!CWcP~}Zs8f}|Yv01UK_N93Orj#Y8#2L@n
+z-}nCB@7Yi->XIKUCMq|ySeq!7MMka_w;ZAm_Oc#?O6r6gLOlta)R#tOetMcw<2!kh
+zj?J&+k*$TY@t;zkC^upfG$uux53MAR#%Fo&B^W~HZy9y0cIlj`PKJ3#11Iz5W4Q6}
+zqKF}0xH_Mm6|fnQaGPTP6eE7-c{a<=vI0hmd3%19r0Asb0+lJ~id7z(Mg{sAs(}Y>
+zqut%?28FA|rG%ZR*kY-edbVomLk$^_s3dlF>=-e}s~kNYuMvhBHpD6Mdb*DMs`wWN
+zI=^rAUjPWEwM{5LK=m9R+VY5YUc7Cwf&&b#0{0{B``7C+>)H21Cy@4HT&V#)^i&Y^
+eyBHYjM+4~90=xdF&qmJ)OSSsvvfV#8Jo*6@*s6H|
+
+literal 0
+HcmV?d00001
+
+diff --git a/tesseractTests/PlaceholderContainerEncodingTests.swift b/tesseractTests/PlaceholderContainerEncodingTests.swift
+new file mode 100644
+index 00000000..9145a7e9
+--- /dev/null
++++ b/tesseractTests/PlaceholderContainerEncodingTests.swift
+@@ -0,0 +1,70 @@
++import Foundation
++import Testing
++
++@testable import Tesseract_Agent
++
++struct PlaceholderContainerEncodingTests {
++    private func fixture(_ blob: Data, suffix: Int? = nil) -> (
++        SnapshotPayload, PersistedSnapshotDescriptor
++    ) {
++        let payload = SnapshotPayload(
++            tokenOffset: 4, checkpointType: .leaf,
++            layers: [
++                .init(
++                    className: "KVCacheSimple",
++                    state: [.init(data: blob, dtype: "uint8", shape: [blob.count])],
++                    metaState: ["4"], offset: 4, suffixBaseOffset: suffix)
++            ])
++        let descriptor = PersistedSnapshotDescriptor(
++            snapshotID: "fixed", partitionDigest: "abcd1234", pathFromRoot: [1, 2, 3, 4],
++            tokenOffset: 4, checkpointType: "leaf", bytes: blob.count,
++            segmentBaseOffset: suffix ?? 0, createdAt: 100, lastAccessAt: 101,
++            fileRelativePath: "fixed.safetensors", schemaVersion: 9)
++        return (payload, descriptor)
++    }
++
++    @Test func chunksBorrowPayloadStorageWithinTheWriteBound() throws {
++        let blob = Data(repeating: 0xAB, count: 9_009)
++        let (payload, descriptor) = fixture(blob)
++        let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
++        var consumed = 0
++        blob.withUnsafeBytes { (source: UnsafeRawBufferPointer) in
++            encoding.withChunks(maximumBytes: 4_096) { chunk in
++                #expect(chunk.count <= 4_096)
++                if consumed >= encoding.headerByteCount {
++                    let payloadOffset = consumed - encoding.headerByteCount
++                    #expect(chunk.baseAddress == source.baseAddress?.advanced(by: payloadOffset))
++                }
++                consumed += chunk.count
++            }
++        }
++        #expect(consumed == encoding.byteCount)
++    }
++
++    @Test(arguments: [nil, 2] as [Int?])
++    func layoutMatchesExistingContainer(suffix: Int?) throws {
++        let (payload, descriptor) = fixture(Data([1, 2, 3, 4]), suffix: suffix)
++        let name = suffix == nil ? "full.bin" : "suffix.bin"
++        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
++            .appendingPathComponent("Fixtures/PlaceholderContainer/" + name)
++        let expected = try Data(contentsOf: url)
++        let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
++        var actual = Data()
++        encoding.withChunks(maximumBytes: 7) { actual.append(contentsOf: $0) }
++        #expect(actual == expected)
++    }
++
++    @Test func aWriteErrorStopsBeforeTheNextChunk() throws {
++        struct WriteFailed: Error {}
++        let (payload, descriptor) = fixture(Data(repeating: 0xAB, count: 9_009))
++        let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
++        var calls = 0
++        #expect(throws: WriteFailed.self) {
++            try encoding.withChunks(maximumBytes: 4_096) { _ in
++                calls += 1
++                throw WriteFailed()
++            }
++        }
++        #expect(calls == 1)
++    }
++}
+diff --git a/tesseractTests/RequestMemoryTelemetryTests.swift b/tesseractTests/RequestMemoryTelemetryTests.swift
+index c472148d..8a801c94 100644
+--- a/tesseractTests/RequestMemoryTelemetryTests.swift
++++ b/tesseractTests/RequestMemoryTelemetryTests.swift
+@@ -54,6 +54,40 @@ struct RequestMemoryTelemetryTests {
+         #expect(retained == nil)
+     }
+ 
++    @Test func attentionFactsDistinguishTrimmedLengthFromRetainedArrayExtent() {
++        let cache = KVCacheSimple()
++        cache.state = [MLXArray.ones([1, 1, 8, 4]), MLXArray.ones([1, 1, 8, 4])]
++        #expect(cache.trim(5) == 5)
++        let facts = RequestMemoryTelemetry.cacheFacts([cache])
++        #expect(facts["requestFullAttentionLayerCount"] == "1")
++        #expect(facts["requestFullAttentionLogicalBytes"] == "96")
++        #expect(facts["requestFullAttentionArrayBytes"] == "256")
++        #expect(facts["requestFullAttentionUnusedArrayBytes"] == "160")
++        #expect(cache.offset == 3)
++        #expect(cache.innerState().allSatisfy { $0.dim(2) == 8 })
++
++        let empty = RequestMemoryTelemetry.cacheFacts([])
++        #expect(empty["requestFullAttentionLayerCount"] == "0")
++        #expect(empty["requestFullAttentionUnusedArrayBytes"] == "0")
++    }
++
++    @Test func releasingCacheClearsCarriedByteFacts() throws {
++        let modelID = "memory-release-\(UUID())"
++        let capture = TelemetryCapture(modelID: modelID)
++        defer { capture.stop() }
++        let memory = RequestMemoryTelemetry(
++            context: .init(requestID: UUID(), modelID: modelID, kvBits: nil, kvGroupSize: 64))
++        let cache = KVCacheSimple()
++        cache.state = [MLXArray.ones([1, 1, 8, 4]), MLXArray.ones([1, 1, 8, 4])]
++        memory.mark(.rewindingLeaf, facts: RequestMemoryTelemetry.cacheFacts([cache]))
++        memory.mark(.rewoundLeaf, facts: ["requestCacheLayerCount": "0"])
++        let released = try #require(capture.drain().last)
++        #expect(released.field("requestCacheAttentionArrayBytes") == "0")
++        #expect(released.field("requestFullAttentionArrayBytes") == "0")
++        #expect(released.field("requestFullAttentionLogicalBytes") == "0")
++        #expect(released.field("requestCacheMeasuredAtPhase") == "rewoundLeaf")
++    }
++
+     @Test func coldAndWarmCompletionExposeRestoreHandoffAndRelease() async throws {
+         let modelID = "memory-replay-\(UUID())"
+         let capture = TelemetryCapture(modelID: modelID)

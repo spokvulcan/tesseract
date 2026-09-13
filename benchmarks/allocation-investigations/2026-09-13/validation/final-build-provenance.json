@@ -1,0 +1,7 @@
+{
+  "binarySHA256": "d0aba85a484705d0faaf549564c04b7156b5104bc5bbacece7b48205f1227388",
+  "sourceRevision": "b1f0dca32ec9baead778221a8001fe4aa59e1850",
+  "sourcePatchSHA256": "9ad7cedc9dc20aded594aee651e6297f4ed373b1195648f3a40f2b5962f4e7c1",
+  "command": "bash scripts/dev.sh build Release",
+  "changeFromExperiment": "The measured clear-cache branch is unconditional; the temporary environment switch was removed. Equivalent nested-optional flattening uses flatMap after SwiftLint feedback; all 12 delivery/lifecycle tests passed again. Final Release build succeeded; no third production model run."
+}

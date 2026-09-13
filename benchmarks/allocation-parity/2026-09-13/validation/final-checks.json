@@ -1,0 +1,16 @@
+{
+  "productionParityChecks": 18,
+  "productionParityPassed": true,
+  "focusedTestFunctionsTotalIncludingPreviousWork": 111,
+  "focusedSuitesTotalIncludingPreviousWork": 12,
+  "projectionTestOptIn": true,
+  "releaseBuildPassed": true,
+  "swiftFormatStrictPassed": true,
+  "swiftLintExitCode": 0,
+  "swiftLintWarnings": 76,
+  "pythonAndJSONSyntaxPassed": true,
+  "docsAndLinksPassed": true,
+  "oldEvidenceChecksumsUnchanged": true,
+  "normalAppRestoredAndHealthOK": true,
+  "productionTraversalChanged": false
+}

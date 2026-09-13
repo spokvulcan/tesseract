@@ -1,0 +1,5 @@
+PROJECTION_LIFETIME=[{"beforeBytes":432369808,"foldedBytes":5242880,"bitwiseEqual":true,"traversal":"flat","afterBytes":432369872,"peakIncreaseBytes":5242944},{"beforeBytes":432369836,"foldedBytes":5242880,"bitwiseEqual":true,"traversal":"incremental","afterBytes":432369872,"peakIncreaseBytes":655396}]
+✔ Test incrementalTraversalAvoidsRetainingEveryReplacedProjection() passed after 0.042 seconds.
+✔ Suite ProjectionStackingLifetimeTests passed after 0.042 seconds.
+✔ Test run with 1 test in 1 suite passed after 0.043 seconds.
+** TEST SUCCEEDED **

@@ -1,0 +1,9 @@
+{
+  "appExitCode": -15,
+  "completedRequests": 0,
+  "elapsedSeconds": 26.26698408302036,
+  "failure": "system swap growth stop",
+  "resourceStops": [
+    "system swap growth stop"
+  ]
+}

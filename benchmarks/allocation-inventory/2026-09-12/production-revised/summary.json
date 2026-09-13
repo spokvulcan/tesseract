@@ -1,0 +1,119 @@
+{
+  "allocationPhases": [
+    {
+      "activeMlxBytes": "424497280",
+      "cachedMlxBytes": "286453190",
+      "observationMilliseconds": "0.056",
+      "observedUnixSeconds": "1789256668.257593",
+      "phase": "modelLoadBegin",
+      "processCompressedBytes": "0",
+      "processFootprintBytes": "1125206080",
+      "processLifetimePeakMlxBytes": "625128004",
+      "processResidentBytes": "1234108416",
+      "systemSwapUsedBytes": "6121848832",
+      "visionMode": "false"
+    },
+    {
+      "activeMlxBytes": "15557857700",
+      "cachedMlxBytes": "4686671532",
+      "modelWeightBytes": "15132802048",
+      "observationMilliseconds": "0.044",
+      "observedUnixSeconds": "1789256673.472274",
+      "phase": "modelTargetLoaded",
+      "processCompressedBytes": "16322707456",
+      "processFootprintBytes": "20998404304",
+      "processLifetimePeakMlxBytes": "17836856238",
+      "processResidentBytes": "1961459712",
+      "systemSwapUsedBytes": "6121848832"
+    },
+    {
+      "activeMlxBytes": "15557857700",
+      "cachedMlxBytes": "4686671532",
+      "observationMilliseconds": "0.026",
+      "observedUnixSeconds": "1789256673.473216",
+      "phase": "modelDFlash2LoadBegin",
+      "processCompressedBytes": "16322707456",
+      "processFootprintBytes": "20998453456",
+      "processLifetimePeakMlxBytes": "17836856238",
+      "processResidentBytes": "1961558016",
+      "systemSwapUsedBytes": "6121848832"
+    },
+    {
+      "activeMlxBytes": "16643980196",
+      "cachedMlxBytes": "7936544428",
+      "observationMilliseconds": "0.074",
+      "observedUnixSeconds": "1789256674.549659",
+      "phase": "modelDFlash2Loaded",
+      "processCompressedBytes": "18937757696",
+      "processFootprintBytes": "25371673112",
+      "processLifetimePeakMlxBytes": "20102347684",
+      "processResidentBytes": "2579021824",
+      "systemSwapUsedBytes": "6121848832"
+    }
+  ],
+  "eventCounts": {
+    "allocationMemory": 4
+  },
+  "os": {
+    "firstFootprintBytes": 81992,
+    "lastFootprintBytes": 30809981464,
+    "maxFootprintBytes": 30809981464,
+    "maxSwapGrowthBytes": 739639296,
+    "pressureCounts": {
+      "1": 59,
+      "2": 5
+    },
+    "sampleCount": 64
+  },
+  "osStages": {
+    "cold": {
+      "firstFootprintBytes": 1125206080,
+      "lastFootprintBytes": 30809981464,
+      "maxFootprintBytes": 30809981464,
+      "maxSwapGrowthBytes": 739639296,
+      "pressureCounts": {
+        "1": 30,
+        "2": 5
+      },
+      "sampleCount": 35
+    },
+    "launch": {
+      "firstFootprintBytes": 81992,
+      "lastFootprintBytes": 1197197184,
+      "maxFootprintBytes": 1197197184,
+      "maxSwapGrowthBytes": -8388608,
+      "pressureCounts": {
+        "1": 10
+      },
+      "sampleCount": 10
+    },
+    "server-ready-idle": {
+      "firstFootprintBytes": 1364805648,
+      "lastFootprintBytes": 1125238848,
+      "maxFootprintBytes": 1364805648,
+      "maxSwapGrowthBytes": -8388608,
+      "pressureCounts": {
+        "1": 19
+      },
+      "sampleCount": 19
+    }
+  },
+  "outcome": {
+    "appExitCode": -15,
+    "completedRequests": 0,
+    "elapsedSeconds": 26.26698408302036,
+    "failure": "system swap growth stop",
+    "resourceStops": [
+      "system swap growth stop"
+    ]
+  },
+  "probeCosts": {
+    "allocationMaxMilliseconds": 0.074,
+    "allocationMedianMilliseconds": 0.05,
+    "allocationTotalMilliseconds": 0.19999999999999998,
+    "externalMaxNanoseconds": 1055958,
+    "externalMedianNanoseconds": 68750.0,
+    "externalTotalNanoseconds": 6694041
+  },
+  "requests": []
+}

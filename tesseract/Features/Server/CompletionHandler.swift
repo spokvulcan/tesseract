@@ -255,14 +255,23 @@ struct CompletionHandler: Sendable {
         logHandle: TraceHandle
     ) async {
         let generation: CompletionDelivery.Generation
-        switch await startGeneration(
-            request,
-            sessionAffinity: sessionAffinity,
-            completionID: completionID,
-            logHandle: logHandle
+        switch await StreamLifecycleDriver.startGeneration(
+            waitForDisconnect: { await writer.waitForDisconnect() },
+            start: {
+                await startGeneration(
+                    request,
+                    sessionAffinity: sessionAffinity,
+                    completionID: completionID,
+                    logHandle: logHandle
+                )
+            }
         ) {
         case .success(let started):
             generation = started
+        case .failure(let error) where error is CancellationError:
+            await activityLog.cancel(handle: logHandle)
+            try? await writer.send(.serviceUnavailable("Request cancelled"))
+            return
         case .failure(let error):
             Log.server.error("Generation failed to start: \(error)")
             await activityLog.fail(handle: logHandle, error: error.localizedDescription)

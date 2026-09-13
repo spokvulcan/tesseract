@@ -1,0 +1,27 @@
+[01:17:09.819] HybridCacheCorrectness starting — model=Qwen3.8-27B (MLX 4bit)
+[01:17:09.819] Bounded parity: 2048 tokens, 1024-token leaf, unquantized KV, raw bytes.
+[01:17:09.819] Loading model from: /Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit
+[01:17:16.779] Model loaded.
+[01:17:53.079] 
+── Summary ──
+[01:17:53.079]   ✅ copiedPrefix: layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true
+[01:17:53.079]   ✅ movedPrefixRestoredByCopy: layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true
+[01:17:53.079]   ✅ copiedContinuationState: layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true
+[01:17:53.079]   ✅ copiedContinuationLogits: logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4
+[01:17:53.080]   ✅ checkoutOwnership: sourceLayers=0 treeBodyLayers=0
+[01:17:53.080]   ✅ checkedOutPrefix: layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ handoffContinuationState: layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ handoffContinuationLogits: logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4
+[01:17:53.080]   ✅ rewindOwnership: requestLayers=0 rewindBytes=0
+[01:17:53.080]   ✅ rewoundPrefix: layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ rewoundContinuationState: layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ rewoundContinuationLogits: logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4
+[01:17:53.080]   ✅ ssdFullPrefix: layers=64 stateBytes=221052928 expectedBytes=221052928 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ ssdFullContinuationState: layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ ssdFullContinuationLogits: logitsBytes=496640 bitwiseEqual=true sha256=c0a17c60abbf5e80131e6d2175329ea0895c5effdd7ef1a91bac0b2ea4dd32b4
+[01:17:53.080]   ✅ ssdExtensionState: layers=64 stateBytes=288161792 expectedBytes=288161792 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ ssdExtensionSentinelState: layers=64 stateBytes=288227328 expectedBytes=288227328 metadataAndBytesEqual=true
+[01:17:53.080]   ✅ ssdExtensionSentinelLogits: logitsBytes=496640 bitwiseEqual=true sha256=dae6e021e62201f4050419d094d93ba0e0d2e4995424219fee1c57c88a1d26fb
+[01:17:53.082] 
+Overall: PASS
+[01:17:53.082] Report written to: /Users/owl/projects/tesseract/benchmarks/allocation-parity/2026-09-13/production-dflash2/harness/hybrid-cache-correctness/correctness_2026-09-13_01-17-53.json

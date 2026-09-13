@@ -1,0 +1,27 @@
+[
+  {
+    "name": "cache-state-bytes",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/CacheStateBytesTests -resultBundlePath /private/tmp/tesseract-bounded-cache-parity-tests.xcresult",
+    "rawLogSHA256": "9b34caaed4b9f0b5dc1e35a572daa3053761588323402dbd5c87460ced5f47b8"
+  },
+  {
+    "name": "projection-red",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/ProjectionStackingLifetimeTests -resultBundlePath /private/tmp/tesseract-projection-lifetime-red-control.xcresult",
+    "rawLogSHA256": "6bc6cc4969999d01229258080393be4784addf4acfcbfdb65f3a5dc51a9b082b"
+  },
+  {
+    "name": "projection-green",
+    "command": "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/ProjectionStackingLifetimeTests -resultBundlePath /private/tmp/tesseract-projection-lifetime-green-solo.xcresult",
+    "rawLogSHA256": "bc978c488462cb0847453f908bbca469b3b2492ad1ec1c7160af3674259f22d4"
+  },
+  {
+    "name": "projection-opt-in",
+    "command": "TEST_RUNNER_TESSERACT_PROJECTION_LIFETIME_EVIDENCE=1 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/ProjectionStackingLifetimeTests -resultBundlePath /private/tmp/tesseract-projection-lifetime-opt-in.xcresult",
+    "rawLogSHA256": "e48461e83ee444df2882055cbe721941c581606f34e7fc9cbe83de9c5688419a"
+  },
+  {
+    "name": "projection-final",
+    "command": "TEST_RUNNER_TESSERACT_PROJECTION_LIFETIME_EVIDENCE=1 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination platform=macOS -skipPackagePluginValidation -parallel-testing-enabled NO -only-testing:tesseractTests/ProjectionStackingLifetimeTests -resultBundlePath /private/tmp/tesseract-projection-lifetime-final.xcresult",
+    "rawLogSHA256": "30a88cd2b0af4a85d196b343607c00d814eb30a3b00d809ba40a19c6adaa211b"
+  }
+]

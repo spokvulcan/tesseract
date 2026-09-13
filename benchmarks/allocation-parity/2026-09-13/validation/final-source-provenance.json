@@ -1,0 +1,6 @@
+{
+  "sourceRevision": "b1f0dca32ec9baead778221a8001fe4aa59e1850",
+  "sourcePatchSHA256": "02b42ccd4422ebb277f4ce8740cc3440c246549821858cc30faff0ee9004c9ed",
+  "productionAppSource": "Matches production-dflash2/source.patch; later source addition is the test-only projection fixture.",
+  "releaseCommand": "bash scripts/dev.sh build Release"
+}

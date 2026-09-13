@@ -181,12 +181,11 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
         report.leafOffset = checkout.claim.lease.offset
         checkout.claim.lease.context.log(report, level: .notice)
         self.checkout = nil
-        memory?.mark(
+        memory?.markCacheReleased(
             .rewoundLeaf,
             facts: [
                 "leafSource": "rewind", "recurrentRewindStateBytes": "0",
                 "leafLeaseActive": "false",
-                "requestCacheLayerCount": "0",
             ])
     }
 
@@ -748,19 +747,23 @@ nonisolated final class ServerCompletion {
         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
         let mlxStart: HTTPPrefixCacheGeneration
         do {
-            mlxStart = try await makeHTTPPrefixCacheGeneration(
-                on: actor,
-                sessions: sessions,
-                conversation: conversation,
-                requestID: requestID,
-                modelID: modelID,
-                parameters: genParams,
-                toolSpecs: canonicalTools,
-                prefixCache: prefixCache,
-                renderContext: renderContext,
-                progressHandler: progressHandler,
-                memory: memory
-            )
+            mlxStart = try await withTaskCancellationHandler {
+                try await makeHTTPPrefixCacheGeneration(
+                    on: actor,
+                    sessions: sessions,
+                    conversation: conversation,
+                    requestID: requestID,
+                    modelID: modelID,
+                    parameters: genParams,
+                    toolSpecs: canonicalTools,
+                    prefixCache: prefixCache,
+                    renderContext: renderContext,
+                    progressHandler: progressHandler,
+                    memory: memory
+                )
+            } onCancel: {
+                memory.recordCancellationSignal(origin: "caller")
+            }
         } catch {
             if error is CancellationError { startOutcome = "cancelledDuringStart" }
             memory.mark(

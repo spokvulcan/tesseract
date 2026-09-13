@@ -126,6 +126,8 @@ actor LLMActor {
         let loadClock = ContinuousClock()
         let loadStart = loadClock.now
         let identity = ModelIdentity(directory: directory)
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "modelLoadBegin", facts: ["visionMode": "\(visionMode)"])
         Log.agent.info("Loading model — visionMode=\(visionMode)")
 
         if let ssdConfig {
@@ -207,6 +209,9 @@ actor LLMActor {
         since start: ContinuousClock.Instant, clock: ContinuousClock, visionMode: Bool
     ) {
         let seconds = (clock.now - start) / .seconds(1)
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "modelLoadCompleted",
+            facts: ["visionMode": "\(visionMode)", "loadSeconds": "\(seconds)"])
         Log.agent.notice(
             "Model load completed in \(String(format: "%.2f", seconds))s — visionMode=\(visionMode)"
         )
@@ -615,6 +620,8 @@ actor LLMActor {
             }
         }
         let totalMemoryBytes = ProcessInfo.processInfo.physicalMemory
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "modelTargetLoaded", facts: ["modelWeightBytes": "\(modelWeightBytes)"])
         let prefixCacheBudgetBytes = Self.autoSizedPrefixCacheMemoryBudgetBytes(
             totalMemoryBytes: totalMemoryBytes,
             modelMemoryBytes: modelWeightBytes
@@ -750,9 +757,11 @@ extension LLMActor {
             return
         }
         do {
+            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoadBegin", facts: [:])
             let context = try await MTPDrafterSupport.loadDrafter(
                 directory: directory, pairing: pairing)
             mtpDrafter = UnsafeSendableBox(context.model)
+            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoaded", facts: [:])
             Log.agent.notice(
                 "MTP drafter loaded — pairing=\(pairing.rawValue) "
                     + "blockSize=\(MTPDrafterSupport.blockSize)")
@@ -798,21 +807,31 @@ extension LLMActor {
                         + "loaded target has \(targetLayers) layers — off")
                 return
             }
+            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2LoadBegin", facts: [:])
             let draft = try DFlash2Support.loadDrafter(directory: directory)
+            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2Loaded", facts: [:])
+            // Loading leaves reusable buffers that need not overlap the
+            // evaluated old/new weights during projection stacking.
+            Memory.clearCache()
+            RequestMemoryTelemetry.recordAllocation(phase: "modelTargetStackingBegin", facts: [:])
             // Same-input QMM stacking (bitwise-exact, ledger R40/R47) on both
             // sides of the speculative pair. Only plain QuantizedLinear folds;
             // a PARO target stacks fewer blocks.
             let stackedTarget = await container.perform { context in
                 let n = stackSameInputProjections(in: context.model)
-                if n > 0 { MLX.GPU.clearCache() }
+                if n > 0 { Memory.clearCache() }
                 return n
             }
+            RequestMemoryTelemetry.recordAllocation(
+                phase: "modelTargetStackingEnd", facts: ["stackedBlocks": "\(stackedTarget)"])
+            RequestMemoryTelemetry.recordAllocation(phase: "modelDraftStackingBegin", facts: [:])
             let stackedDraft = stackSameInputProjections(in: draft)
-            if stackedDraft > 0 { MLX.GPU.clearCache() }
+            if stackedDraft > 0 { Memory.clearCache() }
             Log.agent.notice(
                 "DFlash2 same-input stacking: target=\(stackedTarget) draft=\(stackedDraft) blocks"
             )
             dflash2Drafter = UnsafeSendableBox(draft)
+            RequestMemoryTelemetry.recordAllocation(phase: "modelProjectionStackingEnd", facts: [:])
             Log.agent.notice(
                 "DFlash2 draft loaded (4-bit) — blockSize=\(DFlash2Support.blockSize)")
         } catch {

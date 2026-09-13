@@ -1,0 +1,82 @@
+{
+  "projection-red": [
+    {
+      "afterBytes": 432369872,
+      "peakIncreaseBytes": 5242944,
+      "foldedBytes": 5242880,
+      "bitwiseEqual": true,
+      "traversal": "flat",
+      "beforeBytes": 432369808,
+      "peakAboveFinalBytes": 5242880
+    },
+    {
+      "afterBytes": 432369872,
+      "peakIncreaseBytes": 5005336,
+      "foldedBytes": 5242880,
+      "bitwiseEqual": true,
+      "traversal": "incremental",
+      "beforeBytes": 432607416,
+      "peakAboveFinalBytes": 5242880
+    }
+  ],
+  "projection-green": [
+    {
+      "foldedBytes": 5242880,
+      "beforeBytes": 432369808,
+      "traversal": "flat",
+      "afterBytes": 432369872,
+      "peakIncreaseBytes": 5242944,
+      "bitwiseEqual": true,
+      "peakAboveFinalBytes": 5242880
+    },
+    {
+      "foldedBytes": 5242880,
+      "beforeBytes": 432369808,
+      "traversal": "incremental",
+      "afterBytes": 432369872,
+      "peakIncreaseBytes": 655424,
+      "bitwiseEqual": true,
+      "peakAboveFinalBytes": 655360
+    }
+  ],
+  "projection-opt-in": [
+    {
+      "peakIncreaseBytes": 5242944,
+      "bitwiseEqual": true,
+      "foldedBytes": 5242880,
+      "beforeBytes": 432369808,
+      "afterBytes": 432369872,
+      "traversal": "flat",
+      "peakAboveFinalBytes": 5242880
+    },
+    {
+      "peakIncreaseBytes": 376856,
+      "bitwiseEqual": true,
+      "foldedBytes": 5242880,
+      "beforeBytes": 432648376,
+      "afterBytes": 432369872,
+      "traversal": "incremental",
+      "peakAboveFinalBytes": 655360
+    }
+  ],
+  "projection-final": [
+    {
+      "beforeBytes": 432369808,
+      "foldedBytes": 5242880,
+      "bitwiseEqual": true,
+      "traversal": "flat",
+      "afterBytes": 432369872,
+      "peakIncreaseBytes": 5242944,
+      "peakAboveFinalBytes": 5242880
+    },
+    {
+      "beforeBytes": 432369836,
+      "foldedBytes": 5242880,
+      "bitwiseEqual": true,
+      "traversal": "incremental",
+      "afterBytes": 432369872,
+      "peakIncreaseBytes": 655396,
+      "peakAboveFinalBytes": 655360
+    }
+  ]
+}

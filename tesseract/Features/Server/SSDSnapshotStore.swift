@@ -941,6 +941,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
         //    rename). On disk-full, run a single eviction-retry pass — its
         //    victim is also cleaned up outside the lock. Any other error
         //    drops the incoming and fires the drop callback.
+        let allocationFacts = [
+            "snapshotID": item.descriptor.snapshotID,
+            "payloadBytes": "\(item.payload.totalBytes)",
+            "payloadMode": item.extendingBaseID == nil ? "full" : "extension",
+            "mandatory": "\(item.mandatory)",
+        ]
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "ssdMaterializeBegin", facts: allocationFacts)
         let materializeStart = Date.timeIntervalSinceReferenceDate
         if item.payload.materialize() {
             PrefixCacheDiagnostics.logSystem(
@@ -950,6 +958,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                     durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
                 ))
         }
+        RequestMemoryTelemetry.recordAllocation(phase: "ssdMaterializeEnd", facts: allocationFacts)
         // The materializer has dropped every body array. Subsequent file I/O
         // reads independent Data and no longer excludes a lease.
         if holdsBodyRead {
@@ -1186,12 +1195,23 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             throw classifyWriteError(error)
         }
 
-        let data: Data
+        let encoding: PlaceholderContainerEncoding
+        let allocationFacts = [
+            "snapshotID": descriptor.snapshotID, "payloadBytes": "\(payload.totalBytes)",
+        ]
+        RequestMemoryTelemetry.recordAllocation(phase: "ssdEncodeBegin", facts: allocationFacts)
         do {
-            data = try encodePlaceholderContainer(payload: payload, descriptor: descriptor)
+            encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
         } catch {
             throw WriteError.ioError(underlying: error)
         }
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "ssdEncodeEnd",
+            facts: allocationFacts.merging([
+                "encodedBytes": "\(encoding.byteCount)",
+                "encodedStagingBytes": "\(encoding.headerByteCount)",
+                "encodingMode": "borrowedChunks",
+            ]) { _, new in new })
 
         // Remove any stale temp file from a previous aborted run
         // before we create the new handle, so the write is an
@@ -1219,21 +1239,14 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
 
         do {
             // write(2) rejects a single call past INT_MAX with EINVAL —
-            // observed live on a 2.5 GB leaf (35K-context KV, issue #441
-            // smoke). Chunk at 1 GiB; Data(bytesNoCopy:) keeps it zero-copy.
-            try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            // observed live on a 2.5 GB leaf (issue #441). Borrow each
+            // header/blob chunk without constructing a full encoded Data.
+            try encoding.withChunks(maximumBytes: Self.maxWriteChunkBytes) { buffer in
                 guard let baseAddress = buffer.baseAddress else { return }
-                var remaining = buffer.count
-                var base = baseAddress
-                while remaining > 0 {
-                    let n = min(remaining, Self.maxWriteChunkBytes)
-                    try handle.write(
-                        Data(
-                            bytesNoCopy: UnsafeMutableRawPointer(mutating: base),
-                            count: n, deallocator: .none))
-                    base += n
-                    remaining -= n
-                }
+                try handle.write(
+                    contentsOf: Data(
+                        bytesNoCopy: UnsafeMutableRawPointer(mutating: baseAddress),
+                        count: buffer.count, deallocator: .none))
             }
             try handle.synchronize()
             try handle.close()
@@ -1256,6 +1269,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             try? FileManager.default.removeItem(at: tempURL)
             throw classifyWriteError(error)
         }
+        RequestMemoryTelemetry.recordAllocation(phase: "ssdWriteCompleted", facts: allocationFacts)
     }
 
     /// Map Foundation errors to our `WriteError`. ENOSPC / EDQUOT

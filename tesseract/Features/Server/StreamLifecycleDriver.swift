@@ -21,6 +21,37 @@ import Foundation
 /// zero isolation change; every closure it holds is `@Sendable`.
 nonisolated enum StreamLifecycleDriver {
 
+    /// Observe disconnects while tokenization, restore and prefill are still
+    /// building the generation handle, before delivery can open its response.
+    static func startGeneration(
+        waitForDisconnect: @escaping @Sendable () async -> Void,
+        start: @escaping @Sendable () async -> Result<CompletionDelivery.Generation, Error>
+    ) async -> Result<CompletionDelivery.Generation, Error> {
+        await withTaskGroup(of: Result<CompletionDelivery.Generation, Error>?.self) { group in
+            group.addTask {
+                await waitForDisconnect()
+                return nil
+            }
+            group.addTask { await start() }
+            let first = (await group.next()).flatMap { $0 }
+            group.cancelAll()
+
+            // A start may finish just as the connection drops, or return a
+            // handle despite cancellation. Drain that handle before the
+            // handler can release its GPU lease; never abandon a live owner.
+            var started = first
+            for await remaining in group {
+                if let remaining { started = remaining }
+            }
+            if let first, !Task.isCancelled { return first }
+            if case .success(let generation) = started {
+                generation.cancel()
+                await generation.waitForCompletion()
+            }
+            return .failure(CancellationError())
+        }
+    }
+
     /// The transport probes the driver races against the drive. In production
     /// these wrap the request's `HTTPResponseWriter` and `SSEWriter`; in tests
     /// they are scripted, so the race runs without a socket.

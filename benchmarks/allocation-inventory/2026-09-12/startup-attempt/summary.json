@@ -1,0 +1,42 @@
+{
+  "allocationPhases": [],
+  "eventCounts": {},
+  "os": {
+    "firstFootprintBytes": 81992,
+    "lastFootprintBytes": 964839512,
+    "maxFootprintBytes": 1256753168,
+    "maxSwapGrowthBytes": 0,
+    "pressureCounts": {
+      "1": 707
+    },
+    "sampleCount": 707
+  },
+  "osStages": {
+    "launch": {
+      "firstFootprintBytes": 81992,
+      "lastFootprintBytes": 964839512,
+      "maxFootprintBytes": 1256753168,
+      "maxSwapGrowthBytes": 0,
+      "pressureCounts": {
+        "1": 707
+      },
+      "sampleCount": 707
+    }
+  },
+  "outcome": {
+    "appExitCode": -15,
+    "completedRequests": 0,
+    "elapsedSeconds": 189.5455755419971,
+    "failure": "Model did not load before the startup deadline",
+    "resourceStops": []
+  },
+  "probeCosts": {
+    "allocationMaxMilliseconds": null,
+    "allocationMedianMilliseconds": null,
+    "allocationTotalMilliseconds": 0,
+    "externalMaxNanoseconds": 1791417,
+    "externalMedianNanoseconds": 127458,
+    "externalTotalNanoseconds": 109456274
+  },
+  "requests": []
+}

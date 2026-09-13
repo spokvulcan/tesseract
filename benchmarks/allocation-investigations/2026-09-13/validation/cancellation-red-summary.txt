@@ -1,0 +1,10 @@
+✘ Test disconnectCancelsBeforeGenerationStartReturns() recorded an issue at CompletionDeliveryTests.swift:168:9: Expectation failed: (observedCancel → Tesseract_Agent.LeaseAcquiredSignal).isSet → false
+✘ Test disconnectCancelsBeforeGenerationStartReturns() recorded an issue at CompletionDeliveryTests.swift:173:9: Expectation failed: (error → ScriptedFailure()) is (CancellationError → ScriptedFailure)
+✘ Test disconnectCancelsBeforeGenerationStartReturns() failed after 0.537 seconds with 2 issues.
+✔ Test deliversInOrderThenRecordsReplayAndCompletes() passed after 0.001 seconds.
+✔ Test undeliveredFinishCancelsLogAndSkipsReplay() passed after 0.001 seconds.
+✔ Test clientDisconnectCancelsGenerationOnNonStreamingTransport() passed after 0.053 seconds.
+✔ Test streamFailureFailsTheRequest() passed after 0.001 seconds.
+✘ Suite CompletionDeliveryTests failed after 0.593 seconds with 2 issues.
+✘ Test run with 5 tests in 1 suite failed after 0.593 seconds with 2 issues.
+** TEST FAILED **

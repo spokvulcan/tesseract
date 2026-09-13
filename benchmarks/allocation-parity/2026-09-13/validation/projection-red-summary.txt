@@ -1,0 +1,6 @@
+PROJECTION_LIFETIME=[{"afterBytes":432369872,"peakIncreaseBytes":5242944,"foldedBytes":5242880,"bitwiseEqual":true,"traversal":"flat","beforeBytes":432369808},{"afterBytes":432369872,"peakIncreaseBytes":5005336,"foldedBytes":5242880,"bitwiseEqual":true,"traversal":"incremental","beforeBytes":432607416}]
+✘ Test incrementalTraversalAvoidsRetainingEveryReplacedProjection() recorded an issue at ProjectionStackingLifetimeTests.swift:28:9: Expectation failed: (flat.peakIncreaseBytes → 5242944) > (incremental.peakIncreaseBytes + flat.foldedBytes / 2 → 7626776)
+✘ Test incrementalTraversalAvoidsRetainingEveryReplacedProjection() failed after 0.292 seconds with 1 issue.
+✘ Suite ProjectionStackingLifetimeTests failed after 0.292 seconds with 1 issue.
+✘ Test run with 1 test in 1 suite failed after 0.293 seconds with 1 issue.
+** TEST FAILED **

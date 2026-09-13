@@ -1,0 +1,66 @@
+{
+  "allocationPhases": [],
+  "eventCounts": {},
+  "os": {
+    "firstFootprintBytes": 41845576,
+    "lastFootprintBytes": 29245784552,
+    "maxFootprintBytes": 29245784552,
+    "maxSwapGrowthBytes": 0,
+    "pressureCounts": {
+      "1": 57,
+      "2": 1
+    },
+    "sampleCount": 58
+  },
+  "osStages": {
+    "cold": {
+      "firstFootprintBytes": 1049626712,
+      "lastFootprintBytes": 29245784552,
+      "maxFootprintBytes": 29245784552,
+      "maxSwapGrowthBytes": 0,
+      "pressureCounts": {
+        "1": 33,
+        "2": 1
+      },
+      "sampleCount": 34
+    },
+    "launch": {
+      "firstFootprintBytes": 41845576,
+      "lastFootprintBytes": 147637472,
+      "maxFootprintBytes": 147637472,
+      "maxSwapGrowthBytes": 0,
+      "pressureCounts": {
+        "1": 4
+      },
+      "sampleCount": 4
+    },
+    "server-ready-idle": {
+      "firstFootprintBytes": 921585440,
+      "lastFootprintBytes": 994920512,
+      "maxFootprintBytes": 1332660192,
+      "maxSwapGrowthBytes": 0,
+      "pressureCounts": {
+        "1": 20
+      },
+      "sampleCount": 20
+    }
+  },
+  "outcome": {
+    "appExitCode": -15,
+    "completedRequests": 0,
+    "elapsedSeconds": 24.048685250018025,
+    "failure": "Remote end closed connection without response",
+    "resourceStops": [
+      "memory pressure stop"
+    ]
+  },
+  "probeCosts": {
+    "allocationMaxMilliseconds": null,
+    "allocationMedianMilliseconds": null,
+    "allocationTotalMilliseconds": 0,
+    "externalMaxNanoseconds": 227375,
+    "externalMedianNanoseconds": 66521.0,
+    "externalTotalNanoseconds": 5010038
+  },
+  "requests": []
+}

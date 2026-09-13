@@ -7,6 +7,17 @@ import Testing
 
 @MainActor
 struct RequestMemoryTelemetryTests {
+    @Test(.enabled(if: !RequestMemoryTelemetry.allocationDiagnosticsEnabled))
+    func disabledAllocationDiagnosticsDoesNotBuildFacts() {
+        var evaluations = 0
+        func buildFacts() -> [String: String] {
+            evaluations += 1
+            return ["fixture": "value"]
+        }
+        RequestMemoryTelemetry.recordAllocation(phase: "fixture", facts: buildFacts())
+        #expect(evaluations == 0)
+    }
+
     @Test func phaseSamplesSeparateLifetimeAndObservedRequestPeaksAndStopAtFinish() throws {
         let modelID = "memory-\(UUID())"
         let capture = TelemetryCapture(modelID: modelID)
@@ -52,6 +63,40 @@ struct RequestMemoryTelemetryTests {
             memory.mark(.restored, facts: RequestMemoryTelemetry.cacheFacts([cache]))
         }
         #expect(retained == nil)
+    }
+
+    @Test func attentionFactsDistinguishTrimmedLengthFromRetainedArrayExtent() {
+        let cache = KVCacheSimple()
+        cache.state = [MLXArray.ones([1, 1, 8, 4]), MLXArray.ones([1, 1, 8, 4])]
+        #expect(cache.trim(5) == 5)
+        let facts = RequestMemoryTelemetry.cacheFacts([cache])
+        #expect(facts["requestFullAttentionLayerCount"] == "1")
+        #expect(facts["requestFullAttentionLogicalBytes"] == "96")
+        #expect(facts["requestFullAttentionArrayBytes"] == "256")
+        #expect(facts["requestFullAttentionUnusedArrayBytes"] == "160")
+        #expect(cache.offset == 3)
+        #expect(cache.innerState().allSatisfy { $0.dim(2) == 8 })
+
+        let empty = RequestMemoryTelemetry.cacheFacts([])
+        #expect(empty["requestFullAttentionLayerCount"] == "0")
+        #expect(empty["requestFullAttentionUnusedArrayBytes"] == "0")
+    }
+
+    @Test func releasingCacheClearsCarriedByteFacts() throws {
+        let modelID = "memory-release-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let memory = RequestMemoryTelemetry(
+            context: .init(requestID: UUID(), modelID: modelID, kvBits: nil, kvGroupSize: 64))
+        let cache = KVCacheSimple()
+        cache.state = [MLXArray.ones([1, 1, 8, 4]), MLXArray.ones([1, 1, 8, 4])]
+        memory.mark(.rewindingLeaf, facts: RequestMemoryTelemetry.cacheFacts([cache]))
+        memory.markCacheReleased(.rewoundLeaf)
+        let released = try #require(capture.drain().last)
+        #expect(released.field("requestCacheAttentionArrayBytes") == "0")
+        #expect(released.field("requestFullAttentionArrayBytes") == "0")
+        #expect(released.field("requestFullAttentionLogicalBytes") == "0")
+        #expect(released.field("requestCacheMeasuredAtPhase") == "rewoundLeaf")
     }
 
     @Test func coldAndWarmCompletionExposeRestoreHandoffAndRelease() async throws {

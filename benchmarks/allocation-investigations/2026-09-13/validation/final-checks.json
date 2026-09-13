@@ -1,0 +1,24 @@
+{
+  "strictSwiftFormat": "passed on all changed Swift files; startup helper rechecked after final edit",
+  "swiftLint": {
+    "command": "swiftlint lint --quiet --no-cache",
+    "exitCode": 0,
+    "warningCount": 76
+  },
+  "pythonSyntax": "passed",
+  "jsonAndDiagnosticJSONL": "passed",
+  "docs": "scripts/check-docs.sh and new report/archive links passed",
+  "sourceAndRawLogProvenance": "verified",
+  "derivedSummaries": "reproduced byte-for-byte from preserved raw data",
+  "focusedTests": {
+    "distinctFunctions": 107,
+    "suites": 10,
+    "finalRerunFunctions": 12
+  },
+  "releaseBuild": "passed; see final-build-provenance.json",
+  "originalInventoryChecksums": "verified unchanged",
+  "ordinaryAppHealth": {
+    "status": "ok",
+    "port": 8321
+  }
+}

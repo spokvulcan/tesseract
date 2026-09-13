@@ -1,0 +1,39 @@
+{
+  "baselineSystemSwapUsedBytes": 8441888768,
+  "binarySHA256": "b1163af74a17b262e234d7329652f70e0f3e3fb4db4162462009d5072cfeed4d",
+  "command": [
+    "/Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app/Contents/MacOS/Tesseract Agent",
+    "--hybrid-cache-correctness",
+    "--bench-bounded-cache-parity",
+    "--bench-model",
+    "/Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit",
+    "--bench-model-id",
+    "qwen3.8-27b",
+    "--bench-output",
+    "/Users/owl/projects/tesseract/benchmarks/allocation-parity/2026-09-13/production-dflash2/harness",
+    "-isServerEnabled",
+    "NO"
+  ],
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83\n",
+  "physicalMemoryBytes": 51539607552,
+  "plan": {
+    "allowedPressureLevels": [
+      1,
+      2
+    ],
+    "footprintStopBytes": 34359738368,
+    "kvBits": null,
+    "leafOffset": 1024,
+    "maxSeconds": 600,
+    "model": "qwen3.8-27b",
+    "promptTokens": 2048,
+    "sampleIntervalSeconds": 0.25,
+    "sentinelTokens": 1,
+    "speculationLoadPolicy": "dflash2",
+    "speculativeDecodingExercised": false,
+    "swapGrowthStopBytes": 2147483648
+  },
+  "sourcePatchSHA256": "5ecf7d76acb9715d04d17f6ece2a923682a232546c636fc1dc412b8cd18cd012",
+  "sourceRevision": "b1f0dca32ec9baead778221a8001fe4aa59e1850",
+  "startUTC": "2026-09-13T01:17:07.634964+00:00"
+}
