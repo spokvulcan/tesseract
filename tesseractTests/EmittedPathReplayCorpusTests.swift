@@ -1,8 +1,6 @@
 import Foundation
-import MLXHuggingFace
 import MLXLMCommon
 import Testing
-import Tokenizers
 
 @testable import Tesseract_Agent
 
@@ -53,7 +51,7 @@ struct EmittedPathReplayCorpusTests {
         let modelDirectory = URL(
             fileURLWithPath: NSString(string: Self.modelRoot!).expandingTildeInPath)
 
-        let tokenizer = try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        let tokenizer = try await AppTokenizerLoader().load(from: modelDirectory)
         let identity = ModelIdentity(directory: modelDirectory)
         let toolCallFormat = Self.declaredToolCallFormat(modelDirectory: modelDirectory)
 

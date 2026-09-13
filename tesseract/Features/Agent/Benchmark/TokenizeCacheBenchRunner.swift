@@ -1,8 +1,6 @@
 import Foundation
-import MLXHuggingFace
 import MLXLMCommon
 import os
-import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expansion
 
 /// Render+token cache benchmark (`--tokenize-cache-bench`) — experiments
 /// C25/C26/C27/C28.
@@ -38,7 +36,7 @@ import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expans
 ///
 /// Tokenizer-only by design: the cache path is render+encode, so the harness
 /// exercises the real tokenizer/template through the same
-/// `#huggingFaceTokenizerLoader` adaptor the app loads with, on a fresh
+/// `AppTokenizerLoader` the app loads with, on a fresh
 /// `RenderTokenCache` instance (isolated from `.shared`; identical code).
 @MainActor
 final class TokenizeCacheBenchRunner {
@@ -119,7 +117,7 @@ final class TokenizeCacheBenchRunner {
 
         let modelDir = try runner.resolveModelDirectory()
         log("Loading tokenizer from: \(modelDir.path)")
-        let tokenizer = try await (#huggingFaceTokenizerLoader()).load(from: modelDir)
+        let tokenizer = try await AppTokenizerLoader().load(from: modelDir)
         guard let rendering = tokenizer as? any ChatTemplateRendering else {
             log("FAIL: loaded tokenizer is not ChatTemplateRendering — Layer 2 wiring broken")
             logFileHandle?.closeFile()

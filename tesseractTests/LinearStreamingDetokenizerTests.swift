@@ -160,6 +160,17 @@ struct LinearStreamingDetokenizerTests {
 
     // MARK: - Guards
 
+    @Test func unrecognizedDecodersKeepTheirPerTokenLiveBehavior() {
+        let tokenizers: [any Tokenizer] = [
+            WindowPathTokenizer(), WindowPathTokenizer(rule: .farLookbehind),
+            WindowPathTokenizer(rule: .countCase), CollapsingTokenizer(),
+        ]
+        let tokens = Self.byteTokens("P" + String(repeating: "a  b", count: 12) + "Q\ntail")
+        for tokenizer in tokenizers {
+            expectLiveDetokenizationParity(tokens, tokenizer: tokenizer, viaBytes: false)
+        }
+    }
+
     @Test func aDecoderThatReadsPastTheWindowFallsBackToTheNaiveChunks() {
         // `Q` renders as `p` when a `P` occurred anywhere earlier — further
         // back than the window sees. The splice is consistent (nothing is

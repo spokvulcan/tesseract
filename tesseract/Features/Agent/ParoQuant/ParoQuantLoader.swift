@@ -1,11 +1,9 @@
 import Foundation
 import HuggingFace
 import MLX
-import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXVLM
-import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expansion
 
 // App-side ParoQuant surface: checkpoint detection, container loading, and
 // input-processor wiring. The quantization machinery itself — AutoAWQ weight
@@ -139,7 +137,7 @@ nonisolated func loadParoQuantLLMContainer(
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
         typeRegistry: typeRegistry,
-        tokenizerLoader: #huggingFaceTokenizerLoader()
+        tokenizerLoader: AppTokenizerLoader()
     )
     await installTextOnlyProcessor(on: container)
     return container
@@ -169,7 +167,7 @@ nonisolated func loadParoQuantVLMContainer(
     let container = try await MLXLMCommon.loadParoQuantModel(
         from: directory,
         typeRegistry: typeRegistry,
-        tokenizerLoader: #huggingFaceTokenizerLoader()
+        tokenizerLoader: AppTokenizerLoader()
     )
 
     if let vlmProcessor = await loadVLMProcessor(from: directory, container: container) {

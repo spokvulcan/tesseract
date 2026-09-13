@@ -692,6 +692,27 @@ the test surface.
 _Avoid_: writer (`HTTPResponseWriter` is the socket, not the seam); output
 channel; transport (the driver's probe closures, which the sink exposes).
 
+### Streaming detokenization
+
+**Live Delivery**:
+The delivery of generated text and tool-call source deltas while generation is
+still in progress, preserving the reference decoder's chunk bytes and token-step
+timing, including its withholding of incomplete Unicode.
+_Avoid_: **Verified Replay** (reconstruction after generation); immediate delivery
+(which obscures incomplete-Unicode withholding).
+
+**Verified Replay**:
+The reconstruction of a completed turn's emitted chunks for **Emitted Path**
+fidelity, with each segment checked before its reconstructed chunks are accepted.
+_Avoid_: live audit (already-delivered text cannot be repaired); **Live Delivery**.
+
+**ByteLevel Decoding Capability**:
+Established compatibility of a tokenizer with incremental byte decoding that
+preserves reference chunks and their release steps, including literal added-token
+boundaries.
+_Avoid_: model-family support; sample-probe match (neither establishes the
+compatibility contract).
+
 ### Streaming tool calls
 
 **Argument Transcoder**:

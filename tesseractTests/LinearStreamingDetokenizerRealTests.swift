@@ -1,8 +1,6 @@
 import Foundation
-import MLXHuggingFace
 import MLXLMCommon
 import Testing
-import Tokenizers
 
 @testable import Tesseract_Agent
 
@@ -28,7 +26,7 @@ struct LinearStreamingDetokenizerRealTests {
     }
 
     private static func loadTokenizer() async throws -> any MLXLMCommon.Tokenizer {
-        try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        try await AppTokenizerLoader().load(from: modelDirectory)
     }
 
     private static let samples: [String] = [
@@ -39,6 +37,38 @@ struct LinearStreamingDetokenizerRealTests {
         "func f(x: Int) -> Int {\n\tlet y = x * 2\n\treturn y\n}\n// done\r\nend",
         "Let me think about this.\n</think>\n\nHere is the answer: 42.",
     ]
+
+    @Test(.enabled(if: modelAvailable))
+    func liveChunksMatchTheReferenceAtEveryToken() async throws {
+        try await Self.checkLiveChunks(in: Self.modelDirectory)
+    }
+
+    private nonisolated static var paroDirectory: URL {
+        let path =
+            ProcessInfo.processInfo.environment["TESSERACT_PARO_TOKENIZE_MODEL"]
+            ?? "~/Library/Application Support/models/z-lab_Qwen3.6-27B-PARO"
+        return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)
+    }
+
+    @Test(
+        .enabled(
+            if: FileManager.default.fileExists(
+                atPath: paroDirectory.appendingPathComponent("tokenizer_config.json").path)))
+    func paroLiveChunksMatchTheReferenceAtEveryToken() async throws {
+        try await Self.checkLiveChunks(in: Self.paroDirectory)
+    }
+
+    private static func checkLiveChunks(in directory: URL) async throws {
+        let tokenizer = try await AppTokenizerLoader().load(from: directory)
+        let longCall =
+            "<tool_call>{\"name\":\"write\",\"arguments\":{\"text\":\""
+            + String(repeating: "a newline-free file body with café and 😀 ", count: 400)
+            + "\"}}</tool_call>"
+        for sample in samples + [longCall] {
+            let tokens = tokenizer.encode(text: sample, addSpecialTokens: false)
+            expectLiveDetokenizationParity(tokens, tokenizer: tokenizer)
+        }
+    }
 
     @Test(.enabled(if: modelAvailable))
     func theChunksEqualTheNaiveChunksOnEveryShape() async throws {
@@ -55,7 +85,9 @@ struct LinearStreamingDetokenizerRealTests {
             var linearChunks: [String] = []
             for token in tokens { linearChunks += linear.append(token: token) }
             linearChunks += linear.finish()
-            #expect(linearChunks == naiveChunks, Comment(rawValue: sample))
+            #expect(
+                linearChunks.map { Array($0.utf8) } == naiveChunks.map { Array($0.utf8) },
+                Comment(rawValue: sample))
             #expect(linear.decodesFromBytes, Comment(rawValue: sample))
             #expect(linear.resyncs == 0 && linear.fallbacks == 0, Comment(rawValue: sample))
         }

@@ -373,6 +373,13 @@ The speech model ports (ADR-0003) are the worked example.
 
 **Inference stack**: `LLMActor` → `AgentEngine` → `Agent` (double-loop orchestrator).
 
+**Streaming detokenization**: `AppTokenizerLoader` constructs the tokenizer and
+recognizes its effective decoder configuration for both ordinary and PARO loads.
+The app-owned `LinearStreamingDetokenizer` is shared by the live token loop and
+Emitted Path fidelity replay. Live delivery emits on the naive decoder's token
+steps for recognized ByteLevel configurations and uses naive streaming otherwise;
+replay retains verified segment delivery and its window/fallback paths (ADR-0065).
+
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 
 **Double-loop** (`Features/Agent/Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.

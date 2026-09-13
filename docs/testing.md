@@ -116,15 +116,77 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests
 ```
 
+## Live detokenization and stream parity
+
+`LiveStreamingDetokenizerTests` loads a tiny real BPE tokenizer through
+`AppTokenizerLoader`. It pins exact chunk UTF-8 bytes and release-token steps,
+decoder eligibility, cleanup and unknown-tokenizer fallback, added-token
+boundaries (including empty tokens and incomplete UTF-8), template forwarding,
+and newline-free work counts. The long malformed-byte test also catches
+rebuilding a growing withheld chunk on every token.
+`ConversationRenderSourceShapeTests` keeps server template calls at the
+Conversation Render boundary, with an explicit exception for the tokenizer
+bridge's forwarding methods.
+`LiveTokenGenerationLoopTests` drives the production loop one token at a time:
+the producer waits for text or an Argument Fragment's source delta before
+advancing. A complete tagged call through a recognized byte tokenizer must emit
+its parsed tool call before EOS, after its source deltas. It also checks split
+Unicode and an incomplete final scalar, and uses explicit barriers to verify
+upstream cleanup before mapper completion after consumer abandonment and before
+natural stream completion. The one-minute
+test timeout is a deadlock guard, not a delivery-latency allowance.
+
+`LinearStreamingDetokenizerTests` retains the verified replay's window and
+recomputation coverage and checks naive live fallback for those same decoders.
+`LinearStreamingDetokenizerRealTests` pins live release steps with the local
+Qwen MLX and PARO tokenizers, including a long newline-free tool call, and retains
+the replay parity and tail-budget checks. These tokenizer-only tests load no
+weights. The optional model directories are `TESSERACT_TOKENIZE_CACHE_MODEL`
+(default Qwen3.8-27B-4bit) and `TESSERACT_PARO_TOKENIZE_MODEL` (default
+Qwen3.6-27B-PARO); missing directories skip the corresponding real-tokenizer
+checks and must be reported as skips.
+
+Quit the running app before this focused group and relaunch it afterward:
+
+```bash
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/LiveStreamingDetokenizerTests \
+  -only-testing:tesseractTests/ConversationRenderSourceShapeTests \
+  -only-testing:tesseractTests/LinearStreamingDetokenizerTests \
+  -only-testing:tesseractTests/LinearStreamingDetokenizerRealTests \
+  -only-testing:tesseractTests/LiveTokenGenerationLoopTests \
+  -only-testing:tesseractTests/TokenGenerationLoopTests \
+  -only-testing:tesseractTests/ToolCallDeltaTrackerTests \
+  -only-testing:tesseractTests/GenerationStreamLoopTests \
+  -only-testing:tesseractTests/ManagedGenerationDriverTests \
+  -only-testing:tesseractTests/GenStreamLoopMalformedToolCallBufferTests \
+  -only-testing:tesseractTests/ToolCallParserDeltaTests \
+  -only-testing:tesseractTests/ArgumentTranscoderCorpusTests \
+  -only-testing:tesseractTests/ArgumentTranscoderWireShapeTests \
+  -only-testing:tesseractTests/ArgumentTranscoderAtomicFallbackTests \
+  -only-testing:tesseractTests/ArgumentTranscoderJSONWrapperTests \
+  -only-testing:tesseractTests/ArgumentTranscoderEquivalenceTests \
+  -only-testing:tesseractTests/EmittedPathFidelityTests \
+  -only-testing:tesseractTests/EmittedPathRegistrationTests \
+  -only-testing:tesseractTests/ServerCompletionUnkeyedSequencingTests
+```
+
+The CPU benchmark (`--agent-cpu-bench`) uses the production loader and live
+delivery mode for `p5 detok`, including terminal handling. Its log names the
+selected path and measures increasing newline-free lengths. Linear cost is
+required of the recognized byte path; naive fallback retains its current cost.
+
 ## Canonical-echo fidelity gate (corpus mode)
 
 `CanonicalEchoFidelityTests` runs with the suites above (fake tokenizer, no
 extra setup). The corpus gate — `CanonicalEchoFidelityCorpusTests` — replays a
 recorded session corpus (the `HTTPRequestLogger` request JSONs) through the
 real normalization + reasoning-repair + probe machinery with a real model
-tokenizer, and fails on any boundary whose derived leaf/speculation path is
-not a token-identical prefix of the next request's render (PRD #94). It is
-opt-in via environment because the corpus contains user project content and
+tokenizer loaded through `AppTokenizerLoader`, and fails on any boundary whose
+derived leaf/speculation path is not a token-identical prefix of the next
+request's render (PRD #94). It is opt-in via environment because the corpus
+contains user project content and
 lives outside the repo:
 
 ```bash
@@ -146,9 +208,10 @@ include decoded windows around the fork.
 
 ## Emitted Path Index replay gate (corpus mode)
 
-`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476/#477) walks
-the same recorded sessions through the canonical-echo harness with a
-private **Emitted Path Index** learning every echoed turn — the Leaf
+`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476/#477) uses the same
+production tokenizer loader and walks the same recorded sessions through the
+canonical-echo harness with a private **Emitted Path Index** learning every echoed
+turn — the Leaf
 Store's registration simulated on the canonical encode of the stored
 render past request N's prompt, the leaf source decided exactly as the
 live fast path decides it (`LiveLeafCapture.decide`) — and every next
