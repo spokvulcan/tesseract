@@ -7,6 +7,55 @@ import os
 
 struct LiveTokenGenerationLoopTests {
     @Test(.timeLimit(.minutes(1)))
+    func recognizedBytePathEmitsACompletedTaggedToolCallBeforeEOS() async throws {
+        let tokenizer = DecodeWorkTokenizer(try await ByteLevelTokenizerFixture.load())
+        let (tokens, input) = AsyncStream<TokenGeneration>.makeStream()
+        let (stream, task) = TokenGenerationLoop.events(
+            from: tokens, generationTask: nil, promptTokenCount: 7,
+            modelConfiguration: ModelConfiguration(id: "test/live", toolCallFormat: .json),
+            tokenizer: tokenizer)
+        defer { input.finish(); task.cancel() }
+        var output = stream.makeAsyncIterator()
+        let body = #"{"name":"read","arguments":{"file_path":"/tmp/café😀"}}"#
+        let reply = "Sure. <tool_call>\(body)</tool_call>"
+        for byte in reply.utf8 { input.yield(.token(Int(byte))) }
+
+        var text = ""
+        var deltas = ""
+        var call: ToolCall?
+        // The producer has not sent info or EOS: parsing must finish as soon
+        // as the closing tag arrives, after all of the source deltas.
+        while call == nil, let event = await output.next() {
+            switch event {
+            case .chunk(let chunk): text += chunk
+            case .toolCallBufferDelta(let delta): deltas += delta
+            case .toolCall(let parsed): call = parsed
+            case .info: Issue.record("Unexpected completion before producer EOS")
+            }
+        }
+        #expect(Array(text.utf8) == Array("Sure. ".utf8))
+        #expect(Array(deltas.utf8) == Array("<tool_call>\(body)</tool_call".utf8))
+        #expect(call?.function.name == "read")
+        #expect(call?.function.arguments == ["file_path": .string("/tmp/café😀")])
+
+        input.yield(
+            .info(
+                GenerateCompletionInfo(
+                    promptTokenCount: 7, generationTokenCount: reply.utf8.count,
+                    promptTime: 0, generationTime: 0, stopReason: .stop)))
+        input.finish()
+        if case .info(let info) = await output.next() {
+            #expect(info.stopReason == .stop)
+            #expect(info.generationTokenCount == reply.utf8.count)
+        } else {
+            Issue.record("Expected terminal info without a duplicate tool call or residual text")
+        }
+        #expect(await output.next() == nil)
+        await task.value
+        #expect(tokenizer.decodedTokens == 0, "The complete call must use the recognized byte path")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func splitUnicodeEmitsOnCompletionAndAnIncompleteFinalScalarStaysWithheld() async throws {
         let tokenizer = try await ByteLevelTokenizerFixture.load()
         let (tokens, input) = AsyncStream<TokenGeneration>.makeStream()

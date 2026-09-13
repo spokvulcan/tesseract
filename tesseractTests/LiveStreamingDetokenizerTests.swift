@@ -110,9 +110,27 @@ struct LiveStreamingDetokenizerTests {
             #expect(Array(chunks.joined().utf8) == Array(text.utf8))
             #expect(tokenizer.decodedTokens == 0)
             #expect(tokenizer.spellings == 8)
-            print(
-                "live detok work: \(length) tokens, \(tokenizer.decodedTokens) decoded token entries, \(tokenizer.spellings) spelling lookups"
-            )
+        }
+    }
+
+    @Test func renderingPreservesTheGenerationPromptDefaultAndExplicitOverrides() async throws {
+        let tokenizer = try await ByteLevelTokenizerFixture.load(
+            chatTemplate:
+                "{{ messages[0]['content'] }}{% if add_generation_prompt %}<assistant>{% endif %}")
+        let rendering = try #require(tokenizer as? any ChatTemplateRendering)
+        let messages: [[String: any Sendable]] = [["role": "user", "content": "hello"]]
+        for flag in [nil, true, false] as [Bool?] {
+            let context: [String: any Sendable]? = flag.map { ["add_generation_prompt": $0] }
+            let expected = flag == false ? "hello" : "hello<assistant>"
+            let rendered = try rendering.renderChatTemplate(
+                messages: messages, tools: nil, additionalContext: context)
+            #expect(
+                Array(rendered.utf8) == Array(expected.utf8),
+                "override: \(String(describing: flag))")
+            #expect(
+                try tokenizer.applyChatTemplate(
+                    messages: messages, tools: nil, additionalContext: context)
+                    == tokenizer.encode(text: expected, addSpecialTokens: false))
         }
     }
 
@@ -139,7 +157,8 @@ func expectLiveDetokenizationParity(
 enum ByteLevelTokenizerFixture {
     static func load(
         addedTokens: [String] = [], cleanup: Bool? = false,
-        decoder: [String: Any] = ["type": "ByteLevel"]
+        decoder: [String: Any] = ["type": "ByteLevel"],
+        chatTemplate: String = "{{ messages[0]['content'] }}"
     ) async throws -> any MLXLMCommon.Tokenizer {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("live-detokenizer-\(UUID().uuidString)")
@@ -159,7 +178,7 @@ enum ByteLevelTokenizerFixture {
         ]
         var config: [String: Any] = [
             "tokenizer_class": "PreTrainedTokenizer",
-            "chat_template": "{{ messages[0]['content'] }}",
+            "chat_template": chatTemplate,
         ]
         if let cleanup { config["clean_up_tokenization_spaces"] = cleanup }
         try JSONSerialization.data(withJSONObject: data)

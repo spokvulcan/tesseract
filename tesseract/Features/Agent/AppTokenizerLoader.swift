@@ -56,7 +56,10 @@ nonisolated struct ByteLevelDecoding: Sendable {
 /// Keeps the decoder capability with the tokenizer it describes, and preserves
 /// the chat-template rendering seam used by Emitted Path Resolve.
 private nonisolated struct LoadedTokenizer: MLXLMCommon.ChatTemplateRendering, ByteLevelTokenizing {
-    private let upstream: PreTrainedTokenizer
+    // Match the vendor bridge's protocol dispatch: the concrete render
+    // overload defaults addGenerationPrompt to false, but the protocol's
+    // convenience overload defaults it to true, like applyChatTemplate.
+    private let upstream: any Tokenizers.Tokenizer
     let byteLevelDecoding: ByteLevelDecoding?
 
     init(config: Config, data: Config) throws {

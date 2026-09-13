@@ -126,9 +126,11 @@ and newline-free work counts. The long malformed-byte test also catches
 rebuilding a growing withheld chunk on every token.
 `LiveTokenGenerationLoopTests` drives the production loop one token at a time:
 the producer waits for text or an Argument Fragment's source delta before
-advancing. It also checks split Unicode and an incomplete final scalar, and
-uses explicit barriers to verify upstream cleanup before mapper completion
-after consumer abandonment and before natural stream completion. The one-minute
+advancing. A complete tagged call through a recognized byte tokenizer must emit
+its parsed tool call before EOS, after its source deltas. It also checks split
+Unicode and an incomplete final scalar, and uses explicit barriers to verify
+upstream cleanup before mapper completion after consumer abandonment and before
+natural stream completion. The one-minute
 test timeout is a deadlock guard, not a delivery-latency allowance.
 
 `LinearStreamingDetokenizerTests` retains the verified replay's window and
@@ -177,9 +179,10 @@ required of the recognized byte path; naive fallback retains its current cost.
 extra setup). The corpus gate — `CanonicalEchoFidelityCorpusTests` — replays a
 recorded session corpus (the `HTTPRequestLogger` request JSONs) through the
 real normalization + reasoning-repair + probe machinery with a real model
-tokenizer, and fails on any boundary whose derived leaf/speculation path is
-not a token-identical prefix of the next request's render (PRD #94). It is
-opt-in via environment because the corpus contains user project content and
+tokenizer loaded through `AppTokenizerLoader`, and fails on any boundary whose
+derived leaf/speculation path is not a token-identical prefix of the next
+request's render (PRD #94). It is opt-in via environment because the corpus
+contains user project content and
 lives outside the repo:
 
 ```bash
@@ -201,9 +204,10 @@ include decoded windows around the fork.
 
 ## Emitted Path Index replay gate (corpus mode)
 
-`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476/#477) walks
-the same recorded sessions through the canonical-echo harness with a
-private **Emitted Path Index** learning every echoed turn — the Leaf
+`EmittedPathReplayCorpusTests` (ADR-0063, tickets #475/#476/#477) uses the same
+production tokenizer loader and walks the same recorded sessions through the
+canonical-echo harness with a private **Emitted Path Index** learning every echoed
+turn — the Leaf
 Store's registration simulated on the canonical encode of the stored
 render past request N's prompt, the leaf source decided exactly as the
 live fast path decides it (`LiveLeafCapture.decide`) — and every next

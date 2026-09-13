@@ -56,12 +56,14 @@ nonisolated struct LinearStreamingDetokenizer {
     /// most four single-byte tokens.
     static let windowKeep = 4
 
-    /// How the segment's decode is kept up to date.
+    /// How the segment's decode is kept up to date; `delivery` separately
+    /// determines when the resulting chunks are released.
     private enum Mode {
         /// From each token's own bytes, with no `decode` call per step.
         case bytes
         /// From a decode of the trailing window, spliced on.
         case window
+        /// The vendor reference for live tokenizers without a recognized capability.
         case naive
     }
 

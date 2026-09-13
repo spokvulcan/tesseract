@@ -1,8 +1,6 @@
 import Foundation
-import MLXHuggingFace
 import MLXLMCommon
 import Testing
-import Tokenizers
 
 @testable import Tesseract_Agent
 
@@ -39,7 +37,7 @@ struct CanonicalEchoFidelityCorpusTests {
                 string: Self.modelRoot!
             ).expandingTildeInPath)
 
-        let tokenizer = try await #huggingFaceTokenizerLoader().load(from: modelDirectory)
+        let tokenizer = try await AppTokenizerLoader().load(from: modelDirectory)
 
         let recordingsDirectory = corpus.appendingPathComponent("http-completions")
         let recordingFiles = try FileManager.default
