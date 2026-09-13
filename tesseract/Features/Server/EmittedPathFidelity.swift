@@ -57,8 +57,8 @@ nonisolated enum EmittedPathFidelity {
     /// The assistant message the server would have stored for `contentIDs`
     /// — the generated ids without the stop id — replayed chunk by chunk
     /// through the stream pipeline: the streaming detokenizer's chunks
-    /// (`LinearStreamingDetokenizer`, the live loop's naive chunks in linear
-    /// time), the vendor processor (whose tag state machine handles one
+    /// (`LinearStreamingDetokenizer` in verified replay delivery), the vendor
+    /// processor (whose tag state machine handles one
     /// boundary per chunk, so a whole turn in one chunk would not parse as
     /// the stream did), the app parser, the accumulator.
     /// `startsInsideThinkBlock` is the request's (the generation prompt

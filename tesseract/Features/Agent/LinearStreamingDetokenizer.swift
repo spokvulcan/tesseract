@@ -29,18 +29,26 @@
 //  scalars it replaces are the ones the window predicts, resynchronizing
 //  from one full decode when they are not.
 //
-//  Both ways, every segment is verified against one full decode before its
-//  chunks are released, and recomputed with the naive algorithm itself when
-//  the two disagree — so a decoder that reaches further back, or rewrites
-//  text it already emitted, costs a recomputation and never a chunk. Chunks
-//  are therefore released per segment rather than per token; the chunk
-//  sequence, which is all the stream pipeline folds, is unchanged.
+//  Verified replay checks each segment against one full decode before
+//  releasing its chunks, recomputing naively when they disagree. Live
+//  delivery instead requires a ByteLevelDecoding capability established by
+//  the tokenizer loader: it releases the same chunk on the same token step,
+//  with no segment audit. Unknown live decoders use the naive implementation.
+//  Both callers share byte decoding, including literal added-token boundaries.
+//  See ADR-0065 for the deliberate difference between these delivery modes.
 //
 
 import Foundation
 import MLXLMCommon
 
 nonisolated struct LinearStreamingDetokenizer {
+    enum Delivery {
+        /// Generic replay may defer output until segment verification.
+        case verifiedReplay
+        /// No added token delay; unknown decoder semantics use naive streaming.
+        case live
+    }
+
     /// Trailing tokens decoded per step on the window path; the window
     /// restarts on `windowKeep` tokens when it reaches this length.
     static let windowLength = 12
@@ -54,9 +62,13 @@ nonisolated struct LinearStreamingDetokenizer {
         case bytes
         /// From a decode of the trailing window, spliced on.
         case window
+        case naive
     }
 
     private let tokenizer: any Tokenizer
+    private let delivery: Delivery
+    private let byteLevelDecoding: ByteLevelDecoding?
+    private var naive: NaiveStreamingDetokenizer?
     private var mode = Mode.bytes
 
     // The naive algorithm's state, mirrored.
@@ -72,8 +84,13 @@ nonisolated struct LinearStreamingDetokenizer {
     private var committedShared = 0
     private var committedTail: [Unicode.Scalar] = []
 
-    /// Each token's bytes, recovered and checked once.
-    private var tokenBytes: [Int: [UInt8]] = [:]
+    private enum BytePiece {
+        case bytes([UInt8])
+        case literal([Unicode.Scalar])
+    }
+
+    /// Each token's byte run or literal boundary, resolved once.
+    private var tokenPieces: [Int: BytePiece] = [:]
     /// The segment's trailing bytes that form a valid but incomplete scalar
     /// — standing in `full` as the one replacement character they read as
     /// until the token that completes them arrives.
@@ -97,24 +114,50 @@ nonisolated struct LinearStreamingDetokenizer {
     /// Whether the tokens so far were decoded from their own bytes.
     var decodesFromBytes: Bool { mode == .bytes }
 
-    init(tokenizer: any Tokenizer) {
+    init(tokenizer: any Tokenizer, delivery: Delivery = .verifiedReplay) {
         self.tokenizer = tokenizer
+        self.delivery = delivery
+        byteLevelDecoding = (tokenizer as? any ByteLevelTokenizing)?.byteLevelDecoding
+        if delivery == .live, byteLevelDecoding == nil {
+            mode = .naive
+            naive = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+        }
     }
 
-    /// Feed one token; returns the chunks of the segment it closed, if any.
+    /// Feed one token. Live delivery returns its reference chunk immediately;
+    /// verified replay returns a segment's chunks only once it checks out.
     mutating func append(token: Int) -> [String] {
-        segmentTokens.append(token)
+        if mode == .naive {
+            naive?.append(token: token)
+            return naive?.next().map { [$0] } ?? []
+        }
+        if delivery == .verifiedReplay { segmentTokens.append(token) }
         advance(token)
 
         // The naive diff: the scalars beyond the common prefix with the
         // last committed decode.
         let common = committedShared + Self.commonPrefix(full[committedShared...], committedTail)
+        // Decide whether to withhold before materializing the chunk: a long
+        // run of malformed bytes can remain uncommitted for many tokens.
+        // FFFD is its own final Character unless preceded by a Prepend scalar;
+        // two scalars from the uncommitted suffix retain that distinction.
+        if full.last == "\u{fffd}" {
+            var ending = String.UnicodeScalarView()
+            ending.append(contentsOf: full.suffix(min(2, full.count - common)))
+            if String(ending).last == "\u{fffd}" { return [] }
+        }
         var view = String.UnicodeScalarView()
         view.append(contentsOf: full[common...])
         let chunk = String(view)
 
-        // An incomplete scalar at the end: nothing released, nothing committed.
-        if chunk.last == "\u{fffd}" { return [] }
+        if delivery == .live {
+            if chunk.hasSuffix("\n") {
+                restart(with: token)
+            } else {
+                commit()
+            }
+            return [chunk]
+        }
 
         pending.append(chunk)
         if chunk.hasSuffix("\n") {
@@ -126,9 +169,10 @@ nonisolated struct LinearStreamingDetokenizer {
         return []
     }
 
-    /// The end of the stream: the chunks of the open segment.
+    /// Replay releases the open segment. Live delivery has no deferred chunks;
+    /// incomplete Unicode stays withheld exactly as in the naive reference.
     mutating func finish() -> [String] {
-        closeSegment()
+        delivery == .live ? [] : closeSegment()
     }
 
     /// Open a segment on the token whose chunk closed the previous one, as
@@ -139,8 +183,8 @@ nonisolated struct LinearStreamingDetokenizer {
         committedTail = []
         incompleteTail = []
         full = []
-        if mode == .bytes, let bytes = bytes(of: token) {
-            appendBytes(bytes)
+        if mode == .bytes, let piece = bytePiece(of: token) {
+            append(piece)
         } else {
             mode = .window
             full = Self.scalars(tokenizer.decode(tokenIds: segmentTokens))
@@ -153,14 +197,16 @@ nonisolated struct LinearStreamingDetokenizer {
     private mutating func advance(_ token: Int) {
         switch mode {
         case .bytes:
-            if let bytes = bytes(of: token) {
-                appendBytes(bytes)
+            if let piece = bytePiece(of: token) {
+                append(piece)
             } else {
                 switchToWindow()
                 advanceWindow(token)
             }
         case .window:
             advanceWindow(token)
+        case .naive:
+            break
         }
     }
 
@@ -195,12 +241,27 @@ nonisolated struct LinearStreamingDetokenizer {
         return alphabet
     }()
 
-    /// The token's bytes: its spelling read through the alphabet, or the
-    /// spelling itself (an added token decodes verbatim) — whichever reads
-    /// back as the decode of the token alone. `nil` when neither does,
-    /// which is what takes a vocabulary off the byte path.
-    private mutating func bytes(of token: Int) -> [UInt8]? {
-        if let known = tokenBytes[token] { return known }
+    /// A recognized decoder supplies exact byte runs and literal boundaries.
+    /// Unknown replay decoders retain the speculative individual-token check;
+    /// failure to match leaves that replay on its verified window path.
+    private mutating func bytePiece(of token: Int) -> BytePiece? {
+        if let known = tokenPieces[token] { return known }
+        if let byteLevelDecoding {
+            // The configured decoder drops unknown IDs. All ordinary
+            // vocabulary spellings were checked at load, so this mapping
+            // needs neither a speculative decode nor a later verification.
+            let piece: BytePiece
+            if let spelling = tokenizer.convertIdToToken(token) {
+                piece =
+                    byteLevelDecoding.addedTokens.contains(spelling)
+                    ? .literal(Self.scalars(spelling))
+                    : .bytes(spelling.unicodeScalars.compactMap { Self.byteLevelAlphabet[$0] })
+            } else {
+                piece = .bytes([])
+            }
+            tokenPieces[token] = piece
+            return piece
+        }
         guard let spelling = tokenizer.convertIdToToken(token) else { return nil }
         var candidates: [[UInt8]] = []
         let mapped = spelling.unicodeScalars.compactMap { Self.byteLevelAlphabet[$0] }
@@ -209,8 +270,22 @@ nonisolated struct LinearStreamingDetokenizer {
         let decoded = tokenizer.decode(tokenIds: [token])
         guard let bytes = candidates.first(where: { Self.text(of: $0) == decoded })
         else { return nil }
-        tokenBytes[token] = bytes
-        return bytes
+        let piece = BytePiece.bytes(bytes)
+        tokenPieces[token] = piece
+        return piece
+    }
+
+    private mutating func append(_ piece: BytePiece) {
+        switch piece {
+        case .bytes(let bytes):
+            appendBytes(bytes)
+        case .literal(let scalars):
+            // Added tokens end the preceding byte run, even when empty.
+            // Its incomplete scalar stays a replacement character; bytes
+            // after this boundary must never complete it retroactively.
+            incompleteTail = []
+            splice(removing: 0, appending: scalars[...])
+        }
     }
 
     /// Append a token's bytes: the held-back incomplete tail and the new

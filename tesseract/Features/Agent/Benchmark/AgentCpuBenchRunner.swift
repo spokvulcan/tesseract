@@ -1,9 +1,7 @@
 import CryptoKit
 import Foundation
-import MLXHuggingFace
 import MLXLMCommon
 import os
-import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expansion
 
 /// Per-turn CPU attribution benchmark (`--agent-cpu-bench`) — measurement
 /// only. The tokenize side of the request path is covered by
@@ -31,7 +29,7 @@ import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expans
 ///    C27 eliminates, and the digest chain is the entry's stored head since
 ///    C31), and the identity `translatedLength`.
 /// 5. `p5 detok`        — the production streaming detokenizer
-///    (`NaiveStreamingDetokenizer`, the same one `TokenGenerationLoop` drives
+///    (`LinearStreamingDetokenizer` in live delivery mode, as `TokenGenerationLoop` drives
 ///    per generated token) over a ~700-token assistant reply; reported as
 ///    ms/turn and ms/token.
 /// 6. `p6 digests`      — the `RenderTokenCache` per-message SHA-256 digest
@@ -149,7 +147,11 @@ final class AgentCpuBenchRunner {
 
         let modelDir = try runner.resolveModelDirectory()
         log("Loading tokenizer from: \(modelDir.path)")
-        let tokenizer = try await (#huggingFaceTokenizerLoader()).load(from: modelDir)
+        let tokenizer = try await AppTokenizerLoader().load(from: modelDir)
+        let detokPath =
+            LinearStreamingDetokenizer(tokenizer: tokenizer, delivery: .live)
+                .decodesFromBytes ? "byte-level" : "naive"
+        log("detok live path: \(detokPath)")
         let fingerprint =
             (try? ModelFingerprint.computeFingerprint(modelDir: modelDir)) ?? "unavailable"
         log("model fingerprint: \(fingerprint.prefix(16))…")
@@ -162,11 +164,9 @@ final class AgentCpuBenchRunner {
 
         // The ~700-token assistant reply the detok phase streams (starter +
         // filler in the trajectory's shape; the encode is untimed setup).
-        // Paragraph breaks matter: `NaiveStreamingDetokenizer.next()`
-        // re-decodes the whole segment accumulated since the last "\n", so a
-        // reply's cost is O(segment²) between newlines — the markdown-ish
-        // shape here is the realistic case; a newline-free variant is logged
-        // alongside as the worst case (tool-call JSON buffers, etc.).
+        // The newline-free variant represents long tool-call JSON. The
+        // recognized byte path must stay linear on it; an unsupported
+        // decoder keeps the naive path's O(segment²) cost.
         let replyFiller =
             "I read the file, compared it against the expected output, and "
             + "recorded the difference in the working notes before moving on. "
@@ -214,16 +214,18 @@ final class AgentCpuBenchRunner {
             logTurnLine(index: index, fixtures: fixtures, samples: samples)
         }
 
-        // One-off worst case: the same-length reply with no newline resets —
-        // the detokenizer's O(segment²) upper bound, turn-independent.
-        let flatDetokMs = Self.timeDetok(tokens: flatReplyTokens, tokenizer: tokenizer)
-        log(
-            String(
-                format:
-                    "detok worst case (no newlines): %.2f ms over %d tokens (%.2f us/token)",
-                flatDetokMs, flatReplyTokens.count,
-                flatDetokMs * 1000 / Double(max(flatReplyTokens.count, 1))
-            ))
+        // Increasing newline-free lengths expose growing-prefix work that a
+        // single realistic-reply measurement would hide.
+        for scale in [1, 2, 4, 8] {
+            let tokens = Array(repeating: flatReplyTokens, count: scale).flatMap { $0 }
+            let elapsed = Self.timeDetok(tokens: tokens, tokenizer: tokenizer)
+            log(
+                String(
+                    format:
+                        "detok worst case (no newlines, %@): %.2f ms over %d tokens (%.2f us/token)",
+                    detokPath, elapsed, tokens.count, elapsed * 1000 / Double(max(tokens.count, 1)))
+            )
+        }
 
         let report = buildReport(fixtures: fixtures, allSamples: allSamples)
         log("")
@@ -443,15 +445,14 @@ final class AgentCpuBenchRunner {
     }
 
     /// Stream one token list through the production detokenizer exactly as
-    /// `TokenGenerationLoop` drives it — `append` + `next` per token — and
-    /// return the total milliseconds.
+    /// `TokenGenerationLoop` drives it, including terminal handling.
     private static func timeDetok(tokens: [Int], tokenizer: any MLXLMCommon.Tokenizer) -> Double {
-        var detok = NaiveStreamingDetokenizer(tokenizer: tokenizer)
+        var detok = LinearStreamingDetokenizer(tokenizer: tokenizer, delivery: .live)
         let start = ContinuousClock.now
         for token in tokens {
-            detok.append(token: token)
-            _ = detok.next()
+            _ = detok.append(token: token)
         }
+        _ = detok.finish()
         return ms(since: start)
     }
 

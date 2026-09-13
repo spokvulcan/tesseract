@@ -1,11 +1,9 @@
 import Foundation
 import HuggingFace
 import MLX
-import MLXHuggingFace
 import MLXLLM
 import MLXLMCommon
 import MLXNN
-import Tokenizers
 import os
 
 /// Actor-isolated wrapper that owns the LLM model and runs inference off the MainActor.
@@ -187,12 +185,12 @@ actor LLMActor {
             Log.agent.info("Detected Qwen3.5 non-PARO model — forcing text-only LLM path")
             container = try await LLMModelFactory.shared.loadContainer(
                 from: directory,
-                using: #huggingFaceTokenizerLoader()
+                using: AppTokenizerLoader()
             )
         } else {
             container = try await loadModelContainer(
                 from: directory,
-                using: #huggingFaceTokenizerLoader()
+                using: AppTokenizerLoader()
             )
         }
         let result = try await verifyAndStore(container: container, identity: identity)

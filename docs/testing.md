@@ -116,6 +116,61 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests
 ```
 
+## Live detokenization and stream parity
+
+`LiveStreamingDetokenizerTests` loads a tiny real BPE tokenizer through
+`AppTokenizerLoader`. It pins exact chunk UTF-8 bytes and release-token steps,
+decoder eligibility, cleanup and unknown-tokenizer fallback, added-token
+boundaries (including empty tokens and incomplete UTF-8), template forwarding,
+and newline-free work counts. The long malformed-byte test also catches
+rebuilding a growing withheld chunk on every token.
+`LiveTokenGenerationLoopTests` drives the production loop one token at a time:
+the producer waits for text or an Argument Fragment's source delta before
+advancing. It also checks split Unicode and an incomplete final scalar, and
+uses explicit barriers to verify upstream cleanup before mapper completion
+after consumer abandonment and before natural stream completion. The one-minute
+test timeout is a deadlock guard, not a delivery-latency allowance.
+
+`LinearStreamingDetokenizerTests` retains the verified replay's window and
+recomputation coverage and checks naive live fallback for those same decoders.
+`LinearStreamingDetokenizerRealTests` pins live release steps with the local
+Qwen MLX and PARO tokenizers, including a long newline-free tool call, and retains
+the replay parity and tail-budget checks. These tokenizer-only tests load no
+weights. The optional model directories are `TESSERACT_TOKENIZE_CACHE_MODEL`
+(default Qwen3.8-27B-4bit) and `TESSERACT_PARO_TOKENIZE_MODEL` (default
+Qwen3.6-27B-PARO); missing directories skip the corresponding real-tokenizer
+checks and must be reported as skips.
+
+Quit the running app before this focused group and relaunch it afterward:
+
+```bash
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/LiveStreamingDetokenizerTests \
+  -only-testing:tesseractTests/LinearStreamingDetokenizerTests \
+  -only-testing:tesseractTests/LinearStreamingDetokenizerRealTests \
+  -only-testing:tesseractTests/LiveTokenGenerationLoopTests \
+  -only-testing:tesseractTests/TokenGenerationLoopTests \
+  -only-testing:tesseractTests/ToolCallDeltaTrackerTests \
+  -only-testing:tesseractTests/GenerationStreamLoopTests \
+  -only-testing:tesseractTests/ManagedGenerationDriverTests \
+  -only-testing:tesseractTests/GenStreamLoopMalformedToolCallBufferTests \
+  -only-testing:tesseractTests/ToolCallParserDeltaTests \
+  -only-testing:tesseractTests/ArgumentTranscoderCorpusTests \
+  -only-testing:tesseractTests/ArgumentTranscoderWireShapeTests \
+  -only-testing:tesseractTests/ArgumentTranscoderAtomicFallbackTests \
+  -only-testing:tesseractTests/ArgumentTranscoderJSONWrapperTests \
+  -only-testing:tesseractTests/ArgumentTranscoderEquivalenceTests \
+  -only-testing:tesseractTests/EmittedPathFidelityTests \
+  -only-testing:tesseractTests/EmittedPathRegistrationTests \
+  -only-testing:tesseractTests/ServerCompletionUnkeyedSequencingTests
+```
+
+The CPU benchmark (`--agent-cpu-bench`) uses the production loader and live
+delivery mode for `p5 detok`, including terminal handling. Its log names the
+selected path and measures increasing newline-free lengths. Linear cost is
+required of the recognized byte path; naive fallback retains its current cost.
+
 ## Canonical-echo fidelity gate (corpus mode)
 
 `CanonicalEchoFidelityTests` runs with the suites above (fake tokenizer, no
