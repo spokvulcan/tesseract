@@ -81,41 +81,62 @@ nonisolated enum BoundedCacheParity {
             try continuation(
                 context, tokens: tokens, base: offset, cache: rewound.restore()), cold)
 
+        try await withScratchStore(diskRoot: diskRoot) { store in
+            let fingerprint = String(repeating: "a", count: 64)
+            let digest = "bounded-parity"
+            store.registerPartition(
+                .init(
+                    modelID: key.modelID, modelFingerprint: fingerprint, kvBits: nil,
+                    kvGroupSize: 64,
+                    createdAt: 100, schemaVersion: SnapshotManifestSchema.currentVersion),
+                digest: digest)
+            let full = try await roundTrip(
+                store, snapshot: copied, id: "base", tokens: tokens,
+                digest: digest, fingerprint: fingerprint, extending: nil)
+            checkState("ssdFullPrefix", CacheStateBytes(try full.restore()), prefix)
+            checkContinuation(
+                "ssdFullContinuation",
+                try continuation(
+                    context, tokens: tokens, base: offset, cache: full.restore()), cold)
+            let extensionHead = try await roundTrip(
+                store, snapshot: head, id: "head", tokens: tokens, digest: digest,
+                fingerprint: fingerprint,
+                extending: .init(baseSnapshotID: "base", baseOffset: offset))
+            checkState(
+                "ssdExtensionState", CacheStateBytes(try extensionHead.restore()), cold.state)
+            let sentinelTokens = tokens + [tokens.last!]
+            checkContinuation(
+                "ssdExtensionSentinel",
+                try continuation(
+                    context, tokens: sentinelTokens, base: tokens.count,
+                    cache: extensionHead.restore()),
+                try continuation(
+                    context, tokens: sentinelTokens, base: tokens.count, cache: head.restore()))
+        }
+        return checks
+    }
+
+    /// Own the temporary store through its final writer drain and directory removal.
+    static func withScratchStore(
+        diskRoot: URL, operation: (SSDSnapshotStore) async throws -> Void
+    ) async throws {
         let store = SSDSnapshotStore(
             config: .init(
                 enabled: true, rootURL: diskRoot, budgetBytes: 1 << 30, maxPendingBytes: 1 << 30))
-        let fingerprint = String(repeating: "a", count: 64)
-        let digest = "bounded-parity"
-        store.registerPartition(
-            .init(
-                modelID: key.modelID, modelFingerprint: fingerprint, kvBits: nil, kvGroupSize: 64,
-                createdAt: 100, schemaVersion: SnapshotManifestSchema.currentVersion),
-            digest: digest)
-        let full = try await roundTrip(
-            store, snapshot: copied, id: "base", tokens: tokens,
-            digest: digest, fingerprint: fingerprint, extending: nil)
-        checkState("ssdFullPrefix", CacheStateBytes(try full.restore()), prefix)
-        checkContinuation(
-            "ssdFullContinuation",
-            try continuation(
-                context, tokens: tokens, base: offset, cache: full.restore()), cold)
-        let extensionHead = try await roundTrip(
-            store, snapshot: head, id: "head", tokens: tokens, digest: digest,
-            fingerprint: fingerprint,
-            extending: .init(baseSnapshotID: "base", baseOffset: offset))
-        checkState("ssdExtensionState", CacheStateBytes(try extensionHead.restore()), cold.state)
-        let sentinelTokens = tokens + [tokens.last!]
-        checkContinuation(
-            "ssdExtensionSentinel",
-            try continuation(
-                context, tokens: sentinelTokens, base: tokens.count, cache: extensionHead.restore()),
-            try continuation(
-                context, tokens: sentinelTokens, base: tokens.count, cache: head.restore()))
+        let outcome: Result<Void, Error>
+        do {
+            try await operation(store)
+            outcome = .success(())
+        } catch {
+            outcome = .failure(error)
+        }
+        // A synchronous defer cannot await the writer. Capture failures first
+        // so every cooperative exit drains before removing model cache tensors.
         await store.flushAsync()
-        // This directory belongs only to this opt-in run; keep scalar evidence,
-        // not 2K production-model cache tensors, in the published archive.
-        try FileManager.default.removeItem(at: diskRoot)
-        return checks
+        if FileManager.default.fileExists(atPath: diskRoot.path) {
+            try FileManager.default.removeItem(at: diskRoot)
+        }
+        try outcome.get()
     }
 
     @MainActor

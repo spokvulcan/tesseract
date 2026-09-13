@@ -58,11 +58,11 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
         ProcessInfo.processInfo.environment["TESSERACT_ALLOCATION_DIAGNOSTICS"] == "1"
 
     /// Opt-in operation boundaries; samples scalars without evaluating or retaining arrays.
-    static func recordAllocation(phase: String, facts: [String: String]) {
+    static func recordAllocation(phase: String, facts: @autoclosure () -> [String: String]) {
         guard allocationDiagnosticsEnabled else { return }
         let observationStarted = ContinuousClock.now
         let sample = Sample.current()
-        var fields = facts
+        var fields = facts()
         fields["phase"] = phase
         fields["observedUnixSeconds"] = String(
             format: "%.6f", Date().timeIntervalSince1970)
@@ -130,9 +130,6 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
                 phaseStarted = .now
             }
             phase = next
-            if updates["requestCacheLayerCount"] == "0" {
-                facts.merge(Self.cacheFacts([])) { _, new in new }
-            }
             facts.merge(updates) { _, new in new }
             if updates["requestCacheLayerCount"] != nil {
                 facts["requestCacheMeasuredAtPhase"] = next.rawValue
@@ -142,6 +139,11 @@ nonisolated final class RequestMemoryTelemetry: @unchecked Sendable {
             }
             emit(kind: changed ? "phaseBegin" : "observation")
         }
+    }
+
+    /// Relinquishing the last cache owner clears every carried cache-byte fact.
+    func markCacheReleased(_ next: Phase, facts updates: [String: String] = [:]) {
+        mark(next, facts: updates.merging(Self.cacheFacts([])) { _, new in new })
     }
 
     func finish(outcome: String) {

@@ -30,7 +30,8 @@ EVENTS = {"requestMemory", "allocationMemory", "leafStore", "lookup",
 
 
 class RUsage(ctypes.Structure):
-    # SDK sys/resource.h: rusage_info_v4 starts with uuid + these eight uint64s.
+    # SDK sys/resource.h: rusage_info_v4 starts with a UUID, then uint64 counters.
+    # Reserve space for the whole structure; resident/footprint are counters 6/7.
     _fields_ = [("uuid", ctypes.c_uint8 * 16), ("values", ctypes.c_uint64 * 64)]
 
 
@@ -163,7 +164,7 @@ def main():
                 files.append({"modelFile": str(path.relative_to(model_root)),
                               "bytes": path.stat().st_size, "sha256": file_digest(path)})
     write_json(args.output / "model-files.json", files)
-    app_log = open("/private/tmp/tesseract-506-production-app.log", "wb")
+    app_log = (args.output / "app.log").open("wb")
     child = subprocess.Popen([str(args.app), *metadata["launchArguments"]], stdout=app_log,
                              stderr=subprocess.STDOUT,
                              env={**os.environ, "TESSERACT_ALLOCATION_DIAGNOSTICS": "1"})

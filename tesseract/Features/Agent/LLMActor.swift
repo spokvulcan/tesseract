@@ -819,14 +819,14 @@ extension LLMActor {
             // a PARO target stacks fewer blocks.
             let stackedTarget = await container.perform { context in
                 let n = stackSameInputProjections(in: context.model)
-                if n > 0 { MLX.GPU.clearCache() }
+                if n > 0 { Memory.clearCache() }
                 return n
             }
             RequestMemoryTelemetry.recordAllocation(
                 phase: "modelTargetStackingEnd", facts: ["stackedBlocks": "\(stackedTarget)"])
             RequestMemoryTelemetry.recordAllocation(phase: "modelDraftStackingBegin", facts: [:])
             let stackedDraft = stackSameInputProjections(in: draft)
-            if stackedDraft > 0 { MLX.GPU.clearCache() }
+            if stackedDraft > 0 { Memory.clearCache() }
             Log.agent.notice(
                 "DFlash2 same-input stacking: target=\(stackedTarget) draft=\(stackedDraft) blocks"
             )

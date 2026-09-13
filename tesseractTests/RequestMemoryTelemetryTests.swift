@@ -7,6 +7,17 @@ import Testing
 
 @MainActor
 struct RequestMemoryTelemetryTests {
+    @Test(.enabled(if: !RequestMemoryTelemetry.allocationDiagnosticsEnabled))
+    func disabledAllocationDiagnosticsDoesNotBuildFacts() {
+        var evaluations = 0
+        func buildFacts() -> [String: String] {
+            evaluations += 1
+            return ["fixture": "value"]
+        }
+        RequestMemoryTelemetry.recordAllocation(phase: "fixture", facts: buildFacts())
+        #expect(evaluations == 0)
+    }
+
     @Test func phaseSamplesSeparateLifetimeAndObservedRequestPeaksAndStopAtFinish() throws {
         let modelID = "memory-\(UUID())"
         let capture = TelemetryCapture(modelID: modelID)
@@ -80,7 +91,7 @@ struct RequestMemoryTelemetryTests {
         let cache = KVCacheSimple()
         cache.state = [MLXArray.ones([1, 1, 8, 4]), MLXArray.ones([1, 1, 8, 4])]
         memory.mark(.rewindingLeaf, facts: RequestMemoryTelemetry.cacheFacts([cache]))
-        memory.mark(.rewoundLeaf, facts: ["requestCacheLayerCount": "0"])
+        memory.markCacheReleased(.rewoundLeaf)
         let released = try #require(capture.drain().last)
         #expect(released.field("requestCacheAttentionArrayBytes") == "0")
         #expect(released.field("requestFullAttentionArrayBytes") == "0")

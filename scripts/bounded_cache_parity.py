@@ -105,7 +105,8 @@ def main():
                     child.wait()
     events = []
     if diagnostic.exists():
-        if inode is not None and diagnostic.stat().st_ino != inode or diagnostic.stat().st_size < position:
+        stat = diagnostic.stat()
+        if (inode is not None and stat.st_ino != inode) or stat.st_size < position:
             stop = stop or "diagnostics rotated"
         else:
             with diagnostic.open("rb") as stream:

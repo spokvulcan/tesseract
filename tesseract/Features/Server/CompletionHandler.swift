@@ -270,6 +270,7 @@ struct CompletionHandler: Sendable {
             generation = started
         case .failure(let error) where error is CancellationError:
             await activityLog.cancel(handle: logHandle)
+            try? await writer.send(.serviceUnavailable("Request cancelled"))
             return
         case .failure(let error):
             Log.server.error("Generation failed to start: \(error)")

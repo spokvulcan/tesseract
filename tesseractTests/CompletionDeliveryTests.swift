@@ -199,6 +199,32 @@ struct CompletionDeliveryTests {
         #expect(scripted.drained.isSet)
     }
 
+    @Test func parentCancellationDrainsLateHandleWhileClientRemainsConnected() async {
+        let connection = HTTPConnectionLifecycle()
+        let (started, signal) = AsyncStream<Void>.makeStream()
+        let scripted = scriptedGeneration([], hangAfterEvents: true)
+        let task = Task {
+            await StreamLifecycleDriver.startGeneration(
+                waitForDisconnect: { await connection.waitForDisconnect() },
+                start: {
+                    signal.yield(())
+                    signal.finish()
+                    try? await Task.sleep(for: .seconds(1))
+                    return .success(scripted.generation)
+                })
+        }
+        for await _ in started { break }
+        task.cancel()
+        guard case .failure(let error) = await task.value else {
+            Issue.record("parent cancellation must drain the late handle")
+            return
+        }
+        #expect(error is CancellationError)
+        #expect(scripted.cancelled.isSet)
+        #expect(scripted.drained.isSet)
+        #expect(await !connection.isDisconnected())
+    }
+
     @Test func connectedStartTransfersHandleWithoutCancellingIt() async {
         let connection = HTTPConnectionLifecycle()
         let scripted = scriptedGeneration([.text("ready")])
