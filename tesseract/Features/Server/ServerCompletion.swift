@@ -1312,6 +1312,14 @@ nonisolated final class ServerCompletion {
         // the closure runs on the **Model Session**'s isolation and cannot
         // sync-read the actor-confined module.
         let promptStartsThinking = self.promptStartsThinking
+        // The per-request thinking resolution: the same value the stream
+        // driver and the Leaf Store phase run with. An emitted
+        // `enable_thinking: false` closes the template's think block, so a
+        // thinking-default template still yields `.directLeaf` traffic for
+        // that request — the MTP predictor below must see this value, not
+        // the load-time flag alone (#460).
+        let requestStartsInsideThinkBlock = renderContext.startsInsideThinkBlock(
+            promptStartsThinking: promptStartsThinking)
         let modelFingerprint = self.modelFingerprint
         let emittedPathIndex = self.emittedPathIndex
         let imageKeying = self.modelIdentity?.imageKeying
@@ -1663,7 +1671,7 @@ nonisolated final class ServerCompletion {
                             temperature: parameters.temperature,
                             textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
                             predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
-                                promptStartsThinking: promptStartsThinking,
+                                promptStartsThinking: requestStartsInsideThinkBlock,
                                 // Conservative stand-in: tool *emission* is unknowable
                                 // at engagement time, so defined tools predict as if
                                 // they will be called.
