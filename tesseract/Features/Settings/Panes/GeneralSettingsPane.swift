@@ -50,6 +50,21 @@ struct GeneralSettingsPane: View {
             }
 
             Section {
+                Toggle("The Whip", isOn: $settings.whipEnabled)
+            } header: {
+                Text("For Fun")
+            } footer: {
+                if WhipController.reduceMotionEnabled {
+                    Text("Unavailable while Reduce Motion is on in Accessibility settings.")
+                } else {
+                    Text(
+                        "A simulated whip that hangs over every app. Hold ⌥ and drag its handle "
+                            + "to pick it up; it drapes over your real windows and cracks when you "
+                            + "swing it hard. It never intercepts a click.")
+                }
+            }
+
+            Section {
                 Picker("Overlay Variant", selection: $settings.overlayVariantRaw) {
                     ForEach(OverlayVariants.all) { variant in
                         Text(variant.displayName).tag(variant.id)

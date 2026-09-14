@@ -39,6 +39,10 @@ enum SettingsCatalogue {
     static let overlayVariantRaw = Setting.string("overlayVariant", default: "classic")
     static let samplingPresetRaw = Setting.string(
         "samplingPreset", default: SamplingPreset.automatic.rawValue)
+    /// The Whip: a simulated whip you can pick up and crack over any app.
+    /// Default off — a toy that draws over every window should be opted into,
+    /// never opted out of.
+    static let whipEnabled = Setting.bool("whipEnabled", default: false)
 
     // MARK: - Audio
 
