@@ -5,7 +5,7 @@ import MLXLMCommon
 
 /// Convert protocol messages to the low-level LLM representation, dropping any
 /// that return `nil` from `toLLMMessage()` (e.g. UI-only or custom messages).
-func defaultConvertToLlm(_ messages: [any AgentMessageProtocol]) -> [LLMMessage] {
+nonisolated func defaultConvertToLlm(_ messages: [any AgentMessageProtocol]) -> [LLMMessage] {
     messages.compactMap { $0.toLLMMessage() }
 }
 

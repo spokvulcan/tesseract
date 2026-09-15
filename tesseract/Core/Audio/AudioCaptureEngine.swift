@@ -379,7 +379,10 @@ final class AudioCaptureEngine: AudioCapturing {
 
         let clock = Date()
         lastIntentionalReconfigure = clock
-        try audioEngine.inputNode.setVoiceProcessingEnabled(wanted)
+        // The arm can raise an NSException instead of throwing; see ObjCExceptions.
+        try ObjCExceptions.catching {
+            try audioEngine.inputNode.setVoiceProcessingEnabled(wanted)
+        }
         voiceProcessingArmed = wanted
         if wanted {
             duckPolicy.engineDidArm()
@@ -419,7 +422,11 @@ final class AudioCaptureEngine: AudioCapturing {
         var armed = false
         if voiceProcessing {
             do {
-                try engine.inputNode.setVoiceProcessingEnabled(true)
+                // A VPIO refusal can raise an NSException instead of
+                // throwing; see ObjCExceptions.
+                try ObjCExceptions.catching {
+                    try engine.inputNode.setVoiceProcessingEnabled(true)
+                }
                 armed = true
             } catch {
                 Log.audio.error(
@@ -547,24 +554,31 @@ final class AudioCaptureEngine: AudioCapturing {
         let meterTap = AudioMeterTap(
             sampleRate: recordingFormat.sampleRate,
             continuation: meterStream.continuation)
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: bufferSize,
-            format: recordingFormat,
-            block: Self.makeAudioTapHandler(gate: captureGate, buffer: buffer, meter: meterTap)
-        )
-        inputTapInstalled = true
-
-        // Duck other system audio only for a real dictation capture — the
-        // settings meter keeps the idle treatment. Set before start so the
-        // level is baked into this run of the IO unit.
-        duckPolicy.captureDidStart(meteringOnly: meteringOnly)
 
         let startClock = Date()
         lastIntentionalReconfigure = startClock
         do {
-            audioEngine.prepare()
-            try audioEngine.start()
+            // Every graph mutation of this step runs inside the one exception
+            // seam: an AVFAudio raise (tap format mismatch, VPIO failure)
+            // becomes a thrown error handled below; see ObjCExceptions.
+            try ObjCExceptions.catching {
+                inputNode.installTap(
+                    onBus: 0,
+                    bufferSize: bufferSize,
+                    format: recordingFormat,
+                    block: Self.makeAudioTapHandler(
+                        gate: captureGate, buffer: buffer, meter: meterTap)
+                )
+                inputTapInstalled = true
+
+                // Duck other system audio only for a real dictation capture —
+                // the settings meter keeps the idle treatment. Set before
+                // start so the level is baked into this run of the IO unit.
+                duckPolicy.captureDidStart(meteringOnly: meteringOnly)
+
+                audioEngine.prepare()
+                try audioEngine.start()
+            }
             isCapturing = true
             Log.audio.info(
                 """
@@ -798,14 +812,19 @@ final class AudioCaptureEngine: AudioCapturing {
 
         // Keep the tap callback alive while CoreAudio stops its IO thread. Removing
         // the tap first can leave AudioOutputUnitStop racing a nil tap callback.
-        engine.stop()
-
-        if inputTapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            inputTapInstalled = false
+        // Best effort: a raise here must not escape the task; see ObjCExceptions.
+        do {
+            try ObjCExceptions.catching {
+                engine.stop()
+                if inputTapInstalled {
+                    engine.inputNode.removeTap(onBus: 0)
+                }
+                engine.reset()
+            }
+        } catch {
+            Log.audio.error("Engine teardown raised, discarding: \(error.localizedDescription)")
         }
-
-        engine.reset()
+        inputTapInstalled = false
     }
 
     /// Creates an audio tap handler that runs on the real-time audio thread.

@@ -230,7 +230,7 @@ struct GlobalOverlayHUD: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
+            .overlayAffordance()
             .accessibilityLabel("Insert the raw transcription anyway")
         }
         .padding(.horizontal, 12)
@@ -252,7 +252,7 @@ struct GlobalOverlayHUD: View {
                 .frame(width: 22, height: 22)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .overlayAffordance()
         .accessibilityLabel(label)
     }
 

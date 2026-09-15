@@ -440,7 +440,7 @@ struct StageCardOverlayView: View {
                     .background(.quaternary, in: Capsule())
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .overlayAffordance()
             .accessibilityLabel("Insert the raw transcription anyway")
         }
         .contentShape(Rectangle())
@@ -493,7 +493,7 @@ struct StageCardOverlayView: View {
                 .frame(width: 22, height: 22)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .overlayAffordance()
         .accessibilityLabel(label)
     }
 

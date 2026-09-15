@@ -621,7 +621,7 @@ struct CaptionOverlayView: View {
                     .background(.quaternary, in: Capsule())
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .overlayAffordance()
             .accessibilityLabel("Insert the raw transcription anyway")
             .frame(height: CaptionMetrics.textBlockHeight)
         }
@@ -661,7 +661,7 @@ struct CaptionOverlayView: View {
                 .frame(width: 24, height: 24)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .overlayAffordance()
         .accessibilityLabel(label)
     }
 

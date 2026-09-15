@@ -11,6 +11,8 @@
 		A9FF2A6C2F80A000003C1B55 /* Demark in Frameworks */ = {isa = PBXBuildFile; productRef = A1C54C8E2F80A000003C1B55 /* Demark */; };
 		AAE67E6C2F80A000003C1B55 /* SwiftReadability in Frameworks */ = {isa = PBXBuildFile; productRef = AD72427E2F80A000003C1B55 /* SwiftReadability */; };
 		D1A111002F41A000003C1B55 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = D1A111012F41A000003C1B55 /* MLXHuggingFace */; };
+		E07E1A032F80B000003C1B55 /* TesseractHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = E07E1A022F80B000003C1B55 /* TesseractHighlight */; };
+		E07E1A132F80B000003C1B55 /* TesseractSpeech in Frameworks */ = {isa = PBXBuildFile; productRef = E07E1A122F80B000003C1B55 /* TesseractSpeech */; };
 		E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111012F41A000003C1B55 /* MLXLLM */; };
 		E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111032F41A000003C1B55 /* MLXLMCommon */; };
 		E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111052F41A000003C1B55 /* MLXVLM */; };
@@ -18,8 +20,6 @@
 		E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */ = {isa = PBXBuildFile; fileRef = E0A5AC012F50B000003C1B55 /* AgentPackages */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
 		E0C655502F3BA000003C1B55 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudioTTS */; };
-		E07E1A032F80B000003C1B55 /* TesseractHighlight in Frameworks */ = {isa = PBXBuildFile; productRef = E07E1A022F80B000003C1B55 /* TesseractHighlight */; };
-		E07E1A132F80B000003C1B55 /* TesseractSpeech in Frameworks */ = {isa = PBXBuildFile; productRef = E07E1A122F80B000003C1B55 /* TesseractSpeech */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -494,6 +494,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "tesseract/tesseract-Bridging-Header.h";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.2;
 			};
@@ -547,6 +548,7 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "tesseract/tesseract-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 6.2;
@@ -683,14 +685,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "Vendor/mlx-swift-lm";
-		};
-		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "Vendor/mlx-audio-swift";
-		};
 		E07E1A012F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-highlight" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/tesseract-highlight";
@@ -698,6 +692,14 @@
 		E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/tesseract-speech";
+		};
+		E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/mlx-swift-lm";
+		};
+		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "Vendor/mlx-audio-swift";
 		};
 /* End XCLocalSwiftPackageReference section */
 
@@ -765,6 +767,16 @@
 			package = E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */;
 			productName = MLXHuggingFace;
 		};
+		E07E1A022F80B000003C1B55 /* TesseractHighlight */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E07E1A012F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-highlight" */;
+			productName = TesseractHighlight;
+		};
+		E07E1A122F80B000003C1B55 /* TesseractSpeech */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */;
+			productName = TesseractSpeech;
+		};
 		E0A111012F41A000003C1B55 /* MLXLLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */;
@@ -794,16 +806,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */;
 			productName = MLXAudioTTS;
-		};
-		E07E1A022F80B000003C1B55 /* TesseractHighlight */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E07E1A012F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-highlight" */;
-			productName = TesseractHighlight;
-		};
-		E07E1A122F80B000003C1B55 /* TesseractSpeech */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = E07E1A112F80B000003C1B55 /* XCLocalSwiftPackageReference "Vendor/tesseract-speech" */;
-			productName = TesseractSpeech;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
