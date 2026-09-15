@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.13.1](https://github.com/spokvulcan/tesseract/compare/v1.13.0...v1.13.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* catch AVFAudio exceptions and keep overlay buttons out of the key-view loop ([#512](https://github.com/spokvulcan/tesseract/issues/512)) ([e46b733](https://github.com/spokvulcan/tesseract/commit/e46b733ce6a11028cba925808b3d6a82b55c2b2d))
+* **server:** predict the MTP leaf mode from the per-request thinking resolution ([#508](https://github.com/spokvulcan/tesseract/issues/508)) ([89e2da4](https://github.com/spokvulcan/tesseract/commit/89e2da4eed9c885f4b47607e510a61a8e60462bf))
+
+
+### Performance Improvements
+
+* **agent:** stream compatible ByteLevel tokenizers incrementally ([#510](https://github.com/spokvulcan/tesseract/issues/510)) ([473cfd8](https://github.com/spokvulcan/tesseract/commit/473cfd87d5b4b17220ca70d185ad65333abadc01))
+* **ui:** pin the page to its Settled Width while the sidebar slides ([#511](https://github.com/spokvulcan/tesseract/issues/511)) ([3331fa2](https://github.com/spokvulcan/tesseract/commit/3331fa2c1091acb92104fabb008b4411ce07d8b3))
+
+
+### Miscellaneous Chores
+
+* **deps:** move the vendor to 46f0356, the pin rebased onto upstream c6446cf ([#620](https://github.com/spokvulcan/tesseract/issues/620)) ([d92909f](https://github.com/spokvulcan/tesseract/commit/d92909f613ab081fd541d07cb23cbc975d4f561c))
+* **deps:** re-pin mlx-swift-lm to upstream 3e6ea1e, swift-transformers to 1.3.4, swift-jinja to 2.5.1 ([#514](https://github.com/spokvulcan/tesseract/issues/514)) ([671cbf7](https://github.com/spokvulcan/tesseract/commit/671cbf76b303ecf39c4bdb0fbc964def8eb89563))
+
 ## [1.13.0](https://github.com/spokvulcan/tesseract/compare/v1.12.0...v1.13.0) (2026-09-13)
 
 
