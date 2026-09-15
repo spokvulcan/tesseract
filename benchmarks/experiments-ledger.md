@@ -4231,3 +4231,24 @@ budget, R55 note) at +1-2 tok/s. The chat arm is the new floor datum: an
 open-ended request with the thinking trace on sits at τ 2.6, alongside the
 docs prompt's 2.53 — the content class, not the port. These are the numbers
 in the upstream issue/PR drafts.
+
+### R59 — 2026-09-15 vendor re-pin (upstream 3e6ea1e): fixtures bit-identical
+
+Same stack as R58 (Qwen3.8-27B 4-bit + 4-bit draft, greedy, block 8, 192
+tokens, thinking on, direct binary, `MLX_DYNSLICE_INPLACE=1`), one run per
+fixture after the pin moved from `921c676` to `e5fec88` (upstream main
+`e3d4a20` → `3e6ea1e`, 8 commits, two carries re-expressed:
+`docs/mlx-swift-lm-fork.md`). mlx-swift and mlx unchanged.
+
+| fixture | ar | bs8 tok/s | ms/round | accepted | identity |
+| --- | --- | --- | --- | --- | --- |
+| travel | 22.2 | 58.1 | 64.8 | 140/356 | MATCH |
+| code | 20.1 | 62.2 | 61.7 | 141/349 | MATCH |
+| math | 21.1 | 84.3 | 63.3 | 158/249 | DIVERGED at +8 (as the reference) |
+
+Acceptance counts equal the 2026-09-05 references on all three; the math
+divergence is the pre-existing one. Rounds are ~7-10 ms slower than the
+09-05 verification (54.2-54.6 ms/round) — single runs on a machine that had
+just finished a Debug test suite and a Release build, not an A/B; the
+2026-09-03 re-pin (R55) saw the same spread. Not a speed claim either way;
+the identity check is the gate.

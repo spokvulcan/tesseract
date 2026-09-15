@@ -475,6 +475,55 @@ struct HybridCacheSnapshotTests {
         }
     }
 
+    @Test func restoreAcceptsSixElementRotatingMetaState() throws {
+        // Snapshots persisted between the 2026-08 and 2026-09-15 vendor pins
+        // carry the capacity-origin tag but no wrapped-layout flag (upstream
+        // #584 added the 7th value); the setter infers the layout, so they
+        // must keep restoring.
+        let previous = HybridCacheSnapshot(
+            tokenOffset: 10,
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "RotatingKVCache",
+                    state: [],
+                    metaState: ["0", "512", "256", "0", "0", "modelNative"],
+                    offset: 10
+                )
+            ],
+            checkpointType: .leaf,
+            memoryBytes: 0,
+            createdAt: .now
+        )
+
+        let restored = try previous.restore()
+        #expect(restored[0] is RotatingKVCache)
+        #expect(restored[0].maxSize == 512)
+    }
+
+    @Test func restoreThrowsOnNonBooleanRotatingWrapFlag() {
+        // The upstream setter `fatalError`s on a 7th (wrapped-layout) value
+        // that is not "true" or "false" — corrupt data must be a thrown
+        // RestoreError, never reach that setter.
+        let corrupt = HybridCacheSnapshot(
+            tokenOffset: 10,
+            layers: [
+                HybridCacheSnapshot.LayerState(
+                    className: "RotatingKVCache",
+                    state: [],
+                    metaState: ["0", "512", "256", "0", "0", "modelNative", "maybe"],
+                    offset: 10
+                )
+            ],
+            checkpointType: .leaf,
+            memoryBytes: 0,
+            createdAt: .now
+        )
+
+        #expect(throws: HybridCacheSnapshot.RestoreError.self) {
+            _ = try corrupt.restore()
+        }
+    }
+
     @Test func restoreThrowsOnUnknownCacheClassName() {
         let corrupt = HybridCacheSnapshot(
             tokenOffset: 4,

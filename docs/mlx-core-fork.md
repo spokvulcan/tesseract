@@ -162,6 +162,16 @@ C7's Swift surface (`GPU.setCommitLimits`) rides the same carries, so
 `LLMActor.loadModel`/`unloadModel` lose their per-model commit policy on the
 new base until C4+C7 are re-ported.
 
+### Update 2026-09-15: the binding landed
+
+[ml-explore/mlx-c#122](https://github.com/ml-explore/mlx-c/pull/122) (merged
+2026-08-27) exposes `new_thread_unsafe_stream` as
+`mlx_stream_new_thread_unsafe`, and upstream mlx-swift `main` already carries
+the regenerated header; mlx-swift does not yet create its default streams
+through it. Step 1 below is therefore "adopt the binding in mlx-swift", not
+"wait for mlx-c". The move is tracked as tesseract issue #513; the 2026-09-15
+vendor re-pin left this fork level on its July base deliberately.
+
 ### Re-attempt checklist
 
 1. Land the mlx-c `new_thread_unsafe_stream` binding and the mlx-swift
