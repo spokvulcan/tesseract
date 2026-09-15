@@ -89,7 +89,7 @@ Carried on top, in order:
 | `2945fa9` `perf(qwen35): fuse each residual add into the RMSNorm that follows it` | `RMSNormResidual.swift` (bitwise with Add then RMSNorm over both norm geometries), next-norm plumbing through the decode/verify segments and the drafter's | Follow-up PR candidate |
 | `5a7a4f1` `perf(dflash2): fused drafter dynamic conv, greedy walk, top-k and a head over the vocabulary prefix` | `DFlash2DynamicConv.swift`, `DFlash2GreedyWalk.swift`, `TopKIndices.swift`, the 98304-row head prefix (`DFLASH2_DRAFT_VOCAB`, `observeCommitted`), context-cache slack rows via `dynamicSliceUpdated`, traces declaring their modules | Follow-up PR candidate; the slack-row write pays off only with the fork's `MLX_DYNSLICE_INPLACE` |
 | `19fd998` `fix(dflash2): compute in the drafter's dtype whatever the target hands over` (tidied in `b3ec4e8`) | `DFlash2DraftModel.propose` casts the target's block embedding and captured hidden states to the drafter's checkpoint dtype (`computeDType`), runs the target's head in the target's dtype and scores in its own — no-ops on the bfloat16 pairing. The float16 ParoQuant Qwen3.8-27B beside the bfloat16 drafter promoted every mixed matmul to float32, and the fused residual norm's dtype precondition crashed the server on every `qwen3.8-27b-paro` request since 2026-09-05. Test: `testDFlash2CompiledProposalMatchesEager` takes the pairing as an argument | Follow-up PR candidate on #607 (fold into the drafter commit) |
-| `e5fec88` `perf(tools): scan only the chunk for a collecting call's end tag` | Both scanners (the native `processTaggedChunk` and `TextToolCallRecoveryScanner`'s native-frame context) gate the whole-buffer frame scan on the appended bytes plus the tag's overlap holding the end tag, through `ToolCallFrameScanner.marker(_:mayHaveArrivedIn:appendedByteCount:)`. Five tests in `ToolCallProcessorLongCallTests` (linear time with and without declared tools; the tag split across chunks, in the start-tag-completing chunk, and followed by another call) | Upstream PR branch `perf/tool-call-end-tag-scan` (`31fcc22` = upstream `3e6ea1e` + this commit) pushed 2026-09-15; the issue and PR text are banked in the status log entry of 2026-09-15 below and wait for the owner to post (both upstream templates carry an "I approve this as my own" attestation) |
+| `e5fec88` `perf(tools): scan only the chunk for a collecting call's end tag` | Both scanners (the native `processTaggedChunk` and `TextToolCallRecoveryScanner`'s native-frame context) gate the whole-buffer frame scan on the appended bytes plus the tag's overlap holding the end tag, through `ToolCallFrameScanner.marker(_:mayHaveArrivedIn:appendedByteCount:)`. Five tests in `ToolCallProcessorLongCallTests` (linear time with and without declared tools; the tag split across chunks, in the start-tag-completing chunk, and followed by another call) | Upstream issue [#624](https://github.com/ml-explore/mlx-swift-lm/issues/624) and PR [#625](https://github.com/ml-explore/mlx-swift-lm/pull/625) (branch `perf/tool-call-end-tag-scan`, `31fcc22` = upstream `3e6ea1e` + this commit), posted 2026-09-15 with the owner's attestation. Drop from the carry when it merges |
 
 ## Pin of 2026-09-03 (superseded 2026-09-15)
 
@@ -313,9 +313,12 @@ force-pushed (`56a21b2`, MERGEABLE, builds); the end-tag scan rewritten over
 both scanners and pushed as `perf/tool-call-end-tag-scan` (`31fcc22`, built
 from upstream `main`, not from the pin); outgoing tips tagged
 `pin-tip/2026-08-17-ddc1f66` and `pin-tip/2026-09-07-921c676`. The
-issue and PR below are ready for the owner to post — both upstream templates
-open with an "I have read this and approve it as my own" attestation, so
-they are not posted by an agent.
+issue and PR below were posted the same day as
+[#624](https://github.com/ml-explore/mlx-swift-lm/issues/624) and
+[#625](https://github.com/ml-explore/mlx-swift-lm/pull/625), with the owner's
+attestation given in the session (both upstream templates open with an "I
+have read this and approve it as my own" checkbox, so an agent posts them
+only on that go-ahead).
 
 Gates:
 
