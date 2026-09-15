@@ -80,6 +80,7 @@ tesseract/
 │   │   └── AudioConverter.swift       # Format conversion
 │   ├── Permissions/
 │   │   └── PermissionsManager.swift   # Mic & Accessibility checks
+│   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
 │   ├── ViewModifiers.swift      # Scoped dependency injection
 │   └── Logging.swift            # Unified logging (Log enum)
 │
