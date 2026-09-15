@@ -85,6 +85,8 @@ tesseract/
 │
 ├── Platform/                    # AppKit bridge code
 │   ├── HotkeyManager.swift           # Global hotkey listener (CGEventTap)
+│   ├── ObjCExceptions.swift           # NSException → thrown error seam (wraps AVFAudio graph steps)
+│   ├── ObjCExceptionCatcher.h/.m      # The one Objective-C file: the @try behind ObjCExceptions
 │   ├── TextInjector.swift             # Clipboard-based paste injection
 │   ├── TextExtractor.swift            # Selected text extraction
 │   ├── MenuBarManager.swift           # Status bar menu (NSStatusItem)
