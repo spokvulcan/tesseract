@@ -20,15 +20,21 @@ struct ContentView: View {
                     injectedDestinationView(for: page)
                 }
         } detail: {
-            if let selected = selectedNavigation {
-                injectedDestinationView(for: selected)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .scrollEdgeEffectStyle(.soft, for: .top)
-            } else {
-                injectedDestinationView(for: .dictation)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .scrollEdgeEffectStyle(.soft, for: .top)
+            Group {
+                if let selected = selectedNavigation {
+                    injectedDestinationView(for: selected)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .scrollEdgeEffectStyle(.soft, for: .top)
+                } else {
+                    injectedDestinationView(for: .dictation)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .scrollEdgeEffectStyle(.soft, for: .top)
+                }
             }
+            // Every page lays out against its Settled Width: pinned while the
+            // sidebar slides, reflowed once when the column settles, so a
+            // long transcript never re-measures per animation frame.
+            .settledWidth(releasingOn: columnVisibility)
         }
         .navigationSplitViewStyle(.balanced)
         .scrollEdgeEffectStyle(.soft, for: .top)

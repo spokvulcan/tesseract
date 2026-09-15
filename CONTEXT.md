@@ -2273,6 +2273,16 @@ composition root, which stays pure wiring with no behaviour.
 _Avoid_: app glue (pre-carve working name), setup() behaviour, launch coordinator,
 app services, a SwiftUI `Binding` (view data flow, unrelated).
 
+**Settled Width**:
+The width a page lays out against — the detail column's width once the column
+has stopped moving. While the sidebar slides, every page keeps its previous
+settled width and reflows once when the column settles, so heavy content is
+never re-measured per animation frame. A window resize is not column motion:
+pages follow it live.
+_Avoid_: frozen width (the pin is the mechanism, not the concept); debounced
+width (the release is the slide ending, not a delay); snapshot / rasterized
+transition (nothing is captured — the page is laid out, just not per frame).
+
 ### Release and distribution
 
 **Release PR**:
