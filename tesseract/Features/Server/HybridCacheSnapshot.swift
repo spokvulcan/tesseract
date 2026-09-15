@@ -497,13 +497,16 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 && Int(metaState[3]) != nil
         case "RotatingKVCache":
             // [keep, maxCacheSize, step, offset, idx] plus an optional
-            // capacity-origin tag (6th) since the 2026-08 vendor pin; the
-            // setter accepts both shapes but fatalErrors on an unknown
-            // origin string, so mirror its full precondition here.
+            // capacity-origin tag (6th, since the 2026-08 vendor pin) and an
+            // optional wrapped-layout flag (7th, since the 2026-09-15 pin:
+            // upstream #584 made the ring's trim wrap-aware and records the
+            // layout so a restore never has to infer it); the setter accepts
+            // all three shapes but fatalErrors on an unknown origin string or
+            // a non-boolean flag, so mirror its full precondition here.
             return
-                (metaState.count == 5
-                || (metaState.count == 6
-                    && ["modelNative", "requested"].contains(metaState[5])))
+                (5...7).contains(metaState.count)
+                && (metaState.count < 6 || ["modelNative", "requested"].contains(metaState[5]))
+                && (metaState.count < 7 || Bool(metaState[6]) != nil)
                 && Int(metaState[0]) != nil
                 && metaState[1] != "None" && Int(metaState[1]) != nil
                 && Int(metaState[2]) != nil
