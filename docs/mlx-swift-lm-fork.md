@@ -32,10 +32,17 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
-## Current pin (2026-09-15)
+## Current pin (2026-09-15, second cut)
 
-Base: upstream `main` @ `3e6ea1e` — 8 commits past the 2026-09-03 base
-(`e3d4a20`): **our #613 merged** (`4c3d793`, the streaming-detokenizer
+Base: upstream `main` @ `c6446cf` — 9 commits past the 2026-09-03 base
+(`e3d4a20`). The same-day second cut adds #620 (clear the MLX buffer cache
+on the first generated token, as mlx-lm does, so short generations no
+longer leave their prefill and decode buffers cached — a two-line move in
+`TokenIterator.next()`, which the app's autoregressive path drives; the
+DFlash2 iterator clears between prefill chunks and has no per-token
+cadence to move). The first cut's tip `e5fec88` is tagged
+`pin-tip/2026-09-15-e5fec88`; the rebase onto `c6446cf` was clean, every
+carry re-hashed. The 8 commits before #620: **our #613 merged** (`4c3d793`, the streaming-detokenizer
 scalar fix carried as `ed74418`); bounded cross-dialect tool-call recovery
 and schema validation #548 (a rewrite of `ToolCallProcessor`, +3.4k lines,
 which also covers the leading-text case of our #610 — its four tests pass
@@ -67,8 +74,8 @@ Two carries were re-expressed against the new base:
   a fifth test covers the declared-tools path.
 
 Everything else cherry-picked clean. Dropped as merged or superseded:
-`ed74418` (#613) and `a1bd36d` (#610). Outgoing tip `921c676` is tagged
-`pin-tip/2026-09-07-921c676`.
+`ed74418` (#613) and `a1bd36d` (#610). Outgoing tips are tagged
+`pin-tip/2026-09-07-921c676` and `pin-tip/2026-09-15-e5fec88`.
 
 mlx-swift needs no move: upstream still requires `0.31.6` up-to-next-minor,
 no newer tag exists, and the fork pin stays at `6058402`. mlx-core stays at
@@ -79,17 +86,17 @@ Carried on top, in order:
 
 | Commit | What it does | Upstream status |
 | --- | --- | --- |
-| `6c9d18e` `fix: pin mlx-swift to the spokvulcan fork at 24779d5` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + provenance + the Cmlx gitlink bumps carrying the C-series, qmv_wide, affine_qmm_mma8, SDPA mma8, multi-query SDPA and round-5 kernels + `dynamicSliceUpdated`). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
-| `3a40f2f` `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer. Enables tesseract's render+token cache (experiments-ledger C25). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract-2026-09-15` (`docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
-| `7055516` `DFlash2 block-parallel speculative decoding for Qwen3.5` (ADR-0061) | The whole DFlash2 series reshaped into one commit in upstream's own shapes: `DFlash2DrafterModel` / `DFlash2TargetModel` protocols, `DFlash2SpeculativeTokenIterator`, factory/registry/container, `generate` overloads, Qwen3.5 target side (verify pass, `writeRows`, gated-delta captures), `SameInputProjectionStacking`. Fast path only — no environment knobs, no research arms | Upstream PR #607 (branch `dflash2-upstream-clean` = `3e6ea1e` + this commit, rebased and force-pushed 2026-09-15 as `56a21b2`, MERGEABLE) |
-| `049a37a` `feat(speculative): expose GenerationFinalizingTokenIterator` | Makes the finalize protocol (and the two upstream conformances) public so the app's own token loop (`TokenGenerationLoop`) can rewind speculative lookahead the way `generateLoopTask` does | Permanent local unless upstream wants it; kept out of the DFlash2 PR |
-| `030b77c` `chore(deps): pin mlx-swift to 6058402 (dynamicSlice op, mlx b6a5f3b6)` | Moves the pin to the 2026-09-05 loop's mlx-swift/mlx commits (`dynamicSlice`, QMM tile diet + v2 default, 1-pass SDPA, fast-math custom kernels, profiler probes) | Permanent local; collapses into the pin row at the next re-pin |
-| `5be94db` `perf(qwen35): fuse the GDN conv + norm, the gated output norm and the scan's gate tables` | `GatedDeltaConvNorm.swift`, `GatedDeltaNormGate.swift`; in-kernel gate tables and output-only / state-after-valid scan variants in `GatedDelta.swift`; `GatedDeltaCapture` carries gates. All bitwise with the ops chains. Re-expressed on #616 (see above) | Follow-up PR candidate on #607 (2026-09-05 loop) |
-| `d7e6881` `perf(qwen35): fuse the q/k RMSNorm + RoPE and fold the attention scale into the query norm` | `AttentionNormRope.swift` (`fastmath_` kernel name: bitwise with the AOT `rope` kernel only under the fork's fast-math compile), `PlainRoPEParameters` from the config, folded power-of-two query scale, head-major gate | Follow-up PR candidate; the `fastmath_` compile needs an mlx-side change first |
-| `2945fa9` `perf(qwen35): fuse each residual add into the RMSNorm that follows it` | `RMSNormResidual.swift` (bitwise with Add then RMSNorm over both norm geometries), next-norm plumbing through the decode/verify segments and the drafter's | Follow-up PR candidate |
-| `5a7a4f1` `perf(dflash2): fused drafter dynamic conv, greedy walk, top-k and a head over the vocabulary prefix` | `DFlash2DynamicConv.swift`, `DFlash2GreedyWalk.swift`, `TopKIndices.swift`, the 98304-row head prefix (`DFLASH2_DRAFT_VOCAB`, `observeCommitted`), context-cache slack rows via `dynamicSliceUpdated`, traces declaring their modules | Follow-up PR candidate; the slack-row write pays off only with the fork's `MLX_DYNSLICE_INPLACE` |
-| `19fd998` `fix(dflash2): compute in the drafter's dtype whatever the target hands over` (tidied in `b3ec4e8`) | `DFlash2DraftModel.propose` casts the target's block embedding and captured hidden states to the drafter's checkpoint dtype (`computeDType`), runs the target's head in the target's dtype and scores in its own — no-ops on the bfloat16 pairing. The float16 ParoQuant Qwen3.8-27B beside the bfloat16 drafter promoted every mixed matmul to float32, and the fused residual norm's dtype precondition crashed the server on every `qwen3.8-27b-paro` request since 2026-09-05. Test: `testDFlash2CompiledProposalMatchesEager` takes the pairing as an argument | Follow-up PR candidate on #607 (fold into the drafter commit) |
-| `e5fec88` `perf(tools): scan only the chunk for a collecting call's end tag` | Both scanners (the native `processTaggedChunk` and `TextToolCallRecoveryScanner`'s native-frame context) gate the whole-buffer frame scan on the appended bytes plus the tag's overlap holding the end tag, through `ToolCallFrameScanner.marker(_:mayHaveArrivedIn:appendedByteCount:)`. Five tests in `ToolCallProcessorLongCallTests` (linear time with and without declared tools; the tag split across chunks, in the start-tag-completing chunk, and followed by another call) | Upstream issue [#624](https://github.com/ml-explore/mlx-swift-lm/issues/624) and PR [#625](https://github.com/ml-explore/mlx-swift-lm/pull/625) (branch `perf/tool-call-end-tag-scan`, `31fcc22` = upstream `3e6ea1e` + this commit), posted 2026-09-15 with the owner's attestation. Drop from the carry when it merges |
+| `536b670` `fix: pin mlx-swift to the spokvulcan fork at 24779d5` | Exact-revision pin on `spokvulcan/mlx-swift` `pin-tesseract` (0.31.6 base + provenance + the Cmlx gitlink bumps carrying the C-series, qmv_wide, affine_qmm_mma8, SDPA mma8, multi-query SDPA and round-5 kernels + `dynamicSliceUpdated`). SwiftPM cannot mix revision and version requirements for one package, so this must match mlx-audio-swift and tesseract-speech exactly | Permanent local; never upstream |
+| `4662ad9` `feat(tokenizers): ChatTemplateRendering protocol + adaptor forwarding (C25)` | Exposes the render half of `applyChatTemplate` at the MLXLMCommon layer. Enables tesseract's render+token cache (experiments-ledger C25). Requires `renderChatTemplate` on the swift-transformers side — `spokvulcan/swift-transformers` `pin-tesseract-2026-09-15` (`docs/swift-transformers-fork.md`) | Not filed (queued — owner go-ahead) |
+| `a3cb04d` `DFlash2 block-parallel speculative decoding for Qwen3.5` (ADR-0061) | The whole DFlash2 series reshaped into one commit in upstream's own shapes: `DFlash2DrafterModel` / `DFlash2TargetModel` protocols, `DFlash2SpeculativeTokenIterator`, factory/registry/container, `generate` overloads, Qwen3.5 target side (verify pass, `writeRows`, gated-delta captures), `SameInputProjectionStacking`. Fast path only — no environment knobs, no research arms | Upstream PR #607 (branch `dflash2-upstream-clean` = `3e6ea1e` + this commit, rebased and force-pushed 2026-09-15 as `56a21b2`, MERGEABLE; one unrelated upstream commit behind since #620) |
+| `6498a02` `feat(speculative): expose GenerationFinalizingTokenIterator` | Makes the finalize protocol (and the two upstream conformances) public so the app's own token loop (`TokenGenerationLoop`) can rewind speculative lookahead the way `generateLoopTask` does | Permanent local unless upstream wants it; kept out of the DFlash2 PR |
+| `8449a52` `chore(deps): pin mlx-swift to 6058402 (dynamicSlice op, mlx b6a5f3b6)` | Moves the pin to the 2026-09-05 loop's mlx-swift/mlx commits (`dynamicSlice`, QMM tile diet + v2 default, 1-pass SDPA, fast-math custom kernels, profiler probes) | Permanent local; collapses into the pin row at the next re-pin |
+| `1f83de0` `perf(qwen35): fuse the GDN conv + norm, the gated output norm and the scan's gate tables` | `GatedDeltaConvNorm.swift`, `GatedDeltaNormGate.swift`; in-kernel gate tables and output-only / state-after-valid scan variants in `GatedDelta.swift`; `GatedDeltaCapture` carries gates. All bitwise with the ops chains. Re-expressed on #616 (see above) | Follow-up PR candidate on #607 (2026-09-05 loop) |
+| `eadbf6c` `perf(qwen35): fuse the q/k RMSNorm + RoPE and fold the attention scale into the query norm` | `AttentionNormRope.swift` (`fastmath_` kernel name: bitwise with the AOT `rope` kernel only under the fork's fast-math compile), `PlainRoPEParameters` from the config, folded power-of-two query scale, head-major gate | Follow-up PR candidate; the `fastmath_` compile needs an mlx-side change first |
+| `35c95ea` `perf(qwen35): fuse each residual add into the RMSNorm that follows it` | `RMSNormResidual.swift` (bitwise with Add then RMSNorm over both norm geometries), next-norm plumbing through the decode/verify segments and the drafter's | Follow-up PR candidate |
+| `dc9bd1e` `perf(dflash2): fused drafter dynamic conv, greedy walk, top-k and a head over the vocabulary prefix` | `DFlash2DynamicConv.swift`, `DFlash2GreedyWalk.swift`, `TopKIndices.swift`, the 98304-row head prefix (`DFLASH2_DRAFT_VOCAB`, `observeCommitted`), context-cache slack rows via `dynamicSliceUpdated`, traces declaring their modules | Follow-up PR candidate; the slack-row write pays off only with the fork's `MLX_DYNSLICE_INPLACE` |
+| `4ad84b2` `fix(dflash2): compute in the drafter's dtype whatever the target hands over` (tidied in `530e84e`) | `DFlash2DraftModel.propose` casts the target's block embedding and captured hidden states to the drafter's checkpoint dtype (`computeDType`), runs the target's head in the target's dtype and scores in its own — no-ops on the bfloat16 pairing. The float16 ParoQuant Qwen3.8-27B beside the bfloat16 drafter promoted every mixed matmul to float32, and the fused residual norm's dtype precondition crashed the server on every `qwen3.8-27b-paro` request since 2026-09-05. Test: `testDFlash2CompiledProposalMatchesEager` takes the pairing as an argument | Follow-up PR candidate on #607 (fold into the drafter commit) |
+| `46f0356` `perf(tools): scan only the chunk for a collecting call's end tag` | Both scanners (the native `processTaggedChunk` and `TextToolCallRecoveryScanner`'s native-frame context) gate the whole-buffer frame scan on the appended bytes plus the tag's overlap holding the end tag, through `ToolCallFrameScanner.marker(_:mayHaveArrivedIn:appendedByteCount:)`. Five tests in `ToolCallProcessorLongCallTests` (linear time with and without declared tools; the tag split across chunks, in the start-tag-completing chunk, and followed by another call) | Upstream issue [#624](https://github.com/ml-explore/mlx-swift-lm/issues/624) and PR [#625](https://github.com/ml-explore/mlx-swift-lm/pull/625) (branch `perf/tool-call-end-tag-scan`, `31fcc22` = upstream `3e6ea1e` + this commit, one unrelated upstream commit behind since #620), posted 2026-09-15 with the owner's attestation. Drop from the carry when it merges |
 
 ## Pin of 2026-09-03 (superseded 2026-09-15)
 
@@ -305,6 +312,16 @@ four per-family `perf(qwen35|dflash2)` commits, tip `0647cf9`; mlx-side
 in spokvulcan/mlx `b6a5f3b6` and mlx-swift `6058402` (pushed). Section
 "2026-09-05 optimization loop — landed" below has the map. Upstream:
 these are follow-up PR candidates on #607, not filed.
+
+**Status 2026-09-15 (second cut, #620)** — upstream merged #620 the same
+evening; the pin was rebased onto `c6446cf` (clean, tip `46f0356`), the
+first cut's tip tagged `pin-tip/2026-09-15-e5fec88`. Gates re-run: vendor CI
+replica green (647 XCTest with upstream's new `TokenIteratorClearCacheTests`,
+889 Swift Testing); app Release build; full Debug suite with the corpus
+gates 2941 tests / 0 failures, 66/66 boundaries registered, 0 fidelity
+rejections; travel DFlash2 fixture 140/356 identity MATCH on both streams
+at 54.1 ms/round (69.6 tok/s, the 2026-09-05 reference speed on a quiet
+machine).
 
 **Status 2026-09-15 (re-pin)** — pin rebuilt on upstream `main`
 `3e6ea1e`, tip `e5fec88` (section "Current pin (2026-09-15)" above). Same

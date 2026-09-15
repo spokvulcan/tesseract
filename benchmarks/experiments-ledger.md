@@ -4252,3 +4252,8 @@ divergence is the pre-existing one. Rounds are ~7-10 ms slower than the
 just finished a Debug test suite and a Release build, not an A/B; the
 2026-09-03 re-pin (R55) saw the same spread. Not a speed claim either way;
 the identity check is the gate.
+
+Second cut the same evening (pin `46f0356`, base `c6446cf` = the above plus
+upstream #620): travel re-run on a quiet machine, 140/356 MATCH on both
+streams, 54.1 ms/round, 69.6 tok/s — the 2026-09-05 reference speed, which
+confirms the slower rounds above were machine state.
