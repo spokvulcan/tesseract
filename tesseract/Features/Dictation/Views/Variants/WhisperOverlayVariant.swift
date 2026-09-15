@@ -345,7 +345,7 @@ struct WhisperOverlayView: View {
                     .frame(height: 22)
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .overlayAffordance()
             .accessibilityLabel("Insert the raw transcription anyway")
         }
         .padding(.horizontal, 12)
@@ -621,7 +621,7 @@ private struct WhisperCommittedChip: View {
                 .frame(width: 22, height: 22)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .overlayAffordance()
         .accessibilityLabel(label)
     }
 }

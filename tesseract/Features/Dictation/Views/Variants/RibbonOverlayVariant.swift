@@ -389,7 +389,7 @@ struct RibbonOverlayView: View {
                     .padding(.vertical, 5)
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .overlayAffordance()
             .accessibilityLabel("Insert the raw transcription anyway")
         }
         .padding(.horizontal, 16)
@@ -411,7 +411,7 @@ struct RibbonOverlayView: View {
                 .frame(width: 24, height: 24)
                 .contentShape(Circle())
         }
-        .buttonStyle(.plain)
+        .overlayAffordance()
         .accessibilityLabel(label)
     }
 }

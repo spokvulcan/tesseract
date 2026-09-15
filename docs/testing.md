@@ -92,6 +92,11 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/PlaybackEnvelopeTests
 
+# Dictation overlay freeze (no unit-test seam: the hang lives in SwiftUI's
+# key-view loop on macOS 27.0; tools/overlay-focus-hang-lab is the regression
+# loop — no flags must exit 2 while the OS still hangs, --unfocusable must exit 0):
+swift run --package-path tools/overlay-focus-hang-lab overlay-focus-hang-lab --unfocusable
+
 # App bindings, image input, integrations, and model-selection seams:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
