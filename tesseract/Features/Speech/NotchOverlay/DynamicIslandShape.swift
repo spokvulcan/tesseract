@@ -7,7 +7,7 @@
 
 import SwiftUI
 
-struct DynamicIslandShape: Shape {
+nonisolated struct DynamicIslandShape: Shape {
     var topInset: CGFloat = 16
     var bottomRadius: CGFloat = 18
 
