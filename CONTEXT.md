@@ -996,6 +996,15 @@ thing that makes the companion's voice survive relaunch. Restore validates the
 fingerprint or throws; a seed is never voice identity (#339).
 _Avoid_: voice anchor (the KV realization inside a session), seed, voice id.
 
+**Preset Voice**:
+A fixed-timbre named speaker of a CustomVoice checkpoint — chosen from the
+checkpoint's own list, never designed, needing no anchor; the phone's voice
+identity. Distinct from **Pinned Voice**, which is designed from a description
+and anchored per session.
+_Avoid_: speaker id (the wire field), custom voice (the checkpoint family, not
+the identity), voice preset, fallback voice (the system synthesizer that plays
+while a Preset Voice loads is not a voice identity at all).
+
 **Readiness**:
 The engine lifecycle ladder — `.unloaded` / `.loaded` / `.warm(priming:)` —
 driven by one idempotent `prepare` verb; warmup and voice-prefix priming are
