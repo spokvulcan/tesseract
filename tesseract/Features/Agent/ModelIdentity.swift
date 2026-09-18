@@ -342,17 +342,14 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// text-class route, the FLOP profile, image keying and the scratch
     /// profiles. See `CONTEXT.md` (Base Architecture).
     static func baseArchitecture(configJSON: [String: Any]?) -> String? {
-        guard let root = configJSON else { return nil }
-        return (root["base_model_type"] as? String) ?? (root["model_type"] as? String)
+        (configJSON?["base_model_type"] as? String) ?? (configJSON?["model_type"] as? String)
     }
 
     /// A Rotated Ternary Checkpoint declares its rotated modules in a
     /// `modules` manifest — a non-empty array of entries that each name a
     /// `path`. The pack's `model_type` is the loader key and is not consulted.
     private static func interpretRotatedTernaryCheckpoint(configJSON: [String: Any]?) -> Bool {
-        guard let root = configJSON,
-            let modules = root["modules"] as? [[String: Any]],
-            !modules.isEmpty
+        guard let modules = configJSON?["modules"] as? [[String: Any]], !modules.isEmpty
         else { return false }
         return modules.allSatisfy { $0["path"] is String }
     }

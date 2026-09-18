@@ -193,12 +193,12 @@ struct AgentGenerateParameters: Sendable, Codable {
         if modelID.hasPrefix("nanbeige") { return .nanbeige42 }
         if modelID.hasPrefix("ornith-9b") { return .ornith9b }
         if modelID.hasPrefix("ornith-35b") { return .ornith35b }
-        // Bonsai 2 is Qwen3.8-27B in a rotated ternary pack; the card keeps the
-        // Qwen3.8 thinking sampling.
-        if modelID.hasPrefix("bonsai-2") { return .qwen38Thinking }
         if modelID.hasPrefix("qwen3.5") { return .qwen35 }
         if modelID.hasPrefix("qwen3.6") { return .qwen36Thinking }
         if modelID.hasPrefix("qwen3.8") { return .qwen38Thinking }
+        // Bonsai 2 is Qwen3.8-27B in a rotated ternary pack; the card keeps the
+        // Qwen3.8 thinking sampling.
+        if modelID.hasPrefix("bonsai-2") { return .qwen38Thinking }
         if modelID.hasPrefix("qwen3") { return .qwen3 }
         return .default
     }

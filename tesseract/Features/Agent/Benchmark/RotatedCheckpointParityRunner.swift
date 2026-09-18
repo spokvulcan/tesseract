@@ -31,10 +31,6 @@ final class RotatedCheckpointParityRunner {
     private lazy var reportDir: URL = runner.activeConfig.outputDir
         .appendingPathComponent("rotated-checkpoint-parity")
 
-    nonisolated private static let prompt =
-        "List the first ten prime numbers, then explain in two sentences why 1 is not prime."
-    nonisolated private static let newTokens = 64
-
     /// What the reference script consumes. Token ids, never text: the
     /// comparison must not depend on two detokenizers agreeing.
     struct Report: Codable {
@@ -50,9 +46,7 @@ final class RotatedCheckpointParityRunner {
     }
 
     private struct Capture: Sendable {
-        let promptTokens: [Int]
-        let generatedTokens: [Int]
-        let text: String
+        let generation: BenchmarkHarness.GreedyCapture
         let rotatedLinear: Int
         let rotatedEmbedding: Int
     }
@@ -84,20 +78,21 @@ final class RotatedCheckpointParityRunner {
         engine.unloadModel()
         await engine.awaitPendingUnload()
 
+        let generation = capture.generation
         log(
             "rotated modules: \(capture.rotatedLinear) linear, "
                 + "\(capture.rotatedEmbedding) embedding")
-        log("prompt tokens: \(capture.promptTokens.count)")
-        log("generated \(capture.generatedTokens.count) tokens: \(capture.generatedTokens)")
-        log("generated text: \(capture.text)")
+        log("prompt tokens: \(generation.promptTokens.count)")
+        log("generated \(generation.generatedTokens.count) tokens: \(generation.generatedTokens)")
+        log("generated text: \(generation.text)")
 
         let report = Report(
             model: runner.resolvedModelName,
             modelDir: modelDir.path,
-            prompt: Self.prompt,
-            promptTokens: capture.promptTokens,
-            generatedTokens: capture.generatedTokens,
-            generatedText: capture.text,
+            prompt: BenchmarkHarness.parityPrompt,
+            promptTokens: generation.promptTokens,
+            generatedTokens: generation.generatedTokens,
+            generatedText: generation.text,
             rotatedLinearModules: capture.rotatedLinear,
             rotatedEmbeddingModules: capture.rotatedEmbedding,
             loadSeconds: loadSeconds)
@@ -117,11 +112,11 @@ final class RotatedCheckpointParityRunner {
             throw RotatedCheckpointParityError.rotationNotApplied(
                 linear: capture.rotatedLinear, embedding: capture.rotatedEmbedding)
         }
-        guard capture.generatedTokens.count == Self.newTokens else {
-            log("❌ generation stopped early (\(capture.generatedTokens.count) tokens)")
+        guard generation.generatedTokens.count == BenchmarkHarness.parityNewTokens else {
+            log("❌ generation stopped early (\(generation.generatedTokens.count) tokens)")
             log("Overall: FAIL")
             throw RotatedCheckpointParityError.generationStoppedEarly(
-                capture.generatedTokens.count)
+                generation.generatedTokens.count)
         }
         log("Swift half: PASS — run the reference script to score the token agreement")
         log("Overall: PASS")
@@ -129,9 +124,8 @@ final class RotatedCheckpointParityRunner {
 
     // MARK: - Inspect + generate
 
-    /// Greedy decoding through the vendor iterator so raw token ids are
-    /// compared, not detokenized text. The prompt ids are captured after the
-    /// chat template so the reference decodes from the identical sequence.
+    /// Counts the rotated leaves the load installed, then runs the shared
+    /// greedy parity generation (`BenchmarkHarness.greedyGenerate`).
     nonisolated private static func inspectAndGenerate(
         context: ModelContext
     ) async throws -> Capture {
@@ -144,32 +138,8 @@ final class RotatedCheckpointParityRunner {
                 rotatedEmbedding += 1
             }
         }
-
-        var parameters = AgentGenerateParameters(
-            maxTokens: newTokens,
-            temperature: 0.0,
-            topP: 1.0,
-            topK: 0,
-            minP: 0.0
-        )
-        parameters.repetitionPenalty = nil
-        let genParams = LLMActor.makeGenerateParameters(from: parameters)
-
-        let prepared = try await context.processor.prepare(
-            input: UserInput(chat: [.user(prompt)])
-        )
-        let promptTokens = prepared.text.tokens.asArray(Int32.self).map { Int($0) }
-        var iterator = try TokenIterator(
-            input: prepared, model: context.model, cache: nil, parameters: genParams
-        )
-        var ids: [Int] = []
-        while ids.count < newTokens, let token = iterator.next() {
-            ids.append(token)
-        }
         return Capture(
-            promptTokens: promptTokens,
-            generatedTokens: ids,
-            text: context.tokenizer.decode(tokenIds: ids),
+            generation: try await BenchmarkHarness.greedyGenerate(context: context),
             rotatedLinear: rotatedLinear,
             rotatedEmbedding: rotatedEmbedding)
     }

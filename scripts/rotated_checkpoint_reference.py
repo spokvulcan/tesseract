@@ -106,8 +106,8 @@ def main() -> int:
     args = parser.parse_args()
 
     report = json.loads(args.report.read_text())
-    prompt_ids = [int(t) for t in report["promptTokens"]]
-    swift_ids = [int(t) for t in report["generatedTokens"]]
+    prompt_ids = list(report["promptTokens"])
+    swift_ids = list(report["generatedTokens"])
     model_dir = args.model_dir or Path(report["modelDir"])
     if not swift_ids:
         print("FAIL: the report carries no generated tokens", file=sys.stderr)

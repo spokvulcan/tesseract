@@ -402,7 +402,8 @@ updating before it says anything again. The load check before the trap is
 still informative.
 
 `scripts/dev.sh rotated-checkpoint-parity` is the **Rotated Ternary
-Checkpoint** gate (ADR-0067; `MODEL_ID` defaults to `bonsai-2-27b`). A
+Checkpoint** gate (ADR-0067; `MODEL_ID` defaults to `bonsai-2-27b`, and extra
+arguments reach the binary as for the other loaded-model subcommands). A
 loader that skips the Hadamard rotation decodes plausible garbage, not an
 error, so the only proof is an independent implementation. The Swift half
 (`RotatedCheckpointParityRunner`, `--rotated-checkpoint-parity`) loads the
