@@ -409,7 +409,8 @@ error, so the only proof is an independent implementation. The Swift half
 (`RotatedCheckpointParityRunner`, `--rotated-checkpoint-parity`) loads the
 pack through `AgentEngine`, asserts the manifest modules were substituted
 with rotated layers, greedy-decodes a fixed prompt and writes the prompt and
-generated token ids to `benchmark/rotated-checkpoint-parity/latest.json`.
+generated token ids to the JSON report (latest.json) in
+`benchmark/rotated-checkpoint-parity/`.
 The reference half (`scripts/rotated_checkpoint_reference.py`, run from
 `research/bonsai-venv` with mlx-vlm installed) decodes the same prompt ids
 through mlx-vlm's `prism_hadamard_qwen35` and scores two things: the greedy
@@ -421,7 +422,8 @@ mlx-vlm loads the pack's float32 norms as stored and MLX promotes its residual
 stream to float32; the app casts them to the manifest's float16 at load, so
 `PARITY_REFERENCE_ARGS=--match-app-dtypes` runs the reference with the same
 cast and isolates the rotation logic from that difference. Run it for any
-change to `HadamardQuantized.swift`, the `PrismHadamardQwen35` classes,
+change to the vendor's `HadamardQuantized` layers (MLXLMCommon), the
+`PrismHadamardQwen35` classes,
 `ModelIdentity.baseArchitecture`, or a new rotated pack in the catalog.
 
 `scripts/dev.sh trace-replay` is the odd one out: it needs **no loaded

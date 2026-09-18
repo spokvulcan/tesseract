@@ -412,9 +412,10 @@ case "${1:-}" in
     dev)         cmd_dev ;;
     dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
-    prefix-cache-e2e|hybrid-cache-correctness|prefill-step-benchmark|paroquant-vlm-smoke)
-        # Flag and report subdirectory share the subcommand's name.
-        check="$1"; shift; _run_loaded_model_check "--$check" "$check" "$@" ;;
+    prefix-cache-e2e)         shift; _run_loaded_model_check --prefix-cache-e2e prefix-cache-e2e "$@" ;;
+    hybrid-cache-correctness) shift; _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness "$@" ;;
+    prefill-step-benchmark)   shift; _run_loaded_model_check --prefill-step-benchmark prefill-step-benchmark "$@" ;;
+    paroquant-vlm-smoke)      shift; _run_loaded_model_check --paroquant-vlm-smoke paroquant-vlm-smoke "$@" ;;
     rotated-checkpoint-parity) shift; cmd_rotated_checkpoint_parity "$@" ;;
     trace-replay)             cmd_trace_replay ;;
     archive)     cmd_archive ;;
