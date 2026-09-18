@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/spokvulcan/tesseract/compare/v1.14.0...v1.14.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **server:** keep the Emitted Path Index in render space so image-bearing sessions stay indexed ([#518](https://github.com/spokvulcan/tesseract/issues/518)) ([863e697](https://github.com/spokvulcan/tesseract/commit/863e697e4bf885eb3a0470a043c47d77ea9a821a))
+
 ## [1.14.0](https://github.com/spokvulcan/tesseract/compare/v1.13.1...v1.14.0) (2026-09-18)
 
 
