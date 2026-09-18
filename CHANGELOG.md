@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.14.0](https://github.com/spokvulcan/tesseract/compare/v1.13.1...v1.14.0) (2026-09-18)
+
+
+### Features
+
+* **models:** ship Bonsai 2 27B, a Rotated Ternary Checkpoint of Qwen3.8-27B (ADR-0067) ([#517](https://github.com/spokvulcan/tesseract/issues/517)) ([9e425da](https://github.com/spokvulcan/tesseract/commit/9e425dac44b3342d88ab6f6f094732979a872e6b))
+
+
+### Documentation
+
+* record the iOS v1 decisions in ADR-0066 and add the Preset Voice term ([#515](https://github.com/spokvulcan/tesseract/issues/515)) ([c098752](https://github.com/spokvulcan/tesseract/commit/c0987529a971584f222a7464e3bd180868e71e7e))
+
 ## [1.13.1](https://github.com/spokvulcan/tesseract/compare/v1.13.0...v1.13.1) (2026-09-15)
 
 
