@@ -136,8 +136,8 @@ nonisolated final class EmittedPathRequestTelemetry: @unchecked Sendable {
         var requestEdgeSuffixTokens: Int?
         /// Miss reason of the request-edge resolve, when it missed.
         var requestEdgeMissReason: String?
-        /// Why the request edge never consulted the index (an image-bearing
-        /// or unknown-fingerprint render), when it did not.
+        /// Why the request edge never consulted the index (an
+        /// unknown-fingerprint render), when it did not.
         var requestEdgeSkipReason: String?
         /// The most recent resolve of any spelling: its indexed prefix and
         /// suffix on a hit, or its miss reason — what an offline walk
@@ -194,7 +194,7 @@ nonisolated final class EmittedPathRequestTelemetry: @unchecked Sendable {
     }
 
     /// A render that never consulted the index — logged for the request
-    /// edge only, once per request, so an image-bearing request's "resolves
+    /// edge only, once per request, so an unindexed request's "resolves
     /// nothing" is visible with its reason.
     func recordSkip(spelling: Spelling, reason: String) {
         lock.withLock {

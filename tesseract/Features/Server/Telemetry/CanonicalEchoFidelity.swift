@@ -466,7 +466,7 @@ nonisolated enum CanonicalEchoFidelity {
             let decision = LiveLeafCapture.decide(
                 mode: mode, preservesThinking: renderContext.preservesThinking,
                 promptKeyPath: prompt, generatedTokens: generatedTokens,
-                cacheOffset: path.count, keySpaceIsIdentity: true)
+                cacheOffset: path.count)
             if case .boundary(let reason) = decision {
                 return SimulatedRegistration(
                     registration: EmittedPathRegistration.skipReason(for: reason).rawValue,
@@ -491,7 +491,7 @@ nonisolated enum CanonicalEchoFidelity {
             let outcome = EmittedPathRegistration.register(
                 EmittedPathRegistration.Inputs(
                     index: index, fingerprint: fingerprint, marker: marker, tokenizer: tokenizer,
-                    storedRenderBytes: bytes, storedMessage: echo, promptKeyPath: prompt,
+                    storedRenderBytes: bytes, storedMessage: echo, promptPath: prompt,
                     generatedTokens: generatedTokens, stoppedOn: marker.tokenID,
                     toolCallFormat: learning.toolCallFormat, tools: probeToolSpecs,
                     startsInsideThinkBlock: renderContext.startsInsideThinkBlock(

@@ -161,8 +161,7 @@ nonisolated enum LeafStorePhase {
             preservesThinking: preservesThinking,
             promptKeyPath: mlxStart.keySpace.keyPath,
             generatedTokens: turn.generatedTokens,
-            cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache),
-            keySpaceIsIdentity: mlxStart.keySpace.isIdentity
+            cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache)
         )
         switch decision {
         case .live(let offset):
@@ -492,7 +491,7 @@ nonisolated enum LeafStorePhase {
                 tokenizer: render.tokenizer,
                 storedRenderBytes: storedRenderBytes,
                 storedMessage: turn.storedMessage,
-                promptKeyPath: mlxStart.keySpace.keyPath,
+                promptPath: mlxStart.keySpace.renderSpacePath,
                 generatedTokens: turn.generatedTokens,
                 stoppedOn: mlxStart.generatedTokens.stopToken,
                 toolCallFormat: mlxStart.toolCallFormat,
@@ -726,8 +725,6 @@ nonisolated enum LeafStorePhase {
                 ])
         }
         switch reason {
-        case .nonIdentityKeySpace:
-            return record("non-identity-key-space", .info)
         case .noGeneratedTokens:
             return record("no-generated-tokens", .info)
         case .cacheOffsetOutsideLivePath(let cacheOffset, let promptCount, let liveCount):

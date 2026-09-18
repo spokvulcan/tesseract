@@ -289,27 +289,11 @@ struct RenderTokenCacheFakeTests {
 // MARK: - Cache eligibility
 
 /// The **Conversation Render** owns cache eligibility — decided once at its
-/// request-edge construction and re-checked at key-space sealing; the
-/// predicate five seams used to spell five ways, two of which disagreed on
-/// the unknown-fingerprint case.
+/// request-edge construction; the predicate five seams used to spell five
+/// ways, two of which disagreed on the unknown-fingerprint case.
 struct ConversationRenderEligibilityTests {
 
     private let tokenizer = GreedyTokenizer(pieces: [" "])
-
-    /// A key space carrying one image run — non-identity by construction,
-    /// built through the same fixture the builder suites use.
-    private func imageKeySpace() throws -> CacheKeySpace {
-        let conversation = HTTPPrefixCacheConversation(
-            systemPrompt: nil,
-            messages: [
-                HTTPPrefixCacheMessage(
-                    role: .user, content: "describe",
-                    images: [HTTPPrefixCacheImage(data: Data([0x01]))]
-                )
-            ]
-        )
-        return try FakeChatMLTokenizer.keySpace(for: conversation, runLengths: [4])
-    }
 
     /// An unknown fingerprint must BYPASS, never resolve under a synthetic
     /// shared key: the repeat path trusts (bytes, fingerprint) with no
@@ -319,24 +303,12 @@ struct ConversationRenderEligibilityTests {
         #expect(makeRender(tokenizer, fingerprint: nil).cacheFingerprint == nil)
     }
 
-    /// Media is the one render-side ineligibility: the model's class is
-    /// not an input (a vision container's text-only request is eligible;
-    /// the session shapes the token list at the processor's rank).
-    @Test func mediaBypasses() {
-        #expect(makeRender(tokenizer, hasMedia: true, fingerprint: "m").cacheFingerprint == nil)
-    }
-
-    @Test func eligibleTextOnlyRequestCarriesTheFingerprint() {
+    /// The unknown fingerprint is the one render-side ineligibility:
+    /// neither the model's class (the session shapes the token list at the
+    /// processor's rank) nor the request's images (the render carries one
+    /// pad per image; the keying edge expands it) is an input.
+    @Test func eligibleRequestCarriesTheFingerprint() {
         #expect(makeRender(tokenizer, fingerprint: "m").cacheFingerprint == "m")
-    }
-
-    /// Sealing re-checks eligibility against the settled key space: identity
-    /// keeps the fingerprint, an image-bearing space clears it (placeholder
-    /// runs need the real token list, so those requests always render).
-    @Test func sealingKeepsTheFingerprintOnlyForAnIdentityKeySpace() throws {
-        let render = makeRender(tokenizer, fingerprint: "m")
-        #expect(render.sealed(for: .identity()).cacheFingerprint == "m")
-        #expect(try render.sealed(for: imageKeySpace()).cacheFingerprint == nil)
     }
 
     /// The C31 plumbed base render travels with the eligibility decision and

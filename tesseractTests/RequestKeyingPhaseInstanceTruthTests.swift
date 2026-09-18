@@ -64,7 +64,8 @@ import Testing
     private static func runPhase(
         provider: ToyModelSessionProvider,
         conversation: HTTPPrefixCacheConversation,
-        modelFingerprint: String? = nil
+        modelFingerprint: String? = nil,
+        imageKeying: ModelIdentity.ImageKeying = visionFamilyKeying
     ) async throws -> OutcomeFacts {
         try await provider.withSession { session in
             switch try await RequestKeyingPhase.run(
@@ -75,7 +76,7 @@ import Testing
                 parameters: GenerateParameters(temperature: 0),
                 modelID: "toy/model",
                 modelFingerprint: modelFingerprint,
-                imageKeying: Self.visionFamilyKeying
+                imageKeying: imageKeying
             ) {
             case .keyed(let keyed):
                 return OutcomeFacts(
@@ -205,12 +206,15 @@ import Testing
         #expect(outcome.tokenNDim == 2)
     }
 
-    /// The guard the #439 eligibility extension must NOT loosen: genuinely
-    /// processed media — a vision-container instance, whose images survive
-    /// the instance filter — stays on the processor path even when the
-    /// tokenizer can render, because a media `prepare` (pad runs, 2D tokens,
-    /// grids) is nothing the render cache can reproduce.
-    @Test func visionInstanceMediaStaysOnProcessorPath() async throws {
+    /// Genuinely processed media — a vision-container instance, whose
+    /// images survive the instance filter — always runs the processor's
+    /// `prepare` (pixels, grids, the pad runs), and its own token list
+    /// stands whenever the render's placeholders and the processor's runs
+    /// do not pair up: here a template that renders no placeholder for the
+    /// image part and a processor that appends its run after the render.
+    @Test func visionInstanceMediaWithoutARenderedPlaceholderKeepsTheProcessorsTokens()
+        async throws
+    {
         let tokenizer = GreedyTokenizer(pieces: [
             "<|im_start|>", "<|im_end|>", "assistant", "user", "system",
             "\n", "look", " ",
@@ -224,9 +228,12 @@ import Testing
                 frame: THW(1, 8, 8)
             )
         )
+        let conversation = Self.imageConversation(imageData: ImageTestFixtures.tinyPNGData)
+        let render = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
         let outcome = try await Self.runPhase(
             provider: provider,
-            conversation: Self.imageConversation(imageData: ImageTestFixtures.tinyPNGData),
+            conversation: conversation,
             modelFingerprint: "vision-media-guard-\(UUID().uuidString)"
         )
 
@@ -234,6 +241,47 @@ import Testing
         #expect(outcome.isIdentity == false)
         #expect(outcome.seedsPositionAnchor)
         #expect(provider.recorder.verbs == [.prepare])
+        let pad = Self.visionFamilyKeying.imagePadTokenId
+        #expect(outcome.fullTokens == render + Array(repeating: pad, count: 4))
+        #expect(outcome.tokenNDim == 2)
+    }
+
+    /// The image-bearing request on a vision container (ADR-0063, amended
+    /// 2026-09-18): the processor's `prepare` supplies pixels and grids; the
+    /// token list is the render's — one pad per image, the Emitted Path
+    /// composition — expanded at the pad into the run the processor placed,
+    /// at the processor's rank. Keyed into the non-identity space.
+    @Test func visionInstanceImageRequestExpandsTheRenderAtTheProcessorsRuns() async throws {
+        let tokenizer = EmittedPathToyTokenizer()
+        let pad = tokenizer.imagePadID
+        let runLength = EmittedPathToyTokenizer.imagePadRunLength
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]),
+            tokenizer: tokenizer,
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: pad, padRunLength: runLength, frame: THW(1, 8, 8),
+                expandsInPlace: true)
+        )
+        let conversation = Self.imageConversation(imageData: ImageTestFixtures.tinyPNGData)
+        let render = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        #expect(render.count { $0 == pad } == 1)
+        let outcome = try await Self.runPhase(
+            provider: provider,
+            conversation: conversation,
+            modelFingerprint: "vision-media-render-\(UUID().uuidString)",
+            imageKeying: ModelIdentity.ImageKeying(imagePadTokenId: pad, spatialMergeSize: 2)
+        )
+
+        #expect(outcome.isKeyed)
+        #expect(outcome.isIdentity == false)
+        #expect(outcome.seedsPositionAnchor)
+        #expect(provider.recorder.verbs == [.prepare])
+        let expanded = render.flatMap { token in
+            token == pad ? Array(repeating: token, count: runLength) : [token]
+        }
+        #expect(outcome.fullTokens == expanded)
+        #expect(outcome.tokenNDim == 2)
     }
 
     /// The guard the fix must NOT loosen: a vision-container instance whose

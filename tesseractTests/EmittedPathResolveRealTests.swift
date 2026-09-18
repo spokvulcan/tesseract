@@ -55,8 +55,8 @@ struct EmittedPathResolveRealTests {
         tokenizer: any MLXLMCommon.Tokenizer, tools: [ToolSpec]?,
         context: TemplateRenderContext, fingerprint: String, index: EmittedPathIndex
     ) -> ConversationRender {
-        ConversationRender.forTextOnlyRequest(
-            tokenizer: tokenizer, toolSpecs: tools, renderContext: context, hasMedia: false,
+        ConversationRender.forRequest(
+            tokenizer: tokenizer, toolSpecs: tools, renderContext: context,
             modelFingerprint: fingerprint,
             cache: RenderTokenCache(), emittedPathIndex: index, diagnostics: nil)
     }
@@ -119,7 +119,7 @@ struct EmittedPathResolveRealTests {
             EmittedPathRegistration.Inputs(
                 index: index, fingerprint: fingerprint, marker: marker,
                 tokenizer: render.tokenizer, storedRenderBytes: storedBytes, storedMessage: echo,
-                promptKeyPath: prompt, generatedTokens: Array(path[prompt.count...]),
+                promptPath: prompt, generatedTokens: Array(path[prompt.count...]),
                 stoppedOn: marker.tokenID, toolCallFormat: .qwen35, tools: tools,
                 startsInsideThinkBlock: startsInsideThinkBlock))
         return (path, outcome)

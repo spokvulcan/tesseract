@@ -112,7 +112,12 @@ layer classes on an unmerged mlx-swift fork branch and no model integration.
   cache support applies unchanged" held for the tree but not for the index,
   and a Pi `write` turn re-prefilled 18,988 tokens in 95 s. ADR-0063's
   amendment of the same date removes the class from the eligibility; the
-  session shapes the token list at the container's rank.
+  session shapes the token list at the container's rank. The same session
+  then read a PNG, and as a vision container the pack processes it: the
+  image-bearing request skipped the index (`media`), re-encoded a 59 KB
+  `write` turn canonically and re-prefilled 29,715 tokens from the system
+  checkpoint. ADR-0063's second amendment of that date keeps the index in
+  render space, so a Bonsai session stays indexed after an image enters it.
 - The acceptance gate gains a greedy-parity check against the mlx-vlm
   reference: a wrong sign width or dtype slip yields plausible text, not an
   error.

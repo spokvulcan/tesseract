@@ -8,9 +8,8 @@ import Testing
 /// decisions 4/5), serving: every byte-producing verb resolves against the
 /// index and returns the deepest registered path plus the canonical encode
 /// of the bytes after its marker; an unregistered history renders
-/// canonically; renders that never consult the index — image-bearing
-/// (sealed non-identity), uncached, and a template whose marker is not a
-/// hard boundary — say so.
+/// canonically; renders that never consult the index — uncached, and a
+/// template whose marker is not a hard boundary — say so.
 struct ConversationRenderEmittedPathTests {
 
     private static let fingerprint = "fp-render"
@@ -31,12 +30,11 @@ struct ConversationRenderEmittedPathTests {
     }
 
     private func makeRender(
-        index: EmittedPathIndex?, tokenizer: (any Tokenizer)? = nil,
-        hasMedia: Bool = false
+        index: EmittedPathIndex?, tokenizer: (any Tokenizer)? = nil
     ) -> ConversationRender {
-        ConversationRender.forTextOnlyRequest(
+        ConversationRender.forRequest(
             tokenizer: tokenizer ?? self.tokenizer, toolSpecs: nil, renderContext: .canonical,
-            hasMedia: hasMedia, modelFingerprint: Self.fingerprint,
+            modelFingerprint: Self.fingerprint,
             cache: RenderTokenCache(), emittedPathIndex: index, diagnostics: nil)
     }
 
@@ -202,41 +200,6 @@ struct ConversationRenderEmittedPathTests {
             return (reason, cause)
         }
         return nil
-    }
-
-    @Test func aSealedNonIdentityRenderNeverConsultsTheIndex() throws {
-        let index = EmittedPathIndex(byteBudget: 1 << 20)
-        _ = try registerTurnOne(into: index)
-        let render = makeRender(index: index)
-        let pad = 248_056
-        let imageSpace = try CacheKeySpace.make(
-            preparedTokens: [1, 2, 248_053, pad, pad, 248_054, 3],
-            images: [.init(digest: ImageDigest(imageBytes: Data("a".utf8)), positionSpan: 2)],
-            placeholderIdentity: ImagePlaceholderIdentity(imagePadTokenId: pad)
-        ).get()
-        #expect(!imageSpace.isIdentity)
-        let sealed = render.sealed(for: imageSpace)
-        #expect(sealed.fullRender(messages: turnTwo) == nil)
-        // The leaf store's render runs in full and canonically; no resolve.
-        let stored = try sealed.storedRender(messages: turnTwo)
-        let expected = try tokenizer.renderChatTemplate(
-            messages: turnTwo, tools: nil, additionalContext: ["add_generation_prompt": false])
-        #expect(stored.tokens == tokenizer.encode(text: expected, addSpecialTokens: false))
-        #expect(index.statsSnapshot().resolves == 0)
-        let summary = try #require(sealed.emittedPathTelemetry?.summary)
-        #expect(summary.resolves == 0)
-        #expect(summary.requestEdgeSkipReason == "nonIdentityKeySpace")
-        let skip = try #require(registrationSkip(of: sealed))
-        #expect(skip.reason == .ineligibleRender)
-        #expect(skip.cause == "nonIdentityKeySpace")
-    }
-
-    @Test func aMediaBearingRenderIsIneligibleAtConstruction() throws {
-        let index = EmittedPathIndex(byteBudget: 1 << 20)
-        let render = makeRender(index: index, hasMedia: true)
-        #expect(render.fullRender(messages: turnTwo) == nil)
-        #expect(render.emittedPathTelemetry?.summary.requestEdgeSkipReason == "media")
-        #expect(index.statsSnapshot().resolves == 0)
     }
 
     @Test func anUncachedRenderConsultsNoIndexUnlessGivenOne() throws {

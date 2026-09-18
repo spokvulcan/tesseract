@@ -296,8 +296,10 @@ requests), token path (ambiguous near images), virtual/hash/key tokens.
 The per-request authority that holds the request's image table and reconciles the
 two token spaces — it produces the **Cache Key Path** and translates any
 render-space token sequence into key space, so everything that touches the radix
-tree shares one space. Failing to build it yields an **Unkeyed Completion**; a
-later translation failure degrades only the consuming feature, not the request.
+tree shares one space, and collapses its key path back to render space (one pad
+per image) for the **Emitted Path Index**, which never holds an image's identity
+or run. Failing to build it yields an **Unkeyed Completion**; a later
+translation failure degrades only the consuming feature, not the request.
 _Avoid_: key path splice (a shallower predecessor), space converter, token mapper,
 render fixup.
 
@@ -308,8 +310,8 @@ re-render, the leaf probes, the speculative future-shared-prefix probe pair and
 the stable-prefix detector's probe pair, identical to the shape prepare uses, so
 a probe render cannot drift from prepare's. Since 2026-09 a module, not a
 convention: one per-request value (`ConversationRender`) built at **Request
-Keying** where instance truth lives, sealed for the settled **Cache Key Space**,
-whose render verbs own the whole choreography — cache eligibility, the
+Keying** where instance truth lives — image-agnostic, every render one pad per
+image — whose render verbs own the whole choreography — cache eligibility, the
 Render+Token Cache resolve, the template fallback, the no-generation-prompt
 merged context — so a call site can no longer wire an ingredient wrong (the
 issue #439 defect class). The two probe pairs use its cache-free probe verbs
@@ -465,8 +467,10 @@ a decision, not a capture).
 **Emitted Path**:
 The token path a conversation prefix actually took through the model on this
 server — the prompt ids as fed plus the generated ids, ending with the canonical
-end-of-turn id. The truth for every assistant turn the server generated; a
-canonical re-encoding of such a turn is not it.
+end-of-turn id; kept in render space, each image's fed run collapsed to the
+template's single pad, so the path names no image. The truth for every
+assistant turn the server generated; a canonical re-encoding of such a turn is
+not it.
 _Avoid_: **Cache Key Path** (the prompt as keyed, which the Emitted Path begins
 with); generated tokens (only the tail); canonical path, stored path (the
 re-render's encoding, which the Emitted Path replaces for server-generated
@@ -478,7 +482,9 @@ the start of the render through a server-generated assistant message's
 end-of-turn marker — to that prefix's **Emitted Path**. Keyed on the whole
 prefix so the same text after a different history is a different key; bounded in
 bytes, evicted least-recently-used, cleared on model unload; last writer wins on
-a same key.
+a same key. Image-agnostic: the render bytes carry one placeholder per image and
+the path one pad, and an image's identity and run enter through the request's
+own **Cache Key Space** and grids after the resolve.
 _Avoid_: token cache (the Render+Token Cache holds canonical encodes and never an
 emitted id); session table, lineage store (nothing is keyed by client or
 session); the tree (KV lives there — the index is provenance and outlives the
@@ -489,7 +495,9 @@ The one way a request's tokens are built: render to bytes, find the deepest
 end-of-turn marker the **Emitted Path Index** knows, take that entry's path,
 canonically encode only the bytes after the marker, concatenate. Its output is
 both the model input and the **Cache Key Space** input; anything unindexed
-encodes canonically and is a safe miss. Text-only requests only.
+encodes canonically and is a safe miss. For an image-bearing request the
+**Request Keying** edge then expands each pad into the run the processor placed
+for that image, so the model input is the resolve's list at prepared length.
 _Avoid_: tokenize (the resolve may not tokenize an indexed prefix at all);
 render-and-encode (the per-call-site spellings it replaces); lookup (the tree's
 read side, which consumes the resolve's output).
@@ -499,9 +507,8 @@ Storing a finished turn's leaf straight from the live decode cache at the
 cache's own offset, under the **Emitted Path**, with no re-prefill. By
 construction for a turn the **Emitted Path Index** registers: the path the leaf
 is keyed on is the path the model fed, so nothing is compared against a
-re-render; only structural eligibility (an intervened turn, a non-identity key
-space, no fed ids, an offset outside the live path) sends a turn to the boundary
-path.
+re-render; only structural eligibility (an intervened turn, no fed ids, an
+offset outside the live path) sends a turn to the boundary path.
 _Avoid_: cache reuse (too broad — the prompt hit is also reuse); proven
 append-stability (the ADR-0062 shape — a per-turn comparison the index made
 unnecessary); preserve-thinking fast path (the render mode makes a turn

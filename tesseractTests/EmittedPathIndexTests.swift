@@ -288,7 +288,7 @@ struct EmittedPathIndexTests {
 
     @Test func aTurnStoppedOnTheEndOfTurnIdIsThePathAsFed() {
         let path = EmittedPath.make(
-            promptKeyPath: prompt, generatedTokens: [10, 11, 99], stoppedOn: 99, endOfTurnID: 99)
+            promptPath: prompt, generatedTokens: [10, 11, 99], stoppedOn: 99, endOfTurnID: 99)
         #expect(path.ids == [1, 2, 3, 10, 11, 99])
         #expect(path.appendedEndOfTurn == false)
         #expect(path.promptCount == 3)
@@ -298,7 +298,7 @@ struct EmittedPathIndexTests {
 
     @Test func aForeignStopIdKeepsTheFedIdAndAppendsTheEndOfTurnId() {
         let path = EmittedPath.make(
-            promptKeyPath: prompt, generatedTokens: [10, 11, 42], stoppedOn: 42, endOfTurnID: 99)
+            promptPath: prompt, generatedTokens: [10, 11, 42], stoppedOn: 42, endOfTurnID: 99)
         #expect(path.ids == [1, 2, 3, 10, 11, 42, 99])
         #expect(path.appendedEndOfTurn == true)
         #expect(path.contentIDs == [10, 11])
@@ -306,7 +306,7 @@ struct EmittedPathIndexTests {
 
     @Test func aTokenLimitCutAppendsTheEndOfTurnIdAndKeepsEveryFedIdAsContent() {
         let path = EmittedPath.make(
-            promptKeyPath: prompt, generatedTokens: [10, 11, 12], stoppedOn: nil, endOfTurnID: 99)
+            promptPath: prompt, generatedTokens: [10, 11, 12], stoppedOn: nil, endOfTurnID: 99)
         #expect(path.ids == [1, 2, 3, 10, 11, 12, 99])
         #expect(path.appendedEndOfTurn == true)
         #expect(path.contentIDs == [10, 11, 12])
@@ -316,7 +316,7 @@ struct EmittedPathIndexTests {
         // DFlash2 can return a token the cache never fed; the path is what
         // was emitted, the leaf ends at the cache offset (the caller's job).
         let path = EmittedPath.make(
-            promptKeyPath: prompt, generatedTokens: [10, 11, 99], stoppedOn: 99, endOfTurnID: 99)
+            promptPath: prompt, generatedTokens: [10, 11, 99], stoppedOn: 99, endOfTurnID: 99)
         #expect(path.ids.count == 6)
         #expect(path.contentIDs == [10, 11])
     }

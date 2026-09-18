@@ -33,9 +33,10 @@ nonisolated enum RequestKeyingPhase {
         let tokenNDim: Int
         let partitionKey: CachePartitionKey
         let keySpace: CacheKeySpace
-        /// The request's **Conversation Render**, sealed for `keySpace` —
-        /// the one render authority every later phase (planner boundary,
-        /// leaf-store measure, admission probes) draws on.
+        /// The request's **Conversation Render** — the one render authority
+        /// every later phase (planner boundary, leaf-store measure,
+        /// admission probes) draws on. Image-agnostic: its renders carry
+        /// one pad per image, which `keySpace` translates.
         let render: ConversationRender
         /// The recognized vision container mis-positions M-RoPE on any
         /// nil-state warm forward — text-only restores included — so the
@@ -113,43 +114,54 @@ nonisolated enum RequestKeyingPhase {
             }
             return .ciImage(decoded)
         }
-        // C25 Render+Token Cache: text-only requests tokenize through the
-        // cache on EITHER model class — the `.messages` prompt reaches every
-        // processor's `generate(from:)` unchanged, so the cache renders
-        // exactly what `prepare` would, and the session's `textOnlyInput`
-        // shapes the list at the processor's own rank (1D on the LLM-class
-        // text processor, 2D `[1, seq]` on a vision container). Media, an
-        // unknown model fingerprint, non-rendering tokenizers, and any
-        // render/encode failure all fall back to the processor. This is the
-        // ONE construction of the request's **Conversation Render** —
-        // eligibility decided here, where instance truth lives, then sealed
-        // for the key space below and threaded to every later render.
-        // `hasMedia` keys on the INSTANCE-FILTERED list (issue #439): a
-        // dropped-image request is text-only by construction — the processor
-        // never sees the bytes, only the same content-array prompt the cache
-        // renders — so it is C25-eligible like any other text render, and
-        // real media (images an instance actually processes) is the one
-        // render-side ineligibility left.
-        let render = ConversationRender.forTextOnlyRequest(
+        // C25 Render+Token Cache and the Emitted Path Resolve (ADR-0063):
+        // every request renders through the cache on EITHER model class —
+        // the `.messages` prompt reaches every processor's `generate(from:)`
+        // unchanged, so the cache renders exactly what `prepare` would. This
+        // is the ONE construction of the request's **Conversation Render**
+        // — eligibility decided here, where instance truth lives, then
+        // threaded to every later render. An unknown model fingerprint,
+        // non-rendering tokenizers, and any render/encode failure fall back
+        // to the processor.
+        //
+        // A text-only request (the instance-filtered image list is empty —
+        // issue #439: a dropped-image request is text-only by construction)
+        // is the rendered list at the processor's own rank (1D on the
+        // LLM-class text processor, 2D `[1, seq]` on a vision container).
+        // An image-bearing request runs the processor's `prepare` for its
+        // pixels and grids, then takes the rendered list — the Emitted Path
+        // composition, one pad per image — expanded at each pad into the run
+        // the processor placed for that image. Until 2026-09-18 media was a
+        // render ineligibility and every request after an image entered a
+        // session re-encoded canonically: a Pi session against Bonsai 2 27B
+        // read a PNG, diverged inside a 59 KB `write` turn and re-prefilled
+        // 29,715 tokens from the system checkpoint.
+        let render = ConversationRender.forRequest(
             tokenizer: session.tokenizer,
             toolSpecs: canonicalTools,
             renderContext: renderContext,
-            hasMedia: !keyedImages.isEmpty,
             modelFingerprint: modelFingerprint,
             emittedPathIndex: emittedPathIndex,
             diagnostics: diagnostics
         )
+        let renderedTokens = render.fullRender(messages: conversation.promptMessages)
         let fullInput: LMInput
-        if let renderedTokens = render.fullRender(messages: conversation.promptMessages) {
+        if keyedImages.isEmpty, let renderedTokens {
             fullInput = session.textOnlyInput(tokens: renderedTokens)
         } else {
-            fullInput = try await session.prepare(
+            let prepared = try await session.prepare(
                 UserInput(
                     messages: conversation.promptMessages,
                     images: userInputImages,
                     tools: canonicalTools,
                     additionalContext: renderContext.additionalContext()
                 )
+            )
+            fullInput = imageBearingInput(
+                rendered: renderedTokens,
+                prepared: prepared,
+                imagePadTokenId: effectiveImageKeying?.imagePadTokenId,
+                diagnostics: diagnostics
             )
         }
         // Sequence length is always the LAST dim. For LLM models tokens are
@@ -226,8 +238,54 @@ nonisolated enum RequestKeyingPhase {
                 tokenNDim: tokenNDim,
                 partitionKey: partitionKey,
                 keySpace: keySpace,
-                render: render.sealed(for: keySpace),
+                render: render,
                 seedsPositionAnchor: effectiveImageKeying != nil
             ))
+    }
+
+    /// The image-bearing request's model input over the render's tokens:
+    /// the processor's pixels and grids as prepared, its text replaced by
+    /// the rendered list — the Emitted Path composition, one pad per image —
+    /// with each pad expanded into the run the processor placed for that
+    /// image, at the processor's own rank and with its mask shape. The
+    /// processor's own list stands when the render bypassed (`rendered` is
+    /// nil), when the family has no placeholder identity, or when the
+    /// render's placeholders and the processor's runs do not pair up (a
+    /// processor that appends its runs to a render that placed none): that
+    /// request keeps the canonical tokens and logs why.
+    private static func imageBearingInput(
+        rendered: [Int]?,
+        prepared: LMInput,
+        imagePadTokenId: Int?,
+        diagnostics: PrefixCacheDiagnostics.Context?
+    ) -> LMInput {
+        guard let rendered, let imagePadTokenId else { return prepared }
+        let preparedTokens = LLMActor.extractTokenSequence(prepared.text.tokens)
+        let runs = ImagePlaceholderRuns.runs(in: preparedTokens, padTokenId: imagePadTokenId)
+        guard
+            let expanded = ImagePlaceholderRuns.expand(
+                renderTokens: rendered, padTokenId: imagePadTokenId,
+                runLengths: runs.map(\.count))
+        else {
+            let placeholders = rendered.count { $0 == imagePadTokenId }
+            diagnostics?.logSkip(
+                stage: "imageRenderExpansion", reason: "placeholderStructureMismatch",
+                extraFields: [
+                    ("renderPlaceholders", "\(placeholders)"), ("preparedRuns", "\(runs.count)"),
+                ])
+            Log.image.debug(
+                "image-bearing render kept the processor's tokens — "
+                    + "renderPlaceholders=\(placeholders) preparedRuns=\(runs.count)")
+            return prepared
+        }
+        let flat = MLXArray(expanded)
+        let tokens = prepared.text.tokens.ndim == 1 ? flat : flat.expandedDimensions(axis: 0)
+        let mask = prepared.text.mask.map { ones(like: tokens).asType($0.dtype) }
+        return LMInput(
+            text: LMInput.Text(tokens: tokens, mask: mask),
+            image: prepared.image,
+            video: prepared.video,
+            audio: prepared.audio
+        )
     }
 }

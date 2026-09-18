@@ -55,7 +55,10 @@ whether the leaf can be captured from the live decode cache
    used to skip for lack of one now store a live leaf.
 4. Any mismatch falls back to the boundary plan and the unchanged
    restore-and-re-prefill. Eligibility misses (intervened turn,
-   non-identity key space with image placeholders, no fed ids) log at info.
+   non-identity key space with image placeholders, no fed ids) log at info
+   — the non-identity guard was lifted on 2026-09-18 (ADR-0063's
+   render-space amendment): the registration stores the path in render
+   space, so image-bearing turns take the fast path too.
    A real disagreement (divergence, live longer than stored) logs a warning
    with the offset, both ids and four ids of context on each side, because
    on an append-stable render it means the render or the wire text is

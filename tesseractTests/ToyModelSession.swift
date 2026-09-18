@@ -259,21 +259,24 @@ nonisolated enum ToyVocabulary {
 /// (PRD #137, user story 12), whose every `prepare` emits the VLM 2D
 /// `[batch, seq]` token shape — a text-only prompt included, exactly as
 /// `Qwen3VLProcessor` adds the batch axis to its chat-template tokens.
-/// Image-bearing input appends one placeholder pad run per image and
-/// returns a `ProcessedImage` whose frames carry the stub's grid — the
-/// prepared shape the **Cache Key Space** and the ADR-0014 patch guard
-/// price, with no vision tower behind it.
+/// Image-bearing input places one placeholder pad run per image — expanded
+/// in place from the template's single pad (the Qwen-VL processor shape)
+/// or appended after the render — and returns a `ProcessedImage` whose
+/// frames carry the stub's grid: the prepared shape the **Cache Key Space**
+/// and the ADR-0014 patch guard price, with no vision tower behind it.
 nonisolated struct ToyUserInputProcessor: UserInputProcessor {
     /// The image-keying facts the stub fabricates per attached image.
     struct VisionStub {
         let padTokenId: Int
         let padRunLength: Int
         let frame: THW
-        /// When set, the template already rendered each image's placeholder
-        /// run in place (the Qwen-VL shape, where text follows the image);
-        /// the stub then supplies only the frames. Off, the run is appended
-        /// after the render.
-        var inlineRuns = false
+        /// When set, the template rendered each image as ONE pad and the
+        /// stub expands it in place into the run — exactly what
+        /// `Qwen3VLProcessor.prepare` does with `replacePaddingTokens`, so
+        /// render space (one pad) and prepared space (the run) differ where
+        /// the real ones do. Off, the run is appended after the render (a
+        /// template that renders no placeholder at all).
+        var expandsInPlace = false
     }
 
     let tokenizer: any Tokenizer
@@ -303,12 +306,21 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
             // tokenizes through the Render+Token Cache instead.
             return LMInput(tokens: MLXArray(tokens.map(Int32.init))[.newAxis])
         }
-        var frames: [THW] = []
-        for _ in input.images {
-            if !vision.inlineRuns {
+        let frames = input.images.map { _ in vision.frame }
+        if vision.expandsInPlace {
+            let placeholders = tokens.count { $0 == vision.padTokenId }
+            guard placeholders == input.images.count else {
+                throw PlaceholderCountMismatch(
+                    placeholders: placeholders, images: input.images.count)
+            }
+            tokens = tokens.flatMap { token in
+                token == vision.padTokenId
+                    ? Array(repeating: token, count: vision.padRunLength) : [token]
+            }
+        } else {
+            for _ in input.images {
                 tokens += Array(repeating: vision.padTokenId, count: vision.padRunLength)
             }
-            frames.append(vision.frame)
         }
         // Image-bearing prepares emit the VLM 2D `[batch, seq]` token shape —
         // the keyed arm's image-span slicing indexes both axes.
@@ -317,6 +329,13 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
             image: LMInput.ProcessedImage(pixels: MLXArray.zeros([4, 3]), frames: frames)
         )
     }
+}
+
+/// The in-place vision stub's version of the vendor processor's
+/// "placeholder tokens do not match frames" failure.
+nonisolated struct PlaceholderCountMismatch: Error {
+    let placeholders: Int
+    let images: Int
 }
 
 /// One-shot gate for the toy model's forward hook: pauses the model thread

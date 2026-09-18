@@ -31,7 +31,11 @@ struct EmittedPathToyTokenizer: ChatTemplateRendering {
         "KNI", "KN", "NI", "K", "N", "I",
     ]
 
-    /// An image part renders as this run in place, the Qwen-VL shape.
+    /// An image part renders as ONE pad between the vision markers — the
+    /// Qwen-VL template shape; the container's processor expands that pad
+    /// in place into a run of `imagePadRunLength` (`ToyUserInputProcessor`
+    /// with an in-place `VisionStub`), so render space and prepared space
+    /// differ exactly where the real ones do.
     static let imagePad = "<|image_pad|>"
     static let imagePadRunLength = 4
 
@@ -130,16 +134,14 @@ struct EmittedPathToyTokenizer: ChatTemplateRendering {
     }
 
     /// A message's text: a string content, or a content array's parts in
-    /// order — text as is, an image as its framed placeholder run.
+    /// order — text as is, an image as its framed single placeholder.
     private static func text(of message: [String: any Sendable]) -> String {
         if let content = message["content"] as? String { return content }
         guard let parts = message["content"] as? [[String: any Sendable]] else { return "" }
         return parts.map { part in
             switch part["type"] as? String {
             case "image":
-                "<|vision_start|>"
-                    + String(repeating: imagePad, count: imagePadRunLength)
-                    + "<|vision_end|>"
+                "<|vision_start|>" + imagePad + "<|vision_end|>"
             default:
                 part["text"] as? String ?? ""
             }

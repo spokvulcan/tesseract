@@ -110,20 +110,16 @@ struct ServerCompletionLeafSkipLogTests {
         #expect(fields(log) == [["mode", "directToolLeaf"], ["preservesThinking", "true"]])
         #expect(
             LeafStorePhase.liveFallbackLog(
-                for: .nonIdentityKeySpace, mode: .canonicalUserLeaf, preservesThinking: false
-            ).reason == "non-identity-key-space")
-        #expect(
-            LeafStorePhase.liveFallbackLog(
                 for: .noGeneratedTokens, mode: .canonicalUserLeaf, preservesThinking: false
             ).level == .info)
     }
 
     @Test func liveFallbackUnderANonThinkingTemplateNamesTheDirectMode() {
-        // An image-bearing request under a non-thinking template: the
-        // pre-existing direct labels, so dashboards keep their vocabulary.
+        // A guard failure under a non-thinking template: the pre-existing
+        // direct labels, so dashboards keep their vocabulary.
         let log = LeafStorePhase.liveFallbackLog(
-            for: .nonIdentityKeySpace, mode: .directLeaf, preservesThinking: false)
-        #expect(log.reason == "non-identity-key-space")
+            for: .noGeneratedTokens, mode: .directLeaf, preservesThinking: false)
+        #expect(log.reason == "no-generated-tokens")
         #expect(fields(log) == [["mode", "leaf"], ["preservesThinking", "false"]])
     }
 

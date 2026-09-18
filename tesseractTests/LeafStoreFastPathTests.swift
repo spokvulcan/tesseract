@@ -21,8 +21,7 @@ struct LeafStoreFastPathTests {
         mode: HTTPLeafStoreMode = .directToolLeaf,
         preservesThinking: Bool = true,
         generated: [Int]? = nil,
-        cacheOffset: Int? = nil,
-        identity: Bool = true
+        cacheOffset: Int? = nil
     ) -> LiveLeafCapture.Decision {
         let gen = generated ?? self.generated
         return LiveLeafCapture.decide(
@@ -30,8 +29,7 @@ struct LeafStoreFastPathTests {
             preservesThinking: preservesThinking,
             promptKeyPath: prompt,
             generatedTokens: gen,
-            cacheOffset: cacheOffset ?? prompt.count + gen.count,
-            keySpaceIsIdentity: identity
+            cacheOffset: cacheOffset ?? prompt.count + gen.count
         )
     }
 
@@ -82,10 +80,6 @@ struct LeafStoreFastPathTests {
                 == .boundary(.thinkStrippingUserBoundary))
     }
 
-    @Test func nonIdentityKeySpaceFallsBack() {
-        #expect(decide(preservesThinking: true, identity: false) == .boundary(.nonIdentityKeySpace))
-    }
-
     @Test func emptyGenerationFallsBack() {
         #expect(
             decide(preservesThinking: true, generated: [], cacheOffset: prompt.count)
@@ -114,8 +108,24 @@ struct LeafStoreFastPathTests {
 
     @Test func theStructuralGuardsAreNamedBeforeTheRenderRule() {
         #expect(
-            decide(mode: .canonicalUserLeaf, preservesThinking: false, identity: false)
-                == .boundary(.nonIdentityKeySpace))
+            decide(
+                mode: .canonicalUserLeaf, preservesThinking: false, generated: [],
+                cacheOffset: prompt.count)
+                == .boundary(.noGeneratedTokens))
+    }
+
+    /// An image-bearing turn's key path carries its digest pseudo-tokens
+    /// and is the path the tree keys on: the fast path applies to it like
+    /// any other (the registration stores the path in render space). Until
+    /// 2026-09-18 a non-identity key space was a structural fallback, so no
+    /// turn after an image entered a session registered.
+    @Test func anImageBearingKeyPathIsLive() {
+        let keyPath = [1, 2, -5, -6, -7, 3]
+        #expect(
+            LiveLeafCapture.decide(
+                mode: .directToolLeaf, preservesThinking: true, promptKeyPath: keyPath,
+                generatedTokens: generated, cacheOffset: keyPath.count + generated.count)
+                == .live(offset: keyPath.count + generated.count))
     }
 
     // MARK: the path the leaf is admitted under

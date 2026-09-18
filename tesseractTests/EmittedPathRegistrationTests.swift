@@ -54,7 +54,7 @@ struct EmittedPathRegistrationTests {
             tokenizer: tokenizer,
             storedRenderBytes: storedBytes,
             storedMessage: .assistant(content: storedContent),
-            promptKeyPath: prompt,
+            promptPath: prompt,
             generatedTokens: generated,
             stoppedOn: stoppedOn,
             toolCallFormat: .xmlFunction,
@@ -70,8 +70,8 @@ struct EmittedPathRegistrationTests {
             Issue.record("expected a registration")
             return
         }
-        #expect(registered.pathLength == inputs.promptKeyPath.count + 2)
-        #expect(registered.promptTokens == inputs.promptKeyPath.count)
+        #expect(registered.pathLength == inputs.promptPath.count + 2)
+        #expect(registered.promptTokens == inputs.promptPath.count)
         #expect(registered.generatedTokens == 2)
         #expect(registered.appendedEndOfTurn == false)
         #expect(registered.previousPathLength == nil)
@@ -82,7 +82,7 @@ struct EmittedPathRegistrationTests {
             renderedBytes: inputs.storedRenderBytes, marker: Array("<|im_end|>".utf8))
         #expect(
             index.lookup(fingerprint: Self.fingerprint, hash: hashes.last!.hash)
-                == inputs.promptKeyPath + [hello, imEnd])
+                == inputs.promptPath + [hello, imEnd])
     }
 
     @Test func aForeignStopIdIsKeptAndTheMarkerAppended() throws {
@@ -95,12 +95,12 @@ struct EmittedPathRegistrationTests {
             return
         }
         #expect(registered.appendedEndOfTurn == true)
-        #expect(registered.pathLength == inputs.promptKeyPath.count + 3)
+        #expect(registered.pathLength == inputs.promptPath.count + 3)
         let hashes = EmittedPathIndex.prefixHashes(
             renderedBytes: inputs.storedRenderBytes, marker: Array("<|im_end|>".utf8))
         #expect(
             index.lookup(fingerprint: Self.fingerprint, hash: hashes.last!.hash)
-                == inputs.promptKeyPath + [hello, foreign, imEnd])
+                == inputs.promptPath + [hello, foreign, imEnd])
     }
 
     @Test func aTokenLimitCutAppendsTheMarker() throws {
@@ -112,7 +112,7 @@ struct EmittedPathRegistrationTests {
             return
         }
         #expect(registered.appendedEndOfTurn == true)
-        #expect(registered.pathLength == inputs.promptKeyPath.count + 2)
+        #expect(registered.pathLength == inputs.promptPath.count + 2)
     }
 
     @Test func aFidelityMismatchRegistersNothingAndCounts() throws {
@@ -144,8 +144,8 @@ struct EmittedPathRegistrationTests {
             Issue.record("expected a registration")
             return
         }
-        #expect(registered.previousPathLength == second.promptKeyPath.count + 2)
-        #expect(registered.pathLength == second.promptKeyPath.count + 3)
+        #expect(registered.previousPathLength == second.promptPath.count + 2)
+        #expect(registered.pathLength == second.promptPath.count + 3)
         #expect(index.statsSnapshot().overwrites == 1)
     }
 
@@ -156,7 +156,7 @@ struct EmittedPathRegistrationTests {
         inputs = EmittedPathRegistration.Inputs(
             index: inputs.index, fingerprint: inputs.fingerprint, marker: inputs.marker,
             tokenizer: inputs.tokenizer, storedRenderBytes: Array("no markers here".utf8),
-            storedMessage: inputs.storedMessage, promptKeyPath: inputs.promptKeyPath,
+            storedMessage: inputs.storedMessage, promptPath: inputs.promptPath,
             generatedTokens: inputs.generatedTokens, stoppedOn: inputs.stoppedOn,
             toolCallFormat: inputs.toolCallFormat, tools: inputs.tools,
             startsInsideThinkBlock: inputs.startsInsideThinkBlock)
@@ -171,8 +171,6 @@ struct EmittedPathRegistrationTests {
 
     @Test func boundaryPathTurnsMapToTheFastPathsGuards() {
         typealias Reason = EmittedPathRegistration.SkipReason
-        #expect(
-            EmittedPathRegistration.skipReason(for: .nonIdentityKeySpace) == .nonIdentityKeySpace)
         #expect(EmittedPathRegistration.skipReason(for: .noGeneratedTokens) == .noGeneratedTokens)
         #expect(
             EmittedPathRegistration.skipReason(
@@ -188,7 +186,6 @@ struct EmittedPathRegistrationTests {
 
     @Test func skipReasonsAreCamelCaseWireStrings() {
         typealias Reason = EmittedPathRegistration.SkipReason
-        #expect(Reason.nonIdentityKeySpace.rawValue == "nonIdentityKeySpace")
         #expect(Reason.noGeneratedTokens.rawValue == "noGeneratedTokens")
         #expect(Reason.cacheOffsetOutsideLivePath.rawValue == "cacheOffsetOutsideLivePath")
         #expect(Reason.fidelityRejected.rawValue == "fidelityRejected")

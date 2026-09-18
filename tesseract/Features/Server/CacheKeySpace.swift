@@ -77,6 +77,23 @@ nonisolated struct CacheKeySpace: Sendable {
     /// True for text-only requests: every operation is the identity.
     var isIdentity: Bool { imageTable.isEmpty }
 
+    /// The prompt in render space — the key path with each image's
+    /// pseudo-token run collapsed back to the template's single pad; the
+    /// key path itself (the prepared tokens) for a text-only request. What
+    /// the **Emitted Path Index** stores for an image-bearing turn (ADR-0063,
+    /// amended 2026-09-18): the index maps render bytes to render-space
+    /// ids and never carries an image's identity or its run, so a request
+    /// that resolves to this path re-expands the pads from its own
+    /// processor's grids and keys the images through its own key space.
+    var renderSpacePath: [Int] {
+        guard let identity = placeholderIdentity, !imageTable.isEmpty else { return keyPath }
+        var path = keyPath
+        for entry in imageTable.reversed() {
+            path.replaceSubrange(entry.runRange, with: [identity.imagePadTokenId])
+        }
+        return path
+    }
+
     /// The identity space over a known key path — what `make` produces for a
     /// text-only request. Translation returns inputs unchanged, anchors are
     /// zero. Also the natural stand-in for call sites and tests that predate
@@ -293,6 +310,20 @@ nonisolated struct CacheKeySpace: Sendable {
     // MARK: - Internals
 
     private static func placeholderRuns(in tokens: [Int], padTokenId: Int) -> [Range<Int>] {
+        ImagePlaceholderRuns.runs(in: tokens, padTokenId: padTokenId)
+    }
+}
+
+/// The two token spaces at an image (CONTEXT.md → Image-aware prefix
+/// caching), as pure list operations: the chat template renders ONE pad per
+/// image (render space); the processor expands it into the image's run
+/// (prepared space), whose length only its grid knows. `runs` finds the runs
+/// in a prepared list; `expand` takes a render-space list into prepared
+/// space over the run lengths the processor placed — the request edge's
+/// step after an Emitted Path Resolve of an image-bearing request.
+nonisolated enum ImagePlaceholderRuns {
+    /// The maximal pad runs of a prepared list, in order.
+    static func runs(in tokens: [Int], padTokenId: Int) -> [Range<Int>] {
         var runs: [Range<Int>] = []
         var runStart: Int?
         for (index, token) in tokens.enumerated() {
@@ -307,5 +338,27 @@ nonisolated struct CacheKeySpace: Sendable {
             runs.append(start..<tokens.count)
         }
         return runs
+    }
+
+    /// The render-space list with its i-th pad replaced by a run of
+    /// `runLengths[i]` pads, or `nil` when the pad occurrences and the runs
+    /// do not pair up one to one — a render that placed no placeholder (a
+    /// family whose processor appends its runs), or one that placed more
+    /// than the processor expanded: the caller keeps the processor's own
+    /// list.
+    static func expand(renderTokens: [Int], padTokenId: Int, runLengths: [Int]) -> [Int]? {
+        guard renderTokens.count { $0 == padTokenId } == runLengths.count else { return nil }
+        var expanded: [Int] = []
+        expanded.reserveCapacity(renderTokens.count + runLengths.reduce(0, +) - runLengths.count)
+        var runIndex = 0
+        for token in renderTokens {
+            guard token == padTokenId else {
+                expanded.append(token)
+                continue
+            }
+            expanded.append(contentsOf: repeatElement(token, count: runLengths[runIndex]))
+            runIndex += 1
+        }
+        return expanded
     }
 }
