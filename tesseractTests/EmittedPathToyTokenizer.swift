@@ -51,6 +51,12 @@ struct EmittedPathToyTokenizer: ChatTemplateRendering {
 
     let inner = GreedyTokenizer(pieces: Self.pieces)
 
+    /// Off, an image part renders as nothing — the compatibility-fallback
+    /// shape (a template with no placeholder over a processor that places
+    /// the run itself, the toy stub's after the messages), which no
+    /// production processor has.
+    var rendersImagePlaceholder = true
+
     var bosToken: String? { inner.bosToken }
     var eosToken: String? { Self.endOfTurn }
     var unknownToken: String? { inner.unknownToken }
@@ -89,7 +95,7 @@ struct EmittedPathToyTokenizer: ChatTemplateRendering {
         var body = messages[...]
         var system = ""
         if let first = body.first, first["role"] as? String == "system" {
-            system = Self.text(of: first)
+            system = text(of: first)
             body = body.dropFirst()
         }
         system += (system.isEmpty ? "" : "\n") + "Think with \(effort) effort."
@@ -99,7 +105,7 @@ struct EmittedPathToyTokenizer: ChatTemplateRendering {
         let lastUserIndex = body.lastIndex { ($0["role"] as? String) == "user" }
         for (index, message) in zip(body.indices, body) {
             let role = message["role"] as? String ?? "user"
-            let content = Self.text(of: message)
+            let content = text(of: message)
             guard role == "assistant" else {
                 rendered += "<|im_start|>\(role)\n\(content)\(Self.endOfTurn)\n"
                 continue
@@ -135,13 +141,13 @@ struct EmittedPathToyTokenizer: ChatTemplateRendering {
 
     /// A message's text: a string content, or a content array's parts in
     /// order — text as is, an image as its framed single placeholder.
-    private static func text(of message: [String: any Sendable]) -> String {
+    private func text(of message: [String: any Sendable]) -> String {
         if let content = message["content"] as? String { return content }
         guard let parts = message["content"] as? [[String: any Sendable]] else { return "" }
         return parts.map { part in
             switch part["type"] as? String {
             case "image":
-                "<|vision_start|>" + imagePad + "<|vision_end|>"
+                rendersImagePlaceholder ? "<|vision_start|>" + Self.imagePad + "<|vision_end|>" : ""
             default:
                 part["text"] as? String ?? ""
             }

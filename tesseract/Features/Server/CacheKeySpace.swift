@@ -87,10 +87,17 @@ nonisolated struct CacheKeySpace: Sendable {
     /// processor's grids and keys the images through its own key space.
     var renderSpacePath: [Int] {
         guard let identity = placeholderIdentity, !imageTable.isEmpty else { return keyPath }
-        var path = keyPath
-        for entry in imageTable.reversed() {
-            path.replaceSubrange(entry.runRange, with: [identity.imagePadTokenId])
+        // One pass: the text between runs is copied once, never shifted per
+        // image (a screenshot-heavy history has many runs and a long tail).
+        var path: [Int] = []
+        path.reserveCapacity(keyPath.count - imageTable.reduce(0) { $0 + $1.runLength - 1 })
+        var cursor = 0
+        for entry in imageTable {
+            path.append(contentsOf: keyPath[cursor..<entry.runRange.lowerBound])
+            path.append(identity.imagePadTokenId)
+            cursor = entry.runRange.upperBound
         }
+        path.append(contentsOf: keyPath[cursor...])
         return path
     }
 

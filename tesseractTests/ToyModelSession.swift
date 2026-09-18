@@ -261,7 +261,8 @@ nonisolated enum ToyVocabulary {
 /// `Qwen3VLProcessor` adds the batch axis to its chat-template tokens.
 /// Image-bearing input places one placeholder pad run per image — expanded
 /// in place from the template's single pad (the Qwen-VL processor shape)
-/// or appended after the render — and returns a `ProcessedImage` whose
+/// or placed after the rendered messages, before the generation prompt —
+/// and returns a `ProcessedImage` whose
 /// frames carry the stub's grid: the prepared shape the **Cache Key Space**
 /// and the ADR-0014 patch guard price, with no vision tower behind it.
 nonisolated struct ToyUserInputProcessor: UserInputProcessor {
@@ -274,8 +275,11 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
         /// stub expands it in place into the run — exactly what
         /// `Qwen3VLProcessor.prepare` does with `replacePaddingTokens`, so
         /// render space (one pad) and prepared space (the run) differ where
-        /// the real ones do. Off, the run is appended after the render (a
-        /// template that renders no placeholder at all).
+        /// the real ones do. Off, the runs go after the rendered messages
+        /// and before the generation prompt (a template that renders no
+        /// placeholder at all): inside the last turn, where a prompt stays
+        /// well formed — a run at the very start would sit inside the stable
+        /// prefix, one at the very end would leave no text tail to prefill.
         var expandsInPlace = false
     }
 
@@ -318,9 +322,14 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
                     ? Array(repeating: token, count: vision.padRunLength) : [token]
             }
         } else {
-            for _ in input.images {
-                tokens += Array(repeating: vision.padTokenId, count: vision.padRunLength)
-            }
+            var withoutGeneration = input.additionalContext ?? [:]
+            withoutGeneration["add_generation_prompt"] = false
+            let messagesEnd = try tokenizer.applyChatTemplate(
+                messages: messages, tools: input.tools, additionalContext: withoutGeneration
+            ).count
+            let runs = Array(
+                repeating: vision.padTokenId, count: vision.padRunLength * input.images.count)
+            tokens.insert(contentsOf: runs, at: min(messagesEnd, tokens.count))
         }
         // Image-bearing prepares emit the VLM 2D `[batch, seq]` token shape —
         // the keyed arm's image-span slicing indexes both axes.

@@ -277,10 +277,21 @@ hazard rather than the requests.
 - The Request Keying edge, for an image-bearing request, runs the
   processor's `prepare` for its pixels and grids and takes the rendered
   list — the Emitted Path composition — expanded at each pad into the run
-  the processor placed for that image (`ImagePlaceholderRuns.expand`), at
-  the processor's rank. A render whose placeholders do not pair with the
-  processor's runs keeps the processor's own tokens and logs the skip
-  (`imageRenderExpansion` / `placeholderStructureMismatch`).
+  the processor placed for that image (`ImagePlaceholderRuns.expand`), in
+  place as `Qwen3VLProcessor`'s `replacePaddingTokens` expands, at the
+  processor's rank. A render whose placeholders do not pair with the
+  processor's runs (no production processor does this; the toy's
+  placeholder-free stub does) keeps the processor's own tokens, logs the skip
+  (`imageRenderExpansion` / `placeholderStructureMismatch`), and takes the
+  render out of the cache and the index for that request
+  (`ConversationRender.bypassing`): a registered path would carry a pad its
+  rendered-byte key does not, and an image-free request with the same text
+  would be served it.
+- The processor's `prepare` still renders and tokenizes the conversation
+  before its text is replaced — 0.29 s at 32K tokens on the parity bench
+  (`docs/mlx-core-optimization-roadmap.md`), paid once per image-bearing
+  request. A vendor seam that prepares media over given prompt tokens
+  would remove it; a follow-up, not part of this amendment.
 - The Leaf Store fast path accepts non-identity key spaces; the
   registration stores `CacheKeySpace.renderSpacePath` — the key path with
   each pseudo-token run collapsed to the single pad — plus the generated

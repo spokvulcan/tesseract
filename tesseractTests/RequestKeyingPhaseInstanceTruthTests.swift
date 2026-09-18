@@ -59,6 +59,9 @@ import Testing
         /// The prepared input's token rank: 1 on the LLM-class text
         /// processor, 2 (`[batch, seq]`) on a vision container.
         let tokenNDim: Int
+        /// Why the keyed request's render left the cache and the index, if
+        /// it did; `nil` for an engaged render and for an unkeyed request.
+        let renderIneligibility: String?
     }
 
     private static func runPhase(
@@ -85,7 +88,8 @@ import Testing
                     seedsPositionAnchor: keyed.seedsPositionAnchor,
                     unkeyedReason: nil,
                     fullTokens: keyed.fullTokens,
-                    tokenNDim: keyed.tokenNDim
+                    tokenNDim: keyed.tokenNDim,
+                    renderIneligibility: keyed.render.ineligibility?.rawValue
                 )
             case .unkeyed(let input, let fullTokens, _, let reason):
                 return OutcomeFacts(
@@ -94,7 +98,8 @@ import Testing
                     seedsPositionAnchor: false,
                     unkeyedReason: reason.rawValue,
                     fullTokens: fullTokens,
-                    tokenNDim: input.text.tokens.ndim
+                    tokenNDim: input.text.tokens.ndim,
+                    renderIneligibility: nil
                 )
             }
         }
@@ -211,7 +216,7 @@ import Testing
     /// `prepare` (pixels, grids, the pad runs), and its own token list
     /// stands whenever the render's placeholders and the processor's runs
     /// do not pair up: here a template that renders no placeholder for the
-    /// image part and a processor that appends its run after the render.
+    /// image part and a processor that puts its run after the messages.
     @Test func visionInstanceMediaWithoutARenderedPlaceholderKeepsTheProcessorsTokens()
         async throws
     {
@@ -242,8 +247,18 @@ import Testing
         #expect(outcome.seedsPositionAnchor)
         #expect(provider.recorder.verbs == [.prepare])
         let pad = Self.visionFamilyKeying.imagePadTokenId
-        #expect(outcome.fullTokens == render + Array(repeating: pad, count: 4))
+        let messagesEnd = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil,
+            additionalContext: ["add_generation_prompt": false]
+        ).count
+        #expect(
+            outcome.fullTokens
+                == Array(render[..<messagesEnd]) + Array(repeating: pad, count: 4)
+                + Array(render[messagesEnd...]))
         #expect(outcome.tokenNDim == 2)
+        // The processor's tokens were fed, so the render leaves the index
+        // for this request: it may neither register nor serve a path.
+        #expect(outcome.renderIneligibility == "placeholderStructureMismatch")
     }
 
     /// The image-bearing request on a vision container (ADR-0063, amended
@@ -282,6 +297,7 @@ import Testing
         }
         #expect(outcome.fullTokens == expanded)
         #expect(outcome.tokenNDim == 2)
+        #expect(outcome.renderIneligibility == nil)
     }
 
     /// The guard the fix must NOT loosen: a vision-container instance whose

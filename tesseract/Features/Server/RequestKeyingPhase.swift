@@ -136,7 +136,7 @@ nonisolated enum RequestKeyingPhase {
         // session re-encoded canonically: a Pi session against Bonsai 2 27B
         // read a PNG, diverged inside a 59 KB `write` turn and re-prefilled
         // 29,715 tokens from the system checkpoint.
-        let render = ConversationRender.forRequest(
+        var render = ConversationRender.forRequest(
             tokenizer: session.tokenizer,
             toolSpecs: canonicalTools,
             renderContext: renderContext,
@@ -157,12 +157,20 @@ nonisolated enum RequestKeyingPhase {
                     additionalContext: renderContext.additionalContext()
                 )
             )
-            fullInput = imageBearingInput(
+            switch imageBearingInput(
                 rendered: renderedTokens,
                 prepared: prepared,
                 imagePadTokenId: effectiveImageKeying?.imagePadTokenId,
                 diagnostics: diagnostics
-            )
+            ) {
+            case .expanded(let input):
+                fullInput = input
+            case .processorsOwn(let input, let mismatch):
+                // The processor's tokens were fed, so nothing this request
+                // renders may register or serve an emitted path.
+                fullInput = input
+                if mismatch { render = render.bypassing(.placeholderStructureMismatch) }
+            }
         }
         // Sequence length is always the LAST dim. For LLM models tokens are
         // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
@@ -243,23 +251,42 @@ nonisolated enum RequestKeyingPhase {
             ))
     }
 
+    /// The image-bearing request's model input.
+    enum ImageBearingInput {
+        /// The render's tokens — the Emitted Path composition, one pad per
+        /// image — expanded at each pad into the run the processor placed,
+        /// over the processor's pixels and grids.
+        case expanded(LMInput)
+        /// The processor's own prepared input: the render bypassed
+        /// (`mismatch` false — nothing to expand, and the render is already
+        /// out of the index), or the render's placeholders and the
+        /// processor's runs did not pair up (`mismatch` true — the render
+        /// must be taken out of the index for this request).
+        case processorsOwn(LMInput, mismatch: Bool)
+    }
+
     /// The image-bearing request's model input over the render's tokens:
     /// the processor's pixels and grids as prepared, its text replaced by
-    /// the rendered list — the Emitted Path composition, one pad per image —
-    /// with each pad expanded into the run the processor placed for that
-    /// image, at the processor's own rank and with its mask shape. The
-    /// processor's own list stands when the render bypassed (`rendered` is
-    /// nil), when the family has no placeholder identity, or when the
-    /// render's placeholders and the processor's runs do not pair up (a
-    /// processor that appends its runs to a render that placed none): that
-    /// request keeps the canonical tokens and logs why.
+    /// the rendered list with each pad expanded into the run the processor
+    /// placed for that image — in place, as `Qwen3VLProcessor`'s
+    /// `replacePaddingTokens` does — at the processor's own rank and with
+    /// its mask shape. The processor's own list stands when the render
+    /// bypassed (`rendered` is nil), when the family has no placeholder
+    /// identity, or when the render's placeholders and the processor's runs
+    /// do not pair up (a processor that places its runs itself over a render
+    /// that placed none — no production processor, but the toy's
+    /// placeholder-free stub): that request keeps the processor's tokens,
+    /// logs why, and its render leaves the index
+    /// (`ConversationRender.bypassing(_:)`).
     private static func imageBearingInput(
         rendered: [Int]?,
         prepared: LMInput,
         imagePadTokenId: Int?,
         diagnostics: PrefixCacheDiagnostics.Context?
-    ) -> LMInput {
-        guard let rendered, let imagePadTokenId else { return prepared }
+    ) -> ImageBearingInput {
+        guard let rendered, let imagePadTokenId else {
+            return .processorsOwn(prepared, mismatch: false)
+        }
         let preparedTokens = LLMActor.extractTokenSequence(prepared.text.tokens)
         let runs = ImagePlaceholderRuns.runs(in: preparedTokens, padTokenId: imagePadTokenId)
         guard
@@ -276,16 +303,17 @@ nonisolated enum RequestKeyingPhase {
             Log.image.debug(
                 "image-bearing render kept the processor's tokens — "
                     + "renderPlaceholders=\(placeholders) preparedRuns=\(runs.count)")
-            return prepared
+            return .processorsOwn(prepared, mismatch: true)
         }
         let flat = MLXArray(expanded)
         let tokens = prepared.text.tokens.ndim == 1 ? flat : flat.expandedDimensions(axis: 0)
         let mask = prepared.text.mask.map { ones(like: tokens).asType($0.dtype) }
-        return LMInput(
-            text: LMInput.Text(tokens: tokens, mask: mask),
-            image: prepared.image,
-            video: prepared.video,
-            audio: prepared.audio
-        )
+        return .expanded(
+            LMInput(
+                text: LMInput.Text(tokens: tokens, mask: mask),
+                image: prepared.image,
+                video: prepared.video,
+                audio: prepared.audio
+            ))
     }
 }

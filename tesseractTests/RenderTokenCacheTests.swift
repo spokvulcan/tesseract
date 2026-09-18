@@ -311,6 +311,18 @@ struct ConversationRenderEligibilityTests {
         #expect(makeRender(tokenizer, fingerprint: "m").cacheFingerprint == "m")
     }
 
+    /// The keying edge's one way to take an engaged render out of the cache
+    /// and the index for the rest of a request (the image-expansion
+    /// fallback): both fingerprints go, and the reason is what the
+    /// registration reports.
+    @Test func bypassingClearsBothFingerprintsAndNamesTheReason() {
+        let render = makeRender(tokenizer, fingerprint: "m")
+            .bypassing(.placeholderStructureMismatch)
+        #expect(render.cacheFingerprint == nil)
+        #expect(render.emittedPathFingerprint == nil)
+        #expect(render.ineligibility == .placeholderStructureMismatch)
+    }
+
     /// The C31 plumbed base render travels with the eligibility decision and
     /// does not alter it.
     @Test func carriedBaseRenderRidesAlongWithoutChangingEligibility() {

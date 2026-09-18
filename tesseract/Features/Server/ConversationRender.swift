@@ -124,6 +124,11 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     enum Ineligibility: String, Sendable {
         case unknownFingerprint
         case uncached
+        /// The keying edge could not expand this image-bearing request's
+        /// render at the processor's placeholder runs, so the model was fed
+        /// the processor's own tokens: no render of this request may serve
+        /// or register an emitted path (`bypassing(_:)`).
+        case placeholderStructureMismatch
     }
 
     /// Tokens plus the bytes they encode, when the render produced bytes
@@ -217,6 +222,24 @@ nonisolated struct ConversationRender: @unchecked Sendable {
             emittedPathTelemetry: emittedPathTelemetry,
             ineligibility: .uncached
         )
+    }
+
+    /// A copy that renders in full for the rest of this request — no cache,
+    /// no index — because what the model was fed is not what this render
+    /// produces. The keying edge takes it when an image-bearing request's
+    /// render could not be expanded at the processor's placeholder runs and
+    /// the processor's own tokens were fed instead: a registered path would
+    /// then carry a placeholder its rendered-byte key does not, and a later
+    /// request that hashes to the same key — an image-free one, say — would
+    /// be served that placeholder. The registration reports `reason` as its
+    /// cause; the later renders serve canonical tokens, which is what the
+    /// key path was built from.
+    func bypassing(_ reason: Ineligibility) -> ConversationRender {
+        var copy = self
+        copy.cacheFingerprint = nil
+        copy.emittedPathFingerprint = nil
+        copy.ineligibility = reason
+        return copy
     }
 
     /// The C31 enrichment: carry the stored conversation's just-computed

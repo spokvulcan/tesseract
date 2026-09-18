@@ -518,6 +518,73 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(stats.fidelityRejections == 0)
     }
 
+    /// The compatibility fallback of the image path: a template that renders
+    /// no placeholder for an image part over a processor that puts the
+    /// image's run after the messages, before the generation prompt — no
+    /// production processor, the toy's placeholder-free stub. The keying
+    /// edge cannot pair the render with the
+    /// runs, so the processor's own tokens are fed and the request leaves
+    /// the index: a registered path would carry a pad its rendered-byte key
+    /// does not, and an image-free request with the same text would be
+    /// served it. The next request, image-free, is served nothing from the
+    /// index and fed no pad — the canonical render past its restore.
+    @Test func imageBearingRequestWhoseRenderCannotBeExpandedLeavesTheIndex() async throws {
+        var tokenizer = EmittedPathToyTokenizer()
+        tokenizer.rendersImagePlaceholder = false
+        let imagePadID = tokenizer.imagePadID
+        let runLength = EmittedPathToyTokenizer.imagePadRunLength
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5", "image_token_id": imagePadID,
+                "vision_config": ["num_heads": 16, "spatial_merge_size": 2],
+            ],
+            chatTemplate: nil)
+        let session = Session(
+            tokenizer: tokenizer,
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: imagePadID, padRunLength: runLength, frame: THW(1, 8, 8)),
+            identity: identity)
+
+        let image = HTTPPrefixCacheImage(data: try Self.tinyPNG())
+        let turn1 = try await session.turn(
+            Self.conversation([
+                HTTPPrefixCacheMessage(role: .user, content: "hi", images: [image])
+            ]))
+        #expect(turn1.text == "hello world")
+        #expect(!turn1.render.contains(imagePadID))
+        // The processor's tokens: the messages, the run, the generation prompt.
+        #expect(
+            turn1.fedPrompt
+                == turn1.storedRender + Array(repeating: imagePadID, count: runLength)
+                + Array(turn1.render[turn1.storedRender.count...]),
+            turn1.account)
+        let expansionSkip = try #require(
+            turn1.events.first {
+                $0.eventName == "skip" && Self.fields($0)["stage"] == "imageRenderExpansion"
+            })
+        #expect(Self.fields(expansionSkip)["reason"] == "placeholderStructureMismatch")
+        // Keyed and live — the key space is fine — but out of the index.
+        #expect(turn1.leafStore["path"] == "live", turn1.account)
+        #expect(turn1.leafStore["emittedPath"] == "skipped", turn1.account)
+        #expect(turn1.leafStore["emittedPathSkip"] == "ineligibleRender", turn1.account)
+        let registerSkip = try #require(
+            turn1.events.first {
+                $0.eventName == "skip" && Self.fields($0)["stage"] == "emittedPathRegister"
+            })
+        #expect(Self.fields(registerSkip)["cause"] == "placeholderStructureMismatch")
+        #expect(session.index.statsSnapshot().registrations == 0)
+
+        // The same text without the image: no entry to serve, no pad fed.
+        let turn2 = try await session.turn(
+            Self.conversation([Self.user("hi"), Self.assistant("hello world"), Self.user("more")]),
+            text: "again")
+        #expect(turn2.text == "again")
+        #expect(turn2.requestResolve["result"] == "miss", turn2.account)
+        #expect(!turn2.fedPrompt.contains(imagePadID), turn2.account)
+        #expect(turn2.fedPrompt == Array(turn2.render[turn2.cached...]), turn2.account)
+        #expect(turn2.leafStore["emittedPath"] == "registered", turn2.account)
+    }
+
     /// The 2026-09-18 Bonsai 2 27B session (Pi, `write` of a 6 KB SVG
     /// inside an 18,939-token turn): a vision-container instance serving a
     /// text-only coding session. Its text-only `prepare` emits 2D
@@ -710,6 +777,7 @@ struct EmittedPathSynthesizedReplayTests {
 
         init(
             index: EmittedPathIndex = EmittedPathIndex(),
+            tokenizer: EmittedPathToyTokenizer = EmittedPathToyTokenizer(),
             fault: ((EmittedPathToyTokenizer) -> FaultyStreamTokenizer)? = nil,
             vision: ToyUserInputProcessor.VisionStub? = nil,
             identity: ModelIdentity? = nil,
@@ -720,7 +788,6 @@ struct EmittedPathSynthesizedReplayTests {
             let uuid = UUID().uuidString
             let fingerprint = "toy-emitted-path-\(uuid)"
             let modelID = "toy/emitted-path/\(uuid)"
-            let tokenizer = EmittedPathToyTokenizer()
             let queue = ToyCompletionQueue(
                 generationPrompts: tokenizer.generationPrompts, eosTokenId: tokenizer.endOfTurnID)
             var configuration = ModelConfiguration(id: modelID)
