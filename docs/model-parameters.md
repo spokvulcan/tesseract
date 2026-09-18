@@ -79,13 +79,20 @@ between families and modes, so it gets its own column.
   Qwen3.8 thinking preset).
 - Weights ~8.6 GB. Recommended 24 GB+; runs on 16 GB at short context.
 - Decode uses the stock 2-bit `quantizedMM` kernels plus a float32
-  `hadamardTransform` per packed matmul; the fork's tuned matmul kernels are
-  4-bit only. Measured against `qwen3.8-27b` on this machine (48 GB, greedy,
-  5,963-token prompt, 192 new tokens, 2026-09-18): plain decode **30.8 vs
-  22.1 tok/s**, prefill 27.9 vs 27.9 s (the rotation costs nothing
-  measurable at prefill), peak memory 9.8 vs 32.5 GB (the 4-bit run carries
-  the DFlash2 draft, which reaches 45.1 tok/s there and is refused here —
-  see Speculative decoding).
+  `hadamardTransform` per shared input: siblings that share a sign vector
+  (q|k|v, gate|up, the GDN qkv|z — every group on this pack) are stacked
+  into one rotated layer at load, 144 fewer rotations per token than one per
+  packed matmul; the fork's tuned matmul kernels are 4-bit only. Measured
+  against `qwen3.8-27b` on this machine (48 GB, greedy, 5,963-token prompt,
+  192 new tokens, 2026-09-18): plain decode **30.8 vs 22.1 tok/s**, prefill
+  27.9 vs 27.9 s (the rotation costs nothing measurable at prefill), peak
+  memory 9.8 vs 32.5 GB (the 4-bit run carries the DFlash2 draft, which
+  reaches 45.1 tok/s there and is refused here — see Speculative decoding).
+  The stacking itself moves nothing measurable (same day, paired against
+  the unstacked build, two passes each: 29.0 / 31.0 vs 31.4 / 29.1 tok/s
+  median, inside the ±4% drift between passes): decode sits at the
+  memory-bandwidth ceiling, so launch count is not the limiter
+  (ADR-0067, consequences).
 - Agent quick bench at this preset, same day, two passes: 7/14 and 5/14
   scenarios (`qwen3.8-27b`: 5/14), tool accuracy 77% and 74% (86%),
   duplicate tool calls 9.5% and 3.8% (3.4%), 33.3 and 29.6 tok/s on the

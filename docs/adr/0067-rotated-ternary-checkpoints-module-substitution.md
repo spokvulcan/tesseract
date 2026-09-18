@@ -80,7 +80,25 @@ layer classes on an unmerged mlx-swift fork branch and no model integration.
 
 - The GDN input-projection fusion and the attention q|k|v stacking are skipped
   for rotated layers by the existing exact-class guards; the rotated layers pay
-  their four projections separately.
+  their four projections separately. **Amended 2026-09-18** (vendor
+  `51542c4`): the same-input stacking pass now folds rotated siblings whose
+  rotation and sign vector are equal (checked on the arrays once, at load)
+  into one rotated layer, so q|k|v, gate|up and the GDN qkv|z each rotate
+  their shared input once and run one packed matmul; the split is unchanged
+  and the output bitwise identical. The four-way GDN fusion still cannot
+  apply because the pack stores `in_proj_b` / `in_proj_a` unquantized, hence
+  the two-way stack. The app runs the pass on every load (it used to run only
+  beside a DFlash2 draft). On the shipped pack all 274 residual-input modules
+  share one 5120-wide sign vector, so every group folds: 144 of the 401
+  rotations per decoded token disappear. Measured paired against the unstacked
+  build in one session (DFlash2-bench prompt, 5,963 tokens, 192 new, two
+  passes each): plain decode 29.0 / 31.0 tok/s median stacked vs 31.4 / 29.1
+  unstacked, prefill 27–31 s both — nothing beyond the ±4% pass-to-pass
+  drift. Decode is at the memory-bandwidth ceiling (8.6 GB of weights per
+  token at 31 tok/s is about 265 GB/s), so dispatch count is not the limiter
+  and the fused-rotation kernel of decision 6 has no headroom either; that
+  follow-up closes as measured. The pass stays for its generality (the exact-
+  class special case is gone, launches match the plain pack's) and its tests.
 - The Qwen3.8 DFlash2 draft pairs with the text-class load by shape and stays
   lossless, but it was distilled against the full-precision target: on Bonsai
   2 27B it accepted 22% of its proposals and decoded at 0.64× the plain rate

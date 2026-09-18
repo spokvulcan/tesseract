@@ -408,9 +408,11 @@ loader that skips the Hadamard rotation decodes plausible garbage, not an
 error, so the only proof is an independent implementation. The Swift half
 (`RotatedCheckpointParityRunner`, `--rotated-checkpoint-parity`) loads the
 pack through `AgentEngine`, asserts the manifest modules were substituted
-with rotated layers, greedy-decodes a fixed prompt and writes the prompt and
-generated token ids to the JSON report (latest.json) in
-`benchmark/rotated-checkpoint-parity/`.
+with rotated layers (the load's stacking pass folds q|k|v, gate|up and the
+GDN qkv|z, so the count reads 257 rotated linear leaves — 129 standalone and
+128 stacked — not the manifest's 401), greedy-decodes a fixed prompt and
+writes the prompt and generated token ids to the JSON report (latest.json)
+in `benchmark/rotated-checkpoint-parity/`.
 The reference half (`scripts/rotated_checkpoint_reference.py`, run from
 `research/bonsai-venv` with mlx-vlm installed) decodes the same prompt ids
 through mlx-vlm's `prism_hadamard_qwen35` and scores two things: the greedy
@@ -423,8 +425,10 @@ stream to float32; the app casts them to the manifest's float16 at load, so
 `PARITY_REFERENCE_ARGS=--match-app-dtypes` runs the reference with the same
 cast and isolates the rotation logic from that difference. Run it for any
 change to the vendor's `HadamardQuantized` layers (MLXLMCommon), the
-`PrismHadamardQwen35` classes,
-`ModelIdentity.baseArchitecture`, or a new rotated pack in the catalog.
+`PrismHadamardQwen35` classes, the same-input projection stacking pass
+(`SameInputProjectionStacking`, which folds rotated siblings that share a sign
+vector and runs on every load), `ModelIdentity.baseArchitecture`, or a new
+rotated pack in the catalog.
 
 `scripts/dev.sh trace-replay` is the odd one out: it needs **no loaded
 model**. It replays the Completion Trace Log corpus through the offline
