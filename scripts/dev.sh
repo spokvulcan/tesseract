@@ -227,9 +227,23 @@ cmd_dev_profile() {
 # Build the app, kill any running instance, then exec the binary with the
 # given CLI flag. Tails the runner's `latest.log` and propagates the binary's
 # exit code. Used by all loaded-model verification subcommands.
+# Where the harnesses write their reports. The app is not sandboxed
+# (ADR-0047), so `FileManager.temporaryDirectory` is the per-user temp dir —
+# the same resolution `scripts/bench.sh` uses. The container path is the
+# pre-ADR-0047 location, kept as a fallback for an older build.
+_debug_benchmark_dir() {
+    local dir
+    dir="$(getconf DARWIN_USER_TEMP_DIR)tesseract-debug/benchmark"
+    if [ ! -d "$dir" ]; then
+        dir="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark"
+    fi
+    echo "$dir"
+}
+
 _run_loaded_model_check() {
     local flag="$1"
     local report_subdir="$2"
+    shift 2
     local configuration="Debug"
     cmd_build "$configuration"
     echo ""
@@ -240,15 +254,16 @@ _run_loaded_model_check() {
 
     local binary="$app_path/Contents/MacOS/Tesseract Agent"
     echo "Running $flag against: $binary"
-    local report_dir="$HOME/Library/Containers/app.tesseract.agent/Data/tmp/tesseract-debug/benchmark/$report_subdir"
+    local report_dir
+    report_dir="$(_debug_benchmark_dir)/$report_subdir"
 
     local exit_code=0
-    "$binary" "$flag" || exit_code=$?
+    "$binary" "$flag" "$@" || exit_code=$?
 
     if [ -f "$report_dir/latest.log" ]; then
         echo ""
         echo "── latest.log ──"
-        cat "$report_dir/latest.log"
+        cat "$report_dir/latest.log" || true
     fi
     echo ""
     echo "Report dir: $report_dir"
@@ -256,19 +271,43 @@ _run_loaded_model_check() {
 }
 
 cmd_prefix_cache_e2e() {
-    _run_loaded_model_check --prefix-cache-e2e prefix-cache-e2e
+    _run_loaded_model_check --prefix-cache-e2e prefix-cache-e2e "$@"
 }
 
 cmd_hybrid_cache_correctness() {
-    _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness
+    _run_loaded_model_check --hybrid-cache-correctness hybrid-cache-correctness "$@"
 }
 
 cmd_prefill_step_benchmark() {
-    _run_loaded_model_check --prefill-step-benchmark prefill-step-benchmark
+    _run_loaded_model_check --prefill-step-benchmark prefill-step-benchmark "$@"
 }
 
 cmd_paroquant_vlm_smoke() {
-    _run_loaded_model_check --paroquant-vlm-smoke paroquant-vlm-smoke
+    _run_loaded_model_check --paroquant-vlm-smoke paroquant-vlm-smoke "$@"
+}
+
+cmd_rotated_checkpoint_parity() {
+    # Rotated Ternary Checkpoint gate (ADR-0067): the Swift half loads the pack
+    # through the production path and dumps greedy token ids; the reference
+    # half re-decodes them through mlx-vlm and scores the agreement. Model id
+    # via MODEL_ID (default bonsai-2-27b); venv at research/bonsai-venv.
+    local model_id="${MODEL_ID:-bonsai-2-27b}"
+    _run_loaded_model_check --rotated-checkpoint-parity rotated-checkpoint-parity \
+        --bench-model-id "$model_id" || return $?
+
+    local report
+    report="$(_debug_benchmark_dir)/rotated-checkpoint-parity/latest.json"
+    local venv="$PROJECT_DIR/research/bonsai-venv"
+    if [ ! -x "$venv/bin/python" ]; then
+        echo ""
+        echo "Reference half skipped: no venv at $venv"
+        echo "  python3 -m venv $venv && $venv/bin/pip install mlx-vlm"
+        echo "  $venv/bin/python $PROJECT_DIR/scripts/rotated_checkpoint_reference.py --report \"$report\""
+        return 0
+    fi
+    echo ""
+    echo "── reference (mlx-vlm) ──"
+    "$venv/bin/python" "$PROJECT_DIR/scripts/rotated_checkpoint_reference.py" --report "$report" ${PARITY_REFERENCE_ARGS:-}
 }
 
 cmd_trace_replay() {
@@ -377,6 +416,7 @@ usage() {
     echo "  hybrid-cache-correctness Build + run Task 2.2 logit-equivalence harness (mid-prefill restore bitwise check)"
     echo "  prefill-step-benchmark   Build + run Task 3.2 prefill-step-size benchmark sweep"
     echo "  paroquant-vlm-smoke      Build + run VLM load smoke for PARO models (PR #164 C5 gate)"
+    echo "  rotated-checkpoint-parity Build + run the Rotated Ternary Checkpoint gate (ADR-0067; MODEL_ID=bonsai-2-27b)"
     echo "  trace-replay             Build + run offline trace-replay harness (PRD #82 slice #85; no model needed)"
     echo "  archive     Create release archive for App Store submission"
     echo "  resolve     Resolve SPM package dependencies"
@@ -392,10 +432,11 @@ case "${1:-}" in
     dev)         cmd_dev ;;
     dev-release) cmd_dev_release ;;
     dev-profile) cmd_dev_profile ;;
-    prefix-cache-e2e)         cmd_prefix_cache_e2e ;;
-    hybrid-cache-correctness) cmd_hybrid_cache_correctness ;;
-    prefill-step-benchmark)   cmd_prefill_step_benchmark ;;
-    paroquant-vlm-smoke)      cmd_paroquant_vlm_smoke ;;
+    prefix-cache-e2e) shift; cmd_prefix_cache_e2e "$@" ;;
+    hybrid-cache-correctness) shift; cmd_hybrid_cache_correctness "$@" ;;
+    prefill-step-benchmark) shift; cmd_prefill_step_benchmark "$@" ;;
+    paroquant-vlm-smoke) shift; cmd_paroquant_vlm_smoke "$@" ;;
+    rotated-checkpoint-parity) cmd_rotated_checkpoint_parity ;;
     trace-replay)             cmd_trace_replay ;;
     archive)     cmd_archive ;;
     resolve)     cmd_resolve ;;

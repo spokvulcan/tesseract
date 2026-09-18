@@ -278,6 +278,19 @@ extension ModelDefinition {
             textOnlyOverride: true
         ),
         ModelDefinition(
+            id: "bonsai-2-27b",
+            displayName: "Bonsai 2 27B (Ternary 2bit)",
+            description:
+                "Qwen3.8-27B with ternary weights in a Hadamard-rotated 2-bit pack (a Rotated Ternary Checkpoint, ADR-0067): 27B-class agent quality that fits a small Mac. Text and image input; thinking on by default; reasoning effort xhigh or medium (low behaves like xhigh). 24 GB+ recommended, runs on 16 GB at short context. Ships as prism_hadamard_qwen35 over the Qwen3.5 engine.",
+            category: .agent,
+            source: .huggingFace(
+                repo: "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit",
+                requiredExtension: "safetensors"
+            ),
+            sizeDescription: "~8.6 GB",
+            dependencies: []
+        ),
+        ModelDefinition(
             id: "qwen3.8-27b-dflash2-draft",
             displayName: "Qwen3.8-27B DFlash2 Draft",
             description:

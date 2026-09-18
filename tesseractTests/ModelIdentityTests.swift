@@ -46,6 +46,92 @@ struct ModelIdentityTests {
         #expect(ModelIdentity(directory: dir).isMoE == false)
     }
 
+    // MARK: - Base Architecture
+
+    /// A Rotated Ternary Checkpoint declares its own `model_type` beside
+    /// `base_model_type`; the family facts key on the Base Architecture.
+    @Test func rotatedPackResolvesFamilyFromBaseModelType() throws {
+        let dir = try makeModelDir(
+            config: #"{ "model_type": "prism_hadamard_qwen35", "base_model_type": "qwen3_5" }"#)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let identity = ModelIdentity(directory: dir)
+
+        #expect(identity.isQwen35 == true)
+        #expect(identity.isMoE == false)
+    }
+
+    /// The pack is recognized by its module manifest, never by its name: the
+    /// same `model_type` without a manifest is not a Rotated Ternary
+    /// Checkpoint, and a manifest whose entries name no `path` does not count.
+    @Test func rotatedTernaryCheckpointIsRecognizedByItsModuleManifest() {
+        let rotated = ModelIdentity(
+            configJSON: [
+                "model_type": "prism_hadamard_qwen35",
+                "base_model_type": "qwen3_5",
+                "modules": [
+                    ["path": "model.embed_tokens", "block": 1024, "embedding": true],
+                    ["path": "lm_head", "block": 1024],
+                ],
+            ],
+            chatTemplate: nil)
+        #expect(rotated.isRotatedTernaryCheckpoint)
+
+        let namedOnly = ModelIdentity(
+            configJSON: ["model_type": "prism_hadamard_qwen35", "base_model_type": "qwen3_5"],
+            chatTemplate: nil)
+        #expect(!namedOnly.isRotatedTernaryCheckpoint)
+
+        let pathless = ModelIdentity(
+            configJSON: ["model_type": "qwen3_5", "modules": [["block": 1024]]],
+            chatTemplate: nil)
+        #expect(!pathless.isRotatedTernaryCheckpoint)
+
+        #expect(
+            !ModelIdentity(configJSON: ["model_type": "qwen3_5"], chatTemplate: nil)
+                .isRotatedTernaryCheckpoint)
+    }
+
+    /// Without `base_model_type`, `model_type` is the Base Architecture.
+    @Test func baseArchitectureFallsBackToModelType() {
+        #expect(ModelIdentity.baseArchitecture(configJSON: ["model_type": "qwen3_5"]) == "qwen3_5")
+        #expect(
+            ModelIdentity.baseArchitecture(configJSON: [
+                "model_type": "prism_hadamard_qwen35", "base_model_type": "qwen3_5_moe",
+            ]) == "qwen3_5_moe")
+        #expect(ModelIdentity.baseArchitecture(configJSON: nil) == nil)
+    }
+
+    /// Every Qwen3.5-gated interpreter reads the Base Architecture: a rotated
+    /// pack of a VLM checkpoint prices like the checkpoint it runs.
+    @Test func rotatedPackKeysEveryFamilyInterpreterOnBaseArchitecture() {
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "prism_hadamard_qwen35",
+                "base_model_type": "qwen3_5",
+                "image_token_id": 248_056,
+                "text_config": [
+                    "num_hidden_layers": 64,
+                    "hidden_size": 5120,
+                    "linear_num_value_heads": 48,
+                    "linear_value_head_dim": 128,
+                    "linear_key_head_dim": 128,
+                    "num_attention_heads": 24,
+                    "full_attention_interval": 4,
+                    "dtype": "float16",
+                ] as [String: Any],
+                "vision_config": ["num_heads": 16, "spatial_merge_size": 2] as [String: Any],
+            ],
+            chatTemplate: nil
+        )
+
+        #expect(identity.flopProfile != .fallback)
+        #expect(identity.flopProfile.attentionLayers == 16)
+        #expect(identity.fullAttentionScratchProfile?.attentionHeads == 24)
+        #expect(identity.visionAttentionScratchProfile?.attentionHeads == 16)
+        #expect(identity.imageKeying?.imagePadTokenId == 248_056)
+    }
+
     // MARK: - flopProfile is Total (directory surface)
 
     /// VLM checkpoints nest architecture fields under `text_config`; a 9B-shaped

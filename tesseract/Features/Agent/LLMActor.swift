@@ -167,7 +167,7 @@ actor LLMActor {
             await loadMTPDrafterIfPresent(
                 directory: directory, container: container, enabled: speculation.allowsMTP)
             await loadDFlash2DrafterIfPresent(
-                container: container, enabled: speculation.allowsDFlash2)
+                container: container, identity: identity, enabled: speculation.allowsDFlash2)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
         }
@@ -196,7 +196,8 @@ actor LLMActor {
         let result = try await verifyAndStore(container: container, identity: identity)
         await loadMTPDrafterIfPresent(
             directory: directory, container: container, enabled: speculation.allowsMTP)
-        await loadDFlash2DrafterIfPresent(container: container, enabled: speculation.allowsDFlash2)
+        await loadDFlash2DrafterIfPresent(
+            container: container, identity: identity, enabled: speculation.allowsDFlash2)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
     }
@@ -774,13 +775,19 @@ extension LLMActor {
     /// to-plain-decoding discipline as the MTP drafter: a draft problem warns,
     /// never fails the model load.
     private func loadDFlash2DrafterIfPresent(
-        container: ModelContainer, enabled: Bool
+        container: ModelContainer, identity: ModelIdentity, enabled: Bool
     ) async {
         dflash2Drafter = nil
         guard enabled else { return }
         let storageRoot = await MainActor.run { ModelDownloadManager.modelStorageURL }
         guard let directory = DFlash2Support.draftDirectory(storageRoot: storageRoot) else {
             return  // draft not downloaded — the common case, stay silent
+        }
+        guard !DFlash2Support.checkpointRefusesDraft(identity) else {
+            Log.agent.notice(
+                "DFlash2 draft: the target is a Rotated Ternary Checkpoint — the draft was "
+                    + "distilled for the full-precision target and decodes slower on it — off")
+            return
         }
         let targetLayers = await container.perform { context in
             DFlash2Support.targetLayerCount(context.model)

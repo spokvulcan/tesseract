@@ -96,6 +96,29 @@ struct ModelDefinitionCatalogTests {
         )
     }
 
+    @Test func includesBonsai2_27BInAgentCatalog() async throws {
+        guard let model = ModelDefinition.all.first(where: { $0.id == "bonsai-2-27b" }) else {
+            Issue.record("Missing bonsai-2-27b model definition")
+            return
+        }
+
+        #expect(model.displayName == "Bonsai 2 27B (Ternary 2bit)")
+        #expect(model.category == .agent)
+        #expect(model.repoID == "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit")
+        #expect(model.cacheSubdirectory == "prism-ml_Ternary-Bonsai-2-27B-mlx-2bit")
+        #expect(model.requiredExtension == "safetensors")
+        // The pack ships a vision tower; no Text-Only Override (map #457 is
+        // about DFlash2 in the VLM class, which this entry does not require).
+        #expect(model.textOnlyOverride == false)
+        #expect(model.dependencies.isEmpty)
+        #expect(
+            ModelDefinition.byCategory()
+                .first(where: { $0.0 == .agent })?
+                .1
+                .contains(where: { $0.id == model.id }) == true
+        )
+    }
+
     @Test func includesQwen36_35BParoInAgentCatalog() async throws {
         guard let model = ModelDefinition.all.first(where: { $0.id == "qwen3.6-35b-a3b-paro" })
         else {

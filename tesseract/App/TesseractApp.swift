@@ -61,6 +61,7 @@ struct TesseractApp: App {
         "--prefix-cache-e2e", "--benchmark", "--hybrid-cache-correctness",
         "--prefill-step-benchmark", "--paroquant-vlm-smoke",
         "--prepared-checkpoint-parity", "--trace-replay",
+        "--rotated-checkpoint-parity",
     ]
     static var isHarnessLaunch: Bool {
         CommandLine.arguments.contains { harnessFlags.contains($0) }
@@ -128,6 +129,10 @@ struct TesseractApp: App {
         } else if args.contains("--prepared-checkpoint-parity") {
             Self.runHarness("Prepared Checkpoint parity") {
                 try await PreparedCheckpointParityRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--rotated-checkpoint-parity") {
+            Self.runHarness("Rotated Ternary Checkpoint parity") {
+                try await RotatedCheckpointParityRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--trace-replay") {
             Self.runHarness("Trace replay") {

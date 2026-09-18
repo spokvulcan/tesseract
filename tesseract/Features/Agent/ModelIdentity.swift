@@ -76,6 +76,14 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// A discriminator for MoE-specific specialization downstream.
     let isMoE: Bool
 
+    /// `true` when the checkpoint is a **Rotated Ternary Checkpoint**
+    /// (ADR-0067): its `config.json` carries a module manifest (`modules`,
+    /// each entry naming a `path`) beside the Base Architecture. Recognized
+    /// by the manifest, never by name (`CONTEXT.md`). The weights are the
+    /// base model's in a rotated, ternary form, so drafts distilled against
+    /// the full-precision target do not pair (`DFlash2Support`).
+    let isRotatedTernaryCheckpoint: Bool
+
     /// `true` when the chat template opens a `<think>` block in its
     /// generation-prompt section.
     let promptStartsThinking: Bool
@@ -154,9 +162,11 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// interpretation coverage; the directory-based init is the interface this
     /// is not part of. See `CONTEXT.md` (Model Identity).
     init(configJSON: [String: Any]?, chatTemplate: String?) {
-        let modelType = configJSON?["model_type"] as? String
-        self.isQwen35 = modelType?.hasPrefix("qwen3_5") ?? false
-        self.isMoE = modelType == "qwen3_5_moe"
+        let architecture = Self.baseArchitecture(configJSON: configJSON)
+        self.isQwen35 = architecture?.hasPrefix("qwen3_5") ?? false
+        self.isMoE = architecture == "qwen3_5_moe"
+        self.isRotatedTernaryCheckpoint = Self.interpretRotatedTernaryCheckpoint(
+            configJSON: configJSON)
         self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
         // Comment-strip once; every declaration/default interpreter scans the
         // same stripped text (a flag named only in `{# … #}` never counts).
@@ -325,6 +335,28 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         ) != nil
     }
 
+    /// The Base Architecture: `base_model_type` when a pack declares its own
+    /// `model_type` (a Rotated Ternary Checkpoint says `prism_hadamard_qwen35`
+    /// and runs `qwen3_5`), else `model_type` itself. Every family fact keys
+    /// on it, so a rotated pack of a Qwen3.5 checkpoint is Qwen3.5 to the
+    /// text-class route, the FLOP profile, image keying and the scratch
+    /// profiles. See `CONTEXT.md` (Base Architecture).
+    static func baseArchitecture(configJSON: [String: Any]?) -> String? {
+        guard let root = configJSON else { return nil }
+        return (root["base_model_type"] as? String) ?? (root["model_type"] as? String)
+    }
+
+    /// A Rotated Ternary Checkpoint declares its rotated modules in a
+    /// `modules` manifest — a non-empty array of entries that each name a
+    /// `path`. The pack's `model_type` is the loader key and is not consulted.
+    private static func interpretRotatedTernaryCheckpoint(configJSON: [String: Any]?) -> Bool {
+        guard let root = configJSON,
+            let modules = root["modules"] as? [[String: Any]],
+            !modules.isEmpty
+        else { return false }
+        return modules.allSatisfy { $0["path"] is String }
+    }
+
     /// Qwen3.5 hybrid profile from `config.json` (the VLM variant nests
     /// architecture fields under `text_config`; LLM-only puts them at the top
     /// level). Non-Qwen3.5, missing fields, or a malformed config fall back to
@@ -332,7 +364,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// parse-failure path and `LLMActor`'s pre-load path agree in one place.
     private static func interpretFlopProfile(configJSON: [String: Any]?) -> ModelFlopProfile {
         guard let root = configJSON,
-            let topModelType = root["model_type"] as? String
+            let topModelType = baseArchitecture(configJSON: root)
         else { return .fallback }
 
         // Nanbeige's looped transformer is dense attention with every layer
@@ -375,7 +407,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         configJSON: [String: Any]?
     ) -> FullAttentionScratchProfile? {
         guard let root = configJSON,
-            let topModelType = root["model_type"] as? String,
+            let topModelType = baseArchitecture(configJSON: root),
             topModelType.hasPrefix("qwen3_5")
         else { return nil }
 
@@ -401,7 +433,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         configJSON: [String: Any]?
     ) -> FullAttentionScratchProfile? {
         guard let root = configJSON,
-            let modelType = root["model_type"] as? String,
+            let modelType = baseArchitecture(configJSON: root),
             modelType.hasPrefix("qwen3_5"),
             let visionConfig = root["vision_config"] as? [String: Any],
             let numHeads = visionConfig["num_heads"] as? Int,
@@ -434,7 +466,7 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// config decode (`image_token_id` 248056, `spatial_merge_size` 2).
     private static func interpretImageKeying(configJSON: [String: Any]?) -> ImageKeying? {
         guard let root = configJSON,
-            let modelType = root["model_type"] as? String,
+            let modelType = baseArchitecture(configJSON: root),
             modelType.hasPrefix("qwen3_5"),
             let visionConfig = root["vision_config"] as? [String: Any]
         else { return nil }

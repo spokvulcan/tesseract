@@ -37,6 +37,9 @@ for arg in "$@"; do
     elif [ "$arg" = "--prefix-cache-e2e" ]; then
         LOG_FILE="$BENCH_DIR/prefix-cache-e2e/latest.log"
         break
+    elif [ "$arg" = "--rotated-checkpoint-parity" ]; then
+        LOG_FILE="$BENCH_DIR/rotated-checkpoint-parity/latest.log"
+        break
     fi
 done
 RESULTS_DIR="$BENCH_DIR/results"
