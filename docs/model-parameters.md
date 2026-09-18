@@ -195,7 +195,8 @@ between families and modes, so it gets its own column.
 ## Client settings that follow from this
 
 - **Pi** (`~/.pi/agent/models.json`, provider `tesseract`): `contextWindow`
-  262144, `maxTokens` 131072 for both 27B entries, `reasoning: true`.
+  262144, `maxTokens` 131072 for all three 27B entries (`qwen3.8-27b`,
+  `qwen3.8-27b-paro`, `bonsai-2-27b`), `reasoning: true`.
 - **Server** (`/v1/chat/completions`): `max_tokens` /
   `max_completion_tokens` pass straight through to generation; there is no
   clamp against the remaining context. `chat_template_kwargs.enable_thinking`
