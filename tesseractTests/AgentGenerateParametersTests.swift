@@ -37,7 +37,9 @@ struct AgentGenerateParametersTests {
         // Qwen3.8's card recommends temp 1.0 / top_p 0.95 / top_k 20 with
         // presence_penalty 0.0 in thinking mode — must not fall through to
         // the generic `qwen3` instruct profile (temp 0.7, presence 1.5).
-        for id in ["qwen3.8-27b", "qwen3.8-27b-paro"] {
+        // Bonsai 2 is Qwen3.8-27B in a rotated ternary pack and keeps the
+        // same sampling.
+        for id in ["qwen3.8-27b", "qwen3.8-27b-paro", "bonsai-2-27b"] {
             let params = AgentGenerateParameters.forModel(id)
             #expect(params.temperature == 1.0, "\(id)")
             #expect(params.topP == 0.95, "\(id)")

@@ -4,10 +4,11 @@
 //
 //  Shared fixtures and plumbing for the loaded-model verification harnesses
 //  (`HybridCacheCorrectnessRunner`, `ParoQuantVLMSmokeRunner`,
-//  `PrefixCacheE2ERunner`): the deterministic inputs that must stay
-//  byte-identical across harnesses, tensor comparison, and the check-report
-//  JSON shape. One home so the harnesses cannot drift apart on the fixtures
-//  their cross-referenced claims depend on.
+//  `PrefixCacheE2ERunner`, the parity runners): the deterministic inputs that
+//  must stay byte-identical across harnesses, tensor comparison, the greedy
+//  parity generation, and the check-report JSON shape. One home so the
+//  harnesses cannot drift apart on the fixtures their cross-referenced claims
+//  depend on.
 //
 
 import CoreImage
@@ -107,6 +108,43 @@ nonisolated enum BenchmarkHarness {
                 addSpecialTokens: false
             ).prefix(targetTokens)
         )
+    }
+
+    // MARK: - Greedy parity generation
+
+    /// The prompt the parity gates greedy-decode (`PreparedCheckpointParityRunner`,
+    /// `RotatedCheckpointParityRunner`): one text, one length, so their token
+    /// sequences stay comparable across gates and runs.
+    static let parityPrompt =
+        "List the first ten prime numbers, then explain in two sentences why 1 is not prime."
+    static let parityNewTokens = 64
+
+    struct GreedyCapture: Sendable {
+        /// The prompt ids after the chat template, so an independent reference
+        /// can decode from the identical sequence.
+        let promptTokens: [Int]
+        let generatedTokens: [Int]
+        let text: String
+    }
+
+    /// Greedy decoding of `parityPrompt` through the vendor iterator so raw
+    /// token ids are compared, not detokenized text.
+    static func greedyGenerate(context: ModelContext) async throws -> GreedyCapture {
+        let parameters = AgentGenerateParameters(
+            maxTokens: parityNewTokens, temperature: 0.0, topP: 1.0, topK: 0, minP: 0.0)
+        let prepared = try await context.processor.prepare(
+            input: UserInput(chat: [.user(parityPrompt)]))
+        var iterator = try TokenIterator(
+            input: prepared, model: context.model, cache: nil,
+            parameters: LLMActor.makeGenerateParameters(from: parameters))
+        var ids: [Int] = []
+        while ids.count < parityNewTokens, let token = iterator.next() {
+            ids.append(token)
+        }
+        return GreedyCapture(
+            promptTokens: prepared.text.tokens.asArray(Int32.self).map { Int($0) },
+            generatedTokens: ids,
+            text: context.tokenizer.decode(tokenIds: ids))
     }
 
     // MARK: - Deterministic images

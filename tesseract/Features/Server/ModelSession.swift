@@ -43,10 +43,12 @@ nonisolated protocol ModelSession {
     /// a text-only `prepare` — true for the LLM families, false for the vision
     /// containers, whose text-only `prepare` still emits 2D `[batch, seq]`.
     ///
-    /// The same feature-detect-as-a-fact shape as `anchoredVisionPrepare`, and
-    /// the precondition for the C25 **Render+Token Cache** on the request path:
-    /// building `LMInput(tokens:)` from the cache's token list must reproduce
-    /// what the processor would have built.
+    /// The same feature-detect-as-a-fact shape as `anchoredVisionPrepare`: the
+    /// instance truth the keying phase reads for whether images reach the
+    /// model, and the rank `textOnlyInput(tokens:)` reproduces. It is NOT a
+    /// precondition of the **Render+Token Cache** or the **Emitted Path
+    /// Index** — a vision container serving a text-only session (Bonsai 2
+    /// 27B, the PARO Qwen3.5 pack) tokenizes through both like any LLM.
     var producesFlatTextTokens: Bool { get }
 
     /// The MTP speculative-decoding drafter paired with the loaded model,
@@ -188,14 +190,14 @@ extension ModelSession {
     /// The agent-edge tokenize verb (ADR-0016 amendment): the **Conversation
     /// Render**'s `agentEdgeFullRender` — C25 **Render+Token Cache** render +
     /// verified suffix encode when the request is eligible (no media, a
-    /// flat-token model, a known fingerprint, a rendering tokenizer), fed
-    /// lazily by `templateMessages(for:)` — and the processor's `prepare`
-    /// otherwise. The **Raw Generation Start** tokenizes through it; the
-    /// **Request Keying** phase builds its own `ConversationRender` value at
-    /// the edge because later phases carry it. Not a requirement: one
-    /// spelling over the port's own verbs, which decorators inherit — a
-    /// recording peer's overridden `producesFlatTextTokens` steers the same
-    /// code production runs.
+    /// known fingerprint, a rendering tokenizer), fed lazily by
+    /// `templateMessages(for:)` and shaped by `textOnlyInput(tokens:)` — and
+    /// the processor's `prepare` otherwise. The **Raw Generation Start**
+    /// tokenizes through it; the **Request Keying** phase builds its own
+    /// `ConversationRender` value at the edge because later phases carry it.
+    /// Not a requirement: one spelling over the port's own verbs, which
+    /// decorators inherit — a recording peer's overridden
+    /// `producesFlatTextTokens` steers the same code production runs.
     ///
     /// A `nil` fingerprint BYPASSES rather than resolving under a synthetic
     /// key; any render/encode failure falls back too, which reproduces the
@@ -210,12 +212,26 @@ extension ModelSession {
             tools: input.tools,
             additionalContext: input.additionalContext,
             hasMedia: !(input.images.isEmpty && input.videos.isEmpty && input.audios.isEmpty),
-            producesFlatTextTokens: producesFlatTextTokens,
             modelFingerprint: modelFingerprint
         ) {
-            return LMInput(tokens: MLXArray(tokens))
+            return textOnlyInput(tokens: tokens)
         }
         return try await prepare(input)
+    }
+
+    /// The text-only `LMInput` the installed processor would build from a
+    /// rendered token list — the tokens at the processor's own rank: 1D
+    /// `[seq]` on the LLM-class text processor, 2D `[1, seq]` on a vision
+    /// container, whose text-only `prepare` adds the batch axis
+    /// (`Qwen3VLProcessor`, the ParoQuant VLM load). The **Conversation
+    /// Render** produces the tokens; the session answers for their shape,
+    /// so a Render+Token Cache or Emitted Path tokenize reproduces `prepare`
+    /// on either class and every rank-keyed consumer downstream (the
+    /// Prefill Strategy, the suffix slices, the boundary residual) sees
+    /// what the processor would have built.
+    nonisolated func textOnlyInput(tokens: [Int]) -> LMInput {
+        let flat = MLXArray(tokens)
+        return LMInput(tokens: producesFlatTextTokens ? flat : flat.expandedDimensions(axis: 0))
     }
 
     nonisolated func makeMTPDecodeIterator(

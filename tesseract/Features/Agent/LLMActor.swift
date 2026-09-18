@@ -163,11 +163,12 @@ actor LLMActor {
                 visionMode
                 ? try await loadParoQuantVLMContainer(from: directory)
                 : try await loadParoQuantLLMContainer(from: directory)
+            await stackTargetProjections(container: container)
             let result = try await verifyAndStore(container: container, identity: identity)
             await loadMTPDrafterIfPresent(
                 directory: directory, container: container, enabled: speculation.allowsMTP)
             await loadDFlash2DrafterIfPresent(
-                container: container, enabled: speculation.allowsDFlash2)
+                container: container, identity: identity, enabled: speculation.allowsDFlash2)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
         }
@@ -193,12 +194,35 @@ actor LLMActor {
                 using: AppTokenizerLoader()
             )
         }
+        await stackTargetProjections(container: container)
         let result = try await verifyAndStore(container: container, identity: identity)
         await loadMTPDrafterIfPresent(
             directory: directory, container: container, enabled: speculation.allowsMTP)
-        await loadDFlash2DrafterIfPresent(container: container, enabled: speculation.allowsDFlash2)
+        await loadDFlash2DrafterIfPresent(
+            container: container, identity: identity, enabled: speculation.allowsDFlash2)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
+    }
+
+    /// Fold the target's same-input projections (q|k|v, gate|up, the GDN
+    /// qkv|z) into one packed matmul each: bitwise-exact (ledger R40/R47),
+    /// fewer launches per token, and a Rotated Ternary Checkpoint pays one
+    /// rotation per shared input instead of one per projection. Only plain
+    /// and Hadamard-rotated quantized layers fold; a PARO target stacks
+    /// fewer blocks.
+    private func stackTargetProjections(container: ModelContainer) async {
+        // Loading leaves reusable buffers that need not overlap the
+        // evaluated old/new weights during projection stacking.
+        Memory.clearCache()
+        RequestMemoryTelemetry.recordAllocation(phase: "modelTargetStackingBegin", facts: [:])
+        let stacked = await container.perform { context in
+            let n = stackSameInputProjections(in: context.model)
+            if n > 0 { Memory.clearCache() }
+            return n
+        }
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "modelTargetStackingEnd", facts: ["stackedBlocks": "\(stacked)"])
+        Log.agent.notice("Same-input projection stacking: target=\(stacked) blocks")
     }
 
     /// Notice-level so the duration survives in `log show` (info is not
@@ -774,13 +798,19 @@ extension LLMActor {
     /// to-plain-decoding discipline as the MTP drafter: a draft problem warns,
     /// never fails the model load.
     private func loadDFlash2DrafterIfPresent(
-        container: ModelContainer, enabled: Bool
+        container: ModelContainer, identity: ModelIdentity, enabled: Bool
     ) async {
         dflash2Drafter = nil
         guard enabled else { return }
         let storageRoot = await MainActor.run { ModelDownloadManager.modelStorageURL }
         guard let directory = DFlash2Support.draftDirectory(storageRoot: storageRoot) else {
             return  // draft not downloaded — the common case, stay silent
+        }
+        guard !DFlash2Support.checkpointRefusesDraft(identity) else {
+            Log.agent.notice(
+                "DFlash2 draft: the target is a Rotated Ternary Checkpoint — the draft was "
+                    + "distilled for the full-precision target and decodes slower on it — off")
+            return
         }
         let targetLayers = await container.perform { context in
             DFlash2Support.targetLayerCount(context.model)
@@ -808,26 +838,13 @@ extension LLMActor {
             RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2LoadBegin", facts: [:])
             let draft = try DFlash2Support.loadDrafter(directory: directory)
             RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2Loaded", facts: [:])
-            // Loading leaves reusable buffers that need not overlap the
-            // evaluated old/new weights during projection stacking.
+            // The target's projections were stacked at load; the draft's
+            // fold here (same pass, bitwise-exact).
             Memory.clearCache()
-            RequestMemoryTelemetry.recordAllocation(phase: "modelTargetStackingBegin", facts: [:])
-            // Same-input QMM stacking (bitwise-exact, ledger R40/R47) on both
-            // sides of the speculative pair. Only plain QuantizedLinear folds;
-            // a PARO target stacks fewer blocks.
-            let stackedTarget = await container.perform { context in
-                let n = stackSameInputProjections(in: context.model)
-                if n > 0 { Memory.clearCache() }
-                return n
-            }
-            RequestMemoryTelemetry.recordAllocation(
-                phase: "modelTargetStackingEnd", facts: ["stackedBlocks": "\(stackedTarget)"])
             RequestMemoryTelemetry.recordAllocation(phase: "modelDraftStackingBegin", facts: [:])
             let stackedDraft = stackSameInputProjections(in: draft)
             if stackedDraft > 0 { Memory.clearCache() }
-            Log.agent.notice(
-                "DFlash2 same-input stacking: target=\(stackedTarget) draft=\(stackedDraft) blocks"
-            )
+            Log.agent.notice("DFlash2 same-input stacking: draft=\(stackedDraft) blocks")
             dflash2Drafter = UnsafeSendableBox(draft)
             RequestMemoryTelemetry.recordAllocation(phase: "modelProjectionStackingEnd", facts: [:])
             Log.agent.notice(

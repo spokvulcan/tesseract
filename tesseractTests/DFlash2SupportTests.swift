@@ -34,6 +34,25 @@ struct DFlash2SupportTests {
         #expect(!engages(hasDrafter: false))
     }
 
+    // MARK: - Checkpoint-level refusal
+
+    /// A Rotated Ternary Checkpoint runs the pairable class at the pairable
+    /// depth, yet the draft (distilled for the full-precision target) decoded
+    /// slower on it, so the checkpoint itself refuses the pairing.
+    @Test func rotatedTernaryCheckpointRefusesTheDraft() {
+        let rotated = ModelIdentity(
+            configJSON: [
+                "model_type": "prism_hadamard_qwen35",
+                "base_model_type": "qwen3_5",
+                "modules": [["path": "model.embed_tokens", "block": 1024, "embedding": true]],
+            ],
+            chatTemplate: nil)
+        let plain = ModelIdentity(configJSON: ["model_type": "qwen3_5"], chatTemplate: nil)
+
+        #expect(DFlash2Support.checkpointRefusesDraft(rotated))
+        #expect(!DFlash2Support.checkpointRefusesDraft(plain))
+    }
+
     @Test func refusesImageBearingRequests() {
         #expect(!engages(textOnlyIdentityKeySpace: false))
     }

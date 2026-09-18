@@ -319,11 +319,11 @@ struct ConversationRenderEligibilityTests {
         #expect(makeRender(tokenizer, fingerprint: nil).cacheFingerprint == nil)
     }
 
-    @Test func mediaAndNonFlatTokenModelsBypass() {
+    /// Media is the one render-side ineligibility: the model's class is
+    /// not an input (a vision container's text-only request is eligible;
+    /// the session shapes the token list at the processor's rank).
+    @Test func mediaBypasses() {
         #expect(makeRender(tokenizer, hasMedia: true, fingerprint: "m").cacheFingerprint == nil)
-        #expect(
-            makeRender(tokenizer, producesFlatTextTokens: false, fingerprint: "m")
-                .cacheFingerprint == nil)
     }
 
     @Test func eligibleTextOnlyRequestCarriesTheFingerprint() {

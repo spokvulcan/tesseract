@@ -65,6 +65,17 @@ nonisolated enum DFlash2Support {
         model is any DFlash2TargetModel
     }
 
+    /// Whether the target's checkpoint declines the draft regardless of class
+    /// and geometry. A **Rotated Ternary Checkpoint** (ADR-0067) runs the
+    /// pairable class at the pairable depth, but the draft was distilled
+    /// against the full-precision target's distribution: on Bonsai 2 27B it
+    /// accepted 22% of its proposals and decoded a third slower than plain
+    /// autoregression (2026-09-18, `docs/model-parameters.md`), so the pairing
+    /// is refused at load rather than measured per request.
+    static func checkpointRefusesDraft(_ identity: ModelIdentity) -> Bool {
+        identity.isRotatedTernaryCheckpoint
+    }
+
     /// Depth of the loaded target's layer stack when it pairs
     /// (``pairsWithTarget(_:)``), `nil` otherwise. Every pairable class
     /// reports its depth through `KVCacheDimensionProvider`.

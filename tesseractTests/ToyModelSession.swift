@@ -255,11 +255,14 @@ nonisolated enum ToyVocabulary {
 /// Toy `UserInputProcessor`: renders messages through the given tokenizer's
 /// chat template and returns 1D prepared tokens — the pure-LLM prepare shape.
 ///
-/// With a `VisionStub` installed it becomes the 2D-token toy variant (PRD
-/// #137, user story 12): image-bearing input appends one placeholder pad run
-/// per image and returns a `ProcessedImage` whose frames carry the stub's
-/// grid — the prepared shape the **Cache Key Space** and the ADR-0014 patch
-/// guard price, with no vision tower behind it.
+/// With a `VisionStub` installed it becomes the vision-container toy variant
+/// (PRD #137, user story 12), whose every `prepare` emits the VLM 2D
+/// `[batch, seq]` token shape — a text-only prompt included, exactly as
+/// `Qwen3VLProcessor` adds the batch axis to its chat-template tokens.
+/// Image-bearing input appends one placeholder pad run per image and
+/// returns a `ProcessedImage` whose frames carry the stub's grid — the
+/// prepared shape the **Cache Key Space** and the ADR-0014 patch guard
+/// price, with no vision tower behind it.
 nonisolated struct ToyUserInputProcessor: UserInputProcessor {
     /// The image-keying facts the stub fabricates per attached image.
     struct VisionStub {
@@ -291,8 +294,14 @@ nonisolated struct ToyUserInputProcessor: UserInputProcessor {
             tools: input.tools,
             additionalContext: input.additionalContext
         )
-        guard let vision, !input.images.isEmpty else {
+        guard let vision else {
             return LMInput(tokens: MLXArray(tokens.map(Int32.init)))
+        }
+        if input.images.isEmpty {
+            // The vision container's text-only prepare: the same tokens, one
+            // batch axis — the rank the request path must reproduce when it
+            // tokenizes through the Render+Token Cache instead.
+            return LMInput(tokens: MLXArray(tokens.map(Int32.init))[.newAxis])
         }
         var frames: [THW] = []
         for _ in input.images {

@@ -430,10 +430,12 @@ struct EmittedPathSynthesizedReplayTests {
                 padTokenId: imagePadID, padRunLength: EmittedPathToyTokenizer.imagePadRunLength,
                 frame: THW(1, 8, 8), inlineRuns: true),
             identity: identity)
+        // The text-only first turn registers like any other: the container's
+        // class is not a render ineligibility, only its processed media is.
         let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
         #expect(turn1.text == "hello world")
-        #expect(turn1.leafStore["emittedPath"] == "skipped")
-        #expect(turn1.event("emittedPathRegister") == nil)
+        #expect(turn1.leafStore["emittedPath"] == "registered")
+        #expect(turn1.event("emittedPathRegister") != nil)
 
         let image = HTTPPrefixCacheImage(data: try Self.tinyPNG())
         let request2 = Self.conversation([
@@ -453,8 +455,76 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn2.feeds.allSatisfy { $0.id >= 0 && $0.id < ToyVocabulary.size })
         #expect(turn2.cached > 0, "today's path did not reuse the text prefix")
         let stats = session.index.statsSnapshot()
-        #expect(stats.registrations == 0)
+        #expect(stats.registrations == 1)
         #expect(stats.hits == 0)
+    }
+
+    /// The 2026-09-18 Bonsai 2 27B session (Pi, `write` of a 6 KB SVG
+    /// inside an 18,939-token turn): a vision-container instance serving a
+    /// text-only coding session. Its text-only `prepare` emits 2D
+    /// `[batch, seq]` tokens, and that rank alone used to mark every render
+    /// ineligible (`nonFlatTokens`) — no registration, no resolve — so the
+    /// tool call's emitted split, which the canonical re-encode cannot
+    /// reproduce, cost a 95 s re-prefill of the whole turn. The session must
+    /// register and serve the Emitted Path exactly as a flat-token instance
+    /// does; the container's rank is the prepared input's business.
+    @Test func visionContainerTextOnlySessionServesTheEmittedPath() async throws {
+        let imagePadID = EmittedPathToyTokenizer().imagePadID
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5", "image_token_id": imagePadID,
+                "vision_config": ["num_heads": 16, "spatial_merge_size": 2],
+            ],
+            chatTemplate: nil)
+        let session = Session(
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: imagePadID, padRunLength: EmittedPathToyTokenizer.imagePadRunLength,
+                frame: THW(1, 8, 8), inlineRuns: true),
+            identity: identity)
+        let parent = Self.conversation([Self.user("hi")])
+        let thinking = session.completion(thinking: "plan", text: "")
+        let joined = session.tokenizer.encode(text: "KNI", addSpecialTokens: false)
+        let split = ["K", "NI"].flatMap {
+            session.tokenizer.encode(text: $0, addSpecialTokens: false)
+        }
+        #expect(joined.count == 1 && split.count == 2)
+
+        // The model's own split of the text, which no re-encode reproduces.
+        let turn1 = try await session.turn(parent, generated: thinking + split)
+        #expect(turn1.text == "KNI")
+        #expect(turn1.leafStore["path"] == "live", turn1.account)
+        #expect(turn1.leafStore["source"] == "handoff", turn1.account)
+        #expect(turn1.leafStore["emittedPath"] == "registered", turn1.account)
+        let pathLength = try #require(turn1.registeredPathLength)
+        #expect(pathLength == turn1.render.count + turn1.fedGenerated.count, turn1.account)
+
+        // The echo resolves to the emitted path and restores the whole leaf:
+        // only the glue and the new message prefill, never the canonical
+        // `KNI` token.
+        let request2 = Self.conversation([
+            Self.user("hi"), Self.assistant("KNI"), Self.user("more"),
+        ])
+        let turn2 = try await session.turn(request2, text: "again")
+        #expect(turn2.text == "again")
+        #expect(turn2.resolveSkips.isEmpty, "resolve skips: \(turn2.resolveSkips)")
+        #expect(turn2.requestResolve["result"] == "hit", turn2.account)
+        #expect(turn2.requestResolve["indexedPrefix"] == "\(pathLength)")
+        #expect(turn2.cached == pathLength, turn2.account)
+        // Nothing before the leaf offset is fed again; past it, exactly the
+        // canonical bytes after the turn's end-of-turn marker (the canonical
+        // render is one token shorter than the path, so the glue is located
+        // by the marker in the stored render, not by the path length).
+        #expect(turn2.feeds.first?.position == pathLength, turn2.account)
+        let stored = try turn1.storedRender(appending: "KNI")
+        let marker = try #require(stored.lastIndex(of: session.tokenizer.endOfTurnID))
+        #expect(turn2.fedPrompt == Array(turn2.render[(marker + 1)...]), turn2.account)
+        #expect(!turn2.fedPrompt.contains(joined[0]), turn2.account)
+        #expect(turn2.leafStore["source"] == "handoff", turn2.account)
+        #expect(turn2.leafStore["emittedPath"] == "registered", turn2.account)
+        let stats = session.index.statsSnapshot()
+        #expect(stats.registrations == 2)
+        #expect(stats.hits >= 1)
+        #expect(stats.fidelityRejections == 0)
     }
 
     @Test func evictionPastTheByteBoundMissesCanonicallyThenReRegisters() async throws {

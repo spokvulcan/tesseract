@@ -26,9 +26,6 @@ final class PreparedCheckpointParityRunner {
     private lazy var reportDir: URL = runner.activeConfig.outputDir
         .appendingPathComponent("prepared-checkpoint-parity")
 
-    nonisolated private static let prompt =
-        "List the first ten prime numbers, then explain in two sentences why 1 is not prime."
-    nonisolated private static let newTokens = 64
     private static let writeTimeout: Duration = .seconds(600)
 
     init(runner: BenchmarkRunner) {
@@ -110,11 +107,6 @@ final class PreparedCheckpointParityRunner {
         let loadSeconds: Double
     }
 
-    private struct TokenCapture: Sendable {
-        let tokens: [Int]
-        let text: String
-    }
-
     private func loadAndGenerate(modelDir: URL, label: String) async throws -> GenerationResult {
         let engine = AgentEngine()
         let clock = ContinuousClock()
@@ -125,42 +117,14 @@ final class PreparedCheckpointParityRunner {
 
         let capture = try await engine.llmActor.withModelContainer { container in
             try await container.perform { context in
-                try await Self.greedyGenerate(context: context)
+                try await BenchmarkHarness.greedyGenerate(context: context)
             }
         }
         engine.unloadModel()
         await engine.awaitPendingUnload()
-        log("[\(label)] generated \(capture.tokens.count) tokens, engine unloaded")
+        log("[\(label)] generated \(capture.generatedTokens.count) tokens, engine unloaded")
         return GenerationResult(
-            tokens: capture.tokens, text: capture.text, loadSeconds: loadSeconds)
-    }
-
-    /// Greedy decoding through the vendor iterator so raw token ids are
-    /// compared, not detokenized text.
-    nonisolated private static func greedyGenerate(
-        context: ModelContext
-    ) async throws -> TokenCapture {
-        var parameters = AgentGenerateParameters(
-            maxTokens: newTokens,
-            temperature: 0.0,
-            topP: 1.0,
-            topK: 0,
-            minP: 0.0
-        )
-        parameters.repetitionPenalty = nil
-        let genParams = LLMActor.makeGenerateParameters(from: parameters)
-
-        let prepared = try await context.processor.prepare(
-            input: UserInput(chat: [.user(prompt)])
-        )
-        var iterator = try TokenIterator(
-            input: prepared, model: context.model, cache: nil, parameters: genParams
-        )
-        var ids: [Int] = []
-        while ids.count < newTokens, let token = iterator.next() {
-            ids.append(token)
-        }
-        return TokenCapture(tokens: ids, text: context.tokenizer.decode(tokenIds: ids))
+            tokens: capture.generatedTokens, text: capture.text, loadSeconds: loadSeconds)
     }
 
     // MARK: - Logging

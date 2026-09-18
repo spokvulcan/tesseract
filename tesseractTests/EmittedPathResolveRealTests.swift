@@ -57,7 +57,7 @@ struct EmittedPathResolveRealTests {
     ) -> ConversationRender {
         ConversationRender.forTextOnlyRequest(
             tokenizer: tokenizer, toolSpecs: tools, renderContext: context, hasMedia: false,
-            producesFlatTextTokens: true, modelFingerprint: fingerprint,
+            modelFingerprint: fingerprint,
             cache: RenderTokenCache(), emittedPathIndex: index, diagnostics: nil)
     }
 

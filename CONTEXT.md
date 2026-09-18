@@ -2061,6 +2061,25 @@ _Avoid_: prerotated cache (rotations are not pre-applied), weights cache / cache
 (collides with the prefix cache), converted weights (holds the stacked MoE
 layout too, not just per-tensor conversion).
 
+**Rotated Ternary Checkpoint**:
+A checkpoint whose language-model weights are ternary values carried in MLX affine
+2-bit form in a Hadamard-rotated input basis, whatever its base architecture; the
+runtime rotates activations before every packed matmul and un-rotates embedding
+rows, so a loader that skips the rotation yields plausible garbage, not an error.
+Recognized by its config's module manifest, never by name.
+_Avoid_: "Bonsai model" as an architecture (Bonsai 2 27B is Qwen3.8-27B in this
+format), "2-bit model" (the container width, not the weight format), "Hadamard
+model", "ternary model" (the values, not the checkpoint).
+
+**Base Architecture**:
+The architecture whose forward pass a checkpoint runs — `base_model_type` when a
+pack declares its own `model_type`, else `model_type` itself. The **Model
+Identity** family facts key on it, so a **Rotated Ternary Checkpoint** of Qwen3.8
+is a Qwen3.5-family model to everything downstream.
+_Avoid_: "model type" for the family (the pack's type name is the loader key, not
+the architecture), "base model" (the checkpoint it derives from, e.g. Qwen3.8-27B,
+not the architecture).
+
 ### Cache memory budget
 
 **Pressure-Reactive Budget**:

@@ -369,15 +369,66 @@ scripts/dev.sh hybrid-cache-correctness  # HybridCacheCorrectnessRunner — bitw
 
 Both exit non-zero on any failed check. Run before releases and after any change
 to `LLMActor`, `ServerCompletion`, `PrefixCacheManager`, `HybridCacheSnapshot`,
-or `StablePrefixDetector`. The correctness runner is the stronger gate (bitwise
+or `StablePrefixDetector`. Every loaded-model command forwards extra arguments
+to the harness, so `--bench-model-id <catalog id>` picks the model (default:
+`ModelDefinition.defaultAgentModelID`). The correctness runner is the stronger gate (bitwise
 tensor comparison via raw `ModelContainer.perform` access); the e2e runner
 exercises the full HTTP path and is the right shape for catching pipeline
 regressions the correctness runner can't see.
 The correctness runner also compares a moved leaf restored by copy against
 cold-prefill logits bitwise (`movedLeafRestoredByCopyMatchesBitwise`).
 
+Known miss in the e2e image scenario (2026-09-18): with a Qwen3.8-template
+model loaded in vision mode (`qwen3.8-27b-paro`, `bonsai-2-27b`),
+`requestZ2_followup_restores_past_image` and
+`agent_image_history_lands_cache_aware` report `cachedTokens=0`. The runner
+caps every reply at 32 tokens and these models are still inside `<think>`
+at the cap; the canonical leaf stored after Z1 (298 tokens) and the
+follow-up's render of that same reply then part four tokens into the
+assistant turn (shared prefix 261), so Z2 prefills cold. The image path is
+intact — warm and cold outputs are identical, Z5 never hits, Z6b reuses the
+text prefix through the image — and `qwen3.5-2b` (a template without
+`preserve_thinking`) passes both checks with the same truncated reply. Read
+the two checks as a runner limitation until the cap or the truncated-think
+history render is settled; the rest of the report reads as usual.
+
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.
+The VLM smoke currently traps after its load check on every vision model tried
+(`qwen3.5-4b-paro`, `bonsai-2-27b`, 2026-09-18) at the vendor precondition
+`Qwen35 cannot continue a warm prompt cache without qwen35.ropeDeltas`: its
+warm-continuation step predates that precondition (2026-08-10) and needs
+updating before it says anything again. The load check before the trap is
+still informative.
+
+`scripts/dev.sh rotated-checkpoint-parity` is the **Rotated Ternary
+Checkpoint** gate (ADR-0067; `MODEL_ID` defaults to `bonsai-2-27b`, and extra
+arguments reach the binary as for the other loaded-model subcommands). A
+loader that skips the Hadamard rotation decodes plausible garbage, not an
+error, so the only proof is an independent implementation. The Swift half
+(`RotatedCheckpointParityRunner`, `--rotated-checkpoint-parity`) loads the
+pack through `AgentEngine`, asserts the manifest modules were substituted
+with rotated layers (the load's stacking pass folds q|k|v, gate|up and the
+GDN qkv|z, so the count reads 257 rotated linear leaves — 129 standalone and
+128 stacked — not the manifest's 401), greedy-decodes a fixed prompt and
+writes the prompt and generated token ids to the JSON report (latest.json)
+in `benchmark/rotated-checkpoint-parity/`.
+The reference half (`scripts/rotated_checkpoint_reference.py`, run from
+`research/bonsai-venv` with mlx-vlm installed) decodes the same prompt ids
+through mlx-vlm's `prism_hadamard_qwen35` and scores two things: the greedy
+common prefix (weak — two engines' float noise eventually forks a greedy
+trajectory) and the teacher-forced agreement (the Swift continuation fed back
+through the reference in one pass; a missing rotation scores near zero, float
+noise costs a token or two). PASS needs a prefix of 16 and agreement of 0.9.
+mlx-vlm loads the pack's float32 norms as stored and MLX promotes its residual
+stream to float32; the app casts them to the manifest's float16 at load, so
+`PARITY_REFERENCE_ARGS=--match-app-dtypes` runs the reference with the same
+cast and isolates the rotation logic from that difference. Run it for any
+change to the vendor's `HadamardQuantized` layers (MLXLMCommon), the
+`PrismHadamardQwen35` classes, the same-input projection stacking pass
+(`SameInputProjectionStacking`, which folds rotated siblings that share a sign
+vector and runs on every load), `ModelIdentity.baseArchitecture`, or a new
+rotated pack in the catalog.
 
 `scripts/dev.sh trace-replay` is the odd one out: it needs **no loaded
 model**. It replays the Completion Trace Log corpus through the offline
@@ -692,7 +743,11 @@ body removal/accounting, exact recurrent state and metadata after growth,
 every intentional fallback, and pending-full-payload materialization.
 `EmittedPathSynthesizedReplayTests` covers cancellation during decode and warm
 prefill, including the unload drain, followed by a resend that hits the original
-leaf. `ServerCompletionKeyedSequencingTests` also covers a zero-output direct
+leaf, and the vision-container text-only session (Bonsai 2 27B, the PARO
+Qwen3.5 pack: 2D prepared tokens) registering and serving the Emitted Path
+like a flat-token instance; `RequestKeyingPhaseInstanceTruthTests` pins that
+such a request tokenizes through the Render+Token Cache at the processor's
+rank with no `prepare` verb. `ServerCompletionKeyedSequencingTests` also covers a zero-output direct
 turn that returns its original leaf and reports rewind without capturing an
 empty cache. `HybridCacheSnapshotTests` covers copied recurrent metadata,
 including lengths and nil/present padding. Run these alongside

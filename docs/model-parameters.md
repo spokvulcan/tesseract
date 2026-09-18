@@ -4,7 +4,7 @@ The numbers we keep looking up: context windows, recommended output
 lengths, sampling presets, thinking defaults, and what each checkpoint
 ships. One row per catalog entry (`tesseract/Features/Models/ModelDefinition.swift`),
 sourced from the official model cards and the checkpoint `config.json` /
-`generation_config.json` on disk. Last verified **2026-09-03**.
+`generation_config.json` on disk. Last verified **2026-09-17**.
 
 Two columns matter when they disagree:
 
@@ -18,6 +18,7 @@ Two columns matter when they disagree:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `qwen3.8-27b-paro` | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | 27B dense | `qwen3_5` | 64 | PARO 4-bit, group 128 | on | 131,072 final / 262,144 reasoning | `qwen38Thinking` |
 | `qwen3.8-27b` | [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) | 27B dense | `qwen3_5` | 64 | affine 4-bit, group 64 | on | 131,072 final / 262,144 reasoning | `qwen38Thinking` |
+| `bonsai-2-27b` | [prism-ml/Ternary-Bonsai-2-27B-mlx-2bit](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-mlx-2bit) (Qwen3.8-27B) | 27B dense | `prism_hadamard_qwen35` (base `qwen3_5`) | 64 | ternary in affine 2-bit, group 128, Hadamard-rotated | on | 131,072 final / 262,144 reasoning | `qwen38Thinking` |
 | `qwen3.6-27b-paro` | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) | 27B dense | `qwen3_5` | 64 | PARO 4-bit, group 128 | on | 32,768 (81,920 hard problems) | `qwen36Thinking` |
 | `qwen3.6-27b` | [Qwen/Qwen3.6-27B](https://huggingface.co/Qwen/Qwen3.6-27B) | 27B dense | `qwen3_5` | 64 | affine 4-bit, group 64 | on | 32,768 (81,920) | `qwen36Thinking` |
 | `qwen3.6-35b-a3b-paro` | [Qwen/Qwen3.6-35B-A3B](https://huggingface.co/Qwen/Qwen3.6-35B-A3B) | 35B total / 3B active, 256 experts (8 routed + 1 shared) | `qwen3_5_moe` | 40 | PARO 4-bit, group 128 | on | 32,768 (81,920) | `qwen36Thinking` |
@@ -56,6 +57,49 @@ between families and modes, so it gets its own column.
 - Vision-language checkpoint (`vision_config` present). Both 27B entries
   carry the **Text-Only Override** in the catalog until map #457 lands.
 - `generation_config.json`: temperature 1.0, top_p 0.95, top_k 20.
+
+### Bonsai 2 27B (Rotated Ternary Checkpoint of Qwen3.8-27B)
+
+| Mode | temperature | top_p | top_k | min_p | presence_penalty |
+| --- | --- | --- | --- | --- | --- |
+| Thinking (card) | 1.0 | 0.95 | 20 | 0.0 | 0.0 |
+| **App `qwen38Thinking`** | 1.0 | 0.95 | 20 | 0.0 | none |
+
+- Qwen3.8-27B with ternary language-model weights carried in MLX affine
+  2-bit form in a Hadamard-rotated input basis (ADR-0067): `model_type`
+  `prism_hadamard_qwen35`, **Base Architecture** `qwen3_5`, and the Model
+  Identity family facts key on the base, so every Qwen3.8 rule above applies.
+  The vision tower is FP16 and unrotated; the MTP head is dropped, so no
+  MTP drafting.
+- Chat template byte-identical to Qwen3.8-27B: same tool-call format, thinking
+  on by default, `reasoning_effort` `low` / `medium` / `xhigh`. The card
+  notes **`low` behaves like `xhigh`** on this checkpoint; the server passes
+  it through unchanged.
+- `generation_config.json`: temperature 1.0, top_p 0.95, top_k 20 (the
+  Qwen3.8 thinking preset).
+- Weights ~8.6 GB. Recommended 24 GB+; runs on 16 GB at short context.
+- Decode uses the stock 2-bit `quantizedMM` kernels plus a float32
+  `hadamardTransform` per shared input: siblings that share a sign vector
+  (q|k|v, gate|up, the GDN qkv|z — every group on this pack) are stacked
+  into one rotated layer at load, 144 fewer rotations per token than one per
+  packed matmul; the fork's tuned matmul kernels are 4-bit only. Measured
+  against `qwen3.8-27b` on this machine (48 GB, greedy, 5,963-token prompt,
+  192 new tokens, 2026-09-18): plain decode **30.8 vs 22.1 tok/s**, prefill
+  27.9 vs 27.9 s (the rotation costs nothing measurable at prefill), peak
+  memory 9.8 vs 32.5 GB (the 4-bit run carries the DFlash2 draft, which
+  reaches 45.1 tok/s there and is refused here — see Speculative decoding).
+  The stacking itself moves nothing measurable (same day, paired against
+  the unstacked build, two passes each: 29.0 / 31.0 vs 31.4 / 29.1 tok/s
+  median, inside the ±4% drift between passes): decode sits at the
+  memory-bandwidth ceiling, so launch count is not the limiter
+  (ADR-0067, consequences).
+- Agent quick bench at this preset, same day, two passes: 7/14 and 5/14
+  scenarios (`qwen3.8-27b`: 5/14), tool accuracy 77% and 74% (86%),
+  duplicate tool calls 9.5% and 3.8% (3.4%), 33.3 and 29.6 tok/s on the
+  short agent turns. Same band; the runs sample at temperature 1.0, so a
+  single pass is noisy. Its misses are behavioral (answering from context
+  instead of re-reading, a `write` where an `edit` was required, acting on
+  an ambiguous request), not malformed tool calls.
 
 ### Qwen3.6 (27B dense, 35B-A3B MoE)
 
@@ -128,6 +172,7 @@ between families and modes, so it gets its own column.
 | --- | --- | --- |
 | `qwen3.8-27b` | yes | `qwen3.8-27b-dflash2-draft` |
 | `qwen3.8-27b-paro` | **grafted** by `scripts/graft_mtp_head.py` (not in the upstream file) | `qwen3.8-27b-dflash2-draft` |
+| `bonsai-2-27b` | dropped from the pack | **refused by identity**: pairs by shape, but measured 0.64× (19.6 vs 30.8 tok/s, 22% acceptance, 2026-09-18) — see below |
 | `qwen3.5-2b` | yes | — |
 | every other entry | no | — |
 
@@ -136,17 +181,22 @@ between families and modes, so it gets its own column.
   target layers 5/19/33/47/61 of a 64-layer target, lossless (greedy output
   matches the target). Card recommends the target's own sampling (1.0 / 0.95 /
   20). The app quantizes it to 4-bit, group 64. Loads only when the target is
-  the MLXLLM text class with 64 layers (`DFlash2Support`).
+  the MLXLLM text class with 64 layers and not a Rotated Ternary Checkpoint
+  (`DFlash2Support`).
 - **MTP** (ADR-0056): greedy only, block size 4; the drafter borrows the
   target's embedding and head.
 - Measured on this machine (quick bench, greedy, 5,976-token prompt,
   192 new tokens, 2026-09-03): PARO AR 21.1 tok/s, DFlash2 bs8 30.8 (53%
   acceptance), bs5 32.7 (62%). Uniform 27B record bs8f 47.9 (ADR-0058).
+  Bonsai 2 27B (same bench, 2026-09-18): AR 30.8 tok/s, DFlash2 bs8 19.6
+  (22% acceptance, 0.64×) — the draft was distilled against the
+  full-precision target, so the pairing is refused at load.
 
 ## Client settings that follow from this
 
 - **Pi** (`~/.pi/agent/models.json`, provider `tesseract`): `contextWindow`
-  262144, `maxTokens` 131072 for both 27B entries, `reasoning: true`.
+  262144, `maxTokens` 131072 for all three 27B entries (`qwen3.8-27b`,
+  `qwen3.8-27b-paro`, `bonsai-2-27b`), `reasoning: true`.
 - **Server** (`/v1/chat/completions`): `max_tokens` /
   `max_completion_tokens` pass straight through to generation; there is no
   clamp against the remaining context. `chat_template_kwargs.enable_thinking`

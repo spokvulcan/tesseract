@@ -113,39 +113,35 @@ nonisolated enum RequestKeyingPhase {
             }
             return .ciImage(decoded)
         }
-        // C25 Render+Token Cache: text-only requests on flat-token (LLM-family)
-        // models tokenize through the cache — the `.messages` prompt reaches
-        // every processor's `generate(from:)` unchanged, so the cache renders
-        // exactly what `prepare` would, and `LMInput(tokens:)` is exactly what
-        // the text-only processor builds. Media, vision containers (whose
-        // text-only `prepare` emits 2D tokens), an unknown model fingerprint,
-        // non-rendering tokenizers, and any render/encode failure all fall back
-        // to the processor. This is the ONE construction of the request's
-        // **Conversation Render** — eligibility decided here, where instance
-        // truth lives, then sealed for the key space below and threaded to
-        // every later render.
+        // C25 Render+Token Cache: text-only requests tokenize through the
+        // cache on EITHER model class — the `.messages` prompt reaches every
+        // processor's `generate(from:)` unchanged, so the cache renders
+        // exactly what `prepare` would, and the session's `textOnlyInput`
+        // shapes the list at the processor's own rank (1D on the LLM-class
+        // text processor, 2D `[1, seq]` on a vision container). Media, an
+        // unknown model fingerprint, non-rendering tokenizers, and any
+        // render/encode failure all fall back to the processor. This is the
+        // ONE construction of the request's **Conversation Render** —
+        // eligibility decided here, where instance truth lives, then sealed
+        // for the key space below and threaded to every later render.
         // `hasMedia` keys on the INSTANCE-FILTERED list (issue #439): a
         // dropped-image request is text-only by construction — the processor
         // never sees the bytes, only the same content-array prompt the cache
-        // renders — so it is C25-eligible like any other text render. On this
-        // path the two conditions are coupled (images survive the filter only
-        // when the instance processes them, which is exactly when
-        // `producesFlatTextTokens` is false), so real media still lands on the
-        // processor via the flat-tokens guard; passing `keyedImages` keeps the
-        // seam honest if that coupling ever changes.
+        // renders — so it is C25-eligible like any other text render, and
+        // real media (images an instance actually processes) is the one
+        // render-side ineligibility left.
         let render = ConversationRender.forTextOnlyRequest(
             tokenizer: session.tokenizer,
             toolSpecs: canonicalTools,
             renderContext: renderContext,
             hasMedia: !keyedImages.isEmpty,
-            producesFlatTextTokens: producesFlatTextTokens,
             modelFingerprint: modelFingerprint,
             emittedPathIndex: emittedPathIndex,
             diagnostics: diagnostics
         )
         let fullInput: LMInput
         if let renderedTokens = render.fullRender(messages: conversation.promptMessages) {
-            fullInput = LMInput(tokens: MLXArray(renderedTokens))
+            fullInput = session.textOnlyInput(tokens: renderedTokens)
         } else {
             fullInput = try await session.prepare(
                 UserInput(
