@@ -303,7 +303,6 @@ final class AgentCpuBenchRunner {
             toolSpecs: canonicalTools,
             renderContext: .canonical,
             hasMedia: false,
-            producesFlatTextTokens: true,
             modelFingerprint: fingerprint
         )
     }

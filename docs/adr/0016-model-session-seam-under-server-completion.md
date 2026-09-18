@@ -72,12 +72,15 @@ arm — reachable only through them.
 The widening, member by member:
 
 - `prepareText(_:modelFingerprint:)` — the agent-edge tokenize verb, a
-  protocol-extension default over the port's own verbs (`producesFlatTextTokens`,
-  `templateMessages(for:)`, `tokenizer`, `prepare`) composing the
-  **Conversation Render**'s `agentEdgeFullRender`, so eligibility keeps its
-  one spelling there and a recording peer's overridden flat-tokens fact
-  steers the same code production runs. The keying phase keeps building its
-  own `ConversationRender` value at the edge — later phases carry it.
+  protocol-extension default over the port's own verbs (`templateMessages(for:)`,
+  `tokenizer`, `prepare`, and `textOnlyInput(tokens:)`, which shapes the
+  rendered list at the processor's rank from `producesFlatTextTokens`)
+  composing the **Conversation Render**'s `agentEdgeFullRender`, so
+  eligibility keeps its one spelling there and a recording peer's overridden
+  flat-tokens fact steers the same code production runs. (Amended 2026-09-18
+  with ADR-0063: the flat-tokens fact shapes the input; it no longer gates
+  eligibility.) The keying phase keeps building its own `ConversationRender`
+  value at the edge — later phases carry it.
 - `templateMessages(for:)` — the chat-template dicts the processor would
   render: the model's own `messageGenerator` on an `LLMModel`, the prompt's
   `.messages` otherwise.

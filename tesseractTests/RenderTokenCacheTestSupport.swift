@@ -272,7 +272,6 @@ nonisolated func makeRender(
     _ tokenizer: any MLXLMCommon.Tokenizer,
     toolSpecs: [ToolSpec]? = nil,
     hasMedia: Bool = false,
-    producesFlatTextTokens: Bool = true,
     fingerprint: String? = nil,
     base: [Int]? = nil,
     cache: RenderTokenCache = .shared
@@ -282,7 +281,6 @@ nonisolated func makeRender(
         toolSpecs: toolSpecs,
         renderContext: .canonical,
         hasMedia: hasMedia,
-        producesFlatTextTokens: producesFlatTextTokens,
         modelFingerprint: fingerprint,
         cache: cache
     )

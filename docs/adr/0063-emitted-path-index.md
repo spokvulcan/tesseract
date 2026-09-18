@@ -208,6 +208,38 @@ Qwen3.8 + DFlash2 parity, the below-20k 150 ms tail bound, and the 45k/75k/93k
 memory comparison remain pending explicit owner approval on a suitable
 machine. See [the #480 evidence report](../../benchmarks/leaf-checkout/2026-09-12/README.md).
 
+### Amended 2026-09-18: the model's class is not an eligibility input
+
+The render-side eligibility the index inherited from the C25 Render+Token
+Cache carried a `producesFlatTextTokens` leg: a vision-container instance,
+whose text-only `prepare` emits 2D `[batch, seq]` tokens, was ineligible
+(`nonFlatTokens`), so no request on such an instance registered or
+resolved. Every vision-capable pack the HTTP server loads is that instance
+(ADR-0008 loads the vision variant unconditionally): Bonsai 2 27B
+(ADR-0067), the PARO Qwen3.5 pack, any Qwen3.5/3.6 VLM. Their coding
+sessions ran the pre-index paths this ADR retired. Observed on a Pi session
+against Bonsai 2 27B: an 18,939-token turn ending in a `write` tool call of
+a 6 KB SVG registered nothing; the echo diverged at the tool call
+(`tailRewind` at offset 18,961 of 21,732), the only snapshot below it was
+the system checkpoint at 2,773, and the request re-prefilled 18,988 tokens
+in 95 s. The same task on the text-class Qwen3.8-27B load registered and
+served the whole path.
+
+The precondition was about shape, never about eligibility: the token list
+the Conversation Render produces is rank-agnostic, and only the model's
+processor knows its rank. `ModelSession.textOnlyInput(tokens:)` now shapes
+the list at the processor's own rank (1D on the LLM-class text processor,
+2D `[1, seq]` on a vision container, reproducing `Qwen3VLProcessor`'s
+text-only `prepare`), the request edge and the agent edge build their input
+through it, and the eligibility predicate keeps only media and the unknown
+fingerprint. `producesFlatTextTokens` stays as the instance truth the
+keying phase reads (whether images reach the model, the Position Anchor
+seed) — it just no longer gates the render. Image-bearing requests keep
+today's paths unchanged. `EmittedPathSynthesizedReplayTests` gains the
+vision-container text-only case (register, resolve, whole-path hit, glue
+only) and `RequestKeyingPhaseInstanceTruthTests` pins the no-`prepare`,
+rank-2 keyed input.
+
 The required follow-ups are [index persistence (#499)](https://github.com/spokvulcan/tesseract/issues/499),
 [optional lineage (#500)](https://github.com/spokvulcan/tesseract/issues/500),
 [warm-prefill/DFlash2 profiling (#501)](https://github.com/spokvulcan/tesseract/issues/501),

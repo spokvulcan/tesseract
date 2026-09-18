@@ -123,7 +123,6 @@ nonisolated struct ConversationRender: @unchecked Sendable {
 
     enum Ineligibility: String, Sendable {
         case media
-        case nonFlatTokens
         case unknownFingerprint
         case nonIdentityKeySpace
         case uncached
@@ -140,32 +139,33 @@ nonisolated struct ConversationRender: @unchecked Sendable {
 
     /// The one spelling of the eligibility predicate, shared by the request
     /// edge and the agent edge: engage the cache only for a media-free
-    /// request on a model whose processor emits a flat 1-D token list, and
-    /// only under a known fingerprint.
+    /// request under a known fingerprint.
+    ///
+    /// The model's class is deliberately NOT an input. The token list this
+    /// render produces is shape-agnostic; the **Model Session** shapes it at
+    /// the processor's own rank (`textOnlyInput(tokens:)` — 1D on the
+    /// LLM-class text processor, 2D `[1, seq]` on a vision container). Until
+    /// 2026-09-18 a `producesFlatTextTokens` leg here excluded every vision
+    /// container, so Bonsai 2 27B and the PARO Qwen3.5 pack served text-only
+    /// coding sessions without the Render+Token Cache OR the Emitted Path
+    /// Index, and one 18,939-token `write` turn re-prefilled in 95 s.
     private static func eligibility(
         hasMedia: Bool,
-        producesFlatTextTokens: Bool,
         modelFingerprint: String?
     ) -> (fingerprint: String?, ineligibility: Ineligibility?) {
         if hasMedia { return (nil, .media) }
-        if !producesFlatTextTokens { return (nil, .nonFlatTokens) }
         guard let modelFingerprint else { return (nil, .unknownFingerprint) }
         return (modelFingerprint, nil)
     }
 
     /// The request-edge constructor: engage the cache only for a media-free
-    /// request on a model whose processor emits a flat 1-D token list.
-    ///
-    /// `producesFlatTextTokens` is the DIRECT property the cache path needs —
-    /// `LMInput(tokens:)` must reproduce what the processor would build, and
-    /// a vision container's text-only `prepare` emits 2D `[batch, seq]`. It
-    /// replaced the old `imageKeying == nil` proxy, which asked whether the
-    /// app RECOGNIZES a vision container — true of the then-only VLM family
-    /// by coincidence, and silently wrong for any VLM family added without
-    /// an image-keying rule.
+    /// request under a known fingerprint.
     ///
     /// `hasMedia` must key on the INSTANCE-FILTERED image list (issue #439):
-    /// a dropped-image request is text-only by construction.
+    /// a dropped-image request is text-only by construction. Whether the
+    /// instance processes images at all is the keying phase's
+    /// `producesFlatTextTokens` reading; it decides the filter, never the
+    /// render's eligibility.
     ///
     /// `diagnostics` is the request's diagnostics net for the Emitted Path
     /// events; `nil` sends them to the server log.
@@ -174,17 +174,12 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         toolSpecs: [ToolSpec]?,
         renderContext: TemplateRenderContext,
         hasMedia: Bool,
-        producesFlatTextTokens: Bool,
         modelFingerprint: String?,
         cache: RenderTokenCache = .shared,
         emittedPathIndex: EmittedPathIndex? = .shared,
         diagnostics: PrefixCacheDiagnostics.Context? = nil
     ) -> ConversationRender {
-        let eligibility = eligibility(
-            hasMedia: hasMedia,
-            producesFlatTextTokens: producesFlatTextTokens,
-            modelFingerprint: modelFingerprint
-        )
+        let eligibility = eligibility(hasMedia: hasMedia, modelFingerprint: modelFingerprint)
         return ConversationRender(
             tokenizer: tokenizer,
             toolSpecs: toolSpecs,
@@ -637,26 +632,23 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     /// the same eligibility and resolve, so the fifth spelling shares this
     /// home without pretending the contexts match. `nil` sends the caller
     /// to its processor's `prepare`. `messages` is an autoclosure so an
-    /// ineligible request (media, 2D tokens, unknown fingerprint) never pays
-    /// the message-forming pass; a caller that cannot form messages at all
-    /// yields `nil` from it and falls back the same way.
+    /// ineligible request (media, unknown fingerprint) never pays the
+    /// message-forming pass; a caller that cannot form messages at all
+    /// yields `nil` from it and falls back the same way. The caller shapes
+    /// the returned list at its processor's rank (`textOnlyInput(tokens:)`).
     static func agentEdgeFullRender(
         tokenizer: any Tokenizer,
         messages: @autoclosure () -> [[String: any Sendable]]?,
         tools: [ToolSpec]?,
         additionalContext: [String: any Sendable]?,
         hasMedia: Bool,
-        producesFlatTextTokens: Bool,
         modelFingerprint: String?,
         cache: RenderTokenCache = .shared,
         emittedPathIndex: EmittedPathIndex? = .shared
     ) -> [Int]? {
         guard
-            let fingerprint = eligibility(
-                hasMedia: hasMedia,
-                producesFlatTextTokens: producesFlatTextTokens,
-                modelFingerprint: modelFingerprint
-            ).fingerprint
+            let fingerprint = eligibility(hasMedia: hasMedia, modelFingerprint: modelFingerprint)
+                .fingerprint
         else { return nil }
         guard let messages = messages() else { return nil }
         guard

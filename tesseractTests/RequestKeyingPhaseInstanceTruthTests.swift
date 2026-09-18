@@ -56,6 +56,9 @@ import Testing
         let seedsPositionAnchor: Bool
         let unkeyedReason: String?
         let fullTokens: [Int]
+        /// The prepared input's token rank: 1 on the LLM-class text
+        /// processor, 2 (`[batch, seq]`) on a vision container.
+        let tokenNDim: Int
     }
 
     private static func runPhase(
@@ -80,15 +83,17 @@ import Testing
                     isIdentity: keyed.keySpace.isIdentity,
                     seedsPositionAnchor: keyed.seedsPositionAnchor,
                     unkeyedReason: nil,
-                    fullTokens: keyed.fullTokens
+                    fullTokens: keyed.fullTokens,
+                    tokenNDim: keyed.tokenNDim
                 )
-            case .unkeyed(_, let fullTokens, _, let reason):
+            case .unkeyed(let input, let fullTokens, _, let reason):
                 return OutcomeFacts(
                     isKeyed: false,
                     isIdentity: false,
                     seedsPositionAnchor: false,
                     unkeyedReason: reason.rawValue,
-                    fullTokens: fullTokens
+                    fullTokens: fullTokens,
+                    tokenNDim: input.text.tokens.ndim
                 )
             }
         }
@@ -153,6 +158,51 @@ import Testing
         let truth = try tokenizer.applyChatTemplate(
             messages: conversation.promptMessages, tools: nil, additionalContext: nil)
         #expect(outcome.fullTokens == truth)
+    }
+
+    /// The 2026-09-18 Bonsai 2 27B session: a vision-container instance
+    /// (its text-only `prepare` emits 2D tokens) serving a TEXT-ONLY
+    /// request. The render cache and the Emitted Path Index it fronts must
+    /// engage exactly as on a flat-token instance — `prepare` never runs,
+    /// the keyed tokens are the fused render — and the prepared input must
+    /// carry the processor's own rank, so every rank-keyed consumer
+    /// downstream sees what the processor would have built. Before the fix
+    /// the rank alone marked the render ineligible (`nonFlatTokens`), and a
+    /// 18,939-token `write` turn re-prefilled in full.
+    @Test func visionInstanceTextOnlyRequestTokenizesThroughRenderTokenCache() async throws {
+        let tokenizer = GreedyTokenizer(pieces: [
+            "<|im_start|>", "<|im_end|>", "assistant", "user", "system",
+            "\n", "look", " ",
+        ])
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]),
+            tokenizer: tokenizer,
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: Self.visionFamilyKeying.imagePadTokenId,
+                padRunLength: 4,
+                frame: THW(1, 8, 8)
+            )
+        )
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [HTTPPrefixCacheMessage(role: .user, content: "look")]
+        )
+        let truth = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        let outcome = try await Self.runPhase(
+            provider: provider,
+            conversation: conversation,
+            modelFingerprint: "vision-text-only-\(UUID().uuidString)"
+        )
+
+        #expect(outcome.isKeyed)
+        #expect(outcome.isIdentity)
+        // The container still seeds the Position Anchor on a text-only turn:
+        // that reading is the instance's, not the render's.
+        #expect(outcome.seedsPositionAnchor)
+        #expect(outcome.fullTokens == truth)
+        #expect(provider.recorder.verbs.isEmpty, "verbs: \(provider.recorder.verbs)")
+        #expect(outcome.tokenNDim == 2)
     }
 
     /// The guard the #439 eligibility extension must NOT loosen: genuinely

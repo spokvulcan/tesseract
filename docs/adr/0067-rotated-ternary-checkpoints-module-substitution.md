@@ -106,6 +106,13 @@ layer classes on an unmerged mlx-swift fork branch and no model integration.
   `isRotatedTernaryCheckpoint` (recognized by the `modules` manifest, never by
   name) and the draft load refuses such a target. A draft distilled against
   the rotated pack would lift the refusal; none exists.
+- The pack loads as the vision container (`PrismHadamardQwen35: Qwen35`),
+  and until 2026-09-18 that class alone excluded it from the Render+Token
+  Cache and the Emitted Path Index (`nonFlatTokens`): decision 1's "prefix-
+  cache support applies unchanged" held for the tree but not for the index,
+  and a Pi `write` turn re-prefilled 18,988 tokens in 95 s. ADR-0063's
+  amendment of the same date removes the class from the eligibility; the
+  session shapes the token list at the container's rank.
 - The acceptance gate gains a greedy-parity check against the mlx-vlm
   reference: a wrong sign width or dtype slip yields plausible text, not an
   error.

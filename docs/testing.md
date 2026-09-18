@@ -743,7 +743,11 @@ body removal/accounting, exact recurrent state and metadata after growth,
 every intentional fallback, and pending-full-payload materialization.
 `EmittedPathSynthesizedReplayTests` covers cancellation during decode and warm
 prefill, including the unload drain, followed by a resend that hits the original
-leaf. `ServerCompletionKeyedSequencingTests` also covers a zero-output direct
+leaf, and the vision-container text-only session (Bonsai 2 27B, the PARO
+Qwen3.5 pack: 2D prepared tokens) registering and serving the Emitted Path
+like a flat-token instance; `RequestKeyingPhaseInstanceTruthTests` pins that
+such a request tokenizes through the Render+Token Cache at the processor's
+rank with no `prepare` verb. `ServerCompletionKeyedSequencingTests` also covers a zero-output direct
 turn that returns its original leaf and reports rewind without capturing an
 empty cache. `HybridCacheSnapshotTests` covers copied recurrent metadata,
 including lengths and nil/present padding. Run these alongside
