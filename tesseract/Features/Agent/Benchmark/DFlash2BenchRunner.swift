@@ -1261,15 +1261,9 @@ nonisolated struct DFlash2BenchRunner {
         let maxNewTokens = positiveOption("--bench-max-tokens", default: 192)
         let fingerprintLimit = captureFullStream ? maxNewTokens : 8
 
-        // Stack same-input projections into one QMM each (bitwise-neutral,
-        // applies to both arms via the shared model).
-        let stacked = stackSameInputProjections(in: context.model)
-        // The stacking transiently duplicated the weights; the freed
-        // originals sit in the buffer cache and crowd GPU residency —
-        // release them before the runs.
-        GPU.clearCache()
-        emit("[dflash2-bench] same-input projections stacked in \(stacked) blocks")
-
+        // The load stacked the target's same-input projections into one QMM
+        // each (bitwise-neutral, both arms share the model); only the draft's
+        // fold below is the bench's own.
         let promptText = try buildPromptText()
         let prepared = try await context.processor.prepare(
             input: UserInput(chat: [.user(promptText)]))
