@@ -199,6 +199,63 @@ struct CacheKeySpaceTests {
         #expect(spaceA.keyPath.count == spaceB.keyPath.count)
     }
 
+    // MARK: - Render space ↔ prepared space (ADR-0063, amended 2026-09-18)
+
+    /// The key path collapsed back to render space: one pad per image where
+    /// the pseudo-token run was, everything else untouched — what the
+    /// Emitted Path Index stores for an image-bearing turn.
+    @Test func renderSpacePathCollapsesEachRunToOnePad() throws {
+        let prepared = Self.prompt(runLengths: [3, 2])
+        let space = try CacheKeySpace.make(
+            preparedTokens: prepared,
+            images: [
+                .init(digest: Self.digest("a"), positionSpan: 2),
+                .init(digest: Self.digest("b"), positionSpan: 2),
+            ],
+            placeholderIdentity: Self.identity
+        ).get()
+        #expect(space.renderSpacePath == Self.prompt(runLengths: [1, 1]))
+        // Never a pseudo-token (always negative): the path is model vocabulary.
+        #expect(space.renderSpacePath.allSatisfy { $0 >= 0 })
+        // Round trip: expanding the collapsed path over the runs the
+        // processor placed reproduces the prepared tokens exactly.
+        let runs = ImagePlaceholderRuns.runs(in: prepared, padTokenId: Self.pad)
+        #expect(runs.map(\.count) == [3, 2])
+        #expect(
+            ImagePlaceholderRuns.expand(
+                renderTokens: space.renderSpacePath, padTokenId: Self.pad,
+                runLengths: runs.map(\.count)) == prepared)
+    }
+
+    @Test func renderSpacePathIsTheKeyPathForTextOnly() throws {
+        let space = try CacheKeySpace.make(
+            preparedTokens: [1, 2, 3], images: [], placeholderIdentity: Self.identity
+        ).get()
+        #expect(space.renderSpacePath == [1, 2, 3])
+        #expect(CacheKeySpace.identity(keyPath: [4, 5]).renderSpacePath == [4, 5])
+    }
+
+    /// Expansion pairs the i-th pad with the i-th run; a render whose
+    /// placeholders do not pair up with the runs is refused, so the caller
+    /// keeps the processor's own list.
+    @Test func expansionPairsPadsWithRunsInOrderOrRefuses() {
+        let render = [1, Self.visionStart, Self.pad, Self.visionEnd, 2, Self.pad, 3]
+        #expect(
+            ImagePlaceholderRuns.expand(
+                renderTokens: render, padTokenId: Self.pad, runLengths: [2, 1])
+                == [1, Self.visionStart, Self.pad, Self.pad, Self.visionEnd, 2, Self.pad, 3])
+        #expect(
+            ImagePlaceholderRuns.expand(renderTokens: render, padTokenId: Self.pad, runLengths: [2])
+                == nil)
+        #expect(
+            ImagePlaceholderRuns.expand(
+                renderTokens: [1, 2], padTokenId: Self.pad, runLengths: [4])
+                == nil)
+        #expect(
+            ImagePlaceholderRuns.expand(renderTokens: [1, 2], padTokenId: Self.pad, runLengths: [])
+                == [1, 2])
+    }
+
     // MARK: - Translation
 
     @Test func translationIsIdentityForTextOnly() throws {

@@ -327,8 +327,10 @@ leaf hit while resident, the later split fed from token 0 on an empty
 cache); a response-conversion fault between model and client
 (`FaultyStreamTokenizer`: fidelity rejected, nothing registered, the
 warning event, re-prefill below the divergence next turn); an
-image-bearing request on a vision-container instance (neither registered
-nor resolved, the placeholder run fed, no pseudo-token); index eviction
+image-bearing session on a vision-container instance (the text turn before
+the image resolved to its emitted path, only the glue with the pad expanded
+into the processor's run fed, the image-bearing turn registered in render
+space, the request after it restoring that whole leaf); index eviction
 past the byte bound; a restart with a surviving SSD leaf; and a
 think-stripping template at a user boundary (the unchanged boundary
 path). The edit and fault cases restore at the deepest checkpoint below

@@ -29,11 +29,16 @@
 //  bytes after the deepest hit. A miss serves the canonical tokens. Every
 //  spelling of one history serves the same ids, so a planner boundary
 //  measured on one is an offset into another. The index is consulted only
-//  under an engaged fingerprint, so an image-bearing (sealed non-identity)
-//  render, an unknown fingerprint, and the uncached replay renders never
-//  touch it; the request edge logs that skip once per request. The leaf
-//  store's fast path (`storedRenderBytes`) renders to bytes only and never
-//  resolves: the live leaf is stored under the ids that were fed.
+//  under an engaged fingerprint, so an unknown fingerprint and the uncached
+//  replay renders never touch it; the request edge logs that skip once per
+//  request. Images are not an input (ADR-0063, amended 2026-09-18): the
+//  template renders each as its single placeholder, so every render — and
+//  every registered path — is in render space, one pad per image, and an
+//  image's identity and run live in the **Cache Key Space**, never in the
+//  index; the **Request Keying** edge expands the pads into the processor's
+//  runs after the resolve. The leaf store's fast path (`storedRenderBytes`)
+//  renders to bytes only and never resolves: the live leaf is stored under
+//  the ids that were fed.
 //
 //  Eligibility is decided at construction, from instance truth, once:
 //  a `nil` `cacheFingerprint` means "always render+encode in full" — the
@@ -50,12 +55,9 @@
 //  list) into the shared predicate. Construction at the one place instance
 //  truth lives makes that class of defect unrepresentable.
 //
-//  The value is built at the **Request Keying** edge (pre-key-space, from
-//  instance facts), *sealed* with the request's **Cache Key Space** once
-//  keying settles (image-bearing key spaces need the real token list for
-//  their placeholder runs, so a non-identity space clears the fingerprint),
-//  and enriched once more by the leaf store with the C31 base render. It
-//  rides `HTTPPrefixCacheGeneration` to the post-generation phases.
+//  The value is built at the **Request Keying** edge, from instance facts,
+//  and enriched once by the leaf store with the C31 base render. It rides
+//  `HTTPPrefixCacheGeneration` to the post-generation phases.
 //
 //  Concurrency: holds the request's tokenizer, so it is `@unchecked
 //  Sendable` under the same discipline as `HTTPPrefixCacheGeneration`, which
@@ -87,8 +89,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     let renderContext: TemplateRenderContext
 
     /// The fingerprint every cache resolve keys under, or `nil` to bypass
-    /// the cache and render in full (see the header). Cleared only by
-    /// `sealed(for:)`.
+    /// the cache and render in full (see the header). Fixed at construction.
     private(set) var cacheFingerprint: String?
 
     /// The stored (base) conversation's render-space token list, when the
@@ -110,8 +111,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
 
     /// The fingerprint the index is scoped to. Equal to `cacheFingerprint`
     /// at the request edge; independent for an uncached render that learns
-    /// a harness-local index. Cleared with the cache fingerprint by
-    /// `sealed(for:)`.
+    /// a harness-local index.
     private(set) var emittedPathFingerprint: String?
 
     /// The request's account of every resolve — a reference, so the copies
@@ -122,10 +122,13 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     private(set) var ineligibility: Ineligibility?
 
     enum Ineligibility: String, Sendable {
-        case media
         case unknownFingerprint
-        case nonIdentityKeySpace
         case uncached
+        /// The keying edge could not expand this image-bearing request's
+        /// render at the processor's placeholder runs, so the model was fed
+        /// the processor's own tokens: no render of this request may serve
+        /// or register an emitted path (`bypassing(_:)`).
+        case placeholderStructureMismatch
     }
 
     /// Tokens plus the bytes they encode, when the render produced bytes
@@ -138,48 +141,46 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     // MARK: - Construction (the eligibility decision)
 
     /// The one spelling of the eligibility predicate, shared by the request
-    /// edge and the agent edge: engage the cache only for a media-free
-    /// request under a known fingerprint.
+    /// edge and the agent edge: engage the cache under a known fingerprint.
     ///
-    /// The model's class is deliberately NOT an input. The token list this
-    /// render produces is shape-agnostic; the **Model Session** shapes it at
-    /// the processor's own rank (`textOnlyInput(tokens:)` — 1D on the
-    /// LLM-class text processor, 2D `[1, seq]` on a vision container). Until
-    /// 2026-09-18 a `producesFlatTextTokens` leg here excluded every vision
-    /// container, so Bonsai 2 27B and the PARO Qwen3.5 pack served text-only
-    /// coding sessions without the Render+Token Cache OR the Emitted Path
-    /// Index, and one 18,939-token `write` turn re-prefilled in 95 s.
+    /// Neither the model's class nor the request's images is an input. The
+    /// token list this render produces is shape-agnostic; the **Model
+    /// Session** shapes it at the processor's own rank (`textOnlyInput`
+    /// — 1D on the LLM-class text processor, 2D `[1, seq]` on a vision
+    /// container). Until 2026-09-18 a `producesFlatTextTokens` leg here
+    /// excluded every vision container, so Bonsai 2 27B and the PARO
+    /// Qwen3.5 pack served text-only coding sessions without the
+    /// Render+Token Cache OR the Emitted Path Index, and one 18,939-token
+    /// `write` turn re-prefilled in 95 s. A `media` leg then excluded every
+    /// request after an image entered a session: the same Pi session read a
+    /// PNG, its next request re-encoded a 59 KB `write` turn canonically,
+    /// diverged inside it, and re-prefilled 29,715 tokens — and every later
+    /// request carried that image. The render is image-agnostic (one pad
+    /// per image, the header above); the keying edge expands the pads.
     private static func eligibility(
-        hasMedia: Bool,
         modelFingerprint: String?
     ) -> (fingerprint: String?, ineligibility: Ineligibility?) {
-        if hasMedia { return (nil, .media) }
         guard let modelFingerprint else { return (nil, .unknownFingerprint) }
         return (modelFingerprint, nil)
     }
 
-    /// The request-edge constructor: engage the cache only for a media-free
-    /// request under a known fingerprint.
-    ///
-    /// `hasMedia` must key on the INSTANCE-FILTERED image list (issue #439):
-    /// a dropped-image request is text-only by construction. Whether the
-    /// instance processes images at all is the keying phase's
-    /// `producesFlatTextTokens` reading; it decides the filter, never the
-    /// render's eligibility.
+    /// The request-edge constructor: engage the cache under a known
+    /// fingerprint. Whether the instance processes the request's images is
+    /// the keying phase's `producesFlatTextTokens` reading; it decides
+    /// which images the processor sees, never the render's eligibility.
     ///
     /// `diagnostics` is the request's diagnostics net for the Emitted Path
     /// events; `nil` sends them to the server log.
-    static func forTextOnlyRequest(
+    static func forRequest(
         tokenizer: any Tokenizer,
         toolSpecs: [ToolSpec]?,
         renderContext: TemplateRenderContext,
-        hasMedia: Bool,
         modelFingerprint: String?,
         cache: RenderTokenCache = .shared,
         emittedPathIndex: EmittedPathIndex? = .shared,
         diagnostics: PrefixCacheDiagnostics.Context? = nil
     ) -> ConversationRender {
-        let eligibility = eligibility(hasMedia: hasMedia, modelFingerprint: modelFingerprint)
+        let eligibility = eligibility(modelFingerprint: modelFingerprint)
         return ConversationRender(
             tokenizer: tokenizer,
             toolSpecs: toolSpecs,
@@ -223,17 +224,21 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         )
     }
 
-    /// Seal the edge-constructed value with the settled **Cache Key Space**:
-    /// cache resolves stay engaged only on an identity (text-only) space.
-    /// Image-bearing key spaces need the real token list for their
-    /// placeholder runs, so they always render in full — and never consult
-    /// the Emitted Path Index, whose paths are fed ids.
-    func sealed(for keySpace: CacheKeySpace) -> ConversationRender {
-        guard !keySpace.isIdentity else { return self }
+    /// A copy that renders in full for the rest of this request — no cache,
+    /// no index — because what the model was fed is not what this render
+    /// produces. The keying edge takes it when an image-bearing request's
+    /// render could not be expanded at the processor's placeholder runs and
+    /// the processor's own tokens were fed instead: a registered path would
+    /// then carry a placeholder its rendered-byte key does not, and a later
+    /// request that hashes to the same key — an image-free one, say — would
+    /// be served that placeholder. The registration reports `reason` as its
+    /// cause; the later renders serve canonical tokens, which is what the
+    /// key path was built from.
+    func bypassing(_ reason: Ineligibility) -> ConversationRender {
         var copy = self
         copy.cacheFingerprint = nil
         copy.emittedPathFingerprint = nil
-        copy.ineligibility = .nonIdentityKeySpace
+        copy.ineligibility = reason
         return copy
     }
 
@@ -631,11 +636,14 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     /// instead of a `TemplateRenderContext` — the narrow static entry over
     /// the same eligibility and resolve, so the fifth spelling shares this
     /// home without pretending the contexts match. `nil` sends the caller
-    /// to its processor's `prepare`. `messages` is an autoclosure so an
-    /// ineligible request (media, unknown fingerprint) never pays the
-    /// message-forming pass; a caller that cannot form messages at all
-    /// yields `nil` from it and falls back the same way. The caller shapes
-    /// the returned list at its processor's rank (`textOnlyInput(tokens:)`).
+    /// to its processor's `prepare`: for an unknown fingerprint, and for
+    /// any media — this edge has no **Cache Key Space** and no grid step to
+    /// expand a render's placeholders with, so a media-bearing agent input
+    /// is the processor's alone. `messages` is an autoclosure so such a
+    /// request never pays the message-forming pass; a caller that cannot
+    /// form messages at all yields `nil` from it and falls back the same
+    /// way. The caller shapes the returned list at its processor's rank
+    /// (`textOnlyInput(tokens:)`).
     static func agentEdgeFullRender(
         tokenizer: any Tokenizer,
         messages: @autoclosure () -> [[String: any Sendable]]?,
@@ -646,9 +654,8 @@ nonisolated struct ConversationRender: @unchecked Sendable {
         cache: RenderTokenCache = .shared,
         emittedPathIndex: EmittedPathIndex? = .shared
     ) -> [Int]? {
-        guard
-            let fingerprint = eligibility(hasMedia: hasMedia, modelFingerprint: modelFingerprint)
-                .fingerprint
+        guard !hasMedia,
+            let fingerprint = eligibility(modelFingerprint: modelFingerprint).fingerprint
         else { return nil }
         guard let messages = messages() else { return nil }
         guard

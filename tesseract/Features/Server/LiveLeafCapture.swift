@@ -44,9 +44,6 @@ nonisolated enum LiveLeafCapture {
     /// its skip record prints (`LeafStorePhase.liveFallbackLog`) and names
     /// the boundary reason the `leafStore` event reports.
     enum FallbackReason: Equatable, Sendable {
-        /// Image placeholders make key-space and render-space differ; the
-        /// fast path is defined over identity key spaces only.
-        case nonIdentityKeySpace
         /// The loop recorded no fed ids (an empty turn, or an iterator that
         /// bypassed the recorder).
         case noGeneratedTokens
@@ -67,8 +64,12 @@ nonisolated enum LiveLeafCapture {
     /// - `mode`: the selected leaf-store mode (`selectHTTPLeafStoreMode`).
     /// - `preservesThinking`: whether the request rendered under the
     ///   **Preserve-Thinking Render**, which keeps every turn verbatim.
-    /// - `promptKeyPath`: the request's **Cache Key Path** (the prompt as
-    ///   prefilled, identity key space).
+    /// - `promptKeyPath`: the request's **Cache Key Path** — the prompt as
+    ///   prefilled, with each image's run as its digest pseudo-tokens: the
+    ///   space the tree keys on, whatever the key space. (Until 2026-09-18
+    ///   a non-identity space was a structural fallback; the registration
+    ///   stores the path in render space, so the fast path applies to
+    ///   image-bearing turns too.)
     /// - `generatedTokens`: every id the decode loop fed past the prompt, in
     ///   order, stop token included (`GeneratedTokenRecorder`).
     /// - `cacheOffset`: the live final cache's reported token count. It may
@@ -77,17 +78,15 @@ nonisolated enum LiveLeafCapture {
     ///   yet); the leaf is captured at the cache's own offset, never past it.
     ///
     /// The structural guards are checked first, in the order ADR-0062
-    /// logged them, so an image-bearing turn names that
-    /// reason whatever the render; the render rule comes last.
+    /// logged them, so a guard failure names its reason whatever the
+    /// render; the render rule comes last.
     static func decide(
         mode: HTTPLeafStoreMode,
         preservesThinking: Bool,
         promptKeyPath: [Int],
         generatedTokens: [Int],
-        cacheOffset: Int,
-        keySpaceIsIdentity: Bool
+        cacheOffset: Int
     ) -> Decision {
-        guard keySpaceIsIdentity else { return .boundary(.nonIdentityKeySpace) }
         guard !generatedTokens.isEmpty else { return .boundary(.noGeneratedTokens) }
 
         let promptCount = promptKeyPath.count

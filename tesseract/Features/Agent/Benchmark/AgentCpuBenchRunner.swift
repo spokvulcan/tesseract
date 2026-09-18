@@ -298,11 +298,10 @@ final class AgentCpuBenchRunner {
         canonicalTools: [ToolSpec]?,
         fingerprint: String
     ) -> ConversationRender {
-        ConversationRender.forTextOnlyRequest(
+        ConversationRender.forRequest(
             tokenizer: tokenizer,
             toolSpecs: canonicalTools,
             renderContext: .canonical,
-            hasMedia: false,
             modelFingerprint: fingerprint
         )
     }

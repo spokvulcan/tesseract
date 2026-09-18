@@ -58,13 +58,15 @@ nonisolated struct EmittedPath: Equatable, Sendable {
     let appendedEndOfTurn: Bool
 
     /// - Parameters:
-    ///   - promptKeyPath: the prompt ids as fed.
+    ///   - promptPath: the prompt ids as fed, in render space (one pad per
+    ///     image — `CacheKeySpace.renderSpacePath`; the fed ids themselves
+    ///     for a text-only request).
     ///   - generatedTokens: every id the generation loop returned, in order,
     ///     including the stop id when one ended the turn.
     ///   - stoppedOn: the stop id the loop broke on, or `nil` for a cut.
     ///   - endOfTurnID: the template's canonical end-of-turn id.
     static func make(
-        promptKeyPath: [Int],
+        promptPath: [Int],
         generatedTokens: [Int],
         stoppedOn: Int?,
         endOfTurnID: Int
@@ -75,13 +77,13 @@ nonisolated struct EmittedPath: Equatable, Sendable {
         let content =
             (stoppedOnEndOfTurn || stoppedOnForeignID)
             ? Array(generatedTokens.dropLast()) : generatedTokens
-        var ids = promptKeyPath
-        ids.reserveCapacity(promptKeyPath.count + generatedTokens.count + 1)
+        var ids = promptPath
+        ids.reserveCapacity(promptPath.count + generatedTokens.count + 1)
         ids.append(contentsOf: generatedTokens)
         if !stoppedOnEndOfTurn { ids.append(endOfTurnID) }
         return EmittedPath(
             ids: ids,
-            promptCount: promptKeyPath.count,
+            promptCount: promptPath.count,
             contentIDs: content,
             appendedEndOfTurn: !stoppedOnEndOfTurn
         )

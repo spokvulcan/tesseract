@@ -29,7 +29,6 @@ nonisolated enum EmittedPathRegistration {
     /// path's render rule beside them; the fidelity gate; and the render
     /// and template preconditions.
     enum SkipReason: String, Sendable {
-        case nonIdentityKeySpace
         case noGeneratedTokens
         case cacheOffsetOutsideLivePath
         case fidelityRejected
@@ -38,7 +37,7 @@ nonisolated enum EmittedPathRegistration {
         /// turn, so its fed ids are not what any later render resolves to.
         case thinkStrippingUserBoundary
         /// No Emitted Path Index engaged for this render: an unkeyed
-        /// completion, an unknown fingerprint, or an image-bearing render.
+        /// completion or an unknown fingerprint.
         case ineligibleRender
         /// The template has no single-token end-of-turn marker, or the
         /// stored render does not end on one.
@@ -58,7 +57,6 @@ nonisolated enum EmittedPathRegistration {
     /// name.
     static func skipReason(for fallback: LiveLeafCapture.FallbackReason) -> SkipReason {
         switch fallback {
-        case .nonIdentityKeySpace: .nonIdentityKeySpace
         case .noGeneratedTokens: .noGeneratedTokens
         case .cacheOffsetOutsideLivePath: .cacheOffsetOutsideLivePath
         case .thinkStrippingUserBoundary: .thinkStrippingUserBoundary
@@ -74,7 +72,12 @@ nonisolated enum EmittedPathRegistration {
         let storedRenderBytes: [UInt8]
         /// The assistant message the Leaf Store appended.
         let storedMessage: HTTPPrefixCacheMessage
-        let promptKeyPath: [Int]
+        /// The prompt as fed, in render space: the **Cache Key Path** of a
+        /// text-only request; for an image-bearing one the key path with
+        /// each image's run collapsed to the template's single pad
+        /// (`CacheKeySpace.renderSpacePath`), so the registered path is
+        /// what a later render resolves to and the request edge re-expands.
+        let promptPath: [Int]
         let generatedTokens: [Int]
         let stoppedOn: Int?
         let toolCallFormat: ToolCallFormat
@@ -116,7 +119,7 @@ nonisolated enum EmittedPathRegistration {
 
     static func register(_ inputs: Inputs) -> Outcome {
         let path = EmittedPath.make(
-            promptKeyPath: inputs.promptKeyPath,
+            promptPath: inputs.promptPath,
             generatedTokens: inputs.generatedTokens,
             stoppedOn: inputs.stoppedOn,
             endOfTurnID: inputs.marker.tokenID

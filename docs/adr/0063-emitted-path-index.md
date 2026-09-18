@@ -234,11 +234,81 @@ text-only `prepare`), the request edge and the agent edge build their input
 through it, and the eligibility predicate keeps only media and the unknown
 fingerprint. `producesFlatTextTokens` stays as the instance truth the
 keying phase reads (whether images reach the model, the Position Anchor
-seed) — it just no longer gates the render. Image-bearing requests keep
-today's paths unchanged. `EmittedPathSynthesizedReplayTests` gains the
-vision-container text-only case (register, resolve, whole-path hit, glue
-only) and `RequestKeyingPhaseInstanceTruthTests` pins the no-`prepare`,
-rank-2 keyed input.
+seed) — it just no longer gates the render. Image-bearing requests kept
+today's paths unchanged (superseded the same day, below).
+`EmittedPathSynthesizedReplayTests` gains the vision-container text-only
+case (register, resolve, whole-path hit, glue only) and
+`RequestKeyingPhaseInstanceTruthTests` pins the no-`prepare`, rank-2 keyed
+input.
+
+### Amended 2026-09-18: image-bearing requests resolve and register in render space
+
+Decisions 3 and 4 kept image-bearing requests off the index: registration
+required the identity key space, and the resolve consulted the index for
+text-only requests only. Observed the same day, on the Pi session against
+Bonsai 2 27B the amendment above fixed: request #9 followed Pi's `read` of
+a PNG, so it carried an image. The request skipped the resolve (`media`),
+re-encoded the history canonically, diverged 16,860 tokens into a 59 KB
+`write` turn — whose emitted split request #8 had registered — and the
+hybrid model, which cannot rewind recurrent state, restored the 2,773-token
+system checkpoint and re-prefilled 29,715 of 32,488 tokens. Every later
+request of that session carries the image, so the index would have stayed
+off for the rest of it; the leaf store's fast path also refused the
+non-identity key space, so no later turn would have registered either.
+
+The exclusion was never about the index. The index maps render bytes to
+ids, and both sides are image-agnostic when the ids stay in render space:
+the template renders each image as one placeholder between its framing
+tokens (`<|vision_start|><|image_pad|><|vision_end|>` on the Qwen-VL
+families), so the bytes carry no image identity, and a registered path with
+one pad per image carries none either. Two conversations that differ only
+in an image's pixels hash to the same key and are served the same
+render-space ids — correct for both, because the image's run length and
+identity enter afterwards: the request's own `prepare` supplies the grids,
+and its **Cache Key Space** the digest pseudo-tokens. What decision 3
+guarded against was serving a *prepared-space* path (a run whose length
+belongs to one image) for another image; storing render space removes the
+hazard rather than the requests.
+
+- The Conversation Render's eligibility has no media leg and no key-space
+  sealing. Every render of an image-bearing conversation resolves through
+  the Render+Token Cache and the index and serves render-space ids, which
+  the key space translates exactly as before.
+- The Request Keying edge, for an image-bearing request, runs the
+  processor's `prepare` for its pixels and grids and takes the rendered
+  list — the Emitted Path composition — expanded at each pad into the run
+  the processor placed for that image (`ImagePlaceholderRuns.expand`), in
+  place as `Qwen3VLProcessor`'s `replacePaddingTokens` expands, at the
+  processor's rank. A render whose placeholders do not pair with the
+  processor's runs (no production processor does this; the toy's
+  placeholder-free stub does) keeps the processor's own tokens, logs the skip
+  (`imageRenderExpansion` / `placeholderStructureMismatch`), and takes the
+  render out of the cache and the index for that request
+  (`ConversationRender.bypassing`): a registered path would carry a pad its
+  rendered-byte key does not, and an image-free request with the same text
+  would be served it.
+- The processor's `prepare` still renders and tokenizes the conversation
+  before its text is replaced — 0.29 s at 32K tokens on the parity bench
+  (`docs/mlx-core-optimization-roadmap.md`), paid once per image-bearing
+  request. A vendor seam that prepares media over given prompt tokens
+  would remove it; a follow-up, not part of this amendment.
+- The Leaf Store fast path accepts non-identity key spaces; the
+  registration stores `CacheKeySpace.renderSpacePath` — the key path with
+  each pseudo-token run collapsed to the single pad — plus the generated
+  ids. The `nonIdentityKeySpace` fallback and skip reasons are gone.
+- The agent edge (`prepareText`) still sends media to the processor: it
+  has no key space and no grid step.
+
+`EmittedPathSynthesizedReplayTests` replaces the "neither registers nor
+resolves" case with the three-turn image case (a text turn registered under
+the model's split; the image-bearing echo hits that path and prefills only
+the glue with the run expanded; the image turn registers; the next request
+restores the whole leaf), `RequestKeyingPhaseInstanceTruthTests` pins the
+expansion and the processor fallback, `CacheKeySpaceTests` the collapse /
+expand round trip, and the toy vision stub now models the real shape (one
+pad rendered, expanded in place). After an image enters a session, the
+re-prefill classes in the table stay gone. Video and audio (which the
+server never keys), the Batch Engine and the MTP path keep their paths.
 
 The required follow-ups are [index persistence (#499)](https://github.com/spokvulcan/tesseract/issues/499),
 [optional lineage (#500)](https://github.com/spokvulcan/tesseract/issues/500),
@@ -264,9 +334,10 @@ Issue #466 was already closed as superseded by #471.
   wrong state; losing the in-memory index is safe.
 - The same-parent, same-text, different-split regeneration loses the exact
   identity of the earlier generation (decision 6). Accepted and counted.
-- Image-bearing requests, quantized-KV partitions, the MTP path and the
-  Batch Engine keep today's paths. Think-stripping templates at a user
-  boundary keep ADR-0009's answer.
+- Image-bearing requests (until the 2026-09-18 render-space amendment),
+  quantized-KV partitions, the MTP path and the Batch Engine keep today's
+  paths. Think-stripping templates at a user boundary keep ADR-0009's
+  answer.
 - Follow-ups filed from #471: persisting the index beside the SSD manifest;
   an optional lineage field for clients that can carry one; profiling the
   fixed warm-turn prefill overhead; the partitioning of generation-prompt-

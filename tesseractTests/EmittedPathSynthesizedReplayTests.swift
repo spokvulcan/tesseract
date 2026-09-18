@@ -413,12 +413,24 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn2.fedPrompt == Array(turn2.render[turn2.cached...]), turn2.account)
     }
 
-    @Test func imageBearingRequestNeitherRegistersNorResolves() async throws {
-        // The vision-container instance: images key into a non-identity
-        // key space (a flat text instance drops them and keys text-only,
-        // issue #439). The template renders each image's placeholder run
-        // in place; the stub supplies the grid.
+    /// The 2026-09-18 Bonsai 2 27B session, request #9: Pi's `read` of a
+    /// PNG put an image into the conversation and the request skipped the
+    /// Emitted Path Index (`media`) — the canonical re-encode of a 59 KB
+    /// `write` turn diverged 16,860 tokens in, the hybrid model could
+    /// restore only the 2,773-token system checkpoint, and 29,715 tokens
+    /// re-prefilled; every later request of the session carries the image
+    /// and would do the same. The index is image-agnostic by construction:
+    /// it maps render bytes to render-space ids (one pad per image), the
+    /// processor's grids expand the pads at the request edge, and image
+    /// identity lives in the key space, never in the index. So the
+    /// image-bearing echo resolves the text turn before the image to its
+    /// emitted path and prefills only the glue with the run expanded; the
+    /// image-bearing turn registers in render space; and the request after
+    /// it restores that whole leaf — the session stays indexed after an
+    /// image enters.
+    @Test func imageBearingRequestsServeAndRegisterTheEmittedPath() async throws {
         let imagePadID = EmittedPathToyTokenizer().imagePadID
+        let runLength = EmittedPathToyTokenizer.imagePadRunLength
         let identity = ModelIdentity(
             configJSON: [
                 "model_type": "qwen3_5", "image_token_id": imagePadID,
@@ -427,36 +439,150 @@ struct EmittedPathSynthesizedReplayTests {
             chatTemplate: nil)
         let session = Session(
             vision: ToyUserInputProcessor.VisionStub(
-                padTokenId: imagePadID, padRunLength: EmittedPathToyTokenizer.imagePadRunLength,
-                frame: THW(1, 8, 8), inlineRuns: true),
+                padTokenId: imagePadID, padRunLength: runLength,
+                frame: THW(1, 8, 8), expandsInPlace: true),
             identity: identity)
-        // The text-only first turn registers like any other: the container's
-        // class is not a render ineligibility, only its processed media is.
-        let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
-        #expect(turn1.text == "hello world")
-        #expect(turn1.leafStore["emittedPath"] == "registered")
-        #expect(turn1.event("emittedPathRegister") != nil)
+        let thinking = session.completion(thinking: "plan", text: "")
+        let joined = session.tokenizer.encode(text: "KNI", addSpecialTokens: false)
+        let split = ["K", "NI"].flatMap {
+            session.tokenizer.encode(text: $0, addSpecialTokens: false)
+        }
+        #expect(joined.count == 1 && split.count == 2)
 
+        // Turn 1, text-only: the model's own split of `KNI`, registered.
+        let turn1 = try await session.turn(
+            Self.conversation([Self.user("hi")]), generated: thinking + split)
+        #expect(turn1.text == "KNI")
+        #expect(turn1.leafStore["emittedPath"] == "registered", turn1.account)
+        let pathLength1 = try #require(turn1.registeredPathLength)
+
+        // Turn 2, the echo plus an image: the resolve serves turn 1's path
+        // and only the glue — the image-bearing user message, its single
+        // pad expanded into the processor's run — is prefilled past the
+        // restored leaf. Never the canonical `KNI` token.
         let image = HTTPPrefixCacheImage(data: try Self.tinyPNG())
         let request2 = Self.conversation([
-            Self.user("hi"), Self.assistant("hello world"),
+            Self.user("hi"), Self.assistant("KNI"),
             HTTPPrefixCacheMessage(role: .user, content: "look", images: [image]),
         ])
         let turn2 = try await session.turn(request2, text: "nice")
         #expect(turn2.text == "nice")
-        #expect(turn2.requestResolve.isEmpty)
-        #expect(turn2.resolveSkips.contains("media"), "resolve skips: \(turn2.resolveSkips)")
-        #expect(turn2.leafStore["path"] != "live")
-        #expect(turn2.leafStore["emittedPath"] == "skipped")
-        #expect(turn2.event("emittedPathRegister") == nil)
-        // Today's path: the processor's placeholder run is what the model
-        // was fed — never a key-space pseudo-token.
-        #expect(turn2.fedPrompt.contains(imagePadID), turn2.account)
+        #expect(turn2.resolveSkips.isEmpty, "resolve skips: \(turn2.resolveSkips)")
+        #expect(turn2.requestResolve["result"] == "hit", turn2.account)
+        #expect(turn2.requestResolve["indexedPrefix"] == "\(pathLength1)")
+        #expect(turn2.cached == pathLength1, turn2.account)
+        let stored1 = try turn1.storedRender(appending: "KNI")
+        let marker1 = try #require(stored1.lastIndex(of: session.tokenizer.endOfTurnID))
+        // The glue in render space: one pad for the image.
+        let glue2 = Array(turn2.render[(marker1 + 1)...])
+        #expect(glue2.count { $0 == imagePadID } == 1)
+        let expandedGlue2 = glue2.flatMap { token in
+            token == imagePadID ? Array(repeating: token, count: runLength) : [token]
+        }
+        #expect(turn2.feeds.first?.position == pathLength1, turn2.account)
+        #expect(turn2.fedPrompt == expandedGlue2, turn2.account)
+        #expect(!turn2.fedPrompt.contains(joined[0]), turn2.account)
         #expect(turn2.feeds.allSatisfy { $0.id >= 0 && $0.id < ToyVocabulary.size })
-        #expect(turn2.cached > 0, "today's path did not reuse the text prefix")
+        // The image-bearing turn takes the fast path and registers in
+        // render space: the prompt with one pad per image, then the fed ids.
+        #expect(turn2.leafStore["path"] == "live", turn2.account)
+        #expect(turn2.leafStore["emittedPath"] == "registered", turn2.account)
+        let pathLength2 = try #require(turn2.registeredPathLength)
+        #expect(
+            pathLength2 == pathLength1 + glue2.count + turn2.fedGenerated.count, turn2.account)
+
+        // Turn 3: the session stays indexed after the image. The echo of
+        // turn 2 resolves to its path and restores the whole leaf (the pad's
+        // run counts in key space); nothing before the leaf is fed again.
+        let request3 = Self.conversation([
+            Self.user("hi"), Self.assistant("KNI"),
+            HTTPPrefixCacheMessage(role: .user, content: "look", images: [image]),
+            Self.assistant("nice"), Self.user("more"),
+        ])
+        let turn3 = try await session.turn(request3, text: "again")
+        #expect(turn3.text == "again")
+        #expect(turn3.resolveSkips.isEmpty, "resolve skips: \(turn3.resolveSkips)")
+        #expect(turn3.requestResolve["result"] == "hit", turn3.account)
+        #expect(turn3.requestResolve["indexedPrefix"] == "\(pathLength2)")
+        let leaf2 = pathLength2 + runLength - 1
+        #expect(turn3.cached == leaf2, turn3.account)
+        let stored2 = try turn2.storedRender(appending: "nice")
+        let marker2 = try #require(stored2.lastIndex(of: session.tokenizer.endOfTurnID))
+        #expect(turn3.feeds.first?.position == leaf2, turn3.account)
+        #expect(turn3.fedPrompt == Array(turn3.render[(marker2 + 1)...]), turn3.account)
+        #expect(!turn3.fedPrompt.contains(imagePadID), turn3.account)
+        #expect(turn3.leafStore["emittedPath"] == "registered", turn3.account)
         let stats = session.index.statsSnapshot()
-        #expect(stats.registrations == 1)
-        #expect(stats.hits == 0)
+        #expect(stats.registrations == 3)
+        #expect(stats.hits >= 2)
+        #expect(stats.fidelityRejections == 0)
+    }
+
+    /// The compatibility fallback of the image path: a template that renders
+    /// no placeholder for an image part over a processor that puts the
+    /// image's run after the messages, before the generation prompt — no
+    /// production processor, the toy's placeholder-free stub. The keying
+    /// edge cannot pair the render with the
+    /// runs, so the processor's own tokens are fed and the request leaves
+    /// the index: a registered path would carry a pad its rendered-byte key
+    /// does not, and an image-free request with the same text would be
+    /// served it. The next request, image-free, is served nothing from the
+    /// index and fed no pad — the canonical render past its restore.
+    @Test func imageBearingRequestWhoseRenderCannotBeExpandedLeavesTheIndex() async throws {
+        var tokenizer = EmittedPathToyTokenizer()
+        tokenizer.rendersImagePlaceholder = false
+        let imagePadID = tokenizer.imagePadID
+        let runLength = EmittedPathToyTokenizer.imagePadRunLength
+        let identity = ModelIdentity(
+            configJSON: [
+                "model_type": "qwen3_5", "image_token_id": imagePadID,
+                "vision_config": ["num_heads": 16, "spatial_merge_size": 2],
+            ],
+            chatTemplate: nil)
+        let session = Session(
+            tokenizer: tokenizer,
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: imagePadID, padRunLength: runLength, frame: THW(1, 8, 8)),
+            identity: identity)
+
+        let image = HTTPPrefixCacheImage(data: try Self.tinyPNG())
+        let turn1 = try await session.turn(
+            Self.conversation([
+                HTTPPrefixCacheMessage(role: .user, content: "hi", images: [image])
+            ]))
+        #expect(turn1.text == "hello world")
+        #expect(!turn1.render.contains(imagePadID))
+        // The processor's tokens: the messages, the run, the generation prompt.
+        #expect(
+            turn1.fedPrompt
+                == turn1.storedRender + Array(repeating: imagePadID, count: runLength)
+                + Array(turn1.render[turn1.storedRender.count...]),
+            turn1.account)
+        let expansionSkip = try #require(
+            turn1.events.first {
+                $0.eventName == "skip" && Self.fields($0)["stage"] == "imageRenderExpansion"
+            })
+        #expect(Self.fields(expansionSkip)["reason"] == "placeholderStructureMismatch")
+        // Keyed and live — the key space is fine — but out of the index.
+        #expect(turn1.leafStore["path"] == "live", turn1.account)
+        #expect(turn1.leafStore["emittedPath"] == "skipped", turn1.account)
+        #expect(turn1.leafStore["emittedPathSkip"] == "ineligibleRender", turn1.account)
+        let registerSkip = try #require(
+            turn1.events.first {
+                $0.eventName == "skip" && Self.fields($0)["stage"] == "emittedPathRegister"
+            })
+        #expect(Self.fields(registerSkip)["cause"] == "placeholderStructureMismatch")
+        #expect(session.index.statsSnapshot().registrations == 0)
+
+        // The same text without the image: no entry to serve, no pad fed.
+        let turn2 = try await session.turn(
+            Self.conversation([Self.user("hi"), Self.assistant("hello world"), Self.user("more")]),
+            text: "again")
+        #expect(turn2.text == "again")
+        #expect(turn2.requestResolve["result"] == "miss", turn2.account)
+        #expect(!turn2.fedPrompt.contains(imagePadID), turn2.account)
+        #expect(turn2.fedPrompt == Array(turn2.render[turn2.cached...]), turn2.account)
+        #expect(turn2.leafStore["emittedPath"] == "registered", turn2.account)
     }
 
     /// The 2026-09-18 Bonsai 2 27B session (Pi, `write` of a 6 KB SVG
@@ -479,7 +605,7 @@ struct EmittedPathSynthesizedReplayTests {
         let session = Session(
             vision: ToyUserInputProcessor.VisionStub(
                 padTokenId: imagePadID, padRunLength: EmittedPathToyTokenizer.imagePadRunLength,
-                frame: THW(1, 8, 8), inlineRuns: true),
+                frame: THW(1, 8, 8), expandsInPlace: true),
             identity: identity)
         let parent = Self.conversation([Self.user("hi")])
         let thinking = session.completion(thinking: "plan", text: "")
@@ -651,6 +777,7 @@ struct EmittedPathSynthesizedReplayTests {
 
         init(
             index: EmittedPathIndex = EmittedPathIndex(),
+            tokenizer: EmittedPathToyTokenizer = EmittedPathToyTokenizer(),
             fault: ((EmittedPathToyTokenizer) -> FaultyStreamTokenizer)? = nil,
             vision: ToyUserInputProcessor.VisionStub? = nil,
             identity: ModelIdentity? = nil,
@@ -661,7 +788,6 @@ struct EmittedPathSynthesizedReplayTests {
             let uuid = UUID().uuidString
             let fingerprint = "toy-emitted-path-\(uuid)"
             let modelID = "toy/emitted-path/\(uuid)"
-            let tokenizer = EmittedPathToyTokenizer()
             let queue = ToyCompletionQueue(
                 generationPrompts: tokenizer.generationPrompts, eosTokenId: tokenizer.endOfTurnID)
             var configuration = ModelConfiguration(id: modelID)
