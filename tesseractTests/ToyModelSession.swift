@@ -442,6 +442,14 @@ nonisolated enum ModelVerb: String, Equatable, Sendable {
 nonisolated final class ModelVerbRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _verbs: [ModelVerb] = []
+    private var _prefillCapacities: [Int] = []
+
+    var prefillCapacities: [Int] { lock.withLock { _prefillCapacities } }
+
+    func recordPrefillCapacity(_ cache: [any KVCache]) {
+        let capacity = cache.first?.innerState().first?.dim(2) ?? 0
+        lock.withLock { _prefillCapacities.append(capacity) }
+    }
 
     var verbs: [ModelVerb] {
         lock.withLock { _verbs }
@@ -517,7 +525,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         evalPolicy: PrefillExecutor.EvalPolicy
     ) throws -> PrefillExecutor.Output {
         recorder.record(.prefill)
-        return try base.prefill(
+        let output = try base.prefill(
             text: text,
             cache: cache,
             checkpoints: checkpoints,
@@ -527,6 +535,8 @@ nonisolated struct RecordingModelSession: ModelSession {
             initialState: initialState,
             evalPolicy: evalPolicy
         )
+        recorder.recordPrefillCapacity(cache)
+        return output
     }
 
     func makeDecodeIterator(

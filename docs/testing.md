@@ -799,3 +799,36 @@ owner approval of a bounded resource plan and a suitable environment.
 [PR #503 review follow-up evidence](../benchmarks/leaf-checkout/2026-09-12-review/README.md)
 records each external finding's disposition, the final clean full-target run,
 and the explicitly isolated allocation run after these hardening changes.
+
+
+## Attention cache capacity (#533)
+
+`ServerCompletionKeyedSequencingTests.creationAndRestoreReservePromptRowsWithoutReservingOutput`
+drives cold creation, Leaf Checkout and copied quantized restoration through the
+Model Session toy peer. A chunked prompt reserves its total rows before prefill;
+a large output ceiling does not become a reservation. The recorder observes
+backing capacity at the existing prefill verb. `toyDecodeUsesGeometricCapacityGrowth`
+decodes 2,048 toy tokens and observes four capacity allocations (256, 768, 1792,
+3840 rows), with no model weights. Growth is geometric until the 4096-row
+increment cap, then bounded linear increments; this is not a production timing
+measurement. `HybridCacheSnapshotTests` covers snapshot restore and buffer
+isolation under the new vendor allocation policy.
+
+The vendor's `CacheCapacityTests` covers simple and quantized reservation,
+growth to the cap, unchanged trim/state/metaState/copy and prompt-cache
+serialization, preservation across dynamic quantization, and nested CacheList
+forwarding. Run it with the existing vendor cache serialization/copy tests:
+
+```bash
+cd Vendor/mlx-swift-lm
+xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
+  -skipPackagePluginValidation -parallel-testing-enabled NO \
+  -only-testing:MLXLMTests/CacheCapacityTests \
+  '-only-testing:MLXLMTests/testCacheSerialization(creator:)' \
+  '-only-testing:MLXLMTests/testCacheCopyIsIndependent(creator:)' \
+  '-only-testing:MLXLMTests/testCacheCopyOnEmptyCache(creator:)'
+```
+
+App test runs set `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`;
+the test host returns before DependencyContainer starts model prewarms or
+background services. Loaded-model and long-context measurements are owner work.
