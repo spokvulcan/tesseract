@@ -169,7 +169,10 @@ nonisolated enum LeafStorePhase {
         case .boundary(let reason):
             // The render rule rejects canonical reuse of the generated tail,
             // not the already-validated fed path. Check in its full leaf at
-            // this quiescent point before consuming request-local views.
+            // this quiescent point before consuming request-local views; the
+            // canonical leaf takes over as their backer and the live leaf is
+            // released below (ADR-0068 amendment).
+            var boundaryBackingLeafPath: [Int]?
             if reason == .thinkStrippingUserBoundary,
                 [
                     mlxStart.transientLastUserBoundarySnapshot,
@@ -194,6 +197,7 @@ nonisolated enum LeafStorePhase {
                     trace.logSupersessions(
                         admission.supersededLeaves, diagnostics: diagnosticsContext)
                 }
+                if backer.leafStore != nil { boundaryBackingLeafPath = path }
             }
             let checkedOutOffset = mlxStart.finalCacheOwner.checkout?.claim.lease.offset
             // A boundary or intervened turn must return the original leaf
@@ -216,6 +220,13 @@ nonisolated enum LeafStorePhase {
                 result.report.leafOffset = checkedOutOffset
             } else {
                 await storeFromBoundary(turn: turn, inputs: inputs, result: &result)
+            }
+            if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens,
+                let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
+                    path: boundaryBackingLeafPath, sparing: canonical,
+                    partitionKey: mlxStart.partitionKey)
+            {
+                trace.logSupersessions([released], diagnostics: diagnosticsContext)
             }
         }
 

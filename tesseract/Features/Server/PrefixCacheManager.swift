@@ -2376,6 +2376,28 @@ final class PrefixCacheManager {
 
     // MARK: - Eviction
 
+    /// Release the live leaf a think-stripping turn checked in so its
+    /// transient boundary views could be consumed (ADR-0068 amendment).
+    /// Once the canonical leaf is admitted it backs those views itself,
+    /// and the live leaf — the raw generated tail no canonical follow-up
+    /// re-renders — would otherwise stay resident as a second body per
+    /// turn. Drops only an exact-path, RAM-only, unleased leaf body that
+    /// is not the canonical leaf; returns the supersession to log, or
+    /// `nil` when nothing was dropped.
+    func releaseBoundaryBackingLeaf(
+        path: [Int], sparing canonicalPath: [Int], partitionKey: CachePartitionKey
+    ) -> LeafSupersession? {
+        guard path != canonicalPath, let tree = store.tree(for: partitionKey),
+            let (node, matched) = tree.findBestSnapshot(tokens: path, updateAccess: false),
+            matched == path.count, node.tokenOffset == path.count,
+            let body = node.state.body, body.checkpointType == .leaf, !body.isPrefixView,
+            node.state.ref == nil, node.leafLease == nil
+        else { return nil }
+        let result = tree.dropBody(node: node)
+        guard result.droppedCheckpointType != nil else { return nil }
+        return LeafSupersession(offset: path.count, bodyDroppedSnapshotRefID: nil, mode: .deleted)
+    }
+
     /// Drop snapshots until `totalSnapshotBytes <= memoryBudgetBytes`. Uses
     /// Marconi utility scoring (`EvictionPolicy`) for eligible nodes and
     /// falls back to oldest-first when only multi-child branch snapshots

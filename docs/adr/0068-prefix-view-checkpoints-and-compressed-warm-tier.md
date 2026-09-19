@@ -185,3 +185,21 @@ Two rules now make the view's value count where it lives:
 Self-heal is unchanged. A genuinely tight budget can still take a view's last
 backer; the amendment only makes that leaf as expensive to lose as it is.
 
+## Amendment 2026-09-19 — the boundary backing leaf is released
+
+#525 consumes a think-stripping turn's transient boundary views by checking in
+the live leaf (the fed path plus the raw generated tail) as their Backing Leaf
+before the boundary path restores at the view and re-prefills the canonical
+residual. That live leaf was then left resident beside the canonical leaf: two
+bodies of leaf size per boundary turn, where the pre-#525 tree kept one and the
+transient full copies it replaced lived only for the turn. The loaded-model e2e
+gate showed the doubled eviction rate.
+
+Once the canonical leaf is admitted it is a descendant of every boundary the
+turn resolved, so it backs those views itself. The Leaf Store then releases the
+live leaf: an exact-path, RAM-only, unleased leaf body that is not the canonical
+leaf is dropped through the tree's ordinary body drop and reported as a
+`leafSupersession` with mode `deleted`. When the canonical store fails the live
+leaf stays, as the turn's only reusable state. The Speculative Canonical
+Prefill resolves its boundary against whatever backer is resident when it runs.
+

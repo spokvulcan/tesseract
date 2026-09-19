@@ -125,6 +125,18 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
             })
         #expect(canonical.intField("offset") ?? 0 > 0)
         #expect(events.last { $0.eventName == "leafStore" }?.field("path") == "boundary")
+        // The live leaf checked in to back the transient views is released
+        // once the canonical leaf can back them: one resident leaf per turn.
+        let backer = try #require(
+            events.first {
+                $0.eventName == "capture" && $0.field("source") == "boundaryBackingLeaf"
+            })
+        let released = try #require(
+            events.first { $0.eventName == "leafSupersession" && $0.field("mode") == "deleted" })
+        #expect(released.intField("offset") == backer.intField("offset"))
+        let stats = try #require(fixture.cacheAdmin.stats)
+        #expect(stats.snapshotsByType[.leaf] == 1)
+        #expect(stats.snapshotsByType[.branchPoint, default: 0] == 0)
         await fixture.drain()
     }
 
