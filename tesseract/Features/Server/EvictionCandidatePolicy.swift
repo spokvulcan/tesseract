@@ -28,7 +28,7 @@ enum EvictionCandidatePolicy {
     /// to demote, drop, and account for it — the owning partition and
     /// tree, the node itself, which ladder strategy named it, and the
     /// utility score when scoring (not the fallback) decided.
-    struct Candidate {
+    struct Candidate: Sendable {
         let partitionKey: CachePartitionKey
         let tree: TokenRadixTree
         let node: RadixTreeNode

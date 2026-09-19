@@ -113,3 +113,13 @@ Re-priced in #522 (PRD #520, phase 1):
   `growthAllowanceBytes`, `copyFactor` and `perLaneBytes`, so the ceiling is
   explainable from one event.
 
+
+## Amendment — 2026-09-19: compression-first drain (#527)
+
+The opt-in Compressed Warm Tier (ADR-0068) changes the response to a RAM-tier
+shrink, not the Pressure-Reactive Budget band, Budget Floor or Dynamic Ceiling
+Policy. A Model Session batch compresses eligible bodies before any Snapshot
+Demotion. MainActor replaces the body only after evaluating the warm arrays and
+rechecking floor membership; resident accounting uses the resulting quantized
+bytes. The current budget, ceiling and floor calculations retain their meaning.
+The flag stays off until the owner completes #528's loaded-model parity gate.

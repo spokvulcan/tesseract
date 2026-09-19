@@ -13,6 +13,21 @@ struct PrefixCacheDiagnosticsTests {
         kvGroupSize: 64
     )
 
+    @Test func warmCompressionAndLookupIdentifyTheirRepresentation() {
+        let compression = WarmCompressEvent(
+            offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002)
+        #expect(
+            context.render(compression).hasSuffix(
+                "offset=8 bytesBefore=4096 bytesAfter=1152 durationMs=2.000"))
+        let lookup = PrefixCacheDiagnostics.LookupEvent(
+            reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf), promptTokens: 9,
+            sharedPrefixLength: 8, skippedPrefillTokens: 8, newTokensToPrefill: 1,
+            lookupMs: 0, restoreMs: 0.001, plannedCheckpoints: [],
+            restoreMode: "copy", copyReason: .warmBody, warmBody: true)
+        #expect(context.render(lookup).contains("source=warm"))
+        #expect(context.render(lookup).contains("copyReason=warmBody"))
+    }
+
     @Test func lookupHitRendersDeterministically() {
         let event = PrefixCacheDiagnostics.LookupEvent(
             reason: .hit(snapshotOffset: 768, totalTokens: 1024, type: .system),

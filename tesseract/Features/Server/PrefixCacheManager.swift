@@ -146,6 +146,13 @@ final class PrefixCacheManager {
     /// here held this actor 24–50 s per admission on 2026-09-06.
     /// `nil` (tests, replay caches) disables demotion — every unbacked
     /// drop is terminal, today's pre-demotion behavior.
+    private let modelSessions: (any ModelSessionProviding)?
+    private var budgetDrainTask: Task<Void, Never>?
+    private var drainRequested = false
+    private var drainRequestID: UUID?
+    private var drainPreferredPartition: CachePartitionKey?
+    private var compressingNodes: Set<ObjectIdentifier> = []
+
     private let demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)?
 
     /// **Adaptive Write Eagerness** master switch (ADR-0019, PRD #150).
@@ -175,8 +182,11 @@ final class PrefixCacheManager {
         pressureSource: (any MemoryPressureSource)? = nil,
         headroomSource: (any MemoryHeadroomSource)? = nil,
         ramBudgetCapBytes: Int? = nil,
-        adaptiveWriteEagerness: Bool = false
+        adaptiveWriteEagerness: Bool = false,
+        modelSessions: (any ModelSessionProviding)? = nil
     ) {
+        self.modelSessions = modelSessions
+        precondition(!evictionConfig.warmCompressionEnabled || modelSessions != nil)
         self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
         self.storageActivityGate = self.store.activityGate ?? StorageActivityGate()
         // The passed-in budget is the *bootstrap* ceiling (ADR-0018):
@@ -407,6 +417,9 @@ final class PrefixCacheManager {
         else { return .copy(.checkpoint) }
         // Structural checkpoints take precedence over the body's representation.
         if let bodyCopyReason { return .copy(bodyCopyReason) }
+        guard !compressingNodes.contains(ObjectIdentifier(hit.node)) else {
+            return .copy(.immutableBody)
+        }
         guard body.sharesMovedBody(with: snapshot) else { return .copy(.checkpoint) }
         guard
             let lease = tree.beginLeafLease(
@@ -2051,9 +2064,9 @@ final class PrefixCacheManager {
     /// rebuilt around the new value (ceiling and current alike), so a
     /// subsequent pressure regrowth converges to the override instead of
     /// the pre-override ceiling — the "reasserted on the next pressure
-    /// event" stale-band window is unrepresentable. Evicts immediately
-    /// when the live contents exceed the new budget, returning the
-    /// evictions. Used by the loaded-model E2E runner to deliberately
+    /// event" stale-band window is unrepresentable. Drains immediately with
+    /// the default policy; the opt-in Compressed Warm Tier queues a Model
+    /// Session drain (awaitPendingDrain settles it outside a session). Used by the loaded-model E2E runner to deliberately
     /// trigger eviction pressure.
     @discardableResult
     func setMemoryBudget(_ bytes: Int) -> [EvictionEvent] {
@@ -2198,6 +2211,8 @@ final class PrefixCacheManager {
     /// falls back to oldest-first when only multi-child branch snapshots
     /// remain.
     ///
+    /// With the Compressed Warm Tier enabled, a queued Model Session first
+    /// compresses eligible full bodies in the same selection order. Otherwise
     /// **Snapshot Demotion** is the first response to every shrink: an
     /// unbacked victim is persisted to SSD (when the tier and the payload
     /// extractor are available) *before* its RAM body drops, so the loss
@@ -2221,6 +2236,17 @@ final class PrefixCacheManager {
         requestID: UUID? = nil,
         preferredPartitionKey: CachePartitionKey? = nil
     ) -> [EvictionEvent] {
+        if evictionConfig.warmCompressionEnabled, let modelSessions {
+            drainRequested = true
+            drainRequestID = requestID
+            drainPreferredPartition = preferredPartitionKey
+            if budgetDrainTask == nil {
+                budgetDrainTask = Task { [weak self] in
+                    await self?.drainWithCompression(sessions: modelSessions)
+                }
+            }
+            return []
+        }
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
@@ -2247,42 +2273,7 @@ final class PrefixCacheManager {
             // (state 1 → 2 → 3) instead of terminal (state 1 → removed).
             demoteBeforeDrop(candidate, now: now)
 
-            // One chokepoint: `dropBody` reconciles the budget, carries
-            // out the eviction telemetry inputs, and self-heals the
-            // topology. A node whose ref survives the drop (state 2/4 →
-            // 3/5) settles in place; a ref-less node (state 1) empties and
-            // the tree removes it. The orphan guard that used to gate
-            // node removal here is gone — `canEvictNode` is unrepresentable
-            // when violated, so there is nothing for a caller to forget.
-            //
-            // `EvictionCandidatePolicy.candidate` filters body-less nodes, so
-            // `dropBody` is guaranteed non-ignored and returns the
-            // dropped checkpoint type.
-            let offset = candidate.node.tokenOffset
-            let result = candidate.tree.dropBody(node: candidate.node)
-            guard let droppedType = result.droppedCheckpointType else {
-                preconditionFailure("dropBody returned no checkpoint type for a body-bearing node")
-            }
-            let event = EvictionEvent(
-                strategy: candidate.strategy,
-                offset: offset,
-                checkpointType: droppedType,
-                freedBytes: result.droppedBodyBytes,
-                budgetBytes: memoryBudgetBytes,
-                snapshotBytesAfter: totalSnapshotBytes,
-                normalizedRecency: candidate.score?.normalizedRecency,
-                normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
-                utility: candidate.score?.utility,
-                bodyDroppedSnapshotRefID: result.refID,
-                chainPrefixOwnerID: result.refID == nil
-                    ? candidate.node.chainPrefixRestorePoint?.ownerSnapshotID
-                    : nil
-            )
-            if event.isTerminal {
-                cumulativeCounters.terminalEvictions += 1
-            } else {
-                cumulativeCounters.recoveredEvictions += 1
-            }
+            let event = dropEvictionCandidate(candidate)
             events.append(event)
         }
         // Mark the first request that ever triggered eviction. The
@@ -2298,6 +2289,175 @@ final class PrefixCacheManager {
             pendingBootstrapBoundary = requestID.map(PendingBootstrapBoundary.request) ?? .unscoped
         }
         return events
+    }
+
+    private func dropEvictionCandidate(_ candidate: EvictionCandidatePolicy.Candidate)
+        -> EvictionEvent
+    {
+        // One chokepoint: `dropBody` reconciles the budget, carries
+        // out the eviction telemetry inputs, and self-heals the
+        // topology. A node whose ref survives the drop (state 2/4 →
+        // 3/5) settles in place; a ref-less node (state 1) empties and
+        // the tree removes it. The orphan guard that used to gate
+        // node removal here is gone — `canEvictNode` is unrepresentable
+        // when violated, so there is nothing for a caller to forget.
+        //
+        // `EvictionCandidatePolicy.candidate` filters body-less nodes, so
+        // `dropBody` is guaranteed non-ignored and returns the
+        // dropped checkpoint type.
+        let offset = candidate.node.tokenOffset
+        let result = candidate.tree.dropBody(node: candidate.node)
+        guard let droppedType = result.droppedCheckpointType else {
+            preconditionFailure("dropBody returned no checkpoint type for a body-bearing node")
+        }
+        let event = EvictionEvent(
+            strategy: candidate.strategy,
+            offset: offset,
+            checkpointType: droppedType,
+            freedBytes: result.droppedBodyBytes,
+            budgetBytes: memoryBudgetBytes,
+            snapshotBytesAfter: totalSnapshotBytes,
+            normalizedRecency: candidate.score?.normalizedRecency,
+            normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
+            utility: candidate.score?.utility,
+            bodyDroppedSnapshotRefID: result.refID,
+            chainPrefixOwnerID: result.refID == nil
+                ? candidate.node.chainPrefixRestorePoint?.ownerSnapshotID
+                : nil
+        )
+        if event.isTerminal {
+            cumulativeCounters.terminalEvictions += 1
+        } else {
+            cumulativeCounters.recoveredEvictions += 1
+        }
+        return event
+    }
+
+    /// Await outside a Model Session, including before model teardown. Admission
+    /// may be called from inside that session and must never await its own queue.
+    func awaitPendingDrain() async {
+        while let task = budgetDrainTask { await task.value }
+    }
+
+    private struct DrainWork: Sendable {
+        let candidate: EvictionCandidatePolicy.Candidate
+        let snapshot: HybridCacheSnapshot
+        let compress: Bool
+        let needsFullDemotion: Bool
+    }
+
+    private func nextDrainWork(attempted: Set<UUID>, now: ContinuousClock.Instant) -> DrainWork? {
+        guard totalSnapshotBytes > memoryBudgetBytes else { return nil }
+        let partitions = store.orderedPartitions()
+        let preferred = drainPreferredPartition.flatMap { key in
+            store.tree(for: key).map { (key: key, tree: $0) }
+        }
+        let floor = floorContents().nodes
+        var excluded = floor
+        for (key, tree) in partitions {
+            for node in tree.allSnapshotNodes() {
+                guard let snapshot = node.state.body else { continue }
+                if key.kvBits != nil || snapshot.checkpointType == .system
+                    || !snapshot.canCompress || attempted.contains(snapshot.bodyID)
+                {
+                    excluded.insert(ObjectIdentifier(node))
+                }
+            }
+        }
+        let compression = EvictionCandidatePolicy.candidate(
+            now: now, orderedPartitions: partitions, preferred: preferred,
+            protected: excluded, config: evictionConfig)
+        guard
+            let candidate = compression
+                ?? EvictionCandidatePolicy.candidate(
+                    now: now, orderedPartitions: partitions, preferred: preferred,
+                    protected: floor, config: evictionConfig),
+            let snapshot = candidate.node.state.body,
+            candidate.node.bodyAccess.beginRead(snapshotID: snapshot.bodyID.uuidString)
+        else { return nil }
+        compressingNodes.insert(ObjectIdentifier(candidate.node))
+        return DrainWork(
+            candidate: candidate, snapshot: snapshot, compress: compression != nil,
+            needsFullDemotion: snapshot.isWarm && canDemote(candidate))
+    }
+
+    private func drainWithCompression(sessions: any ModelSessionProviding) async {
+        repeat {
+            drainRequested = false
+            await sessions.withSession { session in
+                let now = ContinuousClock.now
+                var attempted: Set<UUID> = []
+                while let work = await self.nextDrainWork(attempted: attempted, now: now) {
+                    let start = ContinuousClock.now
+                    var replacement: HybridCacheSnapshot?
+                    do {
+                        if work.compress {
+                            attempted.insert(work.snapshot.bodyID)
+                            replacement = try session.compress(work.snapshot)
+                        } else if work.needsFullDemotion {
+                            // Stored Form stays full fp16 until #531. Conversion and
+                            // materialization stay on the Model Session thread.
+                            replacement = session.captureSnapshot(
+                                cache: try session.restore(work.snapshot),
+                                offset: work.snapshot.tokenOffset,
+                                type: work.snapshot.checkpointType)
+                        }
+                    } catch {
+                        Log.agent.error("Warm Body conversion failed: \(error)")
+                    }
+                    await self.finishDrainWork(
+                        work, replacement: replacement,
+                        seconds: (ContinuousClock.now - start).seconds,
+                        now: now)
+                }
+            }
+        } while drainRequested
+        budgetDrainTask = nil
+    }
+
+    private func finishDrainWork(
+        _ work: DrainWork, replacement: HybridCacheSnapshot?, seconds: TimeInterval,
+        now: ContinuousClock.Instant
+    ) {
+        let node = work.candidate.node
+        defer {
+            node.bodyAccess.endRead()
+            compressingNodes.remove(ObjectIdentifier(node))
+        }
+        // MainActor may have admitted a new body, cleared the tier, or pinned
+        // this leaf while the Model Session was converting its old body.
+        guard node.state.body?.bodyID == work.snapshot.bodyID,
+            !floorContents().nodes.contains(ObjectIdentifier(node)),
+            totalSnapshotBytes > memoryBudgetBytes
+        else { return }
+        if work.compress {
+            guard let replacement, replacement.isWarm,
+                replacement.memoryBytes < work.snapshot.memoryBytes
+            else { return }
+            let recency = node.lastAccessTime
+            guard work.candidate.tree.storeSnapshot(replacement, on: node) else { return }
+            node.lastAccessTime = recency
+            PrefixCacheDiagnostics.logSystem(
+                WarmCompressEvent(
+                    offset: replacement.tokenOffset, bytesBefore: work.snapshot.memoryBytes,
+                    bytesAfter: replacement.memoryBytes, seconds: seconds))
+        } else {
+            // An SSD ref can disappear during the session hop. Retry as a full
+            // demotion if it was the only reason this pass needed no conversion.
+            if work.snapshot.isWarm, !work.needsFullDemotion, canDemote(work.candidate) { return }
+            demoteBeforeDrop(work.candidate, now: now, fullSnapshot: replacement)
+            let event = dropEvictionCandidate(work.candidate)
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.EvictionEvent(event))
+            if let id = event.bodyDroppedSnapshotRefID {
+                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDBodyDropEvent(id: id))
+            }
+            if let alphaTuner, case .waitingForFirstEviction = alphaTuner.phase,
+                pendingBootstrapBoundary == nil
+            {
+                pendingBootstrapBoundary =
+                    drainRequestID.map(PendingBootstrapBoundary.request) ?? .unscoped
+            }
+        }
     }
 
     /// User-initiated RAM-tier wipe (the status-bar menu's "Clear Memory
@@ -2474,21 +2634,26 @@ final class PrefixCacheManager {
     /// The front door may still reject the write (budget, back-pressure);
     /// then no ref attaches and the drop settles terminal, which is the
     /// honest outcome.
+    private func canDemote(_ candidate: EvictionCandidatePolicy.Candidate) -> Bool {
+        candidate.node.state.ref == nil && candidate.node.chainPrefixRestorePoint == nil
+            && store.isSSDEnabled && demotionPayloadExtractor != nil
+            && candidate.partitionKey.modelFingerprint != nil
+    }
+
     private func demoteBeforeDrop(
         _ candidate: EvictionCandidatePolicy.Candidate,
-        now: ContinuousClock.Instant
+        now: ContinuousClock.Instant,
+        fullSnapshot: HybridCacheSnapshot? = nil
     ) {
         guard !candidate.node.bodyAccess.blocks(.demotion) else { return }
         // A chain-prefix-backed node (ADR-0012) skips demotion outright:
         // its bytes already exist on SSD as the owning chain's leading
         // segments, and writing a duplicate copy is exactly the write
         // amplification the restore-point design rejected.
-        guard candidate.node.state.ref == nil,
-            candidate.node.chainPrefixRestorePoint == nil,
-            store.isSSDEnabled,
+        guard canDemote(candidate),
             let demotionPayloadExtractor,
-            candidate.partitionKey.modelFingerprint != nil,
-            let snapshot = candidate.node.state.body
+            let snapshot = fullSnapshot ?? candidate.node.state.body,
+            !snapshot.isWarm
         else { return }
 
         registerSSDPartitionIfNeeded(for: candidate.partitionKey)
@@ -2539,7 +2704,7 @@ final class PrefixCacheManager {
             store.isSSDEnabled,
             demotionPayloadExtractor != nil,
             partitionKey.modelFingerprint != nil,
-            node.state.body != nil
+            node.state.body?.isWarm == false
         else { return }
 
         guard !node.bodyAccess.blocks(.writePromotion) else { return }
@@ -2553,7 +2718,7 @@ final class PrefixCacheManager {
             guard let self,
                 node.state.ref == nil,
                 node.chainPrefixRestorePoint == nil,
-                let snapshot = node.state.body,
+                let snapshot = node.state.body, !snapshot.isWarm,
                 let payload = self.demotionPayloadExtractor?(snapshot)
             else { return }
 

@@ -7,6 +7,173 @@ import Testing
 
 @testable import Tesseract_Agent
 
+@MainActor
+struct WarmBodyDrainTests {
+    @Test(arguments: [false, true])
+    func compressionPrecedesDemotionAndPreservesTheFloor(enabled: Bool) async throws {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: Array(1...20), headDim: 64))
+        let snapshots = try await sessions.withSession { session in
+            let live = try session.newCache(parameters: GenerateParameters())
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray(Array(1...8).map(Int32.init))), cache: live,
+                checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 8,
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            return try [HybridCacheSnapshot.CheckpointType.system, .leaf, .leaf].map {
+                try #require(session.captureSnapshot(cache: live, offset: 8, type: $0))
+            }
+        }
+        let tier = TieredSnapshotStore(ssdConfig: nil)
+        let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 1_000_000,
+            evictionConfig: EvictionConfiguration(warmCompressionEnabled: enabled),
+            tieredStore: tier, modelSessions: sessions)
+        let now = ContinuousClock.now
+        for (index, body) in snapshots.enumerated() {
+            manager.restoreSnapshot(
+                path: Array(repeating: index + 1, count: 8), snapshot: body, partitionKey: key,
+                lastAccessTime: now - .seconds(30 - index * 10))
+        }
+        let bytesBefore = manager.totalSnapshotBytes
+        manager.setMemoryBudget(bytesBefore - 100)
+        await manager.awaitPendingDrain()
+        let tree = tier.getOrCreateTree(for: key)
+        let nodes = tree.allSnapshotNodes()
+        if enabled {
+            #expect(nodes.count == 3)
+            #expect(nodes.filter { $0.state.body?.isWarm == true }.map(\.edgeTokens.first) == [2])
+            #expect(manager.cumulativeCounters.terminalEvictions == 0)
+        } else {
+            #expect(nodes.count == 2)
+            #expect(nodes.allSatisfy { $0.state.body?.isWarm == false })
+            #expect(manager.cumulativeCounters.terminalEvictions == 1)
+        }
+        #expect(manager.totalSnapshotBytes <= bytesBefore - 100)
+        #expect(
+            tree.findBestSnapshot(tokens: Array(repeating: 3, count: 8), updateAccess: false)?
+                .node.state.body?.isWarm == false)
+    }
+    @Test func leasesSystemQuantizedPartitionsAndNewestLeafStayHot() async throws {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2], headDim: 64))
+        let body = try await sessions.withSession { session in
+            let cache = KVCacheSimple()
+            cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
+            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+        }
+        let tier = TieredSnapshotStore(ssdConfig: nil)
+        let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let quantizedKey = CachePartitionKey(modelID: "toy", kvBits: 8, kvGroupSize: 64)
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 1_000_000,
+            evictionConfig: EvictionConfiguration(warmCompressionEnabled: true),
+            tieredStore: tier, modelSessions: sessions)
+        let now = ContinuousClock.now
+        for index in 1...4 {
+            manager.restoreSnapshot(
+                path: Array(repeating: index, count: 8), snapshot: body,
+                partitionKey: index == 3 ? quantizedKey : key,
+                lastAccessTime: now - .seconds(40 - index * 10))
+        }
+        let tree = tier.getOrCreateTree(for: key)
+        let leased = try #require(
+            tree.findBestSnapshot(tokens: Array(repeating: 1, count: 8), updateAccess: false)?.node)
+        let context = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let lease = try #require(tree.beginLeafLease(on: leased, context: context))
+        manager.setMemoryBudget(manager.totalSnapshotBytes - 100)
+        await manager.awaitPendingDrain()
+        #expect(leased.state.body?.isWarm == false)
+        #expect(
+            tier.getOrCreateTree(for: quantizedKey).allSnapshotNodes().first?.state.body?.isWarm
+                == false)
+        #expect(
+            tree.findBestSnapshot(tokens: Array(repeating: 4, count: 8), updateAccess: false)?.node
+                .state.body?.isWarm == false)
+        let warm = try #require(
+            tree.findBestSnapshot(tokens: Array(repeating: 2, count: 8), updateAccess: false)?.node
+                .state.body)
+        #expect(warm.isWarm)
+        let resolved = await manager.resolve(
+            tokens: Array(repeating: 2, count: 8) + [9], promptTokenCount: 9,
+            partitionKey: key, modelFingerprint: nil, diagnostics: context)
+        let attempt = await LeafCheckout.attempt(
+            resolved: resolved, tokens: Array(repeating: 2, count: 8) + [9], maximumAdvance: 10,
+            identityKeySpace: true, prefixCache: manager, context: context)
+        #expect(attempt.owner == nil)
+        #expect(attempt.copyReason == .warmBody)
+        let telemetry = manager.makeTelemetrySnapshot()
+        #expect(telemetry.warmSnapshotBytes == warm.memoryBytes)
+        #expect(telemetry.hotSnapshotBytes == 3 * body.memoryBytes)
+        #expect(
+            telemetry.hotSnapshotBytes + telemetry.warmSnapshotBytes == manager.totalSnapshotBytes)
+        #expect(
+            tree.endLeafLease(
+                lease, on: leased, returning: body, tokens: Array(repeating: 1, count: 8),
+                reason: .rewind))
+    }
+
+    @Test func warmDemotionKeepsFullSSDStoredForm() async throws {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2], headDim: 64))
+        let body = try await sessions.withSession { session in
+            let cache = KVCacheSimple()
+            cache.state = [
+                MLXArray.ones([1, 1, 8, 64], dtype: .float16),
+                MLXArray.ones([1, 1, 8, 64], dtype: .float16),
+            ]
+            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "warm-demotion-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tier = TieredSnapshotStore(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true, rootURL: root, budgetBytes: 1_000_000, maxPendingBytes: 1_000_000))
+        let key = CachePartitionKey(
+            modelID: "toy", kvBits: nil, kvGroupSize: 64,
+            modelFingerprint: String(repeating: "a", count: 64))
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 1_000_000,
+            evictionConfig: EvictionConfiguration(warmCompressionEnabled: true),
+            tieredStore: tier,
+            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) },
+            modelSessions: sessions)
+        for index in 1...2 {
+            manager.restoreSnapshot(
+                path: Array(repeating: index, count: 8), snapshot: body,
+                partitionKey: key, lastAccessTime: .now - .seconds(30 - index * 10))
+        }
+        manager.setMemoryBudget(manager.totalSnapshotBytes - 100)
+        await manager.awaitPendingDrain()
+        await tier.flush()
+        #expect(tier.ssdResidency()?.bytes == 0)
+        let tree = tier.getOrCreateTree(for: key)
+        let cold = try #require(
+            tree.findBestSnapshot(tokens: Array(repeating: 1, count: 8), updateAccess: false)?.node)
+        #expect(cold.state.body?.isWarm == true)
+        manager.setMemoryBudget(body.memoryBytes)
+        await manager.awaitPendingDrain()
+        await tier.flush()
+        #expect(cold.state.body == nil)
+        #expect(cold.state.committed)
+        #expect(manager.cumulativeCounters.recoveredEvictions == 1)
+        let context = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let resolved = await manager.resolve(
+            tokens: Array(repeating: 1, count: 8), promptTokenCount: 8,
+            partitionKey: key, modelFingerprint: key.modelFingerprint, diagnostics: context)
+        let restored = try #require(resolved.lookup.snapshot)
+        #expect(resolved.hydratedFromSSD)
+        #expect(!restored.isWarm)
+        #expect(restored.layers.first?.className == "KVCache")
+        #expect(restored.layers.first?.state.first?.dtype == .float16)
+        #expect(restored.memoryBytes == body.memoryBytes)
+    }
+
+}
+
 /// Task 1.5 tests: PrefixCacheManager — public API for radix-tree prefix cache.
 @MainActor
 // Large test suite — splitting deferred (evolving MVP, see CLAUDE.md).

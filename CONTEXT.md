@@ -13,6 +13,21 @@ history.
 
 ### Prefix cache snapshot lifecycle
 
+**Hot Leaf**:
+A movable fp16 leaf body eligible for **Leaf Handoff**: a leased leaf or the
+most recently checked-in leaf of a path. It is exempt from compression.
+_Avoid_: warm leaf, pinned leaf.
+
+**Warm Body**:
+A RAM-tier body with quantized attention layers, restored by copy through
+dequantization and never checked out by move.
+_Avoid_: quantized live cache, compressed leaf lease.
+
+**Stored Form**:
+The per-partition dtype policy for bodies at rest, warm and on SSD: fp16 or
+quantized at a given bit width and group size. It is part of cache partition identity.
+_Avoid_: live KV dtype, per-segment compression choice.
+
 **Snapshot State**:
 The per-radix-node lifecycle value: a six-case enum (`empty`, `ramOnly`,
 `pendingWrite`, `pendingDropped`, `committed`, `ssdOnly`) encoding which tier(s)

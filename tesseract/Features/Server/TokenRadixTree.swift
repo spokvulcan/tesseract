@@ -903,7 +903,8 @@ final class TokenRadixTree {
                 lastAccessAgeSeconds: max((now - node.lastAccessTime).seconds, 0),
                 normalizedRecency: scores?.normalizedRecency,
                 normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
-                utility: scores?.utility
+                utility: scores?.utility,
+                warmBytes: snapshot?.isWarm == true ? state.residentBodyBytes : nil
             ))
 
         for child in node.children.values.sorted(by: Self.telemetryChildSort) {

@@ -47,6 +47,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/HybridCacheSnapshotTests \
+  -only-testing:tesseractTests/WarmBodyModelSessionTests \
+  -only-testing:tesseractTests/WarmBodyDrainTests \
   -only-testing:tesseractTests/SnapshotLayerKindTests \
   -only-testing:tesseractTests/LeafCaptureHandoffTests \
   -only-testing:tesseractTests/LeafLeaseTests \
@@ -799,3 +801,18 @@ owner approval of a bounded resource plan and a suitable environment.
 [PR #503 review follow-up evidence](../benchmarks/leaf-checkout/2026-09-12-review/README.md)
 records each external finding's disposition, the final clean full-target run,
 and the explicitly isolated allocation run after these hardening changes.
+
+### Opt-in Warm Bodies (#527)
+
+`WarmBodyModelSessionTests` uses microscopic fp16/fp32 toy-model caches to check
+compression and restore token parity, backing-address isolation, and whole-state
+byte preservation. `WarmBodyDrainTests` checks compression before demotion,
+exemptions, quantized byte accounting, copy-only checkout, default-off behavior,
+and full-form SSD demotion/hydration with a temporary directory.
+`PrefixCacheDiagnosticsTests` pins `warmCompress` fields and lookup `source=warm`;
+the manager telemetry test checks the hot/warm byte totals used by the cache panel.
+
+Use `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests` for these app-host
+unit tests. `DependencyContainer.setup` skips service bootstrap in the test host,
+so tests cannot trigger model prewarms. Loaded-model parity/TTFT measurements and
+the #528 enablement gate remain owner work; the default flag is off.

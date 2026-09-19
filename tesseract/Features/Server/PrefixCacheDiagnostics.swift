@@ -107,6 +107,7 @@ nonisolated enum PrefixCacheDiagnostics {
         /// beside `copyReason` only when a wait actually happened, so the
         /// pinned wire lines of every other restore stay byte-stable.
         let copyWaitSeconds: TimeInterval
+        let warmBody: Bool
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -121,7 +122,8 @@ nonisolated enum PrefixCacheDiagnostics {
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
             restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
-            copyWaitSeconds: TimeInterval = 0
+            copyWaitSeconds: TimeInterval = 0,
+            warmBody: Bool = false
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -159,6 +161,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.restoreMode = restoreMode
             self.copyReason = copyReason
             self.copyWaitSeconds = copyWaitSeconds
+            self.warmBody = warmBody
         }
 
         let eventName = "lookup"
@@ -178,6 +181,7 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("hydratedFromSSD", hydratedFromSSD ? "true" : "false"),
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
+            if warmBody { fields.append(("source", "warm")) }
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if copyWaitSeconds > 0 {
@@ -1075,5 +1079,20 @@ nonisolated enum PrefixCacheDiagnostics {
             return "\"\(escaped)\""
         }
         return value
+    }
+}
+
+nonisolated struct WarmCompressEvent: PrefixCacheDiagnostics.Payload {
+    let offset: Int
+    let bytesBefore: Int
+    let bytesAfter: Int
+    let seconds: TimeInterval
+    let eventName = "warmCompress"
+    var fields: [(String, String)] {
+        [
+            ("offset", "\(offset)"), ("bytesBefore", "\(bytesBefore)"),
+            ("bytesAfter", "\(bytesAfter)"),
+            ("durationMs", PrefixCacheDiagnostics.milliseconds(seconds)),
+        ]
     }
 }

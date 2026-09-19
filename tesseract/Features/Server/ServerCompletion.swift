@@ -594,6 +594,7 @@ nonisolated final class ServerCompletion {
                 }
             }
         }
+        await _prefixCache?.awaitPendingDrain()
     }
 
     /// Natural-finish hook from the driving task: drop the registry slot for
@@ -733,7 +734,7 @@ nonisolated final class ServerCompletion {
             }
         }
 
-        let prefixCache = await ensurePrefixCache(on: actor)
+        let prefixCache = await ensurePrefixCache(on: actor, sessions: sessions)
         let requestID = UUID()
         let memory = RequestMemoryTelemetry(
             context: PrefixCacheDiagnostics.Context(
@@ -1759,7 +1760,8 @@ nonisolated final class ServerCompletion {
                         chainPrefixRestore: resolved.wasChainPrefixRestore,
                         divergence: lookupResult.divergence,
                         restoreMode: restoreMode, copyReason: restoreCopyReason,
-                        copyWaitSeconds: restoreCopyWaitSeconds
+                        copyWaitSeconds: restoreCopyWaitSeconds,
+                        warmBody: lookupResult.snapshot?.isWarm == true
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
@@ -2613,7 +2615,9 @@ nonisolated final class ServerCompletion {
     /// manifest. Warm start is fingerprint-gated: partitions from a
     /// different model layout get their descriptors skipped and
     /// their directories scheduled for async cleanup.
-    private func ensurePrefixCache(on actor: isolated LLMActor) async -> PrefixCacheManager {
+    private func ensurePrefixCache(
+        on actor: isolated LLMActor, sessions: any ModelSessionProviding
+    ) async -> PrefixCacheManager {
         if let existing = _prefixCache { return existing }
         let budget = defaultPrefixCacheMemoryBudgetBytes
         let ssdConfigSnapshot = self.ssdConfig
@@ -2674,7 +2678,8 @@ nonisolated final class ServerCompletion {
                 // Adaptive Write Eagerness (ADR-0019, PRD #150): skip
                 // redundant SSD copies while RAM is comfortable; reuse
                 // earns a deferred-class promotion write instead.
-                adaptiveWriteEagerness: true
+                adaptiveWriteEagerness: true,
+                modelSessions: sessions
             )
             // The current-cache accessor holds it weakly: dropping this
             // module (model unload) reads as "no live cache" over there.

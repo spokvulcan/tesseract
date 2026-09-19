@@ -120,3 +120,15 @@ stalls before production enablement. The continuous/persisted proposal in
 [#92](https://github.com/spokvulcan/tesseract/issues/92) remains subject to that
 decision and its existing ablation gate. Pressure budgets, demotion, the
 Budget Floor and SSD survival/eviction policy remain in place.
+
+## Amendment — 2026-09-19: compression before demotion (#527)
+
+With the Compressed Warm Tier enabled (ADR-0068), a RAM drain first compresses
+eligible full bodies in the existing eviction-selection order. Leased leaves,
+Restore Pins, the Budget Floor's most-recently-extended leaf, system bodies and
+already-quantized partitions remain exempt. Only after this pass cannot satisfy
+the budget does Snapshot Demotion select a victim. The utility formula, alpha
+and terminal-loss ordering do not change. Compression preserves recency.
+
+The flag defaults off until the owner passes #528. SSD Stored Form remains full
+until #531: demotion restores a Warm Body to full form inside the Model Session.

@@ -119,18 +119,23 @@ nonisolated struct EvictionConfiguration: Sendable {
     /// milliseconds away. Zero disables the wait — every
     /// `pendingFullPayload` refusal copies immediately, the pre-#523
     /// behavior.
+    /// Opt-in until the owner completes the parity gate (#528).
+    var warmCompressionEnabled: Bool
+
     var pendingFullPayloadWait: Duration
 
     init(
         flopProfile: ModelFlopProfile = .fallback,
         alpha: Double = 0.0,
         estimates: MeasuredSecondsEstimates = MeasuredSecondsEstimates(),
-        pendingFullPayloadWait: Duration = .milliseconds(500)
+        pendingFullPayloadWait: Duration = .milliseconds(500),
+        warmCompressionEnabled: Bool = false
     ) {
         self.flopProfile = flopProfile
         self.alpha = alpha
         self.estimates = estimates
         self.pendingFullPayloadWait = pendingFullPayloadWait
+        self.warmCompressionEnabled = warmCompressionEnabled
     }
 }
 
