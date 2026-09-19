@@ -158,8 +158,11 @@ float32 recurrent values (12 bytes), and requires canonical admission from the
 checked-in leaf with no older checkpoint available.
 `speculativeViewRestoresOrReprefillsAfterBackingLeafDeparture` compares the exact
 admitted path and KV rows for planned/transient views, a leased Backing Leaf,
-and a removed backer; it pins the fallback diagnostic's offsets and releases
-Restore Pins and the test lease. Run `SpeculativeCanonicalPrefillTests`,
+and a removed backer in both ordinary and RAM-only abandonment passes; it pins
+the fallback diagnostic's offsets and releases Restore Pins and the test lease.
+`imageBearingThinkStripUsesTheCheckedInBackingLeaf` covers image-run expansion,
+canonical admission, and the next turn's exact residual through the same toy
+Model Session. Run `RequestMemoryTelemetryTests`, `SpeculativeCanonicalPrefillTests`,
 `ServerCompletionKeyedSequencingTests`, `SpeculativePrefillPreemptionTests`,
 `ServerCompletionDrainTests`, `PreserveThinkingRenderTests`,
 `CanonicalEchoFidelityTests`, `CanonicalEchoFidelityCorpusTests`, and

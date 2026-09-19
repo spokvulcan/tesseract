@@ -89,7 +89,8 @@ path checks in a full RAM leaf before canonical reconstruction. This uses the
 existing handoff/copy eligibility and does not register a canonical Emitted Path
 or write an extra SSD payload. Resolution chooses a current Backing Leaf by the
 same pure ladder without inserting the transient view into the tree, then pins
-that leaf. The speculative seed retains only the view, never a backer identity.
+that leaf. Stop, tool, and abort speculative seeds retain only the view, never
+a backer identity.
 A leased or departed backer falls through to the existing boundary re-prefill;
 its diagnostic reports requested and restored offsets. The future key path must
 still match the view's original prefix, including image pseudo-token runs.

@@ -16,8 +16,10 @@ import Testing
 @MainActor
 @Suite struct SpeculativePrefillPreemptionTests {
 
-    @Test(arguments: ["planned", "transient", "leased", "departed"])
-    func speculativeViewRestoresOrReprefillsAfterBackingLeafDeparture(backingState: String)
+    @Test(arguments: ["planned", "transient", "leased", "departed"], [false, true])
+    func speculativeViewRestoresOrReprefillsAfterBackingLeafDeparture(
+        backingState: String, ramOnlySpine: Bool
+    )
         async throws
     {
         let tokenizer = ToySequencingTokenizer()
@@ -93,7 +95,8 @@ import Testing
             storedConversation: stored, render: render, keySpace: .identity(keyPath: prefix),
             partitionKey: key, prefillStepSize: 256, ssdEnabled: false,
             seedsPositionAnchor: false, canonicalLeafOffset: 0,
-            transientBoundary: backingState == "planned" ? nil : view, diagnostics: diagnostics)
+            transientBoundary: backingState == "planned" ? nil : view,
+            ramOnlySpine: ramOnlySpine, diagnostics: diagnostics)
         await SpeculativeCanonicalPrefill.run(
             seed: seed, container: provider.container, prefixCache: manager)
         let unavailable = backingState == "leased" || backingState == "departed"

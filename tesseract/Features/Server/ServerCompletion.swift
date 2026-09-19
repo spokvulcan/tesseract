@@ -1246,6 +1246,7 @@ nonisolated final class ServerCompletion {
                 seedsPositionAnchor: mlxStart.seedsPositionAnchor,
                 canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
                     .tokenOffset ?? 0,
+                transientBoundary: mlxStart.transientLastUserBoundarySnapshot,
                 ramOnlySpine: true,
                 diagnostics: diagnosticsContext
             )
