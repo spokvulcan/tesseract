@@ -52,10 +52,10 @@ it merges and the app re-pins to that upstream revision (ADR-0006).
 Validation: the carried revision passes the six new capacity tests and nine
 existing serialization/copy/empty-cache tests; the clean upstream branch passes
 `pre-commit run --all-files` with the Xcode formatter and nine selected capacity/serialization/copy tests
-against upstream dependency pins. The app's initial 765 tests in 54 suites
-passed; Spec review found additional canonical, speculative and raw creation
-paths, now covered by reservation calls and toy regressions. Test-host model
-prewarms are disabled.
+against upstream dependency pins. The app's final 795 tests in 58 prefix-cache
+and touched suites pass, including canonical, speculative and raw prefill
+reservation regressions. Both Standards and Spec review are clear after the
+missing-path fix. Test-host model prewarms are disabled.
 No loaded-model, long-context or model-reload campaign was run.
 
 ## Current pin (2026-09-15, second cut)
