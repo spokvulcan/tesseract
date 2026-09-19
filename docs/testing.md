@@ -806,13 +806,22 @@ and the explicitly isolated allocation run after these hardening changes.
 `ServerCompletionKeyedSequencingTests.creationAndRestoreReservePromptRowsWithoutReservingOutput`
 drives cold creation, Leaf Checkout and copied quantized restoration through the
 Model Session toy peer. A chunked prompt reserves its total rows before prefill;
-a large output ceiling does not become a reservation. The recorder observes
-backing capacity at the existing prefill verb. `toyDecodeUsesGeometricCapacityGrowth`
+a large output ceiling does not become a reservation. The recorders observe
+backing capacity through the existing Model Session toy peer. `toyDecodeUsesGeometricCapacityGrowth`
 decodes 2,048 toy tokens and observes four capacity allocations (256, 768, 1792,
 3840 rows), with no model weights. Growth is geometric until the 4096-row
 increment cap, then bounded linear increments; this is not a production timing
 measurement. `HybridCacheSnapshotTests` covers snapshot restore and buffer
 isolation under the new vendor allocation policy.
+
+`RawGenerationStartTests.rawCreationReservesTheWholePrompt` covers both raw
+Prefill Strategy routes. `canonicalLeafRestoreReservesTheStoredPath` exercises
+the canonical Leaf Store restore with a think-stripping template;
+`SpeculativePrefillPreemptionTests` checks that both extension chunks retain one
+reservation for the entire admit path even when cancellation ends the pass.
+These observations remain scalars in the toy model; no new production seam was
+introduced. Run the raw-generation, Prefill Strategy, Speculative Canonical
+Prefill and Generation Logit Processor suites with the prefix-cache suites.
 
 The vendor's `CacheCapacityTests` covers simple and quantized reservation,
 growth to the cap, unchanged trim/state/metaState/copy and prompt-cache

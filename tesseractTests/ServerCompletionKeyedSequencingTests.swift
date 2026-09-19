@@ -118,6 +118,38 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         await fixture.drain()
     }
 
+    @MainActor
+    @Test func canonicalLeafRestoreReservesTheStoredPath() async throws {
+        let tokenizer = FakeParoThinkingTokenizer()
+        let conversation = Self.conversation([
+            .init(role: .user, content: String(repeating: "a", count: 998))
+        ])
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        let reply = "reasoning\n</think>\n\n" + String(repeating: "b", count: 1000)
+        let model = ToyLanguageModel(script: prompt + Array(reply.utf8).map(Int.init))
+        let records = model.capacityRecords
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(model: model, tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: "capacity-canonical-\(UUID())")
+        var parameters = Self.parameters()
+        parameters.prefillStepSize = 64
+        let handle = try await fixture.start(conversation: conversation, parameters: parameters)
+        _ = try await collectServerText(handle)
+        #expect(fixture.provider.recorder.verbs.contains(.restore))
+        #expect(fixture.provider.recorder.prefillCapacities.count >= 2)
+        // A restore starts a second monotonic run of forward offsets.
+        let values = records.values
+        let rewind = try #require(
+            values.indices.dropFirst().first { values[$0].offset < values[$0 - 1].offset })
+        let canonical = Array(values[rewind...])
+        let finalOffset = try #require(canonical.last?.offset)
+        #expect(canonical.allSatisfy { $0.capacity >= finalOffset })
+        #expect(canonical.allSatisfy { $0.capacity < finalOffset + 256 })
+        #expect(Set(canonical.map(\.capacity)).count == 1)
+        await fixture.drain()
+    }
+
     @Test func toyDecodeUsesGeometricCapacityGrowth() async throws {
         let prompt = [65, 66, 67]
         let completion = Array(repeating: 68, count: 2048)

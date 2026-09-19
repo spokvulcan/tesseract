@@ -23,6 +23,7 @@ import MLXNN
 /// model's would and capture/restore round-trips carry content-dependent
 /// payloads.
 nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensionProvider {
+    let capacityRecords = ToyCacheCapacityRecords()
     let kvHeads: [Int]
     let headDim: Int
     let vocabSize: Int
@@ -117,6 +118,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             }
         }
 
+        if let cache { capacityRecords.append(cache) }
         var rows = [Float](repeating: 0, count: tokenCount * vocabSize)
         if let completions {
             let fed = batched.asType(.int32).reshaped([tokenCount]).asArray(Int32.self).map(
@@ -674,5 +676,22 @@ nonisolated final class InactiveMTPDrafter: Module, MTPDrafterModel {
         sampler: any LogitSampler
     ) -> MLXArray {
         preconditionFailure("MTP must not engage in this fixture")
+    }
+}
+
+/// Scalar observations from the existing toy model; arrays stay in its session.
+nonisolated final class ToyCacheCapacityRecords: @unchecked Sendable {
+    struct Entry: Sendable {
+        let offset: Int
+        let capacity: Int
+    }
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+    var values: [Entry] { lock.withLock { entries } }
+
+    func append(_ cache: [any KVCache]) {
+        guard let first = cache.first, let array = first.innerState().first else { return }
+        let entry = Entry(offset: first.offset, capacity: array.dim(2))
+        lock.withLock { entries.append(entry) }
     }
 }

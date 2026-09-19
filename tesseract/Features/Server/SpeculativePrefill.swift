@@ -306,6 +306,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let restoreOK = await container.perform { _ in
             do {
                 warm.cache = try boundary.restore()
+                for layer in warm.cache { layer.reserveCapacity(admitPath.count) }
                 return true
             } catch {
                 warm.failure = error.localizedDescription
