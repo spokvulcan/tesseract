@@ -49,6 +49,24 @@ and the whole-state (recurrent, rotating, chunked) layers alike, as deep copies
 evaluated there.
 _Avoid_: lazy payload, async extraction, background asData, payload streaming.
 
+**Layer Kind**:
+The one fact a snapshot layer carries about how its arrays relate to the token
+axis — *sliceable attention* or *whole-state* — derived once, from the vendor
+cache class and the array shapes, when the layer state is built (captured,
+moved, deserialized, or hydrated from a **Segment Chain**), and read by every
+consumer that slices, composes, trims or rebuilds. Sliceable attention
+(`KVCacheSimple`, `QuantizedKVCache`) has arrays that cover the snapshot's
+offset along the token axis, so a token-range slice is exact; whole-state is
+recurrent, rotating and chunked state, plus any attention layer whose arrays
+fail that shape guard, which then rides whole. The extraction edge slices the
+former into a **Leaf Extension Admission** and detaches the latter whole;
+check-out eligibility hands off only trimmable sliceable attention beside
+recurrent whole-state; **Leaf Rewind** trims the former and rebuilds the latter.
+_Avoid_: demoted (a mis-shaped attention layer *is* whole-state — **Snapshot
+Demotion** is the RAM-to-SSD move); layer type; class-name matching (a consumer
+reads the kind, never re-derives it); sliceable class (the class alone is not
+the kind — the shape guard is part of it).
+
 **Snapshot Admission Path**:
 The validated token path carried by a **Snapshot Admission** — the proof that a
 snapshot may be stored at a given token offset, checked before any cache mutation.

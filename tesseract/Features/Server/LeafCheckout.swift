@@ -51,7 +51,6 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         claim: Claim, tokens: [Int], cache: [any KVCache],
         kinds: [HybridCacheSnapshot.LayerState.Kind]
     ) {
-        precondition(kinds.count == cache.count, "one kind per moved cache object")
         self.claim = claim
         self.kinds = kinds
         originalTokens = Array(tokens.prefix(claim.lease.offset))
@@ -59,6 +58,9 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             let (layer, kind) = entry
             guard kind == .wholeState, let className = HybridCacheSnapshot.classNameForCache(layer)
             else { return nil }
+            precondition(
+                layer is ArraysCache,
+                "an eligible leaf's whole-state layers are recurrent (checkoutCopyReason)")
             return RecurrentState(
                 index: index,
                 layer: .init(
@@ -124,7 +126,7 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         case .claimed(let acquired): claim = acquired
         case .copy(let reason): return Attempt(copyReason: reason)
         }
-        guard let kinds = snapshot.movingLayerKinds, let cache = snapshot.takeMovingCache() else {
+        guard let (cache, kinds) = snapshot.takeMovingCache() else {
             preconditionFailure("an eligible claimed leaf must own cache objects")
         }
         let owner = FinalGenerationCache(cache)

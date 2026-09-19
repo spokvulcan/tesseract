@@ -191,7 +191,7 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
 
     func recoverUnadmitted(_ snapshot: HybridCacheSnapshot) {
         precondition(cache.isEmpty)
-        guard let returnedCache = snapshot.takeMovingCache() else {
+        guard let (returnedCache, _) = snapshot.takeMovingCache() else {
             preconditionFailure("an unadmitted moved snapshot must still own its cache")
         }
         cache = returnedCache
@@ -2738,7 +2738,7 @@ nonisolated final class ServerCompletion {
     /// array bytes move here. Which layers would slice is each layer's
     /// ``HybridCacheSnapshot/LayerState/Kind``, derived at capture; a
     /// whole-state layer (recurrent, rotating, chunked, or an attention
-    /// layer the shape guard demoted) counts whole.
+    /// layer the shape guard kept whole) counts whole.
     private static func validatedExtension(
         _ extending: SnapshotExtension?,
         for snapshot: HybridCacheSnapshot

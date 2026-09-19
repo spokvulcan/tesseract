@@ -1780,8 +1780,8 @@ extension SSDSnapshotStore {
 
             // The composed layer derives its kind like a captured one —
             // from its class and the merged shapes against the snapshot's
-            // offset — so the hydrated body slices, demotes and extracts
-            // exactly as the body it was written from.
+            // offset — so the hydrated body slices and extracts exactly as
+            // the body it was written from.
             snapshotLayers.append(
                 HybridCacheSnapshot.LayerState(
                     className: lastLayerHeader.className,

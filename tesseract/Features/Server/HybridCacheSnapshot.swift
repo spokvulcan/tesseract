@@ -33,8 +33,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             /// State that rides whole in every **Snapshot Segment** and is
             /// restored whole: recurrent (`ArraysCache`, `MambaCache`),
             /// rotating (buffer order), chunked (`startPosition`), and an
-            /// attention layer the shape guard demoted because its arrays
-            /// do not provably cover the snapshot's offset.
+            /// attention layer the shape guard keeps whole because its
+            /// arrays do not provably cover the snapshot's offset.
             case wholeState
         }
 
@@ -81,8 +81,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         /// when its arrays provably cover `[0..<snapshotOffset]` along the
         /// token axis, so a `(base..<snapshotOffset)` slice is exact. A
         /// layer that fails it — behind the snapshot's offset, a short
-        /// token axis, no separable token axis, or no arrays — is demoted
-        /// to whole-state and simply rides whole.
+        /// token axis, no separable token axis, or no arrays — is
+        /// whole-state and simply rides whole.
         private static func deriveKind(
             className: String, state: [MLXArray], offset: Int, snapshotOffset: Int
         ) -> Kind {
@@ -183,8 +183,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// after the turn's maximum advance (**Leaf Rewind** trims it); a
     /// whole-state layer must be recurrent (the rewind rebuilds it from its
     /// saved copy) — a rotating or chunked buffer, or an attention layer
-    /// the shape guard demoted, cannot promise its prefix back. The copy
-    /// reason names the class the way ADR-0064 records it.
+    /// the shape guard kept whole, cannot promise its prefix back. The
+    /// kind decides; the copy reason still names the class, the way
+    /// ADR-0064 records it.
     func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
         guard checkpointType == .leaf else { return .checkpoint }
         guard case .moved(let owner) = body else { return .immutableBody }
@@ -205,20 +206,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return nil
     }
 
-    /// The kinds of a moved body's layers, in cache order — read before
-    /// ``takeMovingCache()`` empties the frozen views, so **Leaf Rewind**
-    /// knows which objects to trim and which to rebuild.
-    var movingLayerKinds: [LayerState.Kind]? {
+    /// Transfer a moved body's cache objects out, with each object's kind
+    /// in cache order so **Leaf Rewind** knows which to trim and which to
+    /// rebuild. Empties the body and its frozen views in one step.
+    func takeMovingCache() -> (cache: [any KVCache], kinds: [LayerState.Kind])? {
         guard case .moved(let owner) = body, !owner.cache.isEmpty else { return nil }
-        return owner.layers.map(\.kind)
-    }
-
-    func takeMovingCache() -> [any KVCache]? {
-        guard case .moved(let owner) = body, !owner.cache.isEmpty else { return nil }
-        let cache = owner.cache
+        let taken = (cache: owner.cache, kinds: owner.layers.map(\.kind))
         owner.cache = []
         owner.layers = []
-        return cache
+        return taken
     }
 
     func sharesMovedBody(with other: HybridCacheSnapshot) -> Bool {

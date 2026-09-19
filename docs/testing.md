@@ -47,6 +47,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/HybridCacheSnapshotTests \
+  -only-testing:tesseractTests/SnapshotLayerKindTests \
   -only-testing:tesseractTests/LeafCaptureHandoffTests \
   -only-testing:tesseractTests/LeafLeaseTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
@@ -305,6 +306,14 @@ extension writer retains only detached arrays and hydrates correctly after
 RAM is cleared. The synthesized replay below now expects `source=handoff`
 for eligible text turns and `source=live copyReason=quantized` for quantized
 partitions. Check-out by move and leases remain a later ticket.
+
+`SnapshotLayerKindTests` pins the **Layer Kind** (#521): capture of every
+vendor cache class the snapshot supports (simple, quantized, rotating,
+chunked, arrays and Mamba) derives sliceable attention or whole-state; the
+shape guard keeps a mis-shaped attention layer whole-state (behind the
+snapshot's offset, a short token axis, flat arrays, empty state); moved,
+deserialized and chain-hydrated layers carry the kind; and the extraction
+edge and check-out eligibility read it rather than the class.
 
 `EmittedPathSynthesizedReplayTests` (prefix-cache group) runs the history
 shapes the recordings cannot show through the real Server Completion

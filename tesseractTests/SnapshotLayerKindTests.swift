@@ -122,7 +122,7 @@ struct SnapshotLayerKindTests {
     }
 
     @Test(arguments: ShapeFault.allCases, [VendorClass.simple, VendorClass.quantized])
-    func theShapeGuardDemotesAMisShapedAttentionLayerToWholeState(
+    func theShapeGuardKeepsAMisShapedAttentionLayerWholeState(
         fault: ShapeFault, vendorClass: VendorClass
     ) throws {
         let className = vendorClass.rawValue
@@ -258,7 +258,7 @@ struct SnapshotLayerKindTests {
     // MARK: - Consumers read the kind
 
     /// The extraction edge slices by kind, not by class: an attention
-    /// layer the shape guard demoted rides whole in an extension payload
+    /// layer the shape guard kept whole rides whole in an extension payload
     /// beside a sliceable layer of the same class.
     @Test func theExtractionEdgeSlicesByKind() throws {
         let sliceable = VendorClass.simple.make(tokens: 6)
