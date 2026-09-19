@@ -297,3 +297,12 @@ A Warm Body is an explicit restore-by-copy path with `copyReason=warmBody`.
 Vendor dequantization produces fresh live attention arrays in the Model Session;
 whole-state arrays are independently copied. A Warm Body never enters Leaf
 Handoff. Leaf Lease, Leaf Rewind and the single-owner rule are unchanged.
+
+## Amendment 2026-09-19 — Borrowed SSD bytes (#469)
+
+A prepared full payload can still alias the tree body: the no-copy writer holds
+array-backed Data until the layer has been written. The pending-payload probe
+tracks borrowed array ownership, not merely whether Data views exist. The
+writer's body read claim spans the write and every error exit. Pending-Payload
+Wait keeps its same bound and queued/in-progress rules; an in-progress wait now
+covers writing the borrowed bytes as well as preparing their views.

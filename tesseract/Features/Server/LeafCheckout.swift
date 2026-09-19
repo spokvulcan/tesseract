@@ -142,7 +142,7 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             snapshot: snapshot, tokens: tokens, partitionKey: key,
             bodyCopyReason: bodyCopyReason, context: context)
         // The one refusal that clears itself: a full payload aliases the
-        // body only until the SSD writer materializes it (ADR-0064
+        // body until the SSD writer finishes using its borrowed arrays (ADR-0064
         // decision 5, ADR-0019's Deferred Payload Extraction amendment).
         if case .copy(.pendingFullPayload) = result {
             (result, waitedSeconds) = await awaitPendingFullPayload(

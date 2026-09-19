@@ -80,14 +80,17 @@ _Avoid_: capturedPayloads plumbing, payload alignment, storeSnapshots payloads.
 **Deferred Payload Extraction**:
 Building a snapshot's SSD payload without copying its bytes: the extraction edge
 fixes the byte total (slicing and evaluating a **Leaf Extension Admission**'s
-suffix on the Metal-affine caller), and the host copy runs on the SSD writer's
-task right before the file write. **Snapshot Admission**, eviction and **Snapshot
-Demotion** on the MainActor and the **Leaf Store** tail on the inference thread
-never pay the full-KV memcpy; a deferred payload keeps its arrays alive until the
-writer materializes it, releasing each layer as it is copied. A full payload's
-arrays are the body's own except for a Prefix-View Checkpoint's full-format
+suffix on the Metal-affine caller), and the SSD writer borrows no-copy host views
+of evaluated contiguous arrays on its own task right before the file write. Each
+view retains its array until its layer's bytes have been written, then releases
+it. Header and blobs go directly to the file in bounded chunks, without a full
+output buffer. **Snapshot Admission**, eviction and **Snapshot Demotion** on the
+MainActor and the **Leaf Store** tail on the inference thread never pay a full-KV
+host copy. A full payload's arrays are the body's own and exclude checkout until
+the write releases them, except for a Prefix-View Checkpoint's full-format
 payload. View and extension payloads retain no body array: their attention
-prefix or suffix and their whole-state layers are independent evaluated copies.
+prefix or suffix and their whole-state layers are independent evaluated copies
+the extraction edge *detaches* there.
 _Avoid_: lazy payload, async extraction, background asData, payload streaming.
 
 **Layer Kind**:
@@ -2277,7 +2280,7 @@ per-architecture cost model; `alpha` and the wait bound are the mutable halves.)
 The bounded pause a request takes instead of copying a leaf it is about to own:
 when **Leaf Checkout** is refused only because the leaf's full payload still
 aliases the body, and the SSD writer reports that payload *in progress*, the
-request waits for the writer's materialize step to release the arrays and then
+request waits for the writer to finish using the borrowed arrays and then
 re-attempts the check-out. Bounded by the **Eviction Configuration**'s
 `pendingFullPayloadWait` (500 ms); an `await`, never a blocking sleep, and never
 across a model verb. A payload still *queued* behind other writes has no bounded

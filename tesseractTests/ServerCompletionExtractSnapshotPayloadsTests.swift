@@ -79,6 +79,79 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
         #expect(candidate.snapshot.memoryBytes == 0)
     }
 
+    @Test func deferredBytesBorrowEvaluatedStorageAndOutliveTheSnapshot() throws {
+        weak var backing: MLXArray?
+        let (payload, address, expected): (SnapshotPayload, UInt, Data) = {
+            let array = MLXArray(Array(0..<256).map(Float.init))
+            eval(array)
+            backing = array
+            let snapshot = HybridCacheSnapshot(
+                tokenOffset: 1,
+                layers: [.init(className: "ArraysCache", state: [array], metaState: [], offset: 1)],
+                checkpointType: .leaf, memoryBytes: array.nbytes, createdAt: .now)
+            return (
+                ServerCompletion.extractSnapshotPayload(snapshot), backingAddress(array),
+                array.asData(access: .copy).data
+            )
+        }()
+        let bytes = try #require(payload.layers.first?.state.first?.data)
+        #expect(backing != nil, "the borrowed Data must retain its evaluated MLX owner")
+        #expect(bytes == expected)
+        bytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            #expect(UInt(bitPattern: buffer.baseAddress) == address)
+        }
+    }
+
+    @Test func streamingReleasesBorrowedArraysAfterEachLayer() throws {
+        weak var first: MLXArray?
+        weak var second: MLXArray?
+        let payload: SnapshotPayload = {
+            let arrays = [MLXArray.ones([256]), MLXArray.ones([256])]
+            eval(arrays)
+            first = arrays[0]
+            second = arrays[1]
+            let snapshot = HybridCacheSnapshot(
+                tokenOffset: 1,
+                layers: arrays.map {
+                    .init(className: "ArraysCache", state: [$0], metaState: [], offset: 1)
+                },
+                checkpointType: .leaf, memoryBytes: 2048, createdAt: .now)
+            return ServerCompletion.extractSnapshotPayload(snapshot)
+        }()
+        let descriptor = PersistedSnapshotDescriptor(
+            snapshotID: "borrowed", partitionDigest: "abcd1234",
+            pathFromRoot: [1], tokenOffset: 1, checkpointType: "leaf", bytes: 2048,
+            createdAt: 100, lastAccessAt: 100, fileRelativePath: "borrowed.safetensors",
+            schemaVersion: SnapshotManifestSchema.currentVersion)
+        let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
+        #expect(payload.retainsBodyArrays)
+        var consumed = 0
+        encoding.withChunks(maximumBytes: 256, releasingLayers: true) { chunk in
+            if consumed < encoding.headerByteCount + 1024 {
+                #expect(first != nil)
+            } else {
+                #expect(first == nil, "the first layer must release before the second writes")
+            }
+            #expect(second != nil)
+            consumed += chunk.count
+        }
+        #expect(consumed == encoding.byteCount)
+        #expect(first == nil)
+        #expect(second == nil)
+        #expect(!payload.retainsBodyArrays)
+    }
+
+    @Test func deferredEmptyArraysProduceEmptyBytes() throws {
+        let array = MLXArray.zeros([0])
+        let snapshot = HybridCacheSnapshot(
+            tokenOffset: 1,
+            layers: [.init(className: "ArraysCache", state: [array], metaState: [], offset: 1)],
+            checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
+        let payload = ServerCompletion.extractSnapshotPayload(snapshot)
+        #expect(payload.layers[0].state[0].data.isEmpty)
+        #expect(payload.layers[0].state[0].shape == [0])
+    }
+
     // MARK: - Fixture builders
 
     /// Build a single-layer `KVCacheSimple` snapshot whose arrays have

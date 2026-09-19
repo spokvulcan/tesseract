@@ -919,3 +919,21 @@ three-arm timing protocol. The pre-registration records this execution gap;
 owner-reviewed instrumentation and a frozen manifest are required before the
 loaded campaign. The prefix suites above remain the small-cache regression
 evidence; their success does not flip the flag or unblock #531.
+
+### No-copy SSD writer (#469)
+
+`ServerCompletionExtractSnapshotPayloadsTests` checks borrowed backing addresses,
+Data/array lifetime, empty arrays and release after each streamed layer.
+`PlaceholderContainerEncodingTests` pins bounded borrowed chunks and the existing
+full/suffix golden files. `SSDSnapshotStoreTests` compares normal-leaf and demotion
+files with the copying encoder and checks `ssdPayloadPrepare`, `writeMs` and
+`enqueueToCommitMs`. Also run `SnapshotManifestTests`, `TieredSnapshotStoreTests`,
+`LeafLeaseTests`, `LeafCaptureHandoffTests`, the four `LeafExtension*Tests` suites
+and the four `ChainPrefix*Tests` suites with the prefix-cache group.
+
+Use `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests` for the app-host
+unit runs; test bootstrap skips model prewarms. The existing store INT_MAX test
+writes a synthetic host-byte file over 2 GiB, without model weights or KV prefill.
+The [no-copy writer measurement plan](../benchmarks/no-copy-writer/2026-09-19/README.md)
+records the outstanding owner-run 3 GB leaf/demotion comparison. It was not run
+as part of the implementation.
