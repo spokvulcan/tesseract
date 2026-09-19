@@ -4,7 +4,8 @@ import MLX
 import MLXLMCommon
 
 /// Owner-run #532 experiment. Uses the existing SSD store and Model Session
-/// boundaries; never generates a prompt or changes the live prefix-cache tier.
+/// boundaries. Normal model loading verifies one token; the experiment adds
+/// no generation workload and never changes the live prefix-cache tier.
 @MainActor
 final class SSDReadBenchRunner {
     private let runner: BenchmarkRunner
@@ -103,7 +104,8 @@ final class SSDReadBenchRunner {
         for (_, store) in stores { await store.flushAsync() }
         let model = LLMActor()
         do {
-            // No SSD configuration, speculative drafter, or generation: only
+            // Normal loading verifies one token on "Hello" before timing.
+            // No live SSD tier, speculative drafter, or benchmark generation;
             // this target model stays resident for all paired measurements.
             _ = try await model.loadModel(from: modelDir, visionMode: false, speculation: .off)
             let records = try await model.withModelContainer { container in

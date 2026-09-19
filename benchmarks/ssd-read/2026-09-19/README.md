@@ -43,7 +43,9 @@ empty/zero. The owner fills them and approves this protocol before execution.
    positional host buffers and file pages are not fully represented in it.
 3. Record approval identity/date in `ownerApproval`. Save the completed JSON
    before running; retain it unchanged with the report. There is one model
-   load (speculation off, no live SSD tier, no generation). Application
+   load (speculation off, no live SSD tier). Normal `LLMActor.loadModel`
+   verification prepares "Hello" and generates one token before any timed
+   hydration; there is no additional benchmark prompt/generation. Application
    background services do not start for `--ssd-read-bench`.
 
 ```json

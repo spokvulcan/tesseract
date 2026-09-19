@@ -884,6 +884,8 @@ struct SSDSnapshotStoreTests {
         let second = try #require(
             store.loadSync(
                 snapshotRef: ref, expectedFingerprint: makePartitionMeta().modelFingerprint))
+        // The no-copy Data view does not retain its MLX owner.
+        defer { withExtendedLifetime((first, second)) {} }
         let firstBytes = first.layers[0].state[0].asData(access: .noCopy).data
         let secondBytes = second.layers[0].state[0].asData(access: .noCopy).data
         #expect(firstBytes == payload.layers[0].state[0].data)
