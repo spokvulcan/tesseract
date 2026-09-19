@@ -176,9 +176,25 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             await prefixCache.pendingFullPayloadProgress(
                 snapshot: snapshot, tokens: tokens, partitionKey: partitionKey)
         }
+        func reattempt() async -> ClaimResult {
+            await prefixCache.claimLeaf(
+                snapshot: snapshot, tokens: tokens, partitionKey: partitionKey,
+                bodyCopyReason: bodyCopyReason, context: context)
+        }
         let bound = await prefixCache.pendingFullPayloadWait
-        guard bound > .zero, await progress() == .inProgress else {
+        guard bound > .zero else { return (.copy(.pendingFullPayload), 0) }
+        switch await progress() {
+        case .absent:
+            // The writer let go between the refusal and this read, so the
+            // refusal is already stale. Nothing to wait for — but nothing
+            // to copy for either, so re-attempt and take the leaf.
+            return (await reattempt(), 0)
+        case .queued:
+            // Queued behind other writes, with no bounded completion time
+            // of its own. This request copies now, exactly as before #523.
             return (.copy(.pendingFullPayload), 0)
+        case .inProgress:
+            break
         }
         let started = ContinuousClock.now
         var elapsed = Duration.zero
@@ -191,16 +207,8 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             elapsed = ContinuousClock.now - started
             if await progress() != .inProgress { break }
         }
-        let waitedSeconds = seconds(elapsed)
+        let waitedSeconds = elapsed.seconds
         guard !Task.isCancelled else { return (.copy(.pendingFullPayload), waitedSeconds) }
-        let result = await prefixCache.claimLeaf(
-            snapshot: snapshot, tokens: tokens, partitionKey: partitionKey,
-            bodyCopyReason: bodyCopyReason, context: context)
-        return (result, waitedSeconds)
-    }
-
-    private static func seconds(_ duration: Duration) -> TimeInterval {
-        let (whole, attoseconds) = duration.components
-        return TimeInterval(whole) + TimeInterval(attoseconds) * 1e-18
+        return (await reattempt(), waitedSeconds)
     }
 }

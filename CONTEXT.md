@@ -2240,7 +2240,9 @@ request waits for the writer's materialize step to release the arrays and then
 re-attempts the check-out. Bounded by the **Eviction Configuration**'s
 `pendingFullPayloadWait` (500 ms); an `await`, never a blocking sleep, and never
 across a model verb. A payload still *queued* behind other writes has no bounded
-completion time and is not waited for — that request copies at once. The copy
+completion time and is not waited for — that request copies at once, and a
+refusal the writer has already let go of is re-attempted rather than copied
+on. The copy
 reason keeps its name (`pendingFullPayload`) and gains the waited time
 (`copyWaitMs` on `lookup` and `leafStore`, `restoreCopyWaitMs` on
 `requestMemory`).

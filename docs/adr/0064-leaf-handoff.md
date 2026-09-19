@@ -200,7 +200,9 @@ next check-out is not refused on the writer's account at all.
 Only `inProgress` is waited for: the writer's materialize step releases the
 body arrays, and on a conversation's second turn that is milliseconds away. A
 `queued` payload has no bounded completion time, so that request copies at
-once, exactly as it did before. The bound is an **Eviction Configuration**
+once, exactly as it did before. An `absent` answer means the refusal was
+already stale — the writer let go between the refusal and the question — and
+the check-out is re-attempted instead of copied on. The bound is an **Eviction Configuration**
 value, `pendingFullPayloadWait`, defaulting to 500 ms; zero restores the
 pre-#523 behavior. The wait is an `await` that polls the writer's answer every
 5 ms — no Metal work runs, no thread is held, and no Model Session verb has

@@ -441,7 +441,7 @@ final class PrefixCacheManager {
         guard let tree = store.tree(for: partitionKey),
             let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
             hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
-            hit.node.bodyAccess.blockedByPendingFullPayload,
+            hit.node.bodyAccess.blockedByWriter,
             let refID = hit.node.state.refID
         else { return .absent }
         return store.pendingPayloadProgress(snapshotID: refID)

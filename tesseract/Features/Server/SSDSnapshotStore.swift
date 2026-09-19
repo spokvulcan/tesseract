@@ -60,7 +60,7 @@ import MLXLMCommon
 /// refused with `pendingFullPayload` is worth a bounded wait only while the
 /// writer is actually working on that payload. A payload still queued behind
 /// others has no bounded completion time and is not waited for.
-nonisolated enum PendingPayloadProgress: String, Sendable {
+nonisolated enum PendingPayloadProgress: Sendable {
     case inProgress, queued, absent
 }
 
