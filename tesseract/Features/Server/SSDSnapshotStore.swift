@@ -1675,10 +1675,12 @@ extension SSDSnapshotStore {
     /// `container.perform` — constructing MLXArrays from `Data` is
     /// Metal-affine.
     ///
-    /// Composition is per layer, shallow→deep: a whole-state layer
-    /// entry *resets* the fold (last whole copy wins — the recurrent /
-    /// rotating / chunked classes), a suffix entry *appends* its token
-    /// range. Only contributing segments are materialized, and layers
+    /// Composition is per layer, shallow→deep, following what the
+    /// extraction edge wrote from each layer's kind: a whole-state entry
+    /// (no `suffixBaseOffset`) *resets* the fold — last whole copy wins,
+    /// the recurrent / rotating / chunked classes and every layer of a
+    /// full segment — and a sliceable-attention suffix entry *appends*
+    /// its token range. Only contributing segments are materialized, and layers
     /// compose one at a time, so peak transient RAM stays around one
     /// snapshot plus one layer. Any cross-segment disagreement (layer
     /// counts, suffix contiguity, slot counts, dtypes, token-axis
@@ -1776,12 +1778,17 @@ extension SSDSnapshotStore {
                     : concatenated(slotPieces, axis: -2)
             }
 
+            // The composed layer derives its kind like a captured one —
+            // from its class and the merged shapes against the snapshot's
+            // offset — so the hydrated body slices, demotes and extracts
+            // exactly as the body it was written from.
             snapshotLayers.append(
                 HybridCacheSnapshot.LayerState(
                     className: lastLayerHeader.className,
                     state: merged,
                     metaState: lastLayerHeader.metaState,
-                    offset: lastLayerHeader.offset
+                    offset: lastLayerHeader.offset,
+                    snapshotOffset: tokenOffset
                 ))
         }
 

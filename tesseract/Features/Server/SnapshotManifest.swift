@@ -689,11 +689,10 @@ nonisolated struct SnapshotPayload: Sendable {
 
         /// Non-nil when this layer's arrays hold only the suffix token
         /// range `(suffixBaseOffset..offset]` along the token axis — a
-        /// **Leaf Extension Admission** sliced a sliceable class
-        /// (`KVCacheSimple` / `QuantizedKVCache`). `nil` means the
-        /// arrays are the layer's whole state (always for recurrent /
-        /// rotating / chunked classes, and for every non-extension
-        /// payload).
+        /// **Leaf Extension Admission** sliced a sliceable-attention
+        /// layer (`HybridCacheSnapshot.LayerState.Kind`). `nil` means the
+        /// arrays are the layer's whole state (always for whole-state
+        /// layers, and for every non-extension payload).
         let suffixBaseOffset: Int?
 
         init(
