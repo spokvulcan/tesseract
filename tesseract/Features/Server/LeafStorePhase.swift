@@ -167,6 +167,34 @@ nonisolated enum LeafStorePhase {
         case .live(let offset):
             await storeLive(offset: offset, turn: turn, inputs: inputs, result: &result)
         case .boundary(let reason):
+            // The render rule rejects canonical reuse of the generated tail,
+            // not the already-validated fed path. Check in its full leaf at
+            // this quiescent point before consuming request-local views.
+            if reason == .thinkStrippingUserBoundary,
+                [
+                    mlxStart.transientLastUserBoundarySnapshot,
+                    mlxStart.transientLastMessageBoundarySnapshot,
+                ].contains(where: { $0?.isPrefixView == true })
+            {
+                let offset = httpPrefixCacheReportedTokenCount(mlxStart.finalCache)
+                let path = LiveLeafCapture.livePath(
+                    promptKeyPath: mlxStart.keySpace.keyPath,
+                    generatedTokens: turn.generatedTokens, offset: offset)
+                let backer = await captureLiveLeaf(
+                    sessions: sessions, mlxStartBox: mlxStartBox,
+                    context: LeafAdmissionContext(
+                        storedTokens: path, inputs: inputs,
+                        stages: LeafStages(
+                            store: "boundaryBackingLeafStore",
+                            capture: "boundaryBackingLeafCapture",
+                            admission: "boundaryBackingLeafAdmission",
+                            source: "boundaryBackingLeaf"), ssdEnabled: false), path: .live)
+                if let admission = backer.admission {
+                    trace.ingest(evictions: admission.evictions, diagnostics: diagnosticsContext)
+                    trace.logSupersessions(
+                        admission.supersededLeaves, diagnostics: diagnosticsContext)
+                }
+            }
             let checkedOutOffset = mlxStart.finalCacheOwner.checkout?.claim.lease.offset
             // A boundary or intervened turn must return the original leaf
             // before running the existing restore-and-re-prefill strategy.
@@ -391,25 +419,33 @@ nonisolated enum LeafStorePhase {
             }
         // Keep resolution's Backing Leaf alongside a view until materialization.
         // Every call runs inside the Model Session so SSD reads stay off MainActor.
-        let resolveBoundary: @Sendable ([Int]) async -> PrefixCacheManager.LookupResult? = {
-            tokens in
-            try? await inputs.sessions.withSession { _ in
-                await inputs.prefixCache.resolve(
-                    tokens: tokens,
-                    promptTokenCount: tokens.count,
-                    partitionKey: mlxStart.partitionKey,
-                    modelFingerprint: mlxStart.partitionKey.modelFingerprint,
-                    diagnostics: diagnostics,
-                    pinningRestorePathFor: diagnostics.requestID
-                ).lookup
+        let resolveBoundary:
+            @Sendable ([Int], HybridCacheSnapshot?) async -> PrefixCacheManager.LookupResult? = {
+                tokens, view in
+                let matchingView = view.flatMap { boundary in
+                    guard mlxStart.keySpace.keyPath.count >= boundary.tokenOffset,
+                        tokens.starts(with: mlxStart.keySpace.keyPath.prefix(boundary.tokenOffset))
+                    else { return Optional<HybridCacheSnapshot>.none }
+                    return boundary
+                }
+                return try? await inputs.sessions.withSession { _ in
+                    await inputs.prefixCache.resolve(
+                        tokens: tokens,
+                        promptTokenCount: tokens.count,
+                        partitionKey: mlxStart.partitionKey,
+                        modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                        diagnostics: diagnostics,
+                        transientBoundary: matchingView,
+                        pinningRestorePathFor: diagnostics.requestID
+                    ).lookup
+                }
             }
-        }
         let plan = await LeafAdmissionBuilder.plan(
             mode: mode,
             probedTokens: probedTokens,
             transientBoundary: transientBoundary,
             keySpace: mlxStart.keySpace,
-            resolveBoundary: { await resolveBoundary($0)?.snapshot }
+            resolveBoundary: { await resolveBoundary($0, nil)?.snapshot }
         )
         switch plan {
         case .skip(let reason):
@@ -419,12 +455,12 @@ nonisolated enum LeafStorePhase {
             var boundary = plannedBoundary
             var backingLeaf: HybridCacheSnapshot?
             if boundary.isPrefixView {
-                // A planned checkpoint can also occupy a transient boundary.
-                // Select its current backer at restore time; the normal ladder
-                // can fall shallower if that leaf has since been leased.
+                // Request-local boundaries never enter the tree. Resolve the
+                // view against its current Backing Leaf, or use the existing
+                // shallower boundary re-prefill when that leaf is unavailable.
                 guard
                     let resolved = await resolveBoundary(
-                        Array(tokens.prefix(boundary.tokenOffset))),
+                        Array(tokens.prefix(boundary.tokenOffset)), boundary),
                     let snapshot = resolved.snapshot,
                     snapshot.tokenOffset > 0, snapshot.tokenOffset < tokens.count,
                     snapshot.tokenOffset >= mlxStart.keySpace.minimumWarmOffset
@@ -600,6 +636,7 @@ nonisolated enum LeafStorePhase {
             ssdEnabled: mlxStart.ssdEnabled,
             seedsPositionAnchor: mlxStart.seedsPositionAnchor,
             canonicalLeafOffset: leafOffset,
+            transientBoundary: mlxStart.transientLastUserBoundarySnapshot,
             idleDelay: plan.idleDelay,
             ramOnlySpine: plan.ramOnlySpine,
             diagnostics: inputs.diagnosticsContext

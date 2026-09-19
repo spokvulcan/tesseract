@@ -71,7 +71,7 @@ final class RadixTreeNode {
     /// Chosen for this resolution only; never retained on the view node.
     var backingLeaf: RadixTreeNode? { viewResolution.backingLeaf }
 
-    private var descendants: [RadixTreeNode] {
+    fileprivate var descendants: [RadixTreeNode] {
         children.keys.sorted().flatMap { key in
             let child = children[key]!
             return [child] + child.descendants
@@ -254,6 +254,34 @@ final class TokenRadixTree {
             node.hitCount += 1
         }
         return (node: node, sharedPrefixLength: bestPrefixLength)
+    }
+
+    /// Resolve a request-local view without inserting it into the tree. The
+    /// prefix may end inside a compressed edge; only that subtree can back it.
+    /// Candidate choice remains in the same pure ladder as stored views.
+    func backingLeaf(forPrefix tokens: [Int]) -> RadixTreeNode? {
+        guard !tokens.isEmpty else { return nil }
+        var current = root
+        var offset = 0
+        while offset < tokens.count {
+            guard let child = current.children[tokens[offset]] else { return nil }
+            let count = min(child.edgeTokens.count, tokens.count - offset)
+            guard tokens[offset..<(offset + count)].elementsEqual(child.edgeTokens.prefix(count))
+            else { return nil }
+            offset += count
+            current = child
+        }
+        let candidates = [current] + current.descendants
+        let choice = SnapshotResolutionLadder.viewOutcome(
+            offset: tokens.count,
+            candidates: candidates.map {
+                .init(
+                    offset: $0.tokenOffset, lastAccess: $0.lastAccessTime,
+                    residentFullBody: $0.state.hasResidentBody && $0.state.checkpointType == .leaf,
+                    leased: $0.leafLease != nil)
+            }, committedRef: false, chainPrefix: false)
+        guard case .backingLeaf(let index) = choice else { return nil }
+        return candidates[index]
     }
 
     /// The deepest strict-ancestor node on `tokens` whose state is a

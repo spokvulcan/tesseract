@@ -151,6 +151,19 @@ partitions.
 `ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
 canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`
 checks planned-view restore and pin cleanup through the toy Model Session.
+The transient-boundary slice (#525) extends those same suites.
+`thinkStrippingTurnRetainsOnlyWholeStateBoundaryBytes` checks request-memory
+telemetry for both an attention-only toy (0 bytes) and a hybrid toy with three
+float32 recurrent values (12 bytes), and requires canonical admission from the
+checked-in leaf with no older checkpoint available.
+`speculativeViewRestoresOrReprefillsAfterBackingLeafDeparture` compares the exact
+admitted path and KV rows for planned/transient views, a leased Backing Leaf,
+and a removed backer; it pins the fallback diagnostic's offsets and releases
+Restore Pins and the test lease. Run `SpeculativeCanonicalPrefillTests`,
+`ServerCompletionKeyedSequencingTests`, `SpeculativePrefillPreemptionTests`,
+`ServerCompletionDrainTests`, `PreserveThinkingRenderTests`,
+`CanonicalEchoFidelityTests`, `CanonicalEchoFidelityCorpusTests`, and
+`LeafStoreFastPathTests` alongside the prefix suites above.
 These tests do not establish loaded-model parity or large-cache memory savings.
 
 ## Live detokenization and stream parity

@@ -1764,7 +1764,7 @@ nonisolated final class ServerCompletion {
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
-                // helpers (captured as leaves; a planned checkpoint at the same
+                // helpers (Prefix-View Checkpoints; a planned checkpoint at the same
                 // offset wins) into one capture map for the prefill driver.
                 // Planner guarantees offset uniqueness, so uniqueKeysWithValues
                 // traps loudly on a planner-side invariant break instead of
@@ -1776,13 +1776,13 @@ nonisolated final class ServerCompletion {
                     }
                 )
                 // Preserve-thinking turns never synthesize boundary leaves or
-                // abandonment seeds. Their full-prefix helper copies serve no consumer.
+                // abandonment seeds. Their boundary helpers serve no consumer.
                 let transientOffsets =
                     renderContext.preservesThinking && textOnlyIdentityKeySpace
                     ? Set<Int>() : prefillPlan.transientCheckpointOffsets
                 let helperCheckpoints = Dictionary(
                     uniqueKeysWithValues: transientOffsets.map {
-                        ($0, HybridCacheSnapshot.CheckpointType.leaf)
+                        ($0, HybridCacheSnapshot.CheckpointType.branchPoint)
                     }
                 )
                 let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in
@@ -2011,11 +2011,17 @@ nonisolated final class ServerCompletion {
                 finalCacheOwner.copyReason = restoreCopyReason
                 finalCacheOwner.copyWaitSeconds = restoreCopyWaitSeconds
                 let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+                let boundarySnapshots = prefillResult.snapshots.filter {
+                    transientOffsets.contains($0.tokenOffset)
+                }
                 memory.mark(
                     .prefilled,
                     facts: RequestMemoryTelemetry.cacheFacts(liveCache).merging([
                         "prefillCheckpointArrayBytes":
-                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })"
+                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })",
+                        "boundaryCheckpointCount": "\(boundarySnapshots.count)",
+                        "boundaryCheckpointArrayBytes":
+                            "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                     ]) { _, new in new })
                 let iterator = prefillResult.iterator
                 if case .dflash2 = iterator {
