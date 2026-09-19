@@ -62,6 +62,12 @@ import MLXLMCommon
             pinningRestorePathFor: context.requestID)
         let selected = warmOffset == 6 ? warm : full
         #expect(resolved.lookup.backingLeaf?.bodyID == selected.bodyID)
+        // The hit is served through the backer, which earns it (ADR-0068).
+        let backerNode = try #require(
+            tier.getOrCreateTree(for: key).allSnapshotNodes().first {
+                $0.state.body?.bodyID == selected.bodyID
+            })
+        #expect(backerNode.hitCount == 1)
         if !transient {
             let telemetry = manager.makeTelemetrySnapshot()
             #expect(telemetry.viewOnlyBytes == 4)

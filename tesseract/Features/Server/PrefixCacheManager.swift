@@ -561,6 +561,9 @@ final class PrefixCacheManager {
 
         let backingLeaf = node.backingLeaf
         if let snapshot = node.state.body, !snapshot.isPrefixView || backingLeaf != nil {
+            // A view serves its hit through the Backing Leaf; the leaf earns
+            // that hit's recency and count (ADR-0068 amendment).
+            if let backingLeaf { tree.recordViewHit(backingLeaf: backingLeaf) }
             // States 1, 2, or 4. On state 4 (committed ref + body) the
             // store bumps the SSD descriptor's `lastAccessAt` so a hot
             // RAM hit does not look stale to the SSD LRU when the body
@@ -746,10 +749,11 @@ final class PrefixCacheManager {
                     view.tokenOffset > result.snapshotTokenOffset
                 {
                     let prefix = Array(tokens.prefix(view.tokenOffset))
-                    if let backer = self.store.tree(for: partitionKey)?.backingLeaf(
-                        forPrefix: prefix),
+                    if let tree = self.store.tree(for: partitionKey),
+                        let backer = tree.backingLeaf(forPrefix: prefix),
                         let body = backer.state.body
                     {
+                        tree.recordViewHit(backingLeaf: backer)
                         result = LookupResult(
                             snapshot: view, partitionKey: partitionKey,
                             snapshotTokenOffset: view.tokenOffset,

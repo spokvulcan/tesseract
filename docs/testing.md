@@ -886,6 +886,19 @@ unit tests. `DependencyContainer.setup` skips service bootstrap in the test host
 so tests cannot trigger model prewarms. Loaded-model parity/TTFT measurements and
 the #528 enablement gate remain owner work; the default flag is off.
 
+### Backing Leaf credit (ADR-0068 amendment)
+
+`EvictionPolicyTests.aViewHitCreditsItsBackingLeaf` checks that a lookup served
+through a stored view refreshes the Backing Leaf's recency and hit count;
+`SnapshotResolutionTests.storedAndTransientViewsChooseAndPinThePreferredWarmOrFullBacker`
+checks the same for the transient boundary path.
+`EvictionPolicyTests.aSoleBackingLeafRecoversFromItsViewsParent` pins the
+terminal recovery span on a pure tree: through the view while the leaf is its
+only backer, bounded at the view once a second backer or a committed ref exists.
+`aSoleBackerOutranksAnEqualLeafUnderAFullBodyParent` checks the score ordering.
+The loaded-model `prefix-cache-e2e` branch-point survival check is the
+end-to-end evidence.
+
 ### Warm-backed Prefix-View Checkpoints (#530)
 
 `PrefixViewModelSessionTests.warmBackerMaterializesPrivateViewStateAndFullPayloadWithTokenParity`

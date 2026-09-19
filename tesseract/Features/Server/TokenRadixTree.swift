@@ -74,6 +74,34 @@ final class RadixTreeNode {
     /// Chosen for this resolution only; never retained on the view node.
     var backingLeaf: RadixTreeNode? { viewResolution.backingLeaf }
 
+    /// The offset a terminal loss of this body re-prefills from: the
+    /// parent's, unless that parent is a **Prefix-View Checkpoint** this
+    /// leaf alone keeps restorable (ADR-0068 amendment). Such a view owns
+    /// no attention bytes and empties with its last **Backing Leaf**, so
+    /// dropping the leaf loses the view's span as well. A view with
+    /// another resident, unleased full-body descendant, a Snapshot Ref or
+    /// a chain-prefix point outlives the drop and bounds the span as before.
+    var terminalRecoveryParentOffset: Int {
+        var ancestor = parent
+        while let candidate = ancestor {
+            guard candidate.state.body?.isPrefixView == true,
+                candidate.state.ref == nil, candidate.chainPrefixRestorePoint == nil,
+                candidate.isBackedOnly(by: self)
+            else { return candidate.tokenOffset }
+            ancestor = candidate.parent
+        }
+        return 0
+    }
+
+    /// `true` when `leaf` is this view's only resident, unleased full body.
+    private func isBackedOnly(by leaf: RadixTreeNode) -> Bool {
+        guard leaf.state.hasResidentBody, leaf.state.checkpointType == .leaf else { return false }
+        return !descendants.contains {
+            $0 !== leaf && $0.state.hasResidentBody && $0.state.checkpointType == .leaf
+                && $0.leafLease == nil
+        }
+    }
+
     fileprivate var descendants: [RadixTreeNode] {
         children.keys.sorted().flatMap { key in
             let child = children[key]!
@@ -262,6 +290,15 @@ final class TokenRadixTree {
     /// Resolve a request-local view without inserting it into the tree. The
     /// prefix may end inside a compressed edge; only that subtree can back it.
     /// Candidate choice remains in the same pure ladder as stored views.
+    /// Credit a **Backing Leaf** with the hit its view served (ADR-0068
+    /// amendment). The lookup bumped the view node; the leaf whose rows the
+    /// restore actually reads earns the same recency and hit count a direct
+    /// hit would give it, so eviction and write eagerness see the reuse.
+    func recordViewHit(backingLeaf: RadixTreeNode) {
+        backingLeaf.lastAccessTime = .now
+        backingLeaf.hitCount += 1
+    }
+
     func backingLeaf(forPrefix tokens: [Int]) -> RadixTreeNode? {
         guard !tokens.isEmpty else { return nil }
         var current = root
