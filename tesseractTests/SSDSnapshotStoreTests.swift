@@ -901,6 +901,9 @@ struct SSDSnapshotStoreTests {
         #expect(lines.allSatisfy { $0.contains("completed=true") && $0.contains("durationMs=") })
         let fileURL = root.appendingPathComponent(descriptor.fileRelativePath)
         let bytes = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize!
+        // The manifest accounts payload; physical files also include headers.
+        #expect(ref.bytesOnDisk == payload.totalBytes)
+        #expect(bytes > ref.bytesOnDisk)
         #expect(lines.allSatisfy { $0.contains("fileBytes=\(bytes)") })
     }
 

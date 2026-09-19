@@ -83,7 +83,7 @@ final class SSDReadBenchRunner {
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
         try planData.write(to: reportDir.appendingPathComponent("approved-plan.json"))
-        try stageChain(
+        let fileBytes = try stageChain(
             descriptor, partition: partition, source: source, scratch: scratch, plan: plan)
 
         let ref = SnapshotRef(
@@ -98,6 +98,9 @@ final class SSDReadBenchRunner {
             _ = store.warmStartLoad(expectedFingerprint: partition.modelFingerprint)
             return (arm, store)
         }
+        // Finish any warm-start grace-stamp persistence outside the measured
+        // region, so the three stores cannot compete with hydration for I/O.
+        for (_, store) in stores { await store.flushAsync() }
         let model = LLMActor()
         do {
             // No SSD configuration, speculative drafter, or generation: only
@@ -107,7 +110,7 @@ final class SSDReadBenchRunner {
                 try await container.perform { _ in
                     try Self.measure(
                         stores: stores, ref: ref, fingerprint: partition.modelFingerprint,
-                        plan: plan, reportDir: reportDir)
+                        fileBytes: fileBytes, plan: plan, reportDir: reportDir)
                 }
             }
             try writeReport(records, reportDir: reportDir)
@@ -123,7 +126,7 @@ final class SSDReadBenchRunner {
     private func stageChain(
         _ descriptor: PersistedSnapshotDescriptor, partition: PartitionMeta,
         source: URL, scratch: URL, plan: Plan
-    ) throws {
+    ) throws -> Int {
         var stagedBytes = 0
         for path in descriptor.chainFileRelativePaths {
             guard !path.hasPrefix("/"), !path.split(separator: "/").contains("..") else {
@@ -150,20 +153,20 @@ final class SSDReadBenchRunner {
                 throw failure("Segment SHA-256 differs from the pre-registered plan: \(path)")
             }
         }
-        guard stagedBytes == descriptor.totalBytes else {
-            throw failure("Manifest byte total differs")
-        }
+        // Ledger bytes account for payload, not the container headers. The
+        // plan bounds physical bytes; report that independently of the ref.
         let manifest = SnapshotManifest(
             schemaVersion: SnapshotManifestSchema.currentVersion,
             partitions: [descriptor.partitionDigest: partition],
             snapshots: [descriptor.snapshotID: descriptor])
         try JSONEncoder().encode(manifest).write(
             to: scratch.appendingPathComponent("manifest.json"))
+        return stagedBytes
     }
 
     nonisolated private static func measure(
         stores: [(SSDSnapshotReadArm, SSDSnapshotStore)],
-        ref: SnapshotRef, fingerprint: String, plan: Plan, reportDir: URL
+        ref: SnapshotRef, fingerprint: String, fileBytes: Int, plan: Plan, reportDir: URL
     ) throws -> [Record] {
         // One warmup per arm, then six balanced blocks (every permutation).
         // This is an SSD-only body hit; no claim of a cold OS page cache.
@@ -175,7 +178,7 @@ final class SSDReadBenchRunner {
                 Memory.clearCache()
                 // Conservative allowance for host payload + MLX body + chain
                 // composition. The owner also monitors process RSS/swap.
-                guard ref.bytesOnDisk <= (plan.maxMLXBytes - Memory.activeMemory) / 3 else {
+                guard fileBytes <= (plan.maxMLXBytes - Memory.activeMemory) / 3 else {
                     throw failure("Approved memory headroom exhausted before hydration")
                 }
                 Memory.peakMemory = 0
@@ -203,7 +206,7 @@ final class SSDReadBenchRunner {
                 }
                 expectedDigest = digest
                 let record = Record(
-                    block: block, arm: arm, fileBytes: ref.bytesOnDisk,
+                    block: block, arm: arm, fileBytes: fileBytes,
                     materializedBytes: snapshot.memoryBytes, seconds: seconds, peakMLXBytes: peak,
                     snapshotSHA256: digest, segments: events.take())
                 // Preserve completed observations even if a later arm fails.
@@ -223,7 +226,11 @@ final class SSDReadBenchRunner {
             hash.update(data: Data("\(layer.className)|\(layer.offset)|\(layer.metaState)".utf8))
             for array in layer.state {
                 hash.update(data: Data("\(array.shape)|\(array.dtype)".utf8))
-                hash.update(data: array.asData(access: .noCopy).data)
+                // The vendor's no-copy export force-unwraps the data pointer;
+                // an empty whole-state slot has no bytes or backing pointer.
+                if array.size > 0 {
+                    hash.update(data: array.asData(access: .noCopy).data)
+                }
             }
         }
         return hex(hash.finalize())
