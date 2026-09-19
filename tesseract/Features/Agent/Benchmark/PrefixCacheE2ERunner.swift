@@ -740,11 +740,11 @@ final class PrefixCacheE2ERunner {
     /// Test design: C and D share a deliberately long user-message prefix
     /// (~80 tokens) before diverging at the very last word. Without that
     /// long prefix, the captured `.branchPoint` would sit only a few tokens
-    /// past the stable prefix and its parent-relative deltaL (and therefore
-    /// `F/B`) would be smaller than the noise leaves' deltaL, causing the
-    /// utility scorer to evict it instead of the noise. With the long
-    /// prefix, the branch-point sits deeper than any noise leaf can reach
-    /// and survives eviction pressure.
+    /// past the stable prefix and the span its last Backing Leaf recovers
+    /// (and therefore `F/B`) would be no larger than a short leaf's,
+    /// leaving nothing for the utility scorer to prefer. With the long
+    /// prefix, the branch's backer carries a deeper span than the bodies
+    /// the budget cut must take, and survives it.
     private func runBranchPointScenario(
         engine: AgentEngine,
         modelID: String,
@@ -813,9 +813,19 @@ final class PrefixCacheE2ERunner {
             ))
 
         // Step 9: survival under utility-scored eviction pressure.
-        // alpha=2 puts F/B above pure recency in the utility sum so the
-        // branch-point's larger deltaL outweighs the noise leaves' newer
-        // access times.
+        // A planned branch point is a Prefix-View Checkpoint (ADR-0068):
+        // it owns no bytes and lives exactly as long as one leaf beneath
+        // it. Its earned reuse credits that Backing Leaf, and the leaf's
+        // Recovery Cost spans the view's prefix while it alone keeps the
+        // view alive. So the property to prove is that under a budget cut
+        // scored at alpha=2 the drain takes colder, cheaper bodies before
+        // the branch's last backer — and that a request on the branch
+        // prefix still hits past the stable prefix afterwards.
+        //
+        // The cut is applied directly, without interleaved requests: every
+        // fresh leaf is newer than the backer by construction, and the
+        // steep 1/age recency of a sub-second runner would make the check
+        // measure request spacing rather than utility.
         log("\n── Step 9: Branch-point survival under pressure ──")
         // Force F/B-weighted eviction by configuring this cache directly —
         // per-cache Eviction Configuration. Capture the prior weighting so the
@@ -838,47 +848,46 @@ final class PrefixCacheE2ERunner {
             return
         }
 
-        // Budget = current usage minus one snapshot. Each subsequent noise
-        // request overflows by ~one snapshot, so eviction drops one
-        // eligible candidate per round. The budget intentionally stays
-        // above the multi-child / branch-point combined size: utility
-        // scoring should keep the branch-point alive without ever
-        // depleting the eligible set far enough to fall through to the
-        // fallback path (which is plain LRU and would drop the
-        // branch-point regardless of F/B).
+        // Budget = current usage minus three leaves: the drain must drop
+        // the branch's older sibling backer and two more bodies, and the
+        // budget stays above the stable prefix plus the tool leaves plus
+        // one branch leaf, so utility scoring — not the LRU fallback —
+        // decides which bodies go.
         let avgBytes = preStats.totalSnapshotBytes / preStats.snapshotCount
-        let tightBudget = max(preStats.totalSnapshotBytes - avgBytes, avgBytes)
+        let tightBudget = max(preStats.totalSnapshotBytes - 3 * avgBytes, avgBytes)
         await engine.llmActor.prefixCacheAdmin.setMemoryBudget(tightBudget)
-        log(
-            "  tight budget = \(tightBudget) bytes "
-                + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
-                + "avg snapshot size = \(avgBytes), "
-                + "starting branchPoint count = \(preStats.snapshotsByType[.branchPoint] ?? 0))")
-
-        for (i, prompt) in Self.branchPointNoisePrompts.enumerated() {
-            _ = try await runRequest(
-                engine: engine,
-                modelID: modelID,
-                systemPrompt: systemPrompt,
-                userMessage: "\(prompt) #\(i)",
-                toolSpecs: toolSpecs,
-                parameters: params
-            )
-        }
-
         let postStats = await engine.llmActor.prefixCacheAdmin.stats
         let postBranchCount = postStats?.snapshotsByType[.branchPoint] ?? 0
         let postTotalBytes = postStats?.totalSnapshotBytes ?? 0
         log(
-            "  post-pressure branchPoint count = \(postBranchCount), "
-                + "totalBytes = \(postTotalBytes)")
+            "  tight budget = \(tightBudget) bytes "
+                + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
+                + "avg snapshot size = \(avgBytes), "
+                + "bodies \(preStats.snapshotCount) → \(postStats?.snapshotCount ?? 0), "
+                + "branchPoint count \(preStats.snapshotsByType[.branchPoint] ?? 0) "
+                + "→ \(postBranchCount), totalBytes = \(postTotalBytes))")
+
+        // The proof that matters to a user: the fork still reuses its
+        // branch prefix after the cut.
+        let requestE = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: sharedPrefix + "delta.dat",
+            toolSpecs: toolSpecs,
+            parameters: params
+        )
+        log(
+            "  E cachedTokens=\(requestE.cachedTokens) "
+                + "(stable-prefix-only baseline = \(stablePrefixCachedTokens))")
         checks.append(
             CheckResult(
                 name: "branch_point_survives_under_pressure",
-                passed: postBranchCount >= 1,
-                detail: "branchPoint count after \(Self.branchPointNoisePrompts.count) "
-                    + "noise requests + tight budget: \(postBranchCount) "
-                    + "(≥1 means utility scoring preserved it)"
+                passed: postBranchCount >= 1 && requestE.cachedTokens > stablePrefixCachedTokens,
+                detail: "after a three-leaf budget cut at alpha=2: branchPoint count "
+                    + "\(postBranchCount) (≥1 means a Backing Leaf outlived colder bodies), "
+                    + "E cachedTokens=\(requestE.cachedTokens) vs stable-prefix="
+                    + "\(stablePrefixCachedTokens) (deeper means the branch still serves)"
             ))
 
         // Restore the pre-step weighting so the step is self-contained.
@@ -1422,9 +1431,8 @@ final class PrefixCacheE2ERunner {
 
     /// Long shared user-message prefix (~80 tokens) for the branch-point
     /// scenario. C/D append a different terminator so the divergence
-    /// happens deep in the user message — putting the captured
-    /// `.branchPoint` snapshot's parent-relative deltaL well above any
-    /// noise leaf's deltaL.
+    /// happens deep in the user message — putting the span the branch's
+    /// last Backing Leaf recovers well above a short leaf's.
     private static let branchPointSharedPrefix: String = """
         Please carefully analyze the contents of this very specific file path \
         that I am about to give you, and tell me what kind of file it is, what \
@@ -1434,16 +1442,6 @@ final class PrefixCacheE2ERunner {
         any related files you would expect to find nearby. The file is at \
         /tmp/data/configs/sample-
         """
-
-    /// Short, unrelated noise prompts for the survival check. Kept short
-    /// so noise leaves stay shallower than the branch-point's offset.
-    private static let branchPointNoisePrompts: [String] = [
-        "Add 1 + 1",
-        "Spell cat",
-        "Pick a color",
-        "Say hi",
-        "Name an animal",
-    ]
 
     private static func syntheticToolResultContent(
         for call: ToolCallInfo,

@@ -904,7 +904,11 @@ turn, reported as a `leafSupersession` with mode `released`.
 pins the release's guards on the manager: the canonical path, a shallower
 prefix, a foreign path and a leased body release nothing.
 The loaded-model `prefix-cache-e2e` branch-point survival check is the
-end-to-end evidence.
+end-to-end evidence. Since ADR-0068 a planned branch point is a view with no
+bytes of its own, so the check no longer counts a branch-point body outliving
+interleaved noise requests: it cuts the budget by three leaves at alpha=2
+without new requests, then requires the branch view to keep a Backing Leaf and
+a request on the branch prefix to hit past the stable prefix.
 
 ### Warm-backed Prefix-View Checkpoints (#530)
 
