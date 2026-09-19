@@ -133,7 +133,16 @@ For a warm-backed view's SSD admission, metadata-only pricing uses the full
 live dtype's byte count, and extraction moves the already private materialized
 buffers into a full-form payload. It neither dequantizes the entire descendant
 nor copies the resulting prefix a second time. SSD Stored Form (#531) and the
-#528 gate remain pending; Warm Bodies stay opt-in.
+#528 loaded gate remain pending; Warm Bodies stay opt-in.
+
+#528's [pre-registration](../../benchmarks/warm-body-parity/2026-09-19/README.md)
+fixes the fidelity, paired TTFT and memory reporting rules before any loaded
+run. Status: **not run; owner execution pending**. The default remains off.
+The tokenizer-only corpus gate is not warm-restore evidence; the owner campaign
+must record actual loaded continuations and prove the intended restore form.
+The production conversion remains 8-bit only. A loaded three-arm runner and
+4-bit experiment instrumentation are still prerequisites to execution, not
+capabilities added by the pre-registration. No result or enablement is claimed.
 
 The opt-in drain queues one Model Session batch and rechecks body identity and
 Budget Floor membership when committing each conversion on MainActor. The

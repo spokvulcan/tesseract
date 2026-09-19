@@ -903,3 +903,19 @@ backer forms while keeping `source=view` and the `checkpoint` copy reason;
 the existing keyed Server Completion sequence verifies the emitted field.
 Use the same app-host guard and prefix suite allowlist above. No loaded-model
 work is part of this unit-test evidence.
+
+### Warm Body parity pre-registration (#528)
+
+The [pre-registered owner gate](../benchmarks/warm-body-parity/2026-09-19/README.md)
+defines fp16 restore-by-copy, warm-8 and experimental warm-4 arms, fidelity and
+paired TTFT thresholds, memory observations and a mandatory owner resource
+manifest. Results are **not run** and Warm Bodies remain default-off. No loaded
+workload is authorized on the preparation Mac.
+
+The existing `CanonicalEchoFidelityCorpusTests` reads tokenizer files and
+checks token paths. It does not restore a Warm Body or establish generated
+token parity. Existing loaded cache runners also do not implement the #528
+three-arm timing protocol. The pre-registration records this execution gap;
+owner-reviewed instrumentation and a frozen manifest are required before the
+loaded campaign. The prefix suites above remain the small-cache regression
+evidence; their success does not flip the flag or unblock #531.
