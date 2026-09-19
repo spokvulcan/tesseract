@@ -290,3 +290,10 @@ wait is watching runs on its own detached task and is not blocked by either.
 - **Ending a lease by age-out.** The backstop exists for leaked pins of
   copy restores; ending an owner's claim while it decodes would free a buffer
   under a running generation.
+
+## Amendment — 2026-09-19: Warm Body restore (#527)
+
+A Warm Body is an explicit restore-by-copy path with `copyReason=warmBody`.
+Vendor dequantization produces fresh live attention arrays in the Model Session;
+whole-state arrays are independently copied. A Warm Body never enters Leaf
+Handoff. Leaf Lease, Leaf Rewind and the single-owner rule are unchanged.

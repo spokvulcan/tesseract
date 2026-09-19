@@ -112,6 +112,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     private enum Body {
         case copied([LayerState])
         case prefixView([LayerState])
+        case warm([LayerState])
         // Keep the objects themselves for the later check-out step (ADR-0064).
         // The frozen serialization view lets every existing tier consumer
         // read metadata and arrays without calling a live cache's getters.
@@ -127,13 +128,12 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         }
     }
 
-    private let body: Body
-    /// Stable across value copies; async extraction must not admit a payload
-    /// for a view that was replaced while the Model Session was busy.
+    /// Stable across value copies; replacement after a Model Session hop must match this body.
     let bodyID = UUID()
+    private let body: Body
     var layers: [LayerState] {
         switch body {
-        case .copied(let layers), .prefixView(let layers): layers
+        case .copied(let layers), .prefixView(let layers), .warm(let layers): layers
         case .moved(let owner): owner.layers
         }
     }
@@ -142,6 +142,41 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return false
     }
     var checkpointKind: String { isPrefixView ? "prefixView" : "ownedBody" }
+    var isWarm: Bool {
+        if case .warm = body { return true }
+        return false
+    }
+
+    var canCompress: Bool {
+        !isPrefixView && !isWarm && !layers.contains { $0.className == "QuantizedKVCache" }
+            && layers.contains {
+                $0.kind == .sliceableAttention && $0.className != "QuantizedKVCache"
+            }
+    }
+
+    /// Model Session only. The vendor conversion allocates fresh attention
+    /// arrays; immutable whole-state layers keep their existing storage.
+    func compressed() throws -> HybridCacheSnapshot {
+        guard canCompress else { return self }
+        let compressed = try layers.map { layer -> LayerState in
+            guard layer.kind == .sliceableAttention, layer.className != "QuantizedKVCache"
+            else { return layer }
+            let source = KVCacheSimple()
+            source.state = layer.state
+            source.offset = layer.offset
+            let quantized = try source.toQuantized(groupSize: 64, bits: 8)
+            return LayerState(
+                className: "QuantizedKVCache", state: quantized.state,
+                metaState: quantized.metaState, offset: layer.offset,
+                snapshotOffset: tokenOffset)
+        }
+        // Keep the fp16 body alive until every quantized array is settled.
+        eval(compressed.flatMap(\.state))
+        return HybridCacheSnapshot(
+            tokenOffset: tokenOffset, body: .warm(compressed), checkpointType: checkpointType,
+            memoryBytes: compressed.flatMap(\.state).reduce(0) { $0 + $1.nbytes },
+            createdAt: createdAt)
+    }
     let checkpointType: CheckpointType
     /// Pre-computed sum of all state array nbytes, for eviction decisions.
     let memoryBytes: Int
@@ -210,6 +245,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// kind decides; the copy reason still names the class, the way
     /// ADR-0064 records it.
     func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
+        guard !isWarm else { return .warmBody }
         guard checkpointType == .leaf else { return .checkpoint }
         guard case .moved(let owner) = body else { return .immutableBody }
         guard !owner.cache.isEmpty else { return .checkpoint }
@@ -405,6 +441,16 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         copiedArrays.reserveCapacity(layers.count * 2)
         let restored: [any KVCache] = try layers.enumerated().map {
             layerIndex, layerState -> any KVCache in
+            if isWarm, layerState.kind == .sliceableAttention,
+                layerState.className == "QuantizedKVCache"
+            {
+                let quantized = Self.makeQuantizedCache(metaState: layerState.metaState)
+                quantized.state = layerState.state
+                quantized.metaState = layerState.metaState
+                let cache = quantized.toUnquantized()
+                copiedArrays.append(contentsOf: cache.state)
+                return cache
+            }
             // ArraysCache (and its MambaCache subclass) reject direct metaState
             // assignment upstream — slot reconstruction goes through its own path.
             if layerState.className == "MambaCache" || layerState.className == "ArraysCache" {

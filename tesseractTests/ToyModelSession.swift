@@ -535,6 +535,10 @@ nonisolated struct RecordingModelSession: ModelSession {
         return try base.restore(snapshot, backingLeaf: backingLeaf)
     }
 
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot {
+        try base.compress(snapshot)
+    }
+
     func prefill(
         text: LMInput.Text,
         cache: [any KVCache],

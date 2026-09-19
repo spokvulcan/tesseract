@@ -53,9 +53,17 @@ Eagerness and the type-protected SSD cut keep their existing meanings.
 off until #528 passes. On drain, compression precedes Snapshot Demotion in
 the existing eviction-selection order. Leased leaves, the Budget Floor's
 most-recently-extended leaf, system bodies and already-quantized partitions
-are exempt. #529 adds opportunistic compression above a configured fraction
-of the ceiling, preserving the most recently checked-in leaves of up to two
-paths by default, at the Model Session's next quiescent point.
+are exempt. #529 adds the Hot Leaf Set to compression's exclusions, preserving
+the most recently checked-in leaves of up to two paths by default. A successful
+Leaf Admission or Lease check-in queues an opportunistic pass at the Model
+Session's next quiescent point. It compresses cold leaves while RAM remains
+above a configured fraction of the ceiling (initial opt-in default 0.75),
+without demotion. The path limit and fraction belong to Eviction Configuration;
+neither is a production tuning measurement. Advancing a path replaces its set
+entry, and lookups and rewinds do not change check-in order. Leases remain
+exempt independently of the path limit. The Budget Floor and ordinary demotion
+eligibility are unchanged. A pressure drain takes precedence over opportunistic
+work and keeps its existing compression-before-demotion guarantee.
 
 Compression uses the vendor's quantize-to-cache conversion into fresh arrays,
 8 bits, group size 64, affine by default. Whole-state layers stay unchanged;
@@ -111,7 +119,20 @@ Extraction reserves one view at a time and releases that reservation on every
 non-enqueued exit; replacement views cannot inherit the old body's attempt.
 Only hit-earned promotions receive deferred writer scheduling; pressure-triggered
 checkpoint writes retain the ordinary write-through class.
-All Warm Body behavior (#527–#531) and its measurement gates remain pending.
+#527 implements opt-in Warm Bodies, compression-first drain, copy restore and
+telemetry. #529 implements the Hot Leaf Set and opportunistic check-in pass.
+Warm-backed views (#530), SSD Stored Form (#531) and the #528 gate remain pending.
+
+The opt-in drain queues one Model Session batch and rechecks body identity and
+Budget Floor membership when committing each conversion on MainActor. The
+existing Leaf Lease read exclusion protects a moved body's arrays during the
+conversion. Admission never awaits its own session queue; model teardown awaits
+the pending drain. Compression preserves recency and reconciles quantized byte
+accounting through the existing tree body transition. Until #531, an unbacked
+Warm Body selected for Snapshot Demotion is restored and captured in the Model
+Session so the SSD writer still receives the normal full form. Adaptive Write
+Eagerness does not promote Warm Bodies in this slice.
+
 Loaded-model parity and performance evidence remain owner work. Validation
 uses the toy Model Session and tiny snapshot fixtures. An app-host bootstrap
 that unexpectedly prewarmed Whisper during early tests was discovered and

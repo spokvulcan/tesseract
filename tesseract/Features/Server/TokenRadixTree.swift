@@ -1007,7 +1007,8 @@ final class TokenRadixTree {
                 normalizedRecency: scores?.normalizedRecency,
                 normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
                 utility: scores?.utility,
-                checkpointKind: snapshot?.checkpointKind
+                checkpointKind: snapshot?.checkpointKind,
+                warmBytes: snapshot?.isWarm == true ? state.residentBodyBytes : nil
             ))
 
         for child in node.children.values.sorted(by: Self.telemetryChildSort) {

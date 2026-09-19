@@ -80,6 +80,64 @@ import Testing
     }
 }
 
+@Suite struct WarmBodyModelSessionTests {
+    @Test(arguments: [DType.float16, DType.float32])
+    func compressionRestoresPrivateLiveStateAndTheSameTokens(dtype: DType) async throws {
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: Array(1...12), headDim: 64))
+        try await provider.withSession { session in
+            let parameters = GenerateParameters(temperature: 0)
+            let live = try session.newCache(parameters: parameters)
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray(Array(1...4).map(Int32.init))), cache: live,
+                checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            for var layer in live { layer.state = layer.state.map { $0.asType(dtype) } }
+            let recurrent = MambaCache()
+            recurrent.state = [MLXArray([Float(42), 17])]
+            let full = try #require(
+                session.captureSnapshot(
+                    cache: live + [recurrent], offset: 4, type: .leaf))
+            let warm = try session.compress(full)
+            #expect(warm.isWarm)
+            #expect(warm.memoryBytes < full.memoryBytes)
+            #expect(warm.checkoutCopyReason(maximumAdvance: 10)?.rawValue == "warmBody")
+            #expect(
+                warm.layers.last?.state.first?.asData(access: .copy).data
+                    == full.layers.last?.state.first?.asData(access: .copy).data)
+            let fullAttentionAddresses = Set(
+                full.layers.dropLast().flatMap(\.state).map(backingAddress))
+            #expect(
+                warm.layers.dropLast().flatMap(\.state).allSatisfy {
+                    !fullAttentionAddresses.contains(backingAddress($0))
+                })
+            let restored = try session.restore(warm)
+            let baseline = try session.restore(full)
+            let treeAddresses = Set(
+                (full.layers + warm.layers).flatMap(\.state).map(backingAddress))
+            #expect(
+                restored.flatMap(\.state).allSatisfy { !treeAddresses.contains(backingAddress($0)) }
+            )
+            #expect(restored[0].state[0].dtype == dtype)
+            #expect(
+                restored.last?.state.first?.asData(access: .copy).data
+                    == recurrent.state.first?.asData(access: .copy).data)
+            let suffix = LMInput.Text(tokens: MLXArray([Int32(5)]))
+            // The toy has attention layers; the extra recurrent fixture tests
+            // byte preservation without inventing recurrent model behavior.
+            var warmIterator = session.makeDecodeIterator(
+                remainder: suffix, fullText: suffix, cache: Array(restored.dropLast()),
+                state: nil, parameters: parameters)
+            var fullIterator = session.makeDecodeIterator(
+                remainder: suffix, fullText: suffix, cache: Array(baseline.dropLast()),
+                state: nil, parameters: parameters)
+            let warmTokens = (0..<3).compactMap { _ in warmIterator.next() }
+            #expect(warmTokens == [6, 7, 8])
+            #expect(warmTokens == (0..<3).compactMap { _ in fullIterator.next() })
+        }
+    }
+}
+
 /// First sequencing coverage at the **Model Session** seam (PRD #137, PR A;
 /// ADR-0016): the **Unkeyed Completion** arm — the smallest complete
 /// consumer — driven end-to-end with the toy-model peer. The real
