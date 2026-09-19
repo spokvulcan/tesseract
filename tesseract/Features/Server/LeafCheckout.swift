@@ -9,12 +9,22 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         let tree: TokenRadixTree
         let node: RadixTreeNode
         let lease: LeafLease
+        var didCheckIn: (@MainActor @Sendable (RadixTreeNode) -> Void)?
 
         @MainActor
         func returnBody(
             _ body: HybridCacheSnapshot, tokens: [Int], reason: LeafLease.ReleaseReason
         ) -> Bool {
-            tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: reason)
+            guard
+                tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: reason)
+            else { return false }
+            if reason == .checkIn,
+                let returned = tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node,
+                returned.tokenOffset == tokens.count
+            {
+                didCheckIn?(returned)
+            }
+            return true
         }
     }
 
@@ -117,6 +127,8 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         guard let snapshot = resolved.lookup.snapshot,
             let key = resolved.lookup.partitionKey
         else { return Attempt() }
+        guard !snapshot.isPrefixView else { return Attempt(copyReason: .checkpoint) }
+        guard !snapshot.isWarm else { return Attempt(copyReason: .warmBody) }
         guard identityKeySpace else { return Attempt(copyReason: .imageKeySpace) }
         guard key.kvBits == nil else { return Attempt(copyReason: .quantized) }
         guard !resolved.wasChainPrefixRestore,
@@ -130,7 +142,7 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             snapshot: snapshot, tokens: tokens, partitionKey: key,
             bodyCopyReason: bodyCopyReason, context: context)
         // The one refusal that clears itself: a full payload aliases the
-        // body only until the SSD writer materializes it (ADR-0064
+        // body until the SSD writer finishes using its borrowed arrays (ADR-0064
         // decision 5, ADR-0019's Deferred Payload Extraction amendment).
         if case .copy(.pendingFullPayload) = result {
             (result, waitedSeconds) = await awaitPendingFullPayload(

@@ -56,7 +56,7 @@ import MLXLMCommon
 /// enqueued).
 ///
 /// The distinction is load-bearing for **Leaf Handoff** (#523): a full
-/// payload aliases its body until the writer materializes it, so a check-out
+/// payload aliases its body until the writer releases its borrowed arrays, so a check-out
 /// refused with `pendingFullPayload` is worth a bounded wait only while the
 /// writer is actually working on that payload. A payload still queued behind
 /// others has no bounded completion time and is not waited for.
@@ -897,8 +897,10 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable:next function_body_length
     private func processPendingItem(_ item: PendingWrite) async {
-        var holdsBodyRead = item.bodyAccess != nil
-        defer { if holdsBodyRead { item.bodyAccess?.endRead() } }
+        defer {
+            item.payload.discardLayers()
+            item.bodyAccess?.endRead()
+        }
         if ledger.consumeTombstone(id: item.descriptor.snapshotID) {
             item.transferClaim?.release()
             releasePendingBytes(item.payload.totalBytes)
@@ -974,9 +976,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             descriptorToWrite = item.descriptor
         }
 
-        // 2. Run the host copy **Deferred Payload Extraction** left for
-        //    this task (timed here, never on the actor that admitted the
-        //    snapshot), then write the payload atomically (temp + fsync +
+        // 2. Prepare the borrowed views **Deferred Payload Extraction** left
+        //    for this task, then consume the layers into the atomic file
+        //    (temp + fsync +
         //    rename). On disk-full, run a single eviction-retry pass — its
         //    victim is also cleaned up outside the lock. Any other error
         //    drops the incoming and fires the drop callback.
@@ -987,52 +989,35 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             "mandatory": "\(item.mandatory)",
         ]
         RequestMemoryTelemetry.recordAllocation(
-            phase: "ssdMaterializeBegin", facts: allocationFacts)
-        let materializeStart = Date.timeIntervalSinceReferenceDate
+            phase: "ssdPrepareBegin", facts: allocationFacts)
+        let prepareStart = Date.timeIntervalSinceReferenceDate
         if item.payload.materialize() {
             PrefixCacheDiagnostics.logSystem(
-                PrefixCacheDiagnostics.SSDPayloadMaterializedEvent(
+                PrefixCacheDiagnostics.SSDPayloadPreparedEvent(
                     id: item.descriptor.snapshotID,
                     bytes: item.payload.totalBytes,
-                    durationSeconds: Date.timeIntervalSinceReferenceDate - materializeStart
+                    durationSeconds: Date.timeIntervalSinceReferenceDate - prepareStart
                 ))
         }
-        RequestMemoryTelemetry.recordAllocation(phase: "ssdMaterializeEnd", facts: allocationFacts)
-        // The materializer has dropped every body array. Subsequent file I/O
-        // reads independent Data and no longer excludes a lease.
-        if holdsBodyRead {
-            item.bodyAccess?.endRead()
-            holdsBodyRead = false
-        }
+        RequestMemoryTelemetry.recordAllocation(phase: "ssdPrepareEnd", facts: allocationFacts)
+        // Borrowed Data still aliases the full body. The reader exclusion
+        // lasts through its write, and every consumed layer releases its owner.
+        let writeStart = Date.timeIntervalSinceReferenceDate
         do {
-            try writePayload(item.payload, descriptor: descriptorToWrite)
-        } catch WriteError.diskFull {
-            if let retryVictim = ledger.retryAfterDiskFull(descriptorToWrite) {
+            try writePayload(item.payload, descriptor: descriptorToWrite) {
+                guard let retryVictim = self.ledger.retryAfterDiskFull(descriptorToWrite) else {
+                    return false
+                }
                 PrefixCacheDiagnostics.logSystem(
                     PrefixCacheDiagnostics.SSDEvictAtAdmissionEvent(
                         victimID: retryVictim.snapshotID,
-                        incomingID: item.descriptor.snapshotID
-                    )
-                )
-                finalizeEvictions([retryVictim])
-                do {
-                    try writePayload(item.payload, descriptor: descriptorToWrite)
-                } catch {
-                    Log.agent.error(
-                        "SSD writer diskFull retry failed for \(item.descriptor.snapshotID): "
-                            + "\(String(describing: error))"
-                    )
-                    dropItem(reason: .diskFull)
-                    return
-                }
-            } else {
-                Log.agent.error(
-                    "SSD writer diskFull and no eviction victim available for "
-                        + "\(item.descriptor.snapshotID)"
-                )
-                dropItem(reason: .diskFull)
-                return
+                        incomingID: item.descriptor.snapshotID))
+                self.finalizeEvictions([retryVictim])
+                return true
             }
+        } catch WriteError.diskFull {
+            dropItem(reason: .diskFull)
+            return
         } catch {
             Log.agent.error(
                 "SSD writer I/O failure for \(item.descriptor.snapshotID): "
@@ -1086,7 +1071,9 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
                 bytes: item.descriptor.bytes,
                 outcome: .accepted,
                 writeClass: item.mandatory
-                    ? "guarantee" : (item.deferrable ? "deferred" : "writeThrough")
+                    ? "guarantee" : (item.deferrable ? "deferred" : "writeThrough"),
+                writeSeconds: Date.timeIntervalSinceReferenceDate - writeStart,
+                enqueueToCommitSeconds: (ContinuousClock.now - item.enqueuedAt).seconds
             ))
         if let baseID = item.extendingBaseID {
             PrefixCacheDiagnostics.logSystem(
@@ -1215,21 +1202,34 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// Serialize the payload into the placeholder binary format,
     /// write it to `{snapshotID}.safetensors.tmp`, fsync, and
     /// rename atomically to `{snapshotID}.safetensors`. Any
-    /// ENOSPC/EDQUOT error is surfaced as `.diskFull` so the caller
-    /// can retry after eviction.
+    /// ENOSPC/EDQUOT retries the failed operation after one ledger eviction,
+    /// without replaying layers whose borrowed arrays have already released.
     private func writePayload(
         _ payload: SnapshotPayload,
-        descriptor: PersistedSnapshotDescriptor
+        descriptor: PersistedSnapshotDescriptor,
+        retryDiskFull: () -> Bool
     ) throws {
+        // A consumed layer cannot be replayed. Retry the failed operation in
+        // place, with one eviction allowance for the entire write.
+        var retried = false
+        func retryingDiskFull<T>(_ operation: () throws -> T) throws -> T {
+            do { return try operation() } catch {
+                let failure = classifyWriteError(error)
+                guard case .diskFull = failure, !retried else { throw failure }
+                retried = true
+                guard retryDiskFull() else { throw failure }
+                do { return try operation() } catch { throw classifyWriteError(error) }
+            }
+        }
         let finalURL = fileURL(for: descriptor)
         let tempURL = finalURL.appendingPathExtension("tmp")
 
         // Ensure directory tree exists before attempting the write.
         do {
-            try FileManager.default.createDirectory(
-                at: finalURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            try retryingDiskFull {
+                try FileManager.default.createDirectory(
+                    at: finalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
         } catch {
             throw classifyWriteError(error)
         }
@@ -1271,7 +1271,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
 
         let handle: FileHandle
         do {
-            handle = try FileHandle(forWritingTo: tempURL)
+            handle = try retryingDiskFull { try FileHandle(forWritingTo: tempURL) }
         } catch {
             throw classifyWriteError(error)
         }
@@ -1280,14 +1280,24 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             // write(2) rejects a single call past INT_MAX with EINVAL —
             // observed live on a 2.5 GB leaf (issue #441). Borrow each
             // header/blob chunk without constructing a full encoded Data.
-            try encoding.withChunks(maximumBytes: Self.maxWriteChunkBytes) { buffer in
+            var fileOffset: UInt64 = 0
+            try encoding.withChunks(maximumBytes: Self.maxWriteChunkBytes, releasingLayers: true) {
+                buffer in
                 guard let baseAddress = buffer.baseAddress else { return }
-                try handle.write(
-                    contentsOf: Data(
-                        bytesNoCopy: UnsafeMutableRawPointer(mutating: baseAddress),
-                        count: buffer.count, deallocator: .none))
+                var attempted = false
+                try retryingDiskFull {
+                    // A failed write can have written a prefix of this chunk.
+                    // Rewind to its start before replaying the same live buffer.
+                    if attempted { try handle.seek(toOffset: fileOffset) }
+                    attempted = true
+                    try handle.write(
+                        contentsOf: Data(
+                            bytesNoCopy: UnsafeMutableRawPointer(mutating: baseAddress),
+                            count: buffer.count, deallocator: .none))
+                }
+                fileOffset += UInt64(buffer.count)
             }
-            try handle.synchronize()
+            try retryingDiskFull { try handle.synchronize() }
             try handle.close()
         } catch {
             try? handle.close()
@@ -1303,7 +1313,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
             if FileManager.default.fileExists(atPath: finalURL.path) {
                 try FileManager.default.removeItem(at: finalURL)
             }
-            try FileManager.default.moveItem(at: tempURL, to: finalURL)
+            try retryingDiskFull { try FileManager.default.moveItem(at: tempURL, to: finalURL) }
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
             throw classifyWriteError(error)
@@ -1314,6 +1324,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// Map Foundation errors to our `WriteError`. ENOSPC / EDQUOT
     /// become `.diskFull`; everything else is `.ioError`.
     private func classifyWriteError(_ error: Error) -> WriteError {
+        if let classified = error as? WriteError { return classified }
         let nsError = error as NSError
 
         if nsError.domain == NSPOSIXErrorDomain {

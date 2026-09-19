@@ -23,8 +23,11 @@ import MLXNN
 /// model's would and capture/restore round-trips carry content-dependent
 /// payloads.
 nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensionProvider {
+    let capacityRecords = ToyCacheCapacityRecords()
     let kvHeads: [Int]
     let headDim: Int
+    /// Optional microscopic whole-state layer for hybrid snapshot accounting.
+    let recurrentElements: Int
     let vocabSize: Int
     let script: [Int]
     let eosTokenId: Int
@@ -43,6 +46,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         vocabSize: Int = ToyVocabulary.size,
         layers: Int = 2,
         headDim: Int = 4,
+        recurrentElements: Int = 0,
         onForward: (@Sendable (Int) -> Void)? = nil
     ) {
         self.onForward = onForward
@@ -56,6 +60,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
         self.headDim = headDim
+        self.recurrentElements = recurrentElements
         super.init()
     }
 
@@ -69,6 +74,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         vocabSize: Int = ToyVocabulary.size,
         layers: Int = 2,
         headDim: Int = 4,
+        recurrentElements: Int = 0,
         onForward: (@Sendable (Int) -> Void)? = nil
     ) {
         self.onForward = onForward
@@ -78,7 +84,18 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
         self.headDim = headDim
+        self.recurrentElements = recurrentElements
         super.init()
+    }
+
+    func newCache(parameters: GenerateParameters?) throws -> [any KVCache] {
+        var cache = try kvHeads.map { _ in try makeAttentionKVCache(parameters: parameters) }
+        if recurrentElements > 0 {
+            let recurrent = MambaCache()
+            recurrent.state = [MLXArray.zeros([recurrentElements])]
+            cache.append(recurrent)
+        }
+        return cache
     }
 
     func predictedToken(at position: Int) -> Int {
@@ -109,7 +126,13 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             let content = batched.asType(.float32).reshaped([1, 1, tokenCount, 1])
             let keysValues = broadcast(content, to: [1, 1, tokenCount, headDim])
             for layer in cache {
-                if let quantized = layer as? any QuantizedKVCacheProtocol {
+                if let recurrent = layer as? MambaCache {
+                    let count = recurrent.state.first?.size ?? recurrentElements
+                    recurrent.state = [
+                        MLXArray(Array(repeating: Float(offset + tokenCount), count: count))
+                    ]
+                    recurrent.offset = offset + tokenCount
+                } else if let quantized = layer as? any QuantizedKVCacheProtocol {
                     _ = quantized.updateQuantized(keys: keysValues, values: keysValues)
                 } else {
                     _ = layer.update(keys: keysValues, values: keysValues)
@@ -117,6 +140,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             }
         }
 
+        if let cache { capacityRecords.append(cache) }
         var rows = [Float](repeating: 0, count: tokenCount * vocabSize)
         if let completions {
             let fed = batched.asType(.int32).reshaped([tokenCount]).asArray(Int32.self).map(
@@ -442,6 +466,14 @@ nonisolated enum ModelVerb: String, Equatable, Sendable {
 nonisolated final class ModelVerbRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var _verbs: [ModelVerb] = []
+    private var _prefillCapacities: [Int] = []
+
+    var prefillCapacities: [Int] { lock.withLock { _prefillCapacities } }
+
+    func recordPrefillCapacity(_ cache: [any KVCache]) {
+        let capacity = cache.first?.innerState().first?.dim(2) ?? 0
+        lock.withLock { _prefillCapacities.append(capacity) }
+    }
 
     var verbs: [ModelVerb] {
         lock.withLock { _verbs }
@@ -506,6 +538,17 @@ nonisolated struct RecordingModelSession: ModelSession {
         return try base.restore(snapshot)
     }
 
+    func restore(
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
+    ) throws -> [any KVCache] {
+        recorder.record(.restore)
+        return try base.restore(snapshot, backingLeaf: backingLeaf)
+    }
+
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot {
+        try base.compress(snapshot)
+    }
+
     func prefill(
         text: LMInput.Text,
         cache: [any KVCache],
@@ -517,7 +560,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         evalPolicy: PrefillExecutor.EvalPolicy
     ) throws -> PrefillExecutor.Output {
         recorder.record(.prefill)
-        return try base.prefill(
+        let output = try base.prefill(
             text: text,
             cache: cache,
             checkpoints: checkpoints,
@@ -527,6 +570,8 @@ nonisolated struct RecordingModelSession: ModelSession {
             initialState: initialState,
             evalPolicy: evalPolicy
         )
+        recorder.recordPrefillCapacity(cache)
+        return output
     }
 
     func makeDecodeIterator(
@@ -664,5 +709,22 @@ nonisolated final class InactiveMTPDrafter: Module, MTPDrafterModel {
         sampler: any LogitSampler
     ) -> MLXArray {
         preconditionFailure("MTP must not engage in this fixture")
+    }
+}
+
+/// Scalar observations from the existing toy model; arrays stay in its session.
+nonisolated final class ToyCacheCapacityRecords: @unchecked Sendable {
+    struct Entry: Sendable {
+        let offset: Int
+        let capacity: Int
+    }
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+    var values: [Entry] { lock.withLock { entries } }
+
+    func append(_ cache: [any KVCache]) {
+        guard let first = cache.first, let array = first.innerState().first else { return }
+        let entry = Entry(offset: first.offset, capacity: array.dim(2))
+        lock.withLock { entries.append(entry) }
     }
 }

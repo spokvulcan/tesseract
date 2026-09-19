@@ -112,11 +112,26 @@ struct CacheOverviewView: View {
                 capacity: snapshot?.memoryBudgetBytes ?? 0,
                 emptyHint: "no live cache"
             )
+            CacheStatTile(
+                label: "hot bodies",
+                value: PromptCacheFormatting.bytes(snapshot?.hotSnapshotBytes ?? 0),
+                detail: "full precision in RAM"
+            )
+            CacheStatTile(
+                label: "warm bodies",
+                value: PromptCacheFormatting.bytes(snapshot?.warmSnapshotBytes ?? 0),
+                detail: "compressed in RAM"
+            )
             CacheGaugeTile(
                 label: "SSD tier",
                 used: snapshot?.ssd.currentBytes ?? 0,
                 capacity: snapshot?.ssd.budgetBytes ?? 0,
                 emptyHint: snapshot?.ssd.enabled == false ? "disabled" : "no live cache"
+            )
+            CacheStatTile(
+                label: "view-only bytes",
+                value: PromptCacheFormatting.bytes(snapshot?.viewOnlyBytes ?? 0),
+                detail: "whole-state checkpoint layers"
             )
         }
     }

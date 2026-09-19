@@ -89,6 +89,15 @@ nonisolated protocol ModelSession {
     /// Materialize a captured snapshot back into a live KV cache array.
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache]
 
+    /// View Materialization: copies a Prefix-View Checkpoint and the selected
+    /// Backing Leaf's leading attention rows into private live cache objects.
+    func restore(
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
+    ) throws -> [any KVCache]
+
+    /// Convert a resident body to a Warm Body; the live KV dtype is unchanged.
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot
+
     /// App-owned chunked prefill (`PrefillExecutor.run`) over `text` into
     /// `cache`, capturing checkpoints at the given absolute offsets.
     // Port vocabulary mirrors PrefillExecutor.run one-to-one by design.
@@ -350,6 +359,16 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         try snapshot.restore()
     }
 
+    func restore(
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
+    ) throws -> [any KVCache] {
+        try snapshot.restore(backingLeaf: backingLeaf)
+    }
+
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot {
+        try snapshot.compressed()
+    }
+
     // swiftlint:disable:next function_parameter_count
     func prefill(
         text: LMInput.Text,
@@ -476,7 +495,8 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         offset: Int,
         type: HybridCacheSnapshot.CheckpointType
     ) -> HybridCacheSnapshot? {
-        HybridCacheSnapshot.capture(cache: cache, offset: offset, type: type)
+        HybridCacheSnapshot.capture(
+            cache: cache, offset: offset, type: type, prefixView: type == .branchPoint)
     }
 }
 

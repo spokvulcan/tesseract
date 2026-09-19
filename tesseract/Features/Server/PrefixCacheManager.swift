@@ -146,6 +146,22 @@ final class PrefixCacheManager {
     /// here held this actor 24–50 s per admission on 2026-09-06.
     /// `nil` (tests, replay caches) disables demotion — every unbacked
     /// drop is terminal, today's pre-demotion behavior.
+    private let modelSessions: (any ModelSessionProviding)?
+    private var budgetDrainTask: Task<Void, Never>?
+    private var drainRequested = false
+    private var opportunisticCompressionRequested = false
+    private var drainRequestID: UUID?
+    private var drainPreferredPartition: CachePartitionKey?
+    private var compressingNodes: Set<ObjectIdentifier> = []
+
+    private struct HotLeaf {
+        weak var node: RadixTreeNode?
+        weak var tree: TokenRadixTree?
+        let partitionKey: CachePartitionKey
+    }
+    /// Check-in order, oldest first. Lookup recency never changes this set.
+    private var hotLeaves: [HotLeaf] = []
+
     private let demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)?
 
     /// **Adaptive Write Eagerness** master switch (ADR-0019, PRD #150).
@@ -175,8 +191,11 @@ final class PrefixCacheManager {
         pressureSource: (any MemoryPressureSource)? = nil,
         headroomSource: (any MemoryHeadroomSource)? = nil,
         ramBudgetCapBytes: Int? = nil,
-        adaptiveWriteEagerness: Bool = false
+        adaptiveWriteEagerness: Bool = false,
+        modelSessions: (any ModelSessionProviding)? = nil
     ) {
+        self.modelSessions = modelSessions
+        precondition(!evictionConfig.warmCompressionEnabled || modelSessions != nil)
         self.store = tieredStore ?? TieredSnapshotStore(ssdConfig: nil)
         self.storageActivityGate = self.store.activityGate ?? StorageActivityGate()
         // The passed-in budget is the *bootstrap* ceiling (ADR-0018):
@@ -337,6 +356,7 @@ final class PrefixCacheManager {
 
     struct LookupResult: Sendable {
         let snapshot: HybridCacheSnapshot?
+        let backingLeaf: HybridCacheSnapshot?
         let partitionKey: CachePartitionKey?
         let snapshotTokenOffset: Int
         /// Actual token-level match depth in the radix tree, which may be
@@ -366,9 +386,11 @@ final class PrefixCacheManager {
             sharedPrefixLength: Int,
             reason: LookupReason,
             recordedHitSnapshotID: String? = nil,
-            divergence: PrefixDivergenceProbe? = nil
+            divergence: PrefixDivergenceProbe? = nil,
+            backingLeaf: HybridCacheSnapshot? = nil
         ) {
             self.snapshot = snapshot
+            self.backingLeaf = backingLeaf
             self.partitionKey = partitionKey
             self.snapshotTokenOffset = snapshotTokenOffset
             self.sharedPrefixLength = sharedPrefixLength
@@ -384,7 +406,7 @@ final class PrefixCacheManager {
         nonisolated func restoreCache() -> [any KVCache]? {
             guard let snapshot, partitionKey != nil else { return nil }
             do {
-                return try snapshot.restore()
+                return try snapshot.restore(backingLeaf: backingLeaf)
             } catch {
                 Log.server.error(
                     "snapshot restore failed — treating as cache miss: \(error)"
@@ -400,6 +422,7 @@ final class PrefixCacheManager {
         bodyCopyReason: LeafStorePhase.Report.CopyReason?,
         context: PrefixCacheDiagnostics.Context
     ) -> LeafCheckout.ClaimResult {
+        guard !snapshot.isWarm else { return .copy(.warmBody) }
         guard let tree = store.tree(for: partitionKey),
             let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
             hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
@@ -407,6 +430,9 @@ final class PrefixCacheManager {
         else { return .copy(.checkpoint) }
         // Structural checkpoints take precedence over the body's representation.
         if let bodyCopyReason { return .copy(bodyCopyReason) }
+        guard !compressingNodes.contains(ObjectIdentifier(hit.node)) else {
+            return .copy(.immutableBody)
+        }
         guard body.sharesMovedBody(with: snapshot) else { return .copy(.checkpoint) }
         guard
             let lease = tree.beginLeafLease(
@@ -415,7 +441,17 @@ final class PrefixCacheManager {
         guard tree.takeLeasedBody(lease, on: hit.node) != nil else {
             preconditionFailure("a newly leased resident leaf must have a body")
         }
-        return .claimed(LeafCheckout.Claim(tree: tree, node: hit.node, lease: lease))
+        return .claimed(
+            LeafCheckout.Claim(
+                tree: tree, node: hit.node, lease: lease,
+                didCheckIn: { [weak self, weak tree] node in
+                    guard let self, self.evictionConfig.warmCompressionEnabled,
+                        let tree, self.store.tree(for: partitionKey) === tree
+                    else { return }
+                    self.recordLeafCheckIn(node, in: tree, partitionKey: partitionKey)
+                    self.evictToFitBudget(
+                        requestID: context.requestID, preferredPartitionKey: partitionKey)
+                }))
     }
 
     /// The bound on the pending-full-payload wait (#523), an **Eviction
@@ -523,7 +559,8 @@ final class PrefixCacheManager {
             )
         }
 
-        if let snapshot = node.state.body {
+        let backingLeaf = node.backingLeaf
+        if let snapshot = node.state.body, !snapshot.isPrefixView || backingLeaf != nil {
             // States 1, 2, or 4. On state 4 (committed ref + body) the
             // store bumps the SSD descriptor's `lastAccessAt` so a hot
             // RAM hit does not look stale to the SSD LRU when the body
@@ -544,9 +581,17 @@ final class PrefixCacheManager {
                         type: snapshot.checkpointType
                     ),
                     recordedHitSnapshotID: recordedHitID,
-                    divergence: divergence
+                    divergence: divergence,
+                    backingLeaf: backingLeaf?.state.body
                 ), node
             )
+        }
+
+        // A view without a RAM backer follows the body-absent ladder. Drop
+        // only its whole-state representation; any own ref or chain-prefix
+        // point remains available to the existing hydration performers.
+        if node.state.body?.isPrefixView == true {
+            tree.dropBody(node: node)
         }
 
         // State 5 — body absent, committed ref present. We reach here only
@@ -662,6 +707,11 @@ final class PrefixCacheManager {
     /// it: no drain may evict the body an in-flight request restored
     /// from (ADR-0019).
     ///
+    /// `transientBoundary` is a request-local Prefix-View Checkpoint captured
+    /// on `tokens`' prefix; callers validate that original path before passing
+    /// it. It can improve a shallower result without inserting a tree body.
+    /// Backing Leaf selection and its Restore Pin share one MainActor hop.
+    ///
     /// `interruption` (PRD #149 item 7) — polled by the hydration read
     /// at its segment-boundary yield points. A background caller (the
     /// preemptible speculative pass) passes its cancellation check so a
@@ -675,6 +725,7 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey,
         modelFingerprint: String?,
         diagnostics: PrefixCacheDiagnostics.Context,
+        transientBoundary: HybridCacheSnapshot? = nil,
         pinningRestorePathFor pinRequestID: UUID? = nil,
         interruption: (@Sendable () -> Bool)? = nil
     ) async -> Resolved {
@@ -687,9 +738,39 @@ final class PrefixCacheManager {
         var attempt = 0
         while true {
             let initial = await MainActor.run {
-                let (result, node) = self.lookupReturningNode(
+                var (result, node) = self.lookupReturningNode(
                     tokens: tokens, partitionKey: partitionKey
                 )
+                if let view = transientBoundary, view.isPrefixView,
+                    view.tokenOffset <= tokens.count,
+                    view.tokenOffset > result.snapshotTokenOffset
+                {
+                    let prefix = Array(tokens.prefix(view.tokenOffset))
+                    if let backer = self.store.tree(for: partitionKey)?.backingLeaf(
+                        forPrefix: prefix),
+                        let body = backer.state.body
+                    {
+                        result = LookupResult(
+                            snapshot: view, partitionKey: partitionKey,
+                            snapshotTokenOffset: view.tokenOffset,
+                            sharedPrefixLength: max(result.sharedPrefixLength, view.tokenOffset),
+                            reason: .hit(
+                                snapshotOffset: view.tokenOffset,
+                                totalTokens: tokens.count, type: view.checkpointType),
+                            backingLeaf: body)
+                        // The transient view has no node. Pin its resolved
+                        // Backing Leaf atomically before releasing MainActor.
+                        node = backer
+                    } else {
+                        diagnostics.logSkip(
+                            stage: "boundaryView", reason: "no-backing-leaf",
+                            extraFields: [
+                                ("fallback", "boundaryReprefill"),
+                                ("requestedOffset", "\(view.tokenOffset)"),
+                                ("restoredOffset", "\(result.snapshotTokenOffset)"),
+                            ])
+                    }
+                }
                 if let pinRequestID {
                     // Lane registration for the Active-Inference Reserve
                     // (ADR-0018) — on hit AND miss: a missing prefix still
@@ -697,6 +778,9 @@ final class PrefixCacheManager {
                     self.activeRequestIDs.insert(pinRequestID)
                     if let node {
                         self.pinRestorePath(node: node, requestID: pinRequestID)
+                        if let backingLeaf = node.backingLeaf {
+                            self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
+                        }
                     }
                 }
                 return result
@@ -987,6 +1071,9 @@ final class PrefixCacheManager {
                 self.recordHitSavings(restoredOffset: body.tokenOffset)
                 if let pinRequestID {
                     self.pinRestorePath(node: node, requestID: pinRequestID)
+                    if let backingLeaf = node.backingLeaf {
+                        self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
+                    }
                 }
                 if let recordedHitID {
                     diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: recordedHitID))
@@ -994,7 +1081,8 @@ final class PrefixCacheManager {
                 return SnapshotResolutionLadder.gateFallbackHit(
                     body: body, partitionKey: partitionKey,
                     promptTokenCount: promptTokenCount, treeMatchDepth: treeMatchDepth,
-                    recordedHitID: recordedHitID, divergence: divergence
+                    recordedHitID: recordedHitID, divergence: divergence,
+                    backingLeaf: node.backingLeaf?.state.body
                 )
             }
         }
@@ -1138,6 +1226,95 @@ final class PrefixCacheManager {
 
     // MARK: - Store
 
+    private func deferSSDWrite(
+        snapshot: HybridCacheSnapshot, node: RadixTreeNode, bytes: Int
+    ) -> Bool {
+        guard adaptiveWriteEagerness,
+            SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: snapshot.checkpointType, nodeHitCount: node.hitCount,
+                residentBytes: totalSnapshotBytes, budgetBytes: memoryBudgetBytes,
+                bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes)
+        else { return false }
+        cumulativeCounters.eagernessDeferrals += 1
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDWriteDeferredEvent(
+                offset: snapshot.tokenOffset, bytes: bytes, hitCount: node.hitCount))
+        return true
+    }
+
+    /// Fulfil planned views' SSD intent at the turn's quiescent boundary,
+    /// after leaf check-in. Cold deferred views keep their intent; lookup
+    /// hits can earn a write on a later turn. No tree body is materialized.
+    func persistViewCheckpoints(
+        partitionKey: CachePartitionKey, sessions: any ModelSessionProviding
+    ) async {
+        guard store.isSSDEnabled, partitionKey.modelFingerprint != nil,
+            let tree = store.tree(for: partitionKey)
+        else { return }
+        for node in tree.allSnapshotNodes() {
+            guard !Task.isCancelled, node.viewSSDAdmissionRequested,
+                !node.ssdPromotionAttempted, node.state.ref == nil,
+                let view = node.state.body, view.isPrefixView,
+                let backer = node.backingLeaf, let leaf = backer.state.body,
+                leaf.layers.count == view.layers.count
+            else { continue }
+            // Metadata only: decide admission before allocating detached
+            // prefix buffers. Every attention array has the same token axis.
+            guard let bytes = view.materializationByteCount(backingLeaf: leaf) else { continue }
+            guard !deferSSDWrite(snapshot: view, node: node, bytes: bytes) else { continue }
+            guard
+                store.survivalGateAdmits(
+                    snapshot: view, payloadTotalBytes: bytes, scoringConfig: evictionConfig)
+            else {
+                cumulativeCounters.survivalGateSkips += 1
+                continue
+            }
+            let access = backer.bodyAccess
+            guard access.beginRead(snapshotID: "view-\(view.bodyID)") else { continue }
+            let earnedPromotion =
+                adaptiveWriteEagerness
+                && node.hitCount >= SSDWriteEagernessPolicy.hitCountThreshold
+            // Reserve this view while extraction suspends. A failed or
+            // cancelled extraction has not consumed its enqueue attempt.
+            node.ssdPromotionAttempted = true
+            let path = tree.pathToNode(node)
+            let payload: SnapshotPayload?
+            do {
+                payload = try await sessions.withSession { _ in
+                    try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf).payload
+                }
+            } catch {
+                Log.agent.warning(
+                    "Prefix-View Checkpoint SSD extraction failed: \(String(describing: error))")
+                payload = nil
+            }
+            // Device copies are evaluated now. The pending writer owns only
+            // detached arrays and cannot delay the leaf's next check-out.
+            access.endRead()
+            if node.state.body?.bodyID == view.bodyID {
+                node.ssdPromotionAttempted = false
+            }
+            guard let payload, !Task.isCancelled,
+                store.tree(for: partitionKey) === tree,
+                node.state.body?.bodyID == view.bodyID, node.state.ref == nil,
+                tree.allSnapshotNodes().contains(where: { $0 === node })
+            else { continue }
+            registerSSDPartitionIfNeeded(for: partitionKey)
+            node.ssdPromotionAttempted = true
+            if earnedPromotion {
+                cumulativeCounters.eagernessPromotions += 1
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDWritePromotedEvent(
+                        offset: view.tokenOffset, bytes: payload.totalBytes, hitCount: node.hitCount
+                    ))
+            }
+            store.admitSnapshot(
+                node: node, tree: tree, partitionKey: partitionKey, pathFromRoot: path,
+                snapshot: view, payload: payload, scoringConfig: evictionConfig,
+                deferrable: earnedPromotion)
+        }
+    }
+
     @discardableResult
     func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
         // Re-evaluate the measured ceiling on the write path (throttled):
@@ -1172,9 +1349,18 @@ final class PrefixCacheManager {
         {
             let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
+            let replacingView =
+                entry.snapshot.isPrefixView
+                && node.state.body?.bodyID != entry.snapshot.bodyID
             guard tree.storeSnapshot(entry.snapshot, on: node) else {
                 if let lease = node.leafLease { leaseRefusals.append(lease.id) }
                 return nil
+            }
+            if replacingView { node.ssdPromotionAttempted = false }
+            if case .viewSSD = entry.storage {
+                node.viewSSDAdmissionRequested = true
+            } else {
+                node.viewSSDAdmissionRequested = false
             }
 
             return (node, path)
@@ -1209,22 +1395,9 @@ final class PrefixCacheManager {
             // streak earns a deferred-class promotion write from the
             // lookup path instead. `.system` checkpoints are exempt
             // inside the policy (issue #165).
-            if !guaranteeWrite, adaptiveWriteEagerness,
-                SSDWriteEagernessPolicy.mayDefer(
-                    checkpointType: entry.snapshot.checkpointType,
-                    nodeHitCount: node.hitCount,
-                    residentBytes: totalSnapshotBytes,
-                    budgetBytes: memoryBudgetBytes,
-                    bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes
-                )
+            if !guaranteeWrite,
+                deferSSDWrite(snapshot: entry.snapshot, node: node, bytes: payload.totalBytes)
             {
-                cumulativeCounters.eagernessDeferrals += 1
-                PrefixCacheDiagnostics.logSystem(
-                    PrefixCacheDiagnostics.SSDWriteDeferredEvent(
-                        offset: entry.snapshot.tokenOffset,
-                        bytes: payload.totalBytes,
-                        hitCount: node.hitCount
-                    ))
                 return nil
             }
             // The Survival Gate: checkpoint write-throughs (and any
@@ -1314,6 +1487,7 @@ final class PrefixCacheManager {
                     in: tree,
                     policy: policy
                 ))
+            recordLeafCheckIn(stored.node, in: tree, partitionKey: admission.partitionKey)
         }
 
         let evictions = evictToFitBudget(
@@ -2051,9 +2225,9 @@ final class PrefixCacheManager {
     /// rebuilt around the new value (ceiling and current alike), so a
     /// subsequent pressure regrowth converges to the override instead of
     /// the pre-override ceiling — the "reasserted on the next pressure
-    /// event" stale-band window is unrepresentable. Evicts immediately
-    /// when the live contents exceed the new budget, returning the
-    /// evictions. Used by the loaded-model E2E runner to deliberately
+    /// event" stale-band window is unrepresentable. Drains immediately with
+    /// the default policy; the opt-in Compressed Warm Tier queues a Model
+    /// Session drain (awaitPendingDrain settles it outside a session). Used by the loaded-model E2E runner to deliberately
     /// trigger eviction pressure.
     @discardableResult
     func setMemoryBudget(_ bytes: Int) -> [EvictionEvent] {
@@ -2189,6 +2363,9 @@ final class PrefixCacheManager {
     func completeRequest(requestID: UUID) {
         restorePins.removeAll { $0.requestID == requestID }
         activeRequestIDs.remove(requestID)
+        if activeRequestIDs.isEmpty {
+            for (_, tree) in store.orderedPartitions() { tree.retireUnbackedViews() }
+        }
     }
 
     // MARK: - Eviction
@@ -2198,6 +2375,8 @@ final class PrefixCacheManager {
     /// falls back to oldest-first when only multi-child branch snapshots
     /// remain.
     ///
+    /// With the Compressed Warm Tier enabled, a queued Model Session first
+    /// compresses eligible full bodies in the same selection order. Otherwise
     /// **Snapshot Demotion** is the first response to every shrink: an
     /// unbacked victim is persisted to SSD (when the tier and the payload
     /// extractor are available) *before* its RAM body drops, so the loss
@@ -2221,6 +2400,17 @@ final class PrefixCacheManager {
         requestID: UUID? = nil,
         preferredPartitionKey: CachePartitionKey? = nil
     ) -> [EvictionEvent] {
+        if evictionConfig.warmCompressionEnabled, let modelSessions {
+            drainRequested = true
+            drainRequestID = requestID
+            drainPreferredPartition = preferredPartitionKey
+            if budgetDrainTask == nil {
+                budgetDrainTask = Task { [weak self] in
+                    await self?.drainWithCompression(sessions: modelSessions)
+                }
+            }
+            return []
+        }
         // Pin a single clock reading and a single sorted tree order so all
         // iterations in one drain share the same recency anchor and
         // tie-break ordering.
@@ -2247,42 +2437,7 @@ final class PrefixCacheManager {
             // (state 1 → 2 → 3) instead of terminal (state 1 → removed).
             demoteBeforeDrop(candidate, now: now)
 
-            // One chokepoint: `dropBody` reconciles the budget, carries
-            // out the eviction telemetry inputs, and self-heals the
-            // topology. A node whose ref survives the drop (state 2/4 →
-            // 3/5) settles in place; a ref-less node (state 1) empties and
-            // the tree removes it. The orphan guard that used to gate
-            // node removal here is gone — `canEvictNode` is unrepresentable
-            // when violated, so there is nothing for a caller to forget.
-            //
-            // `EvictionCandidatePolicy.candidate` filters body-less nodes, so
-            // `dropBody` is guaranteed non-ignored and returns the
-            // dropped checkpoint type.
-            let offset = candidate.node.tokenOffset
-            let result = candidate.tree.dropBody(node: candidate.node)
-            guard let droppedType = result.droppedCheckpointType else {
-                preconditionFailure("dropBody returned no checkpoint type for a body-bearing node")
-            }
-            let event = EvictionEvent(
-                strategy: candidate.strategy,
-                offset: offset,
-                checkpointType: droppedType,
-                freedBytes: result.droppedBodyBytes,
-                budgetBytes: memoryBudgetBytes,
-                snapshotBytesAfter: totalSnapshotBytes,
-                normalizedRecency: candidate.score?.normalizedRecency,
-                normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
-                utility: candidate.score?.utility,
-                bodyDroppedSnapshotRefID: result.refID,
-                chainPrefixOwnerID: result.refID == nil
-                    ? candidate.node.chainPrefixRestorePoint?.ownerSnapshotID
-                    : nil
-            )
-            if event.isTerminal {
-                cumulativeCounters.terminalEvictions += 1
-            } else {
-                cumulativeCounters.recoveredEvictions += 1
-            }
+            let event = dropEvictionCandidate(candidate)
             events.append(event)
         }
         // Mark the first request that ever triggered eviction. The
@@ -2298,6 +2453,246 @@ final class PrefixCacheManager {
             pendingBootstrapBoundary = requestID.map(PendingBootstrapBoundary.request) ?? .unscoped
         }
         return events
+    }
+
+    private func dropEvictionCandidate(_ candidate: EvictionCandidatePolicy.Candidate)
+        -> EvictionEvent
+    {
+        // One chokepoint: `dropBody` reconciles the budget, carries
+        // out the eviction telemetry inputs, and self-heals the
+        // topology. A node whose ref survives the drop (state 2/4 →
+        // 3/5) settles in place; a ref-less node (state 1) empties and
+        // the tree removes it. The orphan guard that used to gate
+        // node removal here is gone — `canEvictNode` is unrepresentable
+        // when violated, so there is nothing for a caller to forget.
+        //
+        // `EvictionCandidatePolicy.candidate` filters body-less nodes, so
+        // `dropBody` is guaranteed non-ignored and returns the
+        // dropped checkpoint type.
+        let offset = candidate.node.tokenOffset
+        let result = candidate.tree.dropBody(node: candidate.node)
+        guard let droppedType = result.droppedCheckpointType else {
+            preconditionFailure("dropBody returned no checkpoint type for a body-bearing node")
+        }
+        let event = EvictionEvent(
+            strategy: candidate.strategy,
+            offset: offset,
+            checkpointType: droppedType,
+            freedBytes: result.droppedBodyBytes,
+            budgetBytes: memoryBudgetBytes,
+            snapshotBytesAfter: totalSnapshotBytes,
+            normalizedRecency: candidate.score?.normalizedRecency,
+            normalizedFlopEfficiency: candidate.score?.normalizedFlopEfficiency,
+            utility: candidate.score?.utility,
+            bodyDroppedSnapshotRefID: result.refID,
+            chainPrefixOwnerID: result.refID == nil
+                ? candidate.node.chainPrefixRestorePoint?.ownerSnapshotID
+                : nil
+        )
+        if event.isTerminal {
+            cumulativeCounters.terminalEvictions += 1
+        } else {
+            cumulativeCounters.recoveredEvictions += 1
+        }
+        return event
+    }
+
+    /// Await outside a Model Session, including before model teardown. Admission
+    /// may be called from inside that session and must never await its own queue.
+    func awaitPendingDrain() async {
+        while let task = budgetDrainTask { await task.value }
+    }
+
+    private func recordLeafCheckIn(
+        _ node: RadixTreeNode, in tree: TokenRadixTree, partitionKey: CachePartitionKey
+    ) {
+        guard evictionConfig.warmCompressionEnabled, node.state.body?.isWarm == false else {
+            return
+        }
+        func isAncestor(_ ancestor: RadixTreeNode, of descendant: RadixTreeNode) -> Bool {
+            var current: RadixTreeNode? = descendant
+            while let candidate = current {
+                if candidate === ancestor { return true }
+                current = candidate.parent
+            }
+            return false
+        }
+        _ = hotLeafNodes()
+        hotLeaves.removeAll { entry in
+            guard entry.tree === tree, let previous = entry.node else { return false }
+            return isAncestor(previous, of: node) || isAncestor(node, of: previous)
+        }
+        hotLeaves.append(HotLeaf(node: node, tree: tree, partitionKey: partitionKey))
+        hotLeaves.removeFirst(max(0, hotLeaves.count - evictionConfig.hotLeafPathLimit))
+        opportunisticCompressionRequested = true
+    }
+
+    private func hotLeafNodes() -> Set<ObjectIdentifier> {
+        hotLeaves.removeAll { entry in
+            guard let node = entry.node, let tree = entry.tree,
+                store.tree(for: entry.partitionKey) === tree
+            else { return true }
+            return node.leafLease == nil
+                && (node.state.body?.checkpointType != .leaf || node.state.body?.isWarm != false)
+        }
+        return Set(hotLeaves.compactMap { $0.node.map(ObjectIdentifier.init) })
+    }
+
+    private var aboveOpportunisticCompressionThreshold: Bool {
+        Double(totalSnapshotBytes)
+            > Double(budgetBand.ceilingBytes) * evictionConfig.opportunisticCompressionFraction
+    }
+
+    private struct DrainWork: Sendable {
+        let candidate: EvictionCandidatePolicy.Candidate
+        let snapshot: HybridCacheSnapshot
+        let compress: Bool
+        let needsFullDemotion: Bool
+        let opportunistic: Bool
+    }
+
+    private func nextDrainWork(
+        attempted: Set<UUID>, failedDemotions: Set<UUID>, now: ContinuousClock.Instant,
+        opportunisticRequested: Bool
+    ) -> DrainWork? {
+        let opportunistic = totalSnapshotBytes <= memoryBudgetBytes
+        guard !opportunistic || (opportunisticRequested && aboveOpportunisticCompressionThreshold)
+        else { return nil }
+        let partitions = store.orderedPartitions()
+        let preferred = drainPreferredPartition.flatMap { key in
+            store.tree(for: key).map { (key: key, tree: $0) }
+        }
+        var floor = floorContents().nodes
+        for (_, tree) in partitions {
+            for node in tree.allSnapshotNodes()
+            where node.state.body.map({ failedDemotions.contains($0.bodyID) }) == true {
+                floor.insert(ObjectIdentifier(node))
+            }
+        }
+        var excluded = floor.union(hotLeafNodes())
+        for (key, tree) in partitions {
+            for node in tree.allSnapshotNodes() {
+                guard let snapshot = node.state.body else { continue }
+                if key.kvBits != nil || snapshot.checkpointType == .system
+                    || !snapshot.canCompress || attempted.contains(snapshot.bodyID)
+                    || (opportunistic && snapshot.checkpointType != .leaf)
+                {
+                    excluded.insert(ObjectIdentifier(node))
+                }
+            }
+        }
+        let compression = EvictionCandidatePolicy.candidate(
+            now: now, orderedPartitions: partitions, preferred: preferred,
+            protected: excluded, config: evictionConfig)
+        guard
+            let candidate = compression
+                ?? (opportunistic
+                    ? nil
+                    : EvictionCandidatePolicy.candidate(
+                        now: now, orderedPartitions: partitions, preferred: preferred,
+                        protected: floor, config: evictionConfig)),
+            let snapshot = candidate.node.state.body,
+            candidate.node.bodyAccess.beginRead(snapshotID: snapshot.bodyID.uuidString)
+        else { return nil }
+        compressingNodes.insert(ObjectIdentifier(candidate.node))
+        return DrainWork(
+            candidate: candidate, snapshot: snapshot, compress: compression != nil,
+            needsFullDemotion: snapshot.isWarm && canDemote(candidate),
+            opportunistic: opportunistic)
+    }
+
+    private func drainWithCompression(sessions: any ModelSessionProviding) async {
+        repeat {
+            drainRequested = false
+            let opportunisticRequested = opportunisticCompressionRequested
+            opportunisticCompressionRequested = false
+            await sessions.withSession { session in
+                let now = ContinuousClock.now
+                var attempted: Set<UUID> = []
+                var failedDemotions: Set<UUID> = []
+                while let work = await self.nextDrainWork(
+                    attempted: attempted, failedDemotions: failedDemotions, now: now,
+                    opportunisticRequested: opportunisticRequested)
+                {
+                    let start = ContinuousClock.now
+                    var replacement: HybridCacheSnapshot?
+                    do {
+                        if work.compress {
+                            attempted.insert(work.snapshot.bodyID)
+                            replacement = try session.compress(work.snapshot)
+                        } else if work.needsFullDemotion {
+                            // Stored Form stays full fp16 until #531. Conversion and
+                            // materialization stay on the Model Session thread.
+                            replacement = session.captureSnapshot(
+                                cache: try session.restore(work.snapshot),
+                                offset: work.snapshot.tokenOffset,
+                                type: work.snapshot.checkpointType)
+                        }
+                    } catch {
+                        Log.agent.error("Warm Body conversion failed: \(error)")
+                    }
+                    if work.needsFullDemotion, replacement == nil {
+                        failedDemotions.insert(work.snapshot.bodyID)
+                    }
+                    await self.finishDrainWork(
+                        work, replacement: replacement,
+                        seconds: (ContinuousClock.now - start).seconds,
+                        now: now)
+                }
+            }
+        } while drainRequested || opportunisticCompressionRequested
+        budgetDrainTask = nil
+    }
+
+    private func finishDrainWork(
+        _ work: DrainWork, replacement: HybridCacheSnapshot?, seconds: TimeInterval,
+        now: ContinuousClock.Instant
+    ) {
+        let node = work.candidate.node
+        defer {
+            node.bodyAccess.endRead()
+            compressingNodes.remove(ObjectIdentifier(node))
+        }
+        // MainActor may have admitted a new body, cleared the tier, or pinned
+        // this leaf while the Model Session was converting its old body.
+        guard node.state.body?.bodyID == work.snapshot.bodyID,
+            !floorContents().nodes.contains(ObjectIdentifier(node)),
+            work.opportunistic
+                ? aboveOpportunisticCompressionThreshold : totalSnapshotBytes > memoryBudgetBytes
+        else { return }
+        if work.compress {
+            guard !hotLeafNodes().contains(ObjectIdentifier(node)),
+                let replacement, replacement.isWarm,
+                replacement.memoryBytes < work.snapshot.memoryBytes
+            else { return }
+            let recency = node.lastAccessTime
+            guard work.candidate.tree.storeSnapshot(replacement, on: node) else { return }
+            node.lastAccessTime = recency
+            PrefixCacheDiagnostics.logSystem(
+                WarmCompressEvent(
+                    offset: replacement.tokenOffset, bytesBefore: work.snapshot.memoryBytes,
+                    bytesAfter: replacement.memoryBytes, seconds: seconds,
+                    source: work.opportunistic ? .opportunistic : .drain))
+        } else {
+            // A failed conversion is not permission to turn a recoverable
+            // eviction into data loss. This pass can consider another body.
+            guard !work.needsFullDemotion || replacement != nil else { return }
+            // An SSD ref can disappear during the session hop. Retry as a full
+            // demotion if it was the only reason this pass needed no conversion.
+            if work.snapshot.isWarm, !work.needsFullDemotion, canDemote(work.candidate) { return }
+            demoteBeforeDrop(work.candidate, now: now, fullSnapshot: replacement)
+            let event = dropEvictionCandidate(work.candidate)
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.EvictionEvent(event))
+            if let id = event.bodyDroppedSnapshotRefID {
+                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDBodyDropEvent(id: id))
+            }
+            if let alphaTuner, case .waitingForFirstEviction = alphaTuner.phase,
+                pendingBootstrapBoundary == nil
+            {
+                pendingBootstrapBoundary =
+                    drainRequestID.map(PendingBootstrapBoundary.request) ?? .unscoped
+            }
+        }
     }
 
     /// User-initiated RAM-tier wipe (the status-bar menu's "Clear Memory
@@ -2474,21 +2869,26 @@ final class PrefixCacheManager {
     /// The front door may still reject the write (budget, back-pressure);
     /// then no ref attaches and the drop settles terminal, which is the
     /// honest outcome.
+    private func canDemote(_ candidate: EvictionCandidatePolicy.Candidate) -> Bool {
+        candidate.node.state.ref == nil && candidate.node.chainPrefixRestorePoint == nil
+            && store.isSSDEnabled && demotionPayloadExtractor != nil
+            && candidate.partitionKey.modelFingerprint != nil
+    }
+
     private func demoteBeforeDrop(
         _ candidate: EvictionCandidatePolicy.Candidate,
-        now: ContinuousClock.Instant
+        now: ContinuousClock.Instant,
+        fullSnapshot: HybridCacheSnapshot? = nil
     ) {
         guard !candidate.node.bodyAccess.blocks(.demotion) else { return }
         // A chain-prefix-backed node (ADR-0012) skips demotion outright:
         // its bytes already exist on SSD as the owning chain's leading
         // segments, and writing a duplicate copy is exactly the write
         // amplification the restore-point design rejected.
-        guard candidate.node.state.ref == nil,
-            candidate.node.chainPrefixRestorePoint == nil,
-            store.isSSDEnabled,
+        guard canDemote(candidate),
             let demotionPayloadExtractor,
-            candidate.partitionKey.modelFingerprint != nil,
-            let snapshot = candidate.node.state.body
+            let snapshot = fullSnapshot ?? candidate.node.state.body,
+            !snapshot.isWarm
         else { return }
 
         registerSSDPartitionIfNeeded(for: candidate.partitionKey)
@@ -2539,7 +2939,7 @@ final class PrefixCacheManager {
             store.isSSDEnabled,
             demotionPayloadExtractor != nil,
             partitionKey.modelFingerprint != nil,
-            node.state.body != nil
+            node.state.hasResidentBody && node.state.body?.isWarm == false
         else { return }
 
         guard !node.bodyAccess.blocks(.writePromotion) else { return }
@@ -2554,6 +2954,7 @@ final class PrefixCacheManager {
                 node.state.ref == nil,
                 node.chainPrefixRestorePoint == nil,
                 let snapshot = node.state.body,
+                !snapshot.isPrefixView, !snapshot.isWarm,
                 let payload = self.demotionPayloadExtractor?(snapshot)
             else { return }
 

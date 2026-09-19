@@ -32,7 +32,7 @@ nonisolated final class LeafBodyAccess: @unchecked Sendable {
 
     /// Whether a lease here would be refused on the SSD writer's account:
     /// a full payload that still aliases the body, or the writer's own
-    /// body read while it materializes one. False means the next
+    /// body read while it prepares and writes one. False means the next
     /// `begin(requireDetachedPayload: true)` is not refused by the writer
     /// — which is what makes the bounded pending-payload wait (#523)
     /// race-free rather than hopeful.
@@ -66,7 +66,7 @@ nonisolated final class LeafBodyAccess: @unchecked Sendable {
     }
 
     /// Claim before removing a full payload from the writer queue. A lease
-    /// either wins this race or refuses acquisition until the reader releases.
+    /// either wins this race or waits until the last borrowed byte is written.
     func beginRead(snapshotID: String) -> Bool {
         let result: (allowed: Bool, report: LeafLease?) = lock.withLock {
             if let current {

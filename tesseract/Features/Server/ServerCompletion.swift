@@ -579,21 +579,24 @@ nonisolated final class ServerCompletion {
     /// an await cannot slip past the teardown.
     func drainActiveCompletion(on actor: isolated LLMActor) async {
         drainGeneration += 1
-        while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil {
-            if let active = activeCompletion {
-                active.handle.cancel()
-                await active.handle.waitForCompletion()
-                if activeCompletion?.id == active.id {
-                    activeCompletion = nil
-                }
-            } else if speculativePrefill != nil {
-                await preemptSpeculativePrefill(on: actor)
-            } else {
-                await withCheckedContinuation { continuation in
-                    inflightStartWaiters.append(continuation)
+        repeat {
+            while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil {
+                if let active = activeCompletion {
+                    active.handle.cancel()
+                    await active.handle.waitForCompletion()
+                    if activeCompletion?.id == active.id {
+                        activeCompletion = nil
+                    }
+                } else if speculativePrefill != nil {
+                    await preemptSpeculativePrefill(on: actor)
+                } else {
+                    await withCheckedContinuation { continuation in
+                        inflightStartWaiters.append(continuation)
+                    }
                 }
             }
-        }
+            await _prefixCache?.awaitPendingDrain()
+        } while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil
     }
 
     /// Natural-finish hook from the driving task: drop the registry slot for
@@ -733,7 +736,7 @@ nonisolated final class ServerCompletion {
             }
         }
 
-        let prefixCache = await ensurePrefixCache(on: actor)
+        let prefixCache = await ensurePrefixCache(on: actor, sessions: sessions)
         let requestID = UUID()
         let memory = RequestMemoryTelemetry(
             context: PrefixCacheDiagnostics.Context(
@@ -1095,6 +1098,10 @@ nonisolated final class ServerCompletion {
                 memory: memory
             )
             await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+            if mlxStart.ssdEnabled, !Task.isCancelled {
+                await prefixCache.persistViewCheckpoints(
+                    partitionKey: mlxStart.partitionKey, sessions: sessions)
+            }
             leafResult.report.restoreMode = mlxStart.finalCacheOwner.restoreMode
             leafResult.report.restoreCopyReason = mlxStart.finalCacheOwner.copyReason
             leafResult.report.restoreCopyWaitSeconds = mlxStart.finalCacheOwner.copyWaitSeconds
@@ -1246,6 +1253,7 @@ nonisolated final class ServerCompletion {
                 seedsPositionAnchor: mlxStart.seedsPositionAnchor,
                 canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
                     .tokenOffset ?? 0,
+                transientBoundary: mlxStart.transientLastUserBoundarySnapshot,
                 ramOnlySpine: true,
                 diagnostics: diagnosticsContext
             )
@@ -1759,11 +1767,14 @@ nonisolated final class ServerCompletion {
                         chainPrefixRestore: resolved.wasChainPrefixRestore,
                         divergence: lookupResult.divergence,
                         restoreMode: restoreMode, copyReason: restoreCopyReason,
-                        copyWaitSeconds: restoreCopyWaitSeconds
+                        copyWaitSeconds: restoreCopyWaitSeconds,
+                        backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
+                        warmBody: lookupResult.snapshot?.isWarm == true,
+                        backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
-                // helpers (captured as leaves; a planned checkpoint at the same
+                // helpers (Prefix-View Checkpoints; a planned checkpoint at the same
                 // offset wins) into one capture map for the prefill driver.
                 // Planner guarantees offset uniqueness, so uniqueKeysWithValues
                 // traps loudly on a planner-side invariant break instead of
@@ -1775,13 +1786,13 @@ nonisolated final class ServerCompletion {
                     }
                 )
                 // Preserve-thinking turns never synthesize boundary leaves or
-                // abandonment seeds. Their full-prefix helper copies serve no consumer.
+                // abandonment seeds. Their boundary helpers serve no consumer.
                 let transientOffsets =
                     renderContext.preservesThinking && textOnlyIdentityKeySpace
                     ? Set<Int>() : prefillPlan.transientCheckpointOffsets
                 let helperCheckpoints = Dictionary(
                     uniqueKeysWithValues: transientOffsets.map {
-                        ($0, HybridCacheSnapshot.CheckpointType.leaf)
+                        ($0, HybridCacheSnapshot.CheckpointType.branchPoint)
                     }
                 )
                 let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in
@@ -2010,11 +2021,17 @@ nonisolated final class ServerCompletion {
                 finalCacheOwner.copyReason = restoreCopyReason
                 finalCacheOwner.copyWaitSeconds = restoreCopyWaitSeconds
                 let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+                let boundarySnapshots = prefillResult.snapshots.filter {
+                    transientOffsets.contains($0.tokenOffset)
+                }
                 memory.mark(
                     .prefilled,
                     facts: RequestMemoryTelemetry.cacheFacts(liveCache).merging([
                         "prefillCheckpointArrayBytes":
-                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })"
+                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })",
+                        "boundaryCheckpointCount": "\(boundarySnapshots.count)",
+                        "boundaryCheckpointArrayBytes":
+                            "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                     ]) { _, new in new })
                 let iterator = prefillResult.iterator
                 if case .dflash2 = iterator {
@@ -2089,7 +2106,8 @@ nonisolated final class ServerCompletion {
                             checkpointType: snapshot.checkpointType,
                             bytes: snapshot.memoryBytes,
                             duringPrefill: true,
-                            source: "prefill"
+                            source: "prefill",
+                            checkpointKind: snapshot.checkpointKind
                         ))
                 }
 
@@ -2206,6 +2224,9 @@ nonisolated final class ServerCompletion {
             }
         }
         let cache = try restoredCache ?? session.newCache(parameters: parameters)
+        // Reserve the prompt on both fresh and restored live caches. The output
+        // ceiling is not a capacity request; decode grows in the vendor cache.
+        for layer in cache { layer.reserveCapacity(promptTokens) }
         return (cache: cache, startedAt: Date.timeIntervalSinceReferenceDate)
     }
 
@@ -2251,7 +2272,7 @@ nonisolated final class ServerCompletion {
     ) -> [any KVCache]? {
         guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
         do {
-            return try session.restore(snapshot)
+            return try session.restore(snapshot, backingLeaf: lookup.backingLeaf)
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"
@@ -2613,7 +2634,9 @@ nonisolated final class ServerCompletion {
     /// manifest. Warm start is fingerprint-gated: partitions from a
     /// different model layout get their descriptors skipped and
     /// their directories scheduled for async cleanup.
-    private func ensurePrefixCache(on actor: isolated LLMActor) async -> PrefixCacheManager {
+    private func ensurePrefixCache(
+        on actor: isolated LLMActor, sessions: any ModelSessionProviding
+    ) async -> PrefixCacheManager {
         if let existing = _prefixCache { return existing }
         let budget = defaultPrefixCacheMemoryBudgetBytes
         let ssdConfigSnapshot = self.ssdConfig
@@ -2674,7 +2697,8 @@ nonisolated final class ServerCompletion {
                 // Adaptive Write Eagerness (ADR-0019, PRD #150): skip
                 // redundant SSD copies while RAM is comfortable; reuse
                 // earns a deferred-class promotion write instead.
-                adaptiveWriteEagerness: true
+                adaptiveWriteEagerness: true,
+                modelSessions: sessions
             )
             // The current-cache accessor holds it weakly: dropping this
             // module (model unload) reads as "no live cache" over there.
@@ -2757,6 +2781,7 @@ nonisolated final class ServerCompletion {
         extending: SnapshotExtension? = nil
     ) -> SnapshotAdmission.Storage {
         guard ssdEnabled else { return .ramOnly }
+        if snapshot.isPrefixView { return .viewSSD }
         return .ramAndSSD(extractSnapshotPayload(snapshot, extending: extending))
     }
 
@@ -2905,7 +2930,7 @@ nonisolated final class ServerCompletion {
     /// Build the SSD payload for `snapshot` — **Deferred Payload
     /// Extraction**, so this call moves no array bytes on the calling
     /// thread. It settles the extension and fixes the byte total; the
-    /// host copies run when the payload's `layers` are first read, on
+    /// host views are prepared when the payload's `layers` are first read, on
     /// the SSD writer's task. Callable from the MainActor too (**Snapshot
     /// Demotion**'s extractor passes no extension, so that path reads
     /// shapes only): the arrays are evaluated deep copies, never live
@@ -2929,24 +2954,61 @@ nonisolated final class ServerCompletion {
     /// its own contiguous device buffer, and every whole-state layer
     /// (recurrent, rotating, chunked — small next to the attention
     /// suffix) is deep-copied whole, all evaluated in one sync, so the
-    /// later host copy is a plain memcpy and the payload never references
+    /// later host view can borrow contiguous storage and never references
     /// the body it was built from. A full payload retains the body's own
     /// arrays: copying them is what the deferral exists to avoid.
     static func deferredPayload(
         for snapshot: HybridCacheSnapshot,
         extending: SnapshotExtension? = nil
     ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
+        precondition(!snapshot.isPrefixView, "a view payload requires its Backing Leaf")
         let activeExtension = validatedExtension(extending, for: snapshot)
+        return deferredPayload(
+            for: snapshot, layers: snapshot.layers, extending: activeExtension, detaching: false)
+    }
+
+    /// A full-format view payload owns every retained array independently
+    /// of both the Backing Leaf and the view. Run inside the Model Session
+    /// while the backer is protected; only the later host copy is deferred.
+    static func deferredPayload(
+        for view: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
+    ) throws -> (payload: SnapshotPayload, owed: DeferredLayers) {
+        precondition(view.isPrefixView)
+        if backingLeaf.isWarm {
+            // Stored Form remains full until #531. View restore dequantizes
+            // only the prefix and copies whole-state layers into private
+            // buffers, so this payload can take those buffers without a
+            // second copy or retaining any tree body array.
+            var cache = try view.restore(backingLeaf: backingLeaf)
+            guard
+                let materialized = HybridCacheSnapshot.captureMoving(
+                    cache: &cache, offset: view.tokenOffset)
+            else { throw HybridCacheSnapshot.ViewRestoreError.invalidBackingLeaf }
+            return deferredPayload(
+                for: view, layers: materialized.layers, extending: nil, detaching: false)
+        }
+        return deferredPayload(
+            for: view, layers: try view.materializationLayers(backingLeaf: backingLeaf),
+            extending: nil, detaching: true)
+    }
+
+    private static func deferredPayload(
+        for snapshot: HybridCacheSnapshot, layers: [HybridCacheSnapshot.LayerState],
+        extending activeExtension: SnapshotExtension?, detaching: Bool
+    ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
 
         var owed: [DeferredLayers.Layer] = []
         owed.reserveCapacity(snapshot.layers.count)
         var detached: [MLXArray] = []
         var totalBytes = 0
 
-        for layer in snapshot.layers {
+        for layer in layers {
             var suffixBaseOffset: Int?
             var arrays = layer.state
-            if let activeExtension {
+            if detaching {
+                arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
+                detached.append(contentsOf: arrays)
+            } else if let activeExtension {
                 switch layer.kind {
                 case .sliceableAttention:
                     suffixBaseOffset = activeExtension.baseOffset
@@ -2986,19 +3048,16 @@ nonisolated final class ServerCompletion {
             checkpointType: snapshot.checkpointType,
             extending: activeExtension,
             totalBytes: totalBytes,
+            retainsBodyArrays: !snapshot.isPrefixView && !detaching && activeExtension == nil,
             materialize: { deferred.materialize() }
         )
         return (payload, deferred)
     }
 
-    /// The arrays a deferred payload still owes the SSD writer.
-    /// `materialize` copies them layer by layer and releases each as it
-    /// goes, so a demotion victim — whose only remaining reference is this
-    /// box once its RAM body dropped — never sits in memory twice. Runs
-    /// once, under the payload's own lock. The box's own lock guards the
-    /// layer list, so `retainedArrays` can be read while the writer pops
-    /// from it; the array handles it hands out are unsynchronized and safe
-    /// to inspect only because every retained array is already evaluated.
+    /// The evaluated arrays a deferred payload owes the SSD writer. Preparation
+    /// transfers each array into its Data view's lifetime owner; the consuming
+    /// writer releases that owner after the layer's last chunk. The lock guards
+    /// the pending list; no live generation state enters this box.
     final class DeferredLayers: @unchecked Sendable {
         struct Layer {
             let className: String
@@ -3014,11 +3073,37 @@ nonisolated final class ServerCompletion {
             owed = OSAllocatedUnfairLock(uncheckedState: layers)
         }
 
-        /// Every array not yet copied to host, in layer order — empty once
-        /// the writer has materialized the payload. Read by tests that
+        /// Arrays not yet transferred to borrowed Data owners, in layer order.
+        /// Empty once prepared; the Data still retains each array until written. Read by tests that
         /// check, by physical address, what a pending payload retains.
         var retainedArrays: [MLXArray] {
             owed.withLockUnchecked { $0.flatMap(\.arrays) }
+        }
+
+        /// Data's custom deallocator owns this box for exactly the lifetime
+        /// of its borrowed bytes. It also retains a fallback contiguous Data
+        /// if the vendor had to copy a non-contiguous input.
+        private final class BorrowedArrayBytes: @unchecked Sendable {
+            let array: MLXArray
+            let data: Data
+
+            init(_ array: MLXArray) {
+                self.array = array
+                // MLX's no-copy path force-unwraps the zero-size pointer.
+                data = array.size == 0 ? Data() : array.asData(access: .noCopyIfContiguous).data
+            }
+
+            func view() -> Data {
+                guard !data.isEmpty else { return Data() }
+                return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                    Data(
+                        bytesNoCopy: UnsafeMutableRawPointer(mutating: buffer.baseAddress!),
+                        count: buffer.count,
+                        deallocator: .custom { [self] _, _ in
+                            withExtendedLifetime(self) {}
+                        })
+                }
+            }
         }
 
         func materialize() -> [SnapshotPayload.LayerPayload] {
@@ -3028,12 +3113,12 @@ nonisolated final class ServerCompletion {
                 var arrays: [SnapshotPayload.ArrayPayload] = []
                 arrays.reserveCapacity(layer.arrays.count)
                 for array in layer.arrays {
-                    let copy = array.asData(access: .copy)
+                    let bytes = BorrowedArrayBytes(array)
                     arrays.append(
                         SnapshotPayload.ArrayPayload(
-                            data: copy.data,
-                            dtype: ServerCompletion.dtypeWireString(copy.dType),
-                            shape: copy.shape
+                            data: bytes.view(),
+                            dtype: ServerCompletion.dtypeWireString(array.dtype),
+                            shape: array.shape, borrowsArray: array.size > 0
                         ))
                 }
                 layers.append(

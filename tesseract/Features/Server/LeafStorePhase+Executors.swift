@@ -56,11 +56,11 @@ nonisolated extension LeafStorePhase {
         /// Reserve**'s growth allowance (#522).
         let maximumAdvance: Int
 
-        init(storedTokens: [Int], inputs: Inputs, stages: LeafStages) {
+        init(storedTokens: [Int], inputs: Inputs, stages: LeafStages, ssdEnabled: Bool? = nil) {
             let mlxStart = inputs.mlxStart
             self.storedTokens = storedTokens
             partitionKey = mlxStart.partitionKey
-            ssdEnabled = mlxStart.ssdEnabled
+            self.ssdEnabled = ssdEnabled ?? mlxStart.ssdEnabled
             requestID = inputs.requestID
             prefixCache = inputs.prefixCache
             diagnosticsContext = inputs.diagnosticsContext
@@ -239,6 +239,7 @@ nonisolated extension LeafStorePhase {
     static func captureStructuredLeafFromBoundary(
         sessions: any ModelSessionProviding,
         boundarySnapshot: HybridCacheSnapshot,
+        backingLeaf: HybridCacheSnapshot?,
         positionAnchorRopeDelta: Int?,
         prefillStepSize: Int,
         tokenNDim: Int,
@@ -252,7 +253,8 @@ nonisolated extension LeafStorePhase {
             return try await sessions.withSession { session in
                 var timings = Timings()
                 let restoreStart = Date.timeIntervalSinceReferenceDate
-                let restoredCache = try session.restore(boundarySnapshot)
+                let restoredCache = try session.restore(boundarySnapshot, backingLeaf: backingLeaf)
+                for layer in restoredCache { layer.reserveCapacity(storedTokens.count) }
                 timings.restoreSeconds = secondsSince(restoreStart)
 
                 let residual = Array(storedTokens[boundaryOffset...])

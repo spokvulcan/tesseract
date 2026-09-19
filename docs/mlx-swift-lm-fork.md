@@ -32,6 +32,32 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## Capacity reservation carry (2026-09-19, #533)
+
+The #533 app branch advances the gitlink from `51542c4` to `f177464` on
+`codex/533-cache-capacity-reservation`. This is a fast-forward carry; the shared
+`pin-upstream-mlx-swift` branch and every historical tip remain unchanged while
+the app PR is under review. `f177464` adds `KVCache.reserveCapacity(_:)`, honored
+by simple and quantized attention caches and forwarded by CacheList. Allocation
+increments double from 256 rows to 4096; prompt reservations use the initial
+granule. Logical state, metadata and persistence formats stay unchanged.
+
+The same commit is prepared on vanilla upstream `c6446cf` as `a7162cd`, branch
+`codex/533-upstream-cache-capacity`, with no other fork carries. Upstream PR:
+**pending the owner's read-and-approve attestation** required by the vendor's
+`CONTRIBUTING.md` and PR template. The app PR remains draft until this acceptance
+item is complete. Add the upstream PR link here once filed; drop the carry when
+it merges and the app re-pins to that upstream revision (ADR-0006).
+
+Validation: the carried revision passes the six new capacity tests and nine
+existing serialization/copy/empty-cache tests; the clean upstream branch passes
+`pre-commit run --all-files` with the Xcode formatter and nine selected capacity/serialization/copy tests
+against upstream dependency pins. The app's final 795 tests in 58 prefix-cache
+and touched suites pass, including canonical, speculative and raw prefill
+reservation regressions. Both Standards and Spec review are clear after the
+missing-path fix. Test-host model prewarms are disabled.
+No loaded-model, long-context or model-reload campaign was run.
+
 ## Current pin (2026-09-15, second cut)
 
 Base: upstream `main` @ `c6446cf` — 9 commits past the 2026-09-03 base
