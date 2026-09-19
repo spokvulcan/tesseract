@@ -275,16 +275,20 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// Under queueLock; only this case suppresses flush's normal re-pump.
     private var drainBlockedByLease = false
 
+    private let readArm: SSDSnapshotReadArm
+
     // MARK: - Public API
 
     init(
         config: SSDPrefixCacheConfig,
+        readArmForBenchmark: SSDSnapshotReadArm = .mapped,
         manifestDebounce: Duration = .milliseconds(500),
         activityGate: StorageActivityGate? = nil,
         onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
         onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) {
+        self.readArm = readArmForBenchmark
         self.rootURL = config.rootURL
         self.budgetBytes = config.budgetBytes
         self.maxPendingBytes = config.maxPendingBytes
@@ -1512,19 +1516,19 @@ extension SSDSnapshotStore {
             )
         }
 
-        // Read every segment file; let `Data(contentsOf:)` surface
-        // missing / permission / IO errors via one catch site.
-        // `.mappedIfSafe` lets the kernel page in on demand so
-        // ~200 MiB snapshots do not spike peak RSS during hydration.
+        // Production maps every segment with `.mappedIfSafe`, letting the
+        // kernel page in on demand. The #532 owner-run harness can select
+        // advised mapping or positional reads through this same store seam.
+        // All arms surface missing / permission / IO errors here.
         // The interruption poll between segments is the yield point a
         // preempted background hydration exits through (PRD #149 item
         // 7) — an interrupted return leaves the backing untouched.
-        var segmentData: [Data] = []
+        var segmentData: [SSDReadSegment] = []
         segmentData.reserveCapacity(chainURLs.count)
         for url in chainURLs {
             if interruption?() == true { return nil }
             do {
-                segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
+                segmentData.append(try SSDReadSegment(url: url, arm: readArm))
             } catch {
                 return failLoad(
                     snapshotRef,
@@ -1541,6 +1545,7 @@ extension SSDSnapshotStore {
         do {
             return try decodeSegmentChain(
                 segmentData,
+                snapshotID: snapshotRef.snapshotID,
                 tokenOffset: snapshotRef.tokenOffset,
                 checkpointType: snapshotRef.checkpointType
             )
@@ -1627,14 +1632,14 @@ extension SSDSnapshotStore {
             )
         }
 
-        var segmentData: [Data] = []
+        var segmentData: [SSDReadSegment] = []
         segmentData.reserveCapacity(prefixURLs.count)
         for url in prefixURLs {
             // Yield point (PRD #149 item 7): an interrupted return
             // leaves the chain untouched — no condemn, no miss event.
             if interruption?() == true { return nil }
             do {
-                segmentData.append(try Data(contentsOf: url, options: .mappedIfSafe))
+                segmentData.append(try SSDReadSegment(url: url, arm: readArm))
             } catch {
                 Log.agent.error(
                     "SSDSnapshotStore.loadSyncPrefix: read failed error=\(error) "
@@ -1654,6 +1659,7 @@ extension SSDSnapshotStore {
         do {
             return try decodeSegmentChain(
                 segmentData,
+                snapshotID: point.ownerSnapshotID,
                 tokenOffset: point.boundaryOffset,
                 checkpointType: point.checkpointType
             )
@@ -1733,7 +1739,8 @@ extension SSDSnapshotStore {
     /// extents) throws `SSDLoadError.segmentMismatch`, condemning the
     /// chain via the caller's failure path.
     private nonisolated func decodeSegmentChain(
-        _ segments: [Data],
+        _ segments: [SSDReadSegment],
+        snapshotID: String,
         tokenOffset: Int,
         checkpointType: HybridCacheSnapshot.CheckpointType
     ) throws -> HybridCacheSnapshot {
@@ -1741,9 +1748,24 @@ extension SSDSnapshotStore {
             throw SSDLoadError.segmentMismatch("empty chain")
         }
 
+        var segments = segments
+        var completed = false
+        defer {
+            for segment in segments {
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDHydrateSegmentEvent(
+                        id: snapshotID, segment: segment.name, arm: readArm.rawValue,
+                        fileBytes: segment.data.count, materializedBytes: segment.materializedBytes,
+                        readSeconds: segment.readSeconds, copySeconds: segment.copySeconds,
+                        completed: completed))
+            }
+        }
         var parsed: [(header: PlaceholderContainerHeader, blobsStart: Int, data: Data)] = []
         parsed.reserveCapacity(segments.count)
-        for data in segments {
+        for index in segments.indices {
+            let start = ContinuousClock.now
+            defer { segments[index].readSeconds += start.duration(to: .now).seconds }
+            let data = segments[index].data
             let (header, blobsStart) = try PlaceholderContainerHeader.parse(from: data)
             parsed.append((header, blobsStart, data))
         }
@@ -1808,6 +1830,12 @@ extension SSDSnapshotStore {
             pieces.reserveCapacity(contributors.count)
             for segmentIndex in contributors {
                 let segment = parsed[segmentIndex]
+                let start = ContinuousClock.now
+                let bytesBefore = totalBytes
+                defer {
+                    segments[segmentIndex].copySeconds += start.duration(to: .now).seconds
+                    segments[segmentIndex].materializedBytes += totalBytes - bytesBefore
+                }
                 let arrays = try materializeLayerArrays(
                     segment.header.layers[layerIndex],
                     blobsStart: segment.blobsStart,
@@ -1838,6 +1866,7 @@ extension SSDSnapshotStore {
                 ))
         }
 
+        completed = true
         return HybridCacheSnapshot(
             tokenOffset: tokenOffset,
             layers: snapshotLayers,

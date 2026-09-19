@@ -56,7 +56,7 @@ struct TesseractApp: App {
     /// `init`). Harness instances are exempt from the single-instance guard
     /// so a bench can run while an interactive instance is open.
     static let harnessFlags: Set<String> = [
-        "--paro-parity-bench", "--snapshot-bench", "--prefix-detect-bench",
+        "--paro-parity-bench", "--snapshot-bench", "--ssd-read-bench", "--prefix-detect-bench",
         "--tokenize-cache-bench", "--agent-cpu-bench", "--dflash2-bench",
         "--prefix-cache-e2e", "--benchmark", "--hybrid-cache-correctness",
         "--prefill-step-benchmark", "--paroquant-vlm-smoke",
@@ -82,6 +82,10 @@ struct TesseractApp: App {
         if args.contains("--paro-parity-bench") {
             Self.runHarness("PARO parity bench") {
                 try await ParoParityBenchRunner(runner: BenchmarkRunner()).run()
+            }
+        } else if args.contains("--ssd-read-bench") {
+            Self.runHarness("SSD read bench") {
+                try await SSDReadBenchRunner(runner: BenchmarkRunner()).run()
             }
         } else if args.contains("--snapshot-bench") {
             Self.runHarness("Snapshot bench") {

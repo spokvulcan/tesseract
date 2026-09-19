@@ -601,6 +601,33 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
+    /// Per-segment work, including lazy-map page faults in the MLX copy.
+    /// Cross-segment concatenation/evaluation belongs to the whole hydration
+    /// timer; fileBytes includes the header and superseded whole-state blobs,
+    /// whereas materializedBytes counts only arrays contributing to the body.
+    struct SSDHydrateSegmentEvent: Payload {
+        let id: String
+        let segment: String
+        let arm: String
+        let fileBytes: Int
+        let materializedBytes: Int
+        let readSeconds: Double
+        let copySeconds: Double
+        let completed: Bool
+
+        let eventName = "ssdHydrateSegment"
+        var fields: [(String, String)] {
+            [
+                ("id", id), ("segment", segment), ("arm", arm),
+                ("fileBytes", "\(fileBytes)"), ("materializedBytes", "\(materializedBytes)"),
+                ("readMs", PrefixCacheDiagnostics.milliseconds(readSeconds)),
+                ("copyMs", PrefixCacheDiagnostics.milliseconds(copySeconds)),
+                ("durationMs", PrefixCacheDiagnostics.milliseconds(readSeconds + copySeconds)),
+                ("completed", "\(completed)"),
+            ]
+        }
+    }
+
     struct SSDHitEvent: Payload {
         let id: String
         let hydrateMs: TimeInterval

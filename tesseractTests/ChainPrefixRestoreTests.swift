@@ -512,11 +512,13 @@ struct ChainPrefixHydrationTests {
         )
     }
 
-    @Test func prefixHydrationComposesOnlyTheLeadingSegments() async throws {
+    @Test(arguments: SSDSnapshotReadArm.allCases)
+    func prefixHydrationComposesOnlyTheLeadingSegments(arm: SSDSnapshotReadArm) async throws {
         let (config, root) = makeScratch()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SSDSnapshotStore(
             config: config,
+            readArmForBenchmark: arm,
             manifestDebounce: .milliseconds(20),
             onCommit: { _ in },
             onDrop: { _, _ in }
@@ -635,6 +637,18 @@ struct ChainPrefixHydrationTests {
             restoredMamba.state[0].asData(access: .copy).data
                 == MLXArray.zeros([1, 3, 16]).asData(access: .copy).data
         )
+        let headRef = SnapshotRef(
+            snapshotID: "head", partitionDigest: digest,
+            tokenOffset: 7, checkpointType: .leaf, bytesOnDisk: headPayload.totalBytes)
+        let full = try #require(
+            store.loadSync(snapshotRef: headRef, expectedFingerprint: testFingerprint))
+        #expect(full.tokenOffset == 7)
+        #expect(
+            full.layers[0].state[0].asData(access: .copy).data
+                == keysFull.asData(access: .copy).data)
+        #expect(
+            full.layers[1].state[0].asData(access: .copy).data
+                == MLXArray.ones([1, 3, 16]).asData(access: .copy).data)
     }
 
     @Test func staleBoundaryOffTheSegmentGridMissesCleanly() async throws {
