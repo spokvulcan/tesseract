@@ -37,6 +37,9 @@ final class RadixTreeNode {
     /// rejected write (budget, back-pressure) does not retry on every
     /// subsequent hit.
     var ssdPromotionAttempted: Bool = false
+    /// Planned view's SSD intent, fulfilled only after a Backing Leaf checks in.
+    /// Transient request-local helpers never enter this path.
+    var viewSSDAdmissionRequested = false
     weak var parent: RadixTreeNode?
 
     init(
@@ -62,7 +65,49 @@ final class RadixTreeNode {
     /// probe's abandoned-depth scan — the two must never disagree about what
     /// a divergence abandons.
     var isRestorableTarget: Bool {
-        state.isHittable || chainPrefixRestorePoint != nil
+        if state.body?.isPrefixView == true {
+            return viewResolution.outcome != .shallower
+        }
+        return state.isHittable || chainPrefixRestorePoint != nil
+    }
+
+    /// Chosen for this resolution only; never retained on the view node.
+    var backingLeaf: RadixTreeNode? { viewResolution.backingLeaf }
+
+    fileprivate var descendants: [RadixTreeNode] {
+        children.keys.sorted().flatMap { key in
+            let child = children[key]!
+            return [child] + child.descendants
+        }
+    }
+
+    private var viewResolution:
+        (
+            outcome: SnapshotResolutionLadder.ViewOutcome, backingLeaf: RadixTreeNode?
+        )
+    {
+        guard state.body?.isPrefixView == true else { return (.shallower, nil) }
+        let nodes = descendants
+        let decision = SnapshotResolutionLadder.viewOutcome(
+            offset: tokenOffset,
+            candidates: nodes.map {
+                .init(
+                    offset: $0.tokenOffset, lastAccess: $0.lastAccessTime,
+                    residentFullBody: $0.state.hasResidentBody && $0.state.checkpointType == .leaf,
+                    leased: $0.leafLease != nil, warmBody: $0.state.body?.isWarm == true)
+            },
+            committedRef: state.committed, chainPrefix: chainPrefixRestorePoint != nil)
+        if case .backingLeaf(let index) = decision { return (decision, nodes[index]) }
+        return (decision, nil)
+    }
+
+    /// A temporary ownership transfer must not discard the whole-state
+    /// checkpoint that becomes usable again when the leaf checks in.
+    fileprivate var hasPotentialBackingLeaf: Bool {
+        descendants.contains {
+            $0.leafLease != nil
+                || ($0.state.hasResidentBody && $0.state.checkpointType == .leaf)
+        }
     }
 }
 
@@ -160,6 +205,8 @@ final class TokenRadixTree {
         var pos = 0
         var bestNode: RadixTreeNode?
         var bestPrefixLength = 0
+        var unbackedViews: [RadixTreeNode] = []
+        defer { for node in unbackedViews { retireUnbackedView(node) } }
 
         // RAM body → always hittable (`hasResidentBody`). A committed SSD
         // ref (`isHittable` adds state 5) is hittable only when the caller
@@ -168,7 +215,12 @@ final class TokenRadixTree {
         // the owning chain's leading segments. Pending refs are never
         // hittable.
         func isHittable(_ node: RadixTreeNode) -> Bool {
-            includeSnapshotRefs ? node.isRestorableTarget : node.state.hasResidentBody
+            if node.state.body?.isPrefixView == true {
+                if node.backingLeaf != nil { return true }
+                unbackedViews.append(node)
+                return includeSnapshotRefs && node.isRestorableTarget
+            }
+            return includeSnapshotRefs ? node.isRestorableTarget : node.state.hasResidentBody
         }
 
         // Root can have a snapshot (e.g. empty-prefix checkpoint)
@@ -205,6 +257,34 @@ final class TokenRadixTree {
             node.hitCount += 1
         }
         return (node: node, sharedPrefixLength: bestPrefixLength)
+    }
+
+    /// Resolve a request-local view without inserting it into the tree. The
+    /// prefix may end inside a compressed edge; only that subtree can back it.
+    /// Candidate choice remains in the same pure ladder as stored views.
+    func backingLeaf(forPrefix tokens: [Int]) -> RadixTreeNode? {
+        guard !tokens.isEmpty else { return nil }
+        var current = root
+        var offset = 0
+        while offset < tokens.count {
+            guard let child = current.children[tokens[offset]] else { return nil }
+            let count = min(child.edgeTokens.count, tokens.count - offset)
+            guard tokens[offset..<(offset + count)].elementsEqual(child.edgeTokens.prefix(count))
+            else { return nil }
+            offset += count
+            current = child
+        }
+        let candidates = [current] + current.descendants
+        let choice = SnapshotResolutionLadder.viewOutcome(
+            offset: tokens.count,
+            candidates: candidates.map {
+                .init(
+                    offset: $0.tokenOffset, lastAccess: $0.lastAccessTime,
+                    residentFullBody: $0.state.hasResidentBody && $0.state.checkpointType == .leaf,
+                    leased: $0.leafLease != nil, warmBody: $0.state.body?.isWarm == true)
+            }, committedRef: false, chainPrefix: false)
+        guard case .backingLeaf(let index) = choice else { return nil }
+        return candidates[index]
     }
 
     /// The deepest strict-ancestor node on `tokens` whose state is a
@@ -440,6 +520,7 @@ final class TokenRadixTree {
         let old = node.state
         let (next, effect) = old.droppingRef(expectedID: expectedID)
         commit(next, on: node, from: old)
+        if effect == .settled, retireUnbackedView(node) { return .becameEmpty }
         if effect == .becameEmpty { selfHeal(node) }
         return effect
     }
@@ -462,9 +543,33 @@ final class TokenRadixTree {
         if case .ignored = result.effect {
             preconditionFailure("dropBody requires a resident body; node was \(old.label)")
         }
+        var ancestor = node.parent
         commit(next, on: node, from: old)
         if result.effect == .becameEmpty { selfHeal(node) }
+        while let view = ancestor {
+            ancestor = view.parent
+            retireUnbackedView(view)
+        }
         return result
+    }
+
+    @discardableResult
+    private func retireUnbackedView(_ node: RadixTreeNode) -> Bool {
+        guard node.state.body?.isPrefixView == true,
+            node.state.ref == nil, node.chainPrefixRestorePoint == nil,
+            !node.hasPotentialBackingLeaf
+        else { return false }
+        let old = node.state
+        let (next, result) = old.droppingBody()
+        commit(next, on: node, from: old)
+        if result.effect == .becameEmpty { selfHeal(node) }
+        return true
+    }
+
+    /// Checkpoint admission precedes leaf storage. Only sweep once the
+    /// manager's last request settles, including skipped/failed leaf stores.
+    func retireUnbackedViews() {
+        for node in allSnapshotNodes().reversed() { retireUnbackedView(node) }
     }
 
     /// Hydrate a committed-ref node with a freshly loaded body (state 5 →
@@ -501,6 +606,7 @@ final class TokenRadixTree {
         let (next, effect) = old.clearingCommittedRefAfterBackingLoss()
         if case .ignored = effect { return effect }
         commit(next, on: node, from: old)
+        if retireUnbackedView(node) { return .becameEmpty }
         if effect == .becameEmpty { selfHeal(node) }
         return effect
     }
@@ -520,6 +626,7 @@ final class TokenRadixTree {
             )
         }
         commit(next, on: node, from: old)
+        if retireUnbackedView(node) { return .becameEmpty }
         if effect == .becameEmpty { selfHeal(node) }
         return effect
     }
@@ -604,6 +711,7 @@ final class TokenRadixTree {
     func clearChainPrefixRestorePoint(node: RadixTreeNode) {
         guard node.chainPrefixRestorePoint != nil else { return }
         node.chainPrefixRestorePoint = nil
+        if retireUnbackedView(node) { return }
         if node.state.isEmpty { selfHeal(node) }
     }
 
@@ -847,7 +955,7 @@ final class TokenRadixTree {
     }
 
     private func collectEligible(node: RadixTreeNode, into result: inout [RadixTreeNode]) {
-        if node.state.body != nil || node.leafLease != nil {
+        if node.state.hasResidentBody || node.leafLease != nil {
             result.append(node)
         }
         for child in node.children.values {
@@ -874,15 +982,10 @@ final class TokenRadixTree {
         let state = node.state
         let snapshot = state.body
         let checkpointType = state.checkpointType?.wireString
-        // `.map` yields `EvictionScore??` (telemetryEvictionScore is itself
-        // optional); the `?? nil` flattens the double optional and is
-        // load-bearing — not redundant (SwiftLint's heuristic misreads it).
-        // swiftlint:disable redundant_nil_coalescing
-        let scores =
-            snapshot.map { _ in
-                telemetryEvictionScore(for: node, now: now, config: config)
-            } ?? nil
-        // swiftlint:enable redundant_nil_coalescing
+        let scores: EvictionScore? = snapshot.flatMap { snapshot in
+            guard !snapshot.isPrefixView else { return nil }
+            return telemetryEvictionScore(for: node, now: now, config: config)
+        }
 
         nodes.append(
             PromptCacheTreeNodeSnapshot(
@@ -894,7 +997,7 @@ final class TokenRadixTree {
                 edgeTokenCount: node.edgeTokens.count,
                 childCount: node.childCount,
                 depth: depth,
-                hasSnapshot: state.hasResidentBody,
+                hasSnapshot: state.body != nil,
                 checkpointType: checkpointType,
                 snapshotBytes: state.residentBodyBytes,
                 storageState: storageState,
@@ -904,6 +1007,7 @@ final class TokenRadixTree {
                 normalizedRecency: scores?.normalizedRecency,
                 normalizedFlopEfficiency: scores?.normalizedFlopEfficiency,
                 utility: scores?.utility,
+                checkpointKind: snapshot?.checkpointKind,
                 warmBytes: snapshot?.isWarm == true ? state.residentBodyBytes : nil
             ))
 
@@ -1063,12 +1167,15 @@ extension TokenRadixTree {
         leasedBytes -= lease.bytes
         leaseCount -= 1
         if destination !== node {
-            if node.state.body != nil { dropBody(node: node) }
             if let existing { _ = existing.bodyAccess.end(lease) }
             destination.bodyAccess = node.bodyAccess
             node.bodyAccess = LeafBodyAccess()
         }
         storeSnapshot(body, on: destination)
+        // Publish the returned backer before retiring the old resident body.
+        // Both transitions are MainActor-confined; a view must never observe
+        // an artificial last-backer loss during this ownership transfer.
+        if destination !== node, node.state.body != nil { dropBody(node: node) }
         lease.context.log(
             LeafLeaseEndEvent(
                 lease: lease, reason: reason, returnedOffset: body.tokenOffset,

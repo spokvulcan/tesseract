@@ -157,7 +157,7 @@ nonisolated enum SnapshotState {
 
     /// RAM-budget concept: true iff a RAM body is resident (states
     /// 1/2/4). Explicitly distinct from `canEvictNode`.
-    var hasResidentBody: Bool { body != nil }
+    var hasResidentBody: Bool { body.map { !$0.isPrefixView } ?? false }
 
     /// True iff a lookup can land here: a RAM body is present, or the ref
     /// is committed (hydratable). A `pendingDropped` (state 3) is never

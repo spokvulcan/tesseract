@@ -128,6 +128,11 @@ struct CacheOverviewView: View {
                 capacity: snapshot?.ssd.budgetBytes ?? 0,
                 emptyHint: snapshot?.ssd.enabled == false ? "disabled" : "no live cache"
             )
+            CacheStatTile(
+                label: "view-only bytes",
+                value: PromptCacheFormatting.bytes(snapshot?.viewOnlyBytes ?? 0),
+                detail: "whole-state checkpoint layers"
+            )
         }
     }
 

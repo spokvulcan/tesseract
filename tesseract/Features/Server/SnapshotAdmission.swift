@@ -73,6 +73,9 @@ nonisolated struct SnapshotAdmission: Sendable {
     enum Storage: Sendable {
         case ramOnly
         case ramAndSSD(SnapshotPayload)
+        /// A view has no attention arrays to extract until leaf check-in.
+        /// The manager applies the ordinary checkpoint write policy then.
+        case viewSSD
     }
 
     struct CheckpointCandidate: Sendable {

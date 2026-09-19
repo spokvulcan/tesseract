@@ -21,6 +21,64 @@ import Testing
 
 struct ServerCompletionExtractSnapshotPayloadsTests {
 
+    @Test func viewPayloadDetachesEveryArrayAndDefersTheHostCopy() async throws {
+        let attention = KVCacheSimple()
+        attention.state = [
+            MLXArray((0..<512).map(Float.init)).reshaped([1, 1, 8, 64]),
+            MLXArray.ones([1, 1, 8, 64]),
+        ]
+        let recurrent = MambaCache()
+        recurrent.state = [MLXArray([Float(42), 43, 44])]
+        attention.trim(4)
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention, recurrent], offset: 4, type: .branchPoint, prefixView: true))
+        attention.state = [
+            MLXArray((0..<512).map(Float.init)).reshaped([1, 1, 8, 64]),
+            MLXArray.ones([1, 1, 8, 64]),
+        ]
+        recurrent.state = [MLXArray([Float(99), 100, 101])]
+        let leaf = try #require(
+            HybridCacheSnapshot.capture(cache: [attention, recurrent], offset: 8, type: .leaf))
+        let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf)
+        #expect(payload.extending == nil)
+        #expect(payload.totalBytes == 2060)  // two 4×64 float32 arrays + three recurrent values
+        #expect(!payload.isMaterialized)
+        #expect(owed.retainedArrays.count == 3)
+        let originalAddresses = Set(
+            (leaf.layers + view.layers).flatMap(\.state).map(backingAddress))
+        #expect(owed.retainedArrays.allSatisfy { !originalAddresses.contains(backingAddress($0)) })
+        // No host data exists at the extraction edge. The eventual reader
+        // runs the host copy; production supplies the SSD writer's task.
+        let layers = await Task.detached { payload.layers }.value
+        #expect(payload.isMaterialized)
+        #expect(owed.retainedArrays.isEmpty)
+        #expect(SnapshotPayload.byteCount(of: layers) == 2060)
+        #expect(layers[0].state[0].shape == [1, 1, 4, 64])
+        #expect(
+            layers[0].state[0].data
+                == MLXArray((0..<256).map(Float.init)).asData(access: .copy).data)
+        #expect(
+            layers[1].state[0].data == MLXArray([Float(42), 43, 44]).asData(access: .copy).data)
+        #expect(layers.allSatisfy { $0.suffixBaseOffset == nil })
+    }
+
+    @Test func prefixViewAdmissionRetainsSSDIntentUntilTheLeafChecksIn() throws {
+        let attention = KVCacheSimple()
+        attention.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention], offset: 4, type: .branchPoint, prefixView: true))
+        let candidates = ServerCompletion.extractCheckpointAdmissionCandidates(
+            [view], ssdEnabled: true)
+        let candidate = try #require(candidates.first)
+        guard case .viewSSD = candidate.storage else {
+            Issue.record("a view must retain SSD intent without extracting incomplete arrays")
+            return
+        }
+        #expect(candidate.snapshot.memoryBytes == 0)
+    }
+
     // MARK: - Fixture builders
 
     /// Build a single-layer `KVCacheSimple` snapshot whose arrays have

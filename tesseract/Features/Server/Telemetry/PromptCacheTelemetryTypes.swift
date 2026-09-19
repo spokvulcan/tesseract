@@ -353,10 +353,15 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     let estimates: MeasuredSecondsEstimates
     let trees: [PromptCacheTreeSnapshot]
 
+    var viewOnlyBytes: Int {
+        trees.flatMap(\.nodes).filter { $0.checkpointKind == "prefixView" }
+            .reduce(0) { $0 + $1.snapshotBytes }
+    }
+
     var warmSnapshotBytes: Int {
         trees.reduce(0) { $0 + $1.nodes.reduce(0) { $0 + ($1.warmBytes ?? 0) } }
     }
-    var hotSnapshotBytes: Int { residentSnapshotBytes - warmSnapshotBytes }
+    var hotSnapshotBytes: Int { residentSnapshotBytes - warmSnapshotBytes - viewOnlyBytes }
 
     static let empty = PromptCacheTelemetrySnapshot(
         capturedAt: Date(),
@@ -409,6 +414,8 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
     let normalizedRecency: Double?
     let normalizedFlopEfficiency: Double?
     let utility: Double?
+    /// Optional so archived telemetry predating Prefix-View Checkpoints decodes.
+    var checkpointKind: String?
 
     /// Optional for compatibility with telemetry captured before Warm Bodies.
     var warmBytes: Int?
@@ -432,6 +439,7 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
         case normalizedRecency
         case normalizedFlopEfficiency
         case utility
+        case checkpointKind
         case warmBytes
     }
 }

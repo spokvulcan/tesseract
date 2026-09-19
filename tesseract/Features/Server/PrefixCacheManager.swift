@@ -356,6 +356,7 @@ final class PrefixCacheManager {
 
     struct LookupResult: Sendable {
         let snapshot: HybridCacheSnapshot?
+        let backingLeaf: HybridCacheSnapshot?
         let partitionKey: CachePartitionKey?
         let snapshotTokenOffset: Int
         /// Actual token-level match depth in the radix tree, which may be
@@ -385,9 +386,11 @@ final class PrefixCacheManager {
             sharedPrefixLength: Int,
             reason: LookupReason,
             recordedHitSnapshotID: String? = nil,
-            divergence: PrefixDivergenceProbe? = nil
+            divergence: PrefixDivergenceProbe? = nil,
+            backingLeaf: HybridCacheSnapshot? = nil
         ) {
             self.snapshot = snapshot
+            self.backingLeaf = backingLeaf
             self.partitionKey = partitionKey
             self.snapshotTokenOffset = snapshotTokenOffset
             self.sharedPrefixLength = sharedPrefixLength
@@ -403,7 +406,7 @@ final class PrefixCacheManager {
         nonisolated func restoreCache() -> [any KVCache]? {
             guard let snapshot, partitionKey != nil else { return nil }
             do {
-                return try snapshot.restore()
+                return try snapshot.restore(backingLeaf: backingLeaf)
             } catch {
                 Log.server.error(
                     "snapshot restore failed — treating as cache miss: \(error)"
@@ -556,7 +559,8 @@ final class PrefixCacheManager {
             )
         }
 
-        if let snapshot = node.state.body {
+        let backingLeaf = node.backingLeaf
+        if let snapshot = node.state.body, !snapshot.isPrefixView || backingLeaf != nil {
             // States 1, 2, or 4. On state 4 (committed ref + body) the
             // store bumps the SSD descriptor's `lastAccessAt` so a hot
             // RAM hit does not look stale to the SSD LRU when the body
@@ -577,9 +581,17 @@ final class PrefixCacheManager {
                         type: snapshot.checkpointType
                     ),
                     recordedHitSnapshotID: recordedHitID,
-                    divergence: divergence
+                    divergence: divergence,
+                    backingLeaf: backingLeaf?.state.body
                 ), node
             )
+        }
+
+        // A view without a RAM backer follows the body-absent ladder. Drop
+        // only its whole-state representation; any own ref or chain-prefix
+        // point remains available to the existing hydration performers.
+        if node.state.body?.isPrefixView == true {
+            tree.dropBody(node: node)
         }
 
         // State 5 — body absent, committed ref present. We reach here only
@@ -695,6 +707,11 @@ final class PrefixCacheManager {
     /// it: no drain may evict the body an in-flight request restored
     /// from (ADR-0019).
     ///
+    /// `transientBoundary` is a request-local Prefix-View Checkpoint captured
+    /// on `tokens`' prefix; callers validate that original path before passing
+    /// it. It can improve a shallower result without inserting a tree body.
+    /// Backing Leaf selection and its Restore Pin share one MainActor hop.
+    ///
     /// `interruption` (PRD #149 item 7) — polled by the hydration read
     /// at its segment-boundary yield points. A background caller (the
     /// preemptible speculative pass) passes its cancellation check so a
@@ -708,6 +725,7 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey,
         modelFingerprint: String?,
         diagnostics: PrefixCacheDiagnostics.Context,
+        transientBoundary: HybridCacheSnapshot? = nil,
         pinningRestorePathFor pinRequestID: UUID? = nil,
         interruption: (@Sendable () -> Bool)? = nil
     ) async -> Resolved {
@@ -720,9 +738,39 @@ final class PrefixCacheManager {
         var attempt = 0
         while true {
             let initial = await MainActor.run {
-                let (result, node) = self.lookupReturningNode(
+                var (result, node) = self.lookupReturningNode(
                     tokens: tokens, partitionKey: partitionKey
                 )
+                if let view = transientBoundary, view.isPrefixView,
+                    view.tokenOffset <= tokens.count,
+                    view.tokenOffset > result.snapshotTokenOffset
+                {
+                    let prefix = Array(tokens.prefix(view.tokenOffset))
+                    if let backer = self.store.tree(for: partitionKey)?.backingLeaf(
+                        forPrefix: prefix),
+                        let body = backer.state.body
+                    {
+                        result = LookupResult(
+                            snapshot: view, partitionKey: partitionKey,
+                            snapshotTokenOffset: view.tokenOffset,
+                            sharedPrefixLength: max(result.sharedPrefixLength, view.tokenOffset),
+                            reason: .hit(
+                                snapshotOffset: view.tokenOffset,
+                                totalTokens: tokens.count, type: view.checkpointType),
+                            backingLeaf: body)
+                        // The transient view has no node. Pin its resolved
+                        // Backing Leaf atomically before releasing MainActor.
+                        node = backer
+                    } else {
+                        diagnostics.logSkip(
+                            stage: "boundaryView", reason: "no-backing-leaf",
+                            extraFields: [
+                                ("fallback", "boundaryReprefill"),
+                                ("requestedOffset", "\(view.tokenOffset)"),
+                                ("restoredOffset", "\(result.snapshotTokenOffset)"),
+                            ])
+                    }
+                }
                 if let pinRequestID {
                     // Lane registration for the Active-Inference Reserve
                     // (ADR-0018) — on hit AND miss: a missing prefix still
@@ -730,6 +778,9 @@ final class PrefixCacheManager {
                     self.activeRequestIDs.insert(pinRequestID)
                     if let node {
                         self.pinRestorePath(node: node, requestID: pinRequestID)
+                        if let backingLeaf = node.backingLeaf {
+                            self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
+                        }
                     }
                 }
                 return result
@@ -1020,6 +1071,9 @@ final class PrefixCacheManager {
                 self.recordHitSavings(restoredOffset: body.tokenOffset)
                 if let pinRequestID {
                     self.pinRestorePath(node: node, requestID: pinRequestID)
+                    if let backingLeaf = node.backingLeaf {
+                        self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
+                    }
                 }
                 if let recordedHitID {
                     diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: recordedHitID))
@@ -1027,7 +1081,8 @@ final class PrefixCacheManager {
                 return SnapshotResolutionLadder.gateFallbackHit(
                     body: body, partitionKey: partitionKey,
                     promptTokenCount: promptTokenCount, treeMatchDepth: treeMatchDepth,
-                    recordedHitID: recordedHitID, divergence: divergence
+                    recordedHitID: recordedHitID, divergence: divergence,
+                    backingLeaf: node.backingLeaf?.state.body
                 )
             }
         }
@@ -1171,6 +1226,95 @@ final class PrefixCacheManager {
 
     // MARK: - Store
 
+    private func deferSSDWrite(
+        snapshot: HybridCacheSnapshot, node: RadixTreeNode, bytes: Int
+    ) -> Bool {
+        guard adaptiveWriteEagerness,
+            SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: snapshot.checkpointType, nodeHitCount: node.hitCount,
+                residentBytes: totalSnapshotBytes, budgetBytes: memoryBudgetBytes,
+                bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes)
+        else { return false }
+        cumulativeCounters.eagernessDeferrals += 1
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDWriteDeferredEvent(
+                offset: snapshot.tokenOffset, bytes: bytes, hitCount: node.hitCount))
+        return true
+    }
+
+    /// Fulfil planned views' SSD intent at the turn's quiescent boundary,
+    /// after leaf check-in. Cold deferred views keep their intent; lookup
+    /// hits can earn a write on a later turn. No tree body is materialized.
+    func persistViewCheckpoints(
+        partitionKey: CachePartitionKey, sessions: any ModelSessionProviding
+    ) async {
+        guard store.isSSDEnabled, partitionKey.modelFingerprint != nil,
+            let tree = store.tree(for: partitionKey)
+        else { return }
+        for node in tree.allSnapshotNodes() {
+            guard !Task.isCancelled, node.viewSSDAdmissionRequested,
+                !node.ssdPromotionAttempted, node.state.ref == nil,
+                let view = node.state.body, view.isPrefixView,
+                let backer = node.backingLeaf, let leaf = backer.state.body,
+                leaf.layers.count == view.layers.count
+            else { continue }
+            // Metadata only: decide admission before allocating detached
+            // prefix buffers. Every attention array has the same token axis.
+            guard let bytes = view.materializationByteCount(backingLeaf: leaf) else { continue }
+            guard !deferSSDWrite(snapshot: view, node: node, bytes: bytes) else { continue }
+            guard
+                store.survivalGateAdmits(
+                    snapshot: view, payloadTotalBytes: bytes, scoringConfig: evictionConfig)
+            else {
+                cumulativeCounters.survivalGateSkips += 1
+                continue
+            }
+            let access = backer.bodyAccess
+            guard access.beginRead(snapshotID: "view-\(view.bodyID)") else { continue }
+            let earnedPromotion =
+                adaptiveWriteEagerness
+                && node.hitCount >= SSDWriteEagernessPolicy.hitCountThreshold
+            // Reserve this view while extraction suspends. A failed or
+            // cancelled extraction has not consumed its enqueue attempt.
+            node.ssdPromotionAttempted = true
+            let path = tree.pathToNode(node)
+            let payload: SnapshotPayload?
+            do {
+                payload = try await sessions.withSession { _ in
+                    try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf).payload
+                }
+            } catch {
+                Log.agent.warning(
+                    "Prefix-View Checkpoint SSD extraction failed: \(String(describing: error))")
+                payload = nil
+            }
+            // Device copies are evaluated now. The pending writer owns only
+            // detached arrays and cannot delay the leaf's next check-out.
+            access.endRead()
+            if node.state.body?.bodyID == view.bodyID {
+                node.ssdPromotionAttempted = false
+            }
+            guard let payload, !Task.isCancelled,
+                store.tree(for: partitionKey) === tree,
+                node.state.body?.bodyID == view.bodyID, node.state.ref == nil,
+                tree.allSnapshotNodes().contains(where: { $0 === node })
+            else { continue }
+            registerSSDPartitionIfNeeded(for: partitionKey)
+            node.ssdPromotionAttempted = true
+            if earnedPromotion {
+                cumulativeCounters.eagernessPromotions += 1
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDWritePromotedEvent(
+                        offset: view.tokenOffset, bytes: payload.totalBytes, hitCount: node.hitCount
+                    ))
+            }
+            store.admitSnapshot(
+                node: node, tree: tree, partitionKey: partitionKey, pathFromRoot: path,
+                snapshot: view, payload: payload, scoringConfig: evictionConfig,
+                deferrable: earnedPromotion)
+        }
+    }
+
     @discardableResult
     func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
         // Re-evaluate the measured ceiling on the write path (throttled):
@@ -1205,9 +1349,18 @@ final class PrefixCacheManager {
         {
             let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
+            let replacingView =
+                entry.snapshot.isPrefixView
+                && node.state.body?.bodyID != entry.snapshot.bodyID
             guard tree.storeSnapshot(entry.snapshot, on: node) else {
                 if let lease = node.leafLease { leaseRefusals.append(lease.id) }
                 return nil
+            }
+            if replacingView { node.ssdPromotionAttempted = false }
+            if case .viewSSD = entry.storage {
+                node.viewSSDAdmissionRequested = true
+            } else {
+                node.viewSSDAdmissionRequested = false
             }
 
             return (node, path)
@@ -1242,22 +1395,9 @@ final class PrefixCacheManager {
             // streak earns a deferred-class promotion write from the
             // lookup path instead. `.system` checkpoints are exempt
             // inside the policy (issue #165).
-            if !guaranteeWrite, adaptiveWriteEagerness,
-                SSDWriteEagernessPolicy.mayDefer(
-                    checkpointType: entry.snapshot.checkpointType,
-                    nodeHitCount: node.hitCount,
-                    residentBytes: totalSnapshotBytes,
-                    budgetBytes: memoryBudgetBytes,
-                    bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes
-                )
+            if !guaranteeWrite,
+                deferSSDWrite(snapshot: entry.snapshot, node: node, bytes: payload.totalBytes)
             {
-                cumulativeCounters.eagernessDeferrals += 1
-                PrefixCacheDiagnostics.logSystem(
-                    PrefixCacheDiagnostics.SSDWriteDeferredEvent(
-                        offset: entry.snapshot.tokenOffset,
-                        bytes: payload.totalBytes,
-                        hitCount: node.hitCount
-                    ))
                 return nil
             }
             // The Survival Gate: checkpoint write-throughs (and any
@@ -2223,6 +2363,9 @@ final class PrefixCacheManager {
     func completeRequest(requestID: UUID) {
         restorePins.removeAll { $0.requestID == requestID }
         activeRequestIDs.remove(requestID)
+        if activeRequestIDs.isEmpty {
+            for (_, tree) in store.orderedPartitions() { tree.retireUnbackedViews() }
+        }
     }
 
     // MARK: - Eviction
@@ -2796,7 +2939,7 @@ final class PrefixCacheManager {
             store.isSSDEnabled,
             demotionPayloadExtractor != nil,
             partitionKey.modelFingerprint != nil,
-            node.state.body?.isWarm == false
+            node.state.hasResidentBody && node.state.body?.isWarm == false
         else { return }
 
         guard !node.bodyAccess.blocks(.writePromotion) else { return }
@@ -2810,7 +2953,8 @@ final class PrefixCacheManager {
             guard let self,
                 node.state.ref == nil,
                 node.chainPrefixRestorePoint == nil,
-                let snapshot = node.state.body, !snapshot.isWarm,
+                let snapshot = node.state.body,
+                !snapshot.isPrefixView, !snapshot.isWarm,
                 let payload = self.demotionPayloadExtractor?(snapshot)
             else { return }
 

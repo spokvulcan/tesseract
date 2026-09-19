@@ -1098,6 +1098,10 @@ nonisolated final class ServerCompletion {
                 memory: memory
             )
             await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+            if mlxStart.ssdEnabled, !Task.isCancelled {
+                await prefixCache.persistViewCheckpoints(
+                    partitionKey: mlxStart.partitionKey, sessions: sessions)
+            }
             leafResult.report.restoreMode = mlxStart.finalCacheOwner.restoreMode
             leafResult.report.restoreCopyReason = mlxStart.finalCacheOwner.copyReason
             leafResult.report.restoreCopyWaitSeconds = mlxStart.finalCacheOwner.copyWaitSeconds
@@ -1249,6 +1253,7 @@ nonisolated final class ServerCompletion {
                 seedsPositionAnchor: mlxStart.seedsPositionAnchor,
                 canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
                     .tokenOffset ?? 0,
+                transientBoundary: mlxStart.transientLastUserBoundarySnapshot,
                 ramOnlySpine: true,
                 diagnostics: diagnosticsContext
             )
@@ -1763,11 +1768,13 @@ nonisolated final class ServerCompletion {
                         divergence: lookupResult.divergence,
                         restoreMode: restoreMode, copyReason: restoreCopyReason,
                         copyWaitSeconds: restoreCopyWaitSeconds,
-                        warmBody: lookupResult.snapshot?.isWarm == true
+                        backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
+                        warmBody: lookupResult.snapshot?.isWarm == true,
+                        backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
-                // helpers (captured as leaves; a planned checkpoint at the same
+                // helpers (Prefix-View Checkpoints; a planned checkpoint at the same
                 // offset wins) into one capture map for the prefill driver.
                 // Planner guarantees offset uniqueness, so uniqueKeysWithValues
                 // traps loudly on a planner-side invariant break instead of
@@ -1779,13 +1786,13 @@ nonisolated final class ServerCompletion {
                     }
                 )
                 // Preserve-thinking turns never synthesize boundary leaves or
-                // abandonment seeds. Their full-prefix helper copies serve no consumer.
+                // abandonment seeds. Their boundary helpers serve no consumer.
                 let transientOffsets =
                     renderContext.preservesThinking && textOnlyIdentityKeySpace
                     ? Set<Int>() : prefillPlan.transientCheckpointOffsets
                 let helperCheckpoints = Dictionary(
                     uniqueKeysWithValues: transientOffsets.map {
-                        ($0, HybridCacheSnapshot.CheckpointType.leaf)
+                        ($0, HybridCacheSnapshot.CheckpointType.branchPoint)
                     }
                 )
                 let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in
@@ -2014,11 +2021,17 @@ nonisolated final class ServerCompletion {
                 finalCacheOwner.copyReason = restoreCopyReason
                 finalCacheOwner.copyWaitSeconds = restoreCopyWaitSeconds
                 let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+                let boundarySnapshots = prefillResult.snapshots.filter {
+                    transientOffsets.contains($0.tokenOffset)
+                }
                 memory.mark(
                     .prefilled,
                     facts: RequestMemoryTelemetry.cacheFacts(liveCache).merging([
                         "prefillCheckpointArrayBytes":
-                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })"
+                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })",
+                        "boundaryCheckpointCount": "\(boundarySnapshots.count)",
+                        "boundaryCheckpointArrayBytes":
+                            "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                     ]) { _, new in new })
                 let iterator = prefillResult.iterator
                 if case .dflash2 = iterator {
@@ -2093,7 +2106,8 @@ nonisolated final class ServerCompletion {
                             checkpointType: snapshot.checkpointType,
                             bytes: snapshot.memoryBytes,
                             duringPrefill: true,
-                            source: "prefill"
+                            source: "prefill",
+                            checkpointKind: snapshot.checkpointKind
                         ))
                 }
 
@@ -2255,7 +2269,7 @@ nonisolated final class ServerCompletion {
     ) -> [any KVCache]? {
         guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
         do {
-            return try session.restore(snapshot)
+            return try session.restore(snapshot, backingLeaf: lookup.backingLeaf)
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"
@@ -2764,6 +2778,7 @@ nonisolated final class ServerCompletion {
         extending: SnapshotExtension? = nil
     ) -> SnapshotAdmission.Storage {
         guard ssdEnabled else { return .ramOnly }
+        if snapshot.isPrefixView { return .viewSSD }
         return .ramAndSSD(extractSnapshotPayload(snapshot, extending: extending))
     }
 
@@ -2943,17 +2958,54 @@ nonisolated final class ServerCompletion {
         for snapshot: HybridCacheSnapshot,
         extending: SnapshotExtension? = nil
     ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
+        precondition(!snapshot.isPrefixView, "a view payload requires its Backing Leaf")
         let activeExtension = validatedExtension(extending, for: snapshot)
+        return deferredPayload(
+            for: snapshot, layers: snapshot.layers, extending: activeExtension, detaching: false)
+    }
+
+    /// A full-format view payload owns every retained array independently
+    /// of both the Backing Leaf and the view. Run inside the Model Session
+    /// while the backer is protected; only the later host copy is deferred.
+    static func deferredPayload(
+        for view: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
+    ) throws -> (payload: SnapshotPayload, owed: DeferredLayers) {
+        precondition(view.isPrefixView)
+        if backingLeaf.isWarm {
+            // Stored Form remains full until #531. View restore dequantizes
+            // only the prefix and copies whole-state layers into private
+            // buffers, so this payload can take those buffers without a
+            // second copy or retaining any tree body array.
+            var cache = try view.restore(backingLeaf: backingLeaf)
+            guard
+                let materialized = HybridCacheSnapshot.captureMoving(
+                    cache: &cache, offset: view.tokenOffset)
+            else { throw HybridCacheSnapshot.ViewRestoreError.invalidBackingLeaf }
+            return deferredPayload(
+                for: view, layers: materialized.layers, extending: nil, detaching: false)
+        }
+        return deferredPayload(
+            for: view, layers: try view.materializationLayers(backingLeaf: backingLeaf),
+            extending: nil, detaching: true)
+    }
+
+    private static func deferredPayload(
+        for snapshot: HybridCacheSnapshot, layers: [HybridCacheSnapshot.LayerState],
+        extending activeExtension: SnapshotExtension?, detaching: Bool
+    ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
 
         var owed: [DeferredLayers.Layer] = []
         owed.reserveCapacity(snapshot.layers.count)
         var detached: [MLXArray] = []
         var totalBytes = 0
 
-        for layer in snapshot.layers {
+        for layer in layers {
             var suffixBaseOffset: Int?
             var arrays = layer.state
-            if let activeExtension {
+            if detaching {
+                arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
+                detached.append(contentsOf: arrays)
+            } else if let activeExtension {
                 switch layer.kind {
                 case .sliceableAttention:
                     suffixBaseOffset = activeExtension.baseOffset
@@ -2993,6 +3045,7 @@ nonisolated final class ServerCompletion {
             checkpointType: snapshot.checkpointType,
             extending: activeExtension,
             totalBytes: totalBytes,
+            retainsBodyArrays: !snapshot.isPrefixView && !detaching && activeExtension == nil,
             materialize: { deferred.materialize() }
         )
         return (payload, deferred)

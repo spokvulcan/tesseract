@@ -70,6 +70,20 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 snapshotOffset: snapshotOffset ?? offset)
         }
 
+        /// Preserve the already-derived Layer Kind when a Prefix-View
+        /// Checkpoint omits attention arrays, or a copy replaces its arrays.
+        private init(source: LayerState, state: [MLXArray]) {
+            className = source.className
+            self.state = state
+            metaState = source.metaState
+            offset = source.offset
+            kind = source.kind
+        }
+
+        func replacingState(_ state: [MLXArray]) -> LayerState {
+            LayerState(source: self, state: state)
+        }
+
         /// Cache classes whose state arrays slice cleanly per token range.
         /// Rotating, chunked and recurrent classes never do, whatever their
         /// shapes.
@@ -97,6 +111,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
     private enum Body {
         case copied([LayerState])
+        case prefixView([LayerState])
         case warm([LayerState])
         // Keep the objects themselves for the later check-out step (ADR-0064).
         // The frozen serialization view lets every existing tier consumer
@@ -118,18 +133,22 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     private let body: Body
     var layers: [LayerState] {
         switch body {
-        case .copied(let layers): layers
-        case .warm(let layers): layers
+        case .copied(let layers), .prefixView(let layers), .warm(let layers): layers
         case .moved(let owner): owner.layers
         }
     }
+    var isPrefixView: Bool {
+        if case .prefixView = body { return true }
+        return false
+    }
+    var checkpointKind: String { isPrefixView ? "prefixView" : "ownedBody" }
     var isWarm: Bool {
         if case .warm = body { return true }
         return false
     }
 
     var canCompress: Bool {
-        !isWarm && !layers.contains { $0.className == "QuantizedKVCache" }
+        !isPrefixView && !isWarm && !layers.contains { $0.className == "QuantizedKVCache" }
             && layers.contains {
                 $0.kind == .sliceableAttention && $0.className != "QuantizedKVCache"
             }
@@ -339,9 +358,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         cache: [any KVCache],
         offset: Int,
         type: CheckpointType,
-        copyStrategy: CopyStrategy = .device
+        copyStrategy: CopyStrategy = .device,
+        prefixView: Bool = false
     ) -> HybridCacheSnapshot? {
         guard !cache.isEmpty else { return nil }
+        let prefixView = prefixView && type != .system
         var totalBytes = 0
         var layers: [LayerState] = []
         layers.reserveCapacity(cache.count)
@@ -352,20 +373,17 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             guard let className = classNameForCache(layer) else {
                 return nil
             }
-            let state = layer.state.map { array -> MLXArray in
+            let source = LayerState(
+                className: className, state: layer.state, metaState: layer.metaState,
+                offset: layer.offset, snapshotOffset: offset)
+            let retained = prefixView && source.kind == .sliceableAttention ? [] : source.state
+            let state = retained.map { array -> MLXArray in
                 let copy = deepCopyState(array, strategy: copyStrategy)
                 totalBytes += copy.nbytes
                 copiedArrays.append(copy)
                 return copy
             }
-            layers.append(
-                LayerState(
-                    className: className,
-                    state: state,
-                    metaState: layer.metaState,
-                    offset: layer.offset,
-                    snapshotOffset: offset
-                ))
+            layers.append(source.replacingState(state))
         }
 
         // One pipeline sync for the whole capture — per-array syncs made the
@@ -375,7 +393,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
         return HybridCacheSnapshot(
             tokenOffset: offset,
-            layers: layers,
+            body: prefixView ? .prefixView(layers) : .copied(layers),
             checkpointType: type,
             memoryBytes: totalBytes,
             createdAt: .now
@@ -404,7 +422,10 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// Throws ``RestoreError`` when a layer's class or metaState shape is not
     /// restorable (corrupt or truncated persisted data) — callers treat that
     /// as a cache miss.
-    func restore(copyStrategy: CopyStrategy = .device) throws -> [any KVCache] {
+    func restore(
+        copyStrategy: CopyStrategy = .device, backingLeaf: HybridCacheSnapshot? = nil
+    ) throws -> [any KVCache] {
+        let layers = try materializationLayers(backingLeaf: backingLeaf)
         let classBreakdown = Dictionary(grouping: layers, by: { $0.className })
             .mapValues { $0.count }
             .map { "\($0.key):\($0.value)" }
@@ -420,7 +441,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         copiedArrays.reserveCapacity(layers.count * 2)
         let restored: [any KVCache] = try layers.enumerated().map {
             layerIndex, layerState -> any KVCache in
-            if isWarm, layerState.kind == .sliceableAttention,
+            if isWarm || (isPrefixView && backingLeaf?.isWarm == true),
+                layerState.kind == .sliceableAttention,
                 layerState.className == "QuantizedKVCache"
             {
                 let quantized = Self.makeQuantizedCache(metaState: layerState.metaState)
@@ -508,6 +530,80 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return restored
     }
 
+    enum ViewRestoreError: Error {
+        case invalidBackingLeaf
+    }
+
+    /// Metadata-only size of a full view payload, before allocating its
+    /// detached buffers. Used by checkpoint admission policy on MainActor.
+    func materializationByteCount(backingLeaf: HybridCacheSnapshot) -> Int? {
+        guard isPrefixView, !backingLeaf.isPrefixView,
+            backingLeaf.tokenOffset >= tokenOffset, backingLeaf.tokenOffset > 0,
+            layers.count == backingLeaf.layers.count
+        else { return nil }
+        var bytes = 0
+        for (layer, backing) in zip(layers, backingLeaf.layers) {
+            if layer.kind == .sliceableAttention {
+                guard backing.kind == .sliceableAttention else { return nil }
+                if backingLeaf.isWarm, backing.className == "QuantizedKVCache" {
+                    guard ["KVCache", "KVCacheSimple"].contains(layer.className),
+                        Self.metaStateIsRestorable(backing.metaState, for: backing.className),
+                        [4, 6].contains(backing.state.count),
+                        let groupSize = Int(backing.metaState[2]), groupSize > 0
+                    else { return nil }
+                    // Each scale represents one head-dimension group and has
+                    // the live dtype. Price the full form without dequantizing.
+                    let valuesScale = backing.state.count / 2 + 1
+                    bytes +=
+                        (backing.state[1].nbytes + backing.state[valuesScale].nbytes)
+                        / backingLeaf.tokenOffset * tokenOffset * groupSize
+                    continue
+                }
+                guard layer.className == backing.className else { return nil }
+                bytes += backing.state.reduce(0) {
+                    $0 + $1.nbytes / backingLeaf.tokenOffset * tokenOffset
+                }
+            } else {
+                bytes += layer.state.reduce(0) { $0 + $1.nbytes }
+            }
+        }
+        return bytes
+    }
+
+    /// Borrow prefix slices only within a Model Session restore or SSD
+    /// extraction edge. Both callers produce independent buffers and evaluate
+    /// them before returning; no consumer retains these borrowed slices.
+    func materializationLayers(backingLeaf: HybridCacheSnapshot?) throws -> [LayerState] {
+        guard isPrefixView else { return layers }
+        guard let backingLeaf, !backingLeaf.isPrefixView,
+            backingLeaf.checkpointType == .leaf, backingLeaf.tokenOffset >= tokenOffset,
+            backingLeaf.layers.count == layers.count
+        else { throw ViewRestoreError.invalidBackingLeaf }
+        return try zip(layers, backingLeaf.layers).map { view, backing in
+            guard view.kind == .sliceableAttention else { return view }
+            guard backing.kind == .sliceableAttention else {
+                throw ViewRestoreError.invalidBackingLeaf
+            }
+            if backingLeaf.isWarm, backing.className == "QuantizedKVCache" {
+                guard ["KVCache", "KVCacheSimple"].contains(view.className),
+                    Self.metaStateIsRestorable(backing.metaState, for: backing.className)
+                else { throw ViewRestoreError.invalidBackingLeaf }
+                // Slice packed rows before dequantization. The metadata must
+                // name the view offset, never the descendant's full length.
+                var metaState = backing.metaState
+                metaState[1] = String(tokenOffset)
+                return LayerState(
+                    className: backing.className,
+                    state: backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] },
+                    metaState: metaState, offset: tokenOffset)
+            }
+            guard backing.className == view.className else {
+                throw ViewRestoreError.invalidBackingLeaf
+            }
+            return view.replacingState(backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] })
+        }
+    }
+
     // MARK: - Chunked Prefill
 
     /// Runs a checkpoint-aware prefill loop: main chunking + tail drain.
@@ -542,7 +638,12 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             let type = checkpoints[absoluteOffset]!
             // Materialize any pipelined chunk work before deep-copying.
             eval(cache)
-            if let snap = capture(cache: cache, offset: absoluteOffset, type: type) {
+            // Planned branch points and transient boundaries use views;
+            // the system and final leaf retain their owned full bodies.
+            if let snap = capture(
+                cache: cache, offset: absoluteOffset, type: type,
+                prefixView: type == .branchPoint)
+            {
                 snapshots.append(snap)
             }
         }
