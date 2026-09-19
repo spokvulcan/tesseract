@@ -364,6 +364,17 @@ actor LLMActor {
         resolvedToolCallFormat
     }
 
+    /// Whether the loaded instance processes images — the instance truth
+    /// the keying phase reads (`ModelSession.producesFlatTextTokens`), not
+    /// the checkpoint's config claim. A text-class load (a `textOnlyOverride`
+    /// definition, or a checkpoint whose layout resolves to the text class
+    /// whatever `visionMode` asked for) drops image attachments and keys the
+    /// request text-only (issue #439). `false` before a load.
+    func loadedInstanceProcessesImages() async -> Bool {
+        guard let container = modelContainer else { return false }
+        return await container.perform { context in !(context.model is any LLMModel) }
+    }
+
     /// Renders messages and tools through the Jinja chat template, returning the exact
     /// ChatML string the model receives as input (including `<|im_start|>`, tool definitions, etc.).
     func formatRawPrompt(

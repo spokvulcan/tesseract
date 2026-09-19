@@ -454,19 +454,33 @@ regressions the correctness runner can't see.
 The correctness runner also compares a moved leaf restored by copy against
 cold-prefill logits bitwise (`movedLeafRestoredByCopyMatchesBitwise`).
 
-Known miss in the e2e image scenario (2026-09-18): with a Qwen3.8-template
-model loaded in vision mode (`qwen3.8-27b-paro`, `bonsai-2-27b`),
-`requestZ2_followup_restores_past_image` and
-`agent_image_history_lands_cache_aware` report `cachedTokens=0`. The runner
-caps every reply at 32 tokens and these models are still inside `<think>`
-at the cap; the canonical leaf stored after Z1 (298 tokens) and the
-follow-up's render of that same reply then part four tokens into the
-assistant turn (shared prefix 261), so Z2 prefills cold. The image path is
-intact — warm and cold outputs are identical, Z5 never hits, Z6b reuses the
-text prefix through the image — and `qwen3.5-2b` (a template without
-`preserve_thinking`) passes both checks with the same truncated reply. Read
-the two checks as a runner limitation until the cap or the truncated-think
-history render is settled; the rest of the report reads as usual.
+The e2e image scenario (Step Z) measures against a **text-prefix
+baseline**: after the cold image-add turn, a text-only probe runs twice
+under the same system prompt (the first pass captures the system checkpoint
+a cold image plan cannot capture inside its image prefix; the second pass
+restores it). The follow-up turn and the agent-shaped history must restore
+*more* than that baseline (a restore past the image run), and the
+different-image turn — same text, same pixel size, different bytes — must
+restore *no more* than it (ADR-0007 phase 2 lets it reuse the text prefix;
+anything beyond is the first image's digest-keyed run serving the second).
+The agent-shaped history extends a second HTTP-stored image turn of its own:
+a follow-up supersedes the leaf it extends with its own leaf past the
+follow-up's prompt (Leaf Handoff, ADR-0064), so the leaf the HTTP follow-up
+consumed cannot serve a second reader. All warm turns and the
+different-image turn run before the cache-clearing reload that produces the
+cold references for the output-equivalence checks: after that reload the
+only stored state is a cold turn's own leaf, past its prompt, so nothing
+below the image could be restored. The runner mirrors
+the server's accumulator for a `<think>` block the token cap cut open (the
+buffered thinking is folded into the visible text), so the history it
+replays renders exactly like the stored turn. The scenario skips (passing)
+when the loaded *instance* is a text class — `qwen3.8-27b` and
+`qwen3.8-27b-paro` carry `textOnlyOverride`, so even a vision reload drops
+image attachments and keys the request text-only (issue #439), and every
+image check would measure text caching. Run it against a vision-loaded
+model (`--bench-model-id bonsai-2-27b`): on 2026-09-19 that run passed every
+check, 33 of 33 (follow-up 298 and agent history 297 vs baseline 177,
+different image 177, warm and agent outputs byte-equal to cold).
 
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.
@@ -725,11 +739,10 @@ capture/restore correctness; DFlash2 and HTTP timing are covered by the
 separate live replay.
 
 The Qwen3.8 community checkpoint used by this comparison loads as a text
-instance even when vision is requested (ADR-0056). The current HTTP E2E
-runner's config-based image scenario is therefore not real VLM coverage;
-its different-image assertion also fails on the unchanged baseline. The
-comparison report retains that failure instead of presenting it as a green
-image gate. Use an actual vision-loaded model for image-specific validation.
+instance even when vision is requested (`textOnlyOverride`). The HTTP E2E
+runner's image scenario reads that instance truth and skips (passing) on
+it, so the comparison report carries no image gate for this model; use a
+vision-loaded model for image-specific validation.
 
 ### Tree-side Leaf Lease evidence (#479)
 
