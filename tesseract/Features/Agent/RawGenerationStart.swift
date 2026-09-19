@@ -77,6 +77,7 @@ nonisolated enum RawGenerationStart {
         {
             let specParams = DFlash2Support.rawArmParameters(parameters)
             let cache = try session.newCache(parameters: specParams)
+            for layer in cache { layer.reserveCapacity(promptTokenCount) }
             let iterator = try session.makeDFlash2DecodeIterator(
                 prepared, cache: cache, prefilledPrefixTokens: 0, parameters: specParams)
             prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000

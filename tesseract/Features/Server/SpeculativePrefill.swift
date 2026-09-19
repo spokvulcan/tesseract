@@ -336,6 +336,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             do {
                 let session = ContextBackedModelSession(context: context)
                 warm.cache = try session.restore(boundary, backingLeaf: resolved.backingLeaf)
+                for layer in warm.cache { layer.reserveCapacity(admitPath.count) }
                 return true
             } catch {
                 warm.failure = error.localizedDescription

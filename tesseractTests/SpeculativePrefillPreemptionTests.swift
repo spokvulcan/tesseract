@@ -155,8 +155,10 @@ import Testing
         // offset 2048), so the cancel lands mid-span with exactly the
         // 2,048-token capture threshold consumed.
         let gate = ForwardGate(threshold: 2048)
+        let model = ToyLanguageModel(script: [0], onForward: gate.onForward)
+        let records = model.capacityRecords
         let provider = ToyModelSessionProvider(
-            model: ToyLanguageModel(script: [0], onForward: gate.onForward),
+            model: model,
             tokenizer: tokenizer
         )
         let manager = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
@@ -230,5 +232,10 @@ import Testing
         )
         let snapshot = try #require(resolved.lookup.snapshot)
         #expect(snapshot.tokenOffset == 1024 + 2048)
+        let extensionRecords = records.values.filter { $0.offset > 1024 }
+        #expect(extensionRecords.count == 2)
+        #expect(extensionRecords.allSatisfy { $0.capacity >= admitPath.count })
+        #expect(extensionRecords.allSatisfy { $0.capacity < admitPath.count + 256 })
+        #expect(Set(extensionRecords.map(\.capacity)).count == 1)
     }
 }

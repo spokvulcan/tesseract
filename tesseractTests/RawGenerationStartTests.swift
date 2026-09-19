@@ -87,6 +87,25 @@ struct RawGenerationStartTests {
         return text
     }
 
+    @Test(arguments: [false, true])
+    func rawCreationReservesTheWholePrompt(batched: Bool) async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let messages: [Message] = [["role": "user", "content": String(repeating: "a", count: 998)]]
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: messages, tools: nil, additionalContext: nil)
+        let model = ToyLanguageModel(script: prompt + [98])
+        let records = model.capacityRecords
+        let provider = ToyModelSessionProvider(
+            model: model, tokenizer: tokenizer,
+            vision: batched ? .init(padTokenId: 0, padRunLength: 1, frame: THW(1, 1, 1)) : nil)
+        #expect(
+            try await Self.run(
+                provider: provider, prompt: .fresh(UserInput(messages: messages)),
+                parameters: Self.parameters(prefillStepSize: 64)) == "b")
+        #expect(!records.values.isEmpty)
+        #expect(records.values.allSatisfy { $0.capacity == 1024 })
+    }
+
     // MARK: - Fresh turn
 
     /// The agent chat turn: the toy decodes its scripted completion, and the

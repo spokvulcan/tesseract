@@ -254,6 +254,7 @@ nonisolated extension LeafStorePhase {
                 var timings = Timings()
                 let restoreStart = Date.timeIntervalSinceReferenceDate
                 let restoredCache = try session.restore(boundarySnapshot, backingLeaf: backingLeaf)
+                for layer in restoredCache { layer.reserveCapacity(storedTokens.count) }
                 timings.restoreSeconds = secondsSince(restoreStart)
 
                 let residual = Array(storedTokens[boundaryOffset...])

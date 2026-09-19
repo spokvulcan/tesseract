@@ -233,6 +233,97 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     }
 
     @MainActor
+    @Test(arguments: [nil, 4] as [Int?])
+    func creationAndRestoreReservePromptRowsWithoutReservingOutput(kvBits: Int?) async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let first = Self.conversation([
+            .init(role: .user, content: String(repeating: "a", count: 998))
+        ])
+        let next = Self.conversation([
+            .init(role: .user, content: String(repeating: "a", count: 998)),
+            .assistant(content: "b"),
+            .init(role: .user, content: String(repeating: "c", count: 994)),
+        ])
+        let render = try tokenizer.applyChatTemplate(
+            messages: next.promptMessages, tools: nil, additionalContext: nil)
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(script: render + [100], headDim: 32), tokenizer: tokenizer))
+        var parameters = await Self.parameters(kvBits: kvBits)
+        parameters.prefillStepSize = 64
+        parameters.maxTokens = 8192
+        let cold = try await fixture.start(conversation: first, parameters: parameters)
+        #expect(try await collectServerText(cold).text == "b")
+        let coldCapacity = try #require(fixture.provider.recorder.prefillCapacities.last)
+        #expect(coldCapacity == 1024)
+        let warm = try await fixture.start(conversation: next, parameters: parameters)
+        #expect(warm.cachedTokenCount > 0)
+        #expect(try await collectServerText(warm).text == "d")
+        let restoredCapacity = try #require(fixture.provider.recorder.prefillCapacities.last)
+        #expect(restoredCapacity >= render.count)
+        #expect(restoredCapacity < render.count + 256)
+        if kvBits != nil { #expect(fixture.provider.recorder.verbs.contains(.restore)) }
+        await fixture.drain()
+    }
+
+    @MainActor
+    @Test func canonicalLeafRestoreReservesTheStoredPath() async throws {
+        let tokenizer = FakeParoThinkingTokenizer()
+        let conversation = Self.conversation([
+            .init(role: .user, content: String(repeating: "a", count: 998))
+        ])
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        let reply = "reasoning\n</think>\n\n" + String(repeating: "b", count: 1000)
+        let model = ToyLanguageModel(script: prompt + Array(reply.utf8).map(Int.init))
+        let records = model.capacityRecords
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(model: model, tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: "capacity-canonical-\(UUID())")
+        var parameters = Self.parameters()
+        parameters.prefillStepSize = 64
+        let handle = try await fixture.start(conversation: conversation, parameters: parameters)
+        _ = try await collectServerText(handle)
+        #expect(fixture.provider.recorder.verbs.contains(.restore))
+        #expect(fixture.provider.recorder.prefillCapacities.count >= 2)
+        // A restore starts a second monotonic run of forward offsets.
+        let values = records.values
+        let rewind = try #require(
+            values.indices.dropFirst().first { values[$0].offset < values[$0 - 1].offset })
+        let canonical = Array(values[rewind...])
+        let finalOffset = try #require(canonical.last?.offset)
+        #expect(canonical.allSatisfy { $0.capacity >= finalOffset })
+        #expect(canonical.allSatisfy { $0.capacity < finalOffset + 256 })
+        #expect(Set(canonical.map(\.capacity)).count == 1)
+        await fixture.drain()
+    }
+
+    @Test func toyDecodeUsesGeometricCapacityGrowth() async throws {
+        let prompt = [65, 66, 67]
+        let completion = Array(repeating: 68, count: 2048)
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: prompt + completion, layers: 1))
+        let capacities = try await provider.withSession { session in
+            let parameters = GenerateParameters(maxTokens: 2048, temperature: 0)
+            let cache = try session.newCache(parameters: parameters)
+            let input = LMInput(tokens: MLXArray(prompt.map(Int32.init)))
+            var iterator = try session.makePreparingDecodeIterator(
+                input, cache: cache, parameters: parameters, prepare: nil)
+            var capacities = [cache[0].innerState()[0].dim(2)]
+            var generated = 0
+            while let token = iterator.next(), generated < 2048 {
+                #expect(token == 68)
+                generated += 1
+                let capacity = cache[0].innerState()[0].dim(2)
+                if capacity != capacities.last { capacities.append(capacity) }
+            }
+            #expect(generated == 2048)
+            return capacities
+        }
+        #expect(capacities == [256, 768, 1792, 3840])
+    }
+
+    @MainActor
     @Test func emptyDirectTurnReturnsItsLeafWithoutTryingToCaptureTheRewoundCache() async throws {
         let tokenizer = ToySequencingTokenizer()
         let first = Self.conversation([.init(role: .user, content: "Hi")])

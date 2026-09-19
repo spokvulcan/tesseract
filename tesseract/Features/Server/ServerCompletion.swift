@@ -2224,6 +2224,9 @@ nonisolated final class ServerCompletion {
             }
         }
         let cache = try restoredCache ?? session.newCache(parameters: parameters)
+        // Reserve the prompt on both fresh and restored live caches. The output
+        // ceiling is not a capacity request; decode grows in the vendor cache.
+        for layer in cache { layer.reserveCapacity(promptTokens) }
         return (cache: cache, startedAt: Date.timeIntervalSinceReferenceDate)
     }
 
