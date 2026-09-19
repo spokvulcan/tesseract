@@ -185,7 +185,7 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(reserve.perLaneBytes < ActiveInferenceReserve.bootstrapPerLaneBytes)
 
         // A quantized partition captures by copy and reports `live`: the
-        // lane doubles its leaf term — for that partition's turns.
+        // lane doubles its leaf term while that partition stores last.
         var quantized = await MainActor.run { Self.parameters() }
         quantized.kvBits = 8
         let turn2 = try await session.turn(
@@ -196,8 +196,16 @@ struct EmittedPathSynthesizedReplayTests {
         let doubled = try #require(
             await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
         #expect(doubled.copyFactor == 2)
-        #expect(doubled.copyCapturingPartitions.count == 1)
-        #expect(doubled.copyCapturingPartitions.first?.kvBits == 8)
+        #expect(doubled.lastStoreCapturedByCopy)
+
+        // Back on the fp16 partition, the next handoff clears it.
+        let turn3 = try await session.turn(
+            Self.conversation([Self.user("hi"), Self.assistant("hello world"), Self.user("more")]),
+            text: "again")
+        #expect(turn3.leafStore["source"] == "handoff")
+        let cleared = try #require(
+            await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
+        #expect(cleared.copyFactor == 1)
     }
 
     @Test(arguments: [false, true])

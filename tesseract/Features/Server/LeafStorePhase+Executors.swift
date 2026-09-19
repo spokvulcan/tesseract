@@ -121,7 +121,7 @@ nonisolated extension LeafStorePhase {
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         context: LeafAdmissionContext,
         move: Bool = true,
-        path: Report.Path = .live
+        path: Report.Path
     ) async -> LeafCapture {
         let extensionBase = await context.resolveExtensionBase()
         do {

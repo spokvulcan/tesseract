@@ -2141,11 +2141,12 @@ The bytes withheld from the **Pressure-Reactive Budget**'s ceiling for in-flight
 generations' KV working sets — the named replacement for the retired `/2`
 divisor (ADR-0018), count-aware over active lanes and never below one lane. Priced
 from observation, not constants: per lane, the largest leaf admitted, doubled only
-while a partition's most recent leaf store was a capture by copy (the `leafStore`
-source `live` or `boundary`; a `handoff` moved the objects, a `copy` restore's
-source body is already counted in the tree), plus a growth allowance — that leaf's
-bytes per token times the turn's maximum advance, the quantity **Leaf Checkout**
-judges eligibility against. The bootstrap constant stands until the first
+while the most recent leaf store — on the partition the next lane runs on — was a
+capture by copy (the `leafStore` source `live` or `boundary`; a `handoff` moved the
+objects, a `copy` restore's source body is already counted in the tree), plus a
+growth allowance — that leaf's
+bytes per token times the turn's maximum advance, the quantity **Leaf Handoff**'s
+check-out eligibility judges `isTrimmable(after:)` against (ADR-0064). The bootstrap constant stands until the first
 observation and stands in for the growth of an unbounded turn. A pure value the
 leaf admission feeds; the `budgetMeasure` event reports its inputs and per-lane
 result.

@@ -203,10 +203,13 @@ final class InMemoryMemoryHeadroomSource: MemoryHeadroomSource {
 /// advance, the quantity **Leaf Checkout** already computes. The
 /// capture deep copy that once made the structural peak twice the leaf
 /// is gone on every turn **Leaf Handoff** (ADR-0064) moves, so the
-/// doubling applies only while a partition's most recent leaf store was
-/// a capture by copy. The bootstrap constant stands until the first
-/// observation; prefill activation transients beyond the KV bytes
-/// remain guarded by fast pressure retreat (ADR-0018's explicit trade).
+/// doubling applies only while the most recent leaf store was a capture
+/// by copy — the store on the partition the next lane runs on, so a
+/// quantized or image partition's copies price its own turns and stop
+/// pricing the fp16 partition's handoffs once those resume. The
+/// bootstrap constant stands until the first observation; prefill
+/// activation transients beyond the KV bytes remain guarded by fast
+/// pressure retreat (ADR-0018's explicit trade).
 ///
 /// A pure value: it holds observations, never references.
 nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
@@ -223,7 +226,6 @@ nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
     /// One admitted leaf, as the leaf-store telemetry reports it: what
     /// the leaf admission feeds the reserve.
     struct LeafObservation: Sendable, Equatable {
-        let partitionKey: CachePartitionKey
         let bytes: Int
         let tokenCount: Int
         /// The `leafStore` event's source. `live` and `boundary` are
@@ -242,44 +244,40 @@ nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
     private(set) var observedBytesPerToken = 0
     /// The most recently observed turn's maximum advance.
     private(set) var observedMaximumAdvance = 0
-    /// Partitions whose most recent leaf store was a capture by copy.
-    private(set) var copyCapturingPartitions: Set<CachePartitionKey> = []
-    private var observed = false
+    /// Whether the most recent leaf store was a capture by copy.
+    private(set) var lastStoreCapturedByCopy = false
+    private var hasObservation = false
 
     /// Fold one admitted leaf into the per-lane estimate.
     mutating func observeLeaf(_ leaf: LeafObservation) {
-        observed = true
+        hasObservation = true
         if leaf.bytes > largestObservedLeafBytes {
             largestObservedLeafBytes = leaf.bytes
             let tokens = max(leaf.tokenCount, 1)
             observedBytesPerToken = (leaf.bytes + tokens - 1) / tokens
         }
         observedMaximumAdvance = max(leaf.maximumAdvance, 0)
-        if leaf.source.capturesByCopy {
-            copyCapturingPartitions.insert(leaf.partitionKey)
-        } else {
-            copyCapturingPartitions.remove(leaf.partitionKey)
-        }
+        lastStoreCapturedByCopy = leaf.source.capturesByCopy
     }
 
-    /// `captureCopyFactor` while any partition's most recent leaf store
-    /// was a capture by copy, else 1.
+    /// `captureCopyFactor` while the most recent leaf store was a capture
+    /// by copy, else 1.
     var copyFactor: Int {
-        copyCapturingPartitions.isEmpty ? 1 : Self.captureCopyFactor
+        lastStoreCapturedByCopy ? Self.captureCopyFactor : 1
     }
 
     /// Bytes per token times the turn's maximum advance. An unbounded
     /// advance cannot be priced from density, so the bootstrap constant
     /// stands in for it; nothing here overflows.
     var growthAllowanceBytes: Int {
-        guard observed else { return 0 }
+        guard hasObservation else { return 0 }
         let (growth, overflow) = observedBytesPerToken.multipliedReportingOverflow(
             by: observedMaximumAdvance)
         return overflow || observedMaximumAdvance == .max ? Self.bootstrapPerLaneBytes : growth
     }
 
     var perLaneBytes: Int {
-        guard observed else { return Self.bootstrapPerLaneBytes }
+        guard hasObservation else { return Self.bootstrapPerLaneBytes }
         let (leaves, overflow) = largestObservedLeafBytes.multipliedReportingOverflow(
             by: copyFactor)
         guard !overflow else { return .max }

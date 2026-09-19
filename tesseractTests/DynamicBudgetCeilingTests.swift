@@ -190,17 +190,12 @@ struct MemoryHeadroomSampleTests {
 /// Handoff (ADR-0064) removed that copy on eligible turns.
 struct ActiveInferenceReserveTests {
 
-    private let key = CachePartitionKey(modelID: "reserve-test", kvBits: nil, kvGroupSize: 64)
-    private let otherKey = CachePartitionKey(
-        modelID: "reserve-test-other", kvBits: nil, kvGroupSize: 64)
-
     private func leaf(
         bytes: Int, tokens: Int = 1024, source: LeafStorePhase.Report.Source = .handoff,
-        maximumAdvance: Int = 0, partition: CachePartitionKey? = nil
+        maximumAdvance: Int = 0
     ) -> ActiveInferenceReserve.LeafObservation {
         ActiveInferenceReserve.LeafObservation(
-            partitionKey: partition ?? key, bytes: bytes, tokenCount: tokens,
-            source: source, maximumAdvance: maximumAdvance)
+            bytes: bytes, tokenCount: tokens, source: source, maximumAdvance: maximumAdvance)
     }
 
     @Test func bootstrapsPerLaneBeforeAnyLeafIsObserved() {
@@ -234,19 +229,18 @@ struct ActiveInferenceReserveTests {
         #expect(reserve.perLaneBytes == 2 * gib)
     }
 
-    @Test func theCopyFactorFollowsThePartitionsMostRecentLeafStore() {
+    @Test func theCopyFactorFollowsTheMostRecentLeafStore() {
+        // The most recent store is on the partition the next lane runs
+        // on: a quantized partition's copy prices its own turns, and the
+        // fp16 partition's next handoff clears the doubling again.
         var reserve = ActiveInferenceReserve()
         reserve.observeLeaf(leaf(bytes: 1 * gib, source: .live))
         #expect(reserve.copyFactor == 2)
-        // A handoff on the same partition clears the doubling.
         reserve.observeLeaf(leaf(bytes: 1 * gib, source: .handoff))
         #expect(reserve.copyFactor == 1)
-        // A copy-capturing partition keeps the doubling until *its* next
-        // leaf store moves; another partition's handoff does not clear it.
-        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .live, partition: otherKey))
-        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .handoff))
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .boundary))
         #expect(reserve.copyFactor == 2)
-        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .handoff, partition: otherKey))
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .copy))
         #expect(reserve.copyFactor == 1)
     }
 

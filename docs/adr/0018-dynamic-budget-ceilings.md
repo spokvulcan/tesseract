@@ -91,15 +91,19 @@ ceiling's largest subtraction (#238: a 75 MB leaf still reserved 4 GiB).
 Re-priced in #522 (PRD #520, phase 1):
 
 - **Per lane: the largest observed leaf, plus growth.** The leaf is doubled
-  only while the partition's most recent leaf store was a capture by copy —
-  the `leafStore` sources `live` and `boundary`. A `handoff` moved the
+  only while the most recent leaf store was a capture by copy — the
+  `leafStore` sources `live` and `boundary`. The most recent store is on the
+  partition the next lane runs on, so a quantized or image partition's copies
+  price its own turns and stop pricing the fp16 partition's handoffs once
+  those resume; doubling while *any* partition had last copied would pin the
+  factor at 2 for the cache's lifetime. A `handoff` moved the
   objects; a restore by `copy` does not raise the factor, because the source
   body is counted in the tree's bytes and the live copy in the reserve, so
   one leaf plus growth already covers it.
 - **Growth is bytes per token times the turn's maximum advance**: the
-  largest leaf's observed density times the quantity Leaf Checkout already
-  computes (new prompt tokens plus the output ceiling plus the speculative
-  allowance). A turn without an output ceiling advances unboundedly; the
+  largest leaf's observed density times the quantity Leaf Handoff's check-out
+  eligibility already computes (`LeafCheckout.maximumAdvance`: new prompt
+  tokens plus the output ceiling plus the speculative allowance). A turn without an output ceiling advances unboundedly; the
   bootstrap constant stands in for its growth.
 - **The bootstrap retires at the first observation.** It is no longer a
   floor under the measured lane.

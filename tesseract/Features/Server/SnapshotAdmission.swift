@@ -209,7 +209,6 @@ nonisolated struct SnapshotAdmission: Sendable {
             leafIsEndOfTurn: endOfTurn,
             reserveObservation: source.map { source in
                 ActiveInferenceReserve.LeafObservation(
-                    partitionKey: partitionKey,
                     bytes: snapshot.memoryBytes,
                     tokenCount: snapshot.tokenOffset,
                     source: source,
