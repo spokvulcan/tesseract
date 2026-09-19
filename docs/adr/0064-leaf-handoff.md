@@ -104,9 +104,12 @@ offset afterwards cannot bring them back; the vendor exposes
    the tail returns, so a suffix payload never references the body and
    decision 1 holds literally. A full payload (the first leaf of a
    conversation, or a degraded extension) still aliases the attention body,
-   because copying it is what Deferred Payload Extraction exists to avoid;
-   that is why decision 2 makes the next check-out copy until the writer has
-   materialized it — after a bounded wait for exactly that materialization
+   because copying it is what Deferred Payload Extraction exists to avoid.
+   A full-format view payload is the exception: #526 detaches its leading
+   attention rows and whole-state layers before enqueue, exactly like an
+   extension payload, so it cannot block the Backing Leaf's next check-out.
+   For an ordinary full payload, decision 2 makes the next check-out copy until
+   the writer has materialized it — after a bounded wait for that materialization
    (#523; see the 2026-09-19 as-built note).
 
 6. **Accounting.** A leased leaf's bytes stay counted in the tree total;
@@ -287,6 +290,13 @@ wait is watching runs on its own detached task and is not blocked by either.
 - **Ending a lease by age-out.** The backstop exists for leaked pins of
   copy restores; ending an owner's claim while it decodes would free a buffer
   under a running generation.
+
+## Amendment — 2026-09-19: Warm Body restore (#527)
+
+A Warm Body is an explicit restore-by-copy path with `copyReason=warmBody`.
+Vendor dequantization produces fresh live attention arrays in the Model Session;
+whole-state arrays are independently copied. A Warm Body never enters Leaf
+Handoff. Leaf Lease, Leaf Rewind and the single-owner rule are unchanged.
 
 ## Amendment 2026-09-19 — Borrowed SSD bytes (#469)
 

@@ -731,6 +731,12 @@ nonisolated struct SnapshotPayload: Sendable {
     /// payload's materializer must produce exactly this many.
     let totalBytes: Int
 
+    /// Whether this payload's arrays are the tree body's own. View and
+    /// extension payloads own detached device arrays, so they never retain
+    /// the body; a full payload retains it until the writer releases each
+    /// borrowed layer. This is independent of the segment format.
+    private let mayRetainBodyArrays: Bool
+
     private let source: LayerSource
 
     /// Per-layer payloads, in the same order as the vendor snapshot's
@@ -744,8 +750,11 @@ nonisolated struct SnapshotPayload: Sendable {
     /// for a deferred one.
     var isMaterialized: Bool { source.isMaterialized }
 
-    /// Preparing borrowed Data does not detach a full payload from its body.
-    var retainsBodyArrays: Bool { source.retainsBodyArrays }
+    /// Preparing borrowed Data does not detach a full payload from its body:
+    /// `true` while a full payload still borrows a tree body array, `false`
+    /// for view and extension payloads (their arrays are detached copies)
+    /// and once every borrowed layer has been written and released.
+    var retainsBodyArrays: Bool { mayRetainBodyArrays && source.retainsBodyArrays }
 
     /// The writer consumes one layer at a time, releasing its borrowed owner
     /// after the final chunk. In-memory fixture encoding remains repeatable.
@@ -757,7 +766,10 @@ nonisolated struct SnapshotPayload: Sendable {
 
     /// Observes pending array ownership without retaining the payload or its Data.
     var materializationProbe: @Sendable () -> Bool {
-        { [weak source] in !(source?.retainsBodyArrays ?? false) }
+        let mayRetainBodyArrays = mayRetainBodyArrays
+        return { [weak source] in
+            !(mayRetainBodyArrays && (source?.retainsBodyArrays ?? false))
+        }
     }
 
     /// Prepare deferred byte views now, once. This does not detach a borrowed
@@ -778,6 +790,7 @@ nonisolated struct SnapshotPayload: Sendable {
         self.checkpointType = checkpointType
         self.extending = extending
         self.totalBytes = Self.byteCount(of: layers)
+        self.mayRetainBodyArrays = false
         self.source = LayerSource(ready: layers)
     }
 
@@ -788,12 +801,14 @@ nonisolated struct SnapshotPayload: Sendable {
         checkpointType: HybridCacheSnapshot.CheckpointType,
         extending: SnapshotExtension? = nil,
         totalBytes: Int,
+        retainsBodyArrays: Bool = true,
         materialize: @escaping @Sendable () -> [LayerPayload]
     ) {
         self.tokenOffset = tokenOffset
         self.checkpointType = checkpointType
         self.extending = extending
         self.totalBytes = totalBytes
+        self.mayRetainBodyArrays = retainsBodyArrays && extending == nil
         self.source = LayerSource(deferred: materialize)
     }
 

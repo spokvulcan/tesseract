@@ -9,6 +9,78 @@ import Testing
 @MainActor
 struct TokenRadixTreeTests {
 
+    @Test(arguments: ["pendingDrop", "backingLoss", "explicitDelete"])
+    func unbackedViewSelfHealsWhenItsLastRefIsLost(loss: String) throws {
+        let tree = TokenRadixTree()
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv], offset: 4, type: .branchPoint, prefixView: true))
+        let node = tree.insertPath(tokens: Array(1...4))
+        tree.storeSnapshot(view, on: node)
+        let ref = SnapshotRef(
+            snapshotID: "view", partitionDigest: "test", tokenOffset: 4,
+            checkpointType: .branchPoint, bytesOnDisk: 2048)
+        tree.admit(node: node, ref: ref)
+        if loss != "pendingDrop" { tree.commitRef(node: node, expectedID: "view") }
+        switch loss {
+        case "pendingDrop": tree.dropRef(node: node, expectedID: "view")
+        case "backingLoss": tree.clearCommittedSnapshotRefAfterBackingLoss(node: node)
+        default: tree.discardSnapshotRefAfterExplicitDelete(node: node)
+        }
+        // Observe cleanup before any lookup can lazily repair the path.
+        #expect(tree.nodeCount == 1)
+        #expect(tree.snapshotCount == 0)
+        #expect(tree.totalSnapshotBytes == 0)
+    }
+
+    @Test func prefixViewCountsOnlyWholeStateSurvivesLeaseAndSelfHealsAfterLastBackerDrops() throws
+    {
+        let tree = TokenRadixTree()
+        let system = tree.insertPath(tokens: [1, 2])
+        tree.storeSnapshot(makeSnapshot(offset: 2), on: system)
+        let attention = KVCacheSimple()
+        attention.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let recurrent = MambaCache()
+        recurrent.state = [MLXArray([Float(42)])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention, recurrent], offset: 4, type: .branchPoint, prefixView: true))
+        let branch = tree.insertPath(tokens: Array(1...4))
+        tree.storeSnapshot(view, on: branch)
+        let leaf = tree.insertPath(tokens: Array(1...8))
+        tree.storeSnapshot(makeSnapshot(offset: 8, type: .leaf), on: leaf)
+        #expect(tree.totalSnapshotBytes == 5124)
+        #expect(!tree.eligibleEvictionNodes().contains { $0 === branch })
+        let fork = [1, 2, 3, 4, 99]
+        #expect(tree.findBestSnapshot(tokens: fork)?.node === branch)
+        let context = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: "view-tree", kvBits: nil, kvGroupSize: 64)
+        let lease = try #require(tree.beginLeafLease(on: leaf, context: context))
+        let taken = try #require(tree.takeLeasedBody(lease, on: leaf))
+        #expect(tree.findBestSnapshot(tokens: fork)?.node === system)
+        #expect(tree.totalSnapshotBytes == 5124)
+        #expect(
+            tree.endLeafLease(
+                lease, on: leaf, returning: taken, tokens: Array(1...8), reason: .rewind))
+        #expect(tree.findBestSnapshot(tokens: fork)?.node === branch)
+        // The tree-only lease path keeps its body resident until check-in.
+        // Advancing that body must not retire the view in the transfer gap.
+        let advancing = try #require(tree.beginLeafLease(on: leaf, context: context))
+        #expect(
+            tree.endLeafLease(
+                advancing, on: leaf, returning: makeSnapshot(offset: 10, type: .leaf),
+                tokens: Array(1...10), reason: .checkIn))
+        #expect(tree.findBestSnapshot(tokens: fork)?.node === branch)
+        let advancedLeaf = try #require(tree.findBestSnapshot(tokens: Array(1...10))?.node)
+        tree.dropBody(node: advancedLeaf)
+        #expect(tree.findBestSnapshot(tokens: fork)?.node === system)
+        #expect(tree.totalSnapshotBytes == 1024)
+        #expect(tree.snapshotCount == 1)
+        #expect(tree.nodeCount == 2)
+    }
+
     // MARK: - Helpers
 
     private func makeSnapshot(

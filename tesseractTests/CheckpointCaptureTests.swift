@@ -9,6 +9,29 @@ import Testing
 /// driven by the app-side `HybridCacheSnapshot` machinery (ADR-0006).
 struct CheckpointCaptureTests {
 
+    @Test func plannedBranchPointCapturesOnlySettledWholeState() throws {
+        let attention = KVCacheSimple()
+        let recurrent = MambaCache()
+        let cache: [any KVCache] = [attention, recurrent]
+        let (_, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
+            totalTokens: 9, prefillStepSize: 4,
+            checkpoints: [2: .system, 6: .branchPoint], checkpointBaseOffset: 0,
+            cache: cache
+        ) { count in
+            let rows = MLXArray.ones([1, 1, count, 4])
+            _ = attention.update(keys: rows, values: rows)
+            recurrent.state = [MLXArray([Float(attention.offset)]) * 2]
+            asyncEval(cache)
+        }
+        let system = try #require(snapshots.first)
+        let branch = try #require(snapshots.last)
+        #expect(system.memoryBytes == 68)  // Two 2×4 float arrays and one float.
+        #expect(branch.memoryBytes == 4)
+        #expect(branch.layers[0].state.isEmpty)
+        #expect(branch.layers[1].state[0].item(Float.self) == 12)
+        #expect(backingAddress(branch.layers[1].state[0]) != backingAddress(recurrent.state[0]))
+    }
+
     // MARK: - Helpers
 
     /// Creates a small hybrid cache (Mamba + attention pattern) for testing.

@@ -22,6 +22,53 @@ struct LeafLeaseTests {
         return try #require(HybridCacheSnapshot.captureMoving(cache: &cache, offset: offset))
     }
 
+    @Test func pendingViewPayloadDoesNotBlockItsBackingLeafCheckout() async throws {
+        let gate = DrainGate()
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "view-pending-lease", ramBudgetBytes: 1_000_000,
+            writerDrainPreludeForTesting: { await gate.wait() })
+        defer { try? FileManager.default.removeItem(at: root) }
+        let body = try snapshot()
+        let caches = try body.restore()
+        _ = caches[0].trim(4)
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: caches, offset: 4, type: .branchPoint, prefixView: true))
+        let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: body)
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: Array(1...8), snapshot: body, storage: .ramOnly, partitionKey: key
+                )))
+        manager.admit(
+            try #require(
+                SnapshotAdmission.checkpoints(
+                    fullPromptTokens: Array(1...8),
+                    candidates: [.init(snapshot: view, storage: .ramAndSSD(payload))],
+                    partitionKey: key)))
+        #expect(!payload.isMaterialized)
+        let tree = try #require(store.tree(for: key))
+        let node = try #require(
+            tree.findBestSnapshot(tokens: Array(1...8), updateAccess: false)?.node)
+        let lease = try #require(
+            tree.beginLeafLease(
+                on: node,
+                context: .init(
+                    requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64),
+                requireDetachedPayload: true))
+        let taken = try #require(tree.takeLeasedBody(lease, on: node))
+        // The writer completes while the leaf remains leased: every payload
+        // array is detached, so neither ownership nor I/O waits on the other.
+        await gate.open()
+        await store.flush()
+        #expect(payload.isMaterialized)
+        #expect(owed.retainedArrays.isEmpty)
+        #expect(tree.leaseCount == 1)
+        #expect(
+            tree.endLeafLease(
+                lease, on: node, returning: taken, tokens: Array(1...8), reason: .rewind))
+    }
+
     @Test func bodyDropRefusesLeaseWithoutCopyingAndResumesAfterRewind() throws {
         let tree = TokenRadixTree()
         let tokens = Array(1...8)

@@ -17,6 +17,50 @@ import MLXLMCommon
 @MainActor
 @Suite struct SnapshotResolutionLadderTests {
 
+    @Test(arguments: [6, 8])
+    func viewPrefersNearestBackerThenFullFormBeforeRecency(warmOffset: Int) {
+        let now = ContinuousClock.now
+        let candidates: [SnapshotResolutionLadder.BackingLeafCandidate] = [
+            .init(
+                offset: warmOffset, lastAccess: now, residentFullBody: true, leased: false,
+                warmBody: true),
+            .init(offset: 8, lastAccess: now - .seconds(2), residentFullBody: true, leased: false),
+            .init(offset: 12, lastAccess: now, residentFullBody: true, leased: false),
+        ]
+        #expect(
+            SnapshotResolutionLadder.viewOutcome(
+                offset: 4, candidates: candidates, committedRef: false, chainPrefix: false)
+                == .backingLeaf(warmOffset == 6 ? 0 : 1))
+    }
+
+    @Test func prefixViewChoosesNearestUnleasedFullBodyThenRecencyAndFallsThrough() {
+        let now = ContinuousClock.now
+        let candidates: [SnapshotResolutionLadder.BackingLeafCandidate] = [
+            .init(offset: 12, lastAccess: now, residentFullBody: true, leased: false),
+            .init(offset: 8, lastAccess: now - .seconds(2), residentFullBody: true, leased: false),
+            .init(offset: 8, lastAccess: now - .seconds(1), residentFullBody: true, leased: false),
+            .init(offset: 6, lastAccess: now, residentFullBody: true, leased: true),
+            .init(offset: 5, lastAccess: now, residentFullBody: false, leased: false),
+        ]
+        #expect(
+            SnapshotResolutionLadder.viewOutcome(
+                offset: 4, candidates: candidates, committedRef: true, chainPrefix: true
+            ) == .backingLeaf(2))
+        let unavailable = Array(candidates.suffix(2))
+        #expect(
+            SnapshotResolutionLadder.viewOutcome(
+                offset: 4, candidates: unavailable, committedRef: true, chainPrefix: true
+            ) == .ssd)
+        #expect(
+            SnapshotResolutionLadder.viewOutcome(
+                offset: 4, candidates: unavailable, committedRef: false, chainPrefix: true
+            ) == .chainPrefix)
+        #expect(
+            SnapshotResolutionLadder.viewOutcome(
+                offset: 4, candidates: unavailable, committedRef: false, chainPrefix: false
+            ) == .shallower)
+    }
+
     private let key = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
 
     private func makeSnapshot(offset: Int, type: HybridCacheSnapshot.CheckpointType = .leaf)
