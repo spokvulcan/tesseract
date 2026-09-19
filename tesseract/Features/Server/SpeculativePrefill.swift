@@ -179,6 +179,19 @@ nonisolated enum SpeculativeCanonicalPrefill {
         container: ModelContainer,
         prefixCache: PrefixCacheManager
     ) async {
+        let restorePinID = UUID()
+        await run(
+            seed: seed, container: container, prefixCache: prefixCache,
+            restorePinID: restorePinID)
+        await prefixCache.completeRequest(requestID: restorePinID)
+    }
+
+    private static func run(
+        seed: Seed,
+        container: ModelContainer,
+        prefixCache: PrefixCacheManager,
+        restorePinID: UUID
+    ) async {
         // swiftlint:enable function_body_length
         let diagnostics = seed.diagnostics
 
@@ -257,17 +270,18 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 partitionKey: seed.partitionKey,
                 modelFingerprint: seed.partitionKey.modelFingerprint,
                 diagnostics: diagnostics,
+                pinningRestorePathFor: restorePinID,
                 // Yield to a preempting foreground request at the
                 // hydration read's segment boundaries (PRD #149 item 7)
                 // — a background pass must never make a user wait out a
                 // multi-second chain read it can abandon.
                 interruption: { Task.isCancelled }
-            ).lookup.snapshot
+            ).lookup
         }
         // The boundary guards mirror the canonical-leaf arm: a usable
         // boundary is inside the path and past the image prefix (the
         // residual doubles as the reprefill input, so it must be image-free).
-        guard let boundary = resolved,
+        guard let boundary = resolved.snapshot,
             boundary.tokenOffset > 0,
             boundary.tokenOffset < admitPath.count,
             boundary.tokenOffset >= seed.keySpace.minimumWarmOffset
@@ -303,9 +317,10 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let warm = WarmState()
         let prefillStart = Date.timeIntervalSinceReferenceDate
 
-        let restoreOK = await container.perform { _ in
+        let restoreOK = await container.perform { context in
             do {
-                warm.cache = try boundary.restore()
+                let session = ContextBackedModelSession(context: context)
+                warm.cache = try session.restore(boundary, backingLeaf: resolved.backingLeaf)
                 return true
             } catch {
                 warm.failure = error.localizedDescription

@@ -18,6 +18,87 @@ import MLXLMCommon
 @MainActor
 @Suite struct SnapshotResolutionTests {
 
+    @Test func finalRequestSettlementRetiresViewsWhoseLeafWasNeverStored() async throws {
+        let store = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
+        let first = diagnostics
+        let second = diagnostics
+        for context in [first, second] {
+            _ = await manager.resolve(
+                tokens: Array(1...8), promptTokenCount: 8, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context,
+                pinningRestorePathFor: context.requestID)
+        }
+        let recurrent = MambaCache()
+        recurrent.state = [MLXArray([Float(42)])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [recurrent], offset: 4, type: .branchPoint, prefixView: true))
+        manager.restoreSnapshot(
+            path: Array(1...4), snapshot: view, partitionKey: key, lastAccessTime: .now)
+        manager.completeRequest(requestID: first.requestID)
+        #expect(manager.totalSnapshotBytes == 4)
+        // The remaining request skips/fails leaf storage. No lookup visits
+        // the view again: completion must release its non-evictable state.
+        manager.completeRequest(requestID: second.requestID)
+        #expect(manager.totalSnapshotBytes == 0)
+        let tree = store.getOrCreateTree(for: key)
+        #expect(tree.snapshotCount == 0)
+        #expect(tree.nodeCount == 1)
+    }
+
+    @Test func viewResolutionPinsBothNodesAndRestoresItsOwnWholeState() async throws {
+        let manager = makeManager()
+        func hybrid(offset: Int, value: Float, view: Bool = false) throws -> HybridCacheSnapshot {
+            let attention = KVCacheSimple()
+            attention.state = [
+                MLXArray.ones([1, 1, offset, 64]), MLXArray.ones([1, 1, offset, 64]),
+            ]
+            let recurrent = MambaCache()
+            recurrent.state = [MLXArray([value])]
+            return try #require(
+                HybridCacheSnapshot.capture(
+                    cache: [attention, recurrent], offset: offset,
+                    type: view ? .branchPoint : .leaf, prefixView: view))
+        }
+        let view = try hybrid(offset: 4, value: 42, view: true)
+        let nearest = try hybrid(offset: 6, value: 99)
+        manager.restoreSnapshot(
+            path: [1, 2, 3, 4], snapshot: view, partitionKey: key, lastAccessTime: .now)
+        manager.restoreSnapshot(
+            path: [1, 2, 3, 4, 20, 21], snapshot: nearest,
+            partitionKey: key, lastAccessTime: .now - .seconds(1))
+        manager.restoreSnapshot(
+            path: Array(1...8), snapshot: try hybrid(offset: 8, value: 100),
+            partitionKey: key, lastAccessTime: .now)
+        let context = diagnostics
+        let fork = [1, 2, 3, 4, 90]
+        let resolved = await manager.resolve(
+            tokens: fork, promptTokenCount: fork.count, partitionKey: key,
+            modelFingerprint: nil, diagnostics: context, pinningRestorePathFor: context.requestID)
+        #expect(resolved.lookup.backingLeaf?.tokenOffset == 6)
+        #expect(resolved.lookup.snapshot?.memoryBytes == 4)
+        let telemetry = manager.makeTelemetrySnapshot()
+        #expect(telemetry.viewOnlyBytes == 4)
+        let checkpoint = try #require(
+            telemetry.trees.flatMap(\.nodes).first { $0.tokenOffset == 4 })
+        #expect(checkpoint.hasSnapshot)
+        #expect(checkpoint.checkpointKind == "prefixView")
+        let restored = try #require(resolved.lookup.restoreCache())
+        #expect(restored[0].offset == 4)
+        #expect(restored[1].state[0].item(Float.self) == 42)
+        let ownedAddresses = Set(
+            (view.layers + nearest.layers).flatMap(\.state).map(backingAddress))
+        #expect(
+            restored.flatMap(\.state).allSatisfy { !ownedAddresses.contains(backingAddress($0)) })
+        _ = manager.clearRAMTier()
+        #expect(manager.totalSnapshotBytes == 3080)
+        #expect(manager.lookup(tokens: fork, partitionKey: key).snapshot?.tokenOffset == 4)
+        manager.completeRequest(requestID: context.requestID)
+        _ = manager.clearRAMTier()
+        #expect(manager.totalSnapshotBytes == 0)
+    }
+
     private let key = CachePartitionKey(modelID: "test-model", kvBits: nil, kvGroupSize: 64)
     private let fingerprint = "fp"
 

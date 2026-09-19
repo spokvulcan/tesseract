@@ -16,6 +16,61 @@ import Testing
 @MainActor
 @Suite struct SpeculativePrefillPreemptionTests {
 
+    @Test func speculativePassRestoresAPlannedViewAndReleasesBothPins() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let stored = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [
+                .init(role: .user, content: String(repeating: "a", count: 2200)),
+                .assistant(content: "Done"),
+            ])
+        let render = ConversationRender.uncached(tokenizer: tokenizer)
+        let future = try #require(
+            try LeafAdmissionBuilder.futureSharedPrefix(
+                storedConversation: stored, keySpace: .identity(keyPath: []), render: render)?.get()
+        )
+        let path = try #require(
+            SpeculativeCanonicalPrefill.admitPath(
+                futureSharedPrefix: future, canonicalLeafOffset: 0))
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]), tokenizer: tokenizer)
+        let prefix = Array(path.prefix(4))
+        let backerPath = prefix + [42, 42, 42, 42]
+        let (view, leaf) = try await provider.withSession { session in
+            let cache = try session.newCache(parameters: GenerateParameters())
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray(prefix.map(Int32.init))), cache: cache,
+                checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            let view = try #require(
+                session.captureSnapshot(cache: cache, offset: 4, type: .branchPoint))
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray([Int32(42), 42, 42, 42])), cache: cache,
+                checkpoints: [:], checkpointBaseOffset: 4, prefillStepSize: 4,
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            return (
+                view, try #require(session.captureSnapshot(cache: cache, offset: 8, type: .leaf))
+            )
+        }
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1 << 20)
+        let key = CachePartitionKey(modelID: "toy/view-speculation", kvBits: nil, kvGroupSize: 64)
+        manager.restoreSnapshot(
+            path: prefix, snapshot: view, partitionKey: key, lastAccessTime: .now)
+        manager.restoreSnapshot(
+            path: backerPath, snapshot: leaf, partitionKey: key, lastAccessTime: .now)
+        let diagnostics = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)
+        let seed = SpeculativeCanonicalPrefill.makeSeed(
+            storedConversation: stored, render: render, keySpace: .identity(keyPath: []),
+            partitionKey: key, prefillStepSize: 256, ssdEnabled: false,
+            seedsPositionAnchor: false, canonicalLeafOffset: 0, diagnostics: diagnostics)
+        await SpeculativeCanonicalPrefill.run(
+            seed: seed, container: provider.container, prefixCache: manager)
+        #expect(manager.lookup(tokens: path, partitionKey: key).snapshotTokenOffset == path.count)
+        _ = manager.clearRAMTier()
+        #expect(manager.totalSnapshotBytes == 0)
+    }
+
     @Test func preemptedPassSettlesPartialLeafThatResolutionThenSurfaces() async throws {
         let tokenizer = ToySequencingTokenizer()
         let stored = HTTPPrefixCacheConversation(

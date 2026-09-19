@@ -337,6 +337,7 @@ final class PrefixCacheManager {
 
     struct LookupResult: Sendable {
         let snapshot: HybridCacheSnapshot?
+        let backingLeaf: HybridCacheSnapshot?
         let partitionKey: CachePartitionKey?
         let snapshotTokenOffset: Int
         /// Actual token-level match depth in the radix tree, which may be
@@ -366,9 +367,11 @@ final class PrefixCacheManager {
             sharedPrefixLength: Int,
             reason: LookupReason,
             recordedHitSnapshotID: String? = nil,
-            divergence: PrefixDivergenceProbe? = nil
+            divergence: PrefixDivergenceProbe? = nil,
+            backingLeaf: HybridCacheSnapshot? = nil
         ) {
             self.snapshot = snapshot
+            self.backingLeaf = backingLeaf
             self.partitionKey = partitionKey
             self.snapshotTokenOffset = snapshotTokenOffset
             self.sharedPrefixLength = sharedPrefixLength
@@ -384,7 +387,7 @@ final class PrefixCacheManager {
         nonisolated func restoreCache() -> [any KVCache]? {
             guard let snapshot, partitionKey != nil else { return nil }
             do {
-                return try snapshot.restore()
+                return try snapshot.restore(backingLeaf: backingLeaf)
             } catch {
                 Log.server.error(
                     "snapshot restore failed — treating as cache miss: \(error)"
@@ -523,7 +526,8 @@ final class PrefixCacheManager {
             )
         }
 
-        if let snapshot = node.state.body {
+        let backingLeaf = node.backingLeaf
+        if let snapshot = node.state.body, !snapshot.isPrefixView || backingLeaf != nil {
             // States 1, 2, or 4. On state 4 (committed ref + body) the
             // store bumps the SSD descriptor's `lastAccessAt` so a hot
             // RAM hit does not look stale to the SSD LRU when the body
@@ -544,9 +548,17 @@ final class PrefixCacheManager {
                         type: snapshot.checkpointType
                     ),
                     recordedHitSnapshotID: recordedHitID,
-                    divergence: divergence
+                    divergence: divergence,
+                    backingLeaf: backingLeaf?.state.body
                 ), node
             )
+        }
+
+        // A view without a RAM backer follows the body-absent ladder. Drop
+        // only its whole-state representation; any own ref or chain-prefix
+        // point remains available to the existing hydration performers.
+        if node.state.body?.isPrefixView == true {
+            tree.dropBody(node: node)
         }
 
         // State 5 — body absent, committed ref present. We reach here only
@@ -697,6 +709,9 @@ final class PrefixCacheManager {
                     self.activeRequestIDs.insert(pinRequestID)
                     if let node {
                         self.pinRestorePath(node: node, requestID: pinRequestID)
+                        if let backingLeaf = node.backingLeaf {
+                            self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
+                        }
                     }
                 }
                 return result
@@ -987,6 +1002,9 @@ final class PrefixCacheManager {
                 self.recordHitSavings(restoredOffset: body.tokenOffset)
                 if let pinRequestID {
                     self.pinRestorePath(node: node, requestID: pinRequestID)
+                    if let backingLeaf = node.backingLeaf {
+                        self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
+                    }
                 }
                 if let recordedHitID {
                     diagnostics.log(PrefixCacheDiagnostics.SSDRecordHitEvent(id: recordedHitID))
@@ -994,7 +1012,8 @@ final class PrefixCacheManager {
                 return SnapshotResolutionLadder.gateFallbackHit(
                     body: body, partitionKey: partitionKey,
                     promptTokenCount: promptTokenCount, treeMatchDepth: treeMatchDepth,
-                    recordedHitID: recordedHitID, divergence: divergence
+                    recordedHitID: recordedHitID, divergence: divergence,
+                    backingLeaf: node.backingLeaf?.state.body
                 )
             }
         }
@@ -2189,6 +2208,9 @@ final class PrefixCacheManager {
     func completeRequest(requestID: UUID) {
         restorePins.removeAll { $0.requestID == requestID }
         activeRequestIDs.remove(requestID)
+        if activeRequestIDs.isEmpty {
+            for (_, tree) in store.orderedPartitions() { tree.retireUnbackedViews() }
+        }
     }
 
     // MARK: - Eviction
@@ -2539,7 +2561,7 @@ final class PrefixCacheManager {
             store.isSSDEnabled,
             demotionPayloadExtractor != nil,
             partitionKey.modelFingerprint != nil,
-            node.state.body != nil
+            node.state.hasResidentBody
         else { return }
 
         guard !node.bodyAccess.blocks(.writePromotion) else { return }
@@ -2554,6 +2576,7 @@ final class PrefixCacheManager {
                 node.state.ref == nil,
                 node.chainPrefixRestorePoint == nil,
                 let snapshot = node.state.body,
+                !snapshot.isPrefixView,
                 let payload = self.demotionPayloadExtractor?(snapshot)
             else { return }
 

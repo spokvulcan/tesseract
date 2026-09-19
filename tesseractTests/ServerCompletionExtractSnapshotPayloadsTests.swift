@@ -21,6 +21,22 @@ import Testing
 
 struct ServerCompletionExtractSnapshotPayloadsTests {
 
+    @Test func prefixViewAdmissionRemainsRAMOnlyWhenSSDIsEnabled() throws {
+        let attention = KVCacheSimple()
+        attention.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention], offset: 4, type: .branchPoint, prefixView: true))
+        let candidates = ServerCompletion.extractCheckpointAdmissionCandidates(
+            [view], ssdEnabled: true)
+        let candidate = try #require(candidates.first)
+        guard case .ramOnly = candidate.storage else {
+            Issue.record("RAM-only Prefix-View Checkpoints must not enqueue incomplete SSD bodies")
+            return
+        }
+        #expect(candidate.snapshot.memoryBytes == 0)
+    }
+
     // MARK: - Fixture builders
 
     /// Build a single-layer `KVCacheSimple` snapshot whose arrays have

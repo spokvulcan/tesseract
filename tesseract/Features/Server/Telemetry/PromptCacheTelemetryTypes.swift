@@ -353,6 +353,11 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     let estimates: MeasuredSecondsEstimates
     let trees: [PromptCacheTreeSnapshot]
 
+    var viewOnlyBytes: Int {
+        trees.flatMap(\.nodes).filter { $0.checkpointKind == "prefixView" }
+            .reduce(0) { $0 + $1.snapshotBytes }
+    }
+
     static let empty = PromptCacheTelemetrySnapshot(
         capturedAt: Date(),
         memoryBudgetBytes: 0,
@@ -404,6 +409,8 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
     let normalizedRecency: Double?
     let normalizedFlopEfficiency: Double?
     let utility: Double?
+    /// Optional so archived telemetry predating Prefix-View Checkpoints decodes.
+    var checkpointKind: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -424,6 +431,7 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
         case normalizedRecency
         case normalizedFlopEfficiency
         case utility
+        case checkpointKind
     }
 }
 

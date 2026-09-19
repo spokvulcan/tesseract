@@ -326,6 +326,7 @@ nonisolated enum LeafStorePhase {
         let capture = await captureStructuredLeafFromBoundary(
             sessions: inputs.sessions,
             boundarySnapshot: route.boundary,
+            backingLeaf: route.backingLeaf,
             positionAnchorRopeDelta: route.positionAnchorRopeDelta,
             prefillStepSize: mlxStart.prefillStepSize,
             tokenNDim: mlxStart.tokenNDim,
@@ -341,6 +342,7 @@ nonisolated enum LeafStorePhase {
     /// the reusable-prefix probe and the boundary plan have run.
     struct BoundaryRoute {
         let boundary: HybridCacheSnapshot
+        let backingLeaf: HybridCacheSnapshot?
         /// The position-anchor delta the residual re-prefill is seeded with
         /// on the vision container.
         let positionAnchorRopeDelta: Int?
@@ -387,34 +389,55 @@ nonisolated enum LeafStorePhase {
             case .directTool: mlxStart.transientLastMessageBoundarySnapshot
             case .canonical: mlxStart.transientLastUserBoundarySnapshot
             }
+        // Keep resolution's Backing Leaf alongside a view until materialization.
+        // Every call runs inside the Model Session so SSD reads stay off MainActor.
+        let resolveBoundary: @Sendable ([Int]) async -> PrefixCacheManager.LookupResult? = {
+            tokens in
+            try? await inputs.sessions.withSession { _ in
+                await inputs.prefixCache.resolve(
+                    tokens: tokens,
+                    promptTokenCount: tokens.count,
+                    partitionKey: mlxStart.partitionKey,
+                    modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                    diagnostics: diagnostics,
+                    pinningRestorePathFor: diagnostics.requestID
+                ).lookup
+            }
+        }
         let plan = await LeafAdmissionBuilder.plan(
             mode: mode,
             probedTokens: probedTokens,
             transientBoundary: transientBoundary,
             keySpace: mlxStart.keySpace,
-            resolveBoundary: { tokens in
-                // Drive Snapshot Resolution inside the Model Session so the
-                // SSD `loadSync` stays off-MainActor (ADR-0001). Session
-                // entry cannot fail with a non-throwing body; the
-                // hypothetical failure degrades to "no boundary snapshot".
-                let resolved = try? await inputs.sessions.withSession { _ in
-                    await inputs.prefixCache.resolve(
-                        tokens: tokens,
-                        promptTokenCount: tokens.count,
-                        partitionKey: mlxStart.partitionKey,
-                        modelFingerprint: mlxStart.partitionKey.modelFingerprint,
-                        diagnostics: diagnostics,
-                        pinningRestorePathFor: diagnostics.requestID
-                    ).lookup.snapshot
-                }
-                return resolved.flatMap { $0 }
-            }
+            resolveBoundary: { await resolveBoundary($0)?.snapshot }
         )
         switch plan {
         case .skip(let reason):
             report.recordSkip(leafSkipLog(for: reason, mode: mode), in: diagnostics)
             return nil
-        case .fromBoundary(let boundary, let tokens):
+        case .fromBoundary(let plannedBoundary, let tokens):
+            var boundary = plannedBoundary
+            var backingLeaf: HybridCacheSnapshot?
+            if boundary.isPrefixView {
+                // A planned checkpoint can also occupy a transient boundary.
+                // Select its current backer at restore time; the normal ladder
+                // can fall shallower if that leaf has since been leased.
+                guard
+                    let resolved = await resolveBoundary(
+                        Array(tokens.prefix(boundary.tokenOffset))),
+                    let snapshot = resolved.snapshot,
+                    snapshot.tokenOffset > 0, snapshot.tokenOffset < tokens.count,
+                    snapshot.tokenOffset >= mlxStart.keySpace.minimumWarmOffset
+                else {
+                    report.recordSkip(
+                        leafSkipLog(
+                            for: .noResolvedBoundary(canonicalLen: tokens.count), mode: mode),
+                        in: diagnostics)
+                    return nil
+                }
+                boundary = snapshot
+                backingLeaf = resolved.backingLeaf
+            }
             // The boundary sits past the image prefix (builder guard), so the
             // residual is real tokens in both spaces and the anchor delta is
             // always defined; on the vision container the residual reprefill
@@ -435,7 +458,8 @@ nonisolated enum LeafStorePhase {
                 positionAnchorRopeDelta = delta
             }
             return BoundaryRoute(
-                boundary: boundary, positionAnchorRopeDelta: positionAnchorRopeDelta,
+                boundary: boundary, backingLeaf: backingLeaf,
+                positionAnchorRopeDelta: positionAnchorRopeDelta,
                 storedTokens: tokens)
         }
     }

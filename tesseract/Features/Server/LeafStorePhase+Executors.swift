@@ -239,6 +239,7 @@ nonisolated extension LeafStorePhase {
     static func captureStructuredLeafFromBoundary(
         sessions: any ModelSessionProviding,
         boundarySnapshot: HybridCacheSnapshot,
+        backingLeaf: HybridCacheSnapshot?,
         positionAnchorRopeDelta: Int?,
         prefillStepSize: Int,
         tokenNDim: Int,
@@ -252,7 +253,7 @@ nonisolated extension LeafStorePhase {
             return try await sessions.withSession { session in
                 var timings = Timings()
                 let restoreStart = Date.timeIntervalSinceReferenceDate
-                let restoredCache = try session.restore(boundarySnapshot)
+                let restoredCache = try session.restore(boundarySnapshot, backingLeaf: backingLeaf)
                 timings.restoreSeconds = secondsSince(restoreStart)
 
                 let residual = Array(storedTokens[boundaryOffset...])

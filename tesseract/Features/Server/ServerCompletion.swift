@@ -1759,7 +1759,8 @@ nonisolated final class ServerCompletion {
                         chainPrefixRestore: resolved.wasChainPrefixRestore,
                         divergence: lookupResult.divergence,
                         restoreMode: restoreMode, copyReason: restoreCopyReason,
-                        copyWaitSeconds: restoreCopyWaitSeconds
+                        copyWaitSeconds: restoreCopyWaitSeconds,
+                        backingLeafOffset: lookupResult.backingLeaf?.tokenOffset
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
@@ -2089,7 +2090,8 @@ nonisolated final class ServerCompletion {
                             checkpointType: snapshot.checkpointType,
                             bytes: snapshot.memoryBytes,
                             duringPrefill: true,
-                            source: "prefill"
+                            source: "prefill",
+                            checkpointKind: snapshot.checkpointKind
                         ))
                 }
 
@@ -2251,7 +2253,7 @@ nonisolated final class ServerCompletion {
     ) -> [any KVCache]? {
         guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
         do {
-            return try session.restore(snapshot)
+            return try session.restore(snapshot, backingLeaf: lookup.backingLeaf)
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"
@@ -2756,7 +2758,9 @@ nonisolated final class ServerCompletion {
         ssdEnabled: Bool,
         extending: SnapshotExtension? = nil
     ) -> SnapshotAdmission.Storage {
-        guard ssdEnabled else { return .ramOnly }
+        // #524 gives planned views RAM residency only. Their detached SSD
+        // admission needs a checked-in Backing Leaf and belongs to #526.
+        guard ssdEnabled, !snapshot.isPrefixView else { return .ramOnly }
         return .ramAndSSD(extractSnapshotPayload(snapshot, extending: extending))
     }
 

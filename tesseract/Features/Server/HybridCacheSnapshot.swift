@@ -70,6 +70,20 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 snapshotOffset: snapshotOffset ?? offset)
         }
 
+        /// Preserve the already-derived Layer Kind when a Prefix-View
+        /// Checkpoint omits attention arrays, or a copy replaces its arrays.
+        private init(source: LayerState, state: [MLXArray]) {
+            className = source.className
+            self.state = state
+            metaState = source.metaState
+            offset = source.offset
+            kind = source.kind
+        }
+
+        func replacingState(_ state: [MLXArray]) -> LayerState {
+            LayerState(source: self, state: state)
+        }
+
         /// Cache classes whose state arrays slice cleanly per token range.
         /// Rotating, chunked and recurrent classes never do, whatever their
         /// shapes.
@@ -97,6 +111,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
     private enum Body {
         case copied([LayerState])
+        case prefixView([LayerState])
         // Keep the objects themselves for the later check-out step (ADR-0064).
         // The frozen serialization view lets every existing tier consumer
         // read metadata and arrays without calling a live cache's getters.
@@ -115,10 +130,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     private let body: Body
     var layers: [LayerState] {
         switch body {
-        case .copied(let layers): layers
+        case .copied(let layers), .prefixView(let layers): layers
         case .moved(let owner): owner.layers
         }
     }
+    var isPrefixView: Bool {
+        if case .prefixView = body { return true }
+        return false
+    }
+    var checkpointKind: String { isPrefixView ? "prefixView" : "ownedBody" }
     let checkpointType: CheckpointType
     /// Pre-computed sum of all state array nbytes, for eviction decisions.
     let memoryBytes: Int
@@ -299,9 +319,11 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         cache: [any KVCache],
         offset: Int,
         type: CheckpointType,
-        copyStrategy: CopyStrategy = .device
+        copyStrategy: CopyStrategy = .device,
+        prefixView: Bool = false
     ) -> HybridCacheSnapshot? {
         guard !cache.isEmpty else { return nil }
+        let prefixView = prefixView && type != .system
         var totalBytes = 0
         var layers: [LayerState] = []
         layers.reserveCapacity(cache.count)
@@ -312,20 +334,17 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             guard let className = classNameForCache(layer) else {
                 return nil
             }
-            let state = layer.state.map { array -> MLXArray in
+            let source = LayerState(
+                className: className, state: layer.state, metaState: layer.metaState,
+                offset: layer.offset, snapshotOffset: offset)
+            let retained = prefixView && source.kind == .sliceableAttention ? [] : source.state
+            let state = retained.map { array -> MLXArray in
                 let copy = deepCopyState(array, strategy: copyStrategy)
                 totalBytes += copy.nbytes
                 copiedArrays.append(copy)
                 return copy
             }
-            layers.append(
-                LayerState(
-                    className: className,
-                    state: state,
-                    metaState: layer.metaState,
-                    offset: layer.offset,
-                    snapshotOffset: offset
-                ))
+            layers.append(source.replacingState(state))
         }
 
         // One pipeline sync for the whole capture — per-array syncs made the
@@ -335,7 +354,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
         return HybridCacheSnapshot(
             tokenOffset: offset,
-            layers: layers,
+            body: prefixView ? .prefixView(layers) : .copied(layers),
             checkpointType: type,
             memoryBytes: totalBytes,
             createdAt: .now
@@ -364,7 +383,10 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// Throws ``RestoreError`` when a layer's class or metaState shape is not
     /// restorable (corrupt or truncated persisted data) — callers treat that
     /// as a cache miss.
-    func restore(copyStrategy: CopyStrategy = .device) throws -> [any KVCache] {
+    func restore(
+        copyStrategy: CopyStrategy = .device, backingLeaf: HybridCacheSnapshot? = nil
+    ) throws -> [any KVCache] {
+        let layers = try materializationLayers(backingLeaf: backingLeaf)
         let classBreakdown = Dictionary(grouping: layers, by: { $0.className })
             .mapValues { $0.count }
             .map { "\($0.key):\($0.value)" }
@@ -458,6 +480,28 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return restored
     }
 
+    enum ViewRestoreError: Error {
+        case invalidBackingLeaf
+    }
+
+    /// Borrow prefix slices only within the Model Session's restore verb.
+    /// `restore` deep-copies and evaluates every array before it returns;
+    /// neither the live cache nor the view retains these borrowed slices.
+    private func materializationLayers(backingLeaf: HybridCacheSnapshot?) throws -> [LayerState] {
+        guard isPrefixView else { return layers }
+        guard let backingLeaf, !backingLeaf.isPrefixView,
+            backingLeaf.checkpointType == .leaf, backingLeaf.tokenOffset >= tokenOffset,
+            backingLeaf.layers.count == layers.count
+        else { throw ViewRestoreError.invalidBackingLeaf }
+        return try zip(layers, backingLeaf.layers).map { view, backing in
+            guard view.kind == .sliceableAttention else { return view }
+            guard backing.kind == .sliceableAttention, backing.className == view.className else {
+                throw ViewRestoreError.invalidBackingLeaf
+            }
+            return view.replacingState(backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] })
+        }
+    }
+
     // MARK: - Chunked Prefill
 
     /// Runs a checkpoint-aware prefill loop: main chunking + tail drain.
@@ -492,7 +536,12 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             let type = checkpoints[absoluteOffset]!
             // Materialize any pipelined chunk work before deep-copying.
             eval(cache)
-            if let snap = capture(cache: cache, offset: absoluteOffset, type: type) {
+            // Planned branch points are views. Transient `.leaf` helpers
+            // remain owned until the separate boundary-checkpoint slice (#525).
+            if let snap = capture(
+                cache: cache, offset: absoluteOffset, type: type,
+                prefixView: type == .branchPoint)
+            {
                 snapshots.append(snap)
             }
         }
