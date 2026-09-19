@@ -53,9 +53,17 @@ Eagerness and the type-protected SSD cut keep their existing meanings.
 off until #528 passes. On drain, compression precedes Snapshot Demotion in
 the existing eviction-selection order. Leased leaves, the Budget Floor's
 most-recently-extended leaf, system bodies and already-quantized partitions
-are exempt. #529 adds opportunistic compression above a configured fraction
-of the ceiling, preserving the most recently checked-in leaves of up to two
-paths by default, at the Model Session's next quiescent point.
+are exempt. #529 adds the Hot Leaf Set to compression's exclusions, preserving
+the most recently checked-in leaves of up to two paths by default. A successful
+Leaf Admission or Lease check-in queues an opportunistic pass at the Model
+Session's next quiescent point. It compresses cold leaves while RAM remains
+above a configured fraction of the ceiling (initial opt-in default 0.75),
+without demotion. The path limit and fraction belong to Eviction Configuration;
+neither is a production tuning measurement. Advancing a path replaces its set
+entry, and lookups and rewinds do not change check-in order. Leases remain
+exempt independently of the path limit. The Budget Floor and ordinary demotion
+eligibility are unchanged. A pressure drain takes precedence over opportunistic
+work and keeps its existing compression-before-demotion guarantee.
 
 Compression uses the vendor's quantize-to-cache conversion into fresh arrays,
 8 bits, group size 64, affine by default. Whole-state layers stay unchanged;
@@ -84,9 +92,10 @@ Budget Floor and eviction score retain their meaning.
 
 #524 implements planned branch-point views in RAM in PR #539. #527 implements
 opt-in Warm Bodies, the compression-first drain, copy restore and telemetry.
+#529 implements the bounded Hot Leaf Set and opportunistic check-in pass.
 These independent slices carry this shared decision; neither enables the
 Compressed Warm Tier by default. Transient views (#525), view SSD admission
-(#526), the Hot Leaf Set (#529), warm-backed views (#530) and SSD Stored Form
+(#526), warm-backed views (#530) and SSD Stored Form
 (#531) remain separate slices.
 
 The opt-in drain queues one Model Session batch and rechecks body identity and

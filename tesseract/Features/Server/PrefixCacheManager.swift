@@ -149,9 +149,18 @@ final class PrefixCacheManager {
     private let modelSessions: (any ModelSessionProviding)?
     private var budgetDrainTask: Task<Void, Never>?
     private var drainRequested = false
+    private var opportunisticCompressionRequested = false
     private var drainRequestID: UUID?
     private var drainPreferredPartition: CachePartitionKey?
     private var compressingNodes: Set<ObjectIdentifier> = []
+
+    private struct HotLeaf {
+        weak var node: RadixTreeNode?
+        weak var tree: TokenRadixTree?
+        let partitionKey: CachePartitionKey
+    }
+    /// Check-in order, oldest first. Lookup recency never changes this set.
+    private var hotLeaves: [HotLeaf] = []
 
     private let demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)?
 
@@ -429,7 +438,17 @@ final class PrefixCacheManager {
         guard tree.takeLeasedBody(lease, on: hit.node) != nil else {
             preconditionFailure("a newly leased resident leaf must have a body")
         }
-        return .claimed(LeafCheckout.Claim(tree: tree, node: hit.node, lease: lease))
+        return .claimed(
+            LeafCheckout.Claim(
+                tree: tree, node: hit.node, lease: lease,
+                didCheckIn: { [weak self, weak tree] node in
+                    guard let self, self.evictionConfig.warmCompressionEnabled,
+                        let tree, self.store.tree(for: partitionKey) === tree
+                    else { return }
+                    self.recordLeafCheckIn(node, in: tree, partitionKey: partitionKey)
+                    self.evictToFitBudget(
+                        requestID: context.requestID, preferredPartitionKey: partitionKey)
+                }))
     }
 
     /// The bound on the pending-full-payload wait (#523), an **Eviction
@@ -1328,6 +1347,7 @@ final class PrefixCacheManager {
                     in: tree,
                     policy: policy
                 ))
+            recordLeafCheckIn(stored.node, in: tree, partitionKey: admission.partitionKey)
         }
 
         let evictions = evictToFitBudget(
@@ -2340,17 +2360,61 @@ final class PrefixCacheManager {
         while let task = budgetDrainTask { await task.value }
     }
 
+    private func recordLeafCheckIn(
+        _ node: RadixTreeNode, in tree: TokenRadixTree, partitionKey: CachePartitionKey
+    ) {
+        guard evictionConfig.warmCompressionEnabled, node.state.body?.isWarm == false else {
+            return
+        }
+        func isAncestor(_ ancestor: RadixTreeNode, of descendant: RadixTreeNode) -> Bool {
+            var current: RadixTreeNode? = descendant
+            while let candidate = current {
+                if candidate === ancestor { return true }
+                current = candidate.parent
+            }
+            return false
+        }
+        _ = hotLeafNodes()
+        hotLeaves.removeAll { entry in
+            guard entry.tree === tree, let previous = entry.node else { return false }
+            return isAncestor(previous, of: node) || isAncestor(node, of: previous)
+        }
+        hotLeaves.append(HotLeaf(node: node, tree: tree, partitionKey: partitionKey))
+        hotLeaves.removeFirst(max(0, hotLeaves.count - evictionConfig.hotLeafPathLimit))
+        opportunisticCompressionRequested = true
+    }
+
+    private func hotLeafNodes() -> Set<ObjectIdentifier> {
+        hotLeaves.removeAll { entry in
+            guard let node = entry.node, let tree = entry.tree,
+                store.tree(for: entry.partitionKey) === tree
+            else { return true }
+            return node.leafLease == nil
+                && (node.state.body?.checkpointType != .leaf || node.state.body?.isWarm != false)
+        }
+        return Set(hotLeaves.compactMap { $0.node.map(ObjectIdentifier.init) })
+    }
+
+    private var aboveOpportunisticCompressionThreshold: Bool {
+        Double(totalSnapshotBytes)
+            > Double(budgetBand.ceilingBytes) * evictionConfig.opportunisticCompressionFraction
+    }
+
     private struct DrainWork: Sendable {
         let candidate: EvictionCandidatePolicy.Candidate
         let snapshot: HybridCacheSnapshot
         let compress: Bool
         let needsFullDemotion: Bool
+        let opportunistic: Bool
     }
 
     private func nextDrainWork(
-        attempted: Set<UUID>, failedDemotions: Set<UUID>, now: ContinuousClock.Instant
+        attempted: Set<UUID>, failedDemotions: Set<UUID>, now: ContinuousClock.Instant,
+        opportunisticRequested: Bool
     ) -> DrainWork? {
-        guard totalSnapshotBytes > memoryBudgetBytes else { return nil }
+        let opportunistic = totalSnapshotBytes <= memoryBudgetBytes
+        guard !opportunistic || (opportunisticRequested && aboveOpportunisticCompressionThreshold)
+        else { return nil }
         let partitions = store.orderedPartitions()
         let preferred = drainPreferredPartition.flatMap { key in
             store.tree(for: key).map { (key: key, tree: $0) }
@@ -2362,12 +2426,13 @@ final class PrefixCacheManager {
                 floor.insert(ObjectIdentifier(node))
             }
         }
-        var excluded = floor
+        var excluded = floor.union(hotLeafNodes())
         for (key, tree) in partitions {
             for node in tree.allSnapshotNodes() {
                 guard let snapshot = node.state.body else { continue }
                 if key.kvBits != nil || snapshot.checkpointType == .system
                     || !snapshot.canCompress || attempted.contains(snapshot.bodyID)
+                    || (opportunistic && snapshot.checkpointType != .leaf)
                 {
                     excluded.insert(ObjectIdentifier(node))
                 }
@@ -2378,27 +2443,33 @@ final class PrefixCacheManager {
             protected: excluded, config: evictionConfig)
         guard
             let candidate = compression
-                ?? EvictionCandidatePolicy.candidate(
-                    now: now, orderedPartitions: partitions, preferred: preferred,
-                    protected: floor, config: evictionConfig),
+                ?? (opportunistic
+                    ? nil
+                    : EvictionCandidatePolicy.candidate(
+                        now: now, orderedPartitions: partitions, preferred: preferred,
+                        protected: floor, config: evictionConfig)),
             let snapshot = candidate.node.state.body,
             candidate.node.bodyAccess.beginRead(snapshotID: snapshot.bodyID.uuidString)
         else { return nil }
         compressingNodes.insert(ObjectIdentifier(candidate.node))
         return DrainWork(
             candidate: candidate, snapshot: snapshot, compress: compression != nil,
-            needsFullDemotion: snapshot.isWarm && canDemote(candidate))
+            needsFullDemotion: snapshot.isWarm && canDemote(candidate),
+            opportunistic: opportunistic)
     }
 
     private func drainWithCompression(sessions: any ModelSessionProviding) async {
         repeat {
             drainRequested = false
+            let opportunisticRequested = opportunisticCompressionRequested
+            opportunisticCompressionRequested = false
             await sessions.withSession { session in
                 let now = ContinuousClock.now
                 var attempted: Set<UUID> = []
                 var failedDemotions: Set<UUID> = []
                 while let work = await self.nextDrainWork(
-                    attempted: attempted, failedDemotions: failedDemotions, now: now)
+                    attempted: attempted, failedDemotions: failedDemotions, now: now,
+                    opportunisticRequested: opportunisticRequested)
                 {
                     let start = ContinuousClock.now
                     var replacement: HybridCacheSnapshot?
@@ -2426,7 +2497,7 @@ final class PrefixCacheManager {
                         now: now)
                 }
             }
-        } while drainRequested
+        } while drainRequested || opportunisticCompressionRequested
         budgetDrainTask = nil
     }
 
@@ -2443,10 +2514,12 @@ final class PrefixCacheManager {
         // this leaf while the Model Session was converting its old body.
         guard node.state.body?.bodyID == work.snapshot.bodyID,
             !floorContents().nodes.contains(ObjectIdentifier(node)),
-            totalSnapshotBytes > memoryBudgetBytes
+            work.opportunistic
+                ? aboveOpportunisticCompressionThreshold : totalSnapshotBytes > memoryBudgetBytes
         else { return }
         if work.compress {
-            guard let replacement, replacement.isWarm,
+            guard !hotLeafNodes().contains(ObjectIdentifier(node)),
+                let replacement, replacement.isWarm,
                 replacement.memoryBytes < work.snapshot.memoryBytes
             else { return }
             let recency = node.lastAccessTime
@@ -2455,7 +2528,8 @@ final class PrefixCacheManager {
             PrefixCacheDiagnostics.logSystem(
                 WarmCompressEvent(
                     offset: replacement.tokenOffset, bytesBefore: work.snapshot.memoryBytes,
-                    bytesAfter: replacement.memoryBytes, seconds: seconds))
+                    bytesAfter: replacement.memoryBytes, seconds: seconds,
+                    source: work.opportunistic ? .opportunistic : .drain))
         } else {
             // A failed conversion is not permission to turn a recoverable
             // eviction into data loss. This pass can consider another body.

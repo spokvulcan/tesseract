@@ -802,14 +802,20 @@ owner approval of a bounded resource plan and a suitable environment.
 records each external finding's disposition, the final clean full-target run,
 and the explicitly isolated allocation run after these hardening changes.
 
-### Opt-in Warm Bodies (#527)
+### Opt-in Warm Bodies (#527, #529)
 
 `WarmBodyModelSessionTests` uses microscopic fp16/fp32 toy-model caches to check
 compression and restore token parity, backing-address isolation, and whole-state
 byte preservation. `WarmBodyDrainTests` checks compression before demotion,
 exemptions, quantized byte accounting, copy-only checkout, default-off behavior,
 and full-form SSD demotion/hydration with a temporary directory.
-`PrefixCacheDiagnosticsTests` pins `warmCompress` fields and lookup `source=warm`;
+Its opportunistic cases cover RAM above, at and below the ceiling fraction,
+default-off behavior, the default two-path Hot Leaf Set, a configured one-path
+limit, successful Lease check-ins, leased paths outside that set, and waiting
+for the occupied toy Model Session to quiesce. These tests observe the tree
+without refreshing the cold leaf's Budget Floor recency.
+`PrefixCacheDiagnosticsTests` pins `warmCompress` fields, including
+`source=opportunistic` versus `source=drain`, and lookup `source=warm`;
 the manager telemetry test checks the hot/warm byte totals used by the cache panel.
 
 Use `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests` for these app-host

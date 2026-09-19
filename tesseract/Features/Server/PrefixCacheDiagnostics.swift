@@ -1083,16 +1083,22 @@ nonisolated enum PrefixCacheDiagnostics {
 }
 
 nonisolated struct WarmCompressEvent: PrefixCacheDiagnostics.Payload {
+    enum Source: String, Sendable {
+        case drain
+        case opportunistic
+    }
     let offset: Int
     let bytesBefore: Int
     let bytesAfter: Int
     let seconds: TimeInterval
+    var source: Source = .drain
     let eventName = "warmCompress"
     var fields: [(String, String)] {
         [
             ("offset", "\(offset)"), ("bytesBefore", "\(bytesBefore)"),
             ("bytesAfter", "\(bytesAfter)"),
             ("durationMs", PrefixCacheDiagnostics.milliseconds(seconds)),
+            ("source", source.rawValue),
         ]
     }
 }

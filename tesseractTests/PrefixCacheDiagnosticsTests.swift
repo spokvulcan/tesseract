@@ -18,7 +18,7 @@ struct PrefixCacheDiagnosticsTests {
             offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002)
         #expect(
             context.render(compression).hasSuffix(
-                "offset=8 bytesBefore=4096 bytesAfter=1152 durationMs=2.000"))
+                "offset=8 bytesBefore=4096 bytesAfter=1152 durationMs=2.000 source=drain"))
         let lookup = PrefixCacheDiagnostics.LookupEvent(
             reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf), promptTokens: 9,
             sharedPrefixLength: 8, skippedPrefillTokens: 8, newTokensToPrefill: 1,
@@ -26,6 +26,16 @@ struct PrefixCacheDiagnosticsTests {
             restoreMode: "copy", copyReason: .warmBody, warmBody: true)
         #expect(context.render(lookup).contains("source=warm"))
         #expect(context.render(lookup).contains("copyReason=warmBody"))
+    }
+
+    @Test func warmCompressionAttributesOpportunisticWork() {
+        let event = WarmCompressEvent(
+            offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002,
+            source: .opportunistic)
+        #expect(context.render(event).hasSuffix("source=opportunistic"))
+        let drain = WarmCompressEvent(
+            offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002)
+        #expect(context.render(drain).hasSuffix("source=drain"))
     }
 
     @Test func lookupHitRendersDeterministically() {

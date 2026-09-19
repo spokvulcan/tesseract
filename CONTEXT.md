@@ -15,8 +15,14 @@ history.
 
 **Hot Leaf**:
 A movable fp16 leaf body eligible for **Leaf Handoff**: a leased leaf or the
-most recently checked-in leaf of a path. It is exempt from compression.
+most recently checked-in leaf of a path in the **Hot Leaf Set**. It is exempt from compression.
 _Avoid_: warm leaf, pinned leaf.
+
+**Hot Leaf Set**:
+The bounded set of paths whose most recently checked-in leaves stay exempt
+from compression, ordered by check-in rather than lookup recency. Leased
+leaves are exempt independently of this set and its path limit.
+_Avoid_: Budget Floor, hottest snapshots.
 
 **Warm Body**:
 A RAM-tier body with quantized attention layers, restored by copy through
