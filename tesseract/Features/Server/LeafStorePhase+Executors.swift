@@ -56,11 +56,11 @@ nonisolated extension LeafStorePhase {
         /// Reserve**'s growth allowance (#522).
         let maximumAdvance: Int
 
-        init(storedTokens: [Int], inputs: Inputs, stages: LeafStages) {
+        init(storedTokens: [Int], inputs: Inputs, stages: LeafStages, ssdEnabled: Bool? = nil) {
             let mlxStart = inputs.mlxStart
             self.storedTokens = storedTokens
             partitionKey = mlxStart.partitionKey
-            ssdEnabled = mlxStart.ssdEnabled
+            self.ssdEnabled = ssdEnabled ?? mlxStart.ssdEnabled
             requestID = inputs.requestID
             prefixCache = inputs.prefixCache
             diagnosticsContext = inputs.diagnosticsContext

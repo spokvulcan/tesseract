@@ -674,6 +674,11 @@ final class PrefixCacheManager {
     /// it: no drain may evict the body an in-flight request restored
     /// from (ADR-0019).
     ///
+    /// `transientBoundary` is a request-local Prefix-View Checkpoint captured
+    /// on `tokens`' prefix; callers validate that original path before passing
+    /// it. It can improve a shallower result without inserting a tree body.
+    /// Backing Leaf selection and its Restore Pin share one MainActor hop.
+    ///
     /// `interruption` (PRD #149 item 7) — polled by the hydration read
     /// at its segment-boundary yield points. A background caller (the
     /// preemptible speculative pass) passes its cancellation check so a
@@ -687,6 +692,7 @@ final class PrefixCacheManager {
         partitionKey: CachePartitionKey,
         modelFingerprint: String?,
         diagnostics: PrefixCacheDiagnostics.Context,
+        transientBoundary: HybridCacheSnapshot? = nil,
         pinningRestorePathFor pinRequestID: UUID? = nil,
         interruption: (@Sendable () -> Bool)? = nil
     ) async -> Resolved {
@@ -699,9 +705,39 @@ final class PrefixCacheManager {
         var attempt = 0
         while true {
             let initial = await MainActor.run {
-                let (result, node) = self.lookupReturningNode(
+                var (result, node) = self.lookupReturningNode(
                     tokens: tokens, partitionKey: partitionKey
                 )
+                if let view = transientBoundary, view.isPrefixView,
+                    view.tokenOffset <= tokens.count,
+                    view.tokenOffset > result.snapshotTokenOffset
+                {
+                    let prefix = Array(tokens.prefix(view.tokenOffset))
+                    if let backer = self.store.tree(for: partitionKey)?.backingLeaf(
+                        forPrefix: prefix),
+                        let body = backer.state.body
+                    {
+                        result = LookupResult(
+                            snapshot: view, partitionKey: partitionKey,
+                            snapshotTokenOffset: view.tokenOffset,
+                            sharedPrefixLength: max(result.sharedPrefixLength, view.tokenOffset),
+                            reason: .hit(
+                                snapshotOffset: view.tokenOffset,
+                                totalTokens: tokens.count, type: view.checkpointType),
+                            backingLeaf: body)
+                        // The transient view has no node. Pin its resolved
+                        // Backing Leaf atomically before releasing MainActor.
+                        node = backer
+                    } else {
+                        diagnostics.logSkip(
+                            stage: "boundaryView", reason: "no-backing-leaf",
+                            extraFields: [
+                                ("fallback", "boundaryReprefill"),
+                                ("requestedOffset", "\(view.tokenOffset)"),
+                                ("restoredOffset", "\(result.snapshotTokenOffset)"),
+                            ])
+                    }
+                }
                 if let pinRequestID {
                     // Lane registration for the Active-Inference Reserve
                     // (ADR-0018) — on hit AND miss: a missing prefix still

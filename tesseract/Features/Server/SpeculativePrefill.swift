@@ -66,6 +66,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
         /// worth-it threshold and the diagnostics' rewind-span field; the
         /// actual restore boundary is re-resolved against the live tree.
         let canonicalLeafOffset: Int
+        /// Request-local view, never a tree body. Re-resolve its Backing Leaf
+        /// when this pass runs; the originating leaf may already be leased.
+        let transientBoundary: HybridCacheSnapshot?
         /// How long the scheduled pass waits before touching the GPU.
         /// `.zero` for the stop-finish and abort triggers; the
         /// **Stretch Abandonment** idle window for a tool-calls finish —
@@ -113,6 +116,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         ssdEnabled: Bool,
         seedsPositionAnchor: Bool,
         canonicalLeafOffset: Int,
+        transientBoundary: HybridCacheSnapshot? = nil,
         idleDelay: Duration = .zero,
         ramOnlySpine: Bool = false,
         diagnostics: PrefixCacheDiagnostics.Context
@@ -132,6 +136,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             ssdEnabled: ssdEnabled,
             seedsPositionAnchor: seedsPositionAnchor,
             canonicalLeafOffset: canonicalLeafOffset,
+            transientBoundary: transientBoundary,
             idleDelay: idleDelay,
             ramOnlySpine: ramOnlySpine,
             diagnostics: diagnostics,
@@ -263,6 +268,15 @@ nonisolated enum SpeculativeCanonicalPrefill {
             logPreempted(diagnostics, prefilledTokens: 0, residualTokens: 0)
             return
         }
+        let transientBoundary = seed.transientBoundary.flatMap { view in
+            // The whole-state checkpoint belongs to its original key path.
+            // A rewritten future path may use it only through that prefix.
+            guard view.isPrefixView, view.tokenOffset >= seed.keySpace.minimumWarmOffset,
+                seed.keySpace.keyPath.count >= view.tokenOffset,
+                admitPath.starts(with: seed.keySpace.keyPath.prefix(view.tokenOffset))
+            else { return Optional<HybridCacheSnapshot>.none }
+            return view
+        }
         let resolved = await container.perform { _ in
             await prefixCache.resolve(
                 tokens: admitPath,
@@ -270,6 +284,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 partitionKey: seed.partitionKey,
                 modelFingerprint: seed.partitionKey.modelFingerprint,
                 diagnostics: diagnostics,
+                transientBoundary: transientBoundary,
                 pinningRestorePathFor: restorePinID,
                 // Yield to a preempting foreground request at the
                 // hydration read's segment boundaries (PRD #149 item 7)

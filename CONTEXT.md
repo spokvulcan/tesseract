@@ -16,7 +16,9 @@ history.
 **Prefix-View Checkpoint**:
 An interior snapshot owning only its whole-state layers, their metadata and its
 token offset; its attention rows come from a resident descendant leaf. It owns
-no attention bytes and is never an eviction victim.
+no attention bytes and is never an eviction victim. A transient boundary is a
+request-local Prefix-View Checkpoint: it is never admitted as a tree body and
+resolves its Backing Leaf only when consumed after the turn.
 _Avoid_: shared KV, copy-on-write checkpoint, partial leaf.
 
 **Backing Leaf**:

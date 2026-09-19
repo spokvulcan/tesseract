@@ -85,6 +85,50 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
 @Suite struct ServerCompletionKeyedSequencingTests {
 
     @MainActor
+    @Test(arguments: [0, 3])
+    func thinkStrippingTurnRetainsOnlyWholeStateBoundaryBytes(recurrentElements: Int) async throws {
+        var tokenizer = FakeChatMLTokenizer()
+        tokenizer.stripsThinkBeforeLastUser = true
+        let conversation = Self.conversation([.init(role: .user, content: "question")])
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        let modelID = "boundary-memory-\(UUID())"
+        let telemetry = TelemetryCapture(modelID: modelID)
+        defer { telemetry.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(
+                    script: prompt + Array("thought</think>ok".utf8).map(Int.init),
+                    recurrentElements: recurrentElements),
+                tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: modelID)
+        let handle = try await fixture.start(
+            conversation: conversation, parameters: Self.parameters())
+        #expect(try await collectServerText(handle).text == "ok")
+        let events = telemetry.drain()
+        let prefilled = try #require(
+            events.first {
+                $0.eventName == "requestMemory" && $0.field("phase") == "prefilled"
+                    && $0.field("boundaryCheckpointArrayBytes") != nil
+            })
+        #expect(prefilled.field("boundaryCheckpointCount") == "1")
+        // The hybrid toy owns three float32 recurrent values (12 bytes);
+        // the attention-only toy owns none. Neither boundary owns KV rows.
+        #expect(
+            prefilled.field("boundaryCheckpointArrayBytes") == (recurrentElements == 0 ? "0" : "12")
+        )
+        // No system/older checkpoint exists: this turn's checked-in leaf
+        // must back the transient view to build the canonical leaf.
+        let canonical = try #require(
+            events.last {
+                $0.eventName == "capture" && $0.field("source") == "canonicalLeaf"
+            })
+        #expect(canonical.intField("offset") ?? 0 > 0)
+        #expect(events.last { $0.eventName == "leafStore" }?.field("path") == "boundary")
+        await fixture.drain()
+    }
+
+    @MainActor
     @Test func plannedBranchViewReportsCaptureAndLookupThroughTheModelSession() async throws {
         let tokenizer = ToySequencingTokenizer()
         let completions = ToyCompletionQueue(

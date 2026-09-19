@@ -811,6 +811,52 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(reserve.largestObservedLeafBytes > 0)
     }
 
+    @Test func imageBearingThinkStripUsesTheCheckedInBackingLeaf() async throws {
+        let imagePadID = EmittedPathToyTokenizer().imagePadID
+        let runLength = EmittedPathToyTokenizer.imagePadRunLength
+        let session = Session(
+            vision: ToyUserInputProcessor.VisionStub(
+                padTokenId: imagePadID, padRunLength: runLength,
+                frame: THW(1, 8, 8), expandsInPlace: true),
+            identity: ModelIdentity(
+                configJSON: [
+                    "model_type": "qwen3_5", "image_token_id": imagePadID,
+                    "vision_config": ["num_heads": 16, "spatial_merge_size": 2],
+                ], chatTemplate: nil))
+        let user = HTTPPrefixCacheMessage(
+            role: .user, content: "look", images: [.init(data: try Self.tinyPNG())])
+        let first = try await session.turn(
+            Self.conversation([user], context: .canonical), context: .canonical)
+        #expect(first.text == "hello world")
+        #expect(first.leafStore["path"] == "boundary", first.account)
+        let canonical = try #require(
+            first.events.last { $0.eventName == "capture" && $0.field("source") == "canonicalLeaf" }
+        )
+        #expect(canonical.intField("offset") ?? 0 > 0)
+        let memory = try #require(
+            first.events.first {
+                $0.eventName == "requestMemory" && $0.field("phase") == "prefilled"
+                    && $0.field("boundaryCheckpointArrayBytes") != nil
+            })
+        #expect(memory.field("boundaryCheckpointCount") == "1")
+        #expect(memory.field("boundaryCheckpointArrayBytes") == "0")
+
+        let next = try await session.turn(
+            Self.conversation(
+                [user, Self.assistant("hello world"), Self.user("more")], context: .canonical),
+            text: "again", context: .canonical)
+        #expect(next.text == "again")
+        // Render-space single pads expand into KV rows; only the suffix
+        // after the checked-in canonical leaf is forwarded on the next turn.
+        let prepared = next.render.flatMap { token in
+            token == imagePadID ? Array(repeating: token, count: runLength) : [token]
+        }
+        #expect(next.cached == canonical.intField("offset"), next.account)
+        #expect(next.fedPrompt == Array(prepared[next.cached...]), next.account)
+        #expect(!next.fedPrompt.contains(imagePadID))
+        #expect(session.index.statsSnapshot().registrations == 0)
+    }
+
     @Test func thinkStrippingTemplateKeepsTheBoundaryPathAtAUserBoundary() async throws {
         let session = Session()
         let request1 = Self.conversation([Self.user("hi")], context: .canonical)

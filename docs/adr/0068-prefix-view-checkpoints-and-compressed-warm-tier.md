@@ -12,8 +12,8 @@ running generation's buffers.
 
 ## Prefix-View Checkpoints
 
-Planned non-system checkpoints and, in a later slice, transient Think-Strip
-Rewind and Speculative Canonical Prefill boundaries own whole-state layers,
+Planned non-system checkpoints and transient Think-Strip Rewind and
+Speculative Canonical Prefill boundaries own whole-state layers,
 metadata and an absolute token offset. Capture still synchronizes prefill
 before copying whole-state layers. System checkpoints keep owned full bodies:
 they are small, reused by every conversation, and must survive a leased leaf.
@@ -83,8 +83,23 @@ Budget Floor and eviction score retain their meaning.
 ## As built
 
 #524 implements planned branch-point views in RAM, view restore and its
-telemetry. Transient boundary views (#525), view SSD admission (#526), all
-Warm Body behavior (#527–#531), and their measurement gates remain pending.
+telemetry. #525 makes last-user and last-message boundary helpers request-local
+views. For a structurally valid think-stripping stop turn, the quiescent fed
+path checks in a full RAM leaf before canonical reconstruction. This uses the
+existing handoff/copy eligibility and does not register a canonical Emitted Path
+or write an extra SSD payload. Resolution chooses a current Backing Leaf by the
+same pure ladder without inserting the transient view into the tree, then pins
+that leaf. Stop, tool, and abort speculative seeds retain only the view, never
+a backer identity.
+A leased or departed backer falls through to the existing boundary re-prefill;
+its diagnostic reports requested and restored offsets. The future key path must
+still match the view's original prefix, including image pseudo-token runs.
+
+Request memory telemetry reports the additional transient helpers' count and
+whole-state array bytes, deduplicated by capture offset. A planned checkpoint
+at the same offset is already accounted among planned checkpoints.
+View SSD admission (#526), all Warm Body behavior (#527–#531), and their
+measurement gates remain pending.
 Loaded-model parity and performance evidence remain owner work. Validation
 uses the toy Model Session and tiny snapshot fixtures. An app-host bootstrap
 that unexpectedly prewarmed Whisper during early tests was discovered and

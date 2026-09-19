@@ -536,8 +536,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             let type = checkpoints[absoluteOffset]!
             // Materialize any pipelined chunk work before deep-copying.
             eval(cache)
-            // Planned branch points are views. Transient `.leaf` helpers
-            // remain owned until the separate boundary-checkpoint slice (#525).
+            // Planned branch points and transient boundaries use views;
+            // the system and final leaf retain their owned full bodies.
             if let snap = capture(
                 cache: cache, offset: absoluteOffset, type: type,
                 prefixView: type == .branchPoint)
