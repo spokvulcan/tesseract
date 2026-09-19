@@ -191,7 +191,7 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
 
     func recoverUnadmitted(_ snapshot: HybridCacheSnapshot) {
         precondition(cache.isEmpty)
-        guard let returnedCache = snapshot.takeMovingCache() else {
+        guard let (returnedCache, _) = snapshot.takeMovingCache() else {
             preconditionFailure("an unadmitted moved snapshot must still own its cache")
         }
         cache = returnedCache
@@ -2733,37 +2733,12 @@ nonisolated final class ServerCompletion {
     /// the full write buys chain complexity for nothing.
     static let extensionMaxSuffixFraction = 0.9
 
-    /// Cache classes whose state arrays carry the token axis at dim −2
-    /// and slice cleanly per token range: `KVCacheSimple` trims its
-    /// state to `offset`, and `QuantizedKVCache` packs quantization
-    /// groups along the head dim (last axis), so a token-axis slice
-    /// never splits a group. Rotating (buffer order), chunked
-    /// (`startPosition`), and recurrent (whole-prefix state) classes
-    /// ride whole in every segment instead.
-    private static let suffixSliceableClassNames: Set<String> = [
-        "KVCache", "KVCacheSimple", "QuantizedKVCache",
-    ]
-
-    /// True when `layer`'s arrays provably cover `[0..snapshotOffset]`
-    /// along the token axis so a `(baseOffset..snapshotOffset]` slice is
-    /// exact. Defensive shape checks — a layer that fails them simply
-    /// rides whole.
-    private static func layerIsSuffixSliceable(
-        _ layer: HybridCacheSnapshot.LayerState,
-        snapshotOffset: Int
-    ) -> Bool {
-        guard suffixSliceableClassNames.contains(layer.className),
-            layer.offset == snapshotOffset,
-            !layer.state.isEmpty
-        else { return false }
-        return layer.state.allSatisfy { array in
-            array.ndim >= 3 && array.dim(-2) == snapshotOffset
-        }
-    }
-
     /// The validated, worth-it extension for `snapshot`, or `nil` when
     /// the payload should admit full. Pure metadata arithmetic — no
-    /// array bytes move here.
+    /// array bytes move here. Which layers would slice is each layer's
+    /// ``HybridCacheSnapshot/LayerState/Kind``, derived at capture; a
+    /// whole-state layer (recurrent, rotating, chunked, or an attention
+    /// layer the shape guard kept whole) counts whole.
     private static func validatedExtension(
         _ extending: SnapshotExtension?,
         for snapshot: HybridCacheSnapshot
@@ -2781,9 +2756,10 @@ nonisolated final class ServerCompletion {
         for layer in snapshot.layers {
             let layerBytes = layer.state.reduce(0) { $0 + $1.nbytes }
             fullBytes += layerBytes
-            if layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset) {
+            switch layer.kind {
+            case .sliceableAttention:
                 suffixBytes += Int(Double(layerBytes) * suffixFraction)
-            } else {
+            case .wholeState:
                 suffixBytes += layerBytes
             }
         }
@@ -2910,14 +2886,14 @@ nonisolated final class ServerCompletion {
     /// so the box is returned for tests; production reads the payload.
     ///
     /// For a **Leaf Extension Admission** every retained array is
-    /// detached here, on the Metal-affine caller: a sliceable layer's
-    /// suffix past the base is sliced into its own contiguous device
-    /// buffer, and every other layer (recurrent, rotating, chunked —
-    /// small next to the attention suffix) is deep-copied whole, all
-    /// evaluated in one sync, so the later host copy is a plain memcpy
-    /// and the payload never references the body it was built from. A
-    /// full payload retains the body's own arrays: copying them is what
-    /// the deferral exists to avoid.
+    /// detached here, on the Metal-affine caller, by the layer's kind: a
+    /// sliceable-attention layer's suffix past the base is sliced into
+    /// its own contiguous device buffer, and every whole-state layer
+    /// (recurrent, rotating, chunked — small next to the attention
+    /// suffix) is deep-copied whole, all evaluated in one sync, so the
+    /// later host copy is a plain memcpy and the payload never references
+    /// the body it was built from. A full payload retains the body's own
+    /// arrays: copying them is what the deferral exists to avoid.
     static func deferredPayload(
         for snapshot: HybridCacheSnapshot,
         extending: SnapshotExtension? = nil
@@ -2933,7 +2909,8 @@ nonisolated final class ServerCompletion {
             var suffixBaseOffset: Int?
             var arrays = layer.state
             if let activeExtension {
-                if layerIsSuffixSliceable(layer, snapshotOffset: snapshot.tokenOffset) {
+                switch layer.kind {
+                case .sliceableAttention:
                     suffixBaseOffset = activeExtension.baseOffset
                     arrays = layer.state.map { array in
                         HybridCacheSnapshot.deepCopyState(
@@ -2941,10 +2918,10 @@ nonisolated final class ServerCompletion {
                                 .ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
                         )
                     }
-                } else {
-                    // A whole-state layer (recurrent, rotating, chunked)
-                    // rides whole in the segment and is detached whole:
-                    // an extension payload retains no body array.
+                case .wholeState:
+                    // A whole-state layer rides whole in the segment and
+                    // is detached whole: an extension payload retains no
+                    // body array.
                     arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
                 }
                 detached.append(contentsOf: arrays)

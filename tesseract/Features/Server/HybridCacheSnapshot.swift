@@ -15,6 +15,29 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
     /// Per-layer cache state. Mirrors savePromptCache's serialization format.
     struct LayerState: @unchecked Sendable {
+        /// How a layer's arrays relate to the token axis — the one rule
+        /// behind every slice-or-whole decision: what the extraction edge
+        /// slices into a **Leaf Extension Admission**, what a **Segment
+        /// Chain** composes by suffix, what **Leaf Rewind** trims and what
+        /// check-out eligibility may hand off. Derived once, when the layer
+        /// state is built (capture, move, deserialization, hydration), from
+        /// the cache class and the array shapes; every consumer reads it.
+        enum Kind: Sendable, Equatable {
+            /// Attention state whose arrays carry the token axis at dim −2
+            /// and cover `[0..<snapshotOffset]` exactly, so a token-range
+            /// slice is exact: `KVCacheSimple` trims its state to `offset`,
+            /// and `QuantizedKVCache` packs quantization groups along the
+            /// head dim (last axis), so a token-axis slice never splits a
+            /// group.
+            case sliceableAttention
+            /// State that rides whole in every **Snapshot Segment** and is
+            /// restored whole: recurrent (`ArraysCache`, `MambaCache`),
+            /// rotating (buffer order), chunked (`startPosition`), and an
+            /// attention layer the shape guard keeps whole because its
+            /// arrays do not provably cover the snapshot's offset.
+            case wholeState
+        }
+
         /// Cache class name matching savePromptCache convention.
         /// "KVCache" (not "KVCacheSimple") for Python compat.
         let className: String
@@ -26,6 +49,50 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         /// state setter (inherited from KVCacheSimple) only sets offset = keys.dim(2),
         /// and its metaState setter restores chunkSize/startPosition but not offset.
         let offset: Int
+        /// Sliceable attention or whole-state; see ``Kind``.
+        let kind: Kind
+
+        /// Build a layer state and derive its kind against `snapshotOffset`,
+        /// the token offset of the snapshot the layer belongs to. Production
+        /// passes the snapshot's offset wherever it builds layers; a layer
+        /// built on its own is judged against the position it claims
+        /// itself.
+        init(
+            className: String, state: [MLXArray], metaState: [String], offset: Int,
+            snapshotOffset: Int? = nil
+        ) {
+            self.className = className
+            self.state = state
+            self.metaState = metaState
+            self.offset = offset
+            kind = Self.deriveKind(
+                className: className, state: state, offset: offset,
+                snapshotOffset: snapshotOffset ?? offset)
+        }
+
+        /// Cache classes whose state arrays slice cleanly per token range.
+        /// Rotating, chunked and recurrent classes never do, whatever their
+        /// shapes.
+        private static let sliceableAttentionClassNames: Set<String> = [
+            "KVCache", "KVCacheSimple", "QuantizedKVCache",
+        ]
+
+        /// The shape guard: a sliceable class is sliceable attention only
+        /// when its arrays provably cover `[0..<snapshotOffset]` along the
+        /// token axis, so a `(base..<snapshotOffset)` slice is exact. A
+        /// layer that fails it — behind the snapshot's offset, a short
+        /// token axis, no separable token axis, or no arrays — is
+        /// whole-state and simply rides whole.
+        private static func deriveKind(
+            className: String, state: [MLXArray], offset: Int, snapshotOffset: Int
+        ) -> Kind {
+            guard sliceableAttentionClassNames.contains(className),
+                offset == snapshotOffset,
+                !state.isEmpty,
+                state.allSatisfy({ $0.ndim >= 3 && $0.dim(-2) == snapshotOffset })
+            else { return .wholeState }
+            return .sliceableAttention
+        }
     }
 
     private enum Body {
@@ -95,7 +162,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             layers.append(
                 LayerState(
                     className: className, state: state, metaState: layer.metaState,
-                    offset: layer.offset))
+                    offset: layer.offset, snapshotOffset: offset))
         }
         // Cache state getters can return lazy prefix views over evaluated
         // buffers. Settle those views here so a full SSD payload's writer
@@ -110,27 +177,44 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     }
 
     /// Inspect/consume only in the Model Session, after the tree grants a lease.
+    ///
+    /// Eligibility reads each layer's ``LayerState/Kind``: sliceable
+    /// attention must be unquantized and trimmable back to the leaf offset
+    /// after the turn's maximum advance (**Leaf Rewind** trims it); a
+    /// whole-state layer must be recurrent (the rewind rebuilds it from its
+    /// saved copy) — a rotating or chunked buffer, or an attention layer
+    /// the shape guard kept whole, cannot promise its prefix back. The
+    /// kind decides; the copy reason still names the class, the way
+    /// ADR-0064 records it.
     func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
         guard checkpointType == .leaf else { return .checkpoint }
         guard case .moved(let owner) = body else { return .immutableBody }
         guard !owner.cache.isEmpty else { return .checkpoint }
-        for layer in owner.cache {
-            if layer is QuantizedKVCache { return .quantized }
-            if layer is RotatingKVCache || layer is ChunkedKVCache { return .rotating }
-            if layer is ArraysCache { continue }
-            guard layer is KVCacheSimple, layer.offset == tokenOffset,
-                maximumAdvance >= 0, layer.isTrimmable(after: maximumAdvance)
-            else { return .untrimmable }
+        for (entry, layer) in zip(owner.cache, owner.layers) {
+            if entry is QuantizedKVCache { return .quantized }
+            switch layer.kind {
+            case .sliceableAttention:
+                guard maximumAdvance >= 0, entry.isTrimmable(after: maximumAdvance) else {
+                    return .untrimmable
+                }
+            case .wholeState:
+                if entry is ArraysCache { continue }
+                return entry is RotatingKVCache || entry is ChunkedKVCache
+                    ? .rotating : .untrimmable
+            }
         }
         return nil
     }
 
-    func takeMovingCache() -> [any KVCache]? {
+    /// Transfer a moved body's cache objects out, with each object's kind
+    /// in cache order so **Leaf Rewind** knows which to trim and which to
+    /// rebuild. Empties the body and its frozen views in one step.
+    func takeMovingCache() -> (cache: [any KVCache], kinds: [LayerState.Kind])? {
         guard case .moved(let owner) = body, !owner.cache.isEmpty else { return nil }
-        let cache = owner.cache
+        let taken = (cache: owner.cache, kinds: owner.layers.map(\.kind))
         owner.cache = []
         owner.layers = []
-        return cache
+        return taken
     }
 
     func sharesMovedBody(with other: HybridCacheSnapshot) -> Bool {
@@ -239,7 +323,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                     className: className,
                     state: state,
                     metaState: layer.metaState,
-                    offset: layer.offset
+                    offset: layer.offset,
+                    snapshotOffset: offset
                 ))
         }
 
@@ -902,7 +987,8 @@ nonisolated extension HybridCacheSnapshot {
                     className: className,
                     state: state,
                     metaState: metaState,
-                    offset: layerOffset
+                    offset: layerOffset,
+                    snapshotOffset: tokenOffset
                 ))
         }
 

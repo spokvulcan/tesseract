@@ -28,6 +28,10 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         var copyReason: LeafStorePhase.Report.CopyReason?
     }
 
+    /// A whole-state layer's independent copy, saved at check-out. Every
+    /// whole-state layer of an eligible leaf is recurrent (see
+    /// `HybridCacheSnapshot.checkoutCopyReason`), so the rewind rebuilds
+    /// it as an `ArraysCache`.
     private struct RecurrentState {
         let index: Int
         let layer: HybridCacheSnapshot.LayerState
@@ -35,32 +39,44 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
 
     let claim: Claim
     let originalTokens: [Int]
+    /// Each cache object's kind, in cache order, as the moved body
+    /// recorded it: what **Leaf Rewind** trims and what it rebuilds.
+    private let kinds: [HybridCacheSnapshot.LayerState.Kind]
     private let recurrent: [RecurrentState]
     var rewindStateBytes: Int {
         recurrent.reduce(0) { $0 + $1.layer.state.reduce(0) { $0 + $1.nbytes } }
     }
 
-    init(claim: Claim, tokens: [Int], cache: [any KVCache]) {
+    init(
+        claim: Claim, tokens: [Int], cache: [any KVCache],
+        kinds: [HybridCacheSnapshot.LayerState.Kind]
+    ) {
         self.claim = claim
+        self.kinds = kinds
         originalTokens = Array(tokens.prefix(claim.lease.offset))
-        recurrent = cache.enumerated().compactMap { index, entry in
-            guard entry is ArraysCache, let className = HybridCacheSnapshot.classNameForCache(entry)
+        recurrent = zip(cache, kinds).enumerated().compactMap { index, entry in
+            let (layer, kind) = entry
+            guard kind == .wholeState, let className = HybridCacheSnapshot.classNameForCache(layer)
             else { return nil }
+            precondition(
+                layer is ArraysCache,
+                "an eligible leaf's whole-state layers are recurrent (checkoutCopyReason)")
             return RecurrentState(
                 index: index,
                 layer: .init(
                     className: className,
-                    state: entry.state.map { HybridCacheSnapshot.deepCopyState($0) },
-                    metaState: entry.metaState, offset: entry.offset))
+                    state: layer.state.map { HybridCacheSnapshot.deepCopyState($0) },
+                    metaState: layer.metaState, offset: layer.offset))
         }
         eval(recurrent.flatMap { $0.layer.state })
     }
 
-    /// Attention preserves its prefix even across growth. Recurrent layers
-    /// are rebuilt from the independently owned state, including empty slots.
+    /// Sliceable attention preserves its prefix even across growth, so it
+    /// is trimmed back to the leaf offset. Whole-state layers are rebuilt
+    /// from the independently owned state, including empty slots.
     func rewind(cache: inout [any KVCache]) {
         eval(cache)
-        for layer in cache where !(layer is ArraysCache) {
+        for (layer, kind) in zip(cache, kinds) where kind == .sliceableAttention {
             let advance = layer.offset - claim.lease.offset
             precondition(advance >= 0)
             let trimmed = layer.trim(advance)
@@ -110,12 +126,12 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         case .claimed(let acquired): claim = acquired
         case .copy(let reason): return Attempt(copyReason: reason)
         }
-        guard let cache = snapshot.takeMovingCache() else {
+        guard let (cache, kinds) = snapshot.takeMovingCache() else {
             preconditionFailure("an eligible claimed leaf must own cache objects")
         }
         let owner = FinalGenerationCache(cache)
         owner.restoreMode = "handoff"
-        owner.checkout = LeafCheckout(claim: claim, tokens: tokens, cache: cache)
+        owner.checkout = LeafCheckout(claim: claim, tokens: tokens, cache: cache, kinds: kinds)
         return Attempt(owner: owner)
     }
 }
