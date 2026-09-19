@@ -231,6 +231,16 @@ struct PrefixCacheDiagnosticsTests {
                 == "event=ssdEvictAtAdmission victimID=old-1 incomingID=new-1")
     }
 
+    @Test func ssdHydrateSegmentReportsActualCopiedBytesAndDuration() {
+        let event = PrefixCacheDiagnostics.SSDHydrateSegmentEvent(
+            id: "head", segment: "base.safetensors", arm: "mapped", fileBytes: 128,
+            materializedBytes: 64, readSeconds: 0.001, copySeconds: 0.004, completed: true)
+        #expect(
+            PrefixCacheDiagnostics.renderSystem(event)
+                == "event=ssdHydrateSegment id=head segment=base.safetensors arm=mapped fileBytes=128 materializedBytes=64 readMs=1.000 copyMs=4.000 durationMs=5.000 completed=true"
+        )
+    }
+
     @Test func ssdHitRendersHydrateMs() {
         let event = PrefixCacheDiagnostics.SSDHitEvent(
             id: "snap-3",

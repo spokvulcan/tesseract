@@ -862,6 +862,88 @@ struct SSDSnapshotStoreTests {
         return (payload, descriptor)
     }
 
+    @Test(arguments: SSDSnapshotReadArm.allCases)
+    func readArmsHydrateIdenticalBytesAndReportSegmentWork(arm: SSDSnapshotReadArm) async throws {
+        let (config, root) = makeConfig(budgetBytes: 20_000_000)
+        defer { cleanup(root) }
+        let (sink, uninstall) = makeSink()
+        defer { uninstall() }
+        let store = SSDSnapshotStore(config: config, readArmForBenchmark: arm)
+        store.registerPartition(makePartitionMeta(), digest: "abcd1234")
+        // Cross the 8 MiB positional-read chunk boundary with an odd tail.
+        // Host-byte fixture only: no model, prompt, or long-context workload.
+        let (payload, descriptor) = makeRoundTripPayload(elementCount: 4_194_321)
+        guard
+            case .accepted(let pending) = store.tryEnqueue(payload: payload, descriptor: descriptor)
+        else { Issue.record("fixture admission failed"); return }
+        await store.flushAsync()
+        let ref = committedRef(from: pending)
+        let first = try #require(
+            store.loadSync(
+                snapshotRef: ref, expectedFingerprint: makePartitionMeta().modelFingerprint))
+        let second = try #require(
+            store.loadSync(
+                snapshotRef: ref, expectedFingerprint: makePartitionMeta().modelFingerprint))
+        let firstBytes = first.layers[0].state[0].asData(access: .noCopy).data
+        let secondBytes = second.layers[0].state[0].asData(access: .noCopy).data
+        #expect(firstBytes == payload.layers[0].state[0].data)
+        #expect(secondBytes == firstBytes)
+        firstBytes.withUnsafeBytes { firstBuffer in
+            secondBytes.withUnsafeBytes { secondBuffer in
+                #expect(firstBuffer.baseAddress != secondBuffer.baseAddress)
+            }
+        }
+        let lines = sink.lines(matching: "event=ssdHydrateSegment")
+            .filter { $0.contains("id=\(pending.snapshotID) ") }
+        #expect(lines.count == 2)
+        #expect(lines.allSatisfy { $0.contains("arm=\(arm.rawValue)") })
+        #expect(lines.allSatisfy { $0.contains("materializedBytes=\(payload.totalBytes)") })
+        #expect(lines.allSatisfy { $0.contains("completed=true") && $0.contains("durationMs=") })
+        let fileURL = root.appendingPathComponent(descriptor.fileRelativePath)
+        let bytes = try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize!
+        #expect(lines.allSatisfy { $0.contains("fileBytes=\(bytes)") })
+    }
+
+    @Test(arguments: SSDSnapshotReadArm.allCases, ["empty", "truncated", "missing"])
+    func readArmsPreserveInterruptedBackingAndCondemnDamagedFiles(
+        arm: SSDSnapshotReadArm, damage: String
+    ) async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = SSDSnapshotStore(
+            config: config, readArmForBenchmark: arm, onDrop: tracker.onDrop)
+        store.registerPartition(makePartitionMeta(), digest: "abcd1234")
+        let (payload, descriptor) = makeRoundTripPayload()
+        guard
+            case .accepted(let pending) = store.tryEnqueue(payload: payload, descriptor: descriptor)
+        else { Issue.record("fixture admission failed"); return }
+        await store.flushAsync()
+        let ref = committedRef(from: pending)
+        #expect(
+            store.loadSync(
+                snapshotRef: ref, expectedFingerprint: makePartitionMeta().modelFingerprint,
+                interruption: { true }) == nil)
+        #expect(tracker.dropped.isEmpty)
+        let fileURL = root.appendingPathComponent(descriptor.fileRelativePath)
+        switch damage {
+        case "missing": try FileManager.default.removeItem(at: fileURL)
+        case "truncated":
+            var bytes = try Data(contentsOf: fileURL)
+            bytes.removeLast()
+            try bytes.write(to: fileURL)
+        default: try Data().write(to: fileURL)
+        }
+        #expect(
+            store.loadSync(
+                snapshotRef: ref, expectedFingerprint: makePartitionMeta().modelFingerprint) == nil)
+        #expect(
+            tracker.dropped.contains {
+                $0.id == pending.snapshotID && $0.reason == .hydrationFailure
+            })
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
     /// End-to-end round trip: enqueue a payload via `tryEnqueue`,
     /// wait for the writer to commit, then call `loadSync` and verify
     /// the reconstructed `HybridCacheSnapshot` matches the original

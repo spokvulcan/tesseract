@@ -799,3 +799,13 @@ owner approval of a bounded resource plan and a suitable environment.
 [PR #503 review follow-up evidence](../benchmarks/leaf-checkout/2026-09-12-review/README.md)
 records each external finding's disposition, the final clean full-target run,
 and the explicitly isolated allocation run after these hardening changes.
+
+## SSD read experiment (#532)
+
+The three read arms use the existing `SSDSnapshotStoreTests` temporary-file
+seam and `ChainPrefixHydrationTests`, with rendered fields covered by
+`PrefixCacheDiagnosticsTests`. These tests load no model. Run them along with
+the prefix cache suites above. The owner-only `--ssd-read-bench` harness and
+pre-registered throughput/adoption protocol are documented in
+[`benchmarks/ssd-read/2026-09-19/README.md`](../benchmarks/ssd-read/2026-09-19/README.md).
+Do not run the loaded-model harness as part of automated verification.
