@@ -94,7 +94,7 @@ final class RadixTreeNode {
                 .init(
                     offset: $0.tokenOffset, lastAccess: $0.lastAccessTime,
                     residentFullBody: $0.state.hasResidentBody && $0.state.checkpointType == .leaf,
-                    leased: $0.leafLease != nil)
+                    leased: $0.leafLease != nil, warmBody: $0.state.body?.isWarm == true)
             },
             committedRef: state.committed, chainPrefix: chainPrefixRestorePoint != nil)
         if case .backingLeaf(let index) = decision { return (decision, nodes[index]) }
@@ -281,7 +281,7 @@ final class TokenRadixTree {
                 .init(
                     offset: $0.tokenOffset, lastAccess: $0.lastAccessTime,
                     residentFullBody: $0.state.hasResidentBody && $0.state.checkpointType == .leaf,
-                    leased: $0.leafLease != nil)
+                    leased: $0.leafLease != nil, warmBody: $0.state.body?.isWarm == true)
             }, committedRef: false, chainPrefix: false)
         guard case .backingLeaf(let index) = choice else { return nil }
         return candidates[index]

@@ -109,6 +109,7 @@ nonisolated enum PrefixCacheDiagnostics {
         let copyWaitSeconds: TimeInterval
         let backingLeafOffset: Int?
         let warmBody: Bool
+        let backingLeafWarm: Bool
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -125,7 +126,8 @@ nonisolated enum PrefixCacheDiagnostics {
             restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
             copyWaitSeconds: TimeInterval = 0,
             backingLeafOffset: Int? = nil,
-            warmBody: Bool = false
+            warmBody: Bool = false,
+            backingLeafWarm: Bool = false
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -165,6 +167,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.copyWaitSeconds = copyWaitSeconds
             self.backingLeafOffset = backingLeafOffset
             self.warmBody = warmBody
+            self.backingLeafWarm = backingLeafWarm
         }
 
         let eventName = "lookup"
@@ -189,6 +192,7 @@ nonisolated enum PrefixCacheDiagnostics {
             if let backingLeafOffset {
                 fields.append(("source", "view"))
                 fields.append(("backingLeafOffset", "\(backingLeafOffset)"))
+                fields.append(("backingLeafForm", backingLeafWarm ? "warm" : "ownedBody"))
             }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if copyWaitSeconds > 0 {

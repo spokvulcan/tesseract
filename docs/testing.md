@@ -885,3 +885,21 @@ Use `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests` for these app-
 unit tests. `DependencyContainer.setup` skips service bootstrap in the test host,
 so tests cannot trigger model prewarms. Loaded-model parity/TTFT measurements and
 the #528 enablement gate remain owner work; the default flag is off.
+
+### Warm-backed Prefix-View Checkpoints (#530)
+
+`PrefixViewModelSessionTests.warmBackerMaterializesPrivateViewStateAndFullPayloadWithTokenParity`
+uses fp16/fp32 hybrid toy caches to check prefix-only attention shapes and offsets,
+the view's own recurrent state, deterministic token parity with an uncompressed
+backer, and physical-address isolation. It also checks full-form SSD payload
+pricing, shape and detached ownership; quantized Stored Form remains #531 work.
+`SnapshotResolutionLadderTests.viewPrefersNearestBackerThenFullFormBeforeRecency`
+checks nearest warm selection and the uncompressed tie-break.
+`SnapshotResolutionTests.storedAndTransientViewsChooseAndPinThePreferredWarmOrFullBacker`
+checks the manager's composition for stored and transient views, Restore Pins,
+and unchanged Leaf Checkout refusal.
+`PrefixCacheDiagnosticsTests.viewLookupReportsTheBackingLeafForm` checks both
+backer forms while keeping `source=view` and the `checkpoint` copy reason;
+the existing keyed Server Completion sequence verifies the emitted field.
+Use the same app-host guard and prefix suite allowlist above. No loaded-model
+work is part of this unit-test evidence.

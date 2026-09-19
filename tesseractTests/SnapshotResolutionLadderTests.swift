@@ -17,6 +17,22 @@ import MLXLMCommon
 @MainActor
 @Suite struct SnapshotResolutionLadderTests {
 
+    @Test(arguments: [6, 8])
+    func viewPrefersNearestBackerThenFullFormBeforeRecency(warmOffset: Int) {
+        let now = ContinuousClock.now
+        let candidates: [SnapshotResolutionLadder.BackingLeafCandidate] = [
+            .init(
+                offset: warmOffset, lastAccess: now, residentFullBody: true, leased: false,
+                warmBody: true),
+            .init(offset: 8, lastAccess: now - .seconds(2), residentFullBody: true, leased: false),
+            .init(offset: 12, lastAccess: now, residentFullBody: true, leased: false),
+        ]
+        #expect(
+            SnapshotResolutionLadder.viewOutcome(
+                offset: 4, candidates: candidates, committedRef: false, chainPrefix: false)
+                == .backingLeaf(warmOffset == 6 ? 0 : 1))
+    }
+
     @Test func prefixViewChoosesNearestUnleasedFullBodyThenRecencyAndFallsThrough() {
         let now = ContinuousClock.now
         let candidates: [SnapshotResolutionLadder.BackingLeafCandidate] = [

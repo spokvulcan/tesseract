@@ -1769,7 +1769,8 @@ nonisolated final class ServerCompletion {
                         restoreMode: restoreMode, copyReason: restoreCopyReason,
                         copyWaitSeconds: restoreCopyWaitSeconds,
                         backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
-                        warmBody: lookupResult.snapshot?.isWarm == true
+                        warmBody: lookupResult.snapshot?.isWarm == true,
+                        backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
@@ -2970,6 +2971,19 @@ nonisolated final class ServerCompletion {
         for view: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
     ) throws -> (payload: SnapshotPayload, owed: DeferredLayers) {
         precondition(view.isPrefixView)
+        if backingLeaf.isWarm {
+            // Stored Form remains full until #531. View restore dequantizes
+            // only the prefix and copies whole-state layers into private
+            // buffers, so this payload can take those buffers without a
+            // second copy or retaining any tree body array.
+            var cache = try view.restore(backingLeaf: backingLeaf)
+            guard
+                let materialized = HybridCacheSnapshot.captureMoving(
+                    cache: &cache, offset: view.tokenOffset)
+            else { throw HybridCacheSnapshot.ViewRestoreError.invalidBackingLeaf }
+            return deferredPayload(
+                for: view, layers: materialized.layers, extending: nil, detaching: false)
+        }
         return deferredPayload(
             for: view, layers: try view.materializationLayers(backingLeaf: backingLeaf),
             extending: nil, detaching: true)
@@ -3031,7 +3045,7 @@ nonisolated final class ServerCompletion {
             checkpointType: snapshot.checkpointType,
             extending: activeExtension,
             totalBytes: totalBytes,
-            retainsBodyArrays: !detaching && activeExtension == nil,
+            retainsBodyArrays: !snapshot.isPrefixView && !detaching && activeExtension == nil,
             materialize: { deferred.materialize() }
         )
         return (payload, deferred)

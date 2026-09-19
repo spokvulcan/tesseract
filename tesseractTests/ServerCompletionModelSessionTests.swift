@@ -6,6 +6,71 @@ import Testing
 @testable import Tesseract_Agent
 
 @Suite struct PrefixViewModelSessionTests {
+    @Test(arguments: [DType.float16, DType.float32])
+    func warmBackerMaterializesPrivateViewStateAndFullPayloadWithTokenParity(dtype: DType)
+        async throws
+    {
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: Array(1...12), headDim: 64, recurrentElements: 4))
+        try await provider.withSession { session in
+            let parameters = GenerateParameters(temperature: 0)
+            let live = try session.newCache(parameters: parameters)
+            let prefilled = try session.prefill(
+                text: .init(tokens: MLXArray(Array(1...8).map(Int32.init))), cache: live,
+                checkpoints: [4: .branchPoint], checkpointBaseOffset: 0,
+                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            let view = try #require(prefilled.snapshots.first)
+            for var layer in live { layer.state = layer.state.map { $0.asType(dtype) } }
+            let full = try #require(session.captureSnapshot(cache: live, offset: 8, type: .leaf))
+            let warm = try session.compress(full)
+            let baseline = try session.restore(view, backingLeaf: full)
+            let restored = try session.restore(view, backingLeaf: warm)
+            #expect(restored.first is KVCacheSimple)
+            #expect(restored.first?.offset == 4)
+            #expect(restored.first?.state.first?.shape == [1, 1, 4, 64])
+            #expect(restored.first?.state.first?.dtype == dtype)
+            #expect(restored.last?.offset == 4)
+            #expect(restored.last?.state.first?.asArray(Float.self) == [4, 4, 4, 4])
+            let treeAddresses = Set(
+                (view.layers + full.layers + warm.layers).flatMap(\.state).map(backingAddress))
+            #expect(
+                restored.flatMap(\.state).allSatisfy {
+                    !treeAddresses.contains(backingAddress($0))
+                })
+            // #531 has not changed Stored Form: a warm-backed view's SSD
+            // payload is still full form, detached from every tree buffer.
+            let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: warm)
+            let fullBytes = dtype == .float16 ? 2064 : 4112
+            #expect(view.materializationByteCount(backingLeaf: warm) == fullBytes)
+            #expect(payload.totalBytes == fullBytes)
+            #expect(!payload.retainsBodyArrays)
+            #expect(!payload.isMaterialized)
+            #expect(owed.retainedArrays.first?.dtype == dtype)
+            #expect(
+                owed.retainedArrays.allSatisfy {
+                    !treeAddresses.contains(backingAddress($0))
+                })
+            let payloadLayers = payload.layers
+            #expect(payloadLayers.first?.className == "KVCache")
+            #expect(payloadLayers.first?.offset == 4)
+            #expect(payloadLayers.first?.state.first?.shape == [1, 1, 4, 64])
+            #expect(
+                payloadLayers.last?.state.first?.data
+                    == MLXArray([Float(4), 4, 4, 4])
+                    .asData(access: .copy).data)
+            let suffix = LMInput.Text(tokens: MLXArray([Int32(5)]))
+            var warmIterator = session.makeDecodeIterator(
+                remainder: suffix, fullText: suffix, cache: restored, state: nil,
+                parameters: parameters)
+            var fullIterator = session.makeDecodeIterator(
+                remainder: suffix, fullText: suffix, cache: baseline, state: nil,
+                parameters: parameters)
+            let tokens = (0..<3).compactMap { _ in warmIterator.next() }
+            #expect(tokens == [6, 7, 8])
+            #expect(tokens == (0..<3).compactMap { _ in fullIterator.next() })
+        }
+    }
+
     @Test func captureAtPreparedImagePrefixKeepsSystemOwnedAndBranchAsView() async throws {
         let provider = ToyModelSessionProvider(model: ToyLanguageModel(script: Array(1...8)))
         try await provider.withSession { session in

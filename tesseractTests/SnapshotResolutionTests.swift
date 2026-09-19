@@ -18,6 +18,62 @@ import MLXLMCommon
 @MainActor
 @Suite struct SnapshotResolutionTests {
 
+    @Test(arguments: [6, 8], [false, true])
+    func storedAndTransientViewsChooseAndPinThePreferredWarmOrFullBacker(
+        warmOffset: Int, transient: Bool
+    ) async throws {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: Array(1...12), headDim: 64))
+        let (view, warm, full) = try await sessions.withSession { session in
+            func capture(_ offset: Int, type: HybridCacheSnapshot.CheckpointType) throws
+                -> HybridCacheSnapshot
+            {
+                let cache = KVCacheSimple()
+                cache.state = [
+                    MLXArray.ones([1, 1, offset, 64]), MLXArray.ones([1, 1, offset, 64]),
+                ]
+                return try #require(
+                    session.captureSnapshot(cache: [cache], offset: offset, type: type))
+            }
+            return try (
+                capture(4, type: .branchPoint),
+                session.compress(capture(warmOffset, type: .leaf)), capture(8, type: .leaf)
+            )
+        }
+        let tier = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: tier)
+        let prefix = [1, 2, 3, 4]
+        if !transient {
+            manager.restoreSnapshot(
+                path: prefix, snapshot: view, partitionKey: key, lastAccessTime: .now)
+        }
+        manager.restoreSnapshot(
+            path: prefix + Array(repeating: 20, count: warmOffset - 4), snapshot: warm,
+            partitionKey: key, lastAccessTime: .now)
+        manager.restoreSnapshot(
+            path: prefix + [30, 30, 30, 30], snapshot: full,
+            partitionKey: key, lastAccessTime: .now - .seconds(2))
+        let context = diagnostics
+        let resolved = await manager.resolve(
+            tokens: prefix + [99], promptTokenCount: 5, partitionKey: key, modelFingerprint: nil,
+            diagnostics: context, transientBoundary: transient ? view : nil,
+            pinningRestorePathFor: context.requestID)
+        let selected = warmOffset == 6 ? warm : full
+        #expect(resolved.lookup.backingLeaf?.bodyID == selected.bodyID)
+        let attempt = await LeafCheckout.attempt(
+            resolved: resolved, tokens: prefix + [99], maximumAdvance: 1,
+            identityKeySpace: true, prefixCache: manager, context: context)
+        #expect(attempt.owner == nil)
+        #expect(attempt.copyReason == .checkpoint)
+        _ = manager.clearRAMTier()
+        let remaining = tier.getOrCreateTree(for: key).allSnapshotNodes().compactMap(\.state.body)
+            .filter { !$0.isPrefixView }
+        #expect(remaining.map(\.bodyID) == [selected.bodyID])
+        manager.completeRequest(requestID: context.requestID)
+        _ = manager.clearRAMTier()
+        #expect(manager.totalSnapshotBytes == 0)
+    }
+
     @Test func finalRequestSettlementRetiresViewsWhoseLeafWasNeverStored() async throws {
         let store = TieredSnapshotStore(ssdConfig: nil)
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)

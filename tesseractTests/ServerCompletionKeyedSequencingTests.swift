@@ -173,6 +173,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(try await collectServerText(fork).text == "ok")
         let lookup = try #require(capture.drain().first { $0.eventName == "lookup" })
         #expect(lookup.field("source") == "view")
+        #expect(lookup.field("backingLeafForm") == "ownedBody")
         #expect(lookup.field("restoreMode") == "copy")
         #expect(lookup.field("copyReason") == "checkpoint")
         let backingOffset = try #require(lookup.field("backingLeafOffset").flatMap(Int.init))

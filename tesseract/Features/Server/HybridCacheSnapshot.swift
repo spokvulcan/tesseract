@@ -441,7 +441,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         copiedArrays.reserveCapacity(layers.count * 2)
         let restored: [any KVCache] = try layers.enumerated().map {
             layerIndex, layerState -> any KVCache in
-            if isWarm, layerState.kind == .sliceableAttention,
+            if isWarm || (isPrefixView && backingLeaf?.isWarm == true),
+                layerState.kind == .sliceableAttention,
                 layerState.className == "QuantizedKVCache"
             {
                 let quantized = Self.makeQuantizedCache(metaState: layerState.metaState)
@@ -543,10 +544,22 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         var bytes = 0
         for (layer, backing) in zip(layers, backingLeaf.layers) {
             if layer.kind == .sliceableAttention {
-                guard backing.kind == .sliceableAttention, layer.className == backing.className
-                else {
-                    return nil
+                guard backing.kind == .sliceableAttention else { return nil }
+                if backingLeaf.isWarm, backing.className == "QuantizedKVCache" {
+                    guard ["KVCache", "KVCacheSimple"].contains(layer.className),
+                        Self.metaStateIsRestorable(backing.metaState, for: backing.className),
+                        [4, 6].contains(backing.state.count),
+                        let groupSize = Int(backing.metaState[2]), groupSize > 0
+                    else { return nil }
+                    // Each scale represents one head-dimension group and has
+                    // the live dtype. Price the full form without dequantizing.
+                    let valuesScale = backing.state.count / 2 + 1
+                    bytes +=
+                        (backing.state[1].nbytes + backing.state[valuesScale].nbytes)
+                        / backingLeaf.tokenOffset * tokenOffset * groupSize
+                    continue
                 }
+                guard layer.className == backing.className else { return nil }
                 bytes += backing.state.reduce(0) {
                     $0 + $1.nbytes / backingLeaf.tokenOffset * tokenOffset
                 }
@@ -558,8 +571,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     }
 
     /// Borrow prefix slices only within a Model Session restore or SSD
-    /// extraction edge. Both callers deep-copy and evaluate every array
-    /// before returning; no consumer retains these borrowed slices.
+    /// extraction edge. Both callers produce independent buffers and evaluate
+    /// them before returning; no consumer retains these borrowed slices.
     func materializationLayers(backingLeaf: HybridCacheSnapshot?) throws -> [LayerState] {
         guard isPrefixView else { return layers }
         guard let backingLeaf, !backingLeaf.isPrefixView,
@@ -568,7 +581,23 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         else { throw ViewRestoreError.invalidBackingLeaf }
         return try zip(layers, backingLeaf.layers).map { view, backing in
             guard view.kind == .sliceableAttention else { return view }
-            guard backing.kind == .sliceableAttention, backing.className == view.className else {
+            guard backing.kind == .sliceableAttention else {
+                throw ViewRestoreError.invalidBackingLeaf
+            }
+            if backingLeaf.isWarm, backing.className == "QuantizedKVCache" {
+                guard ["KVCache", "KVCacheSimple"].contains(view.className),
+                    Self.metaStateIsRestorable(backing.metaState, for: backing.className)
+                else { throw ViewRestoreError.invalidBackingLeaf }
+                // Slice packed rows before dequantization. The metadata must
+                // name the view offset, never the descendant's full length.
+                var metaState = backing.metaState
+                metaState[1] = String(tokenOffset)
+                return LayerState(
+                    className: backing.className,
+                    state: backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] },
+                    metaState: metaState, offset: tokenOffset)
+            }
+            guard backing.className == view.className else {
                 throw ViewRestoreError.invalidBackingLeaf
             }
             return view.replacingState(backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] })

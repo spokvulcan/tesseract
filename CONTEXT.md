@@ -23,12 +23,14 @@ _Avoid_: shared KV, copy-on-write checkpoint, partial leaf.
 
 **Backing Leaf**:
 The resident, unleased, full-body descendant chosen at **Snapshot Resolution**
-for one **Prefix-View Checkpoint** restore. It is never recorded on the view node.
+for one **Prefix-View Checkpoint** restore, including a **Warm Body**. It is never
+recorded on the view node.
 _Avoid_: parent body, permanent backer, shared owner.
 
 **View Materialization**:
 Producing live cache objects from a **Prefix-View Checkpoint** by copying its
-whole-state layers and the **Backing Leaf**'s leading attention rows. The result
+whole-state layers and the **Backing Leaf**'s leading attention rows, with warm
+attention dequantized after slicing. The result
 belongs to the request or an SSD payload, never to a new tree body.
 _Avoid_: view promotion, alias restore, materialization on backer departure.
 

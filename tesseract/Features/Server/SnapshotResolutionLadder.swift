@@ -29,6 +29,7 @@ nonisolated enum SnapshotResolutionLadder {
         let lastAccess: ContinuousClock.Instant
         let residentFullBody: Bool
         let leased: Bool
+        var warmBody: Bool = false
     }
 
     enum ViewOutcome: Equatable {
@@ -47,8 +48,9 @@ nonisolated enum SnapshotResolutionLadder {
         }
         if let nearest = eligible.min(by: {
             let lhs = candidates[$0], rhs = candidates[$1]
-            return lhs.offset == rhs.offset
-                ? lhs.lastAccess > rhs.lastAccess : lhs.offset < rhs.offset
+            if lhs.offset != rhs.offset { return lhs.offset < rhs.offset }
+            if lhs.warmBody != rhs.warmBody { return !lhs.warmBody }
+            return lhs.lastAccess > rhs.lastAccess
         }) {
             return .backingLeaf(nearest)
         }

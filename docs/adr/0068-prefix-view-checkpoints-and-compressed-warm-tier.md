@@ -19,7 +19,8 @@ before copying whole-state layers. System checkpoints keep owned full bodies:
 they are small, reused by every conversation, and must survive a leased leaf.
 
 Snapshot Resolution chooses a resident, unleased, full-body descendant in the
-same partition as the Backing Leaf, nearest by offset and then most recent.
+same partition as the Backing Leaf, nearest by offset, preferring an owned
+uncompressed body over a Warm Body at equal offset, then most recent.
 The pure resolution ladder chooses; the manager performs effects. Without a
 backer, resolution falls through to the view's committed Snapshot Ref, then a
 Chain-Prefix Restore point, then a shallower hit. No backer identity is stored
@@ -121,7 +122,18 @@ Only hit-earned promotions receive deferred writer scheduling; pressure-triggere
 checkpoint writes retain the ordinary write-through class.
 #527 implements opt-in Warm Bodies, compression-first drain, copy restore and
 telemetry. #529 implements the Hot Leaf Set and opportunistic check-in pass.
-Warm-backed views (#530), SSD Stored Form (#531) and the #528 gate remain pending.
+#530 lets stored and transient views resolve through Warm Bodies. The packed
+attention rows are sliced to the view offset before dequantization into private
+live buffers; the view's whole-state layers retain their own checkpoint state.
+Lookup telemetry keeps `source=view` and `copyReason=checkpoint`, and adds
+`backingLeafForm=warm|ownedBody`. Existing quantized-KV partitions continue to
+restore their owned quantized form without the Warm Body conversion.
+
+For a warm-backed view's SSD admission, metadata-only pricing uses the full
+live dtype's byte count, and extraction moves the already private materialized
+buffers into a full-form payload. It neither dequantizes the entire descendant
+nor copies the resulting prefix a second time. SSD Stored Form (#531) and the
+#528 gate remain pending; Warm Bodies stay opt-in.
 
 The opt-in drain queues one Model Session batch and rechecks body identity and
 Budget Floor membership when committing each conversion on MainActor. The
