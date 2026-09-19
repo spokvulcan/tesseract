@@ -163,6 +163,9 @@ nonisolated enum LeafStorePhase {
             generatedTokens: turn.generatedTokens,
             cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache)
         )
+        // The live leaf a think-stripping boundary turn checks in for its
+        // transient views; released once the canonical leaf backs them.
+        var boundaryBackingLeafPath: [Int]?
         switch decision {
         case .live(let offset):
             await storeLive(offset: offset, turn: turn, inputs: inputs, result: &result)
@@ -172,7 +175,6 @@ nonisolated enum LeafStorePhase {
             // this quiescent point before consuming request-local views; the
             // canonical leaf takes over as their backer and the live leaf is
             // released below (ADR-0068 amendment).
-            var boundaryBackingLeafPath: [Int]?
             if reason == .thinkStrippingUserBoundary,
                 [
                     mlxStart.transientLastUserBoundarySnapshot,
@@ -221,18 +223,26 @@ nonisolated enum LeafStorePhase {
             } else {
                 await storeFromBoundary(turn: turn, inputs: inputs, result: &result)
             }
-            if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens,
-                let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
-                    path: boundaryBackingLeafPath, sparing: canonical,
-                    partitionKey: mlxStart.partitionKey)
-            {
-                trace.logSupersessions([released], diagnostics: diagnosticsContext)
-            }
         }
 
         if let admission = result.admission {
             trace.ingest(evictions: admission.evictions, diagnostics: diagnosticsContext)
             trace.logSupersessions(admission.supersededLeaves, diagnostics: diagnosticsContext)
+        }
+        if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens {
+            if let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
+                path: boundaryBackingLeafPath, sparing: canonical,
+                partitionKey: mlxStart.partitionKey)
+            {
+                trace.logSupersessions([released], diagnostics: diagnosticsContext)
+            } else {
+                result.report.recordSkip(
+                    LeafSkipLog(
+                        stage: "boundaryBackingLeafRelease", reason: "not-releasable",
+                        level: .info,
+                        extraFields: [("offset", "\(boundaryBackingLeafPath.count)")]),
+                    in: diagnosticsContext)
+            }
         }
         return result
     }

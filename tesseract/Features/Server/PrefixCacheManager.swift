@@ -304,7 +304,8 @@ final class PrefixCacheManager {
 
     struct LeafSupersession: Sendable {
         /// What happened to the superseded leaf's SSD backing. See
-        /// `CONTEXT.md` → SSD leaf extension (three supersession modes).
+        /// `CONTEXT.md` → SSD leaf extension (three supersession modes), plus
+        /// `released` for a RAM-only body the Leaf Store let go.
         enum Mode: String, Sendable {
             /// A **Leaf Extension Admission** is taking ownership of
             /// the backing's **Segment Chain**. The transfer completes
@@ -327,6 +328,10 @@ final class PrefixCacheManager {
             /// new leaf has no SSD copy, so the ancestor remains the
             /// warm-start fallback and the next extension base.
             case preserved
+            /// A RAM-only body the **Leaf Store** released once its role
+            /// ended — the boundary backing leaf after the canonical leaf
+            /// is admitted (ADR-0068 amendment). No SSD backing existed.
+            case released
         }
 
         let offset: Int
@@ -2381,21 +2386,17 @@ final class PrefixCacheManager {
     /// Once the canonical leaf is admitted it backs those views itself,
     /// and the live leaf — the raw generated tail no canonical follow-up
     /// re-renders — would otherwise stay resident as a second body per
-    /// turn. Drops only an exact-path, RAM-only, unleased leaf body that
-    /// is not the canonical leaf; returns the supersession to log, or
-    /// `nil` when nothing was dropped.
+    /// turn. The restore and residual re-prefill that read the body have
+    /// completed, so the request's Restore Pin on it guards nothing live.
+    /// Returns the supersession to log, or `nil` when the path is the
+    /// canonical leaf's own or the tree found no releasable body there.
     func releaseBoundaryBackingLeaf(
         path: [Int], sparing canonicalPath: [Int], partitionKey: CachePartitionKey
     ) -> LeafSupersession? {
         guard path != canonicalPath, let tree = store.tree(for: partitionKey),
-            let (node, matched) = tree.findBestSnapshot(tokens: path, updateAccess: false),
-            matched == path.count, node.tokenOffset == path.count,
-            let body = node.state.body, body.checkpointType == .leaf, !body.isPrefixView,
-            node.state.ref == nil, node.leafLease == nil
+            tree.releaseLeafBody(atExactPath: path) != nil
         else { return nil }
-        let result = tree.dropBody(node: node)
-        guard result.droppedCheckpointType != nil else { return nil }
-        return LeafSupersession(offset: path.count, bodyDroppedSnapshotRefID: nil, mode: .deleted)
+        return LeafSupersession(offset: path.count, bodyDroppedSnapshotRefID: nil, mode: .released)
     }
 
     /// Drop snapshots until `totalSnapshotBytes <= memoryBudgetBytes`. Uses

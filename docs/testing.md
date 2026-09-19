@@ -899,7 +899,10 @@ only backer, bounded at the view once a second backer or a committed ref exists.
 `ServerCompletionKeyedSequencingTests.thinkStrippingTurnRetainsOnlyWholeStateBoundaryBytes`
 also checks that the live leaf checked in as the transient views' backer is
 released once the canonical leaf is admitted: one resident leaf per boundary
-turn, reported as a `leafSupersession` with mode `deleted`.
+turn, reported as a `leafSupersession` with mode `released`.
+`EvictionPolicyTests.releasingTheBoundaryBackingLeafDropsOnlyAnExactUnleasedLiveLeaf`
+pins the release's guards on the manager: the canonical path, a shallower
+prefix, a foreign path and a leased body release nothing.
 The loaded-model `prefix-cache-e2e` branch-point survival check is the
 end-to-end evidence.
 

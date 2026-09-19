@@ -132,7 +132,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
                 $0.eventName == "capture" && $0.field("source") == "boundaryBackingLeaf"
             })
         let released = try #require(
-            events.first { $0.eventName == "leafSupersession" && $0.field("mode") == "deleted" })
+            events.first { $0.eventName == "leafSupersession" && $0.field("mode") == "released" })
         #expect(released.intField("offset") == backer.intField("offset"))
         let stats = try #require(fixture.cacheAdmin.stats)
         #expect(stats.snapshotsByType[.leaf] == 1)

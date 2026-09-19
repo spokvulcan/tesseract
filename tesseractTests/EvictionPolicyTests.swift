@@ -640,6 +640,19 @@ struct EvictionPolicyTests {
         #expect(checkedOut.leafLease != nil)
         #expect(residentLeaf.terminalRecoveryParentOffset == 4)
 
+        // A body-less junction restores nothing: the span runs through it
+        // to the nearest ancestor with restorable state.
+        let split = TokenRadixTree()
+        let base = split.insertPath(tokens: Array(1...2))
+        _ = split.storeSnapshot(makeUniformSnapshot(offset: 2, type: .system), on: base)
+        let left = split.insertPath(tokens: Array(1...4) + [70, 71, 72, 73])
+        _ = split.storeSnapshot(makeUniformSnapshot(offset: 8, type: .leaf), on: left)
+        let right = split.insertPath(tokens: Array(1...4) + [80, 81, 82, 83])
+        _ = split.storeSnapshot(makeUniformSnapshot(offset: 8, type: .leaf), on: right)
+        #expect(left.parent?.tokenOffset == 4)
+        #expect(left.parent?.state.body == nil)
+        #expect(left.terminalRecoveryParentOffset == 2)
+
         // A view with its own committed Snapshot Ref survives its last backer.
         let other = TokenRadixTree()
         let backedView = other.insertPath(tokens: Array(1...4))
@@ -675,6 +688,54 @@ struct EvictionPolicyTests {
             EvictionPolicy.selectVictim(
                 candidates: [bodiedLeaf, viewLeaf], config: EvictionConfiguration(alpha: 2.0)
             )?.node === bodiedLeaf)
+    }
+
+    @Test func releasingTheBoundaryBackingLeafDropsOnlyAnExactUnleasedLiveLeaf() throws {
+        let store = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
+        let leased = Array(1...8)
+        let live = Array(1...4) + [50, 51, 52, 53]
+        let canonical = Array(1...4) + [90, 91, 92]
+        for (path, offset) in [(leased, 8), (live, 8), (canonical, 7)] {
+            manager.restoreSnapshot(
+                path: path, snapshot: makeUniformSnapshot(offset: offset, type: .leaf),
+                partitionKey: defaultKey, lastAccessTime: .now)
+        }
+        let leafBytes = makeUniformSnapshot(offset: 8, type: .leaf).memoryBytes
+        // The canonical path itself, a shallower prefix and a foreign path
+        // release nothing.
+        #expect(
+            manager.releaseBoundaryBackingLeaf(
+                path: canonical, sparing: canonical, partitionKey: defaultKey) == nil)
+        #expect(
+            manager.releaseBoundaryBackingLeaf(
+                path: Array(1...6), sparing: canonical, partitionKey: defaultKey) == nil)
+        #expect(
+            manager.releaseBoundaryBackingLeaf(
+                path: [5, 5, 5], sparing: canonical, partitionKey: defaultKey) == nil)
+        // A leased live leaf stays: its body is checked out.
+        let tree = store.getOrCreateTree(for: defaultKey)
+        let leasedNode = try #require(
+            tree.findBestSnapshot(tokens: leased, updateAccess: false)?.node)
+        #expect(
+            tree.beginLeafLease(
+                on: leasedNode,
+                context: .init(
+                    requestID: UUID(), modelID: defaultKey.modelID, kvBits: nil, kvGroupSize: 64))
+                != nil)
+        #expect(
+            manager.releaseBoundaryBackingLeaf(
+                path: leased, sparing: canonical, partitionKey: defaultKey) == nil)
+        #expect(manager.totalSnapshotBytes == 3 * leafBytes)
+        // The exact, unleased live path releases; the canonical leaf is untouched.
+        let released = try #require(
+            manager.releaseBoundaryBackingLeaf(
+                path: live, sparing: canonical, partitionKey: defaultKey))
+        #expect(released.offset == 8)
+        #expect(released.mode == .released)
+        #expect(manager.totalSnapshotBytes == 2 * leafBytes)
+        #expect(manager.lookup(tokens: live, partitionKey: defaultKey).snapshotTokenOffset < 8)
+        #expect(manager.lookup(tokens: canonical, partitionKey: defaultKey).snapshot != nil)
     }
 
     // MARK: - Prefix cache budget sizing

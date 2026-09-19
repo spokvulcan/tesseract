@@ -81,20 +81,25 @@ final class RadixTreeNode {
     var backingLeaf: RadixTreeNode? { viewResolution.backingLeaf }
 
     /// The offset a terminal loss of this body re-prefills from: the
-    /// parent's, unless that parent is a **Prefix-View Checkpoint** this
-    /// leaf alone keeps alive (ADR-0068 amendment). Such a view owns no
-    /// attention bytes and empties with its last **Backing Leaf**, so
-    /// dropping the leaf loses the view's span as well. A view that
+    /// nearest ancestor holding restorable state (ADR-0068 amendment). A
+    /// body-less junction restores nothing and is skipped, and so is a
+    /// **Prefix-View Checkpoint** this leaf alone keeps alive: such a view
+    /// owns no attention bytes and empties with its last **Backing Leaf**,
+    /// so dropping the leaf loses the view's span as well. A view that
     /// outlives the drop bounds the span as before: one with another
     /// potential backer (a resident full body, or a leased leaf that
     /// returns), a Snapshot Ref or a chain-prefix point.
     var terminalRecoveryParentOffset: Int {
         var ancestor = parent
         while let candidate = ancestor {
-            guard candidate.state.body?.isPrefixView == true,
-                candidate.state.ref == nil, candidate.chainPrefixRestorePoint == nil,
-                candidate.isBackedOnly(by: self)
-            else { return candidate.tokenOffset }
+            if candidate.state.ref != nil || candidate.chainPrefixRestorePoint != nil {
+                return candidate.tokenOffset
+            }
+            if let body = candidate.state.body,
+                !(body.isPrefixView && candidate.isBackedOnly(by: self))
+            {
+                return candidate.tokenOffset
+            }
             ancestor = candidate.parent
         }
         return 0
@@ -1239,6 +1244,19 @@ extension TokenRadixTree {
             current = parent
         }
         return current === root
+    }
+
+    /// Drop the RAM body at exactly `tokens`, when it is an unleased,
+    /// ref-less full leaf body: the Leaf Store's release of a boundary
+    /// backing leaf (ADR-0068 amendment). Returns `nil` when no such body
+    /// sits at that path or the drop is refused.
+    func releaseLeafBody(atExactPath tokens: [Int]) -> DropBodyResult? {
+        guard let node = exactNode(tokens: tokens), node.tokenOffset == tokens.count,
+            let body = node.state.body, body.checkpointType == .leaf, !body.isPrefixView,
+            node.state.ref == nil, node.leafLease == nil
+        else { return nil }
+        let result = dropBody(node: node)
+        return result.droppedCheckpointType == nil ? nil : result
     }
 
     private func exactNode(tokens: [Int]) -> RadixTreeNode? {
