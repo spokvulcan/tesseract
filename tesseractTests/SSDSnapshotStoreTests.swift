@@ -1144,6 +1144,50 @@ struct SSDSnapshotStoreTests {
         #expect(commitLines.count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func borrowedLeafAndDemotionMatchTheCopyEncoder(demotion: Bool) async throws {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config, onCommit: tracker.onCommit, onDrop: tracker.onDrop)
+        let snapshot: HybridCacheSnapshot = {
+            let kv = KVCacheSimple()
+            kv.state = [
+                MLXArray(Array(0..<512).map(Float.init)).reshaped([1, 1, 8, 64]),
+                MLXArray.ones([1, 1, 8, 64], dtype: .float16),
+            ]
+            let recurrent = MambaCache()
+            recurrent.state = [MLXArray([Float(3), 7]), MLXArray.zeros([0])]
+            return HybridCacheSnapshot.capture(cache: [kv, recurrent], offset: 8, type: .leaf)!
+        }()
+        let copyPayload = SnapshotPayload(
+            tokenOffset: snapshot.tokenOffset, checkpointType: .leaf,
+            layers: snapshot.layers.map { layer in
+                .init(
+                    className: layer.className,
+                    state: layer.state.map { array in
+                        .init(
+                            data: array.asData(access: .copy).data,
+                            dtype: ServerCompletion.dtypeWireString(array.dtype), shape: array.shape
+                        )
+                    }, metaState: layer.metaState, offset: layer.offset)
+            })
+        let payload = ServerCompletion.extractSnapshotPayload(snapshot)
+        let descriptor = makeDescriptor(bytes: payload.totalBytes, lastAccessAt: 123)
+        let expected = try encodePlaceholderContainer(payload: copyPayload, descriptor: descriptor)
+        guard
+            case .accepted = store.tryEnqueue(
+                payload: payload, descriptor: descriptor,
+                refreshRecencyAtCommit: !demotion)
+        else { Issue.record("enqueue failed"); return }
+        await store.flushAsync()
+        #expect(tracker.committed.contains(descriptor.snapshotID))
+        let actual = try Data(contentsOf: root.appendingPathComponent(descriptor.fileRelativePath))
+        #expect(actual == expected)
+        #expect(!payload.retainsBodyArrays)
+    }
+
     @Test
     func writerMaterializesADeferredPayloadBeforeTheWrite() async throws {
         let (config, root) = makeConfig()
@@ -1195,10 +1239,15 @@ struct SSDSnapshotStoreTests {
         let size = try #require((attributes[.size] as? NSNumber)?.intValue)
         #expect(size > 2_048, "the file carries the header plus the materialized bytes")
 
-        let lines = sink.lines(matching: "event=ssdPayloadMaterialize")
+        let lines = sink.lines(matching: "event=ssdPayloadPrepare")
             .filter { $0.contains("id=\(descriptor.snapshotID)") }
         #expect(lines.count == 1)
         #expect(lines.first?.contains("bytes=2048") == true)
+        let commit = sink.lines(matching: "event=ssdAdmit").first {
+            $0.contains("id=\(descriptor.snapshotID)")
+        }
+        #expect(commit?.contains("writeMs=") == true)
+        #expect(commit?.contains("enqueueToCommitMs=") == true)
     }
 
     @Test

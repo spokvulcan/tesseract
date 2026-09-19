@@ -197,14 +197,13 @@ nonisolated struct PlaceholderContainerHeader: Codable, Sendable {
 /// full-container allocation. Chunk pointers are valid only inside `consume`.
 nonisolated struct PlaceholderContainerEncoding {
     private let header: Data
-    private let blobs: [Data]
+    private let payload: SnapshotPayload
     let byteCount: Int
     var headerByteCount: Int { header.count }
 
     init(payload: SnapshotPayload, descriptor: PersistedSnapshotDescriptor) throws {
         var layerHeaders: [PlaceholderContainerHeader.Layer] = []
         layerHeaders.reserveCapacity(payload.layers.count)
-        var blobs: [Data] = []
         var runningByteOffset = 0
 
         for layer in payload.layers {
@@ -219,7 +218,6 @@ nonisolated struct PlaceholderContainerEncoding {
                         byteSize: array.data.count
                     ))
                 runningByteOffset += array.data.count
-                blobs.append(array.data)
             }
             layerHeaders.append(
                 .init(
@@ -247,12 +245,13 @@ nonisolated struct PlaceholderContainerEncoding {
         withUnsafeBytes(of: &headerLength) { prefix.append(contentsOf: $0) }
         prefix.append(headerData)
         self.header = prefix
-        self.blobs = blobs
+        self.payload = payload
         self.byteCount = prefix.count + runningByteOffset
     }
 
     func withChunks(
         maximumBytes: Int,
+        releasingLayers: Bool = false,
         _ consume: (UnsafeRawBufferPointer) throws -> Void
     ) rethrows {
         precondition(maximumBytes > 0)
@@ -267,7 +266,15 @@ nonisolated struct PlaceholderContainerEncoding {
             }
         }
         try emit(header)
-        for blob in blobs { try emit(blob) }
+        if releasingLayers {
+            try payload.consumeLayers { layer in
+                for array in layer.state { try emit(array.data) }
+            }
+        } else {
+            for layer in payload.layers {
+                for array in layer.state { try emit(array.data) }
+            }
+        }
     }
 }
 

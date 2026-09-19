@@ -167,3 +167,24 @@ transfer and recurrent-state rewind inside the Model Session, and returns
 the lease before end-of-turn admission. Materialization probes become eligible
 only after every array source is detached or released; file I/O over host
 bytes need not finish before checkout.
+
+## Amendment 2026-09-19 — No-copy SSD writer (#469)
+
+Deferred Payload Extraction keeps its admission and Metal-affinity contract.
+The writer now prepares `asData(.noCopyIfContiguous)` views over evaluated arrays,
+with an explicit empty-array guard. Each Data view retains its array (and any
+vendor fallback Data for a non-contiguous input). The container header and blobs
+stream in bounded chunks directly to the temporary file. There is no full output
+buffer; each borrowed layer releases after its last byte is written.
+
+A full payload still aliases its body after preparation. Leaf Lease exclusion
+therefore spans the consuming write, including failures; preparation alone does
+not authorize checkout. An extension still retains no body array. The writer
+retries disk-full at the failed operation, once after ledger eviction; a partial
+chunk rewinds to its start while that chunk's owner is alive. Already-written
+layers need not be retained or reconstituted. Atomic fsync/rename and commit/drop
+behavior remain unchanged.
+
+`ssdPayloadPrepare` replaces `ssdPayloadMaterialize`; accepted `ssdAdmit` adds
+`writeMs` and `enqueueToCommitMs`. The 3 GB loaded-leaf wall-time and peak-footprint
+comparison remains owner work under the capture-handoff resource constraints.

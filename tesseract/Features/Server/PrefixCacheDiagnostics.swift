@@ -445,6 +445,8 @@ nonisolated enum PrefixCacheDiagnostics {
         /// terminal `accepted` event only — reject outcomes wrote
         /// nothing, so they carry no class.
         var writeClass: String?
+        var writeSeconds: TimeInterval?
+        var enqueueToCommitSeconds: TimeInterval?
 
         let eventName = "ssdAdmit"
 
@@ -459,6 +461,16 @@ nonisolated enum PrefixCacheDiagnostics {
             }
             if let writeClass {
                 fields.append(("writeClass", writeClass))
+            }
+            if let writeSeconds {
+                fields.append(("writeMs", PrefixCacheDiagnostics.milliseconds(writeSeconds)))
+            }
+            if let enqueueToCommitSeconds {
+                fields.append(
+                    (
+                        "enqueueToCommitMs",
+                        PrefixCacheDiagnostics.milliseconds(enqueueToCommitSeconds)
+                    ))
             }
             return fields
         }
@@ -795,17 +807,15 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
-    /// One **Deferred Payload Extraction** settled: the SSD writer copied
-    /// a payload's array bytes to the host right before its file write —
-    /// the full-KV memcpy that used to run on the MainActor for a
-    /// demotion and on the inference thread for a leaf. `durationMs` is
-    /// the copy alone, not the write.
-    struct SSDPayloadMaterializedEvent: Payload {
+    /// Preparation of a deferred payload's borrowed Data views. Duration
+    /// excludes file I/O; the accepted SSD admission reports writeMs and
+    /// enqueueToCommitMs. Preparing views does not release their array owners.
+    struct SSDPayloadPreparedEvent: Payload {
         let id: String
         let bytes: Int
         let durationSeconds: TimeInterval
 
-        let eventName = "ssdPayloadMaterialize"
+        let eventName = "ssdPayloadPrepare"
 
         var fields: [(String, String)] {
             [

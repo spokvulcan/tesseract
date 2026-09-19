@@ -24,7 +24,7 @@ import urllib.parse
 import urllib.request
 
 
-EVENTS = {"requestMemory", "leafStore", "lookup", "ssdPayloadMaterialize"}
+EVENTS = {"requestMemory", "leafStore", "lookup", "ssdPayloadMaterialize", "ssdPayloadPrepare"}
 
 
 def digest(value):

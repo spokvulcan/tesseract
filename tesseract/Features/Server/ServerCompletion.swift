@@ -2905,7 +2905,7 @@ nonisolated final class ServerCompletion {
     /// Build the SSD payload for `snapshot` — **Deferred Payload
     /// Extraction**, so this call moves no array bytes on the calling
     /// thread. It settles the extension and fixes the byte total; the
-    /// host copies run when the payload's `layers` are first read, on
+    /// host views are prepared when the payload's `layers` are first read, on
     /// the SSD writer's task. Callable from the MainActor too (**Snapshot
     /// Demotion**'s extractor passes no extension, so that path reads
     /// shapes only): the arrays are evaluated deep copies, never live
@@ -2929,7 +2929,7 @@ nonisolated final class ServerCompletion {
     /// its own contiguous device buffer, and every whole-state layer
     /// (recurrent, rotating, chunked — small next to the attention
     /// suffix) is deep-copied whole, all evaluated in one sync, so the
-    /// later host copy is a plain memcpy and the payload never references
+    /// later host view can borrow contiguous storage and never references
     /// the body it was built from. A full payload retains the body's own
     /// arrays: copying them is what the deferral exists to avoid.
     static func deferredPayload(
@@ -2991,14 +2991,10 @@ nonisolated final class ServerCompletion {
         return (payload, deferred)
     }
 
-    /// The arrays a deferred payload still owes the SSD writer.
-    /// `materialize` copies them layer by layer and releases each as it
-    /// goes, so a demotion victim — whose only remaining reference is this
-    /// box once its RAM body dropped — never sits in memory twice. Runs
-    /// once, under the payload's own lock. The box's own lock guards the
-    /// layer list, so `retainedArrays` can be read while the writer pops
-    /// from it; the array handles it hands out are unsynchronized and safe
-    /// to inspect only because every retained array is already evaluated.
+    /// The evaluated arrays a deferred payload owes the SSD writer. Preparation
+    /// transfers each array into its Data view's lifetime owner; the consuming
+    /// writer releases that owner after the layer's last chunk. The lock guards
+    /// the pending list; no live generation state enters this box.
     final class DeferredLayers: @unchecked Sendable {
         struct Layer {
             let className: String
@@ -3014,11 +3010,37 @@ nonisolated final class ServerCompletion {
             owed = OSAllocatedUnfairLock(uncheckedState: layers)
         }
 
-        /// Every array not yet copied to host, in layer order — empty once
-        /// the writer has materialized the payload. Read by tests that
+        /// Arrays not yet transferred to borrowed Data owners, in layer order.
+        /// Empty once prepared; the Data still retains each array until written. Read by tests that
         /// check, by physical address, what a pending payload retains.
         var retainedArrays: [MLXArray] {
             owed.withLockUnchecked { $0.flatMap(\.arrays) }
+        }
+
+        /// Data's custom deallocator owns this box for exactly the lifetime
+        /// of its borrowed bytes. It also retains a fallback contiguous Data
+        /// if the vendor had to copy a non-contiguous input.
+        private final class BorrowedArrayBytes: @unchecked Sendable {
+            let array: MLXArray
+            let data: Data
+
+            init(_ array: MLXArray) {
+                self.array = array
+                // MLX's no-copy path force-unwraps the zero-size pointer.
+                data = array.size == 0 ? Data() : array.asData(access: .noCopyIfContiguous).data
+            }
+
+            func view() -> Data {
+                guard !data.isEmpty else { return Data() }
+                return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                    Data(
+                        bytesNoCopy: UnsafeMutableRawPointer(mutating: buffer.baseAddress!),
+                        count: buffer.count,
+                        deallocator: .custom { [self] _, _ in
+                            withExtendedLifetime(self) {}
+                        })
+                }
+            }
         }
 
         func materialize() -> [SnapshotPayload.LayerPayload] {
@@ -3028,12 +3050,12 @@ nonisolated final class ServerCompletion {
                 var arrays: [SnapshotPayload.ArrayPayload] = []
                 arrays.reserveCapacity(layer.arrays.count)
                 for array in layer.arrays {
-                    let copy = array.asData(access: .copy)
+                    let bytes = BorrowedArrayBytes(array)
                     arrays.append(
                         SnapshotPayload.ArrayPayload(
-                            data: copy.data,
-                            dtype: ServerCompletion.dtypeWireString(copy.dType),
-                            shape: copy.shape
+                            data: bytes.view(),
+                            dtype: ServerCompletion.dtypeWireString(array.dtype),
+                            shape: array.shape, borrowsArray: array.size > 0
                         ))
                 }
                 layers.append(

@@ -627,17 +627,11 @@ nonisolated struct ChainPrefixRestorePoint: Sendable, Equatable {
 ///
 /// The bytes are owed, not carried (**Deferred Payload Extraction**): the
 /// extraction edge builds the value from the snapshot's arrays with only
-/// their byte total, and the host copy — a full-KV memcpy — runs the first
-/// time `layers` is read, which in production is the SSD writer's task
-/// right before the file write. Admission, eviction and **Snapshot
-/// Demotion** on the MainActor and the **Leaf Store** tail on the
-/// inference thread never pay it. Until then the payload keeps its arrays
-/// alive — a full payload's are the body's own (a leaf shares them with
-/// its RAM body; a demotion victim's live on only here), an extension
-/// payload's are detached copies that reference no body array — and the
-/// materializer releases each layer as it copies it. A payload built from
-/// ready `[LayerPayload]` (fixtures, hydration tests) is materialized from
-/// the start.
+/// their byte total; the SSD writer prepares borrowed host views right before
+/// writing them. Each view owns its evaluated array for the lifetime of its
+/// Data. A full payload shares arrays with the body; an extension owns detached
+/// arrays. The writer consumes borrowed layers, releasing each after its bytes
+/// are written. Ready host-byte payloads (fixtures) remain repeatable.
 ///
 /// Not `Codable`. The payload is the input to the placeholder-container
 /// writer, which consumes it byte-for-byte inside the writer task and
@@ -646,12 +640,10 @@ nonisolated struct ChainPrefixRestorePoint: Sendable, Equatable {
 /// path, which is exactly what the Metal-affinity rules forbid.
 nonisolated struct SnapshotPayload: Sendable {
 
-    /// One MLX state array, pre-extracted from Metal-resident memory
-    /// into a plain `Data` blob.
+    /// One array's bytes, either owned host Data or a view retaining its MLX owner.
     struct ArrayPayload: Sendable {
-        /// Raw bytes from `MLXArray.asData()`. Already owned by the
-        /// CPU after `eval(cache)`; the Apple Silicon unified-memory
-        /// footing means there is no staging copy.
+        /// Contiguous bytes. Borrowed production views retain the evaluated
+        /// array through Data's deallocator; ready fixtures own host storage.
         let data: Data
 
         /// MLX dtype name as reported by the vendor (e.g. `"bfloat16"`,
@@ -662,6 +654,15 @@ nonisolated struct SnapshotPayload: Sendable {
         /// Array shape. Preserved for the safetensors header so the
         /// reader can reconstruct the array before MLX gets involved.
         let shape: [Int]
+        /// The Data retains evaluated MLX storage until its bytes are written.
+        let borrowsArray: Bool
+
+        init(data: Data, dtype: String, shape: [Int], borrowsArray: Bool = false) {
+            self.data = data
+            self.dtype = dtype
+            self.shape = shape
+            self.borrowsArray = borrowsArray
+        }
     }
 
     /// One `HybridCacheSnapshot.LayerState`, mirrored as a flat value
@@ -743,15 +744,24 @@ nonisolated struct SnapshotPayload: Sendable {
     /// for a deferred one.
     var isMaterialized: Bool { source.isMaterialized }
 
-    /// Observes pending array ownership without retaining the payload or its Data.
-    var materializationProbe: @Sendable () -> Bool {
-        { [weak source] in source?.isMaterialized ?? true }
+    /// Preparing borrowed Data does not detach a full payload from its body.
+    var retainsBodyArrays: Bool { source.retainsBodyArrays }
+
+    /// The writer consumes one layer at a time, releasing its borrowed owner
+    /// after the final chunk. In-memory fixture encoding remains repeatable.
+    func consumeLayers(_ consume: (LayerPayload) throws -> Void) rethrows {
+        try source.consumeLayers(consume)
     }
 
-    /// Run the deferred host copy now: `true` when this call did the copy,
-    /// `false` when the bytes were already in hand. The SSD writer calls
-    /// it before the file write so the copy is timed and attributed there
-    /// rather than hidden inside the container encoder.
+    func discardLayers() { source.discardLayers() }
+
+    /// Observes pending array ownership without retaining the payload or its Data.
+    var materializationProbe: @Sendable () -> Bool {
+        { [weak source] in !(source?.retainsBodyArrays ?? false) }
+    }
+
+    /// Prepare deferred byte views now, once. This does not detach a borrowed
+    /// full payload from its tree body; `retainsBodyArrays` tracks that lifetime.
     @discardableResult
     func materialize() -> Bool {
         source.materialize()
@@ -800,7 +810,7 @@ nonisolated struct SnapshotPayload: Sendable {
 
     /// The one-shot holder behind `layers`: ready from construction, or
     /// produced by a materializer the first reader runs under the lock (a
-    /// concurrent reader blocks until that copy finishes and sees the
+    /// concurrent reader blocks until preparation finishes and sees the
     /// cached result). Reference semantics on purpose — copies of the
     /// payload share one materialization.
     private final class LayerSource: Sendable {
@@ -823,6 +833,46 @@ nonisolated struct SnapshotPayload: Sendable {
             state.withLock { state in
                 if case .ready = state { return true }
                 return false
+            }
+        }
+
+        var retainsBodyArrays: Bool {
+            state.withLock { state in
+                switch state {
+                case .deferred: return true
+                case .ready(let layers):
+                    return layers.contains { $0.state.contains { $0.borrowsArray } }
+                }
+            }
+        }
+
+        func discardLayers() {
+            state.withLock { state in
+                switch state {
+                case .deferred: state = .ready([])
+                case .ready(let layers):
+                    if layers.contains(where: { $0.state.contains { $0.borrowsArray } }) {
+                        state = .ready([])
+                    }
+                }
+            }
+        }
+
+        func consumeLayers(_ consume: (LayerPayload) throws -> Void) rethrows {
+            _ = materialize()
+            // Ready host-byte fixtures remain repeatable. Only borrowed
+            // device owners need a consuming write to release per layer.
+            guard retainsBodyArrays else {
+                for layer in layers() { try consume(layer) }
+                return
+            }
+            while let layer = state.withLock({ state -> LayerPayload? in
+                guard case .ready(var layers) = state, !layers.isEmpty else { return nil }
+                let next = layers.removeFirst()
+                state = .ready(layers)
+                return next
+            }) {
+                try consume(layer)
             }
         }
 

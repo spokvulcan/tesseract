@@ -377,7 +377,7 @@ final class TieredSnapshotStore {
                 condemnedResidentIDs: condemnedResidentIDs,
                 mandatory: mandatory,
                 deferrable: deferrable,
-                bodyAccess: payload.extending == nil && !payload.isMaterialized
+                bodyAccess: payload.extending == nil && payload.retainsBodyArrays
                     ? node.bodyAccess : nil
             )
         else {

@@ -88,6 +88,39 @@ struct LeafLeaseTests {
         #expect(manager.memoryTelemetryFacts()["treeLeaseCount"] == "0")
     }
 
+    @Test func preparedBorrowedPayloadBlocksCheckoutUntilTheWriteFinishes() async throws {
+        let gate = DrainGate()
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "prepared-borrowed-payload", ramBudgetBytes: 1_000_000,
+            writerDrainPreludeForTesting: { await gate.wait() })
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tokens = Array(1...8)
+        let body = try snapshot()
+        let payload = ServerCompletion.extractSnapshotPayload(body)
+        payload.materialize()
+        #expect(payload.isMaterialized)
+        #expect(payload.retainsBodyArrays)
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: tokens, snapshot: body, storage: .ramAndSSD(payload),
+                    partitionKey: key)))
+        let tree = try #require(store.tree(for: key))
+        let node = try #require(tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node)
+        let context = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: key.modelID,
+            kvBits: nil, kvGroupSize: 64)
+        #expect(
+            tree.beginLeafLease(on: node, context: context, requireDetachedPayload: true) == nil)
+        await gate.open()
+        await store.flush()
+        #expect(!payload.retainsBodyArrays)
+        let lease = try #require(
+            tree.beginLeafLease(on: node, context: context, requireDetachedPayload: true))
+        #expect(
+            tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: .rewind))
+    }
+
     @Test func pendingFullWriterWaitsForLeaseEvenWhenFlushForcesDrain() async throws {
         let gate = DrainGate()
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
