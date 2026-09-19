@@ -167,3 +167,27 @@ transfer and recurrent-state rewind inside the Model Session, and returns
 the lease before end-of-turn admission. Materialization probes become eligible
 only after every array source is detached or released; file I/O over host
 bytes need not finish before checkout.
+
+## Amendment 2026-09-19 — Prefix-View Checkpoint durability (#526)
+
+A view holds no attention bytes, so losing every backer is not an eviction and
+its durability is exactly its SSD admission.
+
+Planned views retain their RAM-plus-SSD intent until the end-of-turn quiescent
+point after leaf check-in. Adaptive Write Eagerness and the type-protected cut
+apply before allocating payload buffers; a cold deferred view retains its
+intent, and proven reuse can earn a write at a later turn's quiescent point.
+Transient boundary helpers have no SSD intent.
+
+View Materialization for SSD deep-copies the Backing Leaf's leading attention
+rows and the view's whole-state layers, then evaluates every array inside the
+Model Session. This extends Deferred Payload Extraction's detached rule to view
+payloads: they retain no body array, despite using the unchanged full-snapshot
+segment format. A read claim protects the backer only during this device copy;
+the pending payload and writer require no claim on the leaf. The host copy
+still runs on the SSD writer's task.
+
+Without a valid Backing Leaf, a committed Snapshot Ref hydrates as an owned
+full body. The Chain-Prefix Restore and shallower-hit rungs remain unchanged.
+If the final ref or chain-prefix point is lost while no resident or temporarily
+leased descendant remains, the view becomes empty and self-heals immediately.

@@ -76,6 +76,106 @@ struct SSDWriteEagernessPolicyTests {
 @MainActor
 struct SSDWriteEagernessTests {
 
+    @Test(arguments: ["write", "defer", "systemProtected"])
+    func viewAdmissionWaitsForCheckInAndUsesTheExistingEagernessPolicy(policy: String) async throws
+    {
+        let eagerness = policy == "defer"
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "view-eagerness", ramBudgetBytes: 100_000_000,
+            ssdBudgetBytes: policy == "systemProtected" ? 2200 : 10_000_000,
+            adaptiveWriteEagerness: eagerness)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = ToyModelSessionProvider(model: ToyLanguageModel(script: [0]))
+        let (view, leaf) = try await provider.withSession { session in
+            let cache = try session.newCache(parameters: GenerateParameters())
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray([Int32(1), 2, 3, 4])), cache: cache,
+                checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            let view = try #require(
+                session.captureSnapshot(cache: cache, offset: 4, type: .branchPoint))
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray([Int32(5), 6, 7, 8])), cache: cache,
+                checkpoints: [:], checkpointBaseOffset: 4, prefillStepSize: 4,
+                consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            return (
+                view, try #require(session.captureSnapshot(cache: cache, offset: 8, type: .leaf))
+            )
+        }
+        let admission = try #require(
+            SnapshotAdmission.checkpoints(
+                fullPromptTokens: Array(1...8),
+                candidates: ServerCompletion.extractCheckpointAdmissionCandidates(
+                    [view], ssdEnabled: true),
+                partitionKey: key))
+        manager.admit(admission)
+        await manager.persistViewCheckpoints(partitionKey: key, sessions: provider)
+        #expect(store.ssdResidency()?.idsByRecency.isEmpty == true)
+        if policy == "systemProtected" {
+            manager.admit(
+                try #require(
+                    SnapshotAdmission.checkpoints(
+                        fullPromptTokens: [20, 21],
+                        candidates: [
+                            .ramAndSSD(
+                                PrefixCacheTestFixtures.makeUniformSnapshot(
+                                    offset: 2, type: .system),
+                                payload: PrefixCacheTestFixtures.makeLeafPayload(
+                                    bytes: 2048, tokenOffset: 2))
+                        ],
+                        partitionKey: key)))
+            await store.flush()
+        }
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: Array(1...8), snapshot: leaf, storage: .ramOnly, partitionKey: key
+                )))
+        await manager.persistViewCheckpoints(partitionKey: key, sessions: provider)
+        await store.flush()
+        let tree = try #require(store.tree(for: key))
+        let branch = try #require(
+            tree.findBestSnapshot(tokens: [1, 2, 3, 4, 99], updateAccess: false)?.node)
+        if policy == "systemProtected" {
+            #expect(branch.state.ref == nil)
+            #expect(manager.cumulativeCounters.survivalGateSkips == 1)
+            #expect(store.ssdResidency()?.idsByRecency.count == 1)
+            #expect(
+                tree.findBestSnapshot(tokens: [20, 21], updateAccess: false)?.node.state.committed
+                    == true)
+            return
+        }
+        if eagerness {
+            #expect(branch.state.ref == nil)
+            #expect(manager.cumulativeCounters.eagernessDeferrals == 1)
+            for _ in 0..<SSDWriteEagernessPolicy.hitCountThreshold {
+                _ = manager.lookup(tokens: [1, 2, 3, 4, 99], partitionKey: key)
+            }
+            await manager.persistViewCheckpoints(partitionKey: key, sessions: provider)
+            await store.flush()
+        }
+        #expect(await waitUntil { branch.state.committed })
+        let leafNode = try #require(
+            tree.findBestSnapshot(tokens: Array(1...8), updateAccess: false)?.node)
+        tree.dropBody(node: leafNode)
+        let restored = await manager.resolve(
+            tokens: [1, 2, 3, 4, 99], promptTokenCount: 5, partitionKey: key,
+            modelFingerprint: key.modelFingerprint,
+            diagnostics: .init(
+                requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        #expect(restored.hydratedFromSSD)
+        let owned = try #require(restored.lookup.snapshot)
+        #expect(!owned.isPrefixView)
+        #expect(owned.tokenOffset == 4)
+        #expect(
+            owned.layers[0].state[0].asArray(Float.self)
+                == [1, 2, 3, 4].flatMap { Array(repeating: Float($0), count: 4) })
+        let rows = try await provider.withSession { session in
+            try session.restore(owned).first!.state[0].asArray(Float.self)
+        }
+        #expect(rows == owned.layers[0].state[0].asArray(Float.self))
+    }
+
     private var key: CachePartitionKey {
         CachePartitionKey(
             modelID: "write-eagerness-test", kvBits: nil, kvGroupSize: 64,

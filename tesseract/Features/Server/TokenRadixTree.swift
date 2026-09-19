@@ -37,6 +37,9 @@ final class RadixTreeNode {
     /// rejected write (budget, back-pressure) does not retry on every
     /// subsequent hit.
     var ssdPromotionAttempted: Bool = false
+    /// Planned view's SSD intent, fulfilled only after a Backing Leaf checks in.
+    /// Transient request-local helpers never enter this path.
+    var viewSSDAdmissionRequested = false
     weak var parent: RadixTreeNode?
 
     init(
@@ -517,6 +520,7 @@ final class TokenRadixTree {
         let old = node.state
         let (next, effect) = old.droppingRef(expectedID: expectedID)
         commit(next, on: node, from: old)
+        if effect == .settled, retireUnbackedView(node) { return .becameEmpty }
         if effect == .becameEmpty { selfHeal(node) }
         return effect
     }
@@ -549,15 +553,17 @@ final class TokenRadixTree {
         return result
     }
 
-    private func retireUnbackedView(_ node: RadixTreeNode) {
+    @discardableResult
+    private func retireUnbackedView(_ node: RadixTreeNode) -> Bool {
         guard node.state.body?.isPrefixView == true,
             node.state.ref == nil, node.chainPrefixRestorePoint == nil,
             !node.hasPotentialBackingLeaf
-        else { return }
+        else { return false }
         let old = node.state
         let (next, result) = old.droppingBody()
         commit(next, on: node, from: old)
         if result.effect == .becameEmpty { selfHeal(node) }
+        return true
     }
 
     /// Checkpoint admission precedes leaf storage. Only sweep once the
@@ -600,6 +606,7 @@ final class TokenRadixTree {
         let (next, effect) = old.clearingCommittedRefAfterBackingLoss()
         if case .ignored = effect { return effect }
         commit(next, on: node, from: old)
+        if retireUnbackedView(node) { return .becameEmpty }
         if effect == .becameEmpty { selfHeal(node) }
         return effect
     }
@@ -619,6 +626,7 @@ final class TokenRadixTree {
             )
         }
         commit(next, on: node, from: old)
+        if retireUnbackedView(node) { return .becameEmpty }
         if effect == .becameEmpty { selfHeal(node) }
         return effect
     }
@@ -703,6 +711,7 @@ final class TokenRadixTree {
     func clearChainPrefixRestorePoint(node: RadixTreeNode) {
         guard node.chainPrefixRestorePoint != nil else { return }
         node.chainPrefixRestorePoint = nil
+        if retireUnbackedView(node) { return }
         if node.state.isEmpty { selfHeal(node) }
     }
 
