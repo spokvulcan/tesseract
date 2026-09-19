@@ -95,6 +95,9 @@ nonisolated protocol ModelSession {
         _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache]
 
+    /// Convert a resident body to a Warm Body; the live KV dtype is unchanged.
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot
+
     /// App-owned chunked prefill (`PrefillExecutor.run`) over `text` into
     /// `cache`, capturing checkpoints at the given absolute offsets.
     // Port vocabulary mirrors PrefillExecutor.run one-to-one by design.
@@ -360,6 +363,10 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache] {
         try snapshot.restore(backingLeaf: backingLeaf)
+    }
+
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot {
+        try snapshot.compressed()
     }
 
     // swiftlint:disable:next function_parameter_count

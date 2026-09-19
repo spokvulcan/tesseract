@@ -108,6 +108,8 @@ nonisolated enum PrefixCacheDiagnostics {
         /// pinned wire lines of every other restore stay byte-stable.
         let copyWaitSeconds: TimeInterval
         let backingLeafOffset: Int?
+        let warmBody: Bool
+        let backingLeafWarm: Bool
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -123,7 +125,9 @@ nonisolated enum PrefixCacheDiagnostics {
             divergence: PrefixDivergenceProbe? = nil,
             restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
             copyWaitSeconds: TimeInterval = 0,
-            backingLeafOffset: Int? = nil
+            backingLeafOffset: Int? = nil,
+            warmBody: Bool = false,
+            backingLeafWarm: Bool = false
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -162,6 +166,8 @@ nonisolated enum PrefixCacheDiagnostics {
             self.copyReason = copyReason
             self.copyWaitSeconds = copyWaitSeconds
             self.backingLeafOffset = backingLeafOffset
+            self.warmBody = warmBody
+            self.backingLeafWarm = backingLeafWarm
         }
 
         let eventName = "lookup"
@@ -181,10 +187,12 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("hydratedFromSSD", hydratedFromSSD ? "true" : "false"),
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
+            if warmBody { fields.append(("source", "warm")) }
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
             if let backingLeafOffset {
                 fields.append(("source", "view"))
                 fields.append(("backingLeafOffset", "\(backingLeafOffset)"))
+                fields.append(("backingLeafForm", backingLeafWarm ? "warm" : "ownedBody"))
             }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if copyWaitSeconds > 0 {
@@ -1084,5 +1092,26 @@ nonisolated enum PrefixCacheDiagnostics {
             return "\"\(escaped)\""
         }
         return value
+    }
+}
+
+nonisolated struct WarmCompressEvent: PrefixCacheDiagnostics.Payload {
+    enum Source: String, Sendable {
+        case drain
+        case opportunistic
+    }
+    let offset: Int
+    let bytesBefore: Int
+    let bytesAfter: Int
+    let seconds: TimeInterval
+    var source: Source = .drain
+    let eventName = "warmCompress"
+    var fields: [(String, String)] {
+        [
+            ("offset", "\(offset)"), ("bytesBefore", "\(bytesBefore)"),
+            ("bytesAfter", "\(bytesAfter)"),
+            ("durationMs", PrefixCacheDiagnostics.milliseconds(seconds)),
+            ("source", source.rawValue),
+        ]
     }
 }

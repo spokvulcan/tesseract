@@ -358,6 +358,11 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
             .reduce(0) { $0 + $1.snapshotBytes }
     }
 
+    var warmSnapshotBytes: Int {
+        trees.reduce(0) { $0 + $1.nodes.reduce(0) { $0 + ($1.warmBytes ?? 0) } }
+    }
+    var hotSnapshotBytes: Int { residentSnapshotBytes - warmSnapshotBytes - viewOnlyBytes }
+
     static let empty = PromptCacheTelemetrySnapshot(
         capturedAt: Date(),
         memoryBudgetBytes: 0,
@@ -412,6 +417,9 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
     /// Optional so archived telemetry predating Prefix-View Checkpoints decodes.
     var checkpointKind: String?
 
+    /// Optional for compatibility with telemetry captured before Warm Bodies.
+    var warmBytes: Int?
+
     enum CodingKeys: String, CodingKey {
         case id
         case parentID
@@ -432,6 +440,7 @@ nonisolated struct PromptCacheTreeNodeSnapshot: Identifiable, Codable, Equatable
         case normalizedFlopEfficiency
         case utility
         case checkpointKind
+        case warmBytes
     }
 }
 

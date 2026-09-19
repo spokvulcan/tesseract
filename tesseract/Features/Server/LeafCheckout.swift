@@ -9,12 +9,22 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         let tree: TokenRadixTree
         let node: RadixTreeNode
         let lease: LeafLease
+        var didCheckIn: (@MainActor @Sendable (RadixTreeNode) -> Void)?
 
         @MainActor
         func returnBody(
             _ body: HybridCacheSnapshot, tokens: [Int], reason: LeafLease.ReleaseReason
         ) -> Bool {
-            tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: reason)
+            guard
+                tree.endLeafLease(lease, on: node, returning: body, tokens: tokens, reason: reason)
+            else { return false }
+            if reason == .checkIn,
+                let returned = tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node,
+                returned.tokenOffset == tokens.count
+            {
+                didCheckIn?(returned)
+            }
+            return true
         }
     }
 
@@ -118,6 +128,7 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
             let key = resolved.lookup.partitionKey
         else { return Attempt() }
         guard !snapshot.isPrefixView else { return Attempt(copyReason: .checkpoint) }
+        guard !snapshot.isWarm else { return Attempt(copyReason: .warmBody) }
         guard identityKeySpace else { return Attempt(copyReason: .imageKeySpace) }
         guard key.kvBits == nil else { return Attempt(copyReason: .quantized) }
         guard !resolved.wasChainPrefixRestore,

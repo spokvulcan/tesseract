@@ -111,6 +111,15 @@ nonisolated struct EvictionConfiguration: Sendable {
     /// scorer and every test crosses the same global-free seam.
     var estimates: MeasuredSecondsEstimates
 
+    /// Opt-in until the owner completes the parity gate (#528).
+    var warmCompressionEnabled: Bool
+
+    /// Most recently checked-in paths kept exempt from compression (#529).
+    var hotLeafPathLimit: Int
+
+    /// Opportunistic compression runs above this fraction of the RAM ceiling.
+    var opportunisticCompressionFraction: Double
+
     /// How long a request waits for a pending full payload to stop
     /// aliasing the leaf's body before it gives up and restores by copy
     /// (#523). A full payload is the only **Leaf Checkout** refusal that
@@ -125,12 +134,20 @@ nonisolated struct EvictionConfiguration: Sendable {
         flopProfile: ModelFlopProfile = .fallback,
         alpha: Double = 0.0,
         estimates: MeasuredSecondsEstimates = MeasuredSecondsEstimates(),
-        pendingFullPayloadWait: Duration = .milliseconds(500)
+        pendingFullPayloadWait: Duration = .milliseconds(500),
+        warmCompressionEnabled: Bool = false,
+        hotLeafPathLimit: Int = 2,
+        opportunisticCompressionFraction: Double = 0.75
     ) {
+        precondition(hotLeafPathLimit >= 0)
+        precondition((0...1).contains(opportunisticCompressionFraction))
         self.flopProfile = flopProfile
         self.alpha = alpha
         self.estimates = estimates
         self.pendingFullPayloadWait = pendingFullPayloadWait
+        self.warmCompressionEnabled = warmCompressionEnabled
+        self.hotLeafPathLimit = hotLeafPathLimit
+        self.opportunisticCompressionFraction = opportunisticCompressionFraction
     }
 }
 

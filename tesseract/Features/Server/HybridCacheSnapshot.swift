@@ -112,6 +112,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     private enum Body {
         case copied([LayerState])
         case prefixView([LayerState])
+        case warm([LayerState])
         // Keep the objects themselves for the later check-out step (ADR-0064).
         // The frozen serialization view lets every existing tier consumer
         // read metadata and arrays without calling a live cache's getters.
@@ -127,13 +128,12 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         }
     }
 
-    private let body: Body
-    /// Stable across value copies; async extraction must not admit a payload
-    /// for a view that was replaced while the Model Session was busy.
+    /// Stable across value copies; replacement after a Model Session hop must match this body.
     let bodyID = UUID()
+    private let body: Body
     var layers: [LayerState] {
         switch body {
-        case .copied(let layers), .prefixView(let layers): layers
+        case .copied(let layers), .prefixView(let layers), .warm(let layers): layers
         case .moved(let owner): owner.layers
         }
     }
@@ -142,6 +142,41 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return false
     }
     var checkpointKind: String { isPrefixView ? "prefixView" : "ownedBody" }
+    var isWarm: Bool {
+        if case .warm = body { return true }
+        return false
+    }
+
+    var canCompress: Bool {
+        !isPrefixView && !isWarm && !layers.contains { $0.className == "QuantizedKVCache" }
+            && layers.contains {
+                $0.kind == .sliceableAttention && $0.className != "QuantizedKVCache"
+            }
+    }
+
+    /// Model Session only. The vendor conversion allocates fresh attention
+    /// arrays; immutable whole-state layers keep their existing storage.
+    func compressed() throws -> HybridCacheSnapshot {
+        guard canCompress else { return self }
+        let compressed = try layers.map { layer -> LayerState in
+            guard layer.kind == .sliceableAttention, layer.className != "QuantizedKVCache"
+            else { return layer }
+            let source = KVCacheSimple()
+            source.state = layer.state
+            source.offset = layer.offset
+            let quantized = try source.toQuantized(groupSize: 64, bits: 8)
+            return LayerState(
+                className: "QuantizedKVCache", state: quantized.state,
+                metaState: quantized.metaState, offset: layer.offset,
+                snapshotOffset: tokenOffset)
+        }
+        // Keep the fp16 body alive until every quantized array is settled.
+        eval(compressed.flatMap(\.state))
+        return HybridCacheSnapshot(
+            tokenOffset: tokenOffset, body: .warm(compressed), checkpointType: checkpointType,
+            memoryBytes: compressed.flatMap(\.state).reduce(0) { $0 + $1.nbytes },
+            createdAt: createdAt)
+    }
     let checkpointType: CheckpointType
     /// Pre-computed sum of all state array nbytes, for eviction decisions.
     let memoryBytes: Int
@@ -210,6 +245,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// kind decides; the copy reason still names the class, the way
     /// ADR-0064 records it.
     func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
+        guard !isWarm else { return .warmBody }
         guard checkpointType == .leaf else { return .checkpoint }
         guard case .moved(let owner) = body else { return .immutableBody }
         guard !owner.cache.isEmpty else { return .checkpoint }
@@ -405,6 +441,17 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         copiedArrays.reserveCapacity(layers.count * 2)
         let restored: [any KVCache] = try layers.enumerated().map {
             layerIndex, layerState -> any KVCache in
+            if isWarm || (isPrefixView && backingLeaf?.isWarm == true),
+                layerState.kind == .sliceableAttention,
+                layerState.className == "QuantizedKVCache"
+            {
+                let quantized = Self.makeQuantizedCache(metaState: layerState.metaState)
+                quantized.state = layerState.state
+                quantized.metaState = layerState.metaState
+                let cache = quantized.toUnquantized()
+                copiedArrays.append(contentsOf: cache.state)
+                return cache
+            }
             // ArraysCache (and its MambaCache subclass) reject direct metaState
             // assignment upstream — slot reconstruction goes through its own path.
             if layerState.className == "MambaCache" || layerState.className == "ArraysCache" {
@@ -497,10 +544,22 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         var bytes = 0
         for (layer, backing) in zip(layers, backingLeaf.layers) {
             if layer.kind == .sliceableAttention {
-                guard backing.kind == .sliceableAttention, layer.className == backing.className
-                else {
-                    return nil
+                guard backing.kind == .sliceableAttention else { return nil }
+                if backingLeaf.isWarm, backing.className == "QuantizedKVCache" {
+                    guard ["KVCache", "KVCacheSimple"].contains(layer.className),
+                        Self.metaStateIsRestorable(backing.metaState, for: backing.className),
+                        [4, 6].contains(backing.state.count),
+                        let groupSize = Int(backing.metaState[2]), groupSize > 0
+                    else { return nil }
+                    // Each scale represents one head-dimension group and has
+                    // the live dtype. Price the full form without dequantizing.
+                    let valuesScale = backing.state.count / 2 + 1
+                    bytes +=
+                        (backing.state[1].nbytes + backing.state[valuesScale].nbytes)
+                        / backingLeaf.tokenOffset * tokenOffset * groupSize
+                    continue
                 }
+                guard layer.className == backing.className else { return nil }
                 bytes += backing.state.reduce(0) {
                     $0 + $1.nbytes / backingLeaf.tokenOffset * tokenOffset
                 }
@@ -512,8 +571,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     }
 
     /// Borrow prefix slices only within a Model Session restore or SSD
-    /// extraction edge. Both callers deep-copy and evaluate every array
-    /// before returning; no consumer retains these borrowed slices.
+    /// extraction edge. Both callers produce independent buffers and evaluate
+    /// them before returning; no consumer retains these borrowed slices.
     func materializationLayers(backingLeaf: HybridCacheSnapshot?) throws -> [LayerState] {
         guard isPrefixView else { return layers }
         guard let backingLeaf, !backingLeaf.isPrefixView,
@@ -522,7 +581,23 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         else { throw ViewRestoreError.invalidBackingLeaf }
         return try zip(layers, backingLeaf.layers).map { view, backing in
             guard view.kind == .sliceableAttention else { return view }
-            guard backing.kind == .sliceableAttention, backing.className == view.className else {
+            guard backing.kind == .sliceableAttention else {
+                throw ViewRestoreError.invalidBackingLeaf
+            }
+            if backingLeaf.isWarm, backing.className == "QuantizedKVCache" {
+                guard ["KVCache", "KVCacheSimple"].contains(view.className),
+                    Self.metaStateIsRestorable(backing.metaState, for: backing.className)
+                else { throw ViewRestoreError.invalidBackingLeaf }
+                // Slice packed rows before dequantization. The metadata must
+                // name the view offset, never the descendant's full length.
+                var metaState = backing.metaState
+                metaState[1] = String(tokenOffset)
+                return LayerState(
+                    className: backing.className,
+                    state: backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] },
+                    metaState: metaState, offset: tokenOffset)
+            }
+            guard backing.className == view.className else {
                 throw ViewRestoreError.invalidBackingLeaf
             }
             return view.replacingState(backing.state.map { $0[.ellipsis, 0..<tokenOffset, 0...] })
