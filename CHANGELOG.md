@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.15.0](https://github.com/spokvulcan/tesseract/compare/v1.14.1...v1.15.0) (2026-09-19)
+
+
+### Features
+
+* **cache:** price the Active-Inference Reserve on one leaf plus growth ([#537](https://github.com/spokvulcan/tesseract/issues/537)) ([6cc03e1](https://github.com/spokvulcan/tesseract/commit/6cc03e1bff4a043b4ab777c1ce3aa93d15fa6535))
+* **cache:** wait briefly for a pending first payload before copying the leaf ([#538](https://github.com/spokvulcan/tesseract/issues/538)) ([e146ba4](https://github.com/spokvulcan/tesseract/commit/e146ba46ecbcf6e060e4fd8e59d85ebae0734bb7))
+
+
+### Code Refactoring
+
+* **cache:** give every snapshot layer one kind, sliceable attention or whole-state ([#535](https://github.com/spokvulcan/tesseract/issues/535)) ([cf1d67c](https://github.com/spokvulcan/tesseract/commit/cf1d67c2daca7e1d0f15c1d66575161a4d336e34))
+
 ## [1.14.1](https://github.com/spokvulcan/tesseract/compare/v1.14.0...v1.14.1) (2026-09-18)
 
 
