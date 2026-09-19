@@ -2136,6 +2136,24 @@ cold pages become "inactive".
 _Avoid_: memory limit (nothing is refused — the bound caps the ceiling, and
 eviction does the rest); footprint cap; static tax (it is measured every time).
 
+**Active-Inference Reserve**:
+The bytes withheld from the **Pressure-Reactive Budget**'s ceiling for in-flight
+generations' KV working sets — the named replacement for the retired `/2`
+divisor (ADR-0018), count-aware over active lanes and never below one lane. Priced
+from observation, not constants: per lane, the largest leaf admitted, doubled only
+while the most recent leaf store — on the partition the next lane runs on — was a
+capture by copy (the `leafStore` source `live` or `boundary`; a `handoff` moved the
+objects, a `copy` restore's source body is already counted in the tree), plus a
+growth allowance — that leaf's
+bytes per token times the turn's maximum advance, the quantity **Leaf Handoff**'s
+check-out eligibility judges `isTrimmable(after:)` against (ADR-0064). The bootstrap constant stands until the first
+observation and stands in for the growth of an unbounded turn. A pure value the
+leaf admission feeds; the `budgetMeasure` event reports its inputs and per-lane
+result.
+_Avoid_: capture-copy factor (unqualified — it applies only after a capture by
+copy, ADR-0064); `/2` divisor; working-set reserve; the bootstrap as a floor (it
+retires at the first observation — #238).
+
 **Snapshot Demotion**:
 Moving a snapshot's body out of RAM while keeping it recoverable — backing it to SSD
 first, then dropping the RAM body — so the next hit pays a cheap hydration instead of

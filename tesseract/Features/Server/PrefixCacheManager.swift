@@ -1116,11 +1116,10 @@ final class PrefixCacheManager {
         // and the admission cadence is the "periodic" of ADR-0018.
         reevaluateBudgetCeilingIfDue()
         // Feed the Active-Inference Reserve's per-lane estimate: an
-        // end-of-turn leaf *is* one lane's KV working set, measured.
-        if admission.kind == .leaf {
-            activeInferenceReserve.observeLeaf(
-                bytes: admission.entries.first.snapshot.memoryBytes
-            )
+        // end-of-turn leaf *is* one lane's KV working set, measured, and
+        // its source says whether the capture copied it (#522).
+        if admission.kind == .leaf, let observation = admission.reserveObservation {
+            activeInferenceReserve.observeLeaf(observation)
         }
         let tree = store.getOrCreateTree(for: admission.partitionKey)
         var supersededLeaves: [LeafSupersession] = []
@@ -1999,6 +1998,7 @@ final class PrefixCacheManager {
                 workingSetHeadroomBytes: sample.workingSetHeadroomBytes,
                 reserveBytes: reserveBytes,
                 lanes: lanes,
+                reserve: activeInferenceReserve,
                 residentBytes: residentBytes,
                 capBytes: ramBudgetCapBytes,
                 ceilingBytes: budgetBand.ceilingBytes,

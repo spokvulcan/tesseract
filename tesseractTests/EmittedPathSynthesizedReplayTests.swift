@@ -160,6 +160,54 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn.leafStore["copyReason"] == "imageKeySpace")
     }
 
+    /// The **Active-Inference Reserve** observes what the leaf-store
+    /// telemetry reports (#522): a moved leaf prices the lane at one leaf
+    /// plus the turn's growth, a capture by copy at two. The reserve is
+    /// read through the admin, the way the E2E runner reads cache stats.
+    @Test func theReserveObservesTheStoredLeafAsTheLeafStoreEventReportsIt() async throws {
+        let session = Session()
+        let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
+        #expect(turn1.leafStore["source"] == "handoff")
+        let leafOffset = try #require(turn1.leafStore["leafOffset"].flatMap(Int.init))
+        let leafBytes = try #require(
+            turn1.events.first {
+                $0.eventName == "capture" && Self.fields($0)["checkpointType"] == "leaf"
+            }.flatMap { Self.fields($0)["bytes"] }.flatMap(Int.init))
+        let reserve = try #require(
+            await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
+        #expect(reserve.copyFactor == 1)
+        #expect(reserve.largestObservedLeafBytes == leafBytes)
+        #expect(reserve.observedBytesPerToken == (leafBytes + leafOffset - 1) / leafOffset)
+        // A cold turn's advance is its whole prompt plus the output ceiling.
+        let maxTokens = await MainActor.run { Self.parameters().maxTokens }
+        #expect(reserve.observedMaximumAdvance == turn1.fedPrompt.count + maxTokens)
+        #expect(reserve.perLaneBytes == leafBytes + reserve.growthAllowanceBytes)
+        #expect(reserve.perLaneBytes < ActiveInferenceReserve.bootstrapPerLaneBytes)
+
+        // A quantized partition captures by copy and reports `live`: the
+        // lane doubles its leaf term while that partition stores last.
+        var quantized = await MainActor.run { Self.parameters() }
+        quantized.kvBits = 8
+        let turn2 = try await session.turn(
+            Self.conversation([Self.user("hi")]),
+            generated: session.completion(thinking: "plan", text: "hello world"),
+            parameters: quantized)
+        #expect(turn2.leafStore["source"] == "live")
+        let doubled = try #require(
+            await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
+        #expect(doubled.copyFactor == 2)
+        #expect(doubled.lastStoreCapturedByCopy)
+
+        // Back on the fp16 partition, the next handoff clears it.
+        let turn3 = try await session.turn(
+            Self.conversation([Self.user("hi"), Self.assistant("hello world"), Self.user("more")]),
+            text: "again")
+        #expect(turn3.leafStore["source"] == "handoff")
+        let cleared = try #require(
+            await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
+        #expect(cleared.copyFactor == 1)
+    }
+
     @Test(arguments: [false, true])
     func liveTurnRegistersAndTheNextRequestServesTheWholePath(mtpLoaded: Bool) async throws {
         // A loaded but ineligible drafter must not turn an ordinary cold
@@ -729,6 +777,38 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn3.requestResolve["indexedPrefix"] == "\(path2)")
         #expect(turn3.cached == path2, turn3.account)
         #expect(session.index.statsSnapshot().registrations == 2)
+    }
+
+    /// A leaf hydrated from SSD is an immutable body: the check-out falls
+    /// back to a restore by copy, the store reports `copy`, and the
+    /// **Active-Inference Reserve** does not raise its factor for it
+    /// (#522) — the source body is counted in the tree, the live copy in
+    /// the reserve's one leaf plus growth.
+    @Test func aRestoreByCopyDoesNotRaiseTheReservesFactor() async throws {
+        let ssdRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("emitted-path-reserve-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: ssdRoot) }
+        let ssdConfig = SSDPrefixCacheConfig(
+            enabled: true, rootURL: ssdRoot, budgetBytes: 1 << 30, maxPendingBytes: 1 << 30)
+        let session = Session(ssdConfig: ssdConfig)
+        let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
+        let pathLength = try #require(turn1.registeredPathLength)
+        await session.fixture.drain()
+        await session.fixture.flush()
+
+        session.restart(index: session.index, ssdConfig: ssdConfig)
+        let request2 = Self.conversation([
+            Self.user("hi"), Self.assistant("hello world"), Self.user("more"),
+        ])
+        let turn2 = try await session.turn(request2, text: "again")
+        #expect(turn2.cached == pathLength, turn2.account)
+        #expect(turn2.event("lookup").map(Self.fields)?["restoreMode"] == "copy")
+        #expect(turn2.leafStore["source"] == "copy")
+        #expect(turn2.leafStore["copyReason"] == "immutableBody")
+        let reserve = try #require(
+            await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
+        #expect(reserve.copyFactor == 1)
+        #expect(reserve.largestObservedLeafBytes > 0)
     }
 
     @Test func thinkStrippingTemplateKeepsTheBoundaryPathAtAUserBoundary() async throws {

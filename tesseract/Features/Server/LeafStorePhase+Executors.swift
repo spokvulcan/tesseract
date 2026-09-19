@@ -48,6 +48,13 @@ nonisolated extension LeafStorePhase {
         let stages: LeafStages
         let copyReason: Report.CopyReason?
         let memory: RequestMemoryTelemetry?
+        /// The request's restore mode (`cold`, `copy`, `failedCopy`,
+        /// `handoff`), stamped on the generation before the phase runs —
+        /// one input to the stored leaf's source.
+        let restoreMode: String
+        /// The turn's maximum advance, for the **Active-Inference
+        /// Reserve**'s growth allowance (#522).
+        let maximumAdvance: Int
 
         init(storedTokens: [Int], inputs: Inputs, stages: LeafStages) {
             let mlxStart = inputs.mlxStart
@@ -59,6 +66,8 @@ nonisolated extension LeafStorePhase {
             diagnosticsContext = inputs.diagnosticsContext
             self.stages = stages
             memory = inputs.memory
+            restoreMode = mlxStart.finalCacheOwner.restoreMode
+            maximumAdvance = mlxStart.maximumAdvance
             copyReason =
                 inputs.containsImages || !mlxStart.keySpace.isIdentity
                 ? .imageKeySpace
@@ -104,11 +113,15 @@ nonisolated extension LeafStorePhase {
     /// restore, no prefill: the generation loop has been
     /// awaited by the drive, so the array is quiescent (ADR-0006), and the
     /// eligible text leaf takes ownership inside a Metal-affine Model Session.
+    /// `path` is the report path the caller runs under (`.live`, or
+    /// `.direct` through the direct executor); it names the stored leaf's
+    /// source for the reserve.
     static func captureLiveLeaf(
         sessions: any ModelSessionProviding,
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         context: LeafAdmissionContext,
-        move: Bool = true
+        move: Bool = true,
+        path: Report.Path
     ) async -> LeafCapture {
         let extensionBase = await context.resolveExtensionBase()
         do {
@@ -122,6 +135,7 @@ nonisolated extension LeafStorePhase {
                 return await admitLeaf(
                     cache: moving == nil ? generation.finalCache : [],
                     moving: moving,
+                    path: path,
                     session: session,
                     residualTokens: 0,
                     extensionBase: extensionBase,
@@ -204,7 +218,8 @@ nonisolated extension LeafStorePhase {
         }
 
         return await captureLiveLeaf(
-            sessions: sessions, mlxStartBox: mlxStartBox, context: context, move: false)
+            sessions: sessions, mlxStartBox: mlxStartBox, context: context, move: false,
+            path: .direct)
     }
 
     // MARK: - Boundary executor
@@ -270,6 +285,7 @@ nonisolated extension LeafStorePhase {
 
                 return await admitLeaf(
                     cache: restoredCache,
+                    path: .boundary,
                     session: session,
                     residualTokens: residual.count,
                     extensionBase: extensionBase,
@@ -301,6 +317,7 @@ nonisolated extension LeafStorePhase {
     private static func admitLeaf(
         cache: [any KVCache],
         moving: FinalGenerationCache? = nil,
+        path: Report.Path,
         session: any ModelSession,
         residualTokens: Int,
         extensionBase: SnapshotExtension?,
@@ -370,6 +387,8 @@ nonisolated extension LeafStorePhase {
             facts: [
                 "leafLeaseActive": "false", "recurrentRewindStateBytes": "0",
             ])
+        // The reserve observes the source the `leafStore` event will
+        // report for this leaf: the same fold, from the same facts.
         let admission = await ServerCompletion.admitStructuredLeaf(
             leaf,
             storedTokens: storedTokens,
@@ -379,7 +398,10 @@ nonisolated extension LeafStorePhase {
             prefixCache: context.prefixCache,
             diagnostics: context.diagnosticsContext,
             admissionStage: context.stages.admission,
-            captureSource: context.stages.source
+            captureSource: context.stages.source,
+            source: Report.Source.stored(
+                path: path, restoreMode: context.restoreMode, handedOff: moving != nil),
+            maximumAdvance: context.maximumAdvance
         )
         timings.admitSeconds = secondsSince(admitStart)
         Memory.clearCache()

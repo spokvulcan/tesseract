@@ -230,7 +230,8 @@ nonisolated enum LeafStorePhase {
         let stages = leafStages(for: turn.mode)
         let capture = await captureLiveLeaf(
             sessions: inputs.sessions, mlxStartBox: inputs.mlxStartBox,
-            context: LeafAdmissionContext(storedTokens: livePath, inputs: inputs, stages: stages))
+            context: LeafAdmissionContext(storedTokens: livePath, inputs: inputs, stages: stages),
+            path: .live)
         result.report.absorb(capture, path: .live)
         result.conclude(capture, pendingSeed: pendingSeed)
     }

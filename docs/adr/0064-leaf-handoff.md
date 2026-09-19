@@ -109,7 +109,9 @@ offset afterwards cannot bring them back; the vendor exposes
 6. **Accounting.** A leased leaf's bytes stay counted in the tree total;
    check-in reconciles the growth. The `ActiveInferenceReserve` capture-copy
    factor is left as it is in this change and re-priced from measurements
-   afterwards; the real memory drops regardless.
+   afterwards; the real memory drops regardless. (Re-priced in #522 — see
+   ADR-0018's 2026-09-19 amendment: one leaf plus growth, doubled only after
+   a capture by copy.)
 
 7. **Scope.** The handoff applies to text-only identity key spaces with
    unquantized KV, the regular configuration and the only one speculative
@@ -217,8 +219,8 @@ records baseline comparisons and a bounded plan awaiting approval.
   are never used for ownership transfer or rewind.
 - A rotating or sliding-window attention model never hands off; it keeps the
   copy paths and reports why.
-- The `ActiveInferenceReserve` factor is over-priced until it is re-measured
-  (follow-up from #471).
+- The `ActiveInferenceReserve` factor was over-priced until re-priced on one
+  leaf plus growth in #522 (follow-up from #471; ADR-0018 amendment).
 
 ## Rejected alternatives
 

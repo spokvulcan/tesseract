@@ -164,7 +164,9 @@ enum PrefixCacheTestFixtures {
         partitionKey: CachePartitionKey,
         storage: SnapshotAdmission.Storage = .ramOnly,
         endOfTurn: Bool = true,
-        requestID: UUID? = nil
+        requestID: UUID? = nil,
+        source: LeafStorePhase.Report.Source? = nil,
+        maximumAdvance: Int = .max
     ) -> PrefixCacheManager.StoreDiagnostics {
         manager.admit(
             SnapshotAdmission.leaf(
@@ -173,7 +175,9 @@ enum PrefixCacheTestFixtures {
                 storage: storage,
                 partitionKey: partitionKey,
                 requestID: requestID,
-                endOfTurn: endOfTurn
+                endOfTurn: endOfTurn,
+                source: source,
+                maximumAdvance: maximumAdvance
             )!)
     }
 

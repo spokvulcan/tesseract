@@ -110,6 +110,13 @@ nonisolated struct SnapshotAdmission: Sendable {
     /// passes `false` and accepts gating (RAM-only degrade with
     /// supersession *preserve* on rejection).
     let leafIsEndOfTurn: Bool
+    /// What a `.leaf` admission feeds the **Active-Inference Reserve**
+    /// (#522): the leaf's bytes and token count, the source the leaf-store
+    /// telemetry reports, and the turn's maximum advance. `nil` for
+    /// checkpoints and for leaves stored outside a turn (the speculative
+    /// pass, a cancelled-prefill salvage, replay and test fixtures), which
+    /// the reserve does not observe.
+    let reserveObservation: ActiveInferenceReserve.LeafObservation?
 
     nonisolated var snapshots: [HybridCacheSnapshot] {
         entries.map(\.snapshot)
@@ -121,7 +128,8 @@ nonisolated struct SnapshotAdmission: Sendable {
         kind: Kind,
         partitionKey: CachePartitionKey,
         requestID: UUID?,
-        leafIsEndOfTurn: Bool = true
+        leafIsEndOfTurn: Bool = true,
+        reserveObservation: ActiveInferenceReserve.LeafObservation? = nil
     ) {
         self.fullPromptTokens = fullPromptTokens
         self.entries = entries
@@ -129,6 +137,7 @@ nonisolated struct SnapshotAdmission: Sendable {
         self.partitionKey = partitionKey
         self.requestID = requestID
         self.leafIsEndOfTurn = leafIsEndOfTurn
+        self.reserveObservation = reserveObservation
     }
 
     nonisolated static func checkpoints(
@@ -165,13 +174,19 @@ nonisolated struct SnapshotAdmission: Sendable {
         )
     }
 
+    /// `source` and `maximumAdvance` are the turn facts the
+    /// **Active-Inference Reserve** observes beside the snapshot's own
+    /// bytes and offset; a leaf stored outside a turn passes no source and
+    /// is not observed.
     nonisolated static func leaf(
         storedTokens: [Int],
         snapshot: HybridCacheSnapshot,
         storage: Storage,
         partitionKey: CachePartitionKey,
         requestID: UUID? = nil,
-        endOfTurn: Bool = true
+        endOfTurn: Bool = true,
+        source: LeafStorePhase.Report.Source? = nil,
+        maximumAdvance: Int = .max
     ) -> SnapshotAdmission? {
         guard
             let path = SnapshotAdmissionPath.validatingLeaf(
@@ -191,7 +206,15 @@ nonisolated struct SnapshotAdmission: Sendable {
             kind: .leaf,
             partitionKey: partitionKey,
             requestID: requestID,
-            leafIsEndOfTurn: endOfTurn
+            leafIsEndOfTurn: endOfTurn,
+            reserveObservation: source.map { source in
+                ActiveInferenceReserve.LeafObservation(
+                    bytes: snapshot.memoryBytes,
+                    tokenCount: snapshot.tokenOffset,
+                    source: source,
+                    maximumAdvance: maximumAdvance
+                )
+            }
         )
     }
 }

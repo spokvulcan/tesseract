@@ -184,25 +184,124 @@ struct MemoryHeadroomSampleTests {
 
 // MARK: - Active-Inference Reserve (pure)
 
+/// Issue #522 (PRD #520, phase 1): the reserve prices a lane at one leaf
+/// plus growth. The capture-copy doubling applies only while the
+/// partition's most recent leaf store was a capture by copy — Leaf
+/// Handoff (ADR-0064) removed that copy on eligible turns.
 struct ActiveInferenceReserveTests {
+
+    private func leaf(
+        bytes: Int, tokens: Int = 1024, source: LeafStorePhase.Report.Source = .handoff,
+        maximumAdvance: Int = 0
+    ) -> ActiveInferenceReserve.LeafObservation {
+        ActiveInferenceReserve.LeafObservation(
+            bytes: bytes, tokenCount: tokens, source: source, maximumAdvance: maximumAdvance)
+    }
 
     @Test func bootstrapsPerLaneBeforeAnyLeafIsObserved() {
         let reserve = ActiveInferenceReserve()
         #expect(reserve.perLaneBytes == ActiveInferenceReserve.bootstrapPerLaneBytes)
+        #expect(reserve.largestObservedLeafBytes == 0)
+        #expect(reserve.growthAllowanceBytes == 0)
+        #expect(reserve.copyFactor == 1)
     }
 
-    @Test func observedLeavesSizeTheLaneAtTwiceTheLargestLeaf() {
+    @Test func aHandoffLeafPricesTheLaneAtOneLeaf() {
+        // The first observation retires the bootstrap: a moved leaf is
+        // resident exactly once, so the lane is the leaf plus growth.
         var reserve = ActiveInferenceReserve()
-        // Small leaves never shrink the lane below the bootstrap.
-        reserve.observeLeaf(bytes: 1 * gib)
-        #expect(reserve.perLaneBytes == ActiveInferenceReserve.bootstrapPerLaneBytes)
-        // A leaf big enough that 2× exceeds the bootstrap takes over —
-        // the capture deep-copy is the structural 2×.
-        reserve.observeLeaf(bytes: 3 * gib)
-        #expect(reserve.perLaneBytes == 6 * gib)
-        // The estimate is a running max, not a last-value.
-        reserve.observeLeaf(bytes: 2 * gib)
-        #expect(reserve.perLaneBytes == 6 * gib)
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .handoff))
+        #expect(reserve.copyFactor == 1)
+        #expect(reserve.perLaneBytes == 1 * gib)
+        #expect(reserve.perLaneBytes < ActiveInferenceReserve.bootstrapPerLaneBytes)
+    }
+
+    @Test func aLiveLeafStoreCapturedByCopyPricesTheLaneAtTwoLeaves() {
+        // `live` in the leaf-store telemetry is the live final cache deep
+        // copied into the leaf (a moved one reports `handoff`): for one
+        // moment the lane's KV and its snapshot are both resident.
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .live))
+        #expect(reserve.copyFactor == ActiveInferenceReserve.captureCopyFactor)
+        #expect(reserve.perLaneBytes == 2 * gib)
+        // The boundary path captures by copy too.
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .boundary))
+        #expect(reserve.perLaneBytes == 2 * gib)
+    }
+
+    @Test func theCopyFactorFollowsTheMostRecentLeafStore() {
+        // The most recent store is on the partition the next lane runs
+        // on: a quantized partition's copy prices its own turns, and the
+        // fp16 partition's next handoff clears the doubling again.
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .live))
+        #expect(reserve.copyFactor == 2)
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .handoff))
+        #expect(reserve.copyFactor == 1)
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .boundary))
+        #expect(reserve.copyFactor == 2)
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .copy))
+        #expect(reserve.copyFactor == 1)
+    }
+
+    @Test func aRestoreByCopyDoesNotRaiseTheFactor() {
+        // A checkout that fell back to a copy restore reports `copy`: the
+        // source body is counted in the tree's bytes and the live copy in
+        // the reserve, so one leaf plus growth already covers it. A rewound
+        // leaf was never copied at all.
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .copy))
+        #expect(reserve.copyFactor == 1)
+        #expect(reserve.perLaneBytes == 1 * gib)
+        reserve.observeLeaf(leaf(bytes: 1 * gib, source: .rewind))
+        #expect(reserve.copyFactor == 1)
+    }
+
+    @Test func growthAllowanceIsBytesPerTokenTimesTheTurnsMaximumAdvance() {
+        // 1 GiB over 1024 tokens is 1 MiB per token; a turn that may
+        // advance 512 tokens grows by 512 MiB.
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 1 * gib, tokens: 1024, maximumAdvance: 512))
+        #expect(reserve.observedBytesPerToken == 1 << 20)
+        #expect(reserve.growthAllowanceBytes == 512 << 20)
+        #expect(reserve.perLaneBytes == 1 * gib + (512 << 20))
+        // Bytes per token round up, never down.
+        var uneven = ActiveInferenceReserve()
+        uneven.observeLeaf(leaf(bytes: 1001, tokens: 10, maximumAdvance: 1))
+        #expect(uneven.observedBytesPerToken == 101)
+    }
+
+    @Test func growthFollowsTheMostRecentTurnsAdvanceAtTheLargestLeafsDensity() {
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 1 * gib, tokens: 1024, maximumAdvance: 512))
+        // A later, smaller leaf leaves the density alone; its turn's
+        // advance is the one the next turn is priced at.
+        reserve.observeLeaf(leaf(bytes: 1 << 20, tokens: 4, maximumAdvance: 8))
+        #expect(reserve.observedBytesPerToken == 1 << 20)
+        #expect(reserve.growthAllowanceBytes == 8 << 20)
+    }
+
+    @Test func anUnboundedAdvanceFallsBackToTheBootstrapForGrowth() {
+        // A request without an output ceiling advances unboundedly
+        // (`LeafCheckout.maximumAdvance` reports `Int.max`): the growth
+        // cannot be priced from bytes per token, so the bootstrap constant
+        // stands in for it — and nothing overflows.
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 1 * gib, tokens: 1024, maximumAdvance: .max))
+        #expect(reserve.growthAllowanceBytes == ActiveInferenceReserve.bootstrapPerLaneBytes)
+        #expect(reserve.perLaneBytes == 1 * gib + ActiveInferenceReserve.bootstrapPerLaneBytes)
+        #expect(reserve.reserveBytes(lanes: 3) == 3 * reserve.perLaneBytes)
+    }
+
+    @Test func theLargestLeafNeverShrinks() {
+        var reserve = ActiveInferenceReserve()
+        reserve.observeLeaf(leaf(bytes: 3 * gib))
+        #expect(reserve.largestObservedLeafBytes == 3 * gib)
+        reserve.observeLeaf(leaf(bytes: 2 * gib))
+        #expect(reserve.largestObservedLeafBytes == 3 * gib)
+        #expect(reserve.perLaneBytes == 3 * gib)
+        reserve.observeLeaf(leaf(bytes: 5 * gib))
+        #expect(reserve.largestObservedLeafBytes == 5 * gib)
     }
 
     @Test func reserveIsCountAwareAndFlooredAtOneLane() {
@@ -557,6 +656,64 @@ struct DynamicBudgetCeilingManagerTests {
         let changes = lines.filter { $0.contains("event=budgetChange") }
         #expect(changes.count == 1)
         #expect(changes[0].contains("reason=measurement"))
+    }
+
+    /// A leaf admission feeds the reserve — bytes, token count, source and
+    /// the turn's maximum advance — and the next `budgetMeasure` reports
+    /// the reserve's inputs and per-lane result beside the ceiling they
+    /// produced (#522), so the ceiling is explainable from one event.
+    @Test func measurementReportsTheReservesInputsAndPerLaneBytes() {
+        let headroom = InMemoryMemoryHeadroomSource(
+            next: MemoryHeadroomSample(freeBytes: 10 * gib, purgeableBytes: 0)
+        )
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 3 * gib,
+            headroomSource: headroom
+        )
+        let sink = RecordingLineSink()
+        let handle = PrefixCacheDiagnostics.addTestSink(sink.handler)
+        defer { PrefixCacheDiagnostics.removeTestSink(handle) }
+
+        // One moved leaf of 10 tokens; the turn could have advanced 40 more.
+        let leafBytes = PrefixCacheTestFixtures.makeUniformSnapshot(offset: 10, type: .leaf)
+            .memoryBytes
+        PrefixCacheTestFixtures.admitUniformLeaf(
+            manager, tokens: Array(1...10), partitionKey: key,
+            source: .handoff, maximumAdvance: 40)
+        _ = sink.drain()  // the admission's own (pre-observation) measure
+        manager.reevaluateBudgetCeiling()
+
+        let bytesPerToken = (leafBytes + 9) / 10
+        let growth = bytesPerToken * 40
+        let perLane = leafBytes + growth
+        let reserve = manager.activeInferenceReserve
+        #expect(reserve.largestObservedLeafBytes == leafBytes)
+        #expect(reserve.perLaneBytes == perLane)
+        #expect(manager.budgetBand.ceilingBytes == leafBytes + 8 * gib - perLane)
+
+        let measures = sink.drain().filter { $0.contains("event=budgetMeasure") }
+        #expect(measures.count == 1)
+        let measure = measures.first ?? ""
+        #expect(measure.contains("reserveBytes=\(perLane)"))
+        #expect(measure.contains("lanes=1"))
+        #expect(measure.contains("perLaneBytes=\(perLane)"))
+        #expect(measure.contains("largestLeafBytes=\(leafBytes)"))
+        #expect(measure.contains("bytesPerToken=\(bytesPerToken)"))
+        #expect(measure.contains("maximumAdvance=40"))
+        #expect(measure.contains("growthAllowanceBytes=\(growth)"))
+        #expect(measure.contains("copyFactor=1"))
+
+        // A capture by copy on the same partition doubles the leaf term
+        // in the next measure; the growth term is unchanged.
+        PrefixCacheTestFixtures.admitUniformLeaf(
+            manager, tokens: Array(20...29), partitionKey: key,
+            source: .live, maximumAdvance: 40)
+        _ = sink.drain()
+        manager.reevaluateBudgetCeiling()
+        let copied = sink.drain().first { $0.contains("event=budgetMeasure") } ?? ""
+        #expect(copied.contains("copyFactor=2"))
+        #expect(copied.contains("perLaneBytes=\(2 * leafBytes + growth)"))
+        #expect(manager.activeInferenceReserve.reserveBytes(lanes: 1) == 2 * leafBytes + growth)
     }
 
     private final class RecordingLineSink: @unchecked Sendable {
