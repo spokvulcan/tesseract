@@ -410,6 +410,7 @@ final class PrefixCacheManager {
         bodyCopyReason: LeafStorePhase.Report.CopyReason?,
         context: PrefixCacheDiagnostics.Context
     ) -> LeafCheckout.ClaimResult {
+        guard !snapshot.isWarm else { return .copy(.warmBody) }
         guard let tree = store.tree(for: partitionKey),
             let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
             hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
@@ -2346,13 +2347,21 @@ final class PrefixCacheManager {
         let needsFullDemotion: Bool
     }
 
-    private func nextDrainWork(attempted: Set<UUID>, now: ContinuousClock.Instant) -> DrainWork? {
+    private func nextDrainWork(
+        attempted: Set<UUID>, failedDemotions: Set<UUID>, now: ContinuousClock.Instant
+    ) -> DrainWork? {
         guard totalSnapshotBytes > memoryBudgetBytes else { return nil }
         let partitions = store.orderedPartitions()
         let preferred = drainPreferredPartition.flatMap { key in
             store.tree(for: key).map { (key: key, tree: $0) }
         }
-        let floor = floorContents().nodes
+        var floor = floorContents().nodes
+        for (_, tree) in partitions {
+            for node in tree.allSnapshotNodes()
+            where node.state.body.map({ failedDemotions.contains($0.bodyID) }) == true {
+                floor.insert(ObjectIdentifier(node))
+            }
+        }
         var excluded = floor
         for (key, tree) in partitions {
             for node in tree.allSnapshotNodes() {
@@ -2387,7 +2396,10 @@ final class PrefixCacheManager {
             await sessions.withSession { session in
                 let now = ContinuousClock.now
                 var attempted: Set<UUID> = []
-                while let work = await self.nextDrainWork(attempted: attempted, now: now) {
+                var failedDemotions: Set<UUID> = []
+                while let work = await self.nextDrainWork(
+                    attempted: attempted, failedDemotions: failedDemotions, now: now)
+                {
                     let start = ContinuousClock.now
                     var replacement: HybridCacheSnapshot?
                     do {
@@ -2404,6 +2416,9 @@ final class PrefixCacheManager {
                         }
                     } catch {
                         Log.agent.error("Warm Body conversion failed: \(error)")
+                    }
+                    if work.needsFullDemotion, replacement == nil {
+                        failedDemotions.insert(work.snapshot.bodyID)
                     }
                     await self.finishDrainWork(
                         work, replacement: replacement,
@@ -2442,6 +2457,9 @@ final class PrefixCacheManager {
                     offset: replacement.tokenOffset, bytesBefore: work.snapshot.memoryBytes,
                     bytesAfter: replacement.memoryBytes, seconds: seconds))
         } else {
+            // A failed conversion is not permission to turn a recoverable
+            // eviction into data loss. This pass can consider another body.
+            guard !work.needsFullDemotion || replacement != nil else { return }
             // An SSD ref can disappear during the session hop. Retry as a full
             // demotion if it was the only reason this pass needed no conversion.
             if work.snapshot.isWarm, !work.needsFullDemotion, canDemote(work.candidate) { return }

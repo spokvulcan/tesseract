@@ -579,22 +579,24 @@ nonisolated final class ServerCompletion {
     /// an await cannot slip past the teardown.
     func drainActiveCompletion(on actor: isolated LLMActor) async {
         drainGeneration += 1
-        while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil {
-            if let active = activeCompletion {
-                active.handle.cancel()
-                await active.handle.waitForCompletion()
-                if activeCompletion?.id == active.id {
-                    activeCompletion = nil
-                }
-            } else if speculativePrefill != nil {
-                await preemptSpeculativePrefill(on: actor)
-            } else {
-                await withCheckedContinuation { continuation in
-                    inflightStartWaiters.append(continuation)
+        repeat {
+            while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil {
+                if let active = activeCompletion {
+                    active.handle.cancel()
+                    await active.handle.waitForCompletion()
+                    if activeCompletion?.id == active.id {
+                        activeCompletion = nil
+                    }
+                } else if speculativePrefill != nil {
+                    await preemptSpeculativePrefill(on: actor)
+                } else {
+                    await withCheckedContinuation { continuation in
+                        inflightStartWaiters.append(continuation)
+                    }
                 }
             }
-        }
-        await _prefixCache?.awaitPendingDrain()
+            await _prefixCache?.awaitPendingDrain()
+        } while inflightStartCount > 0 || activeCompletion != nil || speculativePrefill != nil
     }
 
     /// Natural-finish hook from the driving task: drop the registry slot for

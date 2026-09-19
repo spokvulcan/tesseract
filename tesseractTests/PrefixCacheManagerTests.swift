@@ -98,11 +98,23 @@ struct WarmBodyDrainTests {
         let resolved = await manager.resolve(
             tokens: Array(repeating: 2, count: 8) + [9], promptTokenCount: 9,
             partitionKey: key, modelFingerprint: nil, diagnostics: context)
-        let attempt = await LeafCheckout.attempt(
-            resolved: resolved, tokens: Array(repeating: 2, count: 8) + [9], maximumAdvance: 10,
-            identityKeySpace: true, prefixCache: manager, context: context)
-        #expect(attempt.owner == nil)
-        #expect(attempt.copyReason == .warmBody)
+        for identityKeySpace in [true, false] {
+            for tokens in [Array(repeating: 2, count: 8), Array(repeating: 2, count: 8) + [9]] {
+                let attempt = await LeafCheckout.attempt(
+                    resolved: resolved, tokens: tokens, maximumAdvance: 10,
+                    identityKeySpace: identityKeySpace, prefixCache: manager, context: context)
+                #expect(attempt.owner == nil)
+                #expect(attempt.copyReason == .warmBody)
+            }
+        }
+        _ = tree.insertPath(tokens: Array(repeating: 2, count: 8) + [9])
+        let claim = manager.claimLeaf(
+            snapshot: warm, tokens: Array(repeating: 2, count: 8) + [9],
+            partitionKey: key, bodyCopyReason: .warmBody, context: context)
+        if case .copy(.warmBody) = claim {
+        } else {
+            Issue.record("Warm branch must report warmBody")
+        }
         let telemetry = manager.makeTelemetrySnapshot()
         #expect(telemetry.warmSnapshotBytes == warm.memoryBytes)
         #expect(telemetry.hotSnapshotBytes == 3 * body.memoryBytes)
@@ -170,6 +182,52 @@ struct WarmBodyDrainTests {
         #expect(restored.layers.first?.className == "KVCache")
         #expect(restored.layers.first?.state.first?.dtype == .float16)
         #expect(restored.memoryBytes == body.memoryBytes)
+    }
+
+    @Test func failedFullDemotionKeepsTheUnbackedWarmBody() async throws {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2], headDim: 64))
+        let (warm, full) = try await sessions.withSession { session in
+            let cache = KVCacheSimple()
+            cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
+            let full = try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+            // The public snapshot/restore seam already represents unsupported
+            // whole-state classes as a recoverable restore error.
+            let invalid = HybridCacheSnapshot(
+                tokenOffset: 8,
+                layers: full.layers + [
+                    .init(className: "UnsupportedCache", state: [], metaState: [], offset: 8)
+                ],
+                checkpointType: .leaf, memoryBytes: full.memoryBytes, createdAt: .now)
+            return (try session.compress(invalid), full)
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "warm-failed-demotion-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let tier = TieredSnapshotStore(
+            ssdConfig: SSDPrefixCacheConfig(
+                enabled: true, rootURL: root, budgetBytes: 1_000_000, maxPendingBytes: 1_000_000))
+        let key = CachePartitionKey(
+            modelID: "toy", kvBits: nil, kvGroupSize: 64,
+            modelFingerprint: String(repeating: "b", count: 64))
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 1_000_000,
+            evictionConfig: EvictionConfiguration(warmCompressionEnabled: true), tieredStore: tier,
+            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) },
+            modelSessions: sessions)
+        manager.restoreSnapshot(
+            path: Array(repeating: 1, count: 8), snapshot: warm,
+            partitionKey: key, lastAccessTime: .now - .seconds(10))
+        manager.restoreSnapshot(
+            path: Array(repeating: 2, count: 8), snapshot: full,
+            partitionKey: key, lastAccessTime: .now)
+        manager.setMemoryBudget(full.memoryBytes)
+        await manager.awaitPendingDrain()
+        #expect(
+            manager.lookup(tokens: Array(repeating: 1, count: 8), partitionKey: key).snapshot?
+                .isWarm == true)
+        #expect(manager.cumulativeCounters.terminalEvictions == 0)
+        #expect(manager.totalSnapshotBytes == full.memoryBytes + warm.memoryBytes)
     }
 
 }
