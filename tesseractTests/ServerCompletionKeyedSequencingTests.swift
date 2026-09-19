@@ -85,6 +85,84 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
 @Suite struct ServerCompletionKeyedSequencingTests {
 
     @MainActor
+    @Test func plannedBranchViewReportsCaptureAndLookupThroughTheModelSession() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let completions = ToyCompletionQueue(
+            generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
+            eosTokenId: ToySequencingTokenizer.eotTokenId)
+        let modelID = "view-sequencing-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(completions: completions), tokenizer: tokenizer),
+            modelID: modelID)
+        for text in ["abcd-one", "abcd-two"] {
+            completions.enqueue(Array("ok".utf8).map(Int.init))
+            let handle = try await fixture.start(
+                conversation: Self.conversation([.init(role: .user, content: text)]),
+                parameters: Self.parameters())
+            #expect(try await collectServerText(handle).text == "ok")
+        }
+        let events = capture.drain()
+        let branch = try #require(
+            events.last {
+                $0.eventName == "capture" && $0.field("checkpointType") == "branchPoint"
+            })
+        #expect(branch.field("checkpointKind") == "prefixView")
+        #expect(branch.field("bytes") == "0")
+        completions.enqueue(Array("ok".utf8).map(Int.init))
+        let fork = try await fixture.start(
+            conversation: Self.conversation([.init(role: .user, content: "abcd-three")]),
+            parameters: Self.parameters())
+        #expect(try await collectServerText(fork).text == "ok")
+        let lookup = try #require(capture.drain().first { $0.eventName == "lookup" })
+        #expect(lookup.field("source") == "view")
+        #expect(lookup.field("restoreMode") == "copy")
+        #expect(lookup.field("copyReason") == "checkpoint")
+        let backingOffset = try #require(lookup.field("backingLeafOffset").flatMap(Int.init))
+        #expect(backingOffset > fork.cachedTokenCount)
+        await fixture.drain()
+    }
+
+    @MainActor
+    @Test func canonicalFallbackRestoresAPlannedBranchView() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let completions = ToyCompletionQueue(
+            generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
+            eosTokenId: ToySequencingTokenizer.eotTokenId)
+        let modelID = "canonical-view-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(completions: completions), tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: modelID)
+        let preserving = TemplateRenderContext(
+            kwargs: [.preserveThinking: true], preservesThinking: true)
+        // Seed a full leaf on the preserving fast path. Assistant-only
+        // histories have no transient last-user boundary, so canonical
+        // reconstruction must resolve the planned branch checkpoint.
+        for (index, text) in ["abcd-one", "abcd-two", "abcd-three"].enumerated() {
+            completions.enqueue(Array("</think>ok".utf8).map(Int.init))
+            _ = capture.drain()
+            let handle = try await fixture.start(
+                conversation: Self.conversation([.assistant(content: text)]),
+                parameters: Self.parameters(),
+                renderContext: index == 0 ? preserving : .canonical)
+            #expect(try await collectServerText(handle).text == "ok")
+            let events = capture.drain()
+            if index == 2 {
+                #expect(events.first { $0.eventName == "lookup" }?.field("source") == "view")
+                #expect(events.last { $0.eventName == "leafStore" }?.field("path") == "boundary")
+                #expect(events.last { $0.eventName == "leafStore" }?.field("source") == "boundary")
+                #expect(!events.contains { $0.field("reason") == "prefill-threw" })
+            }
+        }
+        await fixture.drain()
+    }
+
+    @MainActor
     @Test func emptyDirectTurnReturnsItsLeafWithoutTryingToCaptureTheRewoundCache() async throws {
         let tokenizer = ToySequencingTokenizer()
         let first = Self.conversation([.init(role: .user, content: "Hi")])

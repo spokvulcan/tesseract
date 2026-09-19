@@ -107,6 +107,7 @@ nonisolated enum PrefixCacheDiagnostics {
         /// beside `copyReason` only when a wait actually happened, so the
         /// pinned wire lines of every other restore stay byte-stable.
         let copyWaitSeconds: TimeInterval
+        let backingLeafOffset: Int?
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -121,7 +122,8 @@ nonisolated enum PrefixCacheDiagnostics {
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
             restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
-            copyWaitSeconds: TimeInterval = 0
+            copyWaitSeconds: TimeInterval = 0,
+            backingLeafOffset: Int? = nil
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -159,6 +161,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.restoreMode = restoreMode
             self.copyReason = copyReason
             self.copyWaitSeconds = copyWaitSeconds
+            self.backingLeafOffset = backingLeafOffset
         }
 
         let eventName = "lookup"
@@ -179,6 +182,10 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
+            if let backingLeafOffset {
+                fields.append(("source", "view"))
+                fields.append(("backingLeafOffset", "\(backingLeafOffset)"))
+            }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if copyWaitSeconds > 0 {
                 fields.append(
@@ -199,6 +206,7 @@ nonisolated enum PrefixCacheDiagnostics {
         let bytes: Int
         let duringPrefill: Bool
         let source: String
+        var checkpointKind = "ownedBody"
 
         let eventName = "capture"
 
@@ -209,6 +217,7 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("bytes", "\(bytes)"),
                 ("duringPrefill", "\(duringPrefill)"),
                 ("source", source),
+                ("checkpointKind", checkpointKind),
             ]
         }
     }

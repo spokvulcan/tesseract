@@ -1003,6 +1003,9 @@ final class DependencyContainer: ObservableObject {
     }
 
     func setup() async {
+        // The app is also the unit-test host. Never start model prewarms,
+        // inference reloads, or the owner's background services from tests.
+        guard !ProcessEnvironment.isRunningTests else { return }
         // Prevent duplicate setup from multiple window instances
         guard !hasSetup else { return }
         hasSetup = true

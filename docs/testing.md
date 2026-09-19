@@ -55,6 +55,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/PrefixCacheManagerTests \
   -only-testing:tesseractTests/PrefixCacheIntegrationTests \
   -only-testing:tesseractTests/CheckpointCaptureTests \
+  -only-testing:tesseractTests/PrefixViewModelSessionTests \
   -only-testing:tesseractTests/CacheKeySpaceTests \
   -only-testing:tesseractTests/PrefillPlannerTests \
   -only-testing:tesseractTests/LeafAdmissionBuilderTests \
@@ -62,6 +63,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ConversationRenderProbeParityTests \
   -only-testing:tesseractTests/ConversationRenderProbeParityRealTests \
   -only-testing:tesseractTests/SnapshotResolutionTests \
+  -only-testing:tesseractTests/SnapshotResolutionLadderTests \
   -only-testing:tesseractTests/SnapshotLedgerTests \
   -only-testing:tesseractTests/SnapshotStateTests \
   -only-testing:tesseractTests/LeafHomeGuaranteeTests \
@@ -121,6 +123,32 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -skipPackagePluginValidation \
   -only-testing:tesseractTests
 ```
+
+For a validation run that must not load models, prefix the command with
+`TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing
+test-host detector makes `DependencyContainer.setup()` return before app
+bootstrap, including Whisper, proofreader and memory-model prewarms. Use an
+explicit suite allowlist (the prefix-cache block above plus touched suites)
+after checking its fixtures, rather than the broad target. In particular,
+`MemoryBaselineTests`, `MemoryEvalTests`, `MemoryRecallEvalTests`,
+`MemoryEmbedderQualityTests`, and `RecallToolSmokeTests` intentionally load the
+installed embedder. The prefix block's `Real` suites load tokenizer files,
+not model weights. Leave corpus and allocation opt-ins unset.
+
+The planned Prefix-View Checkpoint slice (#524, ADR-0068) is covered at the
+existing seams. `CheckpointCaptureTests` checks synchronized whole-state-only
+capture. `PrefixViewModelSessionTests` compares exact cache bytes and generated
+tokens against an owned checkpoint for plain and quantized attention, with
+disjoint backing addresses; it also covers the prepared image-prefix capture
+entry. `SnapshotResolutionLadderTests` checks nearest/unleased selection,
+recency and all fall-through rungs. `TokenRadixTreeTests` checks byte accounting,
+eviction exclusion, lease/check-in and last-backer self-heal.
+`SnapshotResolutionTests` checks both Restore Pins and view-only panel bytes.
+`ServerCompletionExtractSnapshotPayloadsTests` keeps views RAM-only;
+`ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
+canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`
+checks planned-view restore and pin cleanup through the toy Model Session.
+These tests do not establish loaded-model parity or large-cache memory savings.
 
 ## Live detokenization and stream parity
 

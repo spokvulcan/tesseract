@@ -5,6 +5,71 @@ import Testing
 
 @testable import Tesseract_Agent
 
+@Suite struct PrefixViewModelSessionTests {
+    @Test func captureAtPreparedImagePrefixKeepsSystemOwnedAndBranchAsView() async throws {
+        let provider = ToyModelSessionProvider(model: ToyLanguageModel(script: Array(1...8)))
+        try await provider.withSession { session in
+            let cache = try session.newCache(parameters: GenerateParameters())
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray(Array(1...4).map(Int32.init))[.newAxis]), cache: cache,
+                checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 4,
+                consumeAll: true, initialState: nil, evalPolicy: .checkedSynchronous)
+            // The image-prefix edge captures directly after checked evaluation,
+            // before the chunk loop starts at this absolute key-path offset.
+            let branch = try #require(
+                session.captureSnapshot(cache: cache, offset: 4, type: .branchPoint))
+            let system = try #require(
+                session.captureSnapshot(cache: cache, offset: 4, type: .system))
+            #expect(branch.memoryBytes == 0)
+            #expect(system.memoryBytes == 256)
+            #expect(try session.restore(system).first?.offset == 4)
+        }
+    }
+
+    @Test(arguments: [nil, 8] as [Int?])
+    func forkFromViewMatchesOwnedCheckpointWithoutSharingBuffers(kvBits: Int?) async throws {
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: Array(1...12), headDim: 64))
+        try await provider.withSession { session in
+            let parameters = GenerateParameters(kvBits: kvBits, kvGroupSize: 64, temperature: 0)
+            var live = try session.newCache(parameters: parameters)
+            session.quantizeKVCache(&live, parameters: parameters)
+            let prefilled = try session.prefill(
+                text: .init(tokens: MLXArray(Array(1...8).map(Int32.init))), cache: live,
+                checkpoints: [4: .branchPoint], checkpointBaseOffset: 0,
+                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            let view = try #require(prefilled.snapshots.first)
+            let leaf = try #require(session.captureSnapshot(cache: live, offset: 8, type: .leaf))
+            var baseline = try session.newCache(parameters: parameters)
+            session.quantizeKVCache(&baseline, parameters: parameters)
+            _ = try session.prefill(
+                text: .init(tokens: MLXArray(Array(1...4).map(Int32.init))), cache: baseline,
+                checkpoints: [:], checkpointBaseOffset: 0,
+                prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            let owned = try #require(
+                session.captureSnapshot(cache: baseline, offset: 4, type: .system))
+            let fromOwned = try session.restore(owned)
+            let fromView = try session.restore(view, backingLeaf: leaf)
+            let treeAddresses = Set(leaf.layers.flatMap(\.state).map(backingAddress))
+            for (actual, expected) in zip(fromView.flatMap(\.state), fromOwned.flatMap(\.state)) {
+                #expect(!treeAddresses.contains(backingAddress(actual)))
+                #expect(actual.asData(access: .copy).data == expected.asData(access: .copy).data)
+            }
+            let suffix = LMInput.Text(tokens: MLXArray([Int32(5)]))
+            var viewIterator = session.makeDecodeIterator(
+                remainder: suffix, fullText: suffix, cache: fromView, state: nil,
+                parameters: parameters)
+            var ownedIterator = session.makeDecodeIterator(
+                remainder: suffix, fullText: suffix, cache: fromOwned, state: nil,
+                parameters: parameters)
+            let viewTokens = (0..<3).compactMap { _ in viewIterator.next() }
+            let ownedTokens = (0..<3).compactMap { _ in ownedIterator.next() }
+            #expect(viewTokens == [6, 7, 8])
+            #expect(viewTokens == ownedTokens)
+        }
+    }
+}
+
 /// First sequencing coverage at the **Model Session** seam (PRD #137, PR A;
 /// ADR-0016): the **Unkeyed Completion** arm — the smallest complete
 /// consumer — driven end-to-end with the toy-model peer. The real
