@@ -751,7 +751,14 @@ approval requirement in the capture baseline still applies to #480.
 
 `LeafCheckoutTests` checks object identity and physical array independence,
 body removal/accounting, exact recurrent state and metadata after growth,
-every intentional fallback, and pending-full-payload materialization.
+every intentional fallback, and pending-full-payload materialization. It also
+covers the bounded pending-payload wait (#523): a payload that materializes
+inside the bound becomes a handoff, one that outlasts it copies and reports the
+waited time, and a payload still queued behind other writes copies at once
+without waiting. `SSDSnapshotStoreTests` covers the writer's own answer —
+queued versus in the writer's hands — that the wait turns on; the shared
+`BlockingMaterializer` in `tesseractTests/PrefixCacheTestFixtures.swift` parks
+the writer inside one payload's materialize step so both are deterministic.
 `EmittedPathSynthesizedReplayTests` covers cancellation during decode and warm
 prefill, including the unload drain, followed by a resend that hits the original
 leaf, and the vision-container text-only session (Bonsai 2 27B, the PARO

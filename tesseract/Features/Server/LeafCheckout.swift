@@ -26,6 +26,12 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
     struct Attempt: Sendable {
         var owner: FinalGenerationCache?
         var copyReason: LeafStorePhase.Report.CopyReason?
+        /// Seconds this attempt spent waiting for a pending full payload
+        /// to stop aliasing the leaf's body (#523). `0` on every attempt
+        /// that never waited — including the ones refused for a *queued*
+        /// payload, which is deliberately not waited for. The copy reason
+        /// keeps its name, `pendingFullPayload`; this is what it cost.
+        var pendingPayloadWaitSeconds: TimeInterval = 0
     }
 
     /// A whole-state layer's independent copy, saved at check-out. Every
@@ -119,12 +125,22 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         else { return Attempt(copyReason: .checkpoint) }
         let bodyCopyReason = snapshot.checkoutCopyReason(maximumAdvance: maximumAdvance)
         let claim: Claim
-        switch await prefixCache.claimLeaf(
+        var waitedSeconds: TimeInterval = 0
+        var result = await prefixCache.claimLeaf(
             snapshot: snapshot, tokens: tokens, partitionKey: key,
             bodyCopyReason: bodyCopyReason, context: context)
-        {
+        // The one refusal that clears itself: a full payload aliases the
+        // body only until the SSD writer materializes it (ADR-0064
+        // decision 5, ADR-0019's Deferred Payload Extraction amendment).
+        if case .copy(.pendingFullPayload) = result {
+            (result, waitedSeconds) = await awaitPendingFullPayload(
+                snapshot: snapshot, tokens: tokens, partitionKey: key,
+                bodyCopyReason: bodyCopyReason, prefixCache: prefixCache, context: context)
+        }
+        switch result {
         case .claimed(let acquired): claim = acquired
-        case .copy(let reason): return Attempt(copyReason: reason)
+        case .copy(let reason):
+            return Attempt(copyReason: reason, pendingPayloadWaitSeconds: waitedSeconds)
         }
         guard let (cache, kinds) = snapshot.takeMovingCache() else {
             preconditionFailure("an eligible claimed leaf must own cache objects")
@@ -132,6 +148,67 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         let owner = FinalGenerationCache(cache)
         owner.restoreMode = "handoff"
         owner.checkout = LeafCheckout(claim: claim, tokens: tokens, cache: cache, kinds: kinds)
-        return Attempt(owner: owner)
+        return Attempt(owner: owner, pendingPayloadWaitSeconds: waitedSeconds)
+    }
+
+    /// How often the wait re-reads the writer's answer. Small enough that
+    /// a materialization is turned into a handoff promptly, large enough
+    /// that the longest bound costs a bounded number of MainActor hops.
+    static let pendingFullPayloadPoll: Duration = .milliseconds(5)
+
+    /// The bounded wait of #523. **Leaf Checkout** was refused only
+    /// because the leaf's full payload is still pending; while the SSD
+    /// writer reports that payload `.inProgress`, the request waits up to
+    /// the **Eviction Configuration** bound and then re-attempts the
+    /// check-out once. A payload still `.queued` behind other writes has
+    /// no bounded completion time and is not waited for — it copies
+    /// immediately, as it does today.
+    ///
+    /// The wait is an `await`, never a blocking sleep: no Metal work runs
+    /// and no thread is held, and it happens before any Model Session verb
+    /// touches the cache. Cancellation settles it as a copy at once.
+    private static func awaitPendingFullPayload(
+        snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey,
+        bodyCopyReason: LeafStorePhase.Report.CopyReason?,
+        prefixCache: PrefixCacheManager, context: PrefixCacheDiagnostics.Context
+    ) async -> (result: ClaimResult, waitedSeconds: TimeInterval) {
+        func progress() async -> PendingPayloadProgress {
+            await prefixCache.pendingFullPayloadProgress(
+                snapshot: snapshot, tokens: tokens, partitionKey: partitionKey)
+        }
+        func reattempt() async -> ClaimResult {
+            await prefixCache.claimLeaf(
+                snapshot: snapshot, tokens: tokens, partitionKey: partitionKey,
+                bodyCopyReason: bodyCopyReason, context: context)
+        }
+        let bound = await prefixCache.pendingFullPayloadWait
+        guard bound > .zero else { return (.copy(.pendingFullPayload), 0) }
+        switch await progress() {
+        case .absent:
+            // The writer let go between the refusal and this read, so the
+            // refusal is already stale. Nothing to wait for — but nothing
+            // to copy for either, so re-attempt and take the leaf.
+            return (await reattempt(), 0)
+        case .queued:
+            // Queued behind other writes, with no bounded completion time
+            // of its own. This request copies now, exactly as before #523.
+            return (.copy(.pendingFullPayload), 0)
+        case .inProgress:
+            break
+        }
+        let started = ContinuousClock.now
+        var elapsed = Duration.zero
+        while elapsed < bound {
+            do {
+                try await Task.sleep(for: min(pendingFullPayloadPoll, bound - elapsed))
+            } catch {
+                break  // cancelled: settle as a copy rather than hold the request
+            }
+            elapsed = ContinuousClock.now - started
+            if await progress() != .inProgress { break }
+        }
+        let waitedSeconds = elapsed.seconds
+        guard !Task.isCancelled else { return (.copy(.pendingFullPayload), waitedSeconds) }
+        return (await reattempt(), waitedSeconds)
     }
 }

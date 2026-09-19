@@ -108,13 +108,15 @@ struct SSDSnapshotStoreTests {
         config: SSDPrefixCacheConfig,
         manifestDebounce: Duration = .milliseconds(20),
         onCommit: @escaping @Sendable (SSDCommitInfo) -> Void = { _ in },
-        onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in }
+        onDrop: @escaping @Sendable (String, SSDDropReason) -> Void = { _, _ in },
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
     ) -> SSDSnapshotStore {
         let store = SSDSnapshotStore(
             config: config,
             manifestDebounce: manifestDebounce,
             onCommit: onCommit,
-            onDrop: onDrop
+            onDrop: onDrop,
+            writerDrainPreludeForTesting: writerDrainPreludeForTesting
         )
         store.registerPartition(makePartitionMeta(), digest: "abcd1234")
         return store
@@ -173,6 +175,53 @@ struct SSDSnapshotStoreTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return condition()
+    }
+
+    // MARK: - Pending payload progress (#523)
+
+    /// The writer's own answer for one payload, which the completion path
+    /// reads before it decides whether a `pendingFullPayload` refusal is
+    /// worth a bounded wait: queued behind other writes, in the writer's
+    /// hands right now, or gone.
+    @Test
+    func writerSeparatesAQueuedPendingPayloadFromTheOneItIsWriting() async {
+        let (config, root) = makeConfig()
+        defer { cleanup(root) }
+        let gate = DrainGate()
+        let materializing = BlockingMaterializer()
+        let tracker = CallbackTracker()
+        let store = makeStoreWithPartition(
+            config: config, onCommit: tracker.onCommit, onDrop: tracker.onDrop,
+            writerDrainPreludeForTesting: { await gate.wait() })
+
+        let slow = makeDescriptor(bytes: 1_024)
+        let next = makeDescriptor(bytes: 1_024)
+        #expect(
+            store.tryEnqueue(payload: materializing.payload(bytes: 1_024), descriptor: slow)
+                .isAccepted)
+        #expect(store.tryEnqueue(payload: makePayload(bytes: 1_024), descriptor: next).isAccepted)
+
+        // Writer parked before the drain: both items are queued, and an id
+        // the writer never saw is absent.
+        #expect(store.pendingPayloadProgress(snapshotID: slow.snapshotID) == .queued)
+        #expect(store.pendingPayloadProgress(snapshotID: next.snapshotID) == .queued)
+        #expect(store.pendingPayloadProgress(snapshotID: "never-enqueued") == .absent)
+
+        // Let the writer in. It pops the first item and parks inside its
+        // **Deferred Payload Extraction** materialize step, so that one is
+        // in progress while the second still waits behind it.
+        await gate.open()
+        #expect(
+            await waitUntil {
+                store.pendingPayloadProgress(snapshotID: slow.snapshotID) == .inProgress
+            })
+        #expect(store.pendingPayloadProgress(snapshotID: next.snapshotID) == .queued)
+
+        materializing.release()
+        await store.flushAsync()
+        #expect(store.pendingPayloadProgress(snapshotID: slow.snapshotID) == .absent)
+        #expect(store.pendingPayloadProgress(snapshotID: next.snapshotID) == .absent)
+        #expect(tracker.committed.count == 2)
     }
 
     // MARK: - Front door: happy path and rejection

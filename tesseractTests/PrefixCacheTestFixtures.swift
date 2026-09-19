@@ -130,7 +130,8 @@ enum PrefixCacheTestFixtures {
         demotionPayloadExtractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = nil,
         writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil,
         activityGate: StorageActivityGate? = nil,
-        adaptiveWriteEagerness: Bool = false
+        adaptiveWriteEagerness: Bool = false,
+        evictionConfig: EvictionConfiguration = EvictionConfiguration()
     ) -> (manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("\(label)-\(UUID().uuidString)")
@@ -147,6 +148,7 @@ enum PrefixCacheTestFixtures {
         )
         let manager = PrefixCacheManager(
             memoryBudgetBytes: ramBudgetBytes,
+            evictionConfig: evictionConfig,
             tieredStore: store,
             demotionPayloadExtractor: demotionPayloadExtractor,
             adaptiveWriteEagerness: adaptiveWriteEagerness
@@ -234,6 +236,71 @@ actor DrainGate {
         waiters.removeAll()
 
         currentWaiters.forEach { $0.resume() }
+    }
+}
+
+extension TryEnqueueResult {
+    nonisolated var isAccepted: Bool {
+        if case .accepted = self { return true }
+        return false
+    }
+}
+
+/// Parks the SSD writer inside one payload's **Deferred Payload
+/// Extraction** materialize step until the test releases it — the only
+/// place a test can hold a payload *in the writer's hands* rather than
+/// merely queued, which is the distinction `pendingPayloadProgress`
+/// draws and the bounded pending-payload wait (#523) turns on.
+///
+/// The gate is a semaphore because `SnapshotPayload.materialize()` is
+/// synchronous on the writer's task; the wait is bounded so a regression
+/// cannot hang the suite.
+nonisolated final class BlockingMaterializer: @unchecked Sendable {
+    private let gate = DispatchSemaphore(value: 0)
+
+    /// Let the parked materializer finish. Safe to call before the writer
+    /// has reached the gate — the signal is remembered.
+    func release() { gate.signal() }
+
+    /// Wrap `inner` so the host copy parks before reading its layers.
+    /// Everything `inner` retains — for a full payload, the body's own
+    /// arrays — stays retained for the duration, so a **Leaf Checkout**
+    /// keeps reporting `pendingFullPayload` while the gate is shut.
+    func gating(_ inner: SnapshotPayload) -> SnapshotPayload {
+        let gate = self.gate
+        return SnapshotPayload(
+            tokenOffset: inner.tokenOffset,
+            checkpointType: inner.checkpointType,
+            extending: inner.extending,
+            totalBytes: inner.totalBytes,
+            materialize: {
+                _ = gate.wait(timeout: .now() + 5)
+                return inner.layers
+            })
+    }
+
+    /// A stand-alone gated payload for store-level tests that need the
+    /// writer parked but have no body to keep alive.
+    func payload(bytes: Int, tokenOffset: Int = 4_096) -> SnapshotPayload {
+        let gate = self.gate
+        return SnapshotPayload(
+            tokenOffset: tokenOffset,
+            checkpointType: .leaf,
+            totalBytes: bytes,
+            materialize: {
+                _ = gate.wait(timeout: .now() + 5)
+                return [
+                    SnapshotPayload.LayerPayload(
+                        className: "KVCache",
+                        state: [
+                            SnapshotPayload.ArrayPayload(
+                                data: Data(repeating: 0xAB, count: bytes),
+                                dtype: "bfloat16", shape: [1, bytes])
+                        ],
+                        metaState: ["meta"],
+                        offset: tokenOffset)
+                ]
+            })
     }
 }
 

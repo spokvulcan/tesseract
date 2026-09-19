@@ -71,6 +71,173 @@ struct LeafCheckoutTests {
         await afterWrite.rewindIfNeeded()
     }
 
+    // MARK: - The bounded pending-payload wait (#523)
+
+    /// One conversation, one leaf, one full payload the SSD writer still
+    /// owes: the shape every second turn hits. `payload` gates the
+    /// writer's materialize step so the test owns when the body arrays
+    /// are released.
+    @MainActor
+    private struct PendingLeafScene {
+        let manager: PrefixCacheManager
+        let store: TieredSnapshotStore
+        let root: URL
+        let key: CachePartitionKey
+        let kv: KVCacheSimple
+        let tokens: [Int]
+        let context: PrefixCacheDiagnostics.Context
+        let materializing: BlockingMaterializer
+
+        func attempt() async -> LeafCheckout.Attempt {
+            await LeafCheckout.attempt(
+                resolved: .init(
+                    lookup: manager.lookup(tokens: tokens, partitionKey: key),
+                    hydratedFromSSD: false, hydrationSeconds: 0),
+                tokens: tokens, maximumAdvance: 10, identityKeySpace: true,
+                prefixCache: manager, context: context)
+        }
+
+        func progress() -> PendingPayloadProgress {
+            guard let snapshot = manager.lookup(tokens: tokens, partitionKey: key).snapshot
+            else { return .absent }
+            return manager.pendingFullPayloadProgress(
+                snapshot: snapshot, tokens: tokens, partitionKey: key)
+        }
+    }
+
+    private func makePendingLeafScene(
+        label: String, wait: Duration,
+        writerDrainPreludeForTesting: (@Sendable () async -> Void)? = nil
+    ) throws -> PendingLeafScene {
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: label, ramBudgetBytes: 1_000_000,
+            writerDrainPreludeForTesting: writerDrainPreludeForTesting,
+            evictionConfig: EvictionConfiguration(pendingFullPayloadWait: wait))
+        let key = CachePartitionKey(
+            modelID: label, kvBits: nil, kvGroupSize: 64,
+            modelFingerprint: String(repeating: "a", count: 64))
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
+        let previous = FinalGenerationCache([kv])
+        let body = try #require(previous.moveSnapshot(offset: 8))
+        let stored = Array(1...8)
+        let materializing = BlockingMaterializer()
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: stored, snapshot: body,
+                    storage: .ramAndSSD(
+                        materializing.gating(
+                            ServerCompletion.deferredPayload(for: body, extending: nil).payload)),
+                    partitionKey: key)))
+        return PendingLeafScene(
+            manager: manager, store: store, root: root, key: key, kv: kv,
+            tokens: stored + [9],
+            context: PrefixCacheDiagnostics.Context(
+                requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64),
+            materializing: materializing)
+    }
+
+    @Test func aPayloadThatMaterializesWithinTheBoundIsWaitedOutIntoAHandoff() async throws {
+        let scene = try makePendingLeafScene(label: "checkout-wait-hit", wait: .seconds(5))
+        defer { try? FileManager.default.removeItem(at: scene.root) }
+        #expect(await waitUntil { scene.progress() == .inProgress })
+
+        let release = Task {
+            try? await Task.sleep(for: .milliseconds(60))
+            scene.materializing.release()
+        }
+        let attempt = await scene.attempt()
+        _ = await release.value
+
+        let owner = try #require(attempt.owner, "the wait should have turned the copy into a move")
+        #expect(attempt.copyReason == nil)
+        #expect(attempt.pendingPayloadWaitSeconds > 0)
+        // The move is the real thing: the request holds the leaf's own
+        // cache objects, not a restored copy of them.
+        #expect(owner.cache[0] as AnyObject === scene.kv)
+        await owner.rewindIfNeeded()
+        await scene.store.flush()
+    }
+
+    @Test func aPayloadStillPendingAfterTheBoundCopiesAndReportsTheWaitedTime() async throws {
+        let bound = Duration.milliseconds(80)
+        let scene = try makePendingLeafScene(label: "checkout-wait-miss", wait: bound)
+        defer { try? FileManager.default.removeItem(at: scene.root) }
+        #expect(await waitUntil { scene.progress() == .inProgress })
+
+        let started = ContinuousClock.now
+        let attempt = await scene.attempt()
+        let elapsed = ContinuousClock.now - started
+
+        #expect(attempt.owner == nil)
+        #expect(attempt.copyReason == .pendingFullPayload)
+        #expect(attempt.pendingPayloadWaitSeconds >= 0.08)
+        // Bounded: the request gives up and copies rather than waiting
+        // out a writer that is taking its time.
+        #expect(elapsed < .seconds(3))
+        #expect(scene.progress() == .inProgress)
+
+        scene.materializing.release()
+        await scene.store.flush()
+    }
+
+    @Test func aQueuedPayloadIsNotWaitedForAndCopiesAtOnce() async throws {
+        let gate = DrainGate()
+        let scene = try makePendingLeafScene(
+            label: "checkout-wait-queued", wait: .seconds(5),
+            writerDrainPreludeForTesting: { await gate.wait() })
+        defer { try? FileManager.default.removeItem(at: scene.root) }
+        // The writer has not started on this payload, so it has no
+        // bounded completion time — waiting for it would be a guess.
+        #expect(scene.progress() == .queued)
+
+        let started = ContinuousClock.now
+        let attempt = await scene.attempt()
+        let elapsed = ContinuousClock.now - started
+
+        #expect(attempt.owner == nil)
+        #expect(attempt.copyReason == .pendingFullPayload)
+        #expect(attempt.pendingPayloadWaitSeconds == 0)
+        #expect(elapsed < .seconds(1))
+
+        await gate.open()
+        scene.materializing.release()
+        await scene.store.flush()
+    }
+
+    /// The waited time rides beside the copy reason on the events a
+    /// request's telemetry is read through — it is what the reason cost,
+    /// and the reason keeps its name.
+    @Test func theWaitedTimeRidesTheCopyReasonThroughRequestTelemetry() async throws {
+        let bound = Duration.milliseconds(80)
+        let scene = try makePendingLeafScene(label: "checkout-wait-telemetry", wait: bound)
+        defer { try? FileManager.default.removeItem(at: scene.root) }
+        #expect(await waitUntil { scene.progress() == .inProgress })
+        let attempt = await scene.attempt()
+        #expect(attempt.copyReason == .pendingFullPayload)
+
+        let lookup = PrefixCacheDiagnostics.LookupEvent(
+            reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf),
+            promptTokens: 9, sharedPrefixLength: 9, skippedPrefillTokens: 8,
+            newTokensToPrefill: 1, lookupMs: 0, restoreMs: 0, plannedCheckpoints: [],
+            restoreMode: "copy", copyReason: attempt.copyReason,
+            copyWaitSeconds: attempt.pendingPayloadWaitSeconds)
+        let lookupFields = Dictionary(uniqueKeysWithValues: lookup.fields)
+        #expect(lookupFields["copyReason"] == "pendingFullPayload")
+        #expect((Double(lookupFields["copyWaitMs"] ?? "") ?? 0) >= 80)
+
+        var report = LeafStorePhase.Report()
+        report.restoreCopyReason = attempt.copyReason
+        report.restoreCopyWaitSeconds = attempt.pendingPayloadWaitSeconds
+        let reportFields = Dictionary(uniqueKeysWithValues: report.fields)
+        #expect(reportFields["copyReason"] == "pendingFullPayload")
+        #expect((Double(reportFields["copyWaitMs"] ?? "") ?? 0) >= 80)
+
+        scene.materializing.release()
+        await scene.store.flush()
+    }
+
     @Test(arguments: [
         "system", "branch", "immutable", "rotating", "window", "untrimmable", "quantized", "image",
     ])

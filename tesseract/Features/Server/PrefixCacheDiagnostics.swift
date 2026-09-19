@@ -102,6 +102,11 @@ nonisolated enum PrefixCacheDiagnostics {
 
         let restoreMode: String?
         let copyReason: LeafStorePhase.Report.CopyReason?
+        /// Seconds the restore waited for a pending full payload to stop
+        /// aliasing the leaf's body before it settled (#523). Rendered
+        /// beside `copyReason` only when a wait actually happened, so the
+        /// pinned wire lines of every other restore stay byte-stable.
+        let copyWaitSeconds: TimeInterval
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -115,7 +120,8 @@ nonisolated enum PrefixCacheDiagnostics {
             hydratedFromSSD: Bool = false,
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
-            restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil
+            restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
+            copyWaitSeconds: TimeInterval = 0
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -152,6 +158,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.divergence = divergence
             self.restoreMode = restoreMode
             self.copyReason = copyReason
+            self.copyWaitSeconds = copyWaitSeconds
         }
 
         let eventName = "lookup"
@@ -173,6 +180,10 @@ nonisolated enum PrefixCacheDiagnostics {
             ]
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
+            if copyWaitSeconds > 0 {
+                fields.append(
+                    ("copyWaitMs", PrefixCacheDiagnostics.milliseconds(copyWaitSeconds)))
+            }
             if let divergence {
                 fields.append(("divergenceOffset", "\(divergence.offset)"))
                 fields.append(("abandonedCachedTokens", "\(divergence.abandonedTokens)"))

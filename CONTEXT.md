@@ -110,7 +110,8 @@ never by alias: the finished turn's live cache becomes the leaf as it is, and
 the request that extends that leaf takes the objects back as its live cache.
 Only at quiescent points; only for a leaf hit at its full offset that every
 layer can return from (**Leaf Rewind**); anything else restores by copy as
-before.
+before — except a check-out refused only for a pending full payload, which is
+worth the **Pending-Payload Wait** first.
 _Avoid_: copy-on-write restore (the alias ADR-0023 rejected — a handoff shares
 nothing between two owners); zero-copy (the SSD write still copies); cache
 sharing (one owner at a time, never two).
@@ -2217,14 +2218,38 @@ density flattens for backed bodies), parentRelativeFlops (one ingredient, not th
 concept).
 
 **Eviction Configuration**:
-The `(flopProfile, alpha)` pair the prefix cache scores eviction against — the single
-mutable cell owned by `PrefixCacheManager`, passed to the pure-function scorers by
-value. `flopProfile` is fixed from **Model Identity** at cache build; production
-`alpha` stays at the static LRU default (`0`), with **AlphaTuner** disabled
-pending [#504](https://github.com/spokvulcan/tesseract/issues/504).
+The load-bearing prefix-cache tuning the manager owns as one mutable cell and
+passes to the pure-function policies by value: `flopProfile` and `alpha` (what
+eviction scores against), the measured `estimates` that denominate **Recovery
+Cost** in seconds, and `pendingFullPayloadWait` (the bound on the
+pending-full-payload wait below). `flopProfile` is fixed from **Model Identity**
+at cache build; production `alpha` stays at the static LRU default (`0`), with
+**AlphaTuner** disabled pending
+[#504](https://github.com/spokvulcan/tesseract/issues/504);
+`pendingFullPayloadWait` defaults to 500 ms.
 _Avoid_: `EvictionPolicy.modelProfile` / `.alpha` (retired statics), eviction settings
-(not a user **Setting**), model profile as a global. ("Flop profile" = the immutable
-per-architecture cost model; the config is the pair whose `alpha` half is mutable.)
+(not a user **Setting**), model profile as a global, "the `(flopProfile, alpha)`
+pair" (it has outgrown the pair). ("Flop profile" = the immutable
+per-architecture cost model; `alpha` and the wait bound are the mutable halves.)
+
+**Pending-Payload Wait**:
+The bounded pause a request takes instead of copying a leaf it is about to own:
+when **Leaf Checkout** is refused only because the leaf's full payload still
+aliases the body, and the SSD writer reports that payload *in progress*, the
+request waits for the writer's materialize step to release the arrays and then
+re-attempts the check-out. Bounded by the **Eviction Configuration**'s
+`pendingFullPayloadWait` (500 ms); an `await`, never a blocking sleep, and never
+across a model verb. A payload still *queued* behind other writes has no bounded
+completion time and is not waited for — that request copies at once, and a
+refusal the writer has already let go of is re-attempted rather than copied
+on. The copy
+reason keeps its name (`pendingFullPayload`) and gains the waited time
+(`copyWaitMs` on `lookup` and `leafStore`, `restoreCopyWaitMs` on
+`requestMemory`).
+_Avoid_: retry/backoff (one bounded wait, then one re-attempt — not a retry
+loop); blocking the writer (the wait observes the writer, it never holds it);
+**Leaf Lease** deferral (the writer-side 500 ms recheck of ADR-0019, a different
+timer on the other side of the same exclusion).
 
 **Eviction Candidate Policy**:
 The pure selection of "who is evicted next", shared shape on both tiers: the RAM
