@@ -85,6 +85,10 @@ nonisolated extension LeafStorePhase {
         var handedOff = false
         var restoreMode: String?
         var restoreCopyReason: CopyReason?
+        /// Seconds the restore waited for a pending full payload before
+        /// falling back to a copy, or before the writer released the body
+        /// and the check-out succeeded (#523). `0` when nothing waited.
+        var restoreCopyWaitSeconds: TimeInterval = 0
         var copyReason: CopyReason?
         var mode = "unkeyed"
         var path: Path = .skipped
@@ -131,6 +135,9 @@ nonisolated extension LeafStorePhase {
             if let source { fields.append(("source", source.rawValue)) }
             if let copyReason = restoreCopyReason ?? copyReason {
                 fields.append(("copyReason", copyReason.rawValue))
+            }
+            if restoreCopyWaitSeconds > 0 {
+                fields.append(("copyWaitMs", ms(restoreCopyWaitSeconds)))
             }
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
             if let skipReason { fields.append(("skip", skipReason)) }

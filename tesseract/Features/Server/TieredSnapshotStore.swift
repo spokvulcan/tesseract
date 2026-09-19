@@ -461,6 +461,14 @@ final class TieredSnapshotStore {
         ssdStore?.isTransferringBase(snapshotID) ?? false
     }
 
+    /// Where the SSD writer holds a pending payload — `.inProgress`,
+    /// `.queued`, or `.absent`. `.absent` when SSD is disabled: with no
+    /// writer there is no payload to wait for. See
+    /// `SSDSnapshotStore.pendingPayloadProgress(snapshotID:)`.
+    func pendingPayloadProgress(snapshotID: String) -> PendingPayloadProgress {
+        ssdStore?.pendingPayloadProgress(snapshotID: snapshotID) ?? .absent
+    }
+
     // MARK: - Warm-start restore
 
     /// Reattach an SSD-resident committed ref to `node` (warm start).

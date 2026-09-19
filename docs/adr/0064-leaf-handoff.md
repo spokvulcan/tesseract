@@ -74,7 +74,9 @@ offset afterwards cannot bring them back; the vendor exposes
    sliding-window architectures; they restore by copy. Otherwise the hit
    restores by copy exactly as today, with the reason recorded:
    `checkpoint`, `immutableBody`, `pendingFullPayload`, `untrimmable`, `rotating`,
-   `quantized`, `imageKeySpace`.
+   `quantized`, `imageKeySpace`. (Since #523, `pendingFullPayload` is the one
+   refusal that clears itself, so it earns a bounded wait before the copy —
+   see the 2026-09-19 as-built note.)
 
 3. **Leaf Lease.** From check-out to check-in the tree may not drop the body,
    demote it, clear the RAM tier of it, promote it into an SSD write, or let
@@ -104,7 +106,8 @@ offset afterwards cannot bring them back; the vendor exposes
    conversation, or a degraded extension) still aliases the attention body,
    because copying it is what Deferred Payload Extraction exists to avoid;
    that is why decision 2 makes the next check-out copy until the writer has
-   materialized it.
+   materialized it — after a bounded wait for exactly that materialization
+   (#523; see the 2026-09-19 as-built note).
 
 6. **Accounting.** A leased leaf's bytes stay counted in the tree total;
    check-in reconciles the growth. The `ActiveInferenceReserve` capture-copy
@@ -182,6 +185,42 @@ remain unmeasured here. The owner constraint prohibits automatically repeating
 the prior crash workload on this 48 GiB Mac. The [evidence report](../../benchmarks/leaf-checkout/2026-09-12/README.md)
 records baseline comparisons and a bounded plan awaiting approval.
 `ActiveInferenceReserve` remains unchanged.
+
+### As built — 2026-09-19: the bounded pending-payload wait (#523)
+
+Decision 5's copy is now a last resort rather than a first response. When
+`claimLeaf` refuses only because the leaf's full payload still aliases the
+body, the request asks the SSD writer where that payload stands. The writer
+answers from its own queue lock — `inProgress` for the item it has popped and
+is materializing or writing, `queued` for one still behind others, `absent`
+otherwise — and the **Prefix Cache Manager** exposes that answer to the
+completion path, gated on the node's own probe so a `absent` answer means the
+next check-out is not refused on the writer's account at all.
+
+Only `inProgress` is waited for: the writer's materialize step releases the
+body arrays, and on a conversation's second turn that is milliseconds away. A
+`queued` payload has no bounded completion time, so that request copies at
+once, exactly as it did before. The bound is an **Eviction Configuration**
+value, `pendingFullPayloadWait`, defaulting to 500 ms; zero restores the
+pre-#523 behavior. The wait is an `await` that polls the writer's answer every
+5 ms — no Metal work runs, no thread is held, and no Model Session verb has
+touched the cache yet — and cancellation settles it as a copy immediately.
+After the wait the check-out is re-attempted once.
+
+The copy reason keeps its name. What the wait cost rides beside it:
+`copyWaitMs` on the `lookup` and `leafStore` events, `restoreCopyWaitMs` on the
+`restored` phase of `requestMemory`. A handoff that only happened because the
+request waited reports the same field, so the wait's payoff and its cost read
+off one trace.
+
+The wait sits at the check-out decision inside `makeHTTPPrefixCacheGeneration`,
+which the request has already entered the Model Session to reach: the decision
+depends on the keying phase's non-`Sendable` products, so it cannot be hoisted
+above `withSession` without a second session entry and a re-key. It therefore
+holds the session's serial-access mutex across the suspension. Under
+`arbiter.withExclusiveGPU(.llm)` the request already owns the GPU for the whole
+turn, so nothing else could enter the session meanwhile; the SSD writer the
+wait is watching runs on its own detached task and is not blocked by either.
 
 ### Amendments this ADR makes
 

@@ -46,6 +46,24 @@ import Foundation
 import MLX
 import MLXLMCommon
 
+// MARK: - Pending payload progress
+
+/// Where a pending **Deferred Payload Extraction** payload stands in the
+/// SSD writer's queue, as the writer itself answers it: `.inProgress` once
+/// the writer has popped the item and is materializing or writing it,
+/// `.queued` while it still waits behind other writes, `.absent` when the
+/// writer no longer holds it (materialized and committed, dropped, or never
+/// enqueued).
+///
+/// The distinction is load-bearing for **Leaf Handoff** (#523): a full
+/// payload aliases its body until the writer materializes it, so a check-out
+/// refused with `pendingFullPayload` is worth a bounded wait only while the
+/// writer is actually working on that payload. A payload still queued behind
+/// others has no bounded completion time and is not waited for.
+nonisolated enum PendingPayloadProgress: String, Sendable {
+    case inProgress, queued, absent
+}
+
 // MARK: - SSD decode errors
 
 /// Errors thrown by the store's Metal-affine `decodePlaceholderContainer`
@@ -739,6 +757,23 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// shield set — the same one the LRU cut already excludes.
     func isTransferringBase(_ snapshotID: String) -> Bool {
         ledger.isTransferringBase(snapshotID)
+    }
+
+    /// The writer's own answer for one pending payload: is it being
+    /// materialized/written right now, or is it still queued behind other
+    /// writes? Read under the queue lock, which is the same lock
+    /// `popNextPending` stamps `inFlightSnapshotID` under, so the answer is
+    /// the writer's state at the moment of the call and never a guess.
+    ///
+    /// The completion path consults this through the **Prefix Cache
+    /// Manager** when **Leaf Checkout** is refused for a pending full
+    /// payload (#523): `.inProgress` is worth a bounded wait, `.queued` is
+    /// not.
+    func pendingPayloadProgress(snapshotID: String) -> PendingPayloadProgress {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+        if inFlightSnapshotID == snapshotID { return .inProgress }
+        return pending.contains { $0.descriptor.snapshotID == snapshotID } ? .queued : .absent
     }
 
     // MARK: - Writer loop

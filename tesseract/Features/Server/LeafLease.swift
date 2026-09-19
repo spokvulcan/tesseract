@@ -30,6 +30,20 @@ nonisolated final class LeafBodyAccess: @unchecked Sendable {
 
     var lease: LeafLease? { lock.withLock { current } }
 
+    /// Whether a lease here would be refused for a reason only the SSD
+    /// writer can clear: a full payload that still aliases the body, or
+    /// the writer's own body read while it materializes one. False means
+    /// the next `begin(requireDetachedPayload: true)` is not refused on
+    /// the writer's account — which is what makes the bounded
+    /// pending-payload wait (#523) race-free rather than hopeful.
+    ///
+    /// Read only: unlike `begin` it prunes no probe and logs no refusal,
+    /// so the wait can poll it without stamping a `leafLeaseRefused`
+    /// event per poll.
+    var blockedByPendingFullPayload: Bool {
+        lock.withLock { readers > 0 || payloadMaterialized.contains { !$0() } }
+    }
+
     func begin(_ lease: LeafLease, requireDetachedPayload: Bool = false) -> Bool {
         lock.withLock {
             guard current == nil, readers == 0 else { return false }

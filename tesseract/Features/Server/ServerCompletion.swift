@@ -156,6 +156,9 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
     var checkout: LeafCheckout?
     var restoreMode = "cold"
     var copyReason: LeafStorePhase.Report.CopyReason?
+    /// Seconds the restore spent waiting for a pending full payload
+    /// before it settled (#523); `0` when it never waited.
+    var copyWaitSeconds: TimeInterval = 0
 
     init(_ cache: [any KVCache]) {
         self.cache = cache
@@ -1094,6 +1097,7 @@ nonisolated final class ServerCompletion {
             await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
             leafResult.report.restoreMode = mlxStart.finalCacheOwner.restoreMode
             leafResult.report.restoreCopyReason = mlxStart.finalCacheOwner.copyReason
+            leafResult.report.restoreCopyWaitSeconds = mlxStart.finalCacheOwner.copyWaitSeconds
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
@@ -1581,6 +1585,9 @@ nonisolated final class ServerCompletion {
             var checkedOutOwner: FinalGenerationCache?
             var restoreMode = "cold"
             var restoreCopyReason: LeafStorePhase.Report.CopyReason?
+            // The bounded wait for a pending full payload (#523): what the
+            // `pendingFullPayload` copy reason cost when it was waited out.
+            var restoreCopyWaitSeconds: TimeInterval = 0
             // The turn's maximum advance: judged at check-out, priced by
             // the Active-Inference Reserve at the leaf store (#522).
             let restoredOffset: Int
@@ -1604,6 +1611,7 @@ nonisolated final class ServerCompletion {
                         prefixCache: prefixCache, context: diagnosticsContext)
                     checkedOutOwner = attempt.owner
                     restoreCopyReason = attempt.copyReason
+                    restoreCopyWaitSeconds = attempt.pendingPayloadWaitSeconds
                     let restoredCache =
                         attempt.owner?.cache ?? Self.restoreCache(lookupResult, session: session)
                     cacheToUse = restoredCache
@@ -1616,6 +1624,8 @@ nonisolated final class ServerCompletion {
                         facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? []).merging([
                             "restoreMode": restoreMode,
                             "restoreCopyReason": restoreCopyReason?.rawValue ?? "none",
+                            "restoreCopyWaitMs": PrefixCacheDiagnostics.milliseconds(
+                                restoreCopyWaitSeconds),
                             "recurrentRewindStateBytes":
                                 "\(checkedOutOwner?.rewindStateBytes ?? 0)",
                             "leafLeaseActive": "\(checkedOutOwner != nil)",
@@ -1748,7 +1758,8 @@ nonisolated final class ServerCompletion {
                         hydratedFromSSD: resolved.hydratedFromSSD,
                         chainPrefixRestore: resolved.wasChainPrefixRestore,
                         divergence: lookupResult.divergence,
-                        restoreMode: restoreMode, copyReason: restoreCopyReason
+                        restoreMode: restoreMode, copyReason: restoreCopyReason,
+                        copyWaitSeconds: restoreCopyWaitSeconds
                     ))
 
                 // 8. Fold the plan's checkpoints plus the transient boundary
@@ -1997,6 +2008,7 @@ nonisolated final class ServerCompletion {
                 let finalCacheOwner = checkedOutOwner ?? FinalGenerationCache(liveCache)
                 finalCacheOwner.restoreMode = restoreMode
                 finalCacheOwner.copyReason = restoreCopyReason
+                finalCacheOwner.copyWaitSeconds = restoreCopyWaitSeconds
                 let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
                 memory.mark(
                     .prefilled,

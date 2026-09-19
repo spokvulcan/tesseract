@@ -137,6 +137,12 @@ struct RequestMemoryTelemetryTests {
         let restored = try #require(warm.first { $0.field("phase") == "restored" })
         #expect(restored.field("restoreMode") == "handoff")
         #expect(restored.field("leafLeaseActive") == "true")
+        // #523: what a `pendingFullPayload` copy cost rides beside the
+        // copy reason on every restore, so a turn that waited is
+        // distinguishable from one that never had to. This one took the
+        // leaf by move without waiting.
+        #expect(restored.field("restoreCopyReason") == "none")
+        #expect(restored.field("restoreCopyWaitMs") == "0.000")
         #expect(try #require(Int(restored.field("restoreSnapshotBytes") ?? "")) > 0)
         let captured = try #require(warm.first { $0.field("phase") == "preparingPayload" })
         #expect(captured.field("leafCaptureMode") == "handoff")

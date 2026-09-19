@@ -117,7 +117,10 @@ suffix slices, deep-copied and evaluated on the Metal-affine caller, so a
 pending suffix payload never references a body a generation may own. A full
 payload still aliases the attention body. Under ADR-0064, a pending full
 payload makes move checkout ineligible: production falls back to copy restore
-until materialization releases the body arrays. The tree-side gate below
+until materialization releases the body arrays — after a bounded wait for that
+materialization when the writer reports the payload in progress (#523; the
+writer's queue-lock answer separates *in progress* from *queued behind other
+writes*, and only the former is waited for). The tree-side gate below
 is a second exclusion boundary, not the production checkout eligibility
 decision: it can protect a queued payload with a lease but refuses lease
 acquisition while the writer is already reading.

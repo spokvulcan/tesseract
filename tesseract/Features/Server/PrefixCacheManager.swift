@@ -418,6 +418,35 @@ final class PrefixCacheManager {
         return .claimed(LeafCheckout.Claim(tree: tree, node: hit.node, lease: lease))
     }
 
+    /// The bound on the pending-full-payload wait (#523), an **Eviction
+    /// Configuration** value. Read by **Leaf Checkout** before it decides
+    /// whether a `pendingFullPayload` refusal is worth waiting out.
+    var pendingFullPayloadWait: Duration { evictionConfig.pendingFullPayloadWait }
+
+    /// Where the SSD writer stands on the full payload that is still
+    /// aliasing this leaf's body — the sole reason `claimLeaf` answered
+    /// `.copy(.pendingFullPayload)` and the only refusal that clears
+    /// itself. `.inProgress` means the writer has the payload in hand and
+    /// its materialize step will release the body arrays shortly, so a
+    /// bounded wait is worth it; `.queued` means it waits behind other
+    /// writes with no bounded completion time, so the request copies now.
+    /// `.absent` once nothing aliases the body any more — the caller
+    /// re-attempts the check-out and takes the leaf by move.
+    ///
+    /// Silent by construction: it prunes no probe and logs no refusal, so
+    /// the wait can poll it (**Leaf Handoff**, ADR-0064 decisions 2 and 5).
+    func pendingFullPayloadProgress(
+        snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey
+    ) -> PendingPayloadProgress {
+        guard let tree = store.tree(for: partitionKey),
+            let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
+            hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
+            hit.node.bodyAccess.blockedByPendingFullPayload,
+            let refID = hit.node.state.refID
+        else { return .absent }
+        return store.pendingPayloadProgress(snapshotID: refID)
+    }
+
     enum LookupReason: CustomStringConvertible, Sendable {
         case hit(snapshotOffset: Int, totalTokens: Int, type: HybridCacheSnapshot.CheckpointType)
         /// State 5 — body absent, committed SSD ref present. LLMActor

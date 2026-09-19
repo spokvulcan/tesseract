@@ -111,14 +111,26 @@ nonisolated struct EvictionConfiguration: Sendable {
     /// scorer and every test crosses the same global-free seam.
     var estimates: MeasuredSecondsEstimates
 
+    /// How long a request waits for a pending full payload to stop
+    /// aliasing the leaf's body before it gives up and restores by copy
+    /// (#523). A full payload is the only **Leaf Checkout** refusal that
+    /// clears on its own: the SSD writer's materialize step releases the
+    /// body arrays, and on the conversation's second turn that is usually
+    /// milliseconds away. Zero disables the wait — every
+    /// `pendingFullPayload` refusal copies immediately, the pre-#523
+    /// behavior.
+    var pendingFullPayloadWait: Duration
+
     init(
         flopProfile: ModelFlopProfile = .fallback,
         alpha: Double = 0.0,
-        estimates: MeasuredSecondsEstimates = MeasuredSecondsEstimates()
+        estimates: MeasuredSecondsEstimates = MeasuredSecondsEstimates(),
+        pendingFullPayloadWait: Duration = .milliseconds(500)
     ) {
         self.flopProfile = flopProfile
         self.alpha = alpha
         self.estimates = estimates
+        self.pendingFullPayloadWait = pendingFullPayloadWait
     }
 }
 
