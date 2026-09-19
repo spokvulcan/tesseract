@@ -135,7 +135,7 @@ buffers into a full-form payload. It neither dequantizes the entire descendant
 nor copies the resulting prefix a second time. SSD Stored Form (#531) and the
 #528 loaded gate remain pending; Warm Bodies stay opt-in.
 
-#528's [pre-registration](../../../benchmarks/warm-body-parity/2026-09-19/README.md)
+#528's [pre-registration](../../benchmarks/warm-body-parity/2026-09-19/README.md)
 fixes the fidelity, paired TTFT and memory reporting rules before any loaded
 run. Status: **not run; owner execution pending**. The default remains off.
 The tokenizer-only corpus gate is not warm-restore evidence; the owner campaign
