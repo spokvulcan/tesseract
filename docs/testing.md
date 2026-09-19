@@ -57,6 +57,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/PrefixCacheManagerTests \
   -only-testing:tesseractTests/PrefixCacheIntegrationTests \
   -only-testing:tesseractTests/CheckpointCaptureTests \
+  -only-testing:tesseractTests/PrefixViewModelSessionTests \
   -only-testing:tesseractTests/CacheKeySpaceTests \
   -only-testing:tesseractTests/PrefillPlannerTests \
   -only-testing:tesseractTests/LeafAdmissionBuilderTests \
@@ -64,6 +65,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ConversationRenderProbeParityTests \
   -only-testing:tesseractTests/ConversationRenderProbeParityRealTests \
   -only-testing:tesseractTests/SnapshotResolutionTests \
+  -only-testing:tesseractTests/SnapshotResolutionLadderTests \
   -only-testing:tesseractTests/SnapshotLedgerTests \
   -only-testing:tesseractTests/SnapshotStateTests \
   -only-testing:tesseractTests/LeafHomeGuaranteeTests \
@@ -123,6 +125,67 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -skipPackagePluginValidation \
   -only-testing:tesseractTests
 ```
+
+For a validation run that must not load models, prefix the command with
+`TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing
+test-host detector makes `DependencyContainer.setup()` return before app
+bootstrap, including Whisper, proofreader and memory-model prewarms. Use an
+explicit suite allowlist (the prefix-cache block above plus touched suites)
+after checking its fixtures, rather than the broad target. In particular,
+`MemoryBaselineTests`, `MemoryEvalTests`, `MemoryRecallEvalTests`,
+`MemoryEmbedderQualityTests`, and `RecallToolSmokeTests` intentionally load the
+installed embedder. The prefix block's `Real` suites load tokenizer files,
+not model weights. Leave corpus and allocation opt-ins unset.
+
+The planned Prefix-View Checkpoint slice (#524, ADR-0068) is covered at the
+existing seams. `CheckpointCaptureTests` checks synchronized whole-state-only
+capture. `PrefixViewModelSessionTests` compares exact cache bytes and generated
+tokens against an owned checkpoint for plain and quantized attention, with
+disjoint backing addresses; it also covers the prepared image-prefix capture
+entry. `SnapshotResolutionLadderTests` checks nearest/unleased selection,
+recency and all fall-through rungs. `TokenRadixTreeTests` checks byte accounting,
+eviction exclusion, lease/check-in and last-backer self-heal.
+`SnapshotResolutionTests` checks both Restore Pins, view-only panel bytes, and
+retirement after the final active request skips leaf storage. `LeafCheckoutTests`
+checks that views retain the `checkpoint` copy reason in image and quantized
+partitions.
+`ServerCompletionExtractSnapshotPayloadsTests` keeps views RAM-only;
+`ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
+canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`
+checks planned-view restore and pin cleanup through the toy Model Session.
+The transient-boundary slice (#525) extends those same suites.
+`thinkStrippingTurnRetainsOnlyWholeStateBoundaryBytes` checks request-memory
+telemetry for both an attention-only toy (0 bytes) and a hybrid toy with three
+float32 recurrent values (12 bytes), and requires canonical admission from the
+checked-in leaf with no older checkpoint available.
+`speculativeViewRestoresOrReprefillsAfterBackingLeafDeparture` compares the exact
+admitted path and KV rows for planned/transient views, a leased Backing Leaf,
+and a removed backer in both ordinary and RAM-only abandonment passes; it pins
+the fallback diagnostic's offsets and releases Restore Pins and the test lease.
+`imageBearingThinkStripUsesTheCheckedInBackingLeaf` covers image-run expansion,
+canonical admission, and the next turn's exact residual through the same toy
+Model Session. Run `RequestMemoryTelemetryTests`, `SpeculativeCanonicalPrefillTests`,
+`ServerCompletionKeyedSequencingTests`, `SpeculativePrefillPreemptionTests`,
+`ServerCompletionDrainTests`, `PreserveThinkingRenderTests`,
+`CanonicalEchoFidelityTests`, `CanonicalEchoFidelityCorpusTests`, and
+`LeafStoreFastPathTests` alongside the prefix suites above.
+These tests do not establish loaded-model parity or large-cache memory savings.
+
+The view SSD slice (#526) uses those same seams. Extraction tests fix the byte
+total and compare every retained array's physical address with both source
+snapshots; `PrefixViewModelSessionTests` also compares plain and quantized view
+payloads against owned checkpoints. `LeafLeaseTests` runs a pending view write
+while its Backing Leaf is checked out. `SSDWriteEagernessTests` checks delayed
+extraction, cold deferral, reuse promotion, type protection, and full-body SSD
+hydration after backer loss. `TokenRadixTreeTests` checks immediate self-heal
+after pending, committed, or explicitly deleted backing loss. The keyed toy
+sequencing test verifies a reused planned view reaches the durable manifest
+through the production successful-turn tail. Run `SSDWriteEagernessTests`,
+`SSDWriteEagernessPolicyTests`, the extension-admission suites, `SnapshotLedgerTests`,
+and the SSD store/manifest suites with the prefix-cache block.
+The eagerness suite also holds the Model Session at a toy forward to verify
+cancellation and replacement before enqueue preserve the view's SSD intent;
+a busy Storage Activity Gate must not delay a pressure-triggered write-through.
 
 ## Live detokenization and stream parity
 
@@ -802,17 +865,57 @@ owner approval of a bounded resource plan and a suitable environment.
 records each external finding's disposition, the final clean full-target run,
 and the explicitly isolated allocation run after these hardening changes.
 
-### Opt-in Warm Bodies (#527)
+### Opt-in Warm Bodies (#527, #529)
 
 `WarmBodyModelSessionTests` uses microscopic fp16/fp32 toy-model caches to check
 compression and restore token parity, backing-address isolation, and whole-state
 byte preservation. `WarmBodyDrainTests` checks compression before demotion,
 exemptions, quantized byte accounting, copy-only checkout, default-off behavior,
 and full-form SSD demotion/hydration with a temporary directory.
-`PrefixCacheDiagnosticsTests` pins `warmCompress` fields and lookup `source=warm`;
+Its opportunistic cases cover RAM above, at and below the ceiling fraction,
+default-off behavior, the default two-path Hot Leaf Set, a configured one-path
+limit, successful Lease check-ins, leased paths outside that set, and waiting
+for the occupied toy Model Session to quiesce. These tests observe the tree
+without refreshing the cold leaf's Budget Floor recency.
+`PrefixCacheDiagnosticsTests` pins `warmCompress` fields, including
+`source=opportunistic` versus `source=drain`, and lookup `source=warm`;
 the manager telemetry test checks the hot/warm byte totals used by the cache panel.
 
 Use `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests` for these app-host
 unit tests. `DependencyContainer.setup` skips service bootstrap in the test host,
 so tests cannot trigger model prewarms. Loaded-model parity/TTFT measurements and
 the #528 enablement gate remain owner work; the default flag is off.
+
+### Warm-backed Prefix-View Checkpoints (#530)
+
+`PrefixViewModelSessionTests.warmBackerMaterializesPrivateViewStateAndFullPayloadWithTokenParity`
+uses fp16/fp32 hybrid toy caches to check prefix-only attention values, shapes and offsets,
+the view's own recurrent state, deterministic token parity with an uncompressed
+backer, and physical-address isolation. It also checks full-form SSD payload
+pricing, shape and detached ownership; quantized Stored Form remains #531 work.
+`SnapshotResolutionLadderTests.viewPrefersNearestBackerThenFullFormBeforeRecency`
+checks nearest warm selection and the uncompressed tie-break.
+`SnapshotResolutionTests.storedAndTransientViewsChooseAndPinThePreferredWarmOrFullBacker`
+checks the manager's composition for stored and transient views, Restore Pins,
+unchanged Leaf Checkout refusal, and separate hot/warm/view-only byte totals.
+`PrefixCacheDiagnosticsTests.viewLookupReportsTheBackingLeafForm` checks both
+backer forms while keeping `source=view` and the `checkpoint` copy reason;
+the existing keyed Server Completion sequence verifies the emitted field.
+Use the same app-host guard and prefix suite allowlist above. No loaded-model
+work is part of this unit-test evidence.
+
+### Warm Body parity pre-registration (#528)
+
+The [pre-registered owner gate](../benchmarks/warm-body-parity/2026-09-19/README.md)
+defines fp16 restore-by-copy, warm-8 and experimental warm-4 arms, fidelity and
+paired TTFT thresholds, memory observations and a mandatory owner resource
+manifest. Results are **not run** and Warm Bodies remain default-off. No loaded
+workload is authorized on the preparation Mac.
+
+The existing `CanonicalEchoFidelityCorpusTests` reads tokenizer files and
+checks token paths. It does not restore a Warm Body or establish generated
+token parity. Existing loaded cache runners also do not implement the #528
+three-arm timing protocol. The pre-registration records this execution gap;
+owner-reviewed instrumentation and a frozen manifest are required before the
+loaded campaign. The prefix suites above remain the small-cache regression
+evidence; their success does not flip the flag or unblock #531.

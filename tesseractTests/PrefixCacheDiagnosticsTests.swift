@@ -6,6 +6,21 @@ import Testing
 
 struct PrefixCacheDiagnosticsTests {
 
+    @Test(arguments: [false, true])
+    func viewLookupReportsTheBackingLeafForm(warm: Bool) {
+        let event = PrefixCacheDiagnostics.LookupEvent(
+            reason: .hit(snapshotOffset: 4, totalTokens: 5, type: .branchPoint), promptTokens: 5,
+            sharedPrefixLength: 4, skippedPrefillTokens: 4, newTokensToPrefill: 1,
+            lookupMs: 0, restoreMs: 0, plannedCheckpoints: [],
+            restoreMode: "copy", copyReason: .checkpoint, backingLeafOffset: 8,
+            backingLeafWarm: warm)
+        let line = context.render(event)
+        #expect(line.contains("source=view backingLeafOffset=8"))
+        #expect(line.contains("backingLeafForm=\(warm ? "warm" : "ownedBody")"))
+        #expect(line.contains("copyReason=checkpoint"))
+        #expect(!line.contains("source=warm"))
+    }
+
     private let context = PrefixCacheDiagnostics.Context(
         requestID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
         modelID: "qwen3.5",
@@ -18,7 +33,7 @@ struct PrefixCacheDiagnosticsTests {
             offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002)
         #expect(
             context.render(compression).hasSuffix(
-                "offset=8 bytesBefore=4096 bytesAfter=1152 durationMs=2.000"))
+                "offset=8 bytesBefore=4096 bytesAfter=1152 durationMs=2.000 source=drain"))
         let lookup = PrefixCacheDiagnostics.LookupEvent(
             reason: .hit(snapshotOffset: 8, totalTokens: 9, type: .leaf), promptTokens: 9,
             sharedPrefixLength: 8, skippedPrefillTokens: 8, newTokensToPrefill: 1,
@@ -26,6 +41,16 @@ struct PrefixCacheDiagnosticsTests {
             restoreMode: "copy", copyReason: .warmBody, warmBody: true)
         #expect(context.render(lookup).contains("source=warm"))
         #expect(context.render(lookup).contains("copyReason=warmBody"))
+    }
+
+    @Test func warmCompressionAttributesOpportunisticWork() {
+        let event = WarmCompressEvent(
+            offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002,
+            source: .opportunistic)
+        #expect(context.render(event).hasSuffix("source=opportunistic"))
+        let drain = WarmCompressEvent(
+            offset: 8, bytesBefore: 4096, bytesAfter: 1152, seconds: 0.002)
+        #expect(context.render(drain).hasSuffix("source=drain"))
     }
 
     @Test func lookupHitRendersDeterministically() {

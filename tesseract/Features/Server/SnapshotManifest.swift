@@ -730,6 +730,11 @@ nonisolated struct SnapshotPayload: Sendable {
     /// payload's materializer must produce exactly this many.
     let totalBytes: Int
 
+    /// Whether unevaluated host extraction still retains tree body arrays.
+    /// View and extension payloads own detached device arrays even though
+    /// their host copy is pending. This is independent of the segment format.
+    let retainsBodyArrays: Bool
+
     private let source: LayerSource
 
     /// Per-layer payloads, in the same order as the vendor snapshot's
@@ -768,6 +773,7 @@ nonisolated struct SnapshotPayload: Sendable {
         self.checkpointType = checkpointType
         self.extending = extending
         self.totalBytes = Self.byteCount(of: layers)
+        self.retainsBodyArrays = false
         self.source = LayerSource(ready: layers)
     }
 
@@ -778,12 +784,14 @@ nonisolated struct SnapshotPayload: Sendable {
         checkpointType: HybridCacheSnapshot.CheckpointType,
         extending: SnapshotExtension? = nil,
         totalBytes: Int,
+        retainsBodyArrays: Bool = true,
         materialize: @escaping @Sendable () -> [LayerPayload]
     ) {
         self.tokenOffset = tokenOffset
         self.checkpointType = checkpointType
         self.extending = extending
         self.totalBytes = totalBytes
+        self.retainsBodyArrays = retainsBodyArrays && extending == nil
         self.source = LayerSource(deferred: materialize)
     }
 

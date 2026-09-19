@@ -9,6 +9,154 @@ import Testing
 
 @MainActor
 struct WarmBodyDrainTests {
+    @Test func pressureDrainKeepsCheckInOrderDespiteLookupRecency() async throws {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2], headDim: 64))
+        let body = try await sessions.withSession { session in
+            let cache = KVCacheSimple()
+            cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
+            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+        }
+        let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 1_000_000,
+            evictionConfig: EvictionConfiguration(warmCompressionEnabled: true),
+            modelSessions: sessions)
+        for path in [1, 2] {
+            manager.admit(
+                try #require(
+                    SnapshotAdmission.leaf(
+                        storedTokens: Array(repeating: path, count: 8), snapshot: body,
+                        storage: .ramOnly, partitionKey: key)))
+        }
+        // A read makes path 1 newer than path 2 for eviction scoring, but
+        // does not refresh its membership in the Hot Leaf Set.
+        _ = manager.lookup(tokens: Array(repeating: 1, count: 8), partitionKey: key)
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: Array(repeating: 3, count: 8), snapshot: body,
+                    storage: .ramOnly, partitionKey: key)))
+        manager.setMemoryBudget(12_188)
+        await manager.awaitPendingDrain()
+        for path in [1, 2, 3] {
+            let snapshot = try #require(
+                manager.lookup(
+                    tokens: Array(repeating: path, count: 8), partitionKey: key
+                ).snapshot)
+            #expect(snapshot.isWarm == (path == 1))
+        }
+        #expect(manager.cumulativeCounters.terminalEvictions == 0)
+    }
+
+    @Test(arguments: [1, 2])
+    func leaseCheckInQueuesCompressionUntilQuiescenceAndKeepsLeasedPathsHot(limit: Int) async throws
+    {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2], headDim: 64))
+        let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let tier = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 20_000,
+            evictionConfig: EvictionConfiguration(
+                warmCompressionEnabled: true, hotLeafPathLimit: limit,
+                opportunisticCompressionFraction: 0.5), tieredStore: tier, modelSessions: sessions)
+        let (leased, bodies) = try await sessions.withSession { _ in
+            let bodies = try (1...4).map { _ in
+                let cache = KVCacheSimple()
+                cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
+                let owner = FinalGenerationCache([cache])
+                return try #require(owner.moveSnapshot(offset: 8))
+            }
+            let leased = try await MainActor.run {
+                for index in 0..<4 {
+                    manager.restoreSnapshot(
+                        path: Array(repeating: index + 1, count: 8), snapshot: bodies[index],
+                        partitionKey: key, lastAccessTime: .now - .seconds(10 - index))
+                }
+                @MainActor func claim(_ index: Int) -> LeafCheckout.Claim? {
+                    let result = manager.claimLeaf(
+                        snapshot: bodies[index - 1], tokens: Array(repeating: index, count: 8),
+                        partitionKey: key, bodyCopyReason: nil,
+                        context: .init(
+                            requestID: UUID(), modelID: "toy", kvBits: nil, kvGroupSize: 64))
+                    if case .claimed(let claim) = result { return claim }
+                    return nil
+                }
+                let leased = try #require(claim(2))
+                for index in [3, 4] {
+                    let checkedOut = try #require(claim(index))
+                    #expect(
+                        checkedOut.returnBody(
+                            bodies[index - 1], tokens: Array(repeating: index, count: 8),
+                            reason: .checkIn))
+                }
+                return leased
+            }
+            // The occupied Model Session is the quiescence boundary. Queued
+            // maintenance cannot convert any body until this session returns.
+            await Task.yield()
+            await MainActor.run {
+                #expect(
+                    tier.getOrCreateTree(for: key).findBestSnapshot(
+                        tokens: Array(repeating: 1, count: 8), updateAccess: false)?.node.state
+                        .body?
+                        .isWarm == false)
+            }
+            return (leased, bodies)
+        }
+        await manager.awaitPendingDrain()
+        for path in [1, 3, 4] {
+            let snapshot = try #require(
+                manager.lookup(
+                    tokens: Array(repeating: path, count: 8), partitionKey: key
+                ).snapshot)
+            #expect(snapshot.isWarm == (path == 1 || (path == 3 && limit == 1)))
+        }
+        #expect(leased.node.leafLease?.id == leased.lease.id)
+        #expect(
+            leased.returnBody(bodies[1], tokens: Array(repeating: 2, count: 8), reason: .rewind))
+        #expect(
+            manager.lookup(tokens: Array(repeating: 2, count: 8), partitionKey: key)
+                .snapshot?.isWarm == false)
+        #expect(manager.cumulativeCounters.terminalEvictions == 0)
+    }
+
+    @Test(arguments: [14_336, 16_384, 20_000], [false, true])
+    func checkInCompressesOnlyTheColdPathAboveTheCeilingFraction(budget: Int, enabled: Bool)
+        async throws
+    {
+        let sessions = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2], headDim: 64))
+        let body = try await sessions.withSession { session in
+            let cache = KVCacheSimple()
+            cache.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
+            return try #require(session.captureSnapshot(cache: [cache], offset: 8, type: .leaf))
+        }
+        #expect(body.memoryBytes == 4096)
+        let key = CachePartitionKey(modelID: "toy", kvBits: nil, kvGroupSize: 64)
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: budget,
+            evictionConfig: EvictionConfiguration(warmCompressionEnabled: enabled),
+            modelSessions: sessions)
+        for path in [3, 1, 2] {
+            manager.admit(
+                try #require(
+                    SnapshotAdmission.leaf(
+                        storedTokens: Array(repeating: path, count: 8), snapshot: body,
+                        storage: .ramOnly, partitionKey: key)))
+        }
+        await manager.awaitPendingDrain()
+        for path in [1, 2, 3] {
+            let snapshot = try #require(
+                manager.lookup(
+                    tokens: Array(repeating: path, count: 8), partitionKey: key
+                ).snapshot)
+            #expect(snapshot.isWarm == (enabled && path == 3 && budget == 14_336))
+        }
+        #expect(manager.cumulativeCounters.terminalEvictions == 0)
+    }
+
     @Test(arguments: [false, true])
     func compressionPrecedesDemotionAndPreservesTheFloor(enabled: Bool) async throws {
         let sessions = ToyModelSessionProvider(

@@ -12,14 +12,15 @@ running generation's buffers.
 
 ## Prefix-View Checkpoints
 
-Planned non-system checkpoints and, in a later slice, transient Think-Strip
-Rewind and Speculative Canonical Prefill boundaries own whole-state layers,
+Planned non-system checkpoints and transient Think-Strip Rewind and
+Speculative Canonical Prefill boundaries own whole-state layers,
 metadata and an absolute token offset. Capture still synchronizes prefill
 before copying whole-state layers. System checkpoints keep owned full bodies:
 they are small, reused by every conversation, and must survive a leased leaf.
 
 Snapshot Resolution chooses a resident, unleased, full-body descendant in the
-same partition as the Backing Leaf, nearest by offset and then most recent.
+same partition as the Backing Leaf, nearest by offset, preferring an owned
+uncompressed body over a Warm Body at equal offset, then most recent.
 The pure resolution ladder chooses; the manager performs effects. Without a
 backer, resolution falls through to the view's committed Snapshot Ref, then a
 Chain-Prefix Restore point, then a shallower hit. No backer identity is stored
@@ -35,13 +36,13 @@ eviction candidates; Leaf Handoff, Leaf Lease and Leaf Rewind keep their meaning
 
 The tree never materializes a view when its last Backing Leaf departs. A view
 holds no attention bytes, so losing every backer is not an eviction: its
-durability is exactly its SSD admission (the ADR-0019 amendment accompanies
-#526). Without a resident or temporarily leased descendant, Snapshot Ref or
+durability is exactly its SSD admission (ADR-0019's #526 amendment).
+Without a resident or temporarily leased descendant, Snapshot Ref or
 chain-prefix point, the view becomes empty and the usual topology self-heal
 applies. A leased descendant preserves the checkpoint for return, but cannot
 serve a restore during the lease.
 
-In #526, end-of-turn SSD admission will slice the checked-in leaf at the
+#526's end-of-turn SSD admission slices the checked-in leaf at the
 extraction edge and detach every retained array on the Metal thread. The
 writer receives a full snapshot at the view offset, in the unchanged segment
 format. Such a payload never blocks the leaf's next checkout. Adaptive Write
@@ -53,9 +54,17 @@ Eagerness and the type-protected SSD cut keep their existing meanings.
 off until #528 passes. On drain, compression precedes Snapshot Demotion in
 the existing eviction-selection order. Leased leaves, the Budget Floor's
 most-recently-extended leaf, system bodies and already-quantized partitions
-are exempt. #529 adds opportunistic compression above a configured fraction
-of the ceiling, preserving the most recently checked-in leaves of up to two
-paths by default, at the Model Session's next quiescent point.
+are exempt. #529 adds the Hot Leaf Set to compression's exclusions, preserving
+the most recently checked-in leaves of up to two paths by default. A successful
+Leaf Admission or Lease check-in queues an opportunistic pass at the Model
+Session's next quiescent point. It compresses cold leaves while RAM remains
+above a configured fraction of the ceiling (initial opt-in default 0.75),
+without demotion. The path limit and fraction belong to Eviction Configuration;
+neither is a production tuning measurement. Advancing a path replaces its set
+entry, and lookups and rewinds do not change check-in order. Leases remain
+exempt independently of the path limit. The Budget Floor and ordinary demotion
+eligibility are unchanged. A pressure drain takes precedence over opportunistic
+work and keeps its existing compression-before-demotion guarantee.
 
 Compression uses the vendor's quantize-to-cache conversion into fresh arrays,
 8 bits, group size 64, affine by default. Whole-state layers stay unchanged;
@@ -82,12 +91,58 @@ Budget Floor and eviction score retain their meaning.
 
 ## As built
 
-#524 implements planned branch-point views in RAM in PR #539. #527 implements
-opt-in Warm Bodies, the compression-first drain, copy restore and telemetry.
-These independent slices carry this shared decision; neither enables the
-Compressed Warm Tier by default. Transient views (#525), view SSD admission
-(#526), the Hot Leaf Set (#529), warm-backed views (#530) and SSD Stored Form
-(#531) remain separate slices.
+#524 implements planned branch-point views in RAM, view restore and its
+telemetry. #525 makes last-user and last-message boundary helpers request-local
+views. For a structurally valid think-stripping stop turn, the quiescent fed
+path checks in a full RAM leaf before canonical reconstruction. This uses the
+existing handoff/copy eligibility and does not register a canonical Emitted Path
+or write an extra SSD payload. Resolution chooses a current Backing Leaf by the
+same pure ladder without inserting the transient view into the tree, then pins
+that leaf. Stop, tool, and abort speculative seeds retain only the view, never
+a backer identity.
+A leased or departed backer falls through to the existing boundary re-prefill;
+its diagnostic reports requested and restored offsets. The future key path must
+still match the view's original prefix, including image pseudo-token runs.
+
+Request memory telemetry reports the additional transient helpers' count and
+whole-state array bytes, deduplicated by capture offset. A planned checkpoint
+at the same offset is already accounted among planned checkpoints.
+#526 retains planned views' SSD intent until the turn's quiescent point after
+leaf check-in. The ordinary write-eagerness policy and type-protected cut run
+before buffer allocation; deferred views retain intent and can earn a write
+through later hits. Extraction claims the current backer while the Model
+Session copies and evaluates all payload arrays. The claim ends before enqueue;
+payload ownership is recorded separately from its full segment format. Async
+completion revalidates the view identity, and unbacked views self-heal when their
+last ref or chain-prefix point is lost. A committed view without a backer uses
+the existing SSD hydration rung to become an owned full body.
+Extraction reserves one view at a time and releases that reservation on every
+non-enqueued exit; replacement views cannot inherit the old body's attempt.
+Only hit-earned promotions receive deferred writer scheduling; pressure-triggered
+checkpoint writes retain the ordinary write-through class.
+#527 implements opt-in Warm Bodies, compression-first drain, copy restore and
+telemetry. #529 implements the Hot Leaf Set and opportunistic check-in pass.
+#530 lets stored and transient views resolve through Warm Bodies. The packed
+attention rows are sliced to the view offset before dequantization into private
+live buffers; the view's whole-state layers retain their own checkpoint state.
+Lookup telemetry keeps `source=view` and `copyReason=checkpoint`, and adds
+`backingLeafForm=warm|ownedBody`. Existing quantized-KV partitions continue to
+restore their owned quantized form without the Warm Body conversion.
+
+For a warm-backed view's SSD admission, metadata-only pricing uses the full
+live dtype's byte count, and extraction moves the already private materialized
+buffers into a full-form payload. It neither dequantizes the entire descendant
+nor copies the resulting prefix a second time. SSD Stored Form (#531) and the
+#528 loaded gate remain pending; Warm Bodies stay opt-in.
+
+#528's [pre-registration](../../benchmarks/warm-body-parity/2026-09-19/README.md)
+fixes the fidelity, paired TTFT and memory reporting rules before any loaded
+run. Status: **not run; owner execution pending**. The default remains off.
+The tokenizer-only corpus gate is not warm-restore evidence; the owner campaign
+must record actual loaded continuations and prove the intended restore form.
+The production conversion remains 8-bit only. A loaded three-arm runner and
+4-bit experiment instrumentation are still prerequisites to execution, not
+capabilities added by the pre-registration. No result or enablement is claimed.
 
 The opt-in drain queues one Model Session batch and rechecks body identity and
 Budget Floor membership when committing each conversion on MainActor. The
@@ -100,5 +155,6 @@ Session so the SSD writer still receives the normal full form. Adaptive Write
 Eagerness does not promote Warm Bodies in this slice.
 
 Loaded-model parity and performance evidence remain owner work. Validation
-uses the toy Model Session and tiny snapshot fixtures. The app's unit-test host
-skips service bootstrap so unit tests never start model prewarms.
+uses the toy Model Session and tiny snapshot fixtures. An app-host bootstrap
+that unexpectedly prewarmed Whisper during early tests was discovered and
+guarded with the existing test-host detector before further validation.

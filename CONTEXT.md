@@ -13,10 +13,37 @@ history.
 
 ### Prefix cache snapshot lifecycle
 
+**Prefix-View Checkpoint**:
+An interior snapshot owning only its whole-state layers, their metadata and its
+token offset; its attention rows come from a resident descendant leaf. It owns
+no attention bytes and is never an eviction victim. A transient boundary is a
+request-local Prefix-View Checkpoint: it is never admitted as a tree body and
+resolves its Backing Leaf only when consumed after the turn.
+_Avoid_: shared KV, copy-on-write checkpoint, partial leaf.
+
+**Backing Leaf**:
+The resident, unleased, full-body descendant chosen at **Snapshot Resolution**
+for one **Prefix-View Checkpoint** restore, including a **Warm Body**. It is never
+recorded on the view node.
+_Avoid_: parent body, permanent backer, shared owner.
+
+**View Materialization**:
+Producing live cache objects from a **Prefix-View Checkpoint** by copying its
+whole-state layers and the **Backing Leaf**'s leading attention rows, with warm
+attention dequantized after slicing. The result
+belongs to the request or an SSD payload, never to a new tree body.
+_Avoid_: view promotion, alias restore, materialization on backer departure.
+
 **Hot Leaf**:
 A movable fp16 leaf body eligible for **Leaf Handoff**: a leased leaf or the
-most recently checked-in leaf of a path. It is exempt from compression.
+most recently checked-in leaf of a path in the **Hot Leaf Set**. It is exempt from compression.
 _Avoid_: warm leaf, pinned leaf.
+
+**Hot Leaf Set**:
+The bounded set of paths whose most recently checked-in leaves stay exempt
+from compression, ordered by check-in rather than lookup recency. Leased
+leaves are exempt independently of this set and its path limit.
+_Avoid_: Budget Floor, hottest snapshots.
 
 **Warm Body**:
 A RAM-tier body with quantized attention layers, restored by copy through
@@ -58,10 +85,9 @@ task right before the file write. **Snapshot Admission**, eviction and **Snapsho
 Demotion** on the MainActor and the **Leaf Store** tail on the inference thread
 never pay the full-KV memcpy; a deferred payload keeps its arrays alive until the
 writer materializes it, releasing each layer as it is copied. A full payload's
-arrays are the body's own; an extension payload retains no body array — the
-extraction edge *detaches* every array it retains, the attention suffix slices
-and the whole-state (recurrent, rotating, chunked) layers alike, as deep copies
-evaluated there.
+arrays are the body's own except for a Prefix-View Checkpoint's full-format
+payload. View and extension payloads retain no body array: their attention
+prefix or suffix and their whole-state layers are independent evaluated copies.
 _Avoid_: lazy payload, async extraction, background asData, payload streaming.
 
 **Layer Kind**:
