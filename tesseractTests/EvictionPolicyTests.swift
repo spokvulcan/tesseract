@@ -621,6 +621,25 @@ struct EvictionPolicyTests {
         #expect(leaf.terminalRecoveryParentOffset == 4)
         #expect(sibling.terminalRecoveryParentOffset == 4)
 
+        // A leased sibling preserves the checkpoint for its return, so the
+        // remaining resident leaf is not what keeps the view alive.
+        let leased = TokenRadixTree()
+        let leasedView = leased.insertPath(tokens: Array(1...4))
+        _ = leased.storeSnapshot(try makePrefixView(offset: 4), on: leasedView)
+        let residentLeaf = leased.insertPath(tokens: Array(1...8))
+        _ = leased.storeSnapshot(makeUniformSnapshot(offset: 8, type: .leaf), on: residentLeaf)
+        let checkedOut = leased.insertPath(tokens: Array(1...4) + [60, 61, 62, 63])
+        _ = leased.storeSnapshot(makeUniformSnapshot(offset: 8, type: .leaf), on: checkedOut)
+        #expect(residentLeaf.terminalRecoveryParentOffset == 4)
+        #expect(
+            leased.beginLeafLease(
+                on: checkedOut,
+                context: .init(
+                    requestID: UUID(), modelID: defaultKey.modelID, kvBits: nil, kvGroupSize: 64))
+                != nil)
+        #expect(checkedOut.leafLease != nil)
+        #expect(residentLeaf.terminalRecoveryParentOffset == 4)
+
         // A view with its own committed Snapshot Ref survives its last backer.
         let other = TokenRadixTree()
         let backedView = other.insertPath(tokens: Array(1...4))

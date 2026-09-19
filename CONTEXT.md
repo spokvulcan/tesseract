@@ -25,8 +25,8 @@ _Avoid_: shared KV, copy-on-write checkpoint, partial leaf.
 The resident, unleased, full-body descendant chosen at **Snapshot Resolution**
 for one **Prefix-View Checkpoint** restore, including a **Warm Body**. It is never
 recorded on the view node. A hit served through the view credits the Backing
-Leaf's recency and hit count as a direct hit would, and while it is the view's
-only backer its terminal **Recovery Cost** spans the view's prefix as well
+Leaf's recency and hit count as a direct hit would, and while it alone keeps
+the view alive its terminal **Recovery Cost** spans the view's prefix as well
 (ADR-0068 amendment).
 _Avoid_: parent body, permanent backer, shared owner.
 

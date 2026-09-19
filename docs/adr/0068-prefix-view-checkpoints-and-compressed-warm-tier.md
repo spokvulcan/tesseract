@@ -174,11 +174,13 @@ Two rules now make the view's value count where it lives:
 - **Hit credit.** A hit served through a view, stored or transient, credits the
   chosen Backing Leaf exactly as a direct hit would: `lastAccessTime` and
   `hitCount`. Eviction recency and Adaptive Write Eagerness see the reuse.
-- **Recovery span.** While a leaf is a view's only resident, unleased full-body
-  descendant and the view holds neither a Snapshot Ref nor a chain-prefix point,
-  the leaf's terminal Recovery Cost spans from the view's parent, not from the
-  view: dropping the leaf loses the view's prefix too. A second backer, a
-  committed ref or a chain-prefix point bounds the span at the view as before.
+- **Recovery span.** While a leaf is the only descendant keeping a view alive
+  and the view holds neither a Snapshot Ref nor a chain-prefix point, the
+  leaf's terminal Recovery Cost spans from the view's parent, not from the
+  view: dropping the leaf loses the view's prefix too. Anything that lets the
+  view outlive the drop bounds the span at the view as before: another
+  resident full body, a leased leaf whose return preserves the checkpoint, a
+  committed ref or a chain-prefix point.
 
 Self-heal is unchanged. A genuinely tight budget can still take a view's last
 backer; the amendment only makes that leaf as expensive to lose as it is.

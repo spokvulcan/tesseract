@@ -1070,12 +1070,14 @@ final class PrefixCacheManager {
                         divergence: divergence
                     )
                 }
-                node.lastAccessTime = .now
+                node.recordHit()
+                let backingLeaf = node.backingLeaf
+                if let backingLeaf { tree.recordViewHit(backingLeaf: backingLeaf) }
                 let recordedHitID = self.store.noteLookupHit(on: node)
                 self.recordHitSavings(restoredOffset: body.tokenOffset)
                 if let pinRequestID {
                     self.pinRestorePath(node: node, requestID: pinRequestID)
-                    if let backingLeaf = node.backingLeaf {
+                    if let backingLeaf {
                         self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
                     }
                 }
@@ -1086,7 +1088,7 @@ final class PrefixCacheManager {
                     body: body, partitionKey: partitionKey,
                     promptTokenCount: promptTokenCount, treeMatchDepth: treeMatchDepth,
                     recordedHitID: recordedHitID, divergence: divergence,
-                    backingLeaf: node.backingLeaf?.state.body
+                    backingLeaf: backingLeaf?.state.body
                 )
             }
         }
