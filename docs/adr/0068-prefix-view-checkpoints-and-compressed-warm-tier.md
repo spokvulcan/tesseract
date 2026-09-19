@@ -107,6 +107,10 @@ payload ownership is recorded separately from its full segment format. Async
 completion revalidates the view identity, and unbacked views self-heal when their
 last ref or chain-prefix point is lost. A committed view without a backer uses
 the existing SSD hydration rung to become an owned full body.
+Extraction reserves one view at a time and releases that reservation on every
+non-enqueued exit; replacement views cannot inherit the old body's attempt.
+Only hit-earned promotions receive deferred writer scheduling; pressure-triggered
+checkpoint writes retain the ordinary write-through class.
 All Warm Body behavior (#527–#531) and its measurement gates remain pending.
 Loaded-model parity and performance evidence remain owner work. Validation
 uses the toy Model Session and tiny snapshot fixtures. An app-host bootstrap

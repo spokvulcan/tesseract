@@ -1238,6 +1238,11 @@ final class PrefixCacheManager {
             }
             let access = backer.bodyAccess
             guard access.beginRead(snapshotID: "view-\(view.bodyID)") else { continue }
+            let earnedPromotion =
+                adaptiveWriteEagerness
+                && node.hitCount >= SSDWriteEagernessPolicy.hitCountThreshold
+            // Reserve this view while extraction suspends. A failed or
+            // cancelled extraction has not consumed its enqueue attempt.
             node.ssdPromotionAttempted = true
             let path = tree.pathToNode(node)
             let payload: SnapshotPayload?
@@ -1253,13 +1258,17 @@ final class PrefixCacheManager {
             // Device copies are evaluated now. The pending writer owns only
             // detached arrays and cannot delay the leaf's next check-out.
             access.endRead()
+            if node.state.body?.bodyID == view.bodyID {
+                node.ssdPromotionAttempted = false
+            }
             guard let payload, !Task.isCancelled,
                 store.tree(for: partitionKey) === tree,
                 node.state.body?.bodyID == view.bodyID, node.state.ref == nil,
                 tree.allSnapshotNodes().contains(where: { $0 === node })
             else { continue }
             registerSSDPartitionIfNeeded(for: partitionKey)
-            if adaptiveWriteEagerness, node.hitCount >= SSDWriteEagernessPolicy.hitCountThreshold {
+            node.ssdPromotionAttempted = true
+            if earnedPromotion {
                 cumulativeCounters.eagernessPromotions += 1
                 PrefixCacheDiagnostics.logSystem(
                     PrefixCacheDiagnostics.SSDWritePromotedEvent(
@@ -1269,7 +1278,7 @@ final class PrefixCacheManager {
             store.admitSnapshot(
                 node: node, tree: tree, partitionKey: partitionKey, pathFromRoot: path,
                 snapshot: view, payload: payload, scoringConfig: evictionConfig,
-                deferrable: adaptiveWriteEagerness)
+                deferrable: earnedPromotion)
         }
     }
 
@@ -1307,10 +1316,14 @@ final class PrefixCacheManager {
         {
             let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
+            let replacingView =
+                entry.snapshot.isPrefixView
+                && node.state.body?.bodyID != entry.snapshot.bodyID
             guard tree.storeSnapshot(entry.snapshot, on: node) else {
                 if let lease = node.leafLease { leaseRefusals.append(lease.id) }
                 return nil
             }
+            if replacingView { node.ssdPromotionAttempted = false }
             if case .viewSSD = entry.storage {
                 node.viewSSDAdmissionRequested = true
             } else {

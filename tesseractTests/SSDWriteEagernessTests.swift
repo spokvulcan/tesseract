@@ -76,13 +76,16 @@ struct SSDWriteEagernessPolicyTests {
 @MainActor
 struct SSDWriteEagernessTests {
 
-    @Test(arguments: ["write", "defer", "systemProtected"])
+    @Test(arguments: ["write", "defer", "systemProtected", "pressure"])
     func viewAdmissionWaitsForCheckInAndUsesTheExistingEagernessPolicy(policy: String) async throws
     {
-        let eagerness = policy == "defer"
+        let eagerness = policy == "defer" || policy == "pressure"
+        let activityGate = StorageActivityGate()
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
-            label: "view-eagerness", ramBudgetBytes: 100_000_000,
+            label: "view-eagerness", ramBudgetBytes: policy == "pressure" ? 600 : 100_000_000,
             ssdBudgetBytes: policy == "systemProtected" ? 2200 : 10_000_000,
+            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) },
+            activityGate: activityGate,
             adaptiveWriteEagerness: eagerness)
         defer { try? FileManager.default.removeItem(at: root) }
         let provider = ToyModelSessionProvider(model: ToyLanguageModel(script: [0]))
@@ -131,11 +134,18 @@ struct SSDWriteEagernessTests {
                 SnapshotAdmission.leaf(
                     storedTokens: Array(1...8), snapshot: leaf, storage: .ramOnly, partitionKey: key
                 )))
+        if policy == "pressure" { activityGate.prefillDidBegin() }
         await manager.persistViewCheckpoints(partitionKey: key, sessions: provider)
-        await store.flush()
         let tree = try #require(store.tree(for: key))
         let branch = try #require(
             tree.findBestSnapshot(tokens: [1, 2, 3, 4, 99], updateAccess: false)?.node)
+        if policy == "pressure" {
+            #expect(
+                await waitUntil { branch.state.committed },
+                "write-through must bypass the busy Storage Activity Gate")
+            activityGate.prefillDidEnd()
+        }
+        await store.flush()
         if policy == "systemProtected" {
             #expect(branch.state.ref == nil)
             #expect(manager.cumulativeCounters.survivalGateSkips == 1)
@@ -145,7 +155,7 @@ struct SSDWriteEagernessTests {
                     == true)
             return
         }
-        if eagerness {
+        if policy == "defer" {
             #expect(branch.state.ref == nil)
             #expect(manager.cumulativeCounters.eagernessDeferrals == 1)
             for _ in 0..<SSDWriteEagernessPolicy.hitCountThreshold {
@@ -174,6 +184,73 @@ struct SSDWriteEagernessTests {
             try session.restore(owned).first!.state[0].asArray(Float.self)
         }
         #expect(rows == owned.layers[0].state[0].asArray(Float.self))
+    }
+
+    @Test(arguments: ["cancel", "replace"])
+    func viewExtractionThatNeverEnqueuesPreservesItsSSDIntent(interruption: String) async throws {
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "view-retry", ramBudgetBytes: 100_000_000)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let attention = KVCacheSimple()
+        attention.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention], offset: 4, type: .branchPoint, prefixView: true))
+        let replacement = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention], offset: 4, type: .branchPoint, prefixView: true))
+        func admission(_ snapshot: HybridCacheSnapshot) throws -> SnapshotAdmission {
+            try #require(
+                SnapshotAdmission.checkpoints(
+                    fullPromptTokens: Array(1...8),
+                    candidates: ServerCompletion.extractCheckpointAdmissionCandidates(
+                        [snapshot], ssdEnabled: true),
+                    partitionKey: key))
+        }
+        manager.admit(try admission(view))
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: Array(1...8),
+                    snapshot: PrefixCacheTestFixtures.makeUniformSnapshot(
+                        offset: 8, type: .leaf, length: 8),
+                    storage: .ramOnly, partitionKey: key)))
+        let tree = try #require(store.tree(for: key))
+        let leaf = try #require(
+            tree.findBestSnapshot(tokens: Array(1...8), updateAccess: false)?.node)
+        let branch = try #require(
+            tree.findBestSnapshot(tokens: [1, 2, 3, 4, 99], updateAccess: false)?.node)
+        let gate = ForwardGate(threshold: 0)
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0], onForward: gate.onForward))
+        let occupiedSession = Task {
+            try await provider.withSession { session in
+                let cache = try session.newCache(parameters: GenerateParameters())
+                _ = try session.prefill(
+                    text: .init(tokens: MLXArray([Int32(1)])), cache: cache,
+                    checkpoints: [:], checkpointBaseOffset: 0, prefillStepSize: 1,
+                    consumeAll: true, initialState: nil, evalPolicy: .pipelined)
+            }
+        }
+        await gate.reached()
+        let extracting = Task {
+            await manager.persistViewCheckpoints(partitionKey: key, sessions: provider)
+        }
+        let claimed = await waitUntil { leaf.bodyAccess.blockedByWriter }
+        if interruption == "cancel" {
+            extracting.cancel()
+        } else {
+            manager.admit(try admission(replacement))
+        }
+        gate.open()
+        try await occupiedSession.value
+        await extracting.value
+        #expect(claimed)
+        #expect(branch.state.ref == nil)
+        #expect(!leaf.bodyAccess.blockedByWriter)
+        await manager.persistViewCheckpoints(partitionKey: key, sessions: provider)
+        await store.flush()
+        #expect(await waitUntil { branch.state.committed })
     }
 
     private var key: CachePartitionKey {

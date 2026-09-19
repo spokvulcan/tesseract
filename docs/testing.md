@@ -181,6 +181,9 @@ sequencing test verifies a reused planned view reaches the durable manifest
 through the production successful-turn tail. Run `SSDWriteEagernessTests`,
 `SSDWriteEagernessPolicyTests`, the extension-admission suites, `SnapshotLedgerTests`,
 and the SSD store/manifest suites with the prefix-cache block.
+The eagerness suite also holds the Model Session at a toy forward to verify
+cancellation and replacement before enqueue preserve the view's SSD intent;
+a busy Storage Activity Gate must not delay a pressure-triggered write-through.
 
 ## Live detokenization and stream parity
 
