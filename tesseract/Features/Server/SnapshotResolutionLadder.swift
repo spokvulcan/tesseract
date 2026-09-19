@@ -23,6 +23,42 @@ import MLXLMCommon
 /// scope, off the MainActor, exactly where the hydration read runs (ADR-0001).
 nonisolated enum SnapshotResolutionLadder {
 
+    /// Descendant facts from one partition, never node or tensor references.
+    struct BackingLeafCandidate {
+        let offset: Int
+        let lastAccess: ContinuousClock.Instant
+        let residentFullBody: Bool
+        let leased: Bool
+        var warmBody: Bool = false
+    }
+
+    enum ViewOutcome: Equatable {
+        case backingLeaf(Int)
+        case ssd
+        case chainPrefix
+        case shallower
+    }
+
+    static func viewOutcome(
+        offset: Int, candidates: [BackingLeafCandidate], committedRef: Bool, chainPrefix: Bool
+    ) -> ViewOutcome {
+        let eligible = candidates.indices.filter {
+            candidates[$0].offset > offset && candidates[$0].residentFullBody
+                && !candidates[$0].leased
+        }
+        if let nearest = eligible.min(by: {
+            let lhs = candidates[$0], rhs = candidates[$1]
+            if lhs.offset != rhs.offset { return lhs.offset < rhs.offset }
+            if lhs.warmBody != rhs.warmBody { return !lhs.warmBody }
+            return lhs.lastAccess > rhs.lastAccess
+        }) {
+            return .backingLeaf(nearest)
+        }
+        if committedRef { return .ssd }
+        if chainPrefix { return .chainPrefix }
+        return .shallower
+    }
+
     // MARK: - Step A: the Hydration Gate
 
     /// The **Hydration Gate** outcome (PRD #149 item 7) once the manager has
@@ -184,7 +220,8 @@ nonisolated enum SnapshotResolutionLadder {
         promptTokenCount: Int,
         treeMatchDepth: Int,
         recordedHitID: String?,
-        divergence: PrefixDivergenceProbe?
+        divergence: PrefixDivergenceProbe?,
+        backingLeaf: HybridCacheSnapshot? = nil
     ) -> PrefixCacheManager.Resolved {
         PrefixCacheManager.Resolved(
             lookup: PrefixCacheManager.LookupResult(
@@ -198,7 +235,8 @@ nonisolated enum SnapshotResolutionLadder {
                     type: body.checkpointType
                 ),
                 recordedHitSnapshotID: recordedHitID,
-                divergence: divergence
+                divergence: divergence,
+                backingLeaf: backingLeaf
             ),
             hydratedFromSSD: false,
             hydrationSeconds: 0

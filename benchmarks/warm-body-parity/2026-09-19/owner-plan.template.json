@@ -1,0 +1,38 @@
+{
+  "status": "NOT_APPROVED_NOT_RUN",
+  "ownerApproval": null,
+  "preRegistrationCommit": null,
+  "appCommit": null,
+  "vendorCommit": null,
+  "instrumentationCommit": null,
+  "releaseBinarySHA256": null,
+  "host": {"identifier": null, "ramBytes": null, "osVersion": null, "mlxVersion": null},
+  "model": {"manifestSHA256": null, "tokenizerSHA256": null, "templateSHA256": null},
+  "corpus": {"manifestSHA256": null, "orderedCaseIDs": [], "unsupportedCases": []},
+  "settings": {
+    "liveKVDtype": "float16",
+    "warmBits": [8, 4],
+    "groupSize": 64,
+    "mode": "affine",
+    "temperature": 0,
+    "speculationPolicy": null,
+    "seed": null,
+    "maximumPromptTokens": null,
+    "maximumOutputTokens": null
+  },
+  "resources": {
+    "minimumInitialAvailableBytes": null,
+    "expectedModelAndCachePeakBytes": null,
+    "footprintStopBytes": null,
+    "minimumAvailableStopBytes": null,
+    "swapGrowthStopBytes": null,
+    "pressureStopLevel": null,
+    "maximumRequestSeconds": null,
+    "maximumCampaignSeconds": null,
+    "sampleIntervalMilliseconds": 250,
+    "cancelGraceSeconds": 5
+  },
+  "cases": [],
+  "orders": [["fp16", "8", "4"], ["fp16", "4", "8"], ["8", "fp16", "4"], ["8", "4", "fp16"], ["4", "fp16", "8"], ["4", "8", "fp16"]],
+  "privateOutputDirectory": null
+}

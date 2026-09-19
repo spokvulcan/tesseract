@@ -25,7 +25,7 @@ from capture_memory_replay import assistant_message
 
 GIB = 1 << 30
 EVENTS = {"requestMemory", "allocationMemory", "leafStore", "lookup",
-          "ssdPayloadMaterialize", "leafLeaseBegin", "leafLeaseEnd", "leafRewind",
+          "ssdPayloadMaterialize", "ssdPayloadPrepare", "leafLeaseBegin", "leafLeaseEnd", "leafRewind",
           "ssdAdmit", "storageRefCommit", "storageRefDropCallback", "leafExtensionCommit"}
 
 

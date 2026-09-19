@@ -28,7 +28,7 @@ enum EvictionCandidatePolicy {
     /// to demote, drop, and account for it — the owning partition and
     /// tree, the node itself, which ladder strategy named it, and the
     /// utility score when scoring (not the fallback) decided.
-    struct Candidate {
+    struct Candidate: Sendable {
         let partitionKey: CachePartitionKey
         let tree: TokenRadixTree
         let node: RadixTreeNode
@@ -73,7 +73,9 @@ enum EvictionCandidatePolicy {
         config: EvictionConfiguration
     ) -> Candidate? {
         func unprotected(_ nodes: [RadixTreeNode]) -> [RadixTreeNode] {
-            nodes.filter { !protected.contains(ObjectIdentifier($0)) }
+            nodes.filter {
+                $0.state.body?.isPrefixView != true && !protected.contains(ObjectIdentifier($0))
+            }
         }
 
         // 1. Preferred utility — writing-partition-first.

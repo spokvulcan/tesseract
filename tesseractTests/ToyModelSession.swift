@@ -26,6 +26,8 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
     let capacityRecords = ToyCacheCapacityRecords()
     let kvHeads: [Int]
     let headDim: Int
+    /// Optional microscopic whole-state layer for hybrid snapshot accounting.
+    let recurrentElements: Int
     let vocabSize: Int
     let script: [Int]
     let eosTokenId: Int
@@ -44,6 +46,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         vocabSize: Int = ToyVocabulary.size,
         layers: Int = 2,
         headDim: Int = 4,
+        recurrentElements: Int = 0,
         onForward: (@Sendable (Int) -> Void)? = nil
     ) {
         self.onForward = onForward
@@ -57,6 +60,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
         self.headDim = headDim
+        self.recurrentElements = recurrentElements
         super.init()
     }
 
@@ -70,6 +74,7 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         vocabSize: Int = ToyVocabulary.size,
         layers: Int = 2,
         headDim: Int = 4,
+        recurrentElements: Int = 0,
         onForward: (@Sendable (Int) -> Void)? = nil
     ) {
         self.onForward = onForward
@@ -79,7 +84,18 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
         self.vocabSize = vocabSize
         self.kvHeads = Array(repeating: 1, count: layers)
         self.headDim = headDim
+        self.recurrentElements = recurrentElements
         super.init()
+    }
+
+    func newCache(parameters: GenerateParameters?) throws -> [any KVCache] {
+        var cache = try kvHeads.map { _ in try makeAttentionKVCache(parameters: parameters) }
+        if recurrentElements > 0 {
+            let recurrent = MambaCache()
+            recurrent.state = [MLXArray.zeros([recurrentElements])]
+            cache.append(recurrent)
+        }
+        return cache
     }
 
     func predictedToken(at position: Int) -> Int {
@@ -110,7 +126,13 @@ nonisolated final class ToyLanguageModel: Module, LanguageModel, KVCacheDimensio
             let content = batched.asType(.float32).reshaped([1, 1, tokenCount, 1])
             let keysValues = broadcast(content, to: [1, 1, tokenCount, headDim])
             for layer in cache {
-                if let quantized = layer as? any QuantizedKVCacheProtocol {
+                if let recurrent = layer as? MambaCache {
+                    let count = recurrent.state.first?.size ?? recurrentElements
+                    recurrent.state = [
+                        MLXArray(Array(repeating: Float(offset + tokenCount), count: count))
+                    ]
+                    recurrent.offset = offset + tokenCount
+                } else if let quantized = layer as? any QuantizedKVCacheProtocol {
                     _ = quantized.updateQuantized(keys: keysValues, values: keysValues)
                 } else {
                     _ = layer.update(keys: keysValues, values: keysValues)
@@ -514,6 +536,17 @@ nonisolated struct RecordingModelSession: ModelSession {
     func restore(_ snapshot: HybridCacheSnapshot) throws -> [any KVCache] {
         recorder.record(.restore)
         return try base.restore(snapshot)
+    }
+
+    func restore(
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
+    ) throws -> [any KVCache] {
+        recorder.record(.restore)
+        return try base.restore(snapshot, backingLeaf: backingLeaf)
+    }
+
+    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot {
+        try base.compress(snapshot)
     }
 
     func prefill(

@@ -107,6 +107,9 @@ nonisolated enum PrefixCacheDiagnostics {
         /// beside `copyReason` only when a wait actually happened, so the
         /// pinned wire lines of every other restore stay byte-stable.
         let copyWaitSeconds: TimeInterval
+        let backingLeafOffset: Int?
+        let warmBody: Bool
+        let backingLeafWarm: Bool
 
         init(
             reason: PrefixCacheManager.LookupReason,
@@ -121,7 +124,10 @@ nonisolated enum PrefixCacheDiagnostics {
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
             restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
-            copyWaitSeconds: TimeInterval = 0
+            copyWaitSeconds: TimeInterval = 0,
+            backingLeafOffset: Int? = nil,
+            warmBody: Bool = false,
+            backingLeafWarm: Bool = false
         ) {
             switch reason {
             case .hit(let snapshotOffset, _, let type):
@@ -159,6 +165,9 @@ nonisolated enum PrefixCacheDiagnostics {
             self.restoreMode = restoreMode
             self.copyReason = copyReason
             self.copyWaitSeconds = copyWaitSeconds
+            self.backingLeafOffset = backingLeafOffset
+            self.warmBody = warmBody
+            self.backingLeafWarm = backingLeafWarm
         }
 
         let eventName = "lookup"
@@ -178,7 +187,13 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("hydratedFromSSD", hydratedFromSSD ? "true" : "false"),
                 ("chainPrefixRestore", chainPrefixRestore ? "true" : "false"),
             ]
+            if warmBody { fields.append(("source", "warm")) }
             if let restoreMode { fields.append(("restoreMode", restoreMode)) }
+            if let backingLeafOffset {
+                fields.append(("source", "view"))
+                fields.append(("backingLeafOffset", "\(backingLeafOffset)"))
+                fields.append(("backingLeafForm", backingLeafWarm ? "warm" : "ownedBody"))
+            }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
             if copyWaitSeconds > 0 {
                 fields.append(
@@ -199,6 +214,7 @@ nonisolated enum PrefixCacheDiagnostics {
         let bytes: Int
         let duringPrefill: Bool
         let source: String
+        var checkpointKind = "ownedBody"
 
         let eventName = "capture"
 
@@ -209,6 +225,7 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("bytes", "\(bytes)"),
                 ("duringPrefill", "\(duringPrefill)"),
                 ("source", source),
+                ("checkpointKind", checkpointKind),
             ]
         }
     }
@@ -445,6 +462,8 @@ nonisolated enum PrefixCacheDiagnostics {
         /// terminal `accepted` event only — reject outcomes wrote
         /// nothing, so they carry no class.
         var writeClass: String?
+        var writeSeconds: TimeInterval?
+        var enqueueToCommitSeconds: TimeInterval?
 
         let eventName = "ssdAdmit"
 
@@ -459,6 +478,16 @@ nonisolated enum PrefixCacheDiagnostics {
             }
             if let writeClass {
                 fields.append(("writeClass", writeClass))
+            }
+            if let writeSeconds {
+                fields.append(("writeMs", PrefixCacheDiagnostics.milliseconds(writeSeconds)))
+            }
+            if let enqueueToCommitSeconds {
+                fields.append(
+                    (
+                        "enqueueToCommitMs",
+                        PrefixCacheDiagnostics.milliseconds(enqueueToCommitSeconds)
+                    ))
             }
             return fields
         }
@@ -795,17 +824,15 @@ nonisolated enum PrefixCacheDiagnostics {
         }
     }
 
-    /// One **Deferred Payload Extraction** settled: the SSD writer copied
-    /// a payload's array bytes to the host right before its file write —
-    /// the full-KV memcpy that used to run on the MainActor for a
-    /// demotion and on the inference thread for a leaf. `durationMs` is
-    /// the copy alone, not the write.
-    struct SSDPayloadMaterializedEvent: Payload {
+    /// Preparation of a deferred payload's borrowed Data views. Duration
+    /// excludes file I/O; the accepted SSD admission reports writeMs and
+    /// enqueueToCommitMs. Preparing views does not release their array owners.
+    struct SSDPayloadPreparedEvent: Payload {
         let id: String
         let bytes: Int
         let durationSeconds: TimeInterval
 
-        let eventName = "ssdPayloadMaterialize"
+        let eventName = "ssdPayloadPrepare"
 
         var fields: [(String, String)] {
             [
@@ -1075,5 +1102,26 @@ nonisolated enum PrefixCacheDiagnostics {
             return "\"\(escaped)\""
         }
         return value
+    }
+}
+
+nonisolated struct WarmCompressEvent: PrefixCacheDiagnostics.Payload {
+    enum Source: String, Sendable {
+        case drain
+        case opportunistic
+    }
+    let offset: Int
+    let bytesBefore: Int
+    let bytesAfter: Int
+    let seconds: TimeInterval
+    var source: Source = .drain
+    let eventName = "warmCompress"
+    var fields: [(String, String)] {
+        [
+            ("offset", "\(offset)"), ("bytesBefore", "\(bytesBefore)"),
+            ("bytesAfter", "\(bytesAfter)"),
+            ("durationMs", PrefixCacheDiagnostics.milliseconds(seconds)),
+            ("source", source.rawValue),
+        ]
     }
 }

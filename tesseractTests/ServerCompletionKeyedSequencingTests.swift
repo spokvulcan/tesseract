@@ -85,6 +85,154 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
 @Suite struct ServerCompletionKeyedSequencingTests {
 
     @MainActor
+    @Test(arguments: [0, 3])
+    func thinkStrippingTurnRetainsOnlyWholeStateBoundaryBytes(recurrentElements: Int) async throws {
+        var tokenizer = FakeChatMLTokenizer()
+        tokenizer.stripsThinkBeforeLastUser = true
+        let conversation = Self.conversation([.init(role: .user, content: "question")])
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil, additionalContext: nil)
+        let modelID = "boundary-memory-\(UUID())"
+        let telemetry = TelemetryCapture(modelID: modelID)
+        defer { telemetry.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(
+                    script: prompt + Array("thought</think>ok".utf8).map(Int.init),
+                    recurrentElements: recurrentElements),
+                tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: modelID)
+        let handle = try await fixture.start(
+            conversation: conversation, parameters: Self.parameters())
+        #expect(try await collectServerText(handle).text == "ok")
+        let events = telemetry.drain()
+        let prefilled = try #require(
+            events.first {
+                $0.eventName == "requestMemory" && $0.field("phase") == "prefilled"
+                    && $0.field("boundaryCheckpointArrayBytes") != nil
+            })
+        #expect(prefilled.field("boundaryCheckpointCount") == "1")
+        // The hybrid toy owns three float32 recurrent values (12 bytes);
+        // the attention-only toy owns none. Neither boundary owns KV rows.
+        #expect(
+            prefilled.field("boundaryCheckpointArrayBytes") == (recurrentElements == 0 ? "0" : "12")
+        )
+        // No system/older checkpoint exists: this turn's checked-in leaf
+        // must back the transient view to build the canonical leaf.
+        let canonical = try #require(
+            events.last {
+                $0.eventName == "capture" && $0.field("source") == "canonicalLeaf"
+            })
+        #expect(canonical.intField("offset") ?? 0 > 0)
+        #expect(events.last { $0.eventName == "leafStore" }?.field("path") == "boundary")
+        await fixture.drain()
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func plannedBranchViewReportsCaptureAndLookupThroughTheModelSession(ssdEnabled: Bool)
+        async throws
+    {
+        let tokenizer = ToySequencingTokenizer()
+        let completions = ToyCompletionQueue(
+            generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
+            eosTokenId: ToySequencingTokenizer.eotTokenId)
+        let modelID = "view-sequencing-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "view-ssd-turn-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(completions: completions), tokenizer: tokenizer),
+            fingerprint: ssdEnabled ? String(repeating: "d", count: 64) : nil,
+            ssdConfig: ssdEnabled
+                ? .init(
+                    enabled: true, rootURL: root, budgetBytes: 1_000_000, maxPendingBytes: 1_000_000
+                ) : nil,
+            modelID: modelID)
+        for text in ["abcd-one", "abcd-two"] {
+            completions.enqueue(Array("ok".utf8).map(Int.init))
+            let handle = try await fixture.start(
+                conversation: Self.conversation([.init(role: .user, content: text)]),
+                parameters: Self.parameters())
+            #expect(try await collectServerText(handle).text == "ok")
+        }
+        let events = capture.drain()
+        let branch = try #require(
+            events.last {
+                $0.eventName == "capture" && $0.field("checkpointType") == "branchPoint"
+            })
+        #expect(branch.field("checkpointKind") == "prefixView")
+        #expect(branch.field("bytes") == "0")
+        completions.enqueue(Array("ok".utf8).map(Int.init))
+        let fork = try await fixture.start(
+            conversation: Self.conversation([.init(role: .user, content: "abcd-three")]),
+            parameters: Self.parameters())
+        #expect(try await collectServerText(fork).text == "ok")
+        let lookup = try #require(capture.drain().first { $0.eventName == "lookup" })
+        #expect(lookup.field("source") == "view")
+        #expect(lookup.field("backingLeafForm") == "ownedBody")
+        #expect(lookup.field("restoreMode") == "copy")
+        #expect(lookup.field("copyReason") == "checkpoint")
+        let backingOffset = try #require(lookup.field("backingLeafOffset").flatMap(Int.init))
+        #expect(backingOffset > fork.cachedTokenCount)
+        if ssdEnabled {
+            // The second fork proves reuse. Its successful-turn tail must
+            // fulfil the deferred view intent after checking in the leaf.
+            completions.enqueue(Array("ok".utf8).map(Int.init))
+            let next = try await fixture.start(
+                conversation: Self.conversation([.init(role: .user, content: "abcd-four")]),
+                parameters: Self.parameters())
+            #expect(try await collectServerText(next).text == "ok")
+            await fixture.flush()
+            let manifest = try JSONDecoder().decode(
+                SnapshotManifest.self,
+                from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+            #expect(manifest.snapshots.values.contains { $0.checkpointType == "branchPoint" })
+        }
+        await fixture.drain()
+    }
+
+    @MainActor
+    @Test func canonicalFallbackRestoresAPlannedBranchView() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let completions = ToyCompletionQueue(
+            generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
+            eosTokenId: ToySequencingTokenizer.eotTokenId)
+        let modelID = "canonical-view-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(completions: completions), tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: modelID)
+        let preserving = TemplateRenderContext(
+            kwargs: [.preserveThinking: true], preservesThinking: true)
+        // Seed a full leaf on the preserving fast path. Assistant-only
+        // histories have no transient last-user boundary, so canonical
+        // reconstruction must resolve the planned branch checkpoint.
+        for (index, text) in ["abcd-one", "abcd-two", "abcd-three"].enumerated() {
+            completions.enqueue(Array("</think>ok".utf8).map(Int.init))
+            _ = capture.drain()
+            let handle = try await fixture.start(
+                conversation: Self.conversation([.assistant(content: text)]),
+                parameters: Self.parameters(),
+                renderContext: index == 0 ? preserving : .canonical)
+            #expect(try await collectServerText(handle).text == "ok")
+            let events = capture.drain()
+            if index == 2 {
+                #expect(events.first { $0.eventName == "lookup" }?.field("source") == "view")
+                #expect(events.last { $0.eventName == "leafStore" }?.field("path") == "boundary")
+                #expect(events.last { $0.eventName == "leafStore" }?.field("source") == "boundary")
+                #expect(!events.contains { $0.field("reason") == "prefill-threw" })
+            }
+        }
+        await fixture.drain()
+    }
+
+    @MainActor
     @Test(arguments: [nil, 4] as [Int?])
     func creationAndRestoreReservePromptRowsWithoutReservingOutput(kvBits: Int?) async throws {
         let tokenizer = ToySequencingTokenizer()

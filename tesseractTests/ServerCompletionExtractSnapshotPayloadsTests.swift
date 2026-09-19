@@ -21,6 +21,137 @@ import Testing
 
 struct ServerCompletionExtractSnapshotPayloadsTests {
 
+    @Test func viewPayloadDetachesEveryArrayAndDefersTheHostCopy() async throws {
+        let attention = KVCacheSimple()
+        attention.state = [
+            MLXArray((0..<512).map(Float.init)).reshaped([1, 1, 8, 64]),
+            MLXArray.ones([1, 1, 8, 64]),
+        ]
+        let recurrent = MambaCache()
+        recurrent.state = [MLXArray([Float(42), 43, 44])]
+        attention.trim(4)
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention, recurrent], offset: 4, type: .branchPoint, prefixView: true))
+        attention.state = [
+            MLXArray((0..<512).map(Float.init)).reshaped([1, 1, 8, 64]),
+            MLXArray.ones([1, 1, 8, 64]),
+        ]
+        recurrent.state = [MLXArray([Float(99), 100, 101])]
+        let leaf = try #require(
+            HybridCacheSnapshot.capture(cache: [attention, recurrent], offset: 8, type: .leaf))
+        let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf)
+        #expect(payload.extending == nil)
+        #expect(payload.totalBytes == 2060)  // two 4×64 float32 arrays + three recurrent values
+        #expect(!payload.isMaterialized)
+        #expect(owed.retainedArrays.count == 3)
+        let originalAddresses = Set(
+            (leaf.layers + view.layers).flatMap(\.state).map(backingAddress))
+        #expect(owed.retainedArrays.allSatisfy { !originalAddresses.contains(backingAddress($0)) })
+        // No host data exists at the extraction edge. The eventual reader
+        // runs the host copy; production supplies the SSD writer's task.
+        let layers = await Task.detached { payload.layers }.value
+        #expect(payload.isMaterialized)
+        #expect(owed.retainedArrays.isEmpty)
+        #expect(SnapshotPayload.byteCount(of: layers) == 2060)
+        #expect(layers[0].state[0].shape == [1, 1, 4, 64])
+        #expect(
+            layers[0].state[0].data
+                == MLXArray((0..<256).map(Float.init)).asData(access: .copy).data)
+        #expect(
+            layers[1].state[0].data == MLXArray([Float(42), 43, 44]).asData(access: .copy).data)
+        #expect(layers.allSatisfy { $0.suffixBaseOffset == nil })
+    }
+
+    @Test func prefixViewAdmissionRetainsSSDIntentUntilTheLeafChecksIn() throws {
+        let attention = KVCacheSimple()
+        attention.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [attention], offset: 4, type: .branchPoint, prefixView: true))
+        let candidates = ServerCompletion.extractCheckpointAdmissionCandidates(
+            [view], ssdEnabled: true)
+        let candidate = try #require(candidates.first)
+        guard case .viewSSD = candidate.storage else {
+            Issue.record("a view must retain SSD intent without extracting incomplete arrays")
+            return
+        }
+        #expect(candidate.snapshot.memoryBytes == 0)
+    }
+
+    @Test func deferredBytesBorrowEvaluatedStorageAndOutliveTheSnapshot() throws {
+        weak var backing: MLXArray?
+        let (payload, address, expected): (SnapshotPayload, UInt, Data) = {
+            let array = MLXArray(Array(0..<256).map(Float.init))
+            eval(array)
+            backing = array
+            let snapshot = HybridCacheSnapshot(
+                tokenOffset: 1,
+                layers: [.init(className: "ArraysCache", state: [array], metaState: [], offset: 1)],
+                checkpointType: .leaf, memoryBytes: array.nbytes, createdAt: .now)
+            return (
+                ServerCompletion.extractSnapshotPayload(snapshot), backingAddress(array),
+                array.asData(access: .copy).data
+            )
+        }()
+        let bytes = try #require(payload.layers.first?.state.first?.data)
+        #expect(backing != nil, "the borrowed Data must retain its evaluated MLX owner")
+        #expect(bytes == expected)
+        bytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            #expect(UInt(bitPattern: buffer.baseAddress) == address)
+        }
+    }
+
+    @Test func streamingReleasesBorrowedArraysAfterEachLayer() throws {
+        weak var first: MLXArray?
+        weak var second: MLXArray?
+        let payload: SnapshotPayload = {
+            let arrays = [MLXArray.ones([256]), MLXArray.ones([256])]
+            eval(arrays)
+            first = arrays[0]
+            second = arrays[1]
+            let snapshot = HybridCacheSnapshot(
+                tokenOffset: 1,
+                layers: arrays.map {
+                    .init(className: "ArraysCache", state: [$0], metaState: [], offset: 1)
+                },
+                checkpointType: .leaf, memoryBytes: 2048, createdAt: .now)
+            return ServerCompletion.extractSnapshotPayload(snapshot)
+        }()
+        let descriptor = PersistedSnapshotDescriptor(
+            snapshotID: "borrowed", partitionDigest: "abcd1234",
+            pathFromRoot: [1], tokenOffset: 1, checkpointType: "leaf", bytes: 2048,
+            createdAt: 100, lastAccessAt: 100, fileRelativePath: "borrowed.safetensors",
+            schemaVersion: SnapshotManifestSchema.currentVersion)
+        let encoding = try PlaceholderContainerEncoding(payload: payload, descriptor: descriptor)
+        #expect(payload.retainsBodyArrays)
+        var consumed = 0
+        encoding.withChunks(maximumBytes: 256, releasingLayers: true) { chunk in
+            if consumed < encoding.headerByteCount + 1024 {
+                #expect(first != nil)
+            } else {
+                #expect(first == nil, "the first layer must release before the second writes")
+            }
+            #expect(second != nil)
+            consumed += chunk.count
+        }
+        #expect(consumed == encoding.byteCount)
+        #expect(first == nil)
+        #expect(second == nil)
+        #expect(!payload.retainsBodyArrays)
+    }
+
+    @Test func deferredEmptyArraysProduceEmptyBytes() throws {
+        let array = MLXArray.zeros([0])
+        let snapshot = HybridCacheSnapshot(
+            tokenOffset: 1,
+            layers: [.init(className: "ArraysCache", state: [array], metaState: [], offset: 1)],
+            checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
+        let payload = ServerCompletion.extractSnapshotPayload(snapshot)
+        #expect(payload.layers[0].state[0].data.isEmpty)
+        #expect(payload.layers[0].state[0].shape == [0])
+    }
+
     // MARK: - Fixture builders
 
     /// Build a single-layer `KVCacheSimple` snapshot whose arrays have
