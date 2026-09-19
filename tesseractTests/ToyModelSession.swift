@@ -507,7 +507,7 @@ nonisolated struct RecordingModelSession: ModelSession {
     }
 
     func restore(
-        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache] {
         recorder.record(.restore)
         return try base.restore(snapshot, backingLeaf: backingLeaf)

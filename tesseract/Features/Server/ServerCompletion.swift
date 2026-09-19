@@ -2253,10 +2253,7 @@ nonisolated final class ServerCompletion {
     ) -> [any KVCache]? {
         guard let snapshot = lookup.snapshot, lookup.partitionKey != nil else { return nil }
         do {
-            if let backingLeaf = lookup.backingLeaf {
-                return try session.restore(snapshot, backingLeaf: backingLeaf)
-            }
-            return try session.restore(snapshot)
+            return try session.restore(snapshot, backingLeaf: lookup.backingLeaf)
         } catch {
             Log.server.error(
                 "snapshot restore failed — treating as cache miss: \(error)"

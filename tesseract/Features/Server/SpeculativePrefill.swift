@@ -320,11 +320,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let restoreOK = await container.perform { context in
             do {
                 let session = ContextBackedModelSession(context: context)
-                if let backingLeaf = resolved.backingLeaf {
-                    warm.cache = try session.restore(boundary, backingLeaf: backingLeaf)
-                } else {
-                    warm.cache = try session.restore(boundary)
-                }
+                warm.cache = try session.restore(boundary, backingLeaf: resolved.backingLeaf)
                 return true
             } catch {
                 warm.failure = error.localizedDescription

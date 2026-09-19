@@ -117,6 +117,7 @@ nonisolated final class LeafCheckout: @unchecked Sendable {
         guard let snapshot = resolved.lookup.snapshot,
             let key = resolved.lookup.partitionKey
         else { return Attempt() }
+        guard !snapshot.isPrefixView else { return Attempt(copyReason: .checkpoint) }
         guard identityKeySpace else { return Attempt(copyReason: .imageKeySpace) }
         guard key.kvBits == nil else { return Attempt(copyReason: .quantized) }
         guard !resolved.wasChainPrefixRestore,

@@ -92,7 +92,7 @@ nonisolated protocol ModelSession {
     /// View Materialization: copies a Prefix-View Checkpoint and the selected
     /// Backing Leaf's leading attention rows into private live cache objects.
     func restore(
-        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache]
 
     /// App-owned chunked prefill (`PrefillExecutor.run`) over `text` into
@@ -357,7 +357,7 @@ nonisolated struct ContextBackedModelSession: ModelSession {
     }
 
     func restore(
-        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
+        _ snapshot: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot?
     ) throws -> [any KVCache] {
         try snapshot.restore(backingLeaf: backingLeaf)
     }

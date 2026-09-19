@@ -10,6 +10,33 @@ import Testing
 struct LeafCheckoutTests {
     private let key = CachePartitionKey(modelID: "checkout", kvBits: nil, kvGroupSize: 64)
 
+    @Test(arguments: [false, true], [nil, 8] as [Int?])
+    func viewCopyReasonPrecedesPartitionRestrictions(identityKeySpace: Bool, kvBits: Int?)
+        async throws
+    {
+        let layer = KVCacheSimple()
+        layer.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [layer], offset: 4, type: .branchPoint, prefixView: true))
+        let partition = CachePartitionKey(
+            modelID: "view-copy-reason", kvBits: kvBits, kvGroupSize: 64)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000)
+        let attempt = await LeafCheckout.attempt(
+            resolved: .init(
+                lookup: .init(
+                    snapshot: view, partitionKey: partition, snapshotTokenOffset: 4,
+                    sharedPrefixLength: 4,
+                    reason: .hit(snapshotOffset: 4, totalTokens: 5, type: .branchPoint)),
+                hydratedFromSSD: false, hydrationSeconds: 0),
+            tokens: Array(1...5), maximumAdvance: 10, identityKeySpace: identityKeySpace,
+            prefixCache: manager,
+            context: .init(
+                requestID: UUID(), modelID: partition.modelID, kvBits: kvBits, kvGroupSize: 64))
+        #expect(attempt.owner == nil)
+        #expect(attempt.copyReason == .checkpoint)
+    }
+
     @Test func emptyCachesCannotBeCapturedOrAdmittedAsCompletedLeaves() async throws {
         var cache: [any KVCache] = []
         #expect(HybridCacheSnapshot.captureMoving(cache: &cache, offset: 8) == nil)

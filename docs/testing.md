@@ -143,7 +143,10 @@ disjoint backing addresses; it also covers the prepared image-prefix capture
 entry. `SnapshotResolutionLadderTests` checks nearest/unleased selection,
 recency and all fall-through rungs. `TokenRadixTreeTests` checks byte accounting,
 eviction exclusion, lease/check-in and last-backer self-heal.
-`SnapshotResolutionTests` checks both Restore Pins and view-only panel bytes.
+`SnapshotResolutionTests` checks both Restore Pins, view-only panel bytes, and
+retirement after the final active request skips leaf storage. `LeafCheckoutTests`
+checks that views retain the `checkpoint` copy reason in image and quantized
+partitions.
 `ServerCompletionExtractSnapshotPayloadsTests` keeps views RAM-only;
 `ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
 canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`

@@ -18,6 +18,35 @@ import MLXLMCommon
 @MainActor
 @Suite struct SnapshotResolutionTests {
 
+    @Test func finalRequestSettlementRetiresViewsWhoseLeafWasNeverStored() async throws {
+        let store = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
+        let first = diagnostics
+        let second = diagnostics
+        for context in [first, second] {
+            _ = await manager.resolve(
+                tokens: Array(1...8), promptTokenCount: 8, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context,
+                pinningRestorePathFor: context.requestID)
+        }
+        let recurrent = MambaCache()
+        recurrent.state = [MLXArray([Float(42)])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [recurrent], offset: 4, type: .branchPoint, prefixView: true))
+        manager.restoreSnapshot(
+            path: Array(1...4), snapshot: view, partitionKey: key, lastAccessTime: .now)
+        manager.completeRequest(requestID: first.requestID)
+        #expect(manager.totalSnapshotBytes == 4)
+        // The remaining request skips/fails leaf storage. No lookup visits
+        // the view again: completion must release its non-evictable state.
+        manager.completeRequest(requestID: second.requestID)
+        #expect(manager.totalSnapshotBytes == 0)
+        let tree = store.getOrCreateTree(for: key)
+        #expect(tree.snapshotCount == 0)
+        #expect(tree.nodeCount == 1)
+    }
+
     @Test func viewResolutionPinsBothNodesAndRestoresItsOwnWholeState() async throws {
         let manager = makeManager()
         func hybrid(offset: Int, value: Float, view: Bool = false) throws -> HybridCacheSnapshot {

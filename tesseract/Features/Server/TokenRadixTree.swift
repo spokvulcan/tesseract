@@ -532,6 +532,12 @@ final class TokenRadixTree {
         if result.effect == .becameEmpty { selfHeal(node) }
     }
 
+    /// Checkpoint admission precedes leaf storage. Only sweep once the
+    /// manager's last request settles, including skipped/failed leaf stores.
+    func retireUnbackedViews() {
+        for node in allSnapshotNodes().reversed() { retireUnbackedView(node) }
+    }
+
     /// Hydrate a committed-ref node with a freshly loaded body (state 5 →
     /// state 4). **Forgiving:** like the SSD-writer commit/drop edges, this
     /// completes a lookup that captured the node *before* an off-main

@@ -2208,6 +2208,9 @@ final class PrefixCacheManager {
     func completeRequest(requestID: UUID) {
         restorePins.removeAll { $0.requestID == requestID }
         activeRequestIDs.remove(requestID)
+        if activeRequestIDs.isEmpty {
+            for (_, tree) in store.orderedPartitions() { tree.retireUnbackedViews() }
+        }
     }
 
     // MARK: - Eviction
