@@ -889,7 +889,7 @@ the #528 enablement gate remain owner work; the default flag is off.
 ### Warm-backed Prefix-View Checkpoints (#530)
 
 `PrefixViewModelSessionTests.warmBackerMaterializesPrivateViewStateAndFullPayloadWithTokenParity`
-uses fp16/fp32 hybrid toy caches to check prefix-only attention shapes and offsets,
+uses fp16/fp32 hybrid toy caches to check prefix-only attention values, shapes and offsets,
 the view's own recurrent state, deterministic token parity with an uncompressed
 backer, and physical-address isolation. It also checks full-form SSD payload
 pricing, shape and detached ownership; quantized Stored Form remains #531 work.
@@ -897,7 +897,7 @@ pricing, shape and detached ownership; quantized Stored Form remains #531 work.
 checks nearest warm selection and the uncompressed tie-break.
 `SnapshotResolutionTests.storedAndTransientViewsChooseAndPinThePreferredWarmOrFullBacker`
 checks the manager's composition for stored and transient views, Restore Pins,
-and unchanged Leaf Checkout refusal.
+unchanged Leaf Checkout refusal, and separate hot/warm/view-only byte totals.
 `PrefixCacheDiagnosticsTests.viewLookupReportsTheBackingLeafForm` checks both
 backer forms while keeping `source=view` and the `checkpoint` copy reason;
 the existing keyed Server Completion sequence verifies the emitted field.

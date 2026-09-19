@@ -32,8 +32,10 @@ import MLXLMCommon
                 cache.state = [
                     MLXArray.ones([1, 1, offset, 64]), MLXArray.ones([1, 1, offset, 64]),
                 ]
+                let recurrent = MambaCache()
+                recurrent.state = [MLXArray([Float(offset)])]
                 return try #require(
-                    session.captureSnapshot(cache: [cache], offset: offset, type: type))
+                    session.captureSnapshot(cache: [cache, recurrent], offset: offset, type: type))
             }
             return try (
                 capture(4, type: .branchPoint),
@@ -60,6 +62,15 @@ import MLXLMCommon
             pinningRestorePathFor: context.requestID)
         let selected = warmOffset == 6 ? warm : full
         #expect(resolved.lookup.backingLeaf?.bodyID == selected.bodyID)
+        if !transient {
+            let telemetry = manager.makeTelemetrySnapshot()
+            #expect(telemetry.viewOnlyBytes == 4)
+            #expect(telemetry.warmSnapshotBytes == warm.memoryBytes)
+            #expect(telemetry.hotSnapshotBytes == full.memoryBytes)
+            #expect(
+                telemetry.hotSnapshotBytes + telemetry.warmSnapshotBytes + telemetry.viewOnlyBytes
+                    == manager.totalSnapshotBytes)
+        }
         let attempt = await LeafCheckout.attempt(
             resolved: resolved, tokens: prefix + [99], maximumAdvance: 1,
             identityKeySpace: true, prefixCache: manager, context: context)

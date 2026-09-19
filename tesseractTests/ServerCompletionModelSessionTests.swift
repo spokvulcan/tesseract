@@ -29,6 +29,12 @@ import Testing
             #expect(restored.first?.offset == 4)
             #expect(restored.first?.state.first?.shape == [1, 1, 4, 64])
             #expect(restored.first?.state.first?.dtype == dtype)
+            // The toy predicts by offset; check its content-derived KV rows
+            // directly too, so token parity cannot hide the wrong prefix.
+            let expectedAttention = (1...4).flatMap { Array(repeating: Float($0), count: 64) }
+            for array in restored.dropLast().flatMap(\.state) {
+                #expect(array.asType(.float32).asArray(Float.self) == expectedAttention)
+            }
             #expect(restored.last?.offset == 4)
             #expect(restored.last?.state.first?.asArray(Float.self) == [4, 4, 4, 4])
             let treeAddresses = Set(

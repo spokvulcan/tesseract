@@ -361,7 +361,7 @@ nonisolated struct PromptCacheTelemetrySnapshot: Codable, Equatable, Sendable {
     var warmSnapshotBytes: Int {
         trees.reduce(0) { $0 + $1.nodes.reduce(0) { $0 + ($1.warmBytes ?? 0) } }
     }
-    var hotSnapshotBytes: Int { residentSnapshotBytes - warmSnapshotBytes }
+    var hotSnapshotBytes: Int { residentSnapshotBytes - warmSnapshotBytes - viewOnlyBytes }
 
     static let empty = PromptCacheTelemetrySnapshot(
         capturedAt: Date(),
