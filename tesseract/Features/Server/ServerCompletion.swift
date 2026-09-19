@@ -64,6 +64,12 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let lookupReason: PrefixCacheManager.LookupReason
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
+    /// The turn's maximum advance (`LeafCheckout.maximumAdvance`): the
+    /// prompt tokens prefilled past the restore offset plus the output
+    /// ceiling plus the speculative allowance, `Int.max` when the output is
+    /// unbounded. What check-out eligibility was judged against, and what
+    /// the **Active-Inference Reserve** prices the turn's growth at (#522).
+    let maximumAdvance: Int
 
     // -- Post-generation store context (radix tree flow) --
 
@@ -1575,16 +1581,25 @@ nonisolated final class ServerCompletion {
             var checkedOutOwner: FinalGenerationCache?
             var restoreMode = "cold"
             var restoreCopyReason: LeafStorePhase.Report.CopyReason?
+            // The turn's maximum advance: judged at check-out, priced by
+            // the Active-Inference Reserve at the leaf store (#522).
+            let restoredOffset: Int
+            if case .restore(let cacheOffset, _) = prefillPlan.restore {
+                restoredOffset = cacheOffset
+            } else {
+                restoredOffset = 0
+            }
+            let maximumAdvance = LeafCheckout.maximumAdvance(
+                newPromptTokens: fullTokenCount - restoredOffset,
+                outputCeiling: parameters.maxTokens,
+                speculativeAllowance: dflash2Engages ? DFlash2Support.blockSize : 0)
             do {
                 switch prefillPlan.restore {
                 case .restore(let cacheOffset, let anchorDelta):
                     let restoreStarted = Date.timeIntervalSinceReferenceDate
                     let attempt = await LeafCheckout.attempt(
                         resolved: resolved, tokens: keySpace.keyPath,
-                        maximumAdvance: LeafCheckout.maximumAdvance(
-                            newPromptTokens: fullTokenCount - cacheOffset,
-                            outputCeiling: parameters.maxTokens,
-                            speculativeAllowance: dflash2Engages ? DFlash2Support.blockSize : 0),
+                        maximumAdvance: maximumAdvance,
                         identityKeySpace: textOnlyIdentityKeySpace,
                         prefixCache: prefixCache, context: diagnosticsContext)
                     checkedOutOwner = attempt.owner
@@ -2093,6 +2108,7 @@ nonisolated final class ServerCompletion {
                     skippedPrefillTokens: skippedTokens,
                     lookupReason: lookupResult.reason,
                     sharedPrefixLength: lookupResult.sharedPrefixLength,
+                    maximumAdvance: maximumAdvance,
                     fullTokens: fullTokens,
                     keySpace: keySpace,
                     unkeyedReason: nil,
@@ -2376,6 +2392,9 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: .missNoEntries,
             sharedPrefixLength: 0,
+            maximumAdvance: LeafCheckout.maximumAdvance(
+                newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
+                speculativeAllowance: 0),
             fullTokens: fullTokens,
             keySpace: .identity(keyPath: fullTokens),
             unkeyedReason: reason,
@@ -2547,6 +2566,9 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: lookupReason,
             sharedPrefixLength: 0,
+            maximumAdvance: LeafCheckout.maximumAdvance(
+                newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
+                speculativeAllowance: MTPDrafterSupport.blockSize),
             fullTokens: fullTokens,
             keySpace: keySpace,
             unkeyedReason: nil,
@@ -2800,7 +2822,9 @@ nonisolated final class ServerCompletion {
         prefixCache: PrefixCacheManager,
         diagnostics: PrefixCacheDiagnostics.Context,
         admissionStage: String,
-        captureSource: String
+        captureSource: String,
+        source: LeafStorePhase.Report.Source? = nil,
+        maximumAdvance: Int = .max
     ) async -> StructuredLeafAdmission {
         // swiftlint:enable function_parameter_count
         guard !leaf.layers.isEmpty else {
@@ -2813,7 +2837,9 @@ nonisolated final class ServerCompletion {
                 snapshot: leaf,
                 storage: storage,
                 partitionKey: partitionKey,
-                requestID: requestID
+                requestID: requestID,
+                source: source,
+                maximumAdvance: maximumAdvance
             )
         else {
             diagnostics.logSkip(

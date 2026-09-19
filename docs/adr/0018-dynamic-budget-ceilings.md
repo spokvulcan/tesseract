@@ -81,3 +81,31 @@ had stretched to 25–50 s.
   last bytes of a full disk.
 - The `budgetMeasure` trace carries the bound (`workingSetHeadroomBytes`), so
   a small ceiling is attributable to the process rather than the machine.
+
+## Amendment 2026-09-19 — the reserve priced on one leaf plus growth
+
+The Active-Inference Reserve priced a lane at twice the largest observed leaf,
+floored at the 4 GiB bootstrap, for a capture deep copy that Leaf Handoff
+(ADR-0064) removed on eligible turns. On the 48 GB machine that was the
+ceiling's largest subtraction (#238: a 75 MB leaf still reserved 4 GiB).
+Re-priced in #522 (PRD #520, phase 1):
+
+- **Per lane: the largest observed leaf, plus growth.** The leaf is doubled
+  only while the partition's most recent leaf store was a capture by copy —
+  the `leafStore` sources `live` and `boundary`. A `handoff` moved the
+  objects; a restore by `copy` does not raise the factor, because the source
+  body is counted in the tree's bytes and the live copy in the reserve, so
+  one leaf plus growth already covers it.
+- **Growth is bytes per token times the turn's maximum advance**: the
+  largest leaf's observed density times the quantity Leaf Checkout already
+  computes (new prompt tokens plus the output ceiling plus the speculative
+  allowance). A turn without an output ceiling advances unboundedly; the
+  bootstrap constant stands in for its growth.
+- **The bootstrap retires at the first observation.** It is no longer a
+  floor under the measured lane.
+- The leaf admission feeds the reserve bytes, token count, source and
+  maximum advance; the reserve stays a pure value. The `budgetMeasure` event
+  carries `largestLeafBytes`, `bytesPerToken`, `maximumAdvance`,
+  `growthAllowanceBytes`, `copyFactor` and `perLaneBytes`, so the ceiling is
+  explainable from one event.
+

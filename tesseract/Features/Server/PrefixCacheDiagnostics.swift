@@ -492,6 +492,10 @@ nonisolated enum PrefixCacheDiagnostics {
         let workingSetHeadroomBytes: Int
         let reserveBytes: Int
         let lanes: Int
+        /// The **Active-Inference Reserve**'s inputs and per-lane result
+        /// (#522), so the reserve — the ceiling's largest subtraction on
+        /// a 48 GB machine — is explainable from this one event.
+        let reserve: ActiveInferenceReserve
         let residentBytes: Int
         let capBytes: Int?
         let ceilingBytes: Int
@@ -505,6 +509,12 @@ nonisolated enum PrefixCacheDiagnostics {
                 ("workingSetHeadroomBytes", "\(workingSetHeadroomBytes)"),
                 ("reserveBytes", "\(reserveBytes)"),
                 ("lanes", "\(lanes)"),
+                ("perLaneBytes", "\(reserve.perLaneBytes)"),
+                ("largestLeafBytes", "\(reserve.largestObservedLeafBytes)"),
+                ("bytesPerToken", "\(reserve.observedBytesPerToken)"),
+                ("maximumAdvance", "\(reserve.observedMaximumAdvance)"),
+                ("growthAllowanceBytes", "\(reserve.growthAllowanceBytes)"),
+                ("copyFactor", "\(reserve.copyFactor)"),
                 ("residentBytes", "\(residentBytes)"),
                 ("capBytes", capBytes.map { "\($0)" } ?? "auto"),
                 ("ceilingBytes", "\(ceilingBytes)"),

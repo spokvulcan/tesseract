@@ -37,6 +37,12 @@ final class PrefixCacheAdmin {
         current?.stats
     }
 
+    /// The **Active-Inference Reserve** as the live cache prices it — the
+    /// leaf observations folded so far (#522). `nil` when no cache is live.
+    var activeInferenceReserve: ActiveInferenceReserve? {
+        current?.activeInferenceReserve
+    }
+
     /// The live cache's **Eviction Configuration**, or `nil`. Lets tests
     /// assert the cache construction folded the model's `flopProfile` in.
     var evictionConfig: EvictionConfiguration? {

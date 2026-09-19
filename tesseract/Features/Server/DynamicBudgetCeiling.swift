@@ -10,7 +10,7 @@
 //  formula survives only as the bootstrap value before the first
 //  measurement. The `/2` divisor's job — protecting the in-flight
 //  generation's working set — moves to the named, count-aware
-//  **Active-Inference Reserve**.
+//  **Active-Inference Reserve**, priced from observed leaves (#522).
 //
 //  This file is the whole seam: the Memory Headroom Source port, the
 //  thin Mach adapter, the in-memory peer tests drive, the pure ceiling
@@ -196,36 +196,101 @@ final class InMemoryMemoryHeadroomSource: MemoryHeadroomSource {
 /// has room (SGLang's shared-pool arbitration invariant: active
 /// generation always outranks cache, the reserve is subtracted first).
 ///
-/// Per-lane sizing is measured where possible: a lane's KV working set
-/// at end of turn *is* its leaf snapshot, and the capture deep-copies
-/// it, so the structural peak is twice the largest leaf this cache has
-/// admitted. The bootstrap constant covers the window before the first
-/// leaf; prefill activation transients beyond the KV bytes remain
-/// guarded by fast pressure retreat (ADR-0018's explicit trade).
+/// Per-lane sizing is measured (issue #522, PRD #520 phase 1): a lane's
+/// KV working set at end of turn *is* its leaf, so the lane is the
+/// largest leaf this cache has admitted, plus the growth the turn may
+/// add — the leaf's observed bytes per token times the turn's maximum
+/// advance, the quantity **Leaf Checkout** already computes. The
+/// capture deep copy that once made the structural peak twice the leaf
+/// is gone on every turn **Leaf Handoff** (ADR-0064) moves, so the
+/// doubling applies only while a partition's most recent leaf store was
+/// a capture by copy. The bootstrap constant stands until the first
+/// observation; prefill activation transients beyond the KV bytes
+/// remain guarded by fast pressure retreat (ADR-0018's explicit trade).
+///
+/// A pure value: it holds observations, never references.
 nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
     /// Per-lane bytes before any leaf has been observed: two ~2 GiB
     /// 96k-token leaves' worth (measured 2026-07-04, ornith-35b,
-    /// ~21.5 KB/token, kvBits=8).
+    /// ~21.5 KB/token, kvBits=8). Also stands in for the growth of a
+    /// turn whose advance is unbounded (no output ceiling).
     static let bootstrapPerLaneBytes = 4 << 30  // 4 GiB
 
-    /// `HybridCacheSnapshot.capture` deep-copies the lane's live KV —
-    /// for one moment both copies are resident.
+    /// A capture by copy (`HybridCacheSnapshot.capture`) deep-copies the
+    /// lane's live KV — for one moment both copies are resident.
     static let captureCopyFactor = 2
 
-    private(set) var largestObservedLeafBytes = 0
+    /// One admitted leaf, as the leaf-store telemetry reports it: what
+    /// the leaf admission feeds the reserve.
+    struct LeafObservation: Sendable, Equatable {
+        let partitionKey: CachePartitionKey
+        let bytes: Int
+        let tokenCount: Int
+        /// The `leafStore` event's source. `live` and `boundary` are
+        /// captures by copy; `handoff` moved the objects; `copy` is a
+        /// restore by copy whose source body the tree already counts;
+        /// `rewind` copied nothing.
+        let source: LeafStorePhase.Report.Source
+        /// The turn's maximum advance (`LeafCheckout.maximumAdvance`):
+        /// new prompt tokens plus the output ceiling plus the speculative
+        /// allowance, `Int.max` when the output is unbounded.
+        let maximumAdvance: Int
+    }
 
-    /// Fold one admitted leaf's size into the per-lane estimate.
-    mutating func observeLeaf(bytes: Int) {
-        largestObservedLeafBytes = max(largestObservedLeafBytes, bytes)
+    private(set) var largestObservedLeafBytes = 0
+    /// Bytes per token of the largest observed leaf, rounded up.
+    private(set) var observedBytesPerToken = 0
+    /// The most recently observed turn's maximum advance.
+    private(set) var observedMaximumAdvance = 0
+    /// Partitions whose most recent leaf store was a capture by copy.
+    private(set) var copyCapturingPartitions: Set<CachePartitionKey> = []
+    private var observed = false
+
+    /// Fold one admitted leaf into the per-lane estimate.
+    mutating func observeLeaf(_ leaf: LeafObservation) {
+        observed = true
+        if leaf.bytes > largestObservedLeafBytes {
+            largestObservedLeafBytes = leaf.bytes
+            let tokens = max(leaf.tokenCount, 1)
+            observedBytesPerToken = (leaf.bytes + tokens - 1) / tokens
+        }
+        observedMaximumAdvance = max(leaf.maximumAdvance, 0)
+        if leaf.source.capturesByCopy {
+            copyCapturingPartitions.insert(leaf.partitionKey)
+        } else {
+            copyCapturingPartitions.remove(leaf.partitionKey)
+        }
+    }
+
+    /// `captureCopyFactor` while any partition's most recent leaf store
+    /// was a capture by copy, else 1.
+    var copyFactor: Int {
+        copyCapturingPartitions.isEmpty ? 1 : Self.captureCopyFactor
+    }
+
+    /// Bytes per token times the turn's maximum advance. An unbounded
+    /// advance cannot be priced from density, so the bootstrap constant
+    /// stands in for it; nothing here overflows.
+    var growthAllowanceBytes: Int {
+        guard observed else { return 0 }
+        let (growth, overflow) = observedBytesPerToken.multipliedReportingOverflow(
+            by: observedMaximumAdvance)
+        return overflow || observedMaximumAdvance == .max ? Self.bootstrapPerLaneBytes : growth
     }
 
     var perLaneBytes: Int {
-        max(Self.bootstrapPerLaneBytes, Self.captureCopyFactor * largestObservedLeafBytes)
+        guard observed else { return Self.bootstrapPerLaneBytes }
+        let (leaves, overflow) = largestObservedLeafBytes.multipliedReportingOverflow(
+            by: copyFactor)
+        guard !overflow else { return .max }
+        let (lane, laneOverflow) = leaves.addingReportingOverflow(growthAllowanceBytes)
+        return laneOverflow ? .max : lane
     }
 
     /// The reserve for `lanes` in-flight requests, floored at one lane.
     func reserveBytes(lanes: Int) -> Int {
-        max(lanes, 1) * perLaneBytes
+        let (reserve, overflow) = perLaneBytes.multipliedReportingOverflow(by: max(lanes, 1))
+        return overflow ? .max : reserve
     }
 }
 

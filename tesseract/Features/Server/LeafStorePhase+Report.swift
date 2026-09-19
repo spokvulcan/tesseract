@@ -44,6 +44,37 @@ nonisolated extension LeafStorePhase {
             /// A restored boundary snapshot extended by the canonical
             /// residual re-prefill.
             case boundary
+
+            /// Whether the leaf was deep-copied out of a live cache
+            /// (`HybridCacheSnapshot.capture`), so its KV was resident
+            /// twice for a moment — what the **Active-Inference Reserve**
+            /// doubles a lane for (#522). A moved leaf reports `handoff`;
+            /// a `copy` is a restore by copy whose source body the tree
+            /// already counts; a `rewind` copied nothing.
+            var capturesByCopy: Bool {
+                switch self {
+                case .live, .boundary: true
+                case .handoff, .copy, .rewind: false
+                }
+            }
+
+            /// The source a stored leaf reports, from the path that stored
+            /// it, the request's restore mode and whether the capture moved
+            /// the generation's objects. Shared by the report and the leaf
+            /// admission so the reserve observes exactly what the
+            /// `leafStore` event says.
+            static func stored(
+                path: Path, restoreMode: String?, handedOff: Bool
+            ) -> Source? {
+                switch path {
+                case .live, .direct:
+                    restoreMode == "copy" || restoreMode == "failedCopy"
+                        ? .copy : handedOff ? .handoff : .live
+                case .boundary: .boundary
+                case .rewind: .rewind
+                case .skipped: nil
+                }
+            }
         }
 
         enum CopyReason: String, Sendable {
@@ -62,14 +93,7 @@ nonisolated extension LeafStorePhase {
         /// under the fast path and the direct route, a restored boundary
         /// snapshot under the boundary route.
         var source: Source? {
-            switch path {
-            case .live, .direct:
-                restoreMode == "copy" || restoreMode == "failedCopy"
-                    ? .copy : handedOff ? .handoff : .live
-            case .boundary: .boundary
-            case .rewind: .rewind
-            case .skipped: nil
-            }
+            Source.stored(path: path, restoreMode: restoreMode, handedOff: handedOff)
         }
         /// Why the turn took the boundary route (the `liveLeafCapture` skip
         /// token), whether or not a leaf was stored there.
