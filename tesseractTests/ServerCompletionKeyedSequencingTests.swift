@@ -129,7 +129,10 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     }
 
     @MainActor
-    @Test func plannedBranchViewReportsCaptureAndLookupThroughTheModelSession() async throws {
+    @Test(arguments: [false, true])
+    func plannedBranchViewReportsCaptureAndLookupThroughTheModelSession(ssdEnabled: Bool)
+        async throws
+    {
         let tokenizer = ToySequencingTokenizer()
         let completions = ToyCompletionQueue(
             generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
@@ -137,9 +140,17 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         let modelID = "view-sequencing-\(UUID())"
         let capture = TelemetryCapture(modelID: modelID)
         defer { capture.stop() }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "view-ssd-turn-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
         let fixture = ServerCompletionFixture(
             provider: ToyModelSessionProvider(
                 model: ToyLanguageModel(completions: completions), tokenizer: tokenizer),
+            fingerprint: ssdEnabled ? String(repeating: "d", count: 64) : nil,
+            ssdConfig: ssdEnabled
+                ? .init(
+                    enabled: true, rootURL: root, budgetBytes: 1_000_000, maxPendingBytes: 1_000_000
+                ) : nil,
             modelID: modelID)
         for text in ["abcd-one", "abcd-two"] {
             completions.enqueue(Array("ok".utf8).map(Int.init))
@@ -166,6 +177,20 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(lookup.field("copyReason") == "checkpoint")
         let backingOffset = try #require(lookup.field("backingLeafOffset").flatMap(Int.init))
         #expect(backingOffset > fork.cachedTokenCount)
+        if ssdEnabled {
+            // The second fork proves reuse. Its successful-turn tail must
+            // fulfil the deferred view intent after checking in the leaf.
+            completions.enqueue(Array("ok".utf8).map(Int.init))
+            let next = try await fixture.start(
+                conversation: Self.conversation([.init(role: .user, content: "abcd-four")]),
+                parameters: Self.parameters())
+            #expect(try await collectServerText(next).text == "ok")
+            await fixture.flush()
+            let manifest = try JSONDecoder().decode(
+                SnapshotManifest.self,
+                from: Data(contentsOf: root.appendingPathComponent("manifest.json")))
+            #expect(manifest.snapshots.values.contains { $0.checkpointType == "branchPoint" })
+        }
         await fixture.drain()
     }
 

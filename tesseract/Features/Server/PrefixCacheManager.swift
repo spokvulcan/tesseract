@@ -1193,6 +1193,95 @@ final class PrefixCacheManager {
 
     // MARK: - Store
 
+    private func deferSSDWrite(
+        snapshot: HybridCacheSnapshot, node: RadixTreeNode, bytes: Int
+    ) -> Bool {
+        guard adaptiveWriteEagerness,
+            SSDWriteEagernessPolicy.mayDefer(
+                checkpointType: snapshot.checkpointType, nodeHitCount: node.hitCount,
+                residentBytes: totalSnapshotBytes, budgetBytes: memoryBudgetBytes,
+                bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes)
+        else { return false }
+        cumulativeCounters.eagernessDeferrals += 1
+        PrefixCacheDiagnostics.logSystem(
+            PrefixCacheDiagnostics.SSDWriteDeferredEvent(
+                offset: snapshot.tokenOffset, bytes: bytes, hitCount: node.hitCount))
+        return true
+    }
+
+    /// Fulfil planned views' SSD intent at the turn's quiescent boundary,
+    /// after leaf check-in. Cold deferred views keep their intent; lookup
+    /// hits can earn a write on a later turn. No tree body is materialized.
+    func persistViewCheckpoints(
+        partitionKey: CachePartitionKey, sessions: any ModelSessionProviding
+    ) async {
+        guard store.isSSDEnabled, partitionKey.modelFingerprint != nil,
+            let tree = store.tree(for: partitionKey)
+        else { return }
+        for node in tree.allSnapshotNodes() {
+            guard !Task.isCancelled, node.viewSSDAdmissionRequested,
+                !node.ssdPromotionAttempted, node.state.ref == nil,
+                let view = node.state.body, view.isPrefixView,
+                let backer = node.backingLeaf, let leaf = backer.state.body,
+                leaf.layers.count == view.layers.count
+            else { continue }
+            // Metadata only: decide admission before allocating detached
+            // prefix buffers. Every attention array has the same token axis.
+            guard let bytes = view.materializationByteCount(backingLeaf: leaf) else { continue }
+            guard !deferSSDWrite(snapshot: view, node: node, bytes: bytes) else { continue }
+            guard
+                store.survivalGateAdmits(
+                    snapshot: view, payloadTotalBytes: bytes, scoringConfig: evictionConfig)
+            else {
+                cumulativeCounters.survivalGateSkips += 1
+                continue
+            }
+            let access = backer.bodyAccess
+            guard access.beginRead(snapshotID: "view-\(view.bodyID)") else { continue }
+            let earnedPromotion =
+                adaptiveWriteEagerness
+                && node.hitCount >= SSDWriteEagernessPolicy.hitCountThreshold
+            // Reserve this view while extraction suspends. A failed or
+            // cancelled extraction has not consumed its enqueue attempt.
+            node.ssdPromotionAttempted = true
+            let path = tree.pathToNode(node)
+            let payload: SnapshotPayload?
+            do {
+                payload = try await sessions.withSession { _ in
+                    try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf).payload
+                }
+            } catch {
+                Log.agent.warning(
+                    "Prefix-View Checkpoint SSD extraction failed: \(String(describing: error))")
+                payload = nil
+            }
+            // Device copies are evaluated now. The pending writer owns only
+            // detached arrays and cannot delay the leaf's next check-out.
+            access.endRead()
+            if node.state.body?.bodyID == view.bodyID {
+                node.ssdPromotionAttempted = false
+            }
+            guard let payload, !Task.isCancelled,
+                store.tree(for: partitionKey) === tree,
+                node.state.body?.bodyID == view.bodyID, node.state.ref == nil,
+                tree.allSnapshotNodes().contains(where: { $0 === node })
+            else { continue }
+            registerSSDPartitionIfNeeded(for: partitionKey)
+            node.ssdPromotionAttempted = true
+            if earnedPromotion {
+                cumulativeCounters.eagernessPromotions += 1
+                PrefixCacheDiagnostics.logSystem(
+                    PrefixCacheDiagnostics.SSDWritePromotedEvent(
+                        offset: view.tokenOffset, bytes: payload.totalBytes, hitCount: node.hitCount
+                    ))
+            }
+            store.admitSnapshot(
+                node: node, tree: tree, partitionKey: partitionKey, pathFromRoot: path,
+                snapshot: view, payload: payload, scoringConfig: evictionConfig,
+                deferrable: earnedPromotion)
+        }
+    }
+
     @discardableResult
     func admit(_ admission: SnapshotAdmission) -> StoreDiagnostics {
         // Re-evaluate the measured ceiling on the write path (throttled):
@@ -1227,9 +1316,18 @@ final class PrefixCacheManager {
         {
             let path = path(for: entry)
             let node = tree.insertPath(tokens: path)
+            let replacingView =
+                entry.snapshot.isPrefixView
+                && node.state.body?.bodyID != entry.snapshot.bodyID
             guard tree.storeSnapshot(entry.snapshot, on: node) else {
                 if let lease = node.leafLease { leaseRefusals.append(lease.id) }
                 return nil
+            }
+            if replacingView { node.ssdPromotionAttempted = false }
+            if case .viewSSD = entry.storage {
+                node.viewSSDAdmissionRequested = true
+            } else {
+                node.viewSSDAdmissionRequested = false
             }
 
             return (node, path)
@@ -1264,22 +1362,9 @@ final class PrefixCacheManager {
             // streak earns a deferred-class promotion write from the
             // lookup path instead. `.system` checkpoints are exempt
             // inside the policy (issue #165).
-            if !guaranteeWrite, adaptiveWriteEagerness,
-                SSDWriteEagernessPolicy.mayDefer(
-                    checkpointType: entry.snapshot.checkpointType,
-                    nodeHitCount: node.hitCount,
-                    residentBytes: totalSnapshotBytes,
-                    budgetBytes: memoryBudgetBytes,
-                    bandRetreating: budgetBand.currentBytes < budgetBand.ceilingBytes
-                )
+            if !guaranteeWrite,
+                deferSSDWrite(snapshot: entry.snapshot, node: node, bytes: payload.totalBytes)
             {
-                cumulativeCounters.eagernessDeferrals += 1
-                PrefixCacheDiagnostics.logSystem(
-                    PrefixCacheDiagnostics.SSDWriteDeferredEvent(
-                        offset: entry.snapshot.tokenOffset,
-                        bytes: payload.totalBytes,
-                        hitCount: node.hitCount
-                    ))
                 return nil
             }
             // The Survival Gate: checkpoint write-throughs (and any

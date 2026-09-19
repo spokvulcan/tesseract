@@ -9,6 +9,32 @@ import Testing
 @MainActor
 struct TokenRadixTreeTests {
 
+    @Test(arguments: ["pendingDrop", "backingLoss", "explicitDelete"])
+    func unbackedViewSelfHealsWhenItsLastRefIsLost(loss: String) throws {
+        let tree = TokenRadixTree()
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 4, 64]), MLXArray.ones([1, 1, 4, 64])]
+        let view = try #require(
+            HybridCacheSnapshot.capture(
+                cache: [kv], offset: 4, type: .branchPoint, prefixView: true))
+        let node = tree.insertPath(tokens: Array(1...4))
+        tree.storeSnapshot(view, on: node)
+        let ref = SnapshotRef(
+            snapshotID: "view", partitionDigest: "test", tokenOffset: 4,
+            checkpointType: .branchPoint, bytesOnDisk: 2048)
+        tree.admit(node: node, ref: ref)
+        if loss != "pendingDrop" { tree.commitRef(node: node, expectedID: "view") }
+        switch loss {
+        case "pendingDrop": tree.dropRef(node: node, expectedID: "view")
+        case "backingLoss": tree.clearCommittedSnapshotRefAfterBackingLoss(node: node)
+        default: tree.discardSnapshotRefAfterExplicitDelete(node: node)
+        }
+        // Observe cleanup before any lookup can lazily repair the path.
+        #expect(tree.nodeCount == 1)
+        #expect(tree.snapshotCount == 0)
+        #expect(tree.totalSnapshotBytes == 0)
+    }
+
     @Test func prefixViewCountsOnlyWholeStateSurvivesLeaseAndSelfHealsAfterLastBackerDrops() throws
     {
         let tree = TokenRadixTree()

@@ -128,6 +128,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     }
 
     private let body: Body
+    /// Stable across value copies; async extraction must not admit a payload
+    /// for a view that was replaced while the Model Session was busy.
+    let bodyID = UUID()
     var layers: [LayerState] {
         switch body {
         case .copied(let layers), .prefixView(let layers): layers
@@ -484,10 +487,34 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         case invalidBackingLeaf
     }
 
-    /// Borrow prefix slices only within the Model Session's restore verb.
-    /// `restore` deep-copies and evaluates every array before it returns;
-    /// neither the live cache nor the view retains these borrowed slices.
-    private func materializationLayers(backingLeaf: HybridCacheSnapshot?) throws -> [LayerState] {
+    /// Metadata-only size of a full view payload, before allocating its
+    /// detached buffers. Used by checkpoint admission policy on MainActor.
+    func materializationByteCount(backingLeaf: HybridCacheSnapshot) -> Int? {
+        guard isPrefixView, !backingLeaf.isPrefixView,
+            backingLeaf.tokenOffset >= tokenOffset, backingLeaf.tokenOffset > 0,
+            layers.count == backingLeaf.layers.count
+        else { return nil }
+        var bytes = 0
+        for (layer, backing) in zip(layers, backingLeaf.layers) {
+            if layer.kind == .sliceableAttention {
+                guard backing.kind == .sliceableAttention, layer.className == backing.className
+                else {
+                    return nil
+                }
+                bytes += backing.state.reduce(0) {
+                    $0 + $1.nbytes / backingLeaf.tokenOffset * tokenOffset
+                }
+            } else {
+                bytes += layer.state.reduce(0) { $0 + $1.nbytes }
+            }
+        }
+        return bytes
+    }
+
+    /// Borrow prefix slices only within a Model Session restore or SSD
+    /// extraction edge. Both callers deep-copy and evaluate every array
+    /// before returning; no consumer retains these borrowed slices.
+    func materializationLayers(backingLeaf: HybridCacheSnapshot?) throws -> [LayerState] {
         guard isPrefixView else { return layers }
         guard let backingLeaf, !backingLeaf.isPrefixView,
             backingLeaf.checkpointType == .leaf, backingLeaf.tokenOffset >= tokenOffset,

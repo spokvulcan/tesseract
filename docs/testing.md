@@ -169,6 +169,22 @@ Model Session. Run `RequestMemoryTelemetryTests`, `SpeculativeCanonicalPrefillTe
 `LeafStoreFastPathTests` alongside the prefix suites above.
 These tests do not establish loaded-model parity or large-cache memory savings.
 
+The view SSD slice (#526) uses those same seams. Extraction tests fix the byte
+total and compare every retained array's physical address with both source
+snapshots; `PrefixViewModelSessionTests` also compares plain and quantized view
+payloads against owned checkpoints. `LeafLeaseTests` runs a pending view write
+while its Backing Leaf is checked out. `SSDWriteEagernessTests` checks delayed
+extraction, cold deferral, reuse promotion, type protection, and full-body SSD
+hydration after backer loss. `TokenRadixTreeTests` checks immediate self-heal
+after pending, committed, or explicitly deleted backing loss. The keyed toy
+sequencing test verifies a reused planned view reaches the durable manifest
+through the production successful-turn tail. Run `SSDWriteEagernessTests`,
+`SSDWriteEagernessPolicyTests`, the extension-admission suites, `SnapshotLedgerTests`,
+and the SSD store/manifest suites with the prefix-cache block.
+The eagerness suite also holds the Model Session at a toy forward to verify
+cancellation and replacement before enqueue preserve the view's SSD intent;
+a busy Storage Activity Gate must not delay a pressure-triggered write-through.
+
 ## Live detokenization and stream parity
 
 `LiveStreamingDetokenizerTests` loads a tiny real BPE tokenizer through

@@ -48,6 +48,16 @@ import Testing
                 prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
             let owned = try #require(
                 session.captureSnapshot(cache: baseline, offset: 4, type: .system))
+            let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf)
+            #expect(payload.totalBytes == owned.memoryBytes)
+            #expect(view.materializationByteCount(backingLeaf: leaf) == owned.memoryBytes)
+            #expect(!payload.isMaterialized)
+            let sourceAddresses = Set(
+                (leaf.layers + view.layers).flatMap(\.state).map(backingAddress))
+            for (actual, expected) in zip(owed.retainedArrays, owned.layers.flatMap(\.state)) {
+                #expect(!sourceAddresses.contains(backingAddress(actual)))
+                #expect(actual.asData(access: .copy).data == expected.asData(access: .copy).data)
+            }
             let fromOwned = try session.restore(owned)
             let fromView = try session.restore(view, backingLeaf: leaf)
             let treeAddresses = Set(leaf.layers.flatMap(\.state).map(backingAddress))

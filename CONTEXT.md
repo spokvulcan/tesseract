@@ -77,10 +77,9 @@ task right before the file write. **Snapshot Admission**, eviction and **Snapsho
 Demotion** on the MainActor and the **Leaf Store** tail on the inference thread
 never pay the full-KV memcpy; a deferred payload keeps its arrays alive until the
 writer materializes it, releasing each layer as it is copied. A full payload's
-arrays are the body's own; an extension payload retains no body array — the
-extraction edge *detaches* every array it retains, the attention suffix slices
-and the whole-state (recurrent, rotating, chunked) layers alike, as deep copies
-evaluated there.
+arrays are the body's own except for a Prefix-View Checkpoint's full-format
+payload. View and extension payloads retain no body array: their attention
+prefix or suffix and their whole-state layers are independent evaluated copies.
 _Avoid_: lazy payload, async extraction, background asData, payload streaming.
 
 **Layer Kind**:

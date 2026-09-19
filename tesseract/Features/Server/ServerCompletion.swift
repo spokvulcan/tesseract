@@ -1095,6 +1095,10 @@ nonisolated final class ServerCompletion {
                 memory: memory
             )
             await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+            if mlxStart.ssdEnabled, !Task.isCancelled {
+                await prefixCache.persistViewCheckpoints(
+                    partitionKey: mlxStart.partitionKey, sessions: sessions)
+            }
             leafResult.report.restoreMode = mlxStart.finalCacheOwner.restoreMode
             leafResult.report.restoreCopyReason = mlxStart.finalCacheOwner.copyReason
             leafResult.report.restoreCopyWaitSeconds = mlxStart.finalCacheOwner.copyWaitSeconds
@@ -2765,9 +2769,8 @@ nonisolated final class ServerCompletion {
         ssdEnabled: Bool,
         extending: SnapshotExtension? = nil
     ) -> SnapshotAdmission.Storage {
-        // #524 gives planned views RAM residency only. Their detached SSD
-        // admission needs a checked-in Backing Leaf and belongs to #526.
-        guard ssdEnabled, !snapshot.isPrefixView else { return .ramOnly }
+        guard ssdEnabled else { return .ramOnly }
+        if snapshot.isPrefixView { return .viewSSD }
         return .ramAndSSD(extractSnapshotPayload(snapshot, extending: extending))
     }
 
@@ -2947,17 +2950,41 @@ nonisolated final class ServerCompletion {
         for snapshot: HybridCacheSnapshot,
         extending: SnapshotExtension? = nil
     ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
+        precondition(!snapshot.isPrefixView, "a view payload requires its Backing Leaf")
         let activeExtension = validatedExtension(extending, for: snapshot)
+        return deferredPayload(
+            for: snapshot, layers: snapshot.layers, extending: activeExtension, detaching: false)
+    }
+
+    /// A full-format view payload owns every retained array independently
+    /// of both the Backing Leaf and the view. Run inside the Model Session
+    /// while the backer is protected; only the later host copy is deferred.
+    static func deferredPayload(
+        for view: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
+    ) throws -> (payload: SnapshotPayload, owed: DeferredLayers) {
+        precondition(view.isPrefixView)
+        return deferredPayload(
+            for: view, layers: try view.materializationLayers(backingLeaf: backingLeaf),
+            extending: nil, detaching: true)
+    }
+
+    private static func deferredPayload(
+        for snapshot: HybridCacheSnapshot, layers: [HybridCacheSnapshot.LayerState],
+        extending activeExtension: SnapshotExtension?, detaching: Bool
+    ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
 
         var owed: [DeferredLayers.Layer] = []
         owed.reserveCapacity(snapshot.layers.count)
         var detached: [MLXArray] = []
         var totalBytes = 0
 
-        for layer in snapshot.layers {
+        for layer in layers {
             var suffixBaseOffset: Int?
             var arrays = layer.state
-            if let activeExtension {
+            if detaching {
+                arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
+                detached.append(contentsOf: arrays)
+            } else if let activeExtension {
                 switch layer.kind {
                 case .sliceableAttention:
                     suffixBaseOffset = activeExtension.baseOffset
@@ -2997,6 +3024,7 @@ nonisolated final class ServerCompletion {
             checkpointType: snapshot.checkpointType,
             extending: activeExtension,
             totalBytes: totalBytes,
+            retainsBodyArrays: !detaching && activeExtension == nil,
             materialize: { deferred.materialize() }
         )
         return (payload, deferred)

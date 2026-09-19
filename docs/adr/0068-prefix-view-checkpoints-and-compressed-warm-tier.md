@@ -35,13 +35,13 @@ eviction candidates; Leaf Handoff, Leaf Lease and Leaf Rewind keep their meaning
 
 The tree never materializes a view when its last Backing Leaf departs. A view
 holds no attention bytes, so losing every backer is not an eviction: its
-durability is exactly its SSD admission (the ADR-0019 amendment accompanies
-#526). Without a resident or temporarily leased descendant, Snapshot Ref or
+durability is exactly its SSD admission (ADR-0019's #526 amendment).
+Without a resident or temporarily leased descendant, Snapshot Ref or
 chain-prefix point, the view becomes empty and the usual topology self-heal
 applies. A leased descendant preserves the checkpoint for return, but cannot
 serve a restore during the lease.
 
-In #526, end-of-turn SSD admission will slice the checked-in leaf at the
+#526's end-of-turn SSD admission slices the checked-in leaf at the
 extraction edge and detach every retained array on the Metal thread. The
 writer receives a full snapshot at the view offset, in the unchanged segment
 format. Such a payload never blocks the leaf's next checkout. Adaptive Write
@@ -98,8 +98,20 @@ still match the view's original prefix, including image pseudo-token runs.
 Request memory telemetry reports the additional transient helpers' count and
 whole-state array bytes, deduplicated by capture offset. A planned checkpoint
 at the same offset is already accounted among planned checkpoints.
-View SSD admission (#526), all Warm Body behavior (#527–#531), and their
-measurement gates remain pending.
+#526 retains planned views' SSD intent until the turn's quiescent point after
+leaf check-in. The ordinary write-eagerness policy and type-protected cut run
+before buffer allocation; deferred views retain intent and can earn a write
+through later hits. Extraction claims the current backer while the Model
+Session copies and evaluates all payload arrays. The claim ends before enqueue;
+payload ownership is recorded separately from its full segment format. Async
+completion revalidates the view identity, and unbacked views self-heal when their
+last ref or chain-prefix point is lost. A committed view without a backer uses
+the existing SSD hydration rung to become an owned full body.
+Extraction reserves one view at a time and releases that reservation on every
+non-enqueued exit; replacement views cannot inherit the old body's attempt.
+Only hit-earned promotions receive deferred writer scheduling; pressure-triggered
+checkpoint writes retain the ordinary write-through class.
+All Warm Body behavior (#527–#531) and its measurement gates remain pending.
 Loaded-model parity and performance evidence remain owner work. Validation
 uses the toy Model Session and tiny snapshot fixtures. An app-host bootstrap
 that unexpectedly prewarmed Whisper during early tests was discovered and
