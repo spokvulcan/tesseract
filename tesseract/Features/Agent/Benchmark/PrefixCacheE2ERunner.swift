@@ -38,17 +38,48 @@ final class PrefixCacheE2ERunner {
 
     // MARK: - Entry point
 
+    /// `TESSERACT_E2E_SPECULATION=off|mtp|dflash2|automatic` pins the drafter
+    /// policy for a memory or speculation bisect; unset = Automatic.
+    private static var speculation: SpeculationMode? {
+        ProcessInfo.processInfo.environment["TESSERACT_E2E_SPECULATION"]
+            .flatMap(SpeculationMode.init(rawValue:))
+    }
+
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable:next function_body_length
     func run() async throws {
         setupLogging()
         log("PrefixCacheE2E starting — model=\(runner.resolvedModelName)")
 
-        let engine = AgentEngine()
+        let engine = AgentEngine(speculation: Self.speculation)
         let modelDir = try runner.resolveModelDirectory()
         log("Loading model from: \(modelDir.path)")
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded.")
+        // `TESSERACT_E2E_RELOAD_ONLY=<n>`: reload the engine n times with no
+        // requests in between and stop — isolates load/unload memory from
+        // request memory when bisecting a retention (allocation samples land
+        // in the cache diagnostics).
+        if let reloads = ProcessInfo.processInfo.environment["TESSERACT_E2E_RELOAD_ONLY"]
+            .flatMap(Int.init), reloads > 0
+        {
+            for i in 1...reloads {
+                log("Reload-only cycle \(i)/\(reloads)")
+                try await reloadEngine(engine, modelDir: modelDir)
+            }
+            engine.unloadModel()
+            await engine.awaitPendingUnload()
+            // `TESSERACT_E2E_HOLD_SECONDS=<s>` keeps the process alive, model
+            // unloaded, so a heap tool can inspect what survived.
+            if let hold = ProcessInfo.processInfo.environment["TESSERACT_E2E_HOLD_SECONDS"]
+                .flatMap(Double.init), hold > 0
+            {
+                log("Holding \(hold)s with the model unloaded.")
+                try await Task.sleep(for: .seconds(hold))
+            }
+            log("Reload-only run complete.")
+            return
+        }
 
         // Build the two requests we're comparing. Both share the same system
         // prompt + tool definitions (the "stable prefix") and differ only in
@@ -962,7 +993,7 @@ final class PrefixCacheE2ERunner {
             budgetBytes: 4 * 1024 * 1024 * 1024,  // 4 GiB
             maxPendingBytes: 1 * 1024 * 1024 * 1024  // 1 GiB front door
         )
-        let ssdEngine = AgentEngine(ssdConfig: ssdConfig)
+        let ssdEngine = AgentEngine(ssdConfig: ssdConfig, speculation: Self.speculation)
 
         // Engine teardown must run on every exit path. `defer` cannot
         // host async calls, so use do/catch with explicit teardown

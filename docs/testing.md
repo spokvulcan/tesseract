@@ -482,6 +482,16 @@ model (`--bench-model-id bonsai-2-27b`): on 2026-09-19 that run passed every
 check, 33 of 33 (follow-up 298 and agent history 297 vs baseline 177,
 different image 177, warm and agent outputs byte-equal to cold).
 
+The e2e runner reads three switches for memory bisects. `TESSERACT_E2E_SPECULATION=off|mtp|dflash2|automatic`
+pins the drafter policy (unset = Automatic, the catalogue default).
+`TESSERACT_E2E_RELOAD_ONLY=<n>` reloads the engine n times with no requests
+in between and exits, isolating load/unload memory from request memory;
+`TESSERACT_E2E_HOLD_SECONDS=<s>` then keeps the process alive, model
+unloaded, for a heap tool. `TESSERACT_SKIP_WARMUP_GENERATION=1` (read by
+`LLMActor`, any harness) skips the one-token warmup after a load. Pair them
+with `TESSERACT_ALLOCATION_DIAGNOSTICS=1` and read the `allocationMemory`
+events from the cache diagnostics log.
+
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.
 The VLM smoke currently traps after its load check on every vision model tried
@@ -623,6 +633,24 @@ Allocation events separate target/draft projection stacking and report
 clears reusable MLX buffers before DFlash2 projection stacking, borrowed payload
 chunks avoid a second full encoded buffer, and startup watches disconnects while
 the generation handle is being built.
+
+Unload emits `modelUnloadBegin`, `modelUnloadContainerReleased`,
+`modelUnloadMTPReleased`, `modelUnloadDFlash2Released`,
+`modelUnloadServerCompletionReleased` and `modelUnloadEnd`; the last one
+carries `containerRetained`, `mtpDrafterRetained` and `dflash2DrafterRetained`
+(weak probes on the released objects, `true` means something still holds
+them) and follows the `Memory.clearCache()` that returns the model's
+buffers, so its `activeMemory` is what survived the unload. The load path
+bounds the MLX buffer cache from the first shard (generation's 2 GB limit),
+clears it after the MTP head loads, and packs the DFlash2 draft leaf by leaf
+from its unread bfloat16 checkpoint instead of reading the whole file first
+(`modelDFlash2LoadBegin` to `modelDFlash2Loaded` peaks 0.3 GB over the
+resident target on the 27B pairing, where the whole-file read peaked 4.5 GB
+over it). A reload-only run
+(`TESSERACT_E2E_RELOAD_ONLY=3`) on 2026-09-20 with `qwen3.8-27b` held
+`modelUnloadEnd` at 0.76 GB active across four loads (the proofread model),
+where the previous vendor pin grew 2.3 GB per load (the fused GDN projection
+read as a compile constant; see `docs/mlx-swift-lm-fork.md`).
 
 Focused coverage includes `CompletionDeliveryTests` for startup cancellation and
 handle ownership, `PlaceholderContainerEncodingTests` for borrowed addresses,
@@ -1011,6 +1039,26 @@ xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
   '-only-testing:MLXLMTests/testCacheSerialization(creator:)' \
   '-only-testing:MLXLMTests/testCacheCopyIsIndependent(creator:)' \
   '-only-testing:MLXLMTests/testCacheCopyOnEmptyCache(creator:)'
+```
+
+The vendor's load-memory regressions measure MLX active memory around a
+model or a stacking pass: `testCompiledDecodeReleasesFusedProjectionWithTheModel`
+(`Qwen35FusedGDNProjectionTests`, a dropped fused model leaves under 64 bytes
+resident), `testSameInputStackingReleasesEachBlockBeforeTheNext`
+(`DFlash2Tests`, the stacking transient stays within two blocks) and the
+`SiblingCycleTests` probes (which sibling-graph drop paths release their
+inputs; the two open upstream cases are expected failures). Run them after
+any change to the compiled traces, the projection fusion or stacking, or the
+loader:
+
+```bash
+cd Vendor/mlx-swift-lm
+xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:MLXLMTests/Qwen35FusedGDNProjectionTests \
+  -only-testing:MLXLMTests/SiblingCycleTests \
+  -only-testing:MLXLMTests/LoadWeightsTests \
+  '-only-testing:MLXLMTests/testSameInputStackingReleasesEachBlockBeforeTheNext()'
 ```
 
 App test runs set `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`;

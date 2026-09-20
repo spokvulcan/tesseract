@@ -115,6 +115,9 @@ final class AgentEngine {
 
     private let ssdConfigSource: SSDConfigSource
     private let settingsManager: SettingsManager?
+    /// Drafter policy for an engine without a settings source (benchmarks,
+    /// the e2e runner); `nil` means the catalogue default, Automatic.
+    private let speculationOverride: SpeculationMode?
 
     /// `ssdConfig` takes precedence over `settingsManager`. If both are nil,
     /// the SSD tier is disabled for the lifetime of this engine — the
@@ -122,9 +125,11 @@ final class AgentEngine {
     init(
         settingsManager: SettingsManager? = nil,
         ssdConfig: SSDPrefixCacheConfig? = nil,
+        speculation: SpeculationMode? = nil,
         llmActor: LLMActor = LLMActor()
     ) {
         self.settingsManager = settingsManager
+        self.speculationOverride = speculation
         self.llmActor = llmActor
         if let ssdConfig {
             self.ssdConfigSource = .explicit(ssdConfig)
@@ -180,7 +185,7 @@ final class AgentEngine {
                 // RAM cap (ADR-0018): same snapshot-at-load semantics as
                 // the SSD config; nil (no settings source) = Automatic.
                 ramBudgetCapBytes: settingsManager?.prefixCacheRAMBudgetCapBytes,
-                speculation: settingsManager?.speculationMode ?? .automatic
+                speculation: settingsManager?.speculationMode ?? speculationOverride ?? .automatic
             )
 
             let st = tokenizer.specialTokens
