@@ -34,10 +34,13 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 
 ## Load memory carry (2026-09-20, #550)
 
-The #550 app branch advances the gitlink from `f177464` to `f8b4827` on
-`fix/550-load-memory-retention`, three commits on top of the #533 carry
+The #550 app branch advances the gitlink from `f177464` to `5e353f1` on
+`fix/550-load-memory-retention`, four commits on top of the #533 carry
 (fast-forward; `pin-upstream-mlx-swift` and every historical tip
-unchanged):
+unchanged). The fourth, `5e353f1`, only cites the upstream reports in the
+sibling probes: the assignment case is fixed by ml-explore/mlx#4453
+(merged 2026-09-11, not in the pinned mlx), the compiled split case is
+ml-explore/mlx#3932 (open). The three that change code:
 
 - `4bbca60` `feat(load): read only the indexed shard a key prefix maps to`.
   `WeightFileSelection.indexedKeyPrefix` reads the files the safetensors
@@ -54,9 +57,10 @@ unchanged):
   `traceState(forLayers:)`). Regression: a dropped fused model leaves 4
   bytes resident (18,852 before). `SiblingCycleTests` documents the two
   upstream causes as expected failures: erasing a compiled function whose
-  tape `split`s a captured constant keeps the constant alive (mlx), and
-  `MLXArray._updateInternal` (mlx-c `mlx_array_set`) assigns over the old
-  array so MLX's sibling cycle break in `~array` never runs (mlx-swift);
+  tape `split`s a captured constant keeps the constant alive
+  (ml-explore/mlx#3932), and assigning over a multi-output sibling (what
+  `MLXArray._updateInternal` does through mlx-c `mlx_array_set`) skips
+  MLX's cycle break in `~array` (ml-explore/mlx#4453, fixed upstream);
   the second leaks the lazy init-quantize graph of every `QuantizedLinear`
   (descriptors and 4-byte scalars, ~2.5 MB per load).
 - `f8b4827` `fix(stacking): free each block's originals before packing the
