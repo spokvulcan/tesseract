@@ -150,7 +150,8 @@ Qwen3.5-27B 4-bit with its MTP head, measured in the app that embeds this librar
 ```
 
 *Comment on #607* (its branch was fast-forwarded to `580ef7b` on
-2026-09-20 with the owner's approval):
+2026-09-20 with the owner's approval; posted as
+[issuecomment-5747123420](https://github.com/ml-explore/mlx-swift-lm/pull/607#issuecomment-5747123420)):
 
 ```markdown
 One more commit. `stackSameInputProjections(in:)` iterated `modules()`, whose array holds every projection module, so each block's originals stayed alive until the loop ended and the transient over a load was the sum of every stacked block instead of one. The loop now keeps only the stacking modules. `testSameInputStackingReleasesEachBlockBeforeTheNext` stacks eight quantized MLP blocks and bounds the peak at two; it held all eight before.
