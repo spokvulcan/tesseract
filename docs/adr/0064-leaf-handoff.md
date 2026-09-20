@@ -306,3 +306,63 @@ tracks borrowed array ownership, not merely whether Data views exist. The
 writer's body read claim spans the write and every error exit. Pending-Payload
 Wait keeps its same bound and queued/in-progress rules; an in-progress wait now
 covers writing the borrowed bytes as well as preparing their views.
+
+## Amendment 2026-09-20 — the boundary leaf is moved, not copied (#501)
+
+Leaf Handoff was introduced for the live path: the finished turn's own cache
+becomes the leaf by a move. The boundary path kept a deep copy, and the
+2026-09-20 session logs showed that copy to be the process's memory peak on
+every think-stripping turn.
+
+The boundary executor restores its boundary snapshot, re-prefills the
+canonical residual, and captures. That restored cache is request-private by
+construction: `HybridCacheSnapshot.restore` deep-copies and evaluates every
+layer out of the tree — a Prefix-View Checkpoint's slices of its Backing Leaf
+included — and only the residual prefill writes into it. No tree body, no
+other request and no pending payload can reach it. The one-owner rule
+therefore permits the move, and the executor now takes it, emptying its own
+reference so the `FinalGenerationCache` it hands to the admission is the only
+one.
+
+`HybridCacheSnapshot.canCaptureMoving` asks `captureMoving`'s own guards
+before the executor commits. A quantized partition answers `false` and keeps
+the deep copy, which supports the `QuantizedKVCache` layers a move cannot;
+without the pre-check a refused move would return `nil` and drop the leaf.
+
+Three costs go with the copy, each one leaf at the turn's context:
+
+- the capture's transient, which was the peak sample of every boundary
+  request in the session logs;
+- the next turn's restore, which fell back to `copy` with reason
+  `immutableBody` because the boundary capture left a `.copied` body where
+  check-out needs a `.moved` one;
+- the Active-Inference Reserve's lane doubling, which applies while the most
+  recent leaf store captured by copy.
+
+A moved boundary capture reports `source=handoff`, so the reserve reads one
+leaf plus growth. The `leafStore` event's `path` still reads `boundary`: the
+two fields together say where the leaf came from and how it was taken. The
+`Source` enum's `.boundary` case now means specifically a boundary capture
+that copied.
+
+Leaf Lease, Leaf Rewind, the Restore Pin and the boundary path's own
+sequencing are unchanged. The backing leaf the transient views resolve
+through is still released once the canonical leaf is admitted (#551).
+
+Measured — Qwen3.8-27B 4-bit, unquantized KV, 48 GB M3 Max, one growing
+conversation to 25.7k prompt tokens under a think-stripping render, same
+script both arms:
+
+| | before | after |
+| --- | --- | --- |
+| boundary captures by copy | 5 (mean +1,208 MB, max +1,752 MB) | 0 |
+| active-MLX allocated across the capture | +1,208 MB mean | 0 MB (n=8) |
+| peak active MLX at 25.7k tokens | 21.81 GB | 20.42 GB |
+| restores refused for `immutableBody` | 4 | 0 |
+| boundary `leafStore` source | `boundary` ×5 | `handoff` ×4 |
+
+Gates on the same model: `hybrid-cache-correctness` 12/12 PASS (including
+`movedLeafRestoredByCopyMatchesBitwise`), `prefix-cache-e2e` 23/23 PASS. On
+the e2e's own workload the capture's allocation is 0 MB across all 58
+captures where the copied arm allocated +183.9 MB mean on its 14 boundary
+captures.

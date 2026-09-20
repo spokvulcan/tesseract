@@ -157,6 +157,8 @@ Transferring a conversation's KV cache objects between their only two possible
 owners — the radix tree and a running generation — by move, never by copy and
 never by alias: the finished turn's live cache becomes the leaf as it is, and
 the request that extends that leaf takes the objects back as its live cache.
+A boundary turn's re-prefilled cache moves in the same way: it is the
+request's own by construction, so the capture takes it rather than copying it.
 Only at quiescent points; only for a leaf hit at its full offset that every
 layer can return from (**Leaf Rewind**); anything else restores by copy as
 before — except a check-out refused only for a pending full payload, which is

@@ -927,6 +927,23 @@ unit tests. `DependencyContainer.setup` skips service bootstrap in the test host
 so tests cannot trigger model prewarms. Loaded-model parity/TTFT measurements and
 the #528 enablement gate remain owner work; the default flag is off.
 
+### Boundary leaf capture by move (ADR-0064 amendment, #501)
+
+`EmittedPathSynthesizedReplayTests.theBoundaryLeafMovesItsReprefilledCacheAndTheNextTurnHandsItOff`
+is the behaviour: a think-stripping boundary turn reports `source=handoff` and
+`leafCaptureMode=handoff` with no `copy` sample, and the next turn restores by
+handoff instead of being refused for `immutableBody`.
+`HybridCacheSnapshotTests.canCaptureMovingAgreesWithWhatAMoveActuallyTakes`
+pins the pre-check against `captureMoving` itself, including the quantized
+refusal that keeps the deep copy — the toy Model Session cannot build a real
+`QuantizedKVCache`, so that guard is covered as a pure predicate, not through
+the replay harness.
+`ServerCompletionKeyedSequencingTests.canonicalFallbackRestoresAPlannedBranchView`
+and `thinkStrippingTemplateKeepsTheBoundaryPathAtAUserBoundary` keep asserting
+`path=boundary`; only their `source` moved from `boundary` to `handoff`.
+The loaded-model evidence and the session audit behind the change are in
+`benchmarks/boundary-leaf-move/2026-09-20/`.
+
 ### Backing Leaf credit (ADR-0068 amendment)
 
 `EvictionPolicyTests.aViewHitCreditsItsBackingLeaf` checks that a lookup served
