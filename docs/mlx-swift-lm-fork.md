@@ -32,6 +32,55 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## Load memory carry (2026-09-20, #550)
+
+The #550 app branch advances the gitlink from `f177464` to `f8b4827` on
+`fix/550-load-memory-retention`, three commits on top of the #533 carry
+(fast-forward; `pin-upstream-mlx-swift` and every historical tip
+unchanged):
+
+- `4bbca60` `feat(load): read only the indexed shard a key prefix maps to`.
+  `WeightFileSelection.indexedKeyPrefix` reads the files the safetensors
+  index maps a key prefix to; the MTP drafter factory asks for `mtp.`, so
+  the head loads from `model-mtp-head.safetensors` alone instead of
+  materializing the whole target checkpoint its `sanitize` then dropped.
+- `9ad90d7` `fix(qwen35): declare the fused GDN projection as compile
+  state`. The fused four-way projection is not a registered child, so the
+  decode, segment and verify traces read its arrays as tape constants and
+  MLX kept them alive after the traces were erased: 2.3 GB of Qwen3.8-27B
+  resident per load, growing on every reload (0 → 3.0 → 5.3 → 7.6 → 9.9 GB
+  across the e2e's reloads). Every trace that runs a GDN layer now declares
+  the fused module as compile state (`fusedProjectionTraceState`,
+  `traceState(forLayers:)`). Regression: a dropped fused model leaves 4
+  bytes resident (18,852 before). `SiblingCycleTests` documents the two
+  upstream causes as expected failures: erasing a compiled function whose
+  tape `split`s a captured constant keeps the constant alive (mlx), and
+  `MLXArray._updateInternal` (mlx-c `mlx_array_set`) assigns over the old
+  array so MLX's sibling cycle break in `~array` never runs (mlx-swift);
+  the second leaks the lazy init-quantize graph of every `QuantizedLinear`
+  (descriptors and 4-byte scalars, ~2.5 MB per load).
+- `f8b4827` `fix(stacking): free each block's originals before packing the
+  next`. `stackSameInputProjections(in:)` iterated `modules()`, whose array
+  holds every projection, so all originals lived until the loop ended: a
+  7 GB transient over the 15.9 GB model on Qwen3.8-27B (peak 22.97 GB),
+  the swap spike on the 48 GB machine. The loop keeps only the stacking
+  modules; the test bounds the transient at two blocks (8 blocks of 5.2 MB
+  held 41.9 MB before).
+
+Validation: `LoadWeightsTests` 25, `Qwen35FusedGDNProjectionTests` 16 (1
+skipped), `SiblingCycleTests` 10 (2 expected failures),
+`CompiledDecodeWeightUpdateTests` 6, `CompiledTraceTests` 8,
+`HadamardQuantizedTests` 17 and the two `DFlash2Tests` stacking tests pass;
+formatter-clean on the touched files. The serialized `MLXLMTests` run is
+green but for `TokenIteratorClearCacheTests.testFirstTokenClearsBufferCache`
+(the 256 MB seed buffer does not land in the MLX cache: 309 KB cached), which
+fails the same way on the pristine `f177464`, alone and on an idle machine;
+it predates this carry and is not understood yet. Upstream: all three are general and
+PR-shaped (the fused-projection and stacking fixes touch #572's fusion and
+#607's stacking file, so they fold into those follow-ups; the loader
+selection stands alone). Not filed — the owner's read-and-approve
+attestation is pending, as for #533.
+
 ## Capacity reservation carry (2026-09-19, #533)
 
 The #533 app branch advances the gitlink from `51542c4` to `f177464` on
