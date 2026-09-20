@@ -158,3 +158,50 @@ Loaded-model parity and performance evidence remain owner work. Validation
 uses the toy Model Session and tiny snapshot fixtures. An app-host bootstrap
 that unexpectedly prewarmed Whisper during early tests was discovered and
 guarded with the existing test-host detector before further validation.
+
+## Amendment 2026-09-19 — a view's reuse credits its Backing Leaf
+
+A Prefix-View Checkpoint has no bytes to score and is never an eviction
+victim, so before this amendment its reuse was invisible to eviction: the hit
+bumped the view node, while the Backing Leaf that served the restore kept its
+older recency and a terminal Recovery Cost bounded by the view's offset. Under
+pressure the tree dropped that leaf like any cold leaf, the view emptied and
+self-healed, and a fork that had already proven reuse prefilled cold. The
+loaded-model e2e gate's branch-point survival check caught this.
+
+Two rules now make the view's value count where it lives:
+
+- **Hit credit.** A hit served through a view, stored or transient, credits the
+  chosen Backing Leaf exactly as a direct hit would: `lastAccessTime` and
+  `hitCount`. Eviction recency and Adaptive Write Eagerness see the reuse.
+- **Recovery span.** A leaf's terminal Recovery Cost spans from the nearest
+  ancestor holding restorable state. A body-less junction (a split left by a
+  sibling path or a released body) restores nothing and is skipped, and so is
+  a view the leaf alone keeps alive when that view holds neither a Snapshot
+  Ref nor a chain-prefix point: dropping the leaf loses the view's prefix too.
+  Anything that lets the view outlive the drop bounds the span at the view:
+  another resident full body, a leased leaf whose return preserves the
+  checkpoint, a committed ref or a chain-prefix point.
+
+Self-heal is unchanged. A genuinely tight budget can still take a view's last
+backer; the amendment only makes that leaf as expensive to lose as it is.
+
+## Amendment 2026-09-19 — the boundary backing leaf is released
+
+#525 consumes a think-stripping turn's transient boundary views by checking in
+the live leaf (the fed path plus the raw generated tail) as their Backing Leaf
+before the boundary path restores at the view and re-prefills the canonical
+residual. That live leaf was then left resident beside the canonical leaf: two
+bodies of leaf size per boundary turn, where the pre-#525 tree kept one and the
+transient full copies it replaced lived only for the turn. The loaded-model e2e
+gate showed the doubled eviction rate.
+
+Once the canonical leaf is admitted it is a descendant of every boundary the
+turn resolved, so it backs those views itself. The Leaf Store then releases the
+live leaf: an exact-path, RAM-only, unleased leaf body that is not the canonical
+leaf is dropped through the tree's ordinary body drop and reported as a
+`leafSupersession` with the new mode `released` (no SSD backing existed). When
+the canonical store fails, or the body is leased or already gone, the live leaf
+stays and the Leaf Store logs a `boundaryBackingLeafRelease` skip. The Speculative Canonical
+Prefill resolves its boundary against whatever backer is resident when it runs.
+

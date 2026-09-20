@@ -56,6 +56,12 @@ final class RadixTreeNode {
     }
 
     var isLeaf: Bool { children.isEmpty }
+
+    /// A served lookup hit: recency for eviction, count for write eagerness.
+    func recordHit() {
+        lastAccessTime = .now
+        hitCount += 1
+    }
     var childCount: Int { children.count }
 
     /// A lookup/attribution target: the node's own state is hittable (RAM
@@ -73,6 +79,43 @@ final class RadixTreeNode {
 
     /// Chosen for this resolution only; never retained on the view node.
     var backingLeaf: RadixTreeNode? { viewResolution.backingLeaf }
+
+    /// The offset a terminal loss of this body re-prefills from: the
+    /// nearest ancestor holding restorable state (ADR-0068 amendment). A
+    /// body-less junction restores nothing and is skipped, and so is a
+    /// **Prefix-View Checkpoint** this leaf alone keeps alive: such a view
+    /// owns no attention bytes and empties with its last **Backing Leaf**,
+    /// so dropping the leaf loses the view's span as well. A view that
+    /// outlives the drop bounds the span as before: one with another
+    /// potential backer (a resident full body, or a leased leaf that
+    /// returns), a Snapshot Ref or a chain-prefix point.
+    var terminalRecoveryParentOffset: Int {
+        var ancestor = parent
+        while let candidate = ancestor {
+            if candidate.state.ref != nil || candidate.chainPrefixRestorePoint != nil {
+                return candidate.tokenOffset
+            }
+            if let body = candidate.state.body,
+                !(body.isPrefixView && candidate.isBackedOnly(by: self))
+            {
+                return candidate.tokenOffset
+            }
+            ancestor = candidate.parent
+        }
+        return 0
+    }
+
+    /// `true` when `leaf` is the only descendant keeping this view alive.
+    private func isBackedOnly(by leaf: RadixTreeNode) -> Bool {
+        guard leaf.state.hasResidentBody, leaf.state.checkpointType == .leaf else { return false }
+        return !descendants.contains { $0 !== leaf && $0.isPotentialBackingLeaf }
+    }
+
+    /// Keeps a view alive: a resident full body now, or a leased leaf whose
+    /// return makes the checkpoint usable again (ADR-0068).
+    fileprivate var isPotentialBackingLeaf: Bool {
+        leafLease != nil || (state.hasResidentBody && state.checkpointType == .leaf)
+    }
 
     fileprivate var descendants: [RadixTreeNode] {
         children.keys.sorted().flatMap { key in
@@ -104,10 +147,7 @@ final class RadixTreeNode {
     /// A temporary ownership transfer must not discard the whole-state
     /// checkpoint that becomes usable again when the leaf checks in.
     fileprivate var hasPotentialBackingLeaf: Bool {
-        descendants.contains {
-            $0.leafLease != nil
-                || ($0.state.hasResidentBody && $0.state.checkpointType == .leaf)
-        }
+        descendants.contains(where: \.isPotentialBackingLeaf)
     }
 }
 
@@ -252,11 +292,16 @@ final class TokenRadixTree {
         }
 
         guard let node = bestNode else { return nil }
-        if updateAccess {
-            node.lastAccessTime = .now
-            node.hitCount += 1
-        }
+        if updateAccess { node.recordHit() }
         return (node: node, sharedPrefixLength: bestPrefixLength)
+    }
+
+    /// Credit a **Backing Leaf** with the hit its view served (ADR-0068
+    /// amendment). The lookup bumped the view node; the leaf whose rows the
+    /// restore actually reads earns the same recency and hit count a direct
+    /// hit would give it, so eviction and write eagerness see the reuse.
+    func recordViewHit(backingLeaf: RadixTreeNode) {
+        backingLeaf.recordHit()
     }
 
     /// Resolve a request-local view without inserting it into the tree. The
@@ -1199,6 +1244,19 @@ extension TokenRadixTree {
             current = parent
         }
         return current === root
+    }
+
+    /// Drop the RAM body at exactly `tokens`, when it is an unleased,
+    /// ref-less full leaf body: the Leaf Store's release of a boundary
+    /// backing leaf (ADR-0068 amendment). Returns `nil` when no such body
+    /// sits at that path or the drop is refused.
+    func releaseLeafBody(atExactPath tokens: [Int]) -> DropBodyResult? {
+        guard let node = exactNode(tokens: tokens), node.tokenOffset == tokens.count,
+            let body = node.state.body, body.checkpointType == .leaf, !body.isPrefixView,
+            node.state.ref == nil, node.leafLease == nil
+        else { return nil }
+        let result = dropBody(node: node)
+        return result.droppedCheckpointType == nil ? nil : result
     }
 
     private func exactNode(tokens: [Int]) -> RadixTreeNode? {

@@ -38,17 +38,48 @@ final class PrefixCacheE2ERunner {
 
     // MARK: - Entry point
 
+    /// `TESSERACT_E2E_SPECULATION=off|mtp|dflash2|automatic` pins the drafter
+    /// policy for a memory or speculation bisect; unset = Automatic.
+    private static var speculation: SpeculationMode? {
+        ProcessInfo.processInfo.environment["TESSERACT_E2E_SPECULATION"]
+            .flatMap(SpeculationMode.init(rawValue:))
+    }
+
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable:next function_body_length
     func run() async throws {
         setupLogging()
         log("PrefixCacheE2E starting — model=\(runner.resolvedModelName)")
 
-        let engine = AgentEngine()
+        let engine = AgentEngine(speculation: Self.speculation)
         let modelDir = try runner.resolveModelDirectory()
         log("Loading model from: \(modelDir.path)")
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("Model loaded.")
+        // `TESSERACT_E2E_RELOAD_ONLY=<n>`: reload the engine n times with no
+        // requests in between and stop — isolates load/unload memory from
+        // request memory when bisecting a retention (allocation samples land
+        // in the cache diagnostics).
+        if let reloads = ProcessInfo.processInfo.environment["TESSERACT_E2E_RELOAD_ONLY"]
+            .flatMap(Int.init), reloads > 0
+        {
+            for i in 1...reloads {
+                log("Reload-only cycle \(i)/\(reloads)")
+                try await reloadEngine(engine, modelDir: modelDir)
+            }
+            engine.unloadModel()
+            await engine.awaitPendingUnload()
+            // `TESSERACT_E2E_HOLD_SECONDS=<s>` keeps the process alive, model
+            // unloaded, so a heap tool can inspect what survived.
+            if let hold = ProcessInfo.processInfo.environment["TESSERACT_E2E_HOLD_SECONDS"]
+                .flatMap(Double.init), hold > 0
+            {
+                log("Holding \(hold)s with the model unloaded.")
+                try await Task.sleep(for: .seconds(hold))
+            }
+            log("Reload-only run complete.")
+            return
+        }
 
         // Build the two requests we're comparing. Both share the same system
         // prompt + tool definitions (the "stable prefix") and differ only in
@@ -432,8 +463,15 @@ final class PrefixCacheE2ERunner {
                         argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(
                             call.function.arguments)
                     ))
-            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta,
-                .info:
+            case .thinkReclassify:
+                // `<think>` never closed (a reply cut at the token cap): the
+                // server's accumulator folds the buffered thinking into the
+                // visible text before it stores the turn, so the history this
+                // runner replays must carry the same shape or its render parts
+                // from the stored leaf inside the assistant turn.
+                assistantText += assistantReasoning
+                assistantReasoning = ""
+            case .thinkStart, .thinkEnd, .malformedToolCall, .toolCallDelta, .info:
                 break
             }
         }
@@ -547,8 +585,15 @@ final class PrefixCacheE2ERunner {
                         argumentsJSON: encodeCanonicalHTTPPrefixCacheJSONObject(
                             call.function.arguments)
                     ))
-            case .thinkStart, .thinkEnd, .thinkReclassify, .malformedToolCall, .toolCallDelta,
-                .info:
+            case .thinkReclassify:
+                // `<think>` never closed (a reply cut at the token cap): the
+                // server's accumulator folds the buffered thinking into the
+                // visible text before it stores the turn, so the history this
+                // runner replays must carry the same shape or its render parts
+                // from the stored leaf inside the assistant turn.
+                assistantText += assistantReasoning
+                assistantReasoning = ""
+            case .thinkStart, .thinkEnd, .malformedToolCall, .toolCallDelta, .info:
                 break
             }
         }
@@ -740,11 +785,11 @@ final class PrefixCacheE2ERunner {
     /// Test design: C and D share a deliberately long user-message prefix
     /// (~80 tokens) before diverging at the very last word. Without that
     /// long prefix, the captured `.branchPoint` would sit only a few tokens
-    /// past the stable prefix and its parent-relative deltaL (and therefore
-    /// `F/B`) would be smaller than the noise leaves' deltaL, causing the
-    /// utility scorer to evict it instead of the noise. With the long
-    /// prefix, the branch-point sits deeper than any noise leaf can reach
-    /// and survives eviction pressure.
+    /// past the stable prefix and the span its last Backing Leaf recovers
+    /// (and therefore `F/B`) would be no larger than a short leaf's,
+    /// leaving nothing for the utility scorer to prefer. With the long
+    /// prefix, the branch's backer carries a deeper span than the bodies
+    /// the budget cut must take, and survives it.
     private func runBranchPointScenario(
         engine: AgentEngine,
         modelID: String,
@@ -813,9 +858,19 @@ final class PrefixCacheE2ERunner {
             ))
 
         // Step 9: survival under utility-scored eviction pressure.
-        // alpha=2 puts F/B above pure recency in the utility sum so the
-        // branch-point's larger deltaL outweighs the noise leaves' newer
-        // access times.
+        // A planned branch point is a Prefix-View Checkpoint (ADR-0068):
+        // it owns no bytes and lives exactly as long as one leaf beneath
+        // it. Its earned reuse credits that Backing Leaf, and the leaf's
+        // Recovery Cost spans the view's prefix while it alone keeps the
+        // view alive. So the property to prove is that under a budget cut
+        // scored at alpha=2 the drain takes colder, cheaper bodies before
+        // the branch's last backer — and that a request on the branch
+        // prefix still hits past the stable prefix afterwards.
+        //
+        // The cut is applied directly, without interleaved requests: every
+        // fresh leaf is newer than the backer by construction, and the
+        // steep 1/age recency of a sub-second runner would make the check
+        // measure request spacing rather than utility.
         log("\n── Step 9: Branch-point survival under pressure ──")
         // Force F/B-weighted eviction by configuring this cache directly —
         // per-cache Eviction Configuration. Capture the prior weighting so the
@@ -838,47 +893,46 @@ final class PrefixCacheE2ERunner {
             return
         }
 
-        // Budget = current usage minus one snapshot. Each subsequent noise
-        // request overflows by ~one snapshot, so eviction drops one
-        // eligible candidate per round. The budget intentionally stays
-        // above the multi-child / branch-point combined size: utility
-        // scoring should keep the branch-point alive without ever
-        // depleting the eligible set far enough to fall through to the
-        // fallback path (which is plain LRU and would drop the
-        // branch-point regardless of F/B).
+        // Budget = current usage minus three leaves: the drain must drop
+        // the branch's older sibling backer and two more bodies, and the
+        // budget stays above the stable prefix plus the tool leaves plus
+        // one branch leaf, so utility scoring — not the LRU fallback —
+        // decides which bodies go.
         let avgBytes = preStats.totalSnapshotBytes / preStats.snapshotCount
-        let tightBudget = max(preStats.totalSnapshotBytes - avgBytes, avgBytes)
+        let tightBudget = max(preStats.totalSnapshotBytes - 3 * avgBytes, avgBytes)
         await engine.llmActor.prefixCacheAdmin.setMemoryBudget(tightBudget)
-        log(
-            "  tight budget = \(tightBudget) bytes "
-                + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
-                + "avg snapshot size = \(avgBytes), "
-                + "starting branchPoint count = \(preStats.snapshotsByType[.branchPoint] ?? 0))")
-
-        for (i, prompt) in Self.branchPointNoisePrompts.enumerated() {
-            _ = try await runRequest(
-                engine: engine,
-                modelID: modelID,
-                systemPrompt: systemPrompt,
-                userMessage: "\(prompt) #\(i)",
-                toolSpecs: toolSpecs,
-                parameters: params
-            )
-        }
-
         let postStats = await engine.llmActor.prefixCacheAdmin.stats
         let postBranchCount = postStats?.snapshotsByType[.branchPoint] ?? 0
         let postTotalBytes = postStats?.totalSnapshotBytes ?? 0
         log(
-            "  post-pressure branchPoint count = \(postBranchCount), "
-                + "totalBytes = \(postTotalBytes)")
+            "  tight budget = \(tightBudget) bytes "
+                + "(pre-pressure total = \(preStats.totalSnapshotBytes), "
+                + "avg snapshot size = \(avgBytes), "
+                + "bodies \(preStats.snapshotCount) → \(postStats?.snapshotCount ?? 0), "
+                + "branchPoint count \(preStats.snapshotsByType[.branchPoint] ?? 0) "
+                + "→ \(postBranchCount), totalBytes = \(postTotalBytes))")
+
+        // The proof that matters to a user: the fork still reuses its
+        // branch prefix after the cut.
+        let requestE = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: sharedPrefix + "delta.dat",
+            toolSpecs: toolSpecs,
+            parameters: params
+        )
+        log(
+            "  E cachedTokens=\(requestE.cachedTokens) "
+                + "(stable-prefix-only baseline = \(stablePrefixCachedTokens))")
         checks.append(
             CheckResult(
                 name: "branch_point_survives_under_pressure",
-                passed: postBranchCount >= 1,
-                detail: "branchPoint count after \(Self.branchPointNoisePrompts.count) "
-                    + "noise requests + tight budget: \(postBranchCount) "
-                    + "(≥1 means utility scoring preserved it)"
+                passed: postBranchCount >= 1 && requestE.cachedTokens > stablePrefixCachedTokens,
+                detail: "after a three-leaf budget cut at alpha=2: branchPoint count "
+                    + "\(postBranchCount) (≥1 means a Backing Leaf outlived colder bodies), "
+                    + "E cachedTokens=\(requestE.cachedTokens) vs stable-prefix="
+                    + "\(stablePrefixCachedTokens) (deeper means the branch still serves)"
             ))
 
         // Restore the pre-step weighting so the step is self-contained.
@@ -939,7 +993,7 @@ final class PrefixCacheE2ERunner {
             budgetBytes: 4 * 1024 * 1024 * 1024,  // 4 GiB
             maxPendingBytes: 1 * 1024 * 1024 * 1024  // 1 GiB front door
         )
-        let ssdEngine = AgentEngine(ssdConfig: ssdConfig)
+        let ssdEngine = AgentEngine(ssdConfig: ssdConfig, speculation: Self.speculation)
 
         // Engine teardown must run on every exit path. `defer` cannot
         // host async calls, so use do/catch with explicit teardown
@@ -1139,13 +1193,26 @@ final class PrefixCacheE2ERunner {
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable function_body_length
     /// Image-aware prefix caching against the loaded model: the image-add
-    /// turn serves cold by design, the follow-up turn restores at/past the
-    /// image prefix with a seeded Position Anchor (warm output byte-equal to
-    /// cold under greedy decoding — the M-RoPE correctness proxy), the
+    /// turn serves cold on an empty cache, the follow-up turn restores past
+    /// the image prefix with a seeded Position Anchor (warm output byte-equal
+    /// to cold under greedy decoding — the M-RoPE correctness proxy), the
     /// agent-shaped history rides the same cache-aware arm, and the
     /// non-negotiable case — different image bytes at identical pixel size —
-    /// never produces a hit. Skips (passing) when the loaded model defines
-    /// no image keying.
+    /// never reuses the image run.
+    ///
+    /// "Past the image" and "never reuses the run" are both measured against
+    /// the **text-prefix baseline**: what a text-only turn under the same
+    /// system prompt restores (the system checkpoint Z1's cold prefill
+    /// captured). A hit below the image is legitimate under ADR-0007 phase 2
+    /// (Z6b is that gate), so the different-image turn may restore up to the
+    /// baseline and never beyond it — beyond it lies only the first image's
+    /// digest-keyed run.
+    ///
+    /// Skips (passing) when the loaded model defines no image keying, or when
+    /// the loaded *instance* is a text class: such a load drops image
+    /// attachments and keys the request text-only (issue #439), so every
+    /// image check here would measure text caching — and the different-image
+    /// turn would share the first image's whole key path.
     private func runImageScenario(
         engine: AgentEngine,
         modelDir: URL,
@@ -1169,6 +1236,20 @@ final class PrefixCacheE2ERunner {
 
         log("  Reloading model with vision weights…")
         try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
+        guard await engine.llmActor.loadedInstanceProcessesImages() else {
+            log(
+                "  \(modelID) loaded as a text-only instance — image attachments are dropped "
+                    + "and keyed text-only (issue #439), so the image checks would measure "
+                    + "text caching; skipping (use a vision-loaded model, e.g. bonsai-2-27b)")
+            checks.append(
+                CheckResult(
+                    name: "image_scenario",
+                    passed: true,
+                    detail: "skipped — \(modelID) loads as a text-only instance "
+                        + "(images dropped and keyed text-only; run against a vision-loaded model)"
+                ))
+            return
+        }
 
         guard let imageA = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 17),
             let imageB = BenchmarkHarness.deterministicPNG(width: 256, height: 256, seed: 41)
@@ -1177,7 +1258,7 @@ final class PrefixCacheE2ERunner {
         }
         let imagePrompt = "Describe the dominant colors and any visible pattern in this image."
 
-        log("\n── Step Z1: Image-add turn (cold by design) ──")
+        log("\n── Step Z1: Image-add turn (cold on an empty cache) ──")
         let requestZ1 = try await runRequest(
             engine: engine,
             modelID: modelID,
@@ -1188,17 +1269,57 @@ final class PrefixCacheE2ERunner {
         )
         log(
             "  cachedTokens=\(requestZ1.cachedTokens) ttft=\(String(format: "%.3f", requestZ1.ttftSeconds))s "
-                + "generatedChars=\(requestZ1.generatedText.count)")
+                + "generatedChars=\(requestZ1.generatedText.count) "
+                + "answerChars=\(requestZ1.assistantText.count)")
         checks.append(
             CheckResult(
                 name: "requestZ1_image_turn_serves_cold",
                 passed: requestZ1.cachedTokens == 0,
                 detail:
-                    "cachedTokens=\(requestZ1.cachedTokens) expected 0 (image-add turns serve cold)"
+                    "cachedTokens=\(requestZ1.cachedTokens) expected 0 (empty cache after the reload)"
+            ))
+
+        // The text-prefix baseline: what a text-only turn under the same
+        // system prompt restores. Z1's cold image plan captures nothing
+        // inside the image prefix (the span is forwarded atomically, so the
+        // system checkpoint at 177 is dropped there), so the probe runs
+        // twice: the first pass prefills cold and captures the system
+        // checkpoint, the second pass restores it. Every image check below is
+        // measured against that second pass — a restore past the image must
+        // beat it, and the different-image turn must never exceed it.
+        log("\n── Step Z1b: Text-only probe, twice (the text-prefix baseline) ──")
+        let probePrompt = "Reply with the single word: ready."
+        let requestZ1ProbeCold = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: probePrompt,
+            toolSpecs: [],
+            parameters: params
+        )
+        let requestZ1Probe = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            userMessage: probePrompt,
+            toolSpecs: [],
+            parameters: params
+        )
+        let textPrefixBaseline = requestZ1Probe.cachedTokens
+        log(
+            "  first pass cachedTokens=\(requestZ1ProbeCold.cachedTokens), "
+                + "second pass cachedTokens=\(textPrefixBaseline) (text-prefix baseline)")
+        checks.append(
+            CheckResult(
+                name: "image_text_prefix_baseline_is_warm",
+                passed: textPrefixBaseline > 0,
+                detail:
+                    "cachedTokens=\(textPrefixBaseline) expected > 0 "
+                    + "(a repeated text-only turn restores the system checkpoint)"
             ))
 
         // Extends Z1's conversation exactly — the canonical leaf stored after
-        // Z1's generation should serve the follow-up at/past the image prefix.
+        // Z1's generation should serve the follow-up past the image prefix.
         let followUpMessages: [BenchmarkMessage] = [
             .user(imagePrompt, images: [imageA]),
             .assistant(content: requestZ1.assistantText, reasoning: requestZ1.assistantReasoning),
@@ -1217,51 +1338,46 @@ final class PrefixCacheE2ERunner {
         log(
             "  cachedTokens=\(requestZ2.cachedTokens) ttft=\(String(format: "%.3f", requestZ2.ttftSeconds))s "
                 + "generatedChars=\(requestZ2.generatedText.count)")
-        // Hits below the image's minimum warm offset degrade to cold by
-        // construction, so any nonzero count here is a restore past the image.
+        // The system checkpoint sits below the image, so beating the
+        // text-prefix baseline is what proves a restore past the image run.
         checks.append(
             CheckResult(
                 name: "requestZ2_followup_restores_past_image",
-                passed: requestZ2.cachedTokens > 0,
+                passed: requestZ2.cachedTokens > textPrefixBaseline,
                 detail:
-                    "cachedTokens=\(requestZ2.cachedTokens) expected > 0 (hit at/past the image prefix)"
+                    "cachedTokens=\(requestZ2.cachedTokens) expected > text-prefix baseline="
+                    + "\(textPrefixBaseline) (a restore past the image run)"
             ))
 
-        log("\n── Step Z3: Warm-vs-cold equivalence (Position Anchor) ──")
-        log("  Reloading to clear the prefix cache…")
-        try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
-        let requestZ3 = try await runRequest(
+        // Z3 and Z4 run in the warm state Z2 measured: the reload before Z5
+        // clears the cache, and a cold image-bearing plan captures nothing
+        // inside its image prefix, so after it there is no state below the
+        // image for either of them to restore. Z2 also consumed Z1's leaf —
+        // the follow-up that extends a leaf supersedes it with its own, past
+        // the follow-up's prompt (Leaf Handoff, ADR-0064) — so the agent path
+        // gets its own HTTP-stored image turn to extend.
+        log("\n── Step Z3a: Second image turn (the leaf the agent path extends) ──")
+        let agentImagePrompt = "In one sentence, what does this image look like?"
+        let requestZ3a = try await runRequest(
             engine: engine,
             modelID: modelID,
             systemPrompt: systemPrompt,
-            messages: followUpMessages,
+            messages: [.user(agentImagePrompt, images: [imageA])],
             toolSpecs: [],
             parameters: params
         )
         log(
-            "  cachedTokens=\(requestZ3.cachedTokens) (expected 0) "
-                + "generatedChars=\(requestZ3.generatedText.count)")
-        checks.append(
-            CheckResult(
-                name: "requestZ3_cold_after_reload",
-                passed: requestZ3.cachedTokens == 0,
-                detail: "cachedTokens=\(requestZ3.cachedTokens) expected 0 after reload"
-            ))
-        let equivalence = Self.checkGreedyOutputEquivalence(
-            requestZ2.generatedText,
-            requestZ3.generatedText,
-            labelA: "warm",
-            labelB: "cold"
-        )
-        checks.append(
-            CheckResult(
-                name: "image_warm_output_equivalence",
-                passed: equivalence.passed,
-                detail: equivalence.detail
-            ))
+            "  cachedTokens=\(requestZ3a.cachedTokens) (the warm text prefix, continued "
+                + "through the image) generatedChars=\(requestZ3a.generatedText.count)")
+        let agentHistoryMessages: [BenchmarkMessage] = [
+            .user(agentImagePrompt, images: [imageA]),
+            .assistant(
+                content: requestZ3a.assistantText, reasoning: requestZ3a.assistantReasoning),
+            .user("Answer in one word: which color family dominates?"),
+        ]
 
-        log("\n── Step Z4: Agent-shaped history rides the cache-aware arm ──")
-        let llmHistory = followUpMessages.map(\.llmMessage)
+        log("\n── Step Z3b: Agent-shaped history rides the cache-aware arm ──")
+        let llmHistory = agentHistoryMessages.map(\.llmMessage)
         let service = ServerInferenceService(
             completionStarter: engine.llmActor,
             engine: engine,
@@ -1293,25 +1409,19 @@ final class PrefixCacheE2ERunner {
         checks.append(
             CheckResult(
                 name: "agent_image_history_lands_cache_aware",
-                passed: agentStart.cachedTokenCount > 0,
-                detail: "cachedTokens=\(agentStart.cachedTokenCount) expected > 0 "
-                    + "(agent history with images hits the cache stored by the HTTP-shaped run)"
-            ))
-        let agentEquivalence = Self.checkGreedyOutputEquivalence(
-            agentResult.generatedText,
-            requestZ3.generatedText,
-            labelA: "agent",
-            labelB: "http"
-        )
-        checks.append(
-            CheckResult(
-                name: "agent_image_output_matches_http_path",
-                passed: agentEquivalence.passed,
-                detail: agentEquivalence.detail
+                passed: agentStart.cachedTokenCount > textPrefixBaseline,
+                detail: "cachedTokens=\(agentStart.cachedTokenCount) expected > text-prefix "
+                    + "baseline=\(textPrefixBaseline) (agent history with images restores past "
+                    + "the image from the cache stored by the HTTP-shaped run)"
             ))
 
-        log("\n── Step Z5: Different image, same size (must never hit) ──")
-        let requestZ5 = try await runRequest(
+        log("\n── Step Z4: Different image, same size (must never reuse the image run) ──")
+        // Same text, same pixel size, different bytes: the key path diverges
+        // at the first pseudo-token of the run, so the only state this turn
+        // may restore lies below the image — at most the text-prefix baseline
+        // (ADR-0007 phase 2 lets it reuse that much). Anything beyond the
+        // baseline is image A's run serving image B.
+        let requestZ4 = try await runRequest(
             engine: engine,
             modelID: modelID,
             systemPrompt: systemPrompt,
@@ -1319,13 +1429,73 @@ final class PrefixCacheE2ERunner {
             toolSpecs: [],
             parameters: params
         )
-        log("  cachedTokens=\(requestZ5.cachedTokens)")
+        log("  cachedTokens=\(requestZ4.cachedTokens) (text-prefix baseline=\(textPrefixBaseline))")
         checks.append(
             CheckResult(
                 name: "different_image_same_size_never_hits",
+                passed: requestZ4.cachedTokens <= textPrefixBaseline,
+                detail: "cachedTokens=\(requestZ4.cachedTokens) expected <= text-prefix baseline="
+                    + "\(textPrefixBaseline) — digest-keyed pseudo-tokens diverge at the image run, "
+                    + "so nothing past the text prefix may serve a different image"
+            ))
+
+        log("\n── Step Z5: Warm-vs-cold equivalence (Position Anchor) ──")
+        log("  Reloading to clear the prefix cache…")
+        try await reloadEngine(engine, modelDir: modelDir, visionMode: true)
+        let requestZ5 = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: followUpMessages,
+            toolSpecs: [],
+            parameters: params
+        )
+        log(
+            "  cachedTokens=\(requestZ5.cachedTokens) (expected 0) "
+                + "generatedChars=\(requestZ5.generatedText.count)")
+        checks.append(
+            CheckResult(
+                name: "requestZ5_cold_after_reload",
                 passed: requestZ5.cachedTokens == 0,
-                detail: "cachedTokens=\(requestZ5.cachedTokens) expected 0 — "
-                    + "digest-keyed pseudo-tokens diverge at the image run"
+                detail: "cachedTokens=\(requestZ5.cachedTokens) expected 0 after reload"
+            ))
+        let equivalence = Self.checkGreedyOutputEquivalence(
+            requestZ2.generatedText,
+            requestZ5.generatedText,
+            labelA: "warm",
+            labelB: "cold"
+        )
+        checks.append(
+            CheckResult(
+                name: "image_warm_output_equivalence",
+                passed: equivalence.passed,
+                detail: equivalence.detail
+            ))
+        // The agent path's own cold reference: its history, HTTP-shaped, on
+        // the cache the reload just cleared (Z5's leaf sits past its prompt
+        // and its cold image plan captured nothing below the image).
+        let requestZ5b = try await runRequest(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            messages: agentHistoryMessages,
+            toolSpecs: [],
+            parameters: params
+        )
+        log(
+            "  agent-history cold reference cachedTokens=\(requestZ5b.cachedTokens) "
+                + "generatedChars=\(requestZ5b.generatedText.count)")
+        let agentEquivalence = Self.checkGreedyOutputEquivalence(
+            agentResult.generatedText,
+            requestZ5b.generatedText,
+            labelA: "agent",
+            labelB: "cold"
+        )
+        checks.append(
+            CheckResult(
+                name: "agent_image_output_matches_http_path",
+                passed: agentEquivalence.passed,
+                detail: agentEquivalence.detail
             ))
 
         // ── Step Z6: Image-add turn reuses a warm text prefix (PRD #104) ──
@@ -1422,9 +1592,8 @@ final class PrefixCacheE2ERunner {
 
     /// Long shared user-message prefix (~80 tokens) for the branch-point
     /// scenario. C/D append a different terminator so the divergence
-    /// happens deep in the user message — putting the captured
-    /// `.branchPoint` snapshot's parent-relative deltaL well above any
-    /// noise leaf's deltaL.
+    /// happens deep in the user message — putting the span the branch's
+    /// last Backing Leaf recovers well above a short leaf's.
     private static let branchPointSharedPrefix: String = """
         Please carefully analyze the contents of this very specific file path \
         that I am about to give you, and tell me what kind of file it is, what \
@@ -1434,16 +1603,6 @@ final class PrefixCacheE2ERunner {
         any related files you would expect to find nearby. The file is at \
         /tmp/data/configs/sample-
         """
-
-    /// Short, unrelated noise prompts for the survival check. Kept short
-    /// so noise leaves stay shallower than the branch-point's offset.
-    private static let branchPointNoisePrompts: [String] = [
-        "Add 1 + 1",
-        "Spell cat",
-        "Pick a color",
-        "Say hi",
-        "Name an animal",
-    ]
 
     private static func syntheticToolResultContent(
         for call: ToolCallInfo,

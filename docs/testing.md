@@ -454,19 +454,43 @@ regressions the correctness runner can't see.
 The correctness runner also compares a moved leaf restored by copy against
 cold-prefill logits bitwise (`movedLeafRestoredByCopyMatchesBitwise`).
 
-Known miss in the e2e image scenario (2026-09-18): with a Qwen3.8-template
-model loaded in vision mode (`qwen3.8-27b-paro`, `bonsai-2-27b`),
-`requestZ2_followup_restores_past_image` and
-`agent_image_history_lands_cache_aware` report `cachedTokens=0`. The runner
-caps every reply at 32 tokens and these models are still inside `<think>`
-at the cap; the canonical leaf stored after Z1 (298 tokens) and the
-follow-up's render of that same reply then part four tokens into the
-assistant turn (shared prefix 261), so Z2 prefills cold. The image path is
-intact — warm and cold outputs are identical, Z5 never hits, Z6b reuses the
-text prefix through the image — and `qwen3.5-2b` (a template without
-`preserve_thinking`) passes both checks with the same truncated reply. Read
-the two checks as a runner limitation until the cap or the truncated-think
-history render is settled; the rest of the report reads as usual.
+The e2e image scenario (Step Z) measures against a **text-prefix
+baseline**: after the cold image-add turn, a text-only probe runs twice
+under the same system prompt (the first pass captures the system checkpoint
+a cold image plan cannot capture inside its image prefix; the second pass
+restores it). The follow-up turn and the agent-shaped history must restore
+*more* than that baseline (a restore past the image run), and the
+different-image turn — same text, same pixel size, different bytes — must
+restore *no more* than it (ADR-0007 phase 2 lets it reuse the text prefix;
+anything beyond is the first image's digest-keyed run serving the second).
+The agent-shaped history extends a second HTTP-stored image turn of its own:
+a follow-up supersedes the leaf it extends with its own leaf past the
+follow-up's prompt (Leaf Handoff, ADR-0064), so the leaf the HTTP follow-up
+consumed cannot serve a second reader. All warm turns and the
+different-image turn run before the cache-clearing reload that produces the
+cold references for the output-equivalence checks: after that reload the
+only stored state is a cold turn's own leaf, past its prompt, so nothing
+below the image could be restored. The runner mirrors
+the server's accumulator for a `<think>` block the token cap cut open (the
+buffered thinking is folded into the visible text), so the history it
+replays renders exactly like the stored turn. The scenario skips (passing)
+when the loaded *instance* is a text class — `qwen3.8-27b` and
+`qwen3.8-27b-paro` carry `textOnlyOverride`, so even a vision reload drops
+image attachments and keys the request text-only (issue #439), and every
+image check would measure text caching. Run it against a vision-loaded
+model (`--bench-model-id bonsai-2-27b`): on 2026-09-19 that run passed every
+check, 33 of 33 (follow-up 298 and agent history 297 vs baseline 177,
+different image 177, warm and agent outputs byte-equal to cold).
+
+The e2e runner reads three switches for memory bisects. `TESSERACT_E2E_SPECULATION=off|mtp|dflash2|automatic`
+pins the drafter policy (unset = Automatic, the catalogue default).
+`TESSERACT_E2E_RELOAD_ONLY=<n>` reloads the engine n times with no requests
+in between and exits, isolating load/unload memory from request memory;
+`TESSERACT_E2E_HOLD_SECONDS=<s>` then keeps the process alive, model
+unloaded, for a heap tool. `TESSERACT_SKIP_WARMUP_GENERATION=1` (read by
+`LLMActor`, any harness) skips the one-token warmup after a load. Pair them
+with `TESSERACT_ALLOCATION_DIAGNOSTICS=1` and read the `allocationMemory`
+events from the cache diagnostics log.
 
 Benchmark-shaped siblings (informational, not gates):
 `scripts/dev.sh prefill-step-benchmark` and `scripts/dev.sh paroquant-vlm-smoke`.
@@ -610,6 +634,24 @@ clears reusable MLX buffers before DFlash2 projection stacking, borrowed payload
 chunks avoid a second full encoded buffer, and startup watches disconnects while
 the generation handle is being built.
 
+Unload emits `modelUnloadBegin`, `modelUnloadContainerReleased`,
+`modelUnloadMTPReleased`, `modelUnloadDFlash2Released`,
+`modelUnloadServerCompletionReleased` and `modelUnloadEnd`; the last one
+carries `containerRetained`, `mtpDrafterRetained` and `dflash2DrafterRetained`
+(weak probes on the released objects, `true` means something still holds
+them) and follows the `Memory.clearCache()` that returns the model's
+buffers, so its `activeMemory` is what survived the unload. The load path
+bounds the MLX buffer cache from the first shard (generation's 2 GB limit),
+clears it after the MTP head loads, and packs the DFlash2 draft leaf by leaf
+from its unread bfloat16 checkpoint instead of reading the whole file first
+(`modelDFlash2LoadBegin` to `modelDFlash2Loaded` peaks 0.3 GB over the
+resident target on the 27B pairing, where the whole-file read peaked 4.5 GB
+over it). A reload-only run
+(`TESSERACT_E2E_RELOAD_ONLY=3`) on 2026-09-20 with `qwen3.8-27b` held
+`modelUnloadEnd` at 0.76 GB active across four loads (the proofread model),
+where the previous vendor pin grew 2.3 GB per load (the fused GDN projection
+read as a compile constant; see `docs/mlx-swift-lm-fork.md`).
+
 Focused coverage includes `CompletionDeliveryTests` for startup cancellation and
 handle ownership, `PlaceholderContainerEncodingTests` for borrowed addresses,
 golden full/suffix bytes and write failure, and the SSD store, snapshot-ledger
@@ -725,11 +767,10 @@ capture/restore correctness; DFlash2 and HTTP timing are covered by the
 separate live replay.
 
 The Qwen3.8 community checkpoint used by this comparison loads as a text
-instance even when vision is requested (ADR-0056). The current HTTP E2E
-runner's config-based image scenario is therefore not real VLM coverage;
-its different-image assertion also fails on the unchanged baseline. The
-comparison report retains that failure instead of presenting it as a green
-image gate. Use an actual vision-loaded model for image-specific validation.
+instance even when vision is requested (`textOnlyOverride`). The HTTP E2E
+runner's image scenario reads that instance truth and skips (passing) on
+it, so the comparison report carries no image gate for this model; use a
+vision-loaded model for image-specific validation.
 
 ### Tree-side Leaf Lease evidence (#479)
 
@@ -886,6 +927,30 @@ unit tests. `DependencyContainer.setup` skips service bootstrap in the test host
 so tests cannot trigger model prewarms. Loaded-model parity/TTFT measurements and
 the #528 enablement gate remain owner work; the default flag is off.
 
+### Backing Leaf credit (ADR-0068 amendment)
+
+`EvictionPolicyTests.aViewHitCreditsItsBackingLeaf` checks that a lookup served
+through a stored view refreshes the Backing Leaf's recency and hit count;
+`SnapshotResolutionTests.storedAndTransientViewsChooseAndPinThePreferredWarmOrFullBacker`
+checks the same for the transient boundary path.
+`EvictionPolicyTests.aSoleBackingLeafRecoversFromItsViewsParent` pins the
+terminal recovery span on a pure tree: through the view while the leaf is its
+only backer, bounded at the view once a second backer or a committed ref exists.
+`aSoleBackerOutranksAnEqualLeafUnderAFullBodyParent` checks the score ordering.
+`ServerCompletionKeyedSequencingTests.thinkStrippingTurnRetainsOnlyWholeStateBoundaryBytes`
+also checks that the live leaf checked in as the transient views' backer is
+released once the canonical leaf is admitted: one resident leaf per boundary
+turn, reported as a `leafSupersession` with mode `released`.
+`EvictionPolicyTests.releasingTheBoundaryBackingLeafDropsOnlyAnExactUnleasedLiveLeaf`
+pins the release's guards on the manager: the canonical path, a shallower
+prefix, a foreign path and a leased body release nothing.
+The loaded-model `prefix-cache-e2e` branch-point survival check is the
+end-to-end evidence. Since ADR-0068 a planned branch point is a view with no
+bytes of its own, so the check no longer counts a branch-point body outliving
+interleaved noise requests: it cuts the budget by three leaves at alpha=2
+without new requests, then requires the branch view to keep a Backing Leaf and
+a request on the branch prefix to hit past the stable prefix.
+
 ### Warm-backed Prefix-View Checkpoints (#530)
 
 `PrefixViewModelSessionTests.warmBackerMaterializesPrivateViewStateAndFullPayloadWithTokenParity`
@@ -974,6 +1039,26 @@ xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
   '-only-testing:MLXLMTests/testCacheSerialization(creator:)' \
   '-only-testing:MLXLMTests/testCacheCopyIsIndependent(creator:)' \
   '-only-testing:MLXLMTests/testCacheCopyOnEmptyCache(creator:)'
+```
+
+The vendor's load-memory regressions measure MLX active memory around a
+model or a stacking pass: `testCompiledDecodeReleasesFusedProjectionWithTheModel`
+(`Qwen35FusedGDNProjectionTests`, a dropped fused model leaves under 64 bytes
+resident), `testSameInputStackingReleasesEachBlockBeforeTheNext`
+(`DFlash2Tests`, the stacking transient stays within two blocks) and the
+`SiblingCycleTests` probes (which sibling-graph drop paths release their
+inputs; the two open upstream cases are expected failures). Run them after
+any change to the compiled traces, the projection fusion or stacking, or the
+loader:
+
+```bash
+cd Vendor/mlx-swift-lm
+xcodebuild test -scheme mlx-swift-lm-Package -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:MLXLMTests/Qwen35FusedGDNProjectionTests \
+  -only-testing:MLXLMTests/SiblingCycleTests \
+  -only-testing:MLXLMTests/LoadWeightsTests \
+  '-only-testing:MLXLMTests/testSameInputStackingReleasesEachBlockBeforeTheNext()'
 ```
 
 App test runs set `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`;

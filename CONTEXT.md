@@ -18,13 +18,18 @@ An interior snapshot owning only its whole-state layers, their metadata and its
 token offset; its attention rows come from a resident descendant leaf. It owns
 no attention bytes and is never an eviction victim. A transient boundary is a
 request-local Prefix-View Checkpoint: it is never admitted as a tree body and
-resolves its Backing Leaf only when consumed after the turn.
+resolves its Backing Leaf only when consumed after the turn. The live leaf a
+think-stripping turn checks in to back it is released once the canonical leaf
+is admitted, so a boundary turn leaves one resident leaf (ADR-0068 amendment).
 _Avoid_: shared KV, copy-on-write checkpoint, partial leaf.
 
 **Backing Leaf**:
 The resident, unleased, full-body descendant chosen at **Snapshot Resolution**
 for one **Prefix-View Checkpoint** restore, including a **Warm Body**. It is never
-recorded on the view node.
+recorded on the view node. A hit served through the view credits the Backing
+Leaf's recency and hit count as a direct hit would, and while it alone keeps
+the view alive its terminal **Recovery Cost** spans the view's prefix as well
+(ADR-0068 amendment).
 _Avoid_: parent body, permanent backer, shared owner.
 
 **View Materialization**:

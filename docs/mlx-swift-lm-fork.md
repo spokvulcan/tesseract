@@ -32,6 +32,140 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## Load memory carry (2026-09-20, #550)
+
+The #550 app branch advances the gitlink from `f177464` to `a3c1776` on
+`fix/550-load-memory-retention`, five commits on top of the #533 carry
+(fast-forward; `pin-upstream-mlx-swift` and every historical tip
+unchanged). `5e353f1` only cites the upstream reports in the sibling
+probes: the assignment case is fixed by ml-explore/mlx#4453 (merged
+2026-09-11, not in the pinned mlx), the compiled split case is
+ml-explore/mlx#3932 (open). `a3c1776` writes the trace's state and body
+closures in the labeled form the upstream branch uses (swift-format's lint
+flags a closure argument beside a trailing closure). The three that change
+code:
+
+- `4bbca60` `feat(load): read only the indexed shard a key prefix maps to`.
+  `WeightFileSelection.indexedKeyPrefix` reads the files the safetensors
+  index maps a key prefix to; the MTP drafter factory asks for `mtp.`, so
+  the head loads from `model-mtp-head.safetensors` alone instead of
+  materializing the whole target checkpoint its `sanitize` then dropped.
+- `9ad90d7` `fix(qwen35): declare the fused GDN projection as compile
+  state`. The fused four-way projection is not a registered child, so the
+  decode, segment and verify traces read its arrays as tape constants and
+  MLX kept them alive after the traces were erased: 2.3 GB of Qwen3.8-27B
+  resident per load, growing on every reload (0 → 3.0 → 5.3 → 7.6 → 9.9 GB
+  across the e2e's reloads). Every trace that runs a GDN layer now declares
+  the fused module as compile state (`fusedProjectionTraceState`,
+  `traceState(forLayers:)`). Regression: a dropped fused model leaves 4
+  bytes resident (18,852 before). `SiblingCycleTests` documents the two
+  upstream causes as expected failures: erasing a compiled function whose
+  tape `split`s a captured constant keeps the constant alive
+  (ml-explore/mlx#3932), and assigning over a multi-output sibling (what
+  `MLXArray._updateInternal` does through mlx-c `mlx_array_set`) skips
+  MLX's cycle break in `~array` (ml-explore/mlx#4453, fixed upstream);
+  the second leaks the lazy init-quantize graph of every `QuantizedLinear`
+  (descriptors and 4-byte scalars, ~2.5 MB per load).
+- `f8b4827` `fix(stacking): free each block's originals before packing the
+  next`. `stackSameInputProjections(in:)` iterated `modules()`, whose array
+  holds every projection, so all originals lived until the loop ended: a
+  7 GB transient over the 15.9 GB model on Qwen3.8-27B (peak 22.97 GB),
+  the swap spike on the 48 GB machine. The loop keeps only the stacking
+  modules; the test bounds the transient at two blocks (8 blocks of 5.2 MB
+  held 41.9 MB before).
+
+Validation: `LoadWeightsTests` 25, `Qwen35FusedGDNProjectionTests` 16 (1
+skipped), `SiblingCycleTests` 10 (2 expected failures),
+`CompiledDecodeWeightUpdateTests` 6, `CompiledTraceTests` 8,
+`HadamardQuantizedTests` 17 and the two `DFlash2Tests` stacking tests pass;
+formatter-clean on the touched files. The serialized `MLXLMTests` run is
+green but for `TokenIteratorClearCacheTests.testFirstTokenClearsBufferCache`
+(the 256 MB seed buffer does not land in the MLX cache: 309 KB cached), which
+fails the same way on the pristine `f177464`, alone and on an idle machine;
+it predates this carry and is not understood yet. Upstream: prepared on 2026-09-20 as
+three branches on the fork, each built and tested against upstream's
+`mlx-swift` 0.31.6 pin and formatter-clean under the CI-pinned swift-format
+603.0.0. Filed by the owner on 2026-09-20: the fused-projection fix as
+upstream PR [#631](https://github.com/ml-explore/mlx-swift-lm/pull/631), the
+loader selection as [#632](https://github.com/ml-explore/mlx-swift-lm/pull/632);
+the stacking fix rides on #607's branch. The texts as posted are below.
+
+- `upstream/fused-projection-compile-state` (`b05e0ba` = vanilla `c6446cf`
+  + the fix, re-applied by hand: the fork's commit conflicts with the
+  carried verify traces). Upstream PR
+  [#631](https://github.com/ml-explore/mlx-swift-lm/pull/631); drop from
+  the carry when it merges. `Qwen35FusedGDNProjectionTests` 16 (1 skipped) on
+  vanilla; the regression test retains 18,848 bytes on plain `main` and
+  passes with the fix. `SiblingCycleTests` stays fork-only (it probes mlx).
+- `upstream/indexed-key-prefix-selection` (`6756dd8` = `c6446cf` +
+  `4bbca60`, cherry-picked clean). `LoadWeightsTests` 25 on vanilla.
+  Upstream PR [#632](https://github.com/ml-explore/mlx-swift-lm/pull/632);
+  drop from the carry when it merges.
+- `dflash2-upstream-clean-stacking` (`580ef7b` = `56a21b2`, the branch
+  behind PR #607, + `f8b4827`, cherry-picked clean): folds into #607 by
+  fast-forwarding `dflash2-upstream-clean` to it. Both stacking tests pass
+  there. Upstream `main` has no `SameInputProjectionStacking.swift`, so
+  this cannot stand alone.
+
+Related upstream reports: ml-explore/mlx#3932 (open) is the compiled
+multi-output capture leak the fused-projection fix works around;
+ml-explore/mlx#4453 (merged 2026-09-11, after the mlx `ce45c52` that
+mlx-swift 0.31.6 ships) fixes the assignment-over-siblings case.
+
+*PR* (`upstream/fused-projection-compile-state` → `main`, title "Declare
+the fused GDN projection as compile state so it frees with the model"):
+
+```markdown
+## Proposed changes
+
+Unloading a Qwen3.5 model that ran the compiled decode path leaves its fused GDN input projections resident, so memory grows on every reload.
+
+The fused projection `prepare()` builds is not a registered child of `Qwen35GatedDeltaNet`, so `CompiledTrace`'s default state does not include it and the per-layer and decode-segment traces read its arrays as tape constants. MLX keeps a constant captured by a compiled function whose tape holds a multi-output primitive alive after the function is erased (ml-explore/mlx#3932). The fix declares the fused module as compile state wherever a trace runs a GDN layer, which is what the compile-state contract from #589 intends anyway.
+
+`testCompiledDecodeReleasesFusedProjectionWithTheModel` runs three compiled decode steps, drops the model and asserts active memory returns to within 64 bytes of the baseline: 18,848 bytes retained on `main`, 4 with this change.
+
+Measured in the app that embeds this library, Qwen3.5-27B 4-bit, MLX active memory in GB:
+
+| phase | before | after |
+|---|---|---|
+| resident at load begin, reload 1 / 2 / 3 | 3.0 / 5.3 / 7.6 | 0.76 / 0.76 / 0.76 (a second small model the app keeps) |
+| resident after load | 17.86 | 17.86 |
+```
+
+*PR* (`upstream/indexed-key-prefix-selection` → `main`, title "Load only
+the shard the safetensors index maps a key prefix to"):
+
+```markdown
+## Proposed changes
+
+The MTP drafter factory loads with the default file selection, so for a checkpoint that keeps the head in its own shard (`model-mtp-head.safetensors`, mapped by `model.safetensors.index.json`) it read and evaluated the whole checkpoint and then dropped every target tensor in `sanitize(weights:)`.
+
+`WeightFileSelection.indexedKeyPrefix(prefix)` selects only the files the index maps a weight named `prefix…` to, falling back to `automatic` when there is no usable index or nothing matches. The MTP factory asks for `mtp.` unless the configuration sets an explicit selection. Two tests in `LoadWeightsTests` cover the selection and the fallback.
+
+Qwen3.5-27B 4-bit with its MTP head, measured in the app that embeds this library:
+
+| | before | after |
+|---|---|---|
+| bytes read and evaluated for the head | 15.1 GB (every shard) | 0.85 GB (the head shard) |
+```
+
+*Comment on #607* (its branch was fast-forwarded to `580ef7b` on
+2026-09-20 with the owner's approval; posted as
+[issuecomment-5747123420](https://github.com/ml-explore/mlx-swift-lm/pull/607#issuecomment-5747123420)):
+
+```markdown
+One more commit. `stackSameInputProjections(in:)` iterated `modules()`, whose array holds every projection module, so each block's originals stayed alive until the loop ended and the transient over a load was the sum of every stacked block instead of one. The loop now keeps only the stacking modules. `testSameInputStackingReleasesEachBlockBeforeTheNext` stacks eight quantized MLP blocks and bounds the peak at two; it held all eight before.
+
+Qwen3.5-27B 4-bit in the app that embeds this library, MLX peak memory in GB:
+
+| phase | before | after |
+|---|---|---|
+| peak during projection stacking | 22.97 | 17.84 (flat over the 15.9 GB model) |
+```
+
+Both PRs take the vendor template's checklist and AI-usage block; the
+disclosure line is the owner's to write.
+
 ## Capacity reservation carry (2026-09-19, #533)
 
 The #533 app branch advances the gitlink from `51542c4` to `f177464` on

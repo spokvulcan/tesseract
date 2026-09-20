@@ -304,7 +304,8 @@ final class PrefixCacheManager {
 
     struct LeafSupersession: Sendable {
         /// What happened to the superseded leaf's SSD backing. See
-        /// `CONTEXT.md` → SSD leaf extension (three supersession modes).
+        /// `CONTEXT.md` → SSD leaf extension (three supersession modes), plus
+        /// `released` for a RAM-only body the Leaf Store let go.
         enum Mode: String, Sendable {
             /// A **Leaf Extension Admission** is taking ownership of
             /// the backing's **Segment Chain**. The transfer completes
@@ -327,6 +328,10 @@ final class PrefixCacheManager {
             /// new leaf has no SSD copy, so the ancestor remains the
             /// warm-start fallback and the next extension base.
             case preserved
+            /// A RAM-only body the **Leaf Store** released once its role
+            /// ended — the boundary backing leaf after the canonical leaf
+            /// is admitted (ADR-0068 amendment). No SSD backing existed.
+            case released
         }
 
         let offset: Int
@@ -561,6 +566,9 @@ final class PrefixCacheManager {
 
         let backingLeaf = node.backingLeaf
         if let snapshot = node.state.body, !snapshot.isPrefixView || backingLeaf != nil {
+            // A view serves its hit through the Backing Leaf; the leaf earns
+            // that hit's recency and count (ADR-0068 amendment).
+            if let backingLeaf { tree.recordViewHit(backingLeaf: backingLeaf) }
             // States 1, 2, or 4. On state 4 (committed ref + body) the
             // store bumps the SSD descriptor's `lastAccessAt` so a hot
             // RAM hit does not look stale to the SSD LRU when the body
@@ -746,10 +754,11 @@ final class PrefixCacheManager {
                     view.tokenOffset > result.snapshotTokenOffset
                 {
                     let prefix = Array(tokens.prefix(view.tokenOffset))
-                    if let backer = self.store.tree(for: partitionKey)?.backingLeaf(
-                        forPrefix: prefix),
+                    if let tree = self.store.tree(for: partitionKey),
+                        let backer = tree.backingLeaf(forPrefix: prefix),
                         let body = backer.state.body
                     {
+                        tree.recordViewHit(backingLeaf: backer)
                         result = LookupResult(
                             snapshot: view, partitionKey: partitionKey,
                             snapshotTokenOffset: view.tokenOffset,
@@ -1066,12 +1075,14 @@ final class PrefixCacheManager {
                         divergence: divergence
                     )
                 }
-                node.lastAccessTime = .now
+                node.recordHit()
+                let backingLeaf = node.backingLeaf
+                if let backingLeaf { tree.recordViewHit(backingLeaf: backingLeaf) }
                 let recordedHitID = self.store.noteLookupHit(on: node)
                 self.recordHitSavings(restoredOffset: body.tokenOffset)
                 if let pinRequestID {
                     self.pinRestorePath(node: node, requestID: pinRequestID)
-                    if let backingLeaf = node.backingLeaf {
+                    if let backingLeaf {
                         self.pinRestorePath(node: backingLeaf, requestID: pinRequestID)
                     }
                 }
@@ -1082,7 +1093,7 @@ final class PrefixCacheManager {
                     body: body, partitionKey: partitionKey,
                     promptTokenCount: promptTokenCount, treeMatchDepth: treeMatchDepth,
                     recordedHitID: recordedHitID, divergence: divergence,
-                    backingLeaf: node.backingLeaf?.state.body
+                    backingLeaf: backingLeaf?.state.body
                 )
             }
         }
@@ -2369,6 +2380,24 @@ final class PrefixCacheManager {
     }
 
     // MARK: - Eviction
+
+    /// Release the live leaf a think-stripping turn checked in so its
+    /// transient boundary views could be consumed (ADR-0068 amendment).
+    /// Once the canonical leaf is admitted it backs those views itself,
+    /// and the live leaf — the raw generated tail no canonical follow-up
+    /// re-renders — would otherwise stay resident as a second body per
+    /// turn. The restore and residual re-prefill that read the body have
+    /// completed, so the request's Restore Pin on it guards nothing live.
+    /// Returns the supersession to log, or `nil` when the path is the
+    /// canonical leaf's own or the tree found no releasable body there.
+    func releaseBoundaryBackingLeaf(
+        path: [Int], sparing canonicalPath: [Int], partitionKey: CachePartitionKey
+    ) -> LeafSupersession? {
+        guard path != canonicalPath, let tree = store.tree(for: partitionKey),
+            tree.releaseLeafBody(atExactPath: path) != nil
+        else { return nil }
+        return LeafSupersession(offset: path.count, bodyDroppedSnapshotRefID: nil, mode: .released)
+    }
 
     /// Drop snapshots until `totalSnapshotBytes <= memoryBudgetBytes`. Uses
     /// Marconi utility scoring (`EvictionPolicy`) for eligible nodes and

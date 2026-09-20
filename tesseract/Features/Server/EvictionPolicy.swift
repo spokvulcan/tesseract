@@ -334,7 +334,9 @@ enum EvictionPolicy {
                 // bytes. A **Chain-Prefix Restore** point (ADR-0012) is also
                 // recovered: hydrating the owning chain's leading segments.
                 // No backing at all means terminal loss: re-prefilling the
-                // node's parent-relative span from scratch.
+                // node's parent-relative span from scratch — through any
+                // Prefix-View Checkpoint this leaf alone keeps restorable
+                // (ADR-0068 amendment), since that view empties with it.
                 let recoverySeconds: Double
                 if node.state.ref != nil {
                     recoverySeconds =
@@ -345,7 +347,7 @@ enum EvictionPolicy {
                         Double(point.prefixBytes)
                         / config.estimates.hydrationBytesPerSecond
                 } else {
-                    let parentOffset = node.parent?.tokenOffset ?? 0
+                    let parentOffset = node.terminalRecoveryParentOffset
                     recoverySeconds =
                         parentRelativeFlops(
                             nodeOffset: node.tokenOffset,

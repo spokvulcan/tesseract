@@ -163,13 +163,18 @@ nonisolated enum LeafStorePhase {
             generatedTokens: turn.generatedTokens,
             cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache)
         )
+        // The live leaf a think-stripping boundary turn checks in for its
+        // transient views; released once the canonical leaf backs them.
+        var boundaryBackingLeafPath: [Int]?
         switch decision {
         case .live(let offset):
             await storeLive(offset: offset, turn: turn, inputs: inputs, result: &result)
         case .boundary(let reason):
             // The render rule rejects canonical reuse of the generated tail,
             // not the already-validated fed path. Check in its full leaf at
-            // this quiescent point before consuming request-local views.
+            // this quiescent point before consuming request-local views; the
+            // canonical leaf takes over as their backer and the live leaf is
+            // released below (ADR-0068 amendment).
             if reason == .thinkStrippingUserBoundary,
                 [
                     mlxStart.transientLastUserBoundarySnapshot,
@@ -194,6 +199,7 @@ nonisolated enum LeafStorePhase {
                     trace.logSupersessions(
                         admission.supersededLeaves, diagnostics: diagnosticsContext)
                 }
+                if backer.leafStore != nil { boundaryBackingLeafPath = path }
             }
             let checkedOutOffset = mlxStart.finalCacheOwner.checkout?.claim.lease.offset
             // A boundary or intervened turn must return the original leaf
@@ -222,6 +228,21 @@ nonisolated enum LeafStorePhase {
         if let admission = result.admission {
             trace.ingest(evictions: admission.evictions, diagnostics: diagnosticsContext)
             trace.logSupersessions(admission.supersededLeaves, diagnostics: diagnosticsContext)
+        }
+        if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens {
+            if let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
+                path: boundaryBackingLeafPath, sparing: canonical,
+                partitionKey: mlxStart.partitionKey)
+            {
+                trace.logSupersessions([released], diagnostics: diagnosticsContext)
+            } else {
+                result.report.recordSkip(
+                    LeafSkipLog(
+                        stage: "boundaryBackingLeafRelease", reason: "not-releasable",
+                        level: .info,
+                        extraFields: [("offset", "\(boundaryBackingLeafPath.count)")]),
+                    in: diagnosticsContext)
+            }
         }
         return result
     }
