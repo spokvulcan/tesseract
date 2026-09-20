@@ -347,7 +347,7 @@ struct WarmBodyDrainTests {
                     .init(className: "UnsupportedCache", state: [], metaState: [], offset: 8)
                 ],
                 checkpointType: .leaf, memoryBytes: full.memoryBytes, createdAt: .now)
-            return (try session.compress(invalid), full)
+            return (try session.compress(invalid, bits: 8), full)
         }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(
             "warm-failed-demotion-\(UUID())")

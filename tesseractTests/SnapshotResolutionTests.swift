@@ -39,7 +39,7 @@ import MLXLMCommon
             }
             return try (
                 capture(4, type: .branchPoint),
-                session.compress(capture(warmOffset, type: .leaf)), capture(8, type: .leaf)
+                session.compress(capture(warmOffset, type: .leaf), bits: 8), capture(8, type: .leaf)
             )
         }
         let tier = TieredSnapshotStore(ssdConfig: nil)

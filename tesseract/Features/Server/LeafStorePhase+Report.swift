@@ -87,6 +87,10 @@ nonisolated extension LeafStorePhase {
         enum CopyReason: String, Sendable {
             case quantized, imageKeySpace, checkpoint, immutableBody, pendingFullPayload,
                 untrimmable, rotating, warmBody
+            /// The parity gate's control arm (#528): **Leaf Checkout**
+            /// switched off through `PrefixCacheAdmin`, so an eligible fp16
+            /// leaf restores by copy. Never reported in production.
+            case checkoutDisabled
         }
 
         var handedOff = false

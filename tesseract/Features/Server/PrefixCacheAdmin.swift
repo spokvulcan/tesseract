@@ -87,6 +87,31 @@ final class PrefixCacheAdmin {
         current?.setEvictionAlpha(alpha)
     }
 
+    /// Parity-gate overrides (#528): the Compressed Warm Tier's configuration
+    /// and the control arm's forced restore-by-copy. Reserved for the
+    /// loaded-model runner; no-ops when no cache is live.
+    func setWarmCompression(
+        enabled: Bool, bits: Int, hotLeafPathLimit: Int, opportunisticFraction: Double
+    ) {
+        current?.setWarmCompression(
+            enabled: enabled, bits: bits, hotLeafPathLimit: hotLeafPathLimit,
+            opportunisticFraction: opportunisticFraction)
+    }
+
+    func setLeafCheckoutDisabled(_ disabled: Bool) {
+        current?.setLeafCheckoutDisabled(disabled)
+    }
+
+    /// Settle the queued compression drain outside any Model Session.
+    func awaitPendingDrain() async {
+        await current?.awaitPendingDrain()
+    }
+
+    /// The freshest resident leaf body and its token path (see the manager).
+    func freshestLeaf() -> (body: HybridCacheSnapshot, tokens: [Int])? {
+        current?.freshestLeaf()
+    }
+
     /// Block until pending SSD-tier writes have drained and the manifest
     /// is durably persisted. Callers must invoke this before the model
     /// unload when the on-disk state must survive the teardown. No-op

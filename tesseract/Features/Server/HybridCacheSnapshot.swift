@@ -147,6 +147,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return false
     }
 
+    /// A Warm Body's bit width, read off its first quantized attention
+    /// layer's metaState (`[step, offset, groupSize, bits]`); `nil` for any
+    /// other form. The gate's "recorded quantization metadata".
+    var warmBits: Int? {
+        guard isWarm else { return nil }
+        return layers.first { $0.kind == .sliceableAttention && $0.className == "QuantizedKVCache" }
+            .flatMap { $0.metaState.count > 3 ? Int($0.metaState[3]) : nil }
+    }
+
     var canCompress: Bool {
         !isPrefixView && !isWarm && !layers.contains { $0.className == "QuantizedKVCache" }
             && layers.contains {
@@ -154,9 +163,17 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             }
     }
 
+    /// Group size of every Warm Body; affine mode is the vendor default.
+    static let warmCompressionGroupSize = 64
+
     /// Model Session only. The vendor conversion allocates fresh attention
     /// arrays; immutable whole-state layers keep their existing storage.
-    func compressed() throws -> HybridCacheSnapshot {
+    /// `bits` is the **Eviction Configuration**'s `warmCompressionBits`
+    /// (8 in production, 4 for the parity gate's experimental arm); the
+    /// quantized layer's metaState records it, so a body proves its own
+    /// width.
+    func compressed(bits: Int = 8) throws -> HybridCacheSnapshot {
+        precondition(EvictionConfiguration.supportedWarmCompressionBits.contains(bits))
         guard canCompress else { return self }
         let compressed = try layers.map { layer -> LayerState in
             guard layer.kind == .sliceableAttention, layer.className != "QuantizedKVCache"
@@ -164,7 +181,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
             let source = KVCacheSimple()
             source.state = layer.state
             source.offset = layer.offset
-            let quantized = try source.toQuantized(groupSize: 64, bits: 8)
+            let quantized = try source.toQuantized(
+                groupSize: Self.warmCompressionGroupSize, bits: bits)
             return LayerState(
                 className: "QuantizedKVCache", state: quantized.state,
                 metaState: quantized.metaState, offset: layer.offset,

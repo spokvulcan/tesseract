@@ -1142,13 +1142,17 @@ nonisolated struct WarmCompressEvent: PrefixCacheDiagnostics.Payload {
     let bytesAfter: Int
     let seconds: TimeInterval
     var source: Source = .drain
+    /// The Warm Body's bit width as its own metaState records it (#528).
+    var bits: Int?
     let eventName = "warmCompress"
     var fields: [(String, String)] {
-        [
+        var fields: [(String, String)] = [
             ("offset", "\(offset)"), ("bytesBefore", "\(bytesBefore)"),
             ("bytesAfter", "\(bytesAfter)"),
             ("durationMs", PrefixCacheDiagnostics.milliseconds(seconds)),
             ("source", source.rawValue),
         ]
+        if let bits { fields.append(("bits", "\(bits)")) }
+        return fields
     }
 }
