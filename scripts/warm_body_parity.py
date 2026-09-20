@@ -20,13 +20,35 @@ import time
 
 from allocation_inventory_probe import OSProbe, file_digest, write_json
 
-PAGE_COUNTERS = ("vm.page_free_count", "vm.page_speculative_count", "vm.page_purgeable_count")
+class VMStatistics64(ctypes.Structure):
+    _fields_ = [("free_count", ctypes.c_uint32), ("active_count", ctypes.c_uint32),
+                ("inactive_count", ctypes.c_uint32), ("wire_count", ctypes.c_uint32),
+                ("zero_fill_count", ctypes.c_uint64), ("reactivations", ctypes.c_uint64),
+                ("pageins", ctypes.c_uint64), ("pageouts", ctypes.c_uint64),
+                ("faults", ctypes.c_uint64), ("cow_faults", ctypes.c_uint64),
+                ("lookups", ctypes.c_uint64), ("hits", ctypes.c_uint64),
+                ("purges", ctypes.c_uint64), ("purgeable_count", ctypes.c_uint32),
+                ("speculative_count", ctypes.c_uint32), ("decompressions", ctypes.c_uint64),
+                ("compressions", ctypes.c_uint64), ("swapins", ctypes.c_uint64),
+                ("swapouts", ctypes.c_uint64), ("compressor_page_count", ctypes.c_uint32),
+                ("throttled_count", ctypes.c_uint32), ("external_page_count", ctypes.c_uint32),
+                ("internal_page_count", ctypes.c_uint32),
+                ("total_uncompressed_pages_in_compressor", ctypes.c_uint64)]
+
+
+HOST_VM_INFO64 = 4
 
 
 def available_bytes(probe, page_size):
-    pages = 0
-    for name in PAGE_COUNTERS:
-        pages += probe.sysctl(name, ctypes.c_uint32()).value
+    """Reclaimable memory the way Activity Monitor counts it: free, inactive,
+    speculative and purgeable pages (macOS keeps the free list tiny and parks
+    reclaimable file-backed pages on the inactive list)."""
+    stats = VMStatistics64()
+    count = ctypes.c_uint32(ctypes.sizeof(stats) // 4)
+    host = probe.libc.mach_host_self()
+    if probe.libc.host_statistics64(host, HOST_VM_INFO64, ctypes.byref(stats), ctypes.byref(count)):
+        raise OSError("host_statistics64")
+    pages = stats.free_count + stats.inactive_count + stats.speculative_count + stats.purgeable_count
     return pages * page_size
 
 

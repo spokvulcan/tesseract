@@ -19,7 +19,7 @@ live cache at once (≈3 bodies ≈ 6.6 GB plus generation scratch).
 | Minimum initial available | 20 GiB | weights + 3 bodies + headroom |
 | Expected model + cache peak | 24 GiB | 14 GB weights + ~7 GB bodies + scratch |
 | Footprint stop | 30 GiB | 6 GiB above the expected peak, 18 GiB below RAM |
-| Minimum available stop | 6 GiB | free + speculative + purgeable pages |
+| Minimum available stop | 6 GiB | free + inactive + speculative + purgeable pages (`host_statistics64`; the free list alone is a few hundred MB on macOS, so the first wrapper revision could not start) |
 | Swap growth stop | 1 GiB | as proposed |
 | Pressure stop level | 4 (critical) or unknown | warning (2) is recorded, not a stop |
 | Request / campaign deadline | 300 s / 14400 s | 84 observations, the 32k prefill ≈ 20 s |
