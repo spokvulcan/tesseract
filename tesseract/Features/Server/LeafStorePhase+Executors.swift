@@ -253,7 +253,10 @@ nonisolated extension LeafStorePhase {
             return try await sessions.withSession { session in
                 var timings = Timings()
                 let restoreStart = Date.timeIntervalSinceReferenceDate
-                var restoredCache = try session.restore(boundarySnapshot, backingLeaf: backingLeaf)
+                let restoredCache = try session.restore(boundarySnapshot, backingLeaf: backingLeaf)
+                // Exactly the stored length: the leaf below moves these
+                // buffers in and keeps them, so `KVCacheGrowth`'s rounding
+                // slack is resident tree memory now, not prefill scratch.
                 for layer in restoredCache { layer.reserveCapacity(storedTokens.count) }
                 timings.restoreSeconds = secondsSince(restoreStart)
 
@@ -293,14 +296,14 @@ nonisolated extension LeafStorePhase {
                 // second full-KV deep copy — the boundary turn's memory peak,
                 // and the `.copied` body that made the next turn restore by
                 // copy. ADR-0064's one-owner rule holds: the owner below is
-                // the only reference once `restoredCache` is emptied.
+                // the only reference, and `admitLeaf` reads `cache` only when
+                // it is not moving.
                 let moving =
                     HybridCacheSnapshot.canCaptureMoving(cache: restoredCache)
                     ? FinalGenerationCache(restoredCache) : nil
-                if moving != nil { restoredCache = [] }
 
                 return await admitLeaf(
-                    cache: restoredCache,
+                    cache: moving == nil ? restoredCache : [],
                     moving: moving,
                     path: .boundary,
                     session: session,

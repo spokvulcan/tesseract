@@ -203,14 +203,26 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         self.createdAt = createdAt
     }
 
-    /// Whether ``captureMoving(cache:offset:)`` would take these objects:
-    /// the same guards it applies, asked before the caller commits to a
-    /// move. The **Leaf Store**'s boundary executor asks it of its restored
-    /// cache; a `false` answer keeps the deep copy, which supports the
-    /// quantized and unknown classes a move cannot.
+    /// The one rule for whether a move can take a layer, and the class
+    /// name it would record: a move rebuilds each layer from its class, so
+    /// an unknown class has nothing to rebuild from, and a quantized layer
+    /// does not survive the trim **Leaf Rewind** needs. Both
+    /// ``canCaptureMoving(cache:)`` and ``captureMoving(cache:offset:)``
+    /// ask through here so the pre-check cannot drift from what the move
+    /// goes on to do.
+    private static func movableClassName(_ layer: any KVCache) -> String? {
+        guard !(layer is QuantizedKVCache) else { return nil }
+        return classNameForCache(layer)
+    }
+
+    /// Whether ``captureMoving(cache:offset:)`` would take these objects,
+    /// asked before the caller commits to a move. The **Leaf Store**'s
+    /// boundary executor asks it of its restored cache; a `false` answer
+    /// keeps the deep copy, which supports the quantized and unknown
+    /// classes a move cannot.
     static func canCaptureMoving(cache: [any KVCache]) -> Bool {
         guard !cache.isEmpty else { return false }
-        return cache.allSatisfy { !($0 is QuantizedKVCache) && classNameForCache($0) != nil }
+        return cache.allSatisfy { movableClassName($0) != nil }
     }
 
     /// Transfer a finished generation's cache objects, clearing its reference.
@@ -222,9 +234,7 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         var layers: [LayerState] = []
         var totalBytes = 0
         for layer in cache {
-            guard !(layer is QuantizedKVCache), let className = classNameForCache(layer) else {
-                return nil
-            }
+            guard let className = movableClassName(layer) else { return nil }
             let state = layer.state
             totalBytes += state.reduce(0) { $0 + $1.nbytes }
             layers.append(

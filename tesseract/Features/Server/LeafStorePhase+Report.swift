@@ -45,7 +45,10 @@ nonisolated extension LeafStorePhase {
             case handoff
             case copy, rewind
             /// A restored boundary snapshot extended by the canonical
-            /// residual re-prefill, deep-copied into the leaf.
+            /// residual re-prefill, deep-copied into the leaf. Since the
+            /// boundary capture moves (ADR-0064's 2026-09-20 amendment),
+            /// this is the fallback case only: a cache no move can take,
+            /// which today means a quantized or unknown layer class.
             case boundary
 
             /// Whether the leaf was deep-copied out of a live cache
@@ -99,7 +102,8 @@ nonisolated extension LeafStorePhase {
         var skipReason: String?
         /// The leaf's source, once one was stored: the live final cache
         /// under the fast path and the direct route, a restored boundary
-        /// snapshot under the boundary route.
+        /// snapshot under the boundary route — each reported as `handoff`
+        /// when the capture moved the objects rather than copying them.
         var source: Source? {
             Source.stored(path: path, restoreMode: restoreMode, handedOff: handedOff)
         }

@@ -349,20 +349,11 @@ Leaf Lease, Leaf Rewind, the Restore Pin and the boundary path's own
 sequencing are unchanged. The backing leaf the transient views resolve
 through is still released once the canonical leaf is admitted (#551).
 
-Measured — Qwen3.8-27B 4-bit, unquantized KV, 48 GB M3 Max, one growing
-conversation to 25.7k prompt tokens under a think-stripping render, same
-script both arms:
-
-| | before | after |
-| --- | --- | --- |
-| boundary captures by copy | 5 (mean +1,208 MB, max +1,752 MB) | 0 |
-| active-MLX allocated across the capture | +1,208 MB mean | 0 MB (n=8) |
-| peak active MLX at 25.7k tokens | 21.81 GB | 20.42 GB |
-| restores refused for `immutableBody` | 4 | 0 |
-| boundary `leafStore` source | `boundary` ×5 | `handoff` ×4 |
-
-Gates on the same model: `hybrid-cache-correctness` 12/12 PASS (including
-`movedLeafRestoredByCopyMatchesBitwise`), `prefix-cache-e2e` 23/23 PASS. On
-the e2e's own workload the capture's allocation is 0 MB across all 58
-captures where the copied arm allocated +183.9 MB mean on its 14 boundary
-captures.
+Measured on one growing conversation under a think-stripping render: the
+boundary capture's allocation goes to zero, peak active MLX at 25.7k prompt
+tokens falls 1.4 GB, and the restores that were refused for `immutableBody`
+stop being refused. The saving is one leaf per boundary turn and scales with
+the leaf — the session logs measured the same copy at 4.45 GB at 69k tokens.
+`hybrid-cache-correctness` and `prefix-cache-e2e` both pass on the same
+model. The session audit, the A/B, its driver and its limits are in
+[`benchmarks/boundary-leaf-move/2026-09-20/`](../../benchmarks/boundary-leaf-move/2026-09-20/README.md).

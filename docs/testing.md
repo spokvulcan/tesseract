@@ -929,15 +929,17 @@ the #528 enablement gate remain owner work; the default flag is off.
 
 ### Boundary leaf capture by move (ADR-0064 amendment, #501)
 
-`EmittedPathSynthesizedReplayTests.theBoundaryLeafMovesItsReprefilledCacheAndTheNextTurnHandsItOff`
-is the behaviour: a think-stripping boundary turn reports `source=handoff` and
+`EmittedPathSynthesizedReplayTests.thinkStrippingTemplateKeepsTheBoundaryPathAtAUserBoundary`
+is the behaviour, alongside its pre-existing boundary-path assertions: a
+think-stripping boundary turn reports `source=handoff` and
 `leafCaptureMode=handoff` with no `copy` sample, and the next turn restores by
 handoff instead of being refused for `immutableBody`.
 `HybridCacheSnapshotTests.canCaptureMovingAgreesWithWhatAMoveActuallyTakes`
 pins the pre-check against `captureMoving` itself, including the quantized
 refusal that keeps the deep copy — the toy Model Session cannot build a real
 `QuantizedKVCache`, so that guard is covered as a pure predicate, not through
-the replay harness.
+the replay harness. Both now ask `movableClassName`, so the predicate and the
+move cannot disagree; the test guards the pair rather than holding it together.
 `ServerCompletionKeyedSequencingTests.canonicalFallbackRestoresAPlannedBranchView`
 and `thinkStrippingTemplateKeepsTheBoundaryPathAtAUserBoundary` keep asserting
 `path=boundary`; only their `source` moved from `boundary` to `handoff`.

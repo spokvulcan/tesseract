@@ -14,7 +14,8 @@ STOP_GB = 38.0
 ROUNDS = int(sys.argv[1]) if len(sys.argv) > 1 else 6
 PAD_CHARS = int(sys.argv[2]) if len(sys.argv) > 2 else 18000
 
-pad_source = pathlib.Path("/Users/owl/projects/tesseract/CONTEXT.md").read_text()
+REPO = pathlib.Path(__file__).resolve().parents[3]
+pad_source = (REPO / "CONTEXT.md").read_text()
 
 def footprint_gb():
     try:
