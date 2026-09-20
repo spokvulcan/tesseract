@@ -36,21 +36,25 @@ nonisolated extension LeafStorePhase {
         /// Where the stored leaf's cache state came from (ADR-0063 decision
         /// 13; ADR-0064 adds `handoff`, `copy` and `rewind`).
         enum Source: String, Sendable {
-            /// The live final cache, captured at its own offset.
+            /// The live final cache, deep-copied at its own offset.
             case live
-            /// Original cache objects transferred from the finished generation.
+            /// The leaf took the cache objects themselves rather than a deep
+            /// copy of them: the finished generation's, or — on the boundary
+            /// path — the request-private cache its residual re-prefill ran
+            /// on. `path` says which.
             case handoff
             case copy, rewind
             /// A restored boundary snapshot extended by the canonical
-            /// residual re-prefill.
+            /// residual re-prefill, deep-copied into the leaf.
             case boundary
 
             /// Whether the leaf was deep-copied out of a live cache
             /// (`HybridCacheSnapshot.capture`), so its KV was resident
             /// twice for a moment — what the **Active-Inference Reserve**
-            /// doubles a lane for (#522). A moved leaf reports `handoff`;
-            /// a `copy` is a restore by copy whose source body the tree
-            /// already counts; a `rewind` copied nothing.
+            /// doubles a lane for (#522). A moved leaf reports `handoff`,
+            /// on the boundary path as on the live one; a `copy` is a
+            /// restore by copy whose source body the tree already counts;
+            /// a `rewind` copied nothing.
             var capturesByCopy: Bool {
                 switch self {
                 case .live, .boundary: true
@@ -70,7 +74,7 @@ nonisolated extension LeafStorePhase {
                 case .live, .direct:
                     restoreMode == "copy" || restoreMode == "failedCopy"
                         ? .copy : handedOff ? .handoff : .live
-                case .boundary: .boundary
+                case .boundary: handedOff ? .handoff : .boundary
                 case .rewind: .rewind
                 case .skipped: nil
                 }

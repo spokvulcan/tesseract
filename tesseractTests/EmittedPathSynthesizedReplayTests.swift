@@ -863,7 +863,7 @@ struct EmittedPathSynthesizedReplayTests {
         let turn1 = try await session.turn(request1, context: .canonical)
         #expect(turn1.text == "hello world")
         #expect(turn1.leafStore["path"] == "boundary")
-        #expect(turn1.leafStore["source"] == "boundary")
+        #expect(turn1.leafStore["source"] == "handoff")
         #expect(turn1.leafStore["emittedPath"] == "skipped")
         #expect(turn1.leafStore["emittedPathSkip"] == "thinkStrippingUserBoundary")
         #expect(turn1.event("emittedPathRegister") == nil)
@@ -882,6 +882,39 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn2.cached <= stripped.count)
         #expect(turn2.fedPrompt == Array(turn2.render[turn2.cached...]), turn2.account)
         #expect(session.index.statsSnapshot().registrations == 0)
+    }
+
+    /// The boundary executor's re-prefilled cache is the request's own —
+    /// `session.restore` deep-copies out of the tree and only the residual
+    /// prefill writes into it — so the leaf takes the objects instead of a
+    /// second full-KV deep copy. Two consequences the session logs showed
+    /// costing a full leaf each at 69k tokens: the capture allocates
+    /// nothing, and the resulting `.moved` body lets the next turn check
+    /// out by move rather than restore by copy for `immutableBody`.
+    @Test func theBoundaryLeafMovesItsReprefilledCacheAndTheNextTurnHandsItOff() async throws {
+        let session = Session()
+        let turn1 = try await session.turn(
+            Self.conversation([Self.user("hi")], context: .canonical), context: .canonical)
+        #expect(turn1.leafStore["path"] == "boundary")
+        #expect(turn1.leafStore["source"] == "handoff")
+        // A move, not a copy: the request-memory phase names the mode.
+        #expect(
+            turn1.events.contains {
+                $0.eventName == "requestMemory" && Self.fields($0)["leafCaptureMode"] == "handoff"
+            }, turn1.account)
+        #expect(
+            !turn1.events.contains {
+                $0.eventName == "requestMemory" && Self.fields($0)["leafCaptureMode"] == "copy"
+            }, turn1.account)
+
+        let turn2 = try await session.turn(
+            Self.conversation(
+                [Self.user("hi"), Self.assistant("hello world"), Self.user("more")],
+                context: .canonical),
+            text: "again", context: .canonical)
+        #expect(turn2.cached > 0, turn2.account)
+        #expect(turn2.leafStore["restoreMode"] == "handoff", turn2.account)
+        #expect(turn2.leafStore["copyReason"] == nil, turn2.account)
     }
 
     // MARK: - Harness

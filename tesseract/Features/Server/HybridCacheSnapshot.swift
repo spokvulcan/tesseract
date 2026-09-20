@@ -203,6 +203,16 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         self.createdAt = createdAt
     }
 
+    /// Whether ``captureMoving(cache:offset:)`` would take these objects:
+    /// the same guards it applies, asked before the caller commits to a
+    /// move. The **Leaf Store**'s boundary executor asks it of its restored
+    /// cache; a `false` answer keeps the deep copy, which supports the
+    /// quantized and unknown classes a move cannot.
+    static func canCaptureMoving(cache: [any KVCache]) -> Bool {
+        guard !cache.isEmpty else { return false }
+        return cache.allSatisfy { !($0 is QuantizedKVCache) && classNameForCache($0) != nil }
+    }
+
     /// Transfer a finished generation's cache objects, clearing its reference.
     /// Called only inside a Model Session after awaiting the generation task;
     /// its stream has already synchronized every pending device operation.
