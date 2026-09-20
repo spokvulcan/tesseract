@@ -108,8 +108,8 @@ final class PrefixCacheAdmin {
     }
 
     /// The freshest resident leaf body and its token path (see the manager).
-    func freshestLeaf() -> (body: HybridCacheSnapshot, tokens: [Int])? {
-        current?.freshestLeaf()
+    func freshestLeaf(minimumOffset: Int = 0) -> (body: HybridCacheSnapshot, tokens: [Int])? {
+        current?.freshestLeaf(minimumOffset: minimumOffset)
     }
 
     /// Block until pending SSD-tier writes have drained and the manifest

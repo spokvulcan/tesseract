@@ -2307,12 +2307,12 @@ final class PrefixCacheManager {
     /// the dequantization allowance is timed on), and the token ids a live
     /// turn fed — prompt plus generated — which the runner compares across
     /// arms. Read-only; the body stays in the tree.
-    func freshestLeaf() -> (body: HybridCacheSnapshot, tokens: [Int])? {
+    func freshestLeaf(minimumOffset: Int = 0) -> (body: HybridCacheSnapshot, tokens: [Int])? {
         var freshest: (node: RadixTreeNode, body: HybridCacheSnapshot)?
         for (_, tree) in store.orderedPartitions() {
             for node in tree.allSnapshotNodes() {
                 guard let body = node.state.body, body.checkpointType == .leaf,
-                    !body.isPrefixView
+                    !body.isPrefixView, body.tokenOffset >= minimumOffset
                 else { continue }
                 if freshest == nil || node.lastAccessTime > freshest!.node.lastAccessTime {
                     freshest = (node, body)

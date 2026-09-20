@@ -280,6 +280,22 @@ final class WarmBodyParityBenchRunner {
         try await engine.loadModel(from: modelDir, visionMode: false)
         log("model loaded")
         let tokenizer = try await AppTokenizerLoader().load(from: modelDir)
+        // The Server Completion module and its cache manager are created on
+        // the first request; the admin overrides are no-ops until then.
+        let priming = try await runTurn(
+            [
+                OpenAI.ChatMessage(role: .system, content: .text("You are a terse assistant.")),
+                OpenAI.ChatMessage(
+                    role: .user, content: .text("Reply with the single word ready.")),
+            ],
+            parameters: AgentGenerateParameters(
+                maxTokens: 4, temperature: 0, topP: 1, topK: 1, minP: 0),
+            renderContext: .canonical, engine: engine, modelID: runner.activeConfig.resolvedModelID,
+            deadline: manifest.resources.maximumRequestSeconds)
+        guard engine.llmActor.prefixCacheAdmin.stats != nil else {
+            throw failure("no live prefix cache after the priming request")
+        }
+        log("primed: \(priming.generationTokenCount) tokens, cache live")
         _ = events.take()
 
         do {
@@ -493,6 +509,13 @@ final class WarmBodyParityBenchRunner {
             OpenAI.ChatMessage(role: .system, content: .text(corpus.systemPrompt))
         ]
         var setupLookups: [[String: String]] = []
+        var warmCompressEvents: [[String: String]] = []
+        func noiseTurn() async throws {
+            let turn = try await noise(corpus, engine: engine, modelID: modelID, params: params)
+            warmCompressEvents.append(
+                contentsOf: turn.events.filter { $0.eventName == "warmCompress" }.map(Self.fieldMap)
+            )
+        }
         func send(
             _ messages: [OpenAI.ChatMessage], maxTokens: Int, affinity: String, record: Bool
         ) async throws -> TurnResult {
@@ -533,9 +556,11 @@ final class WarmBodyParityBenchRunner {
                 invalid.append("\(label): no lookup event")
                 return
             }
-            if first.field("reason") != "missNoEntries" {
+            if first.field("restoreMode") != "cold" || turn.cachedTokenCount != 0 {
                 invalid.append(
-                    "\(label): expected a cold miss, got \(first.field("reason") ?? "?")")
+                    "\(label): expected a cold miss, got \(first.field("reason") ?? "?") "
+                        + "restoreMode=\(first.field("restoreMode") ?? "?") cached=\(turn.cachedTokenCount)"
+                )
             }
         }
         func settleCompression(_ label: String) async {
@@ -562,21 +587,25 @@ final class WarmBodyParityBenchRunner {
                         contentsOf: turn.events.filter { $0.eventName == "lookup" }.map(
                             Self.fieldMap))
                 }
-                _ = try await noise(corpus, engine: engine, modelID: modelID, params: params)
+                try await noiseTurn()
                 await settleCompression("fork \(forkIndex)")
+                warmCompressEvents.append(
+                    contentsOf: events.take().filter { $0.eventName == "warmCompress" }.map(
+                        Self.fieldMap))
             }
             history.append(OpenAI.ChatMessage(role: .user, content: .text(corpus.setupUser)))
         }
         // A short unrelated turn makes the conversation's leaf older than the
         // Budget Floor's freshest leaf, so the opportunistic pass may
         // compress it (the floor's most-recently-extended leaf is exempt).
-        _ = try await noise(corpus, engine: engine, modelID: modelID, params: params)
+        try await noiseTurn()
         await settleCompression("setup")
-        let warmCompressEvents = events.take().filter { $0.eventName == "warmCompress" }
-            .map(Self.fieldMap)
+        warmCompressEvents.append(
+            contentsOf: events.take().filter { $0.eventName == "warmCompress" }.map(Self.fieldMap))
 
-        // The resident form the hit will restore.
-        guard let freshest = admin.freshestLeaf() else {
+        // The resident form the hit will restore: the case conversation's
+        // leaf, told apart from the noise conversation's by its size.
+        guard let freshest = admin.freshestLeaf(minimumOffset: spec.prefixTokens) else {
             throw failure("no resident leaf after setup")
         }
         let leafForm =
@@ -650,7 +679,8 @@ final class WarmBodyParityBenchRunner {
             )
         }
         var generatedIDs: [Int]?
-        if spec.kind != .thinkStrippingBoundary, let leaf = admin.freshestLeaf(),
+        if spec.kind != .thinkStrippingBoundary,
+            let leaf = admin.freshestLeaf(minimumOffset: spec.prefixTokens),
             leaf.tokens.count > hit.promptTokenCount
         {
             generatedIDs = Array(leaf.tokens[hit.promptTokenCount...])
@@ -658,7 +688,7 @@ final class WarmBodyParityBenchRunner {
 
         // Follow-up: another unrelated turn, then a one-token continuation so
         // the fidelity walk has the boundary that crosses the timed turn.
-        _ = try await noise(corpus, engine: engine, modelID: modelID, params: params)
+        try await noiseTurn()
         await settleCompression("follow-up")
         _ = events.take()
         history.append(OpenAI.ChatMessage(role: .user, content: .text(corpus.followUpUser)))
@@ -757,15 +787,26 @@ final class WarmBodyParityBenchRunner {
                 problems.append("boundary: leafStore path=\(leafStore?["path"] ?? "nil")")
                 return problems
             }
-            let boundary = lookups.dropFirst().first { $0["source"] == "view" }
-            if boundary == nil {
-                problems.append("boundary: no transient view restore")
-            } else if arm != .fp16, boundary?["backingLeafForm"] != "warm" {
-                problems.append(
-                    "boundary warm: backingLeafForm=\(boundary?["backingLeafForm"] ?? "nil")")
-            } else if arm == .fp16, boundary?["backingLeafForm"] != "ownedBody" {
-                problems.append(
-                    "boundary control: backingLeafForm=\(boundary?["backingLeafForm"] ?? "nil")")
+            // The transient boundary view is resolved inside the leaf store,
+            // which reports the restore it made from the arm's resident form.
+            if leafStore["boundary"] == nil {
+                problems.append("boundary: leafStore carries no boundary kind")
+            }
+            switch arm {
+            case .fp16:
+                if leafStore["restoreMode"] != "copy"
+                    || leafStore["copyReason"] != "checkoutDisabled"
+                {
+                    problems.append(
+                        "boundary control: restoreMode=\(leafStore["restoreMode"] ?? "nil") copyReason=\(leafStore["copyReason"] ?? "nil")"
+                    )
+                }
+            case .warm8, .warm4:
+                if leafStore["restoreMode"] != "copy" || leafStore["copyReason"] != "warmBody" {
+                    problems.append(
+                        "boundary warm: restoreMode=\(leafStore["restoreMode"] ?? "nil") copyReason=\(leafStore["copyReason"] ?? "nil")"
+                    )
+                }
             }
         }
         return problems
