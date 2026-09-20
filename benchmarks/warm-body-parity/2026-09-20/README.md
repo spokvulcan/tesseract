@@ -3,7 +3,7 @@
 Owner run of the [2026-09-19 pre-registration](../2026-09-19/README.md)
 (commit `d770ba4a`) on the owner's 48 GiB M3 Max. The manifest is
 [owner-plan.json](owner-plan.json); it is committed before the run and the
-runner (`--warm-parity-bench`, commit `2df00ecd`) refuses any manifest that
+runner (`--warm-parity-bench`, commits `2df00ecd` + `57cd12a9`) refuses any manifest that
 is not `APPROVED` or whose binary/model checksums differ.
 
 ## Thresholds re-derived for 48 GiB
@@ -38,3 +38,13 @@ claimed coverage. The filler corpus is `CONTEXT.md` at the recorded checksum.
 ## Results
 
 Filled in after the run; see the results section appended below.
+
+## Attempts
+
+- Attempt 1 (manifest commit `3557e960`, runner `2df00ecd`): stopped by the
+  owner in the warmup block of the first case. Two instrumentation defects:
+  the arm overrides were applied before the cache manager existed (it is
+  created on the first request), and the measured leaf was the noise turn's.
+  No measured block was reached; the partial output is kept privately as
+  `warm-body-parity-2026-09-20-run1-aborted-instrumentation`.
+- Attempt 2 (runner `57cd12a9`): the campaign below.

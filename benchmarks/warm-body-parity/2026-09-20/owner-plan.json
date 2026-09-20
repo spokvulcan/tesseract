@@ -1,11 +1,11 @@
 {
   "status": "APPROVED",
-  "ownerApproval": "Owner approval granted in session on 2026-09-20 (standing approval for unattended loaded-model, long-context and reload benchmarks on this host; thresholds re-derived for 48 GiB below).",
+  "ownerApproval": "Owner approval granted in session on 2026-09-20 (standing approval for unattended loaded-model, long-context and reload benchmarks on this host; thresholds re-derived for 48 GiB below). Attempt 1 (runner 2df00ecd, manifest 3557e960) was stopped by the owner during the warmup block on instrumentation defects (arm overrides applied before the cache manager existed; wrong leaf measured); no measured block was reached. Attempt 2 uses the corrected runner below.",
   "preRegistrationCommit": "d770ba4a",
-  "appCommit": "2df00ecd",
+  "appCommit": "57cd12a9",
   "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
-  "instrumentationCommit": "2df00ecd",
-  "releaseBinarySHA256": "2103730fc5f16757c0076e0933de24a950245c9cd53e47ab2afb9a825c91dc0f",
+  "instrumentationCommit": "57cd12a9",
+  "releaseBinarySHA256": "de072f293d944bf663d8e78766343ddfe626a719fd087e78a2c83a50448fee25",
   "host": {
     "identifier": "Mac15,9 (Apple M3 Max), owner's machine",
     "ramBytes": 51539607552,
