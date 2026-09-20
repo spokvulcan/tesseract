@@ -79,11 +79,65 @@ formatter-clean on the touched files. The serialized `MLXLMTests` run is
 green but for `TokenIteratorClearCacheTests.testFirstTokenClearsBufferCache`
 (the 256 MB seed buffer does not land in the MLX cache: 309 KB cached), which
 fails the same way on the pristine `f177464`, alone and on an idle machine;
-it predates this carry and is not understood yet. Upstream: all three are general and
-PR-shaped (the fused-projection and stacking fixes touch #572's fusion and
-#607's stacking file, so they fold into those follow-ups; the loader
-selection stands alone). Not filed — the owner's read-and-approve
-attestation is pending, as for #533.
+it predates this carry and is not understood yet. Upstream: prepared on 2026-09-20 as
+three branches on the fork, each built and tested against upstream's
+`mlx-swift` 0.31.6 pin and formatter-clean under the CI-pinned swift-format
+603.0.0; **not filed**, pending the owner's read-and-approve attestation
+(vendor `CONTRIBUTING.md`). The texts to post are below.
+
+- `upstream/fused-projection-compile-state` (`ca97bf4` = vanilla `c6446cf`
+  + the fix, re-applied by hand: the fork's commit conflicts with the
+  carried verify traces). `Qwen35FusedGDNProjectionTests` 16 (1 skipped) on
+  vanilla; the regression test retains 18,848 bytes on plain `main` and
+  passes with the fix. `SiblingCycleTests` stays fork-only (it probes mlx).
+- `upstream/indexed-key-prefix-selection` (`6756dd8` = `c6446cf` +
+  `4bbca60`, cherry-picked clean). `LoadWeightsTests` 25 on vanilla.
+- `dflash2-upstream-clean-stacking` (`580ef7b` = `56a21b2`, the branch
+  behind PR #607, + `f8b4827`, cherry-picked clean): folds into #607 by
+  fast-forwarding `dflash2-upstream-clean` to it. Both stacking tests pass
+  there. Upstream `main` has no `SameInputProjectionStacking.swift`, so
+  this cannot stand alone.
+
+Related upstream reports: ml-explore/mlx#3932 (open) is the compiled
+multi-output capture leak the fused-projection fix works around;
+ml-explore/mlx#4453 (merged 2026-09-11, after the mlx `ce45c52` that
+mlx-swift 0.31.6 ships) fixes the assignment-over-siblings case.
+
+*PR* (`upstream/fused-projection-compile-state` → `main`, title "Declare
+the fused GDN projection as compile state so it frees with the model"):
+
+```markdown
+## Proposed changes
+
+Unloading a Qwen3.5 model that ran the compiled decode path leaves its fused GDN input projections resident: about 2.3 GB per load of the 27B, growing on every reload.
+
+The fused projection built by `prepare()` is not a registered child of `Qwen35GatedDeltaNet` (the checkpoint topology stays the four projections), so `CompiledTrace`'s default state, the owner's `innerState()`, does not include it, and the per-layer and decode-segment traces read its arrays as tape constants. MLX does not release a constant captured by a compiled function whose tape holds a multi-output primitive when that function is erased (ml-explore/mlx#3932; the assignment half of it is fixed by ml-explore/mlx#4453, which is newer than the mlx that mlx-swift 0.31.6 ships), so the projection outlives the model.
+
+The fix declares the fused module as compile state wherever a trace runs a GDN layer: `fusedProjectionTraceState` on the layer, the per-layer linear trace's `state` closure, and `traceState(forLayers:)` for the decode segments. That is also what the compile-state contract from #589 intends: a trace's weights are inputs, not constants, so the trace survives a weight update and holds no arrays of its own.
+
+`testCompiledDecodeReleasesFusedProjectionWithTheModel` builds a quantized fused model, runs three compiled decode steps, drops the model and asserts that active memory returns to within 64 bytes of the baseline. On `main` it retains 18,848 bytes; with this change, 4 bytes (the kernel's scalar step count, which MLX keeps).
+```
+
+*PR* (`upstream/indexed-key-prefix-selection` → `main`, title "Load only
+the shard the safetensors index maps a key prefix to"):
+
+```markdown
+## Proposed changes
+
+The MTP drafter factory loads its weights with the default selection, so for a checkpoint that ships the head in its own shard (`model-mtp-head.safetensors` beside the target's shards, mapped by `model.safetensors.index.json`) it read the whole checkpoint, materialized every target tensor, and then dropped all of them in `sanitize(weights:)`. On a 27B target that is 15 GB read and evaluated for a 0.9 GB head, on every load.
+
+`WeightFileSelection.indexedKeyPrefix(prefix)` selects the files the index maps a weight named `prefix…` to, and falls back to `automatic` when there is no usable index or the index maps nothing with that prefix. The MTP factory asks for `mtp.` unless the configuration sets an explicit selection. Two tests in `LoadWeightsTests` cover the selection and the fallback.
+```
+
+*Comment on #607* after `git push origin
+dflash2-upstream-clean-stacking:dflash2-upstream-clean`:
+
+```markdown
+One more commit: `stackSameInputProjections(in:)` iterated `modules()`, whose array holds every projection module, so each block's originals stayed alive until the loop ended and the transient over a load was the sum of all stacked blocks (7 GB over a 27B model) rather than one block. The loop now keeps only the stacking modules. `testSameInputStackingReleasesEachBlockBeforeTheNext` stacks eight quantized MLP blocks and bounds the peak at two blocks; it held all eight before.
+```
+
+Both PRs take the vendor template's checklist and AI-usage block; the
+disclosure line is the owner's to write.
 
 ## Capacity reservation carry (2026-09-19, #533)
 
