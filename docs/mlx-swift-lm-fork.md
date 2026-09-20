@@ -112,13 +112,18 @@ the fused GDN projection as compile state so it frees with the model"):
 ```markdown
 ## Proposed changes
 
-Unloading a Qwen3.5 model that ran the compiled decode path leaves its fused GDN input projections resident: about 2.3 GB per load of the 27B, growing on every reload.
+Unloading a Qwen3.5 model that ran the compiled decode path leaves its fused GDN input projections resident, so memory grows on every reload.
 
-The fused projection built by `prepare()` is not a registered child of `Qwen35GatedDeltaNet` (the checkpoint topology stays the four projections), so `CompiledTrace`'s default state, the owner's `innerState()`, does not include it, and the per-layer and decode-segment traces read its arrays as tape constants. MLX does not release a constant captured by a compiled function whose tape holds a multi-output primitive when that function is erased (ml-explore/mlx#3932; the assignment half of it is fixed by ml-explore/mlx#4453, which is newer than the mlx that mlx-swift 0.31.6 ships), so the projection outlives the model.
+The fused projection `prepare()` builds is not a registered child of `Qwen35GatedDeltaNet`, so `CompiledTrace`'s default state does not include it and the per-layer and decode-segment traces read its arrays as tape constants. MLX keeps a constant captured by a compiled function whose tape holds a multi-output primitive alive after the function is erased (ml-explore/mlx#3932). The fix declares the fused module as compile state wherever a trace runs a GDN layer, which is what the compile-state contract from #589 intends anyway.
 
-The fix declares the fused module as compile state wherever a trace runs a GDN layer: `fusedProjectionTraceState` on the layer, the per-layer linear trace's `state` closure, and `traceState(forLayers:)` for the decode segments. That is also what the compile-state contract from #589 intends: a trace's weights are inputs, not constants, so the trace survives a weight update and holds no arrays of its own.
+`testCompiledDecodeReleasesFusedProjectionWithTheModel` runs three compiled decode steps, drops the model and asserts active memory returns to within 64 bytes of the baseline: 18,848 bytes retained on `main`, 4 with this change.
 
-`testCompiledDecodeReleasesFusedProjectionWithTheModel` builds a quantized fused model, runs three compiled decode steps, drops the model and asserts that active memory returns to within 64 bytes of the baseline. On `main` it retains 18,848 bytes; with this change, 4 bytes (the kernel's scalar step count, which MLX keeps).
+Measured in the app that embeds this library, Qwen3.5-27B 4-bit, MLX active memory in GB:
+
+| phase | before | after |
+|---|---|---|
+| resident at load begin, reload 1 / 2 / 3 | 3.0 / 5.3 / 7.6 | 0.76 / 0.76 / 0.76 (a second small model the app keeps) |
+| resident after load | 17.86 | 17.86 |
 ```
 
 *PR* (`upstream/indexed-key-prefix-selection` → `main`, title "Load only
@@ -127,16 +132,28 @@ the shard the safetensors index maps a key prefix to"):
 ```markdown
 ## Proposed changes
 
-The MTP drafter factory loads its weights with the default selection, so for a checkpoint that ships the head in its own shard (`model-mtp-head.safetensors` beside the target's shards, mapped by `model.safetensors.index.json`) it read the whole checkpoint, materialized every target tensor, and then dropped all of them in `sanitize(weights:)`. On a 27B target that is 15 GB read and evaluated for a 0.9 GB head, on every load.
+The MTP drafter factory loads with the default file selection, so for a checkpoint that keeps the head in its own shard (`model-mtp-head.safetensors`, mapped by `model.safetensors.index.json`) it read and evaluated the whole checkpoint and then dropped every target tensor in `sanitize(weights:)`.
 
-`WeightFileSelection.indexedKeyPrefix(prefix)` selects the files the index maps a weight named `prefix…` to, and falls back to `automatic` when there is no usable index or the index maps nothing with that prefix. The MTP factory asks for `mtp.` unless the configuration sets an explicit selection. Two tests in `LoadWeightsTests` cover the selection and the fallback.
+`WeightFileSelection.indexedKeyPrefix(prefix)` selects only the files the index maps a weight named `prefix…` to, falling back to `automatic` when there is no usable index or nothing matches. The MTP factory asks for `mtp.` unless the configuration sets an explicit selection. Two tests in `LoadWeightsTests` cover the selection and the fallback.
+
+Qwen3.5-27B 4-bit with its MTP head, measured in the app that embeds this library:
+
+| | before | after |
+|---|---|---|
+| bytes read and evaluated for the head | 15.1 GB (every shard) | 0.85 GB (the head shard) |
 ```
 
-*Comment on #607* after `git push origin
-dflash2-upstream-clean-stacking:dflash2-upstream-clean`:
+*Comment on #607* (its branch was fast-forwarded to `580ef7b` on
+2026-09-20 with the owner's approval):
 
 ```markdown
-One more commit: `stackSameInputProjections(in:)` iterated `modules()`, whose array holds every projection module, so each block's originals stayed alive until the loop ended and the transient over a load was the sum of all stacked blocks (7 GB over a 27B model) rather than one block. The loop now keeps only the stacking modules. `testSameInputStackingReleasesEachBlockBeforeTheNext` stacks eight quantized MLP blocks and bounds the peak at two blocks; it held all eight before.
+One more commit. `stackSameInputProjections(in:)` iterated `modules()`, whose array holds every projection module, so each block's originals stayed alive until the loop ended and the transient over a load was the sum of every stacked block instead of one. The loop now keeps only the stacking modules. `testSameInputStackingReleasesEachBlockBeforeTheNext` stacks eight quantized MLP blocks and bounds the peak at two; it held all eight before.
+
+Qwen3.5-27B 4-bit in the app that embeds this library, MLX peak memory in GB:
+
+| phase | before | after |
+|---|---|---|
+| peak during projection stacking | 22.97 | 17.84 (flat over the 15.9 GB model) |
 ```
 
 Both PRs take the vendor template's checklist and AI-usage block; the
