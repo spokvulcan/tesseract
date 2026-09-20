@@ -1,0 +1,131 @@
+{
+  "status": "APPROVED",
+  "ownerApproval": "Owner approval granted in session on 2026-09-20 (standing approval for unattended loaded-model, long-context and reload benchmarks on this host; thresholds re-derived for 48 GiB below).",
+  "preRegistrationCommit": "d770ba4a",
+  "appCommit": "2df00ecd",
+  "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
+  "instrumentationCommit": "2df00ecd",
+  "releaseBinarySHA256": "2103730fc5f16757c0076e0933de24a950245c9cd53e47ab2afb9a825c91dc0f",
+  "host": {
+    "identifier": "Mac15,9 (Apple M3 Max), owner's machine",
+    "ramBytes": 51539607552,
+    "osVersion": "macOS 27.0 (26A428), Xcode 27.0",
+    "mlxVersion": "spokvulcan/mlx-swift 6058402c676de25560051acda772e80d86d696d1 (via Vendor/mlx-swift-lm a3c1776)"
+  },
+  "model": {
+    "id": "qwen3.8-27b",
+    "directory": "/Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit",
+    "configSHA256": "14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85",
+    "tokenizerSHA256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+    "templateSHA256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+  },
+  "corpus": {
+    "fillerFile": "/Users/owl/projects/tesseract/CONTEXT.md",
+    "fillerSHA256": "8c5220149287d639c82e74129df074e3838a5c5cb45ae4187ebeb701b38278bc",
+    "orderedCaseIDs": [
+      "direct-4k",
+      "view-16k",
+      "boundary-8k",
+      "direct-32k"
+    ],
+    "unsupportedCases": [
+      "tool continuation (the runner drives text turns only; no tool round trip)",
+      "cancel/resend (no cancellation path in the runner)",
+      "transient boundary view as a standalone case (covered only as the boundary-8k case's end-of-turn view)"
+    ]
+  },
+  "settings": {
+    "liveKVDtype": "float16",
+    "warmBits": [
+      8,
+      4
+    ],
+    "groupSize": 64,
+    "mode": "affine",
+    "temperature": 0,
+    "speculationPolicy": "off",
+    "seed": 0,
+    "maximumPromptTokens": 40960,
+    "maximumOutputTokens": 320,
+    "timedOutputTokens": 32
+  },
+  "resources": {
+    "minimumInitialAvailableBytes": 21474836480,
+    "expectedModelAndCachePeakBytes": 25769803776,
+    "footprintStopBytes": 32212254720,
+    "minimumAvailableStopBytes": 6442450944,
+    "swapGrowthStopBytes": 1073741824,
+    "pressureStopLevel": 4,
+    "maximumRequestSeconds": 300,
+    "maximumCampaignSeconds": 14400,
+    "sampleIntervalMilliseconds": 250,
+    "cancelGraceSeconds": 5
+  },
+  "cases": [
+    {
+      "id": "direct-4k",
+      "kind": "directLeaf",
+      "prefixTokens": 4096,
+      "setupOutputTokens": 160,
+      "reasoningEffort": null,
+      "description": "Bounded direct-leaf continuation. Expected restore offset: the whole leaf (>= 4096 prefix + setup turn), source warm or copy per arm. Boundary kind: canonicalUser."
+    },
+    {
+      "id": "view-16k",
+      "kind": "plannedView",
+      "prefixTokens": 16384,
+      "setupOutputTokens": 160,
+      "reasoningEffort": null,
+      "description": "Planned view: two forks (alpha/beta) off the same 16k system prefix, then a third fork that restores the Prefix-View Checkpoint at the fork point through its Backing Leaf. Expected view offset: the shared prefix (>= 16384, learned from the warmup block's lookup and recorded). Boundary kind: canonicalUser."
+    },
+    {
+      "id": "boundary-8k",
+      "kind": "thinkStrippingBoundary",
+      "prefixTokens": 8192,
+      "setupOutputTokens": 320,
+      "reasoningEffort": "low",
+      "description": "Think-stripping boundary under reasoning_effort=low, preserve_thinking=false. Timed hit is a direct leaf hit on the canonical leaf; the transient boundary view at the end of the timed turn resolves against the arm's form (leafStore path=boundary). Boundary kind: canonicalUser (think-stripped)."
+    },
+    {
+      "id": "direct-32k",
+      "kind": "directLeaf",
+      "prefixTokens": 32768,
+      "setupOutputTokens": 160,
+      "reasoningEffort": null,
+      "description": "Long direct-leaf continuation, ~2.2 GB fp16 body on this model. Expected restore offset >= 32768. Boundary kind: canonicalUser. Runs last so an early stop preserves the smaller cases."
+    }
+  ],
+  "orders": [
+    [
+      "fp16",
+      "8",
+      "4"
+    ],
+    [
+      "fp16",
+      "4",
+      "8"
+    ],
+    [
+      "8",
+      "fp16",
+      "4"
+    ],
+    [
+      "8",
+      "4",
+      "fp16"
+    ],
+    [
+      "4",
+      "fp16",
+      "8"
+    ],
+    [
+      "4",
+      "8",
+      "fp16"
+    ]
+  ],
+  "privateOutputDirectory": "/Users/owl/Library/Application Support/BenchLocal/warm-body-parity-2026-09-20"
+}
