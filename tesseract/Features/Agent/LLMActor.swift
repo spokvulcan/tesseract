@@ -127,6 +127,13 @@ actor LLMActor {
         RequestMemoryTelemetry.recordAllocation(
             phase: "modelLoadBegin", facts: ["visionMode": "\(visionMode)"])
         Log.agent.info("Loading model — visionMode=\(visionMode)")
+        // Generation sets this limit before its first token; loading runs
+        // before that under MLX's default, which lets the buffers a load frees
+        // (unquantized shards, pre-stacking projections, a draft's read-then-
+        // quantized weights) sit in the MLX cache by the tens of gigabytes
+        // and push the resident model into swap. Bound the cache from the
+        // first shard on.
+        Memory.cacheLimit = Defaults.cacheLimitMB * 1024 * 1024
 
         if let ssdConfig {
             Log.agent.info(
@@ -416,24 +423,35 @@ actor LLMActor {
     /// container. The GPU lease remains the primary guard; this drain is the
     /// in-actor backstop (ADR-0015).
     func unloadModel() async {
-        let containerAtEntry = modelContainer
+        // Identity only: a strong local would keep the whole model alive
+        // until this function returns, past every release below.
+        let containerAtEntry = modelContainer.map(ObjectIdentifier.init)
+        weak var releasedContainer = modelContainer
+        weak var releasedMTPDrafter: AnyObject? = mtpDrafter?.value as AnyObject?
+        weak var releasedDFlash2Drafter: AnyObject? = dflash2Drafter?.value as AnyObject?
         if let serverCompletion {
             await serverCompletion.drainActiveCompletion(on: self)
         }
         // The drain suspends, so a concurrent `loadModel` can interleave and
         // install a fresh container (actor reentrancy). Tear down only the
         // state this call set out to release — never a newer load's.
-        guard modelContainer === containerAtEntry else {
+        guard modelContainer.map(ObjectIdentifier.init) == containerAtEntry else {
             Log.agent.info(
                 "unloadModel skipped teardown — a newer load replaced the container during the drain"
             )
             return
         }
+        RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadBegin", facts: [:])
         modelContainer = nil
+        RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadContainerReleased", facts: [:])
         mtpDrafter = nil
+        RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadMTPReleased", facts: [:])
         dflash2Drafter = nil
+        RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadDFlash2Released", facts: [:])
         agentTokenizer = nil
         serverCompletion = nil
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "modelUnloadServerCompletionReleased", facts: [:])
         activeModelFingerprint = nil
         resolvedToolCallFormat = nil
         // C25: the Render+Token Cache entry holds a whole render's bytes plus
@@ -456,6 +474,16 @@ actor LLMActor {
         // MoE-tuned leg. Scheduling-only either way; this keeps the global
         // state accounted for.
         GPU.setCommitLimits(maxMBPerBuffer: 100)
+        // Nothing resident: the released weights are cached MLX buffers until
+        // this returns them, and the next load would otherwise sit on top.
+        Memory.clearCache()
+        RequestMemoryTelemetry.recordAllocation(
+            phase: "modelUnloadEnd",
+            facts: [
+                "containerRetained": "\(releasedContainer != nil)",
+                "mtpDrafterRetained": "\(releasedMTPDrafter != nil)",
+                "dflash2DrafterRetained": "\(releasedDFlash2Drafter != nil)",
+            ])
     }
 
     /// Cancel-and-await the active **Server Completion**, leaving the model
@@ -624,12 +652,16 @@ actor LLMActor {
     ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
         // Wrap in withError so C++ MLX errors (e.g. matmul shape mismatches) throw
         // instead of calling fatalError via the default error handler.
-        try await withError {
-            let input = try await container.prepare(input: UserInput(prompt: "Hello"))
-            let stream = try await container.generate(
-                input: input, parameters: GenerateParameters(maxTokens: 1)
-            )
-            for await _ in stream {}
+        // `TESSERACT_SKIP_WARMUP_GENERATION=1` skips the one-token warmup so a
+        // load/unload memory bisect can separate the load from the first pass.
+        if ProcessInfo.processInfo.environment["TESSERACT_SKIP_WARMUP_GENERATION"] != "1" {
+            try await withError {
+                let input = try await container.prepare(input: UserInput(prompt: "Hello"))
+                let stream = try await container.generate(
+                    input: input, parameters: GenerateParameters(maxTokens: 1)
+                )
+                for await _ in stream {}
+            }
         }
 
         let tokenizer = try await AgentTokenizer(container: container)
@@ -794,6 +826,9 @@ extension LLMActor {
             let context = try await MTPDrafterSupport.loadDrafter(
                 directory: directory, pairing: pairing)
             mtpDrafter = UnsafeSendableBox(context.model)
+            // The head shard's pre-quantization arrays are dead once the
+            // draft holds its parameters; return them before the next load.
+            Memory.clearCache()
             RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoaded", facts: [:])
             Log.agent.notice(
                 "MTP drafter loaded — pairing=\(pairing.rawValue) "

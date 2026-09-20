@@ -113,15 +113,40 @@ nonisolated enum DFlash2Support {
     /// group_size: 64, bits: 4)`). The draft holds no target state, so the
     /// loaded value can be boxed and shared across sessions; the iterator
     /// checks the pairing (`DFlash2SpeculationError`) at construction.
+    ///
+    /// The checkpoint is bfloat16 (3.85 GB on the 27B pairing) and only its
+    /// packed form stays resident, so the file's arrays are applied unread
+    /// and each leaf is realized on its own: a leaf's rows are read, packed
+    /// and dropped before the next leaf's are read. Reading the whole file
+    /// first (`loadWeights`) held it beside the packed copy at the load's
+    /// peak.
     static func loadDrafter(
         directory: URL
     ) throws -> any DFlash2DrafterModel {
         let config = try draftConfiguration(directory: directory)
         let draft = DFlash2DraftModel(config)
-        try loadWeights(modelDirectory: directory, model: draft)
+        try applyUnreadWeights(in: directory, to: draft)
         quantize(model: draft, groupSize: 64, bits: 4)
+        for (_, leaf) in draft.leafModules().flattened() {
+            eval(leaf)
+        }
         eval(draft)
         return draft
+    }
+
+    /// The checkpoint's arrays applied to `draft` as MLX's lazy file loads,
+    /// read only when a parameter is first evaluated.
+    private static func applyUnreadWeights(in directory: URL, to draft: DFlash2DraftModel) throws {
+        let files = try FileManager.default
+            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "safetensors" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var weights = [String: MLXArray]()
+        for url in files {
+            weights.merge(try loadArrays(url: url)) { _, new in new }
+        }
+        weights = draft.sanitize(weights: weights)
+        try draft.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
     }
 
     // MARK: - Engagement policy
