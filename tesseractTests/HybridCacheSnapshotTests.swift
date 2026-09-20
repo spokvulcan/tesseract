@@ -147,6 +147,36 @@ struct HybridCacheSnapshotTests {
         #expect(snapshot.layers[2].className == "QuantizedKVCache")
     }
 
+    /// `canCaptureMoving` is the question the **Leaf Store**'s boundary
+    /// executor asks before it moves its restored cache into the leaf
+    /// instead of deep-copying it. It must answer exactly what
+    /// `captureMoving` goes on to do, so a `false` keeps the copy — which
+    /// supports the quantized layers a move cannot — rather than losing
+    /// the leaf to a `nil` capture.
+    @Test func canCaptureMovingAgreesWithWhatAMoveActuallyTakes() throws {
+        let simple = KVCacheSimple()
+        simple.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]
+        let mamba = MambaCache()
+        mamba.state = [MLXArray.zeros([1, 3, 32]), MLXArray.zeros([1, 4, 8, 16])]
+        let quantized = QuantizedKVCache(groupSize: 64, bits: 8)
+
+        for cache in [[simple], [simple, mamba]] as [[any KVCache]] {
+            #expect(HybridCacheSnapshot.canCaptureMoving(cache: cache))
+            var moving = cache
+            #expect(HybridCacheSnapshot.captureMoving(cache: &moving, offset: 4) != nil)
+        }
+
+        // An empty cache and a quantized layer are both refused, and the
+        // refusal leaves the caller's objects in place to be copied.
+        #expect(!HybridCacheSnapshot.canCaptureMoving(cache: []))
+        let withQuantized: [any KVCache] = [simple, quantized]
+        #expect(!HybridCacheSnapshot.canCaptureMoving(cache: withQuantized))
+        var refused = withQuantized
+        #expect(HybridCacheSnapshot.captureMoving(cache: &refused, offset: 4) == nil)
+        #expect(refused.count == 2)
+        #expect(HybridCacheSnapshot.capture(cache: refused, offset: 4, type: .leaf) != nil)
+    }
+
     @Test func captureWithMixedCacheTypes() throws {
         let simple = KVCacheSimple()
         simple.state = [MLXArray.zeros([1, 1, 4, 64]), MLXArray.zeros([1, 1, 4, 64])]

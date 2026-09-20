@@ -237,7 +237,9 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
             if index == 2 {
                 #expect(events.first { $0.eventName == "lookup" }?.field("source") == "view")
                 #expect(events.last { $0.eventName == "leafStore" }?.field("path") == "boundary")
-                #expect(events.last { $0.eventName == "leafStore" }?.field("source") == "boundary")
+                // The re-prefilled cache is request-private, so the leaf
+                // moves it in rather than deep-copying it.
+                #expect(events.last { $0.eventName == "leafStore" }?.field("source") == "handoff")
                 #expect(!events.contains { $0.field("reason") == "prefill-threw" })
             }
         }

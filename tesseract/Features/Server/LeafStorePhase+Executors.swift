@@ -254,6 +254,9 @@ nonisolated extension LeafStorePhase {
                 var timings = Timings()
                 let restoreStart = Date.timeIntervalSinceReferenceDate
                 let restoredCache = try session.restore(boundarySnapshot, backingLeaf: backingLeaf)
+                // Exactly the stored length: the leaf below moves these
+                // buffers in and keeps them, so `KVCacheGrowth`'s rounding
+                // slack is resident tree memory now, not prefill scratch.
                 for layer in restoredCache { layer.reserveCapacity(storedTokens.count) }
                 timings.restoreSeconds = secondsSince(restoreStart)
 
@@ -285,8 +288,23 @@ nonisolated extension LeafStorePhase {
                 }
                 timings.prefillSeconds = secondsSince(prefillStart)
 
+                // The restored cache is this request's own: `session.restore`
+                // deep-copies every layer out of the tree (a Prefix-View
+                // Checkpoint's slices of its Backing Leaf included) and the
+                // residual prefill wrote only into it. Nothing else can reach
+                // these objects, so the leaf takes them instead of paying a
+                // second full-KV deep copy — the boundary turn's memory peak,
+                // and the `.copied` body that made the next turn restore by
+                // copy. ADR-0064's one-owner rule holds: the owner below is
+                // the only reference, and `admitLeaf` reads `cache` only when
+                // it is not moving.
+                let moving =
+                    HybridCacheSnapshot.canCaptureMoving(cache: restoredCache)
+                    ? FinalGenerationCache(restoredCache) : nil
+
                 return await admitLeaf(
-                    cache: restoredCache,
+                    cache: moving == nil ? restoredCache : [],
+                    moving: moving,
                     path: .boundary,
                     session: session,
                     residualTokens: residual.count,

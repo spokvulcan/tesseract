@@ -229,9 +229,9 @@ nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
         let bytes: Int
         let tokenCount: Int
         /// The `leafStore` event's source. `live` and `boundary` are
-        /// captures by copy; `handoff` moved the objects; `copy` is a
-        /// restore by copy whose source body the tree already counts;
-        /// `rewind` copied nothing.
+        /// captures by copy; `handoff` moved the objects, on the boundary
+        /// path as on the live one; `copy` is a restore by copy whose
+        /// source body the tree already counts; `rewind` copied nothing.
         let source: LeafStorePhase.Report.Source
         /// The turn's maximum advance (`LeafCheckout.maximumAdvance`):
         /// new prompt tokens plus the output ceiling plus the speculative
