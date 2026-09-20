@@ -34,13 +34,16 @@ pins; it rejoins this table's carry list only if that experiment is revived.
 
 ## Load memory carry (2026-09-20, #550)
 
-The #550 app branch advances the gitlink from `f177464` to `5e353f1` on
-`fix/550-load-memory-retention`, four commits on top of the #533 carry
+The #550 app branch advances the gitlink from `f177464` to `a3c1776` on
+`fix/550-load-memory-retention`, five commits on top of the #533 carry
 (fast-forward; `pin-upstream-mlx-swift` and every historical tip
-unchanged). The fourth, `5e353f1`, only cites the upstream reports in the
-sibling probes: the assignment case is fixed by ml-explore/mlx#4453
-(merged 2026-09-11, not in the pinned mlx), the compiled split case is
-ml-explore/mlx#3932 (open). The three that change code:
+unchanged). `5e353f1` only cites the upstream reports in the sibling
+probes: the assignment case is fixed by ml-explore/mlx#4453 (merged
+2026-09-11, not in the pinned mlx), the compiled split case is
+ml-explore/mlx#3932 (open). `a3c1776` writes the trace's state and body
+closures in the labeled form the upstream branch uses (swift-format's lint
+flags a closure argument beside a trailing closure). The three that change
+code:
 
 - `4bbca60` `feat(load): read only the indexed shard a key prefix maps to`.
   `WeightFileSelection.indexedKeyPrefix` reads the files the safetensors
@@ -85,7 +88,7 @@ three branches on the fork, each built and tested against upstream's
 603.0.0; **not filed**, pending the owner's read-and-approve attestation
 (vendor `CONTRIBUTING.md`). The texts to post are below.
 
-- `upstream/fused-projection-compile-state` (`ca97bf4` = vanilla `c6446cf`
+- `upstream/fused-projection-compile-state` (`b05e0ba` = vanilla `c6446cf`
   + the fix, re-applied by hand: the fork's commit conflicts with the
   carried verify traces). `Qwen35FusedGDNProjectionTests` 16 (1 skipped) on
   vanilla; the regression test retains 18,848 bytes on plain `main` and
