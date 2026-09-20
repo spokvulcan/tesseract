@@ -85,11 +85,10 @@ fails the same way on the pristine `f177464`, alone and on an idle machine;
 it predates this carry and is not understood yet. Upstream: prepared on 2026-09-20 as
 three branches on the fork, each built and tested against upstream's
 `mlx-swift` 0.31.6 pin and formatter-clean under the CI-pinned swift-format
-603.0.0. The fused-projection fix is filed as upstream PR
-[#631](https://github.com/ml-explore/mlx-swift-lm/pull/631) (2026-09-20,
-posted by the owner); the loader selection is **not filed yet**, pending the
-owner's read-and-approve attestation (vendor `CONTRIBUTING.md`). The texts
-are below.
+603.0.0. Filed by the owner on 2026-09-20: the fused-projection fix as
+upstream PR [#631](https://github.com/ml-explore/mlx-swift-lm/pull/631), the
+loader selection as [#632](https://github.com/ml-explore/mlx-swift-lm/pull/632);
+the stacking fix rides on #607's branch. The texts as posted are below.
 
 - `upstream/fused-projection-compile-state` (`b05e0ba` = vanilla `c6446cf`
   + the fix, re-applied by hand: the fork's commit conflicts with the
@@ -100,6 +99,8 @@ are below.
   passes with the fix. `SiblingCycleTests` stays fork-only (it probes mlx).
 - `upstream/indexed-key-prefix-selection` (`6756dd8` = `c6446cf` +
   `4bbca60`, cherry-picked clean). `LoadWeightsTests` 25 on vanilla.
+  Upstream PR [#632](https://github.com/ml-explore/mlx-swift-lm/pull/632);
+  drop from the carry when it merges.
 - `dflash2-upstream-clean-stacking` (`580ef7b` = `56a21b2`, the branch
   behind PR #607, + `f8b4827`, cherry-picked clean): folds into #607 by
   fast-forwarding `dflash2-upstream-clean` to it. Both stacking tests pass
