@@ -95,7 +95,7 @@ def main():
     offset = diagnostic_path.stat().st_size if diagnostic_path.exists() else 0
     identity = diagnostic_path.stat().st_ino if diagnostic_path.exists() else None
     partial = b""
-    events, samples, results, attempts, abort_reason = [], [], [], [], []
+    events, samples, results, attempts, abort_reason, rotations = [], [], [], [], [], []
     aborted, finished = threading.Event(), threading.Event()
     active_socket, active_request_started, stage = [None], [None], ["launch"]
     started = time.monotonic()
@@ -156,12 +156,22 @@ def main():
         if not diagnostic_path.exists():
             return
         stat = diagnostic_path.stat()
+        raw = b""
         if identity is not None and (stat.st_ino != identity or stat.st_size < offset):
-            raise RuntimeError("Diagnostics rotated; campaign stopped to preserve attribution")
+            # The sink rotates at ~8 MB by renaming the file to `.old` and
+            # starting a fresh one; the tail of the old file is still ours.
+            old_path = diagnostic_path.with_suffix(".jsonl.old")
+            if not old_path.exists() or old_path.stat().st_ino != identity:
+                raise RuntimeError("Diagnostics rotated without a readable predecessor; attribution lost")
+            with old_path.open("rb") as source:
+                source.seek(offset)
+                raw += source.read()
+            offset = 0
+            rotations.append(time.monotonic())
         identity = stat.st_ino
         with diagnostic_path.open("rb") as source:
             source.seek(offset)
-            raw = source.read()
+            raw += source.read()
             offset = source.tell()
         lines = (partial + raw).split(b"\n")
         partial = lines.pop()
@@ -344,7 +354,7 @@ def main():
         app_log.close()
         write_json(args.output / "os-samples.json", samples)
         write_json(args.output / "events.json", events)
-        outcome = {"failure": failure, "exitCode": child.returncode, "elapsedSeconds": time.monotonic() - started,
+        outcome = {"failure": failure, "exitCode": child.returncode, "diagnosticsRotations": len(rotations), "elapsedSeconds": time.monotonic() - started,
                    "sampleCount": len(samples),
                    "maxSampledFootprintBytes": max((s["processFootprintBytes"] for s in samples), default=None),
                    "minSampledAvailableBytes": min((s["availableBytes"] for s in samples), default=None),
