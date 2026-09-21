@@ -137,12 +137,23 @@ nor copies the resulting prefix a second time. SSD Stored Form (#531) and the
 
 #528's [pre-registration](../../benchmarks/warm-body-parity/2026-09-19/README.md)
 fixes the fidelity, paired TTFT and memory reporting rules before any loaded
-run. Status: **not run; owner execution pending**. The default remains off.
-The tokenizer-only corpus gate is not warm-restore evidence; the owner campaign
-must record actual loaded continuations and prove the intended restore form.
-The production conversion remains 8-bit only. A loaded three-arm runner and
-4-bit experiment instrumentation are still prerequisites to execution, not
-capabilities added by the pre-registration. No result or enablement is claimed.
+run. Status: **run on 2026-09-20 and failed** — see the
+[owner run](../../benchmarks/warm-body-parity/2026-09-20/README.md). The
+three-arm loaded runner (`--warm-parity-bench`) drives the fp16 copy control,
+warm-8 and warm-4 arms through the in-process Server Completion path on
+Qwen3.8-27B (4-bit, speculation off, greedy) over four cases (direct 4k and
+32k, planned view 16k, think-stripping boundary 8k), six pre-registered arm
+orders each. Fidelity had zero mismatches and the intended restore path held
+in every observation, but the greedy 32-token continuation restored from a
+Warm Body differs from the fp16 control in every block of three of the four
+cases for both bit widths, deterministically, at the same token position; the
+paired TTFT excess also exceeded the measured dequantization allowance for
+warm-8 in two cases. Warm-4 passed only the planned-view case. Memory stayed
+inside the manifest's 48 GiB bounds throughout. **`warmCompressionEnabled`
+stays off**; the production conversion remains 8-bit; the 4-bit setting is
+measurement-only. #531 (SSD Stored Form) does not proceed on this evidence.
+The tokenizer-only corpus gate is not warm-restore evidence and did not see
+the divergence.
 
 The opt-in drain queues one Model Session batch and rechecks body identity and
 Budget Floor membership when committing each conversion on MainActor. The

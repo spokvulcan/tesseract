@@ -1006,11 +1006,11 @@ final class WarmBodyParityBenchRunner {
         let boundaryKindCoverageMatchesControl: Bool
         let tokenMismatches: Int
         let promptTokenMismatches: Int
-        let ttftMedianMs: Double
-        let ttftP95Ms: Double
-        let controlTtftMedianMs: Double
+        let ttftMedianMs: Double?
+        let ttftP95Ms: Double?
+        let controlTtftMedianMs: Double?
         let pairedExcessMs: [Double]
-        let pairedExcessMedianMs: Double
+        let pairedExcessMedianMs: Double?
         let dequantizeMedianMs: Double?
         let dequantizeSamplesMs: [Double]
         let timingPasses: Bool?
@@ -1058,9 +1058,10 @@ final class WarmBodyParityBenchRunner {
                 let invalidCount = armObservations.count { !$0.invalid.isEmpty }
                 let mismatches = armFidelity.reduce(0) { $0 + $1.mismatches }
                 let boundaries = armFidelity.reduce(0) { $0 + $1.boundaries }
-                let excessMedian = Self.median(excess)
+                let excessMedian = excess.isEmpty ? nil : Self.median(excess)
                 let dequantMedian = dequant.isEmpty ? nil : Self.median(dequant)
-                let timing: Bool? = arm == .fp16 ? nil : dequantMedian.map { excessMedian <= $0 }
+                let timing: Bool? =
+                    arm == .fp16 ? nil : dequantMedian.flatMap { d in excessMedian.map { $0 <= d } }
                 let verdict: String
                 if arm == .fp16 {
                     verdict =
@@ -1085,14 +1086,18 @@ final class WarmBodyParityBenchRunner {
                         fidelityMismatches: mismatches, fidelityBoundaries: boundaries,
                         boundaryKindCoverageMatchesControl: coverage,
                         tokenMismatches: tokenMismatches, promptTokenMismatches: promptMismatches,
-                        ttftMedianMs: Self.median(ttfts), ttftP95Ms: Self.percentile(ttfts, 0.95),
-                        controlTtftMedianMs: Self.median(control.map { $0.ttftSeconds * 1000 }),
+                        ttftMedianMs: ttfts.isEmpty ? nil : Self.median(ttfts),
+                        ttftP95Ms: ttfts.isEmpty ? nil : Self.percentile(ttfts, 0.95),
+                        controlTtftMedianMs: control.isEmpty
+                            ? nil : Self.median(control.map { $0.ttftSeconds * 1000 }),
                         pairedExcessMs: excess, pairedExcessMedianMs: excessMedian,
                         dequantizeMedianMs: dequantMedian, dequantizeSamplesMs: dequant,
                         timingPasses: timing, invalidObservations: invalidCount,
-                        residentBodyBytesMedian: Int(
-                            Self.median(
-                                armObservations.map { Double($0.residentBodyBytesBeforeHit) })),
+                        residentBodyBytesMedian: armObservations.isEmpty
+                            ? 0
+                            : Int(
+                                Self.median(
+                                    armObservations.map { Double($0.residentBodyBytesBeforeHit) })),
                         mlxPeakDuringHitMax: armObservations.map(\.mlxPeakDuringHit).max() ?? 0,
                         footprintAfterHitMax: armObservations.compactMap(\.footprintAfterHit).max(),
                         verdict: verdict))
@@ -1118,7 +1123,7 @@ final class WarmBodyParityBenchRunner {
         text +=
             "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n"
         for v in verdicts {
-            let ms: (Double) -> String = { String(format: "%.1f", $0) }
+            let ms: (Double?) -> String = { $0.map { String(format: "%.1f", $0) } ?? "n/a" }
             text +=
                 "| \(v.caseID) | \(v.arm.rawValue) | \(v.samples) | \(v.fidelityMismatches) / \(v.fidelityBoundaries) "
             text +=

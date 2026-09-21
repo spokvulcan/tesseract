@@ -166,6 +166,8 @@ the repository; commit scalar results and checksums only.
 
 ## Results and decision ledger
 
+**Run on 2026-09-20 on the owner's 48 GiB M3 Max: the 8-bit gate failed in all four cases; see [2026-09-20/README.md](../2026-09-20/README.md) for the per-case tables, manifest and verdicts. The default stays off.** The paragraph and table below are the pre-run text, kept as written.
+
 No loaded-model results were collected for this pre-registration. `PENDING`
 means unmeasured; it is not zero, a pass, or an estimate from compression bits.
 Populate one table per registered case after the owner run, with links to
