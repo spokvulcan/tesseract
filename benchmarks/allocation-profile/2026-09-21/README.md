@@ -96,3 +96,69 @@ Retained capacity exceeded 64 MB at two of three sizes (117.2 MB at 30k and 61k)
 ## Not covered
 
 No 75k/93k contexts, no capture-only-build comparison, and no tail-latency claim: the profile targets the capacity lifetime #534 needs. The 2026-09-20 boundary-leaf-move A/B and session audit remain the reference for the boundary-turn transient.
+
+## #534 verification (run 4, 2026-09-21 08:51–09:00 UTC)
+
+Same plan, same host, same filler, the Release build of the compaction
+commit (`plan-compaction.json`; app commit `3d1c0d35`, binary SHA-256 in
+`outcome-compaction.json`'s environment record). Raw records:
+`~/bench-results/allocation-profile-2026-09-21-run4-compaction`
+(`raw-record-checksums-compaction.txt`); summary in `summary-compaction.json`.
+Runs 1 and 3 (`run1-rotation-abort`, `run3-filler-abort`) were collector
+and filler-checksum aborts before any request; they hold no numbers.
+
+**The campaign stopped on the available-memory bound during the last turn.**
+At p64k-after, the boundary turn's second full-size cache took the footprint
+from 20.3 GB to 28.2 GB and available memory to 5.66 GiB, under the 6 GiB
+stop, so the wrapper cancelled the request and terminated the app. Run 2's
+minimum at the same point was 8.34 GiB on a quieter machine; the bound was
+committed before the run and is not moved. The leg is not retried. Every
+number below is from a completed request; p64k-after has none.
+
+### Leaf Rewind with compaction
+
+| Step | Lease offset | Array bytes after rewind | Retained (unused) after | **Compacted** | Run 2 retained |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| p8k-cancel | 7018 | 510.1 MB | 50.1 MB | 0 | 50.1 MB |
+| p32k-cancel | 30564 | 2019.8 MB | 16.8 MB | **100.5 MB** | 117.2 MB |
+| p64k-cancel | 60906 | 4008.3 MB | 16.8 MB | **100.5 MB** | 117.2 MB |
+
+At 30k and 61k the rewound cache now carries one growth step (16.8 MB) instead
+of 117 MB. At 8k the 50.1 MB retained is below the 64 MB threshold and is left
+alone, as the rule says.
+
+### Ordinary check-in after a compacted rewind
+
+| Step | Check-in samples (`requestFullAttentionUnusedArrayBytes`) | Run 2 |
+| --- | --- | --- |
+| p8k-after | 45.1 MB, 16.6 MB | 45.1 MB, 16.6 MB |
+| p32k-after | **11.3 MB**, 16.6 MB | 112.4 MB, 16.6 MB |
+| p64k-after | not observed (resource stop) | 111.9 MB, 16.6 MB |
+
+The live leaf inherited by the next turn at 30k no longer carries the
+cancelled generation's capacity. Capture-time compaction on ordinary
+check-ins reported `compactedBytes` 0 everywhere (5–17 MB retained, under
+threshold), so the default path is unchanged for normal turns.
+
+### Memory
+
+| Step | Peak footprint (sampled) | Settled footprint | Run 2 peak |
+| --- | ---: | ---: | ---: |
+| p8k-grow | 20.01 GB | 18.47 GB | 19.68 GB |
+| p32k-grow | 24.06 GB | 21.40 GB | 23.91 GB |
+| p32k-cancel | 22.13 GB | 19.39 GB | 21.79 GB |
+| p64k-grow | 28.13 GB | 23.44 GB | 27.98 GB |
+| p64k-cancel | 24.08 GB | 21.39 GB | 23.76 GB |
+
+Peaks are within 0.4 GB of run 2 at every completed step: compaction adds no
+visible transient (the copy is at most the compacted body's live rows, and
+the arrays are released within the rewind). Max pressure level 2, swap growth 0.
+
+### What this verifies, and what it does not
+
+Verified: the 30k and 61k cancelled generations end with a compacted leaf,
+and the next turn at 30k inherits a small leaf. Not verified in this run:
+the next turn at 61k (the stop cut it), and any 75k/93k context. The
+p64k-after stop is the same boundary-turn transient run 2 measured at
++4.0 GB, on a host with less headroom this time; it is #552's problem, not
+#534's, and it is recorded here as a resource stop, not a result.
