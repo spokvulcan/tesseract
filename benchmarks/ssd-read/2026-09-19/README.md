@@ -1,24 +1,24 @@
 # SSD read-path experiment — #532
 
-**Pre-registered; owner run pending. No performance result or adoption claim.**
-The production reader remains `Data(contentsOf:options:.mappedIfSafe)`.
-This branch builds the three arms and a loaded-model harness; it does not
-satisfy the measurement and adoption acceptance criteria until the owner
-executes and reviews the approved plan. Parent: #520; no parent edits.
+**Run on 2026-09-21 under the owner's standing approval: no arm reached the
+2.0x gate, so nothing ships and the production reader remains
+`Data(contentsOf:options:.mappedIfSafe)`.** Plan, records and the resource
+log are in [`../2026-09-21/`](../2026-09-21/README.md). Parent: #520.
 
 ## Arms and decision
 
 | Arm | Mechanism | Loaded-model median GB/s | Ratio to mapped |
 | --- | --- | ---: | ---: |
-| `mapped` | Current Foundation mapping, then each contributing array copied into MLX | Pending owner | 1.0 |
-| `sequentialMap` | Read-only private mmap; `MADV_SEQUENTIAL` before parsing/copying | Pending owner | Pending owner |
-| `positional` | 8 MiB `pread` chunks into one page-aligned host allocation per segment; the same single copy per contributing array into MLX | Pending owner | Pending owner |
+| `mapped` | Current Foundation mapping, then each contributing array copied into MLX | 5.128 | 1.000 |
+| `sequentialMap` | Read-only private mmap; `MADV_SEQUENTIAL` before parsing/copying | 5.595 | 1.091 |
+| `positional` | 8 MiB `pread` chunks into one page-aligned host allocation per segment; the same single copy per contributing array into MLX | 3.738 | 0.729 |
 
 On **one exact Segment Chain**, adopt only an arm whose median throughput is
 at least **2.0 times** mapped, with identical bytes/metadata and acceptable
 memory use. If both qualify, choose the faster median; break an exact tie in
 favor of sequentialMap's lower host-buffer footprint. If neither qualifies,
-keep mapped and record the result. An advice failure fails that arm rather
+keep mapped and record the result. **Decision (2026-09-21): neither arm
+qualifies; mapped stays.** An advice failure fails that arm rather
 than silently substituting mapped. The experiment selector is only a harness
 construction argument; there is no product setting. A winning production
 change removes that selection and ships the measured arm without a flag.
