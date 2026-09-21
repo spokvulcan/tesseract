@@ -1,0 +1,55 @@
+{
+  "status": "APPROVED",
+  "ownerApproval": "Owner standing approval for unattended loaded-model and long-context runs on this host, granted in session 2026-09-20; thresholds re-derived for 48 GiB.",
+  "purpose": "#501: retained attention capacity after a cancelled long generation (Leaf Rewind) and at ordinary check-in, with the phase-correlated memory timeline; sets #534's compaction threshold.",
+  "appCommit": "3671ebcc",
+  "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
+  "releaseBinarySHA256": "b388f7a16bef27c946d08dfffe4f04873737f047ce099302a6dc8a3a8d4ce40e",
+  "host": "Mac15,9 (Apple M3 Max), 48 GiB, macOS 27.0 (26A428)",
+  "model": "qwen3.8-27b",
+  "modelFolders": [
+    "mlx-community_Qwen3.8-27B-4bit",
+    "incoai_Qwen3.8-27B-DFlash2"
+  ],
+  "speculation": "app default (DFlash2 draft)",
+  "kv": "unquantized (float16)",
+  "port": 18321,
+  "reasoningEffort": "low",
+  "shortOutputTokens": 64,
+  "longOutputTokens": 4096,
+  "settleSeconds": 5,
+  "fillerFile": "/Users/owl/projects/tesseract/CONTEXT.md",
+  "fillerSHA256": "8c5220149287d639c82e74129df074e3838a5c5cb45ae4187ebeb701b38278bc",
+  "steps": [
+    {
+      "id": "p8k",
+      "addCharacters": 30000,
+      "cancelAfterTokens": 300,
+      "expectedPromptTokensApprox": 8000
+    },
+    {
+      "id": "p32k",
+      "addCharacters": 100000,
+      "cancelAfterTokens": 1024,
+      "expectedPromptTokensApprox": 33000
+    },
+    {
+      "id": "p64k",
+      "addCharacters": 130000,
+      "cancelAfterTokens": 1024,
+      "expectedPromptTokensApprox": 66000
+    }
+  ],
+  "resources": {
+    "minimumInitialAvailableBytes": 21474836480,
+    "expectedPeakBytes": 30064771072,
+    "footprintStopBytes": 36507222016,
+    "minimumAvailableStopBytes": 6442450944,
+    "swapGrowthStopBytes": 1073741824,
+    "pressureStopLevel": 4,
+    "maximumRequestSeconds": 400,
+    "maximumCampaignSeconds": 3600,
+    "sampleIntervalMilliseconds": 250,
+    "cancelGraceSeconds": 5
+  }
+}
