@@ -54,3 +54,36 @@ both arms completed. Plan: `plan.json` (committed first). Driver:
   26 GiB; footprint stop 34 GiB; minimum available stop 6 GiB; swap growth
   stop 1 GiB; pressure stop level 4; free-disk stop 15 GiB; request 400 s;
   write settle 120 s; campaign 1800 s per arm; 250 ms sampling.
+
+## Result: the baseline arm stopped on the available-memory bound; no comparison
+
+Run 2026-09-21 09:10–09:14 UTC, baseline arm first as pre-registered
+(`outcome-baseline.json`, raw records in
+`~/bench-results/no-copy-writer-2026-09-21-baseline`,
+`raw-record-checksums-baseline.txt`).
+
+The A-doc turn (38.6k prompt tokens, leaf 2,681,143,296 bytes) prefilled and
+answered; the request's `capturingLeaf`, `preparingPayload` and
+`admittingLeaf` phases and the `capture` event were recorded, i.e. the
+baseline's host-copy write had begun. The first sample after the response
+read footprint 22.99 GB and **available memory 5.91 GiB, under the 6 GiB
+stop**, so the driver terminated the app 222 s into the arm. No segment
+file appeared in the SSD root (295 bytes: the partition metadata only), no
+`ssdAdmit` or `storageRefCommit` was emitted, and the plan's B and C steps
+did not run. Peak sampled footprint 26.37 GB (during prefill), pressure
+level 1 throughout, swap growth 0.
+
+The bound was committed before the run and is not moved; the leg is not
+retried, and the current arm was not run because the design gives a
+stopped arm no comparison. **#469's owner-run acceptance criterion (the
+matched ~3 GB leaf and demotion timing and peak-footprint comparison) is
+therefore still unmet on this host.** The unit evidence in
+[`../2026-09-19/README.md`](../2026-09-19/README.md) stands as it was.
+
+What the stop says about the host, for whoever plans the next attempt: with
+the 27B weights resident (~15.1 GB) and a 2.7 GB body captured, this 48 GiB
+machine sits within about 1 GiB of the floor once a multi-gigabyte file
+write starts; the write's dirty pages are not counted as available. A plan
+that fits would need either a smaller leaf than the ticket's ~3 GB, a
+smaller model, or a host with more headroom, and would be a new
+pre-registration rather than a re-run of this one.

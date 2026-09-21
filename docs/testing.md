@@ -1125,4 +1125,9 @@ seam and `ChainPrefixHydrationTests`, with rendered fields covered by
 the prefix cache suites above. The owner-only `--ssd-read-bench` harness and
 pre-registered throughput/adoption protocol are documented in
 [`benchmarks/ssd-read/2026-09-19/README.md`](../benchmarks/ssd-read/2026-09-19/README.md).
+The owner run of 2026-09-21
+([`benchmarks/ssd-read/2026-09-21/README.md`](../benchmarks/ssd-read/2026-09-21/README.md))
+was a null result: sequentialMap 1.09x and positional 0.73x of mapped on a
+61k-token chain, under the 2.0x gate, so production keeps `mappedIfSafe` and
+the arm selector stays harness-only.
 Do not run the loaded-model harness as part of automated verification.
