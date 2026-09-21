@@ -186,6 +186,8 @@ nonisolated struct LeafRewindEvent: PrefixCacheDiagnostics.Payload {
     /// aborted generation left in the leaf (#501 / #534).
     var fullAttentionArrayBytes = 0
     var fullAttentionLogicalBytes = 0
+    /// Bytes the #534 compaction freed before the move (`0` below threshold).
+    var compactedBytes = 0
     let eventName = "leafRewind"
     var fields: [(String, String)] {
         lease.fields + [
@@ -196,6 +198,7 @@ nonisolated struct LeafRewindEvent: PrefixCacheDiagnostics.Payload {
                 "fullAttentionUnusedArrayBytes",
                 "\(fullAttentionArrayBytes - fullAttentionLogicalBytes)"
             ),
+            ("compactedBytes", "\(compactedBytes)"),
         ]
     }
 }

@@ -1,0 +1,12 @@
+{
+  "diagnosticsRotations": 0,
+  "elapsedSeconds": 590.5288274579798,
+  "endUTC": "2026-09-21T08:38:50.984548+00:00",
+  "exitCode": -15,
+  "failure": null,
+  "maxPressureLevel": 2,
+  "maxSampledFootprintBytes": 27981622240,
+  "maxSystemSwapGrowthBytes": 0,
+  "minSampledAvailableBytes": 8955740160,
+  "sampleCount": 2313
+}

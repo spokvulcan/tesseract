@@ -1021,6 +1021,22 @@ paths; it did not see the greedy divergence and is not warm-restore evidence.
 The prefix suites above remain the small-cache regression evidence; their
 success does not flip the flag or unblock #531.
 
+### Attention capacity compaction (#534)
+
+`AttentionCapacityCompactionTests` drives real `KVCacheSimple` layers: a long
+trimmed generation compacts to the offset's rows plus one step with fresh
+backing addresses and identical logical rows; below the threshold nothing
+changes; the threshold is the smaller of a quarter of the body and 64 MB;
+quantized and recurrent layers are untouched. The `leafRewind` event reports
+`fullAttentionArrayBytes`, `fullAttentionLogicalBytes`,
+`fullAttentionUnusedArrayBytes` and `compactedBytes`; the `leafStore` event
+and the `capturingLeaf` memory sample report `compactedBytes` /
+`leafCompactedBytes`. The threshold's source measurement is the
+[2026-09-21 cancelled-generation profile](../benchmarks/allocation-profile/2026-09-21/README.md)
+(`scripts/cancelled_generation_profile.py`, under a committed plan with the
+48 GiB stops), which found 50–117 MB retained after a cancelled generation
+and 5–17 MB at ordinary check-in, inherited by the next turn's live leaf.
+
 ### No-copy SSD writer (#469)
 
 `ServerCompletionExtractSnapshotPayloadsTests` checks borrowed backing addresses,

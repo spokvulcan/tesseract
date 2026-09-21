@@ -175,8 +175,10 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
         memory?.mark(.rewindingLeaf, facts: ["recurrentRewindStateBytes": "\(rewindStateBytes)"])
         checkout.rewind(cache: &cache)
         // The rewound cache's attention arrays keep the capacity the aborted
-        // generation grew into; the leaf inherits it (#501 measures, #534
-        // compacts). Read here, before the move takes the cache objects.
+        // generation grew into; the leaf inherits it (#501 measured, #534
+        // compacts above the threshold). Read here, before the move takes
+        // the cache objects.
+        let compaction = AttentionCapacityCompaction.compactIfNeeded(cache)
         let rewoundFacts = RequestMemoryTelemetry.cacheFacts(cache)
         guard let body = moveSnapshot(offset: checkout.claim.lease.offset) else {
             preconditionFailure("a checked-out cache must remain capturable")
@@ -190,7 +192,8 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
                 fullAttentionArrayBytes: Int(
                     rewoundFacts["requestFullAttentionArrayBytes"] ?? "") ?? 0,
                 fullAttentionLogicalBytes: Int(
-                    rewoundFacts["requestFullAttentionLogicalBytes"] ?? "") ?? 0),
+                    rewoundFacts["requestFullAttentionLogicalBytes"] ?? "") ?? 0,
+                compactedBytes: compaction.freedBytes),
             level: .notice)
         var report = LeafStorePhase.Report()
         report.mode = "keyed"
@@ -210,6 +213,7 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
                     rewoundFacts["requestFullAttentionLogicalBytes"] ?? "0",
                 "rewoundLeafFullAttentionUnusedArrayBytes":
                     rewoundFacts["requestFullAttentionUnusedArrayBytes"] ?? "0",
+                "rewoundLeafCompactedBytes": "\(compaction.freedBytes)",
             ])
     }
 

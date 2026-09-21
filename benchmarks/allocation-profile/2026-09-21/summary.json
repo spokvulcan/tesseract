@@ -1,0 +1,205 @@
+{
+  "requests": [
+    {
+      "label": "p8k-grow",
+      "promptTokens": 6995,
+      "cachedTokens": 0,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 42.9,
+      "peakActiveMlxBytes": 17398457572,
+      "peakFootprintBytes": 19675540256,
+      "settledActiveMlxBytes": 16522273296,
+      "settledFootprintBytes": 18321321288,
+      "checkInUnusedBytes": [
+        7143424,
+        16580608
+      ],
+      "checkInArrayBytes": [
+        469762048,
+        474873856
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p8k-cancel",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "generated": 300,
+      "cancelled": true,
+      "responseSeconds": 13.6,
+      "peakActiveMlxBytes": 16915147324,
+      "peakFootprintBytes": 18606402888,
+      "settledActiveMlxBytes": 16555811344,
+      "settledFootprintBytes": 17731890288,
+      "checkInUnusedBytes": [],
+      "checkInArrayBytes": [],
+      "rewind": [
+        {
+          "fullAttentionArrayBytes": 508428288,
+          "fullAttentionLogicalBytes": 458293248,
+          "fullAttentionUnusedArrayBytes": 50135040,
+          "offset": 6993
+        }
+      ]
+    },
+    {
+      "label": "p8k-after",
+      "promptTokens": 7012,
+      "cachedTokens": 6993,
+      "generated": 56,
+      "cancelled": false,
+      "responseSeconds": 3.0,
+      "peakActiveMlxBytes": 17495876260,
+      "peakFootprintBytes": 19065351136,
+      "settledActiveMlxBytes": 16523321872,
+      "settledFootprintBytes": 18518699048,
+      "checkInUnusedBytes": [
+        45088768,
+        16580608
+      ],
+      "checkInArrayBytes": [
+        508428288,
+        475987968
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p32k-grow",
+      "promptTokens": 30540,
+      "cachedTokens": 7010,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 132.0,
+      "peakActiveMlxBytes": 22140002862,
+      "peakFootprintBytes": 23910214624,
+      "settledActiveMlxBytes": 18065236496,
+      "settledFootprintBytes": 21250845664,
+      "checkInUnusedBytes": [
+        64356352,
+        16580608
+      ],
+      "checkInArrayBytes": [
+        2070020096,
+        2017918976
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p32k-cancel",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "generated": 1024,
+      "cancelled": true,
+      "responseSeconds": 53.3,
+      "peakActiveMlxBytes": 18514066004,
+      "peakFootprintBytes": 21792648160,
+      "settledActiveMlxBytes": 18165899792,
+      "settledFootprintBytes": 19347680224,
+      "checkInUnusedBytes": [],
+      "checkInArrayBytes": [],
+      "rewind": [
+        {
+          "fullAttentionArrayBytes": 2118582272,
+          "fullAttentionLogicalBytes": 2001338368,
+          "fullAttentionUnusedArrayBytes": 117243904,
+          "offset": 30538
+        }
+      ]
+    },
+    {
+      "label": "p32k-after",
+      "promptTokens": 30557,
+      "cachedTokens": 30538,
+      "generated": 53,
+      "cancelled": false,
+      "responseSeconds": 3.4,
+      "peakActiveMlxBytes": 20648927790,
+      "peakFootprintBytes": 23721372640,
+      "settledActiveMlxBytes": 18066285072,
+      "settledFootprintBytes": 21300587488,
+      "checkInUnusedBytes": [
+        112394240,
+        16580608
+      ],
+      "checkInArrayBytes": [
+        2118582272,
+        2019033088
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p64k-grow",
+      "promptTokens": 60880,
+      "cachedTokens": 30555,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 203.8,
+      "peakActiveMlxBytes": 26503225902,
+      "peakFootprintBytes": 27978673120,
+      "settledActiveMlxBytes": 20053942800,
+      "settledFootprintBytes": 23296224224,
+      "checkInUnusedBytes": [
+        4915200,
+        16580608
+      ],
+      "checkInArrayBytes": [
+        3998941184,
+        4006281216
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p64k-cancel",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "generated": 1024,
+      "cancelled": true,
+      "responseSeconds": 60.1,
+      "peakActiveMlxBytes": 20508904344,
+      "peakFootprintBytes": 23762316256,
+      "settledActiveMlxBytes": 20154540560,
+      "settledFootprintBytes": 21339925472,
+      "checkInUnusedBytes": [],
+      "checkInArrayBytes": [],
+      "rewind": [
+        {
+          "fullAttentionArrayBytes": 4106944512,
+          "fullAttentionLogicalBytes": 3989700608,
+          "fullAttentionUnusedArrayBytes": 117243904,
+          "offset": 60878
+        }
+      ]
+    },
+    {
+      "label": "p64k-after",
+      "promptTokens": 60897,
+      "cachedTokens": 60878,
+      "generated": 61,
+      "cancelled": false,
+      "responseSeconds": 4.5,
+      "peakActiveMlxBytes": 24626274884,
+      "peakFootprintBytes": 27963550688,
+      "settledActiveMlxBytes": 20054991376,
+      "settledFootprintBytes": 23356648416,
+      "checkInUnusedBytes": [
+        111869952,
+        16580608
+      ],
+      "checkInArrayBytes": [
+        4106944512,
+        4007395328
+      ],
+      "rewind": []
+    }
+  ],
+  "sampler": {
+    "sampleCount": 2313,
+    "maxSampledFootprintBytes": 27981622240,
+    "minSampledAvailableBytes": 8955740160,
+    "maxPressureLevel": 2,
+    "maxSystemSwapGrowthBytes": 0,
+    "diagnosticsRotations": 0,
+    "elapsedSeconds": 590.5288274579798
+  }
+}

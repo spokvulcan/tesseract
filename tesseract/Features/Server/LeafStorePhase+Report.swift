@@ -118,6 +118,8 @@ nonisolated extension LeafStorePhase {
         /// Tokens prefilled on the GPU after generation ended — the
         /// boundary residual, `0` on the live and direct paths.
         var residualTokens = 0
+        /// Bytes the #534 compaction freed before the capture.
+        var compactedBytes = 0
         /// The stored-conversation render (CPU): to bytes on the fast path,
         /// render + tokenize on the boundary path.
         var renderSeconds: TimeInterval = 0
@@ -157,6 +159,7 @@ nonisolated extension LeafStorePhase {
             if let leafOffset { fields.append(("leafOffset", "\(leafOffset)")) }
             fields += [
                 ("residualTokens", "\(residualTokens)"),
+                ("compactedBytes", "\(compactedBytes)"),
                 ("renderMs", ms(renderSeconds)),
                 ("planMs", ms(planSeconds)),
                 ("restoreMs", ms(timings.restoreSeconds)),
@@ -233,6 +236,7 @@ nonisolated extension LeafStorePhase {
             residualTokens = capture.residualTokens
             handedOff = capture.handedOff
             copyReason = capture.copyReason
+            compactedBytes = capture.compactedBytes
             timings = capture.timings
         }
     }
