@@ -1,0 +1,51 @@
+{
+  "status": "APPROVED",
+  "purpose": "#532 SSD read-path experiment: three read arms on one exact Segment Chain, adopt only at >= 2.0x median throughput over mapped",
+  "ownerApproval": "Owner (spokvulcan) standing approval granted in session on 2026-09-20 for loaded-model, long-context and reload benchmarks on this host; plan filled in and committed by the agent under that approval on 2026-09-21",
+  "preRegistrationCommit": null,
+  "appCommit": "5c08817def2865c858a715b46f3059c0eaf67af1",
+  "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
+  "releaseBinarySHA256": "6947d30f12401f9c7fb967666439b2e60d4d73832e5541739cc8d72a33c6f976",
+  "releaseBinary": "/Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app/Contents/MacOS/Tesseract Agent",
+  "host": {
+    "machine": "Apple M3 Max",
+    "memoryBytes": 51539607552,
+    "os": "27.0"
+  },
+  "model": {
+    "id": "qwen3.8-27b",
+    "directory": "/Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit",
+    "configSHA256": "14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85",
+    "partitionModelFingerprint": "78025e8ff196435ba3912bc1783c0bf0360fab2352a69b9ac981c4c0e0228d68"
+  },
+  "cacheRoot": "/Users/owl/bench-results/ssd-export-2026-09-21",
+  "cacheRootOrigin": "~/Library/Caches/prefix-cache after the #534 verification run (run 4) on 2026-09-21; manifest.json plus the selected chain's files copied with rsync and made read-only; no other inference or cache writer ran between the app's exit and the copy",
+  "snapshotID": "A5F80440-BB50-40FE-AE8E-45CB32BD8A30",
+  "chainTokenOffset": 60906,
+  "chainFiles": 5,
+  "chainTotalBytes": 4761977844,
+  "segmentSHA256": {
+    "partitions/9c88cbda/snapshots/8/87F1F20C-79C3-476D-A48E-F1AD772925BD.safetensors": "b951697b00ce96a269b8ca555f43780095d66cd9e24a74e957d46845bf2d3ee8",
+    "partitions/9c88cbda/snapshots/6/6DE07017-1733-47E6-AF9C-0A610B3D5B3B.safetensors": "5ca5fae4c0708ed01ef661f2c9127306a6c108a1cb938f9d01d5d7ec46693876",
+    "partitions/9c88cbda/snapshots/7/762D4E5D-51DF-42B3-B357-E38C95F6AE6E.safetensors": "99221f2d2f3aac0216878b5a01d426e811a30142989c4a64f6368b4ed24755d3",
+    "partitions/9c88cbda/snapshots/3/3BB75E80-A68B-422F-AEBC-4DBA84518A3B.safetensors": "18259f7ebd67520ceca49a89c38adca9c1fcbaecfdc148685ba444c9b8a0222a",
+    "partitions/9c88cbda/snapshots/A/A5F80440-BB50-40FE-AE8E-45CB32BD8A30.safetensors": "c570131d4f54b5f546a64624c41fb1bbf61fb50a53d6bb296fb4f333168b120b"
+  },
+  "maxSegmentBytes": 5368709120,
+  "maxMLXBytes": 34359738368,
+  "resources": {
+    "minimumInitialAvailableBytes": 21474836480,
+    "expectedPeakFootprintBytes": 28991029248,
+    "footprintStopBytes": 36507222016,
+    "minimumAvailableStopBytes": 6442450944,
+    "swapGrowthStopBytes": 1073741824,
+    "pressureStopLevel": 4,
+    "minimumInitialDiskFreeBytes": 32212254720,
+    "minimumDiskFreeStopBytes": 16106127360,
+    "sampleIntervalMilliseconds": 250,
+    "maximumCampaignSeconds": 1800,
+    "cancelGraceSeconds": 30
+  },
+  "decisionRule": "Per benchmarks/ssd-read/2026-09-19/README.md: adopt an arm only if its median GB/s over six blocks is >= 2.0x mapped with identical snapshot digests across arms and an acceptable memory record; otherwise keep mapped and record the null result. A stopped or failed run has no adoption result.",
+  "privateOutputDirectory": "/Users/owl/bench-results/ssd-read-2026-09-21"
+}
