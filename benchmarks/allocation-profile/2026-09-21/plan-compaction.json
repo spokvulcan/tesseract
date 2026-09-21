@@ -19,7 +19,7 @@
   "longOutputTokens": 4096,
   "settleSeconds": 5,
   "fillerFile": "/Users/owl/projects/tesseract/CONTEXT.md",
-  "fillerSHA256": "8c5220149287d639c82e74129df074e3838a5c5cb45ae4187ebeb701b38278bc",
+  "fillerSHA256": "a3c120295fef3d2701417fef9388623c2a6308daf51859bb2548ca5d29204b5f",
   "steps": [
     {
       "id": "p8k",
@@ -51,5 +51,6 @@
     "maximumCampaignSeconds": 3600,
     "sampleIntervalMilliseconds": 250,
     "cancelGraceSeconds": 5
-  }
+  },
+  "note": "Filler is CONTEXT.md at the app commit; it gained the Capacity Compaction paragraph since run 2, so prompt sizes differ by a few tokens."
 }
