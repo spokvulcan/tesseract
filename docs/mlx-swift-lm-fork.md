@@ -193,7 +193,7 @@ against upstream dependency pins. Re-checked 2026-09-21 on the same
 `CacheCapacityTests` plus the three cited free-function cache tests
 (`swift test` cannot load the Metal library here, as the vendor's
 CONTRIBUTING notes). The PR text is prepared at
-`/private/tmp/tesseract-533-upstream-pr.md`; posting waits on the owner's
+`docs/mlx-swift-lm-533-upstream-pr.md`; posting waits on the owner's
 attestation. The app's final 795 tests in 58 prefix-cache
 and touched suites pass, including canonical, speculative and raw prefill
 reservation regressions. Both Standards and Spec review are clear after the
