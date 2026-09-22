@@ -121,9 +121,7 @@ struct CacheClaimMemoryEvidenceTests {
         // The order the executors used before: extract, then check in.
         let before = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let old = try await decodedTurn(before)
-        Memory.clearCache()
-        let oldStart = Memory.activeMemory
-        Memory.peakMemory = 0
+        let oldStart = Self.settledActiveMemory()
         let oldPayload = ServerCompletion.deferredPayload(
             for: old.leaf, extending: Self.extensionBase)
         let oldCheckIn = await checkIn(old.handOver, old.leaf, from: old.live, tokens: old.tokens)
@@ -134,9 +132,7 @@ struct CacheClaimMemoryEvidenceTests {
         // The executors' order now: check in, then extract.
         let after = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let new = try await decodedTurn(after)
-        Memory.clearCache()
-        let newStart = Memory.activeMemory
-        Memory.peakMemory = 0
+        let newStart = Self.settledActiveMemory()
         let newCheckIn = await checkIn(new.handOver, new.leaf, from: new.live, tokens: new.tokens)
         let newPayload = ServerCompletion.deferredPayload(
             for: new.leaf, extending: Self.extensionBase)
@@ -178,9 +174,7 @@ struct CacheClaimMemoryEvidenceTests {
                 SnapshotAdmission.leaf(
                     storedTokens: turn.tokens, snapshot: occupantBody, storage: .ramOnly,
                     partitionKey: key)))
-        Memory.clearCache()
-        let start = Memory.activeMemory
-        Memory.peakMemory = 0
+        let start = Self.settledActiveMemory()
         let outcome = await checkIn(turn.handOver, turn.leaf, from: turn.live, tokens: turn.tokens)
         // The rewind frees the turn's own arrays, so the peak can sit below
         // where the step started; only what it rose above counts.
@@ -210,9 +204,7 @@ struct CacheClaimMemoryEvidenceTests {
                 SnapshotAdmission.leaf(
                     storedTokens: tokens, snapshot: try hybridLeaf(), storage: .ramOnly,
                     partitionKey: key)))
-        Memory.clearCache()
-        let start = Memory.activeMemory
-        Memory.peakMemory = 0
+        let start = Self.settledActiveMemory()
         let (outcome, handOver) = await manager.checkOutHoldingClaim(
             .init(
                 lookup: manager.lookup(tokens: tokens + [7], partitionKey: key),
@@ -226,7 +218,7 @@ struct CacheClaimMemoryEvidenceTests {
         let handoff = try #require(outcome.handoff)
         #expect(handoff.rewindStateBytes == Self.recurrentBytes)
         #expect(await handOver.rewindAndConclude(sessions: sessions) == Self.rows)
-        Memory.clearCache()
+        Stream().synchronize()
         let afterRewind = Memory.activeMemory - start
 
         Self.report(
@@ -240,6 +232,61 @@ struct CacheClaimMemoryEvidenceTests {
             #expect(peak <= Self.recurrentBytes + 65_536)
             #expect(afterRewind <= 65_536, "the rewind returns the backup")
         }
+    }
+
+    /// Item 2 of #554: compaction evaluates one layer at a time. Each
+    /// layer's replacement is materialized and its old arrays released
+    /// before the next layer allocates, so the transient is one layer's
+    /// share of the replacement, not the whole attention body's.
+    @Test func compactionHoldsOneLayersReplacementAtATime() {
+        // 8 layers of 2 heads × 64 dims, float16: 512 B per row. A 2,048-row
+        // body that grew 20,000 rows and was trimmed back retains ~80 MB.
+        let layers = 8
+        let cache: [any KVCache] = (0..<layers).map { _ in
+            let layer = KVCacheSimple()
+            let keys = MLXArray.ones([1, 2, 2_048 + 20_000, 64], dtype: .float16)
+            _ = layer.update(keys: keys, values: keys)
+            layer.trim(20_000)
+            return layer
+        }
+        eval(cache)
+        let oldAddresses = cache.map { Set($0.innerState().map(backingAddress)) }
+        // One layer's replacement: keys and values at the offset plus a step.
+        let layerReplacementBytes = 2 * (2_048 + 256) * 2 * 64 * 2
+
+        let start = Self.settledActiveMemory()
+        let outcome = AttentionCapacityCompaction.compactIfNeeded(cache)
+        let peak = max(0, Memory.peakMemory - start)
+
+        #expect(outcome.compactedLayers == layers)
+        // A replacement never shares the arrays it replaces. (A later layer
+        // may reuse an earlier layer's freed buffer: that storage is gone.)
+        for (layer, old) in zip(cache, oldAddresses) {
+            #expect(Set(layer.innerState().map(backingAddress)).isDisjoint(with: old))
+        }
+        Self.report(
+            "compaction",
+            [
+                "peakBytes": peak, "layerReplacementBytes": layerReplacementBytes,
+                "wholeBodyReplacementBytes": layers * layerReplacementBytes,
+                "freedBytes": outcome.freedBytes,
+            ])
+        if Self.assertsPeaks {
+            #expect(
+                peak <= 2 * layerReplacementBytes,
+                "the transient is one layer's replacement, not the whole body's")
+        }
+    }
+
+    /// Settle the device before a measured step: finish pending GPU work so
+    /// buffers released earlier (by this test or the previous one) are gone,
+    /// empty the buffer cache, and start the peak counter at what is live.
+    private static func settledActiveMemory() -> Int {
+        Stream().synchronize()
+        Memory.clearCache()
+        let active = Memory.activeMemory
+        Memory.peakMemory = 0
+        return active
     }
 
     private static func report(_ step: String, _ values: [String: Int]) {
