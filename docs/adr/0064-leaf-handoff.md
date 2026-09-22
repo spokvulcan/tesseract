@@ -402,3 +402,25 @@ once, as a copied restore did. The model-free evidence in
 `CacheClaimMemoryEvidenceTests` measures the check-out of a loaded 8 MiB hybrid
 leaf at the 4 MiB recurrent rewind backup and nothing else, where restoring the
 same leaf by copy costs the whole 8 MiB.
+
+## Amendment 2026-09-22: the check-out belongs to the Cache Claim (#554)
+
+Accepted with ADR-0069. The check-out, the Pending-Payload Wait, Leaf Rewind
+and check-in are now steps of the request's **Cache Claim**, and the Leaf
+Lease is one part of that claim. `LeafCheckout` and the manager's `claimLeaf`
+are gone: the claim's check-out runs the same guard ladder and asks the
+manager's `leaseLeaf`, the wait keeps its bound, its poll and its queued,
+in-progress and absent rules, and exact rewind is unchanged. Three things
+differ.
+
+- The claim keeps the leased node instead of a copy of the leaf's token path,
+  and a rewind returns the body under the node's own path.
+- The restore outcome is typed. A copy carries its precise refusal in the new
+  `copyRefusal` field, so a leaf that is already leased reads `alreadyLeased`
+  there; `copyReason` keeps today's values and still reads
+  `pendingFullPayload` for it.
+- The executors check the leaf in before they extract its SSD extension
+  payload, not after. Check-in still precedes admission (#498).
+
+The pin table's age-out, which this ADR exempted the lease from, no longer
+exists (ADR-0019's 2026-09-22 amendment).

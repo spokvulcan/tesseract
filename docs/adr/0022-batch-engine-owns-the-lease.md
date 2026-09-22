@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, not pursued (the engine was reverted on 2026-07-06; see the note at the end)
 ---
 
 # Batch inference: a lane engine owns the GPU lease
@@ -66,3 +66,13 @@ loads see one long-running lease consumer.
 - A stray request for a different model can stall a fan-out burst for one
   freeze window (bounded by the longest in-flight completion) — accepted in
   exchange for keeping today's model-switch contract.
+
+## Note 2026-09-22: not pursued
+
+The Batch Engine landed in 8fef7c0f (#176) and was reverted the same day in
+72d61ed3; PRD #173 was closed as not planned. No lane code exists: the server
+runs one generation at a time under the FIFO GPU lease and the Model
+Session's serial lock. This record stays as the design to start from if batch
+inference is taken up again. Until then, architecture reviews should not treat
+lanes as a design driver; the **Cache Claim** (ADR-0069) was designed for one
+generation at a time on this basis.
