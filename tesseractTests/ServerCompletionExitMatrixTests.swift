@@ -43,6 +43,8 @@ struct ServerCompletionExitMatrixTests {
         _ = try await session.turn(Self.firstRequest)
         let turn = try await session.turn(Self.warmRequest, text: "again")
         #expect(turn.leafStore["restoreMode"] == "handoff", turn.account)
+        #expect(turn.leafStore["copyRefusal"] == nil, turn.account)
+        #expect(turn.event("lookup")?.field("copyRefusal") == nil)
         await Self.expectReleased(session.fixture, turn.events)
 
         let next = try await session.turn(
@@ -58,6 +60,13 @@ struct ServerCompletionExitMatrixTests {
         let turn = try await session.turn(Self.warmRequest, text: "again")
         #expect(turn.leafStore["restoreMode"] == "copy", turn.account)
         #expect(turn.leafStore["copyReason"] == "checkoutDisabled", turn.account)
+        // The precise refusal rides beside the unchanged copy reason.
+        #expect(turn.leafStore["copyRefusal"] == "checkoutDisabled", turn.account)
+        #expect(turn.event("lookup")?.field("copyRefusal") == "checkoutDisabled")
+        #expect(
+            turn.events.first {
+                $0.eventName == "requestMemory" && $0.field("phase") == "restored"
+            }?.field("restoreCopyRefusal") == "checkoutDisabled")
         await Self.expectReleased(session.fixture, turn.events)
 
         session.fixture.cacheAdmin.setLeafCheckoutDisabled(false)

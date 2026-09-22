@@ -1128,14 +1128,29 @@ extension TokenRadixTree {
         on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context,
         requireDetachedPayload: Bool = false
     ) -> LeafLease? {
-        func refuse(_ reason: LeafLeaseRefusedEvent.Reason) -> LeafLease? {
+        guard
+            case .success(let lease) = leafLease(
+                on: node, context: context, requireDetachedPayload: requireDetachedPayload)
+        else { return nil }
+        return lease
+    }
+
+    /// `beginLeafLease`, answering why when the tree refuses (the refusal
+    /// is logged either way).
+    func leafLease(
+        on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context,
+        requireDetachedPayload: Bool = false
+    ) -> Result<LeafLease, LeafLeaseRefusedEvent.Reason> {
+        func refuse(
+            _ reason: LeafLeaseRefusedEvent.Reason
+        ) -> Result<LeafLease, LeafLeaseRefusedEvent.Reason> {
             let active = node.leafLease
             context.log(
                 LeafLeaseRefusedEvent(
                     reason: reason, offset: node.tokenOffset, bytes: node.state.residentBodyBytes,
                     leaseID: active?.id, activeLeaseID: active?.id,
                     activeRequestID: active?.context.requestID), level: .notice)
-            return nil
+            return .failure(reason)
         }
         guard contains(node) else { return refuse(.wrongTree) }
         guard let body = node.state.body, body.checkpointType == .leaf else {
@@ -1151,7 +1166,7 @@ extension TokenRadixTree {
         leasedBytes += lease.bytes
         leaseCount += 1
         context.log(LeafLeaseBeginEvent(lease: lease, accounting: leaseAccounting), level: .notice)
-        return lease
+        return .success(lease)
     }
 
     /// Remove the immutable body without retiring its lease's budget charge.
@@ -1172,29 +1187,62 @@ extension TokenRadixTree {
         _ lease: LeafLease, on node: RadixTreeNode,
         returning body: HybridCacheSnapshot, tokens: [Int], reason: LeafLease.ReleaseReason
     ) -> Bool {
-        func refuse(_ reason: LeafLeaseRefusedEvent.Reason) -> Bool {
+        endLeafLease(lease, on: node, returning: body, to: tokens, reason: reason) == nil
+    }
+
+    /// End `lease` by check-in: commit `body` under `tokens`, the leased
+    /// path or one that extends it. `nil` on success, else why the tree
+    /// refused (also logged); the lease then stays intact.
+    func checkInLeafLease(
+        _ lease: LeafLease, on node: RadixTreeNode, returning body: HybridCacheSnapshot,
+        tokens: [Int]
+    ) -> LeafLeaseRefusedEvent.Reason? {
+        endLeafLease(lease, on: node, returning: body, to: tokens, reason: .checkIn)
+    }
+
+    /// End `lease` by **Leaf Rewind**: store the rewound `body` back on the
+    /// node it was leased from, under that node's own path — the lease
+    /// addresses the leaf by its node, not by a copy of its tokens. `nil` on
+    /// success, else why the tree refused (also logged).
+    func rewindLeafLease(
+        _ lease: LeafLease, on node: RadixTreeNode, returning body: HybridCacheSnapshot
+    ) -> LeafLeaseRefusedEvent.Reason? {
+        endLeafLease(lease, on: node, returning: body, to: nil, reason: .rewind)
+    }
+
+    /// `tokens` is the destination path; `nil` means the leased node itself.
+    private func endLeafLease(
+        _ lease: LeafLease, on node: RadixTreeNode,
+        returning body: HybridCacheSnapshot, to tokens: [Int]?, reason: LeafLease.ReleaseReason
+    ) -> LeafLeaseRefusedEvent.Reason? {
+        func refuse(_ reason: LeafLeaseRefusedEvent.Reason) -> LeafLeaseRefusedEvent.Reason {
             let active = node.leafLease
             lease.context.log(
                 LeafLeaseRefusedEvent(
                     reason: reason, offset: lease.offset, bytes: lease.bytes, leaseID: lease.id,
                     activeLeaseID: active?.id, activeRequestID: active?.context.requestID),
                 level: .notice)
-            return false
+            return reason
         }
         guard contains(node) else { return refuse(.wrongTree) }
         guard node.leafLease?.id == lease.id else { return refuse(.staleLease) }
-        guard body.checkpointType == .leaf, body.tokenOffset == tokens.count else {
+        let destinationOffset = tokens?.count ?? lease.offset
+        guard body.checkpointType == .leaf, body.tokenOffset == destinationOffset else {
             return refuse(.invalidBody)
         }
-        guard tokens.starts(with: pathToNode(node)), tokens.count >= lease.offset else {
-            return refuse(.invalidPath)
+        if let tokens {
+            guard tokens.starts(with: pathToNode(node)), tokens.count >= lease.offset else {
+                return refuse(.invalidPath)
+            }
+        } else {
+            guard node.tokenOffset == lease.offset else { return refuse(.invalidPath) }
         }
-        guard reason == .checkIn || tokens.count == lease.offset else {
+        guard reason == .checkIn || destinationOffset == lease.offset else {
             return refuse(.invalidRewind)
         }
         // An occupied destination is a competing admission, not permission to
         // replace another body/ref. Leave the lease intact for a rewind.
-        let existing = exactNode(tokens: tokens)
+        let existing = tokens.flatMap { exactNode(tokens: $0) }
         if let existing, existing !== node {
             guard case .empty = existing.state, existing.chainPrefixRestorePoint == nil else {
                 return refuse(.occupiedDestination)
@@ -1209,7 +1257,7 @@ extension TokenRadixTree {
             return refuse(.staleLease)
         }
         if node.state.body == nil { totalSnapshotBytes -= lease.bytes }
-        let destination = insertPath(tokens: tokens)
+        let destination = tokens.map { insertPath(tokens: $0) } ?? node
         leasedBytes -= lease.bytes
         leaseCount -= 1
         if destination !== node {
@@ -1226,7 +1274,7 @@ extension TokenRadixTree {
             LeafLeaseEndEvent(
                 lease: lease, reason: reason, returnedOffset: body.tokenOffset,
                 returnedBytes: body.memoryBytes, accounting: leaseAccounting), level: .notice)
-        return true
+        return nil
     }
 
     private var leaseAccounting: LeafLeaseAccounting {

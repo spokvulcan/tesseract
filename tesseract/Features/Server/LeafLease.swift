@@ -1,4 +1,6 @@
 import Foundation
+import MLX
+import MLXLMCommon
 
 /// Scalar identity for a tree-side Leaf Lease. Holding this value retains
 /// neither the tree, the node, nor any cache object or array.
@@ -146,7 +148,9 @@ nonisolated struct LeafLeaseEndEvent: PrefixCacheDiagnostics.Payload {
 }
 
 nonisolated struct LeafLeaseRefusedEvent: PrefixCacheDiagnostics.Payload {
-    enum Reason: String, Sendable {
+    /// Why the tree refused. An `Error`, so a lease attempt can answer
+    /// `Result<LeafLease, Reason>`.
+    enum Reason: String, Sendable, Error {
         case bodyReplacement, ssdAdmission, supersession, ramClear, demotion, writePromotion,
             dropBody
         case wrongTree, notLeaf, alreadyLeased, writerReading, pendingFullPayload, staleLease
@@ -200,5 +204,72 @@ nonisolated struct LeafRewindEvent: PrefixCacheDiagnostics.Payload {
             ),
             ("compactedBytes", "\(compactedBytes)"),
         ]
+    }
+}
+
+/// What exact **Leaf Rewind** needs, saved when a leaf is checked out: each
+/// cache object's kind, and an independent copy of every recurrent layer.
+/// Sliceable attention preserves its prefix even across growth, so the
+/// rewind trims it back to `offset`; whole-state layers are rebuilt from
+/// their copy, including empty slots. The copy is the only array a
+/// check-out allocates.
+nonisolated struct LeafRewind: @unchecked Sendable {
+    /// A whole-state layer's independent copy. Every whole-state layer of
+    /// an eligible leaf is recurrent (`HybridCacheSnapshot.checkoutRefusal`),
+    /// so the rewind rebuilds it as an `ArraysCache`.
+    private struct RecurrentState {
+        let index: Int
+        let layer: HybridCacheSnapshot.LayerState
+    }
+
+    /// The leased leaf's token offset: where the rewind trims attention to.
+    let offset: Int
+    /// Each cache object's kind, in cache order, as the moved body recorded
+    /// it: what the rewind trims and what it rebuilds.
+    private let kinds: [HybridCacheSnapshot.LayerState.Kind]
+    private let recurrent: [RecurrentState]
+
+    var stateBytes: Int {
+        recurrent.reduce(0) { $0 + $1.layer.state.reduce(0) { $0 + $1.nbytes } }
+    }
+
+    /// Model Session only, on the objects just taken from the leaf.
+    init(cache: [any KVCache], kinds: [HybridCacheSnapshot.LayerState.Kind], offset: Int) {
+        self.offset = offset
+        self.kinds = kinds
+        recurrent = zip(cache, kinds).enumerated().compactMap { index, entry in
+            let (layer, kind) = entry
+            guard kind == .wholeState, let className = HybridCacheSnapshot.classNameForCache(layer)
+            else { return nil }
+            precondition(
+                layer is ArraysCache,
+                "an eligible leaf's whole-state layers are recurrent (checkoutRefusal)")
+            return RecurrentState(
+                index: index,
+                layer: .init(
+                    className: className,
+                    state: layer.state.map { HybridCacheSnapshot.deepCopyState($0) },
+                    metaState: layer.metaState, offset: layer.offset))
+        }
+        eval(recurrent.flatMap { $0.layer.state })
+    }
+
+    /// Model Session only, once generation has quiesced.
+    func rewind(_ cache: inout [any KVCache]) {
+        eval(cache)
+        for (layer, kind) in zip(cache, kinds) where kind == .sliceableAttention {
+            let advance = layer.offset - offset
+            precondition(advance >= 0)
+            let trimmed = layer.trim(advance)
+            precondition(trimmed == advance)
+        }
+        for saved in recurrent {
+            var arrays: [MLXArray] = []
+            cache[saved.index] = HybridCacheSnapshot.makeArraysCache(
+                mamba: saved.layer.className == "MambaCache", state: saved.layer.state,
+                metaState: saved.layer.metaState, offset: saved.layer.offset,
+                copyStrategy: nil, copiedArrays: &arrays)
+        }
+        eval(cache)
     }
 }

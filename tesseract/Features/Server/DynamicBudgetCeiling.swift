@@ -233,7 +233,7 @@ nonisolated struct ActiveInferenceReserve: Sendable, Equatable {
         /// path as on the live one; `copy` is a restore by copy whose
         /// source body the tree already counts; `rewind` copied nothing.
         let source: LeafStorePhase.Report.Source
-        /// The turn's maximum advance (`LeafCheckout.maximumAdvance`):
+        /// The turn's maximum advance (`CacheClaim.maximumAdvance`):
         /// new prompt tokens plus the output ceiling plus the speculative
         /// allowance, `Int.max` when the output is unbounded.
         let maximumAdvance: Int

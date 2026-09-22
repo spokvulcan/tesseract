@@ -172,7 +172,7 @@ import Testing
             let warm = try session.compress(full, bits: 8)
             #expect(warm.isWarm)
             #expect(warm.memoryBytes < full.memoryBytes)
-            #expect(warm.checkoutCopyReason(maximumAdvance: 10)?.rawValue == "warmBody")
+            #expect(warm.checkoutRefusal(maximumAdvance: 10)?.rawValue == "warmBody")
             #expect(
                 warm.layers.last?.state.first?.asData(access: .copy).data
                     == full.layers.last?.state.first?.asData(access: .copy).data)

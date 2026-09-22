@@ -64,7 +64,7 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     let lookupReason: PrefixCacheManager.LookupReason
     /// Shared-prefix length in tokens between the request and the best cache entry.
     let sharedPrefixLength: Int
-    /// The turn's maximum advance (`LeafCheckout.maximumAdvance`): the
+    /// The turn's maximum advance (`CacheClaim.maximumAdvance`): the
     /// prompt tokens prefilled past the restore offset plus the output
     /// ceiling plus the speculative allowance, `Int.max` when the output is
     /// unbounded. What check-out eligibility was judged against, and what
@@ -145,20 +145,26 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// `ToolCallProcessor` parsed with, so the Emitted Path fidelity check
     /// replays the emitted ids through the same parser (ADR-0063).
     let toolCallFormat: ToolCallFormat
+    /// How the request restored (`cold`, `copy`, `failedCopy`, `handoff`),
+    /// as the claim's check-out decided it — one input to the stored
+    /// leaf's source.
+    var restoreMode = "cold"
+    /// Why a copy restore did not take the leaf; `nil` unless the check-out
+    /// answered copy.
+    var restoreCopy: CacheClaim.Copy?
+    /// Seconds a Pending-Payload Wait cost, whether it ended in a copy or
+    /// a handoff (#523).
+    var restoreWaitSeconds: TimeInterval = 0
 }
 
 /// All copies of the generation handle share this one reference. Handoff
 /// empties it for every phase, including the drive's retained start handle.
 /// Access follows the generation's existing discipline: inspect only after
 /// awaiting completion; transfer only inside the Metal-affine Model Session.
+/// A checked-out leaf's lease belongs to the request's **Cache Claim**, not
+/// to this handle.
 nonisolated final class FinalGenerationCache: @unchecked Sendable {
     private(set) var cache: [any KVCache]
-    var checkout: LeafCheckout?
-    var restoreMode = "cold"
-    var copyReason: LeafStorePhase.Report.CopyReason?
-    /// Seconds the restore spent waiting for a pending full payload
-    /// before it settled (#523); `0` when it never waited.
-    var copyWaitSeconds: TimeInterval = 0
 
     init(_ cache: [any KVCache]) {
         self.cache = cache
@@ -167,54 +173,11 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
     func moveSnapshot(offset: Int) -> HybridCacheSnapshot? {
         HybridCacheSnapshot.captureMoving(cache: &cache, offset: offset)
     }
-    var rewindStateBytes: Int { checkout?.rewindStateBytes ?? 0 }
 
-    /// Called after generation quiesces and inside the Model Session.
-    func rewindIfNeeded(memory: RequestMemoryTelemetry? = nil) async {
-        guard let checkout else { return }
-        memory?.mark(.rewindingLeaf, facts: ["recurrentRewindStateBytes": "\(rewindStateBytes)"])
-        checkout.rewind(cache: &cache)
-        // The rewound cache's attention arrays keep the capacity the aborted
-        // generation grew into; the leaf inherits it (#501 measured, #534
-        // compacts above the threshold). Read here, before the move takes
-        // the cache objects.
-        let compaction = AttentionCapacityCompaction.compactIfNeeded(cache)
-        let rewoundFacts = RequestMemoryTelemetry.cacheFacts(cache)
-        guard let body = moveSnapshot(offset: checkout.claim.lease.offset) else {
-            preconditionFailure("a checked-out cache must remain capturable")
-        }
-        let returned = await checkout.claim.returnBody(
-            body, tokens: checkout.originalTokens, reason: .rewind)
-        precondition(returned, "the lease must accept its original path on rewind")
-        checkout.claim.lease.context.log(
-            LeafRewindEvent(
-                lease: checkout.claim.lease, recurrentBytes: rewindStateBytes,
-                fullAttentionArrayBytes: Int(
-                    rewoundFacts["requestFullAttentionArrayBytes"] ?? "") ?? 0,
-                fullAttentionLogicalBytes: Int(
-                    rewoundFacts["requestFullAttentionLogicalBytes"] ?? "") ?? 0,
-                compactedBytes: compaction.freedBytes),
-            level: .notice)
-        var report = LeafStorePhase.Report()
-        report.mode = "keyed"
-        report.path = .rewind
-        report.restoreMode = restoreMode
-        report.leafOffset = checkout.claim.lease.offset
-        checkout.claim.lease.context.log(report, level: .notice)
-        self.checkout = nil
-        memory?.markCacheReleased(
-            .rewoundLeaf,
-            facts: [
-                "leafSource": "rewind", "recurrentRewindStateBytes": "0",
-                "leafLeaseActive": "false",
-                "rewoundLeafFullAttentionArrayBytes":
-                    rewoundFacts["requestFullAttentionArrayBytes"] ?? "0",
-                "rewoundLeafFullAttentionLogicalBytes":
-                    rewoundFacts["requestFullAttentionLogicalBytes"] ?? "0",
-                "rewoundLeafFullAttentionUnusedArrayBytes":
-                    rewoundFacts["requestFullAttentionUnusedArrayBytes"] ?? "0",
-                "rewoundLeafCompactedBytes": "\(compaction.freedBytes)",
-            ])
+    /// **Leaf Rewind** of checked-out objects, in the Model Session once
+    /// generation has quiesced.
+    func rewind(with state: LeafRewind) {
+        state.rewind(&cache)
     }
 
     func recoverUnadmitted(_ snapshot: HybridCacheSnapshot) {
@@ -224,15 +187,6 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
         }
         cache = returnedCache
     }
-
-    func checkIn(_ snapshot: HybridCacheSnapshot, tokens: [Int]) async -> Bool {
-        guard let checkout else { return true }
-        guard !Task.isCancelled else { return false }
-        let returned = await checkout.claim.returnBody(snapshot, tokens: tokens, reason: .checkIn)
-        if returned { self.checkout = nil }
-        return returned
-    }
-
 }
 
 extension GenerationStreamLoop.RawGenerationHandle {
@@ -815,7 +769,7 @@ nonisolated final class ServerCompletion {
                 startOutcome = "cancelledDuringStart"
                 mlxStart.completion.cancel()
                 await mlxStart.completion.value
-                await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+                await Self.rewindLeaf(claim, sessions: sessions)
                 Memory.clearCache()
                 throw CancellationError()
             }
@@ -1067,7 +1021,7 @@ nonisolated final class ServerCompletion {
                 }) {
                     memory.mark(.generationQuiescent, facts: facts)
                 }
-                await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+                await Self.rewindLeaf(claim, sessions: sessions)
                 memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
@@ -1110,9 +1064,9 @@ nonisolated final class ServerCompletion {
                 )
             }
 
-            if outcome.completionInfo == nil, mlxStart.finalCacheOwner.checkout != nil {
+            if outcome.completionInfo == nil, claim.holdsLease {
                 terminalOutcome = "failed"
-                await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+                await Self.rewindLeaf(claim, sessions: sessions)
                 continuation.finish()
                 break drive
             }
@@ -1135,7 +1089,7 @@ nonisolated final class ServerCompletion {
 
             if Task.isCancelled {
                 terminalOutcome = "cancelled"
-                await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+                await Self.rewindLeaf(claim, sessions: sessions)
                 memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
@@ -1166,14 +1120,15 @@ nonisolated final class ServerCompletion {
                 trace: &trace,
                 memory: memory
             )
-            await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+            await Self.rewindLeaf(claim, sessions: sessions)
             if mlxStart.ssdEnabled, !Task.isCancelled {
                 await prefixCache.persistViewCheckpoints(
                     partitionKey: mlxStart.partitionKey, sessions: sessions)
             }
-            leafResult.report.restoreMode = mlxStart.finalCacheOwner.restoreMode
-            leafResult.report.restoreCopyReason = mlxStart.finalCacheOwner.copyReason
-            leafResult.report.restoreCopyWaitSeconds = mlxStart.finalCacheOwner.copyWaitSeconds
+            leafResult.report.restoreMode = mlxStart.restoreMode
+            leafResult.report.restoreCopyReason = mlxStart.restoreCopy?.reason
+            leafResult.report.restoreCopyRefusal = mlxStart.restoreCopy?.refusal
+            leafResult.report.restoreCopyWaitSeconds = mlxStart.restoreWaitSeconds
             leafResult.report.leafStoreSeconds =
                 Date.timeIntervalSinceReferenceDate - leafStoreStart
             let leafStoreForTuner = leafResult.leafStore
@@ -1278,12 +1233,12 @@ nonisolated final class ServerCompletion {
             continuation.finish()
         } catch is CancellationError {
             terminalOutcome = "cancelled"
-            await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+            await Self.rewindLeaf(claim, sessions: sessions)
             memory.mark(.finishingStream)
             continuation.finish()
         } catch {
             terminalOutcome = "failed"
-            await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+            await Self.rewindLeaf(claim, sessions: sessions)
             memory.mark(.finishingStream)
             continuation.finish(
                 throwing: AgentEngineError.generationFailed(
@@ -1333,12 +1288,11 @@ nonisolated final class ServerCompletion {
 
     /// Cleanup must enter the session even when the driving task was cancelled.
     private static func rewindLeaf(
-        _ owner: FinalGenerationCache, sessions: any ModelSessionProviding,
-        memory: RequestMemoryTelemetry
+        _ claim: CacheClaim, sessions: any ModelSessionProviding
     ) async {
-        guard owner.checkout != nil else { return }
+        guard claim.holdsLease else { return }
         let cleanup = Task.detached {
-            await sessions.withSession { _ in await owner.rewindIfNeeded(memory: memory) }
+            await sessions.withSession { session in await claim.rewind(in: session) }
         }
         await cleanup.value
     }
@@ -1642,12 +1596,15 @@ nonisolated final class ServerCompletion {
                     "dflash2Engaged": "\(dflash2Engages)",
                     "restoreSnapshotBytes": "\(lookupResult.snapshot?.memoryBytes ?? 0)",
                 ])
-            var checkedOutOwner: FinalGenerationCache?
+            // The claim's typed restore outcome: a handoff holds the lease
+            // and the leaf's own cache; a copy says why the leaf was not
+            // taken.
+            var handoff: CacheClaim.Handoff?
+            var restoreCopy: CacheClaim.Copy?
             var restoreMode = "cold"
-            var restoreCopyReason: LeafStorePhase.Report.CopyReason?
-            // The bounded wait for a pending full payload (#523): what the
-            // `pendingFullPayload` copy reason cost when it was waited out.
-            var restoreCopyWaitSeconds: TimeInterval = 0
+            // The bounded wait for a pending full payload (#523): what it
+            // cost, whether it ended in a copy or a handoff.
+            var restoreWaitSeconds: TimeInterval = 0
             // The turn's maximum advance: judged at check-out, priced by
             // the Active-Inference Reserve at the leaf store (#522).
             let restoredOffset: Int
@@ -1656,7 +1613,7 @@ nonisolated final class ServerCompletion {
             } else {
                 restoredOffset = 0
             }
-            let maximumAdvance = LeafCheckout.maximumAdvance(
+            let maximumAdvance = CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount - restoredOffset,
                 outputCeiling: parameters.maxTokens,
                 speculativeAllowance: dflash2Engages ? DFlash2Support.blockSize : 0)
@@ -1664,33 +1621,38 @@ nonisolated final class ServerCompletion {
                 switch prefillPlan.restore {
                 case .restore(let cacheOffset, let anchorDelta):
                     let restoreStarted = Date.timeIntervalSinceReferenceDate
-                    let attempt = await LeafCheckout.attempt(
-                        resolved: resolved, tokens: keySpace.keyPath,
-                        maximumAdvance: maximumAdvance,
-                        identityKeySpace: textOnlyIdentityKeySpace,
-                        prefixCache: prefixCache, context: diagnosticsContext)
-                    checkedOutOwner = attempt.owner
-                    restoreCopyReason = attempt.copyReason
-                    restoreCopyWaitSeconds = attempt.pendingPayloadWaitSeconds
-                    let restoredCache =
-                        attempt.owner?.cache ?? Self.restoreCache(lookupResult, session: session)
+                    let restoredCache: [any KVCache]?
+                    switch await claim.checkOut(
+                        resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
+                        identityKeySpace: textOnlyIdentityKeySpace, in: session)
+                    {
+                    case .handoff(let taken):
+                        handoff = taken
+                        restoreWaitSeconds = taken.waitSeconds
+                        restoredCache = taken.cache.cache
+                    case .copy(let copy):
+                        restoreCopy = copy
+                        restoreWaitSeconds = copy.waitSeconds
+                        restoredCache = Self.restoreCache(lookupResult, session: session)
+                    case .cold:
+                        restoredCache = Self.restoreCache(lookupResult, session: session)
+                    }
                     cacheToUse = restoredCache
                     restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
                     restoreMode =
-                        attempt.owner != nil
+                        handoff != nil
                         ? "handoff" : restoredCache == nil ? "failedCopy" : "copy"
                     memory.mark(
                         .restored,
                         facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? []).merging([
                             "restoreMode": restoreMode,
-                            "restoreCopyReason": restoreCopyReason?.rawValue ?? "none",
+                            "restoreCopyReason": restoreCopy?.reason.rawValue ?? "none",
+                            "restoreCopyRefusal": restoreCopy?.refusal.rawValue ?? "none",
                             "restoreCopyWaitMs": PrefixCacheDiagnostics.milliseconds(
-                                restoreCopyWaitSeconds),
-                            "recurrentRewindStateBytes":
-                                "\(checkedOutOwner?.rewindStateBytes ?? 0)",
-                            "leafLeaseActive": "\(checkedOutOwner != nil)",
-                            "leafLeaseID": checkedOutOwner?.checkout?.claim.lease.id.uuidString
-                                ?? "none",
+                                restoreWaitSeconds),
+                            "recurrentRewindStateBytes": "\(handoff?.rewindStateBytes ?? 0)",
+                            "leafLeaseActive": "\(handoff != nil)",
+                            "leafLeaseID": handoff?.leaseID.uuidString ?? "none",
                         ]) { _, new in new })
                     if !keySpace.isIdentity,
                         cacheOffset < keySpace.minimumWarmOffset,
@@ -1818,8 +1780,9 @@ nonisolated final class ServerCompletion {
                         hydratedFromSSD: resolved.hydratedFromSSD,
                         chainPrefixRestore: resolved.wasChainPrefixRestore,
                         divergence: lookupResult.divergence,
-                        restoreMode: restoreMode, copyReason: restoreCopyReason,
-                        copyWaitSeconds: restoreCopyWaitSeconds,
+                        restoreMode: restoreMode, copyReason: restoreCopy?.reason,
+                        copyRefusal: restoreCopy?.refusal,
+                        copyWaitSeconds: restoreWaitSeconds,
                         backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
                         warmBody: lookupResult.snapshot?.isWarm == true,
                         backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
@@ -2052,7 +2015,7 @@ nonisolated final class ServerCompletion {
                     // latency is unchanged; a re-sent request (or an
                     // abort-seeded speculative pass) resumes from the salvaged
                     // offset instead of the restore floor.
-                    if checkedOutOwner == nil {
+                    if handoff == nil {
                         await Self.salvageCancelledPrefill(
                             cache: liveCache,
                             keySpace: keySpace,
@@ -2068,10 +2031,7 @@ nonisolated final class ServerCompletion {
                 }
                 // Quantization can replace attention objects. Retain the array
                 // that the iterator actually advances, after that replacement.
-                let finalCacheOwner = checkedOutOwner ?? FinalGenerationCache(liveCache)
-                finalCacheOwner.restoreMode = restoreMode
-                finalCacheOwner.copyReason = restoreCopyReason
-                finalCacheOwner.copyWaitSeconds = restoreCopyWaitSeconds
+                let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
                 let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
                 let boundarySnapshots = prefillResult.snapshots.filter {
                     transientOffsets.contains($0.tokenOffset)
@@ -2204,10 +2164,13 @@ nonisolated final class ServerCompletion {
                     prefillStepSize: parameters.prefill.stepSize ?? 512,
                     tokenNDim: tokenNDim,
                     generatedTokens: generatedTokens,
-                    toolCallFormat: session.configuration.toolCallFormat ?? .json
+                    toolCallFormat: session.configuration.toolCallFormat ?? .json,
+                    restoreMode: restoreMode,
+                    restoreCopy: restoreCopy,
+                    restoreWaitSeconds: restoreWaitSeconds
                 )
             } catch {
-                await checkedOutOwner?.rewindIfNeeded(memory: memory)
+                await claim.rewind(in: session)
                 throw error
             }
         }
@@ -2477,7 +2440,7 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: .missNoEntries,
             sharedPrefixLength: 0,
-            maximumAdvance: LeafCheckout.maximumAdvance(
+            maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
                 speculativeAllowance: 0),
             fullTokens: fullTokens,
@@ -2651,7 +2614,7 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: lookupReason,
             sharedPrefixLength: 0,
-            maximumAdvance: LeafCheckout.maximumAdvance(
+            maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
                 speculativeAllowance: MTPDrafterSupport.blockSize),
             fullTokens: fullTokens,

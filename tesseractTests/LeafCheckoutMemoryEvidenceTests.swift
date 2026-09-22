@@ -20,6 +20,7 @@ struct LeafCheckoutMemoryEvidenceTests {
         let key = CachePartitionKey(modelID: "checkout-evidence", kvBits: nil, kvGroupSize: 64)
         let store = TieredSnapshotStore(ssdConfig: nil)
         let manager = PrefixCacheManager(memoryBudgetBytes: 8_000_000, tieredStore: store)
+        let sessions = ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2]))
         var tokens = Array(0..<4096)
         var retiredRequests: [FinalGenerationCache] = []
         var rows: [[String: String]] = []
@@ -68,16 +69,18 @@ struct LeafCheckoutMemoryEvidenceTests {
             record("beforeCheckout", iteration: iteration, requestID: requestID, rewindBytes: 0)
             memory.mark(.restoring, facts: manager.memoryTelemetryFacts())
             let beforeMove = Memory.activeMemory
-            let request = try #require(
-                await LeafCheckout.attempt(
-                    resolved: .init(
-                        lookup: manager.lookup(tokens: requested, partitionKey: key),
-                        hydratedFromSSD: false, hydrationSeconds: 0),
-                    tokens: requested, maximumAdvance: 10, identityKeySpace: true,
-                    prefixCache: manager, context: context
-                ).owner)
+            let (checkedOut, handOver) = await manager.checkOutHoldingClaim(
+                .init(
+                    lookup: manager.lookup(tokens: requested, partitionKey: key),
+                    hydratedFromSSD: false, hydrationSeconds: 0),
+                tokens: requested, diagnostics: context, sessions: sessions)
+            guard case .handoff(let handoff) = checkedOut else {
+                Issue.record("an eligible leaf must be handed off")
+                return
+            }
+            let request = handoff.cache
             #expect(request.cache[0] as AnyObject === attention)
-            #expect(request.rewindStateBytes == 64)
+            #expect(handoff.rewindStateBytes == 64)
             if assertsAllocations {
                 #expect(
                     Memory.activeMemory - beforeMove < 4096,
@@ -95,16 +98,20 @@ struct LeafCheckoutMemoryEvidenceTests {
                 if outcome == "cancelled" { throw CancellationError() }
                 if outcome == "failed" { throw SimulatedFailure() }
                 let body = try #require(request.moveSnapshot(offset: requested.count))
-                #expect(await request.checkIn(body, tokens: requested))
+                let checkIn = await handOver.withClaim { claim in
+                    await sessions.withSession { session in
+                        await claim.checkIn(body, from: request, tokens: requested, in: session)
+                    }
+                }
+                #expect(checkIn == .committed)
                 tokens = requested
             } catch is CancellationError {
                 memory.recordCancellationSignal(origin: "caller")
-                await request.rewindIfNeeded(memory: memory)
+                #expect(await handOver.rewindAndConclude(sessions: sessions) == tokens.count)
             } catch is SimulatedFailure {
-                await request.rewindIfNeeded(memory: memory)
+                #expect(await handOver.rewindAndConclude(sessions: sessions) == tokens.count)
             }
             #expect(request.cache.isEmpty)
-            #expect(request.rewindStateBytes == 0)
             #expect(manager.memoryTelemetryFacts()["treeLeaseCount"] == "0")
             #expect(manager.totalSnapshotBytes == tokens.count * 512 + 64)
             retiredRequests.append(request)
@@ -115,7 +122,7 @@ struct LeafCheckoutMemoryEvidenceTests {
         let retainedBytes = manager.totalSnapshotBytes
         #expect(manager.clearRAMTier() == retainedBytes)
         #expect(attention == nil, "retired requests must not retain the attention body")
-        #expect(retiredRequests.allSatisfy { $0.cache.isEmpty && $0.checkout == nil })
+        #expect(retiredRequests.allSatisfy { $0.cache.isEmpty })
         let report: [String: Any] = [
             "allocationAssertionsEnabled": assertsAllocations,
             "iterations": 24, "rows": rows, "copiedRestoreAllocationBytes": copiedRestoreAllocation,

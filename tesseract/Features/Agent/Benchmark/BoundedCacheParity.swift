@@ -53,7 +53,8 @@ nonisolated enum BoundedCacheParity {
             try continuation(
                 context, tokens: tokens, base: offset, cache: copied.restore()), cold)
 
-        let (manager, owner, key) = try await checkout(moved, tokens: tokens, offset: offset)
+        let (manager, checkedOut, key) = try await checkout(moved, tokens: tokens, offset: offset)
+        let owner = checkedOut.live
         checks.append(
             .init(
                 name: "checkoutOwnership", passed: cache.isEmpty && moved.layers.isEmpty,
@@ -67,14 +68,17 @@ nonisolated enum BoundedCacheParity {
             let head = HybridCacheSnapshot.capture(
                 cache: owner.cache, offset: tokens.count, type: .leaf)
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
-        await owner.rewindIfNeeded()
-        guard let rewound = await manager.lookup(tokens: tokens, partitionKey: key).snapshot
+        owner.rewind(with: checkedOut.rewind)
+        guard let returned = owner.moveSnapshot(offset: offset),
+            await MainActor.run(body: { checkedOut.grant.rewind(returned) }) == nil,
+            let rewound = await manager.lookup(tokens: tokens, partitionKey: key).snapshot
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
+        let leaseCount = await MainActor.run { checkedOut.grant.tree.leaseCount }
         checks.append(
             .init(
                 name: "rewindOwnership",
-                passed: owner.cache.isEmpty && owner.rewindStateBytes == 0,
-                detail: "requestLayers=\(owner.cache.count) rewindBytes=\(owner.rewindStateBytes)"))
+                passed: owner.cache.isEmpty && leaseCount == 0,
+                detail: "requestLayers=\(owner.cache.count) treeLeases=\(leaseCount)"))
         checkState("rewoundPrefix", CacheStateBytes(try rewound.restore()), prefix)
         checkContinuation(
             "rewoundContinuation",
@@ -139,10 +143,19 @@ nonisolated enum BoundedCacheParity {
         try outcome.get()
     }
 
+    /// A leaf checked out through the tree's own lease calls, independently
+    /// of the Cache Claim: the tree's grant, the leaf's cache objects, and
+    /// the recurrent backup its rewind needs.
+    private struct CheckedOutLeaf: @unchecked Sendable {
+        let grant: PrefixCacheManager.LeafLeaseGrant
+        let live: FinalGenerationCache
+        let rewind: LeafRewind
+    }
+
     @MainActor
     private static func checkout(_ snapshot: HybridCacheSnapshot, tokens: [Int], offset: Int)
         async throws
-        -> (PrefixCacheManager, FinalGenerationCache, CachePartitionKey)
+        -> (PrefixCacheManager, CheckedOutLeaf, CachePartitionKey)
     {
         let manager = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let key = CachePartitionKey(modelID: "bounded-parity", kvBits: nil, kvGroupSize: 64)
@@ -152,18 +165,26 @@ nonisolated enum BoundedCacheParity {
                 partitionKey: key)
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
         manager.admit(admission)
-        let attempt = await LeafCheckout.attempt(
-            resolved: .init(
-                lookup: manager.lookup(tokens: tokens, partitionKey: key),
-                hydratedFromSSD: false, hydrationSeconds: 0),
-            tokens: tokens, maximumAdvance: tokens.count - offset + 1,
-            identityKeySpace: true, prefixCache: manager,
-            context: .init(requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
-        guard let owner = attempt.owner else {
-            throw HybridCacheCorrectnessError.verificationFailed(
-                failedChecks: ["checkout fell back: \(String(describing: attempt.copyReason))"])
+        guard let resolved = manager.lookup(tokens: tokens, partitionKey: key).snapshot else {
+            throw HybridCacheCorrectnessError.snapshotCaptureFailed
         }
-        return (manager, owner, key)
+        let outcome = manager.leaseLeaf(
+            snapshot: resolved, tokens: tokens, partitionKey: key,
+            bodyRefusal: resolved.checkoutRefusal(maximumAdvance: tokens.count - offset + 1),
+            context: .init(requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        guard case .leased(let grant) = outcome,
+            let (cache, kinds) = resolved.takeMovingCache()
+        else {
+            throw HybridCacheCorrectnessError.verificationFailed(
+                failedChecks: ["checkout fell back: \(outcome)"])
+        }
+        return (
+            manager,
+            CheckedOutLeaf(
+                grant: grant, live: FinalGenerationCache(cache),
+                rewind: LeafRewind(cache: cache, kinds: kinds, offset: grant.lease.offset)),
+            key
+        )
     }
 
     private static func prefill(

@@ -205,11 +205,11 @@ nonisolated enum LeafStorePhase {
                 }
                 if backer.leafStore != nil { boundaryBackingLeafPath = path }
             }
-            let checkedOutOffset = mlxStart.finalCacheOwner.checkout?.claim.lease.offset
             // A boundary or intervened turn must return the original leaf
-            // before running the existing restore-and-re-prefill strategy.
-            await sessions.withSession { _ in
-                await mlxStartBox.value.finalCacheOwner.rewindIfNeeded(memory: memory)
+            // before running the existing restore-and-re-prefill strategy:
+            // the claim's explicit rewind step.
+            let checkedOutOffset = await sessions.withSession { session in
+                await inputs.claim.rewind(in: session)
             }
             let record = liveFallbackLog(
                 for: reason, mode: leafStoreMode, preservesThinking: preservesThinking)

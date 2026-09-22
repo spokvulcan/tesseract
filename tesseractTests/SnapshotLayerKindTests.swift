@@ -294,15 +294,20 @@ struct SnapshotLayerKindTests {
             try #require(
                 SnapshotAdmission.leaf(
                     storedTokens: tokens, snapshot: body, storage: .ramOnly, partitionKey: key)))
-        let attempt = await LeafCheckout.attempt(
-            resolved: .init(
+        let (outcome, handOver) = await manager.checkOutHoldingClaim(
+            .init(
                 lookup: manager.lookup(tokens: tokens + [13], partitionKey: key),
                 hydratedFromSSD: false, hydrationSeconds: 0),
-            tokens: tokens + [13], maximumAdvance: 10, identityKeySpace: true,
-            prefixCache: manager,
-            context: .init(requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
-        #expect(attempt.owner == nil)
-        #expect(attempt.copyReason == .untrimmable)
+            tokens: tokens + [13],
+            diagnostics: .init(
+                requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        guard case .copy(let copy) = outcome else {
+            Issue.record("a non-recurrent whole-state layer must restore by copy")
+            return
+        }
+        #expect(copy.reason == .untrimmable)
+        #expect(copy.refusal == .untrimmable)
         #expect(!body.layers.isEmpty, "a refused check-out leaves the body in the tree")
+        #expect(await handOver.rewindAndConclude() == nil)
     }
 }

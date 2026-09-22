@@ -76,16 +76,26 @@ import MLXLMCommon
                 telemetry.hotSnapshotBytes + telemetry.warmSnapshotBytes + telemetry.viewOnlyBytes
                     == manager.totalSnapshotBytes)
         }
-        let attempt = await LeafCheckout.attempt(
-            resolved: resolved, tokens: prefix + [99], maximumAdvance: 1,
-            identityKeySpace: true, prefixCache: manager, context: context)
-        #expect(attempt.owner == nil)
-        #expect(attempt.copyReason == .checkpoint)
-        _ = manager.clearRAMTier()
-        let remaining = tier.getOrCreateTree(for: key).allSnapshotNodes().compactMap(\.state.body)
-            .filter { !$0.isPrefixView }
-        #expect(remaining.map(\.bodyID) == [selected.bodyID])
-        await handOver.withClaim { _ in }
+        // The view restores by copy, and the pins hold until the claim
+        // that resolved it concludes.
+        await handOver.withClaim { claim in
+            let outcome = await sessions.withSession { session in
+                await claim.checkOut(
+                    resolved, tokens: prefix + [99], maximumAdvance: 1, identityKeySpace: true,
+                    in: session)
+            }
+            guard case .copy(let copy) = outcome else {
+                Issue.record("a Prefix-View Checkpoint must restore by copy")
+                return
+            }
+            #expect(copy.reason == .checkpoint)
+            #expect(copy.refusal == .prefixView)
+            _ = manager.clearRAMTier()
+            let remaining = tier.getOrCreateTree(for: key).allSnapshotNodes()
+                .compactMap(\.state.body)
+                .filter { !$0.isPrefixView }
+            #expect(remaining.map(\.bodyID) == [selected.bodyID])
+        }
         _ = manager.clearRAMTier()
         #expect(manager.totalSnapshotBytes == 0)
     }

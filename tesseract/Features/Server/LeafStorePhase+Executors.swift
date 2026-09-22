@@ -48,9 +48,12 @@ nonisolated extension LeafStorePhase {
         let stages: LeafStages
         let copyReason: Report.CopyReason?
         let memory: RequestMemoryTelemetry?
+        /// The request's **Cache Claim**: a leaf captured by move from the
+        /// leased cache checks in through it.
+        let claim: CacheClaim
         /// The request's restore mode (`cold`, `copy`, `failedCopy`,
-        /// `handoff`), stamped on the generation before the phase runs —
-        /// one input to the stored leaf's source.
+        /// `handoff`), as its check-out decided it — one input to the stored
+        /// leaf's source.
         let restoreMode: String
         /// The turn's maximum advance, for the **Active-Inference
         /// Reserve**'s growth allowance (#522).
@@ -66,7 +69,8 @@ nonisolated extension LeafStorePhase {
             diagnosticsContext = inputs.diagnosticsContext
             self.stages = stages
             memory = inputs.memory
-            restoreMode = mlxStart.finalCacheOwner.restoreMode
+            claim = inputs.claim
+            restoreMode = mlxStart.restoreMode
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
                 inputs.containsImages || !mlxStart.keySpace.isIdentity
@@ -406,9 +410,14 @@ nonisolated extension LeafStorePhase {
         }
         context.memory?.mark(.admittingLeaf, facts: payloadFacts)
         let admitStart = Date.timeIntervalSinceReferenceDate
-        if let moving, !(await moving.checkIn(leaf, tokens: storedTokens)) {
-            moving.recoverUnadmitted(leaf)
-            return LeafCapture(skipReason: Task.isCancelled ? "cancelled" : "lease-return-refused")
+        if let moving,
+            case .rewound(let cause) = await context.claim.checkIn(
+                leaf, from: moving, tokens: storedTokens, in: session)
+        {
+            // Not committed: the claim took the objects back and returned
+            // the original leaf.
+            return LeafCapture(
+                skipReason: cause == .cancelled ? "cancelled" : "lease-return-refused")
         }
         context.memory?.mark(
             .admittingLeaf,

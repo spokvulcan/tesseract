@@ -272,7 +272,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return snapshot
     }
 
-    /// Inspect/consume only in the Model Session, after the tree grants a lease.
+    /// Why this body cannot be checked out, or `nil` when it can. Inspect
+    /// only in the Model Session, before the tree grants a lease.
     ///
     /// Eligibility reads each layer's ``LayerState/Kind``: sliceable
     /// attention must be unquantized and trimmable back to the leaf offset
@@ -280,15 +281,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// whole-state layer must be recurrent (the rewind rebuilds it from its
     /// saved copy) — a rotating or chunked buffer, or an attention layer
     /// the shape guard kept whole, cannot promise its prefix back. The
-    /// kind decides; the copy reason still names the class, the way
-    /// ADR-0064 records it.
-    func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
+    /// kind decides; the refusal still names the class, the way ADR-0064
+    /// records it.
+    func checkoutRefusal(maximumAdvance: Int) -> CacheClaim.CopyRefusal? {
         guard !isWarm else { return .warmBody }
-        guard checkpointType == .leaf else { return .checkpoint }
+        guard checkpointType == .leaf else { return .notLeafCheckpoint }
         guard case .moved(let owner) = body else { return .immutableBody }
-        guard !owner.cache.isEmpty else { return .checkpoint }
+        guard !owner.cache.isEmpty else { return .emptyBody }
         for (entry, layer) in zip(owner.cache, owner.layers) {
-            if entry is QuantizedKVCache { return .quantized }
+            if entry is QuantizedKVCache { return .quantizedLayer }
             switch layer.kind {
             case .sliceableAttention:
                 guard maximumAdvance >= 0, entry.isTrimmable(after: maximumAdvance) else {

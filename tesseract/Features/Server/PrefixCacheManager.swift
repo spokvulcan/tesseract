@@ -428,34 +428,79 @@ final class PrefixCacheManager {
         }
     }
 
-    /// Reserve only the exact resident leaf selected by this request's lookup.
-    func claimLeaf(
+    /// A Leaf Lease the tree granted: the tree, the node whose body was
+    /// taken, and the lease. What a check-out holds; it retains no token
+    /// path.
+    struct LeafLeaseGrant: Sendable {
+        let tree: TokenRadixTree
+        let node: RadixTreeNode
+        let lease: LeafLease
+        /// Opportunistic warm compression's bookkeeping for a checked-in
+        /// leaf, run on the MainActor after the tree commits it.
+        let didCheckIn: @MainActor @Sendable (RadixTreeNode) -> Void
+
+        /// Commit `body` under `tokens` and end the lease. `nil` on success,
+        /// else why the tree refused; the lease then stays for a rewind.
+        @MainActor
+        func checkIn(_ body: HybridCacheSnapshot, tokens: [Int]) -> LeafLeaseRefusedEvent.Reason? {
+            if let refusal = tree.checkInLeafLease(lease, on: node, returning: body, tokens: tokens)
+            {
+                return refusal
+            }
+            if let returned = tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node,
+                returned.tokenOffset == tokens.count
+            {
+                didCheckIn(returned)
+            }
+            return nil
+        }
+
+        /// Store the rewound `body` back on the leased node and end the lease.
+        @MainActor
+        func rewind(_ body: HybridCacheSnapshot) -> LeafLeaseRefusedEvent.Reason? {
+            tree.rewindLeafLease(lease, on: node, returning: body)
+        }
+    }
+
+    enum LeafLeaseOutcome: Sendable {
+        case leased(LeafLeaseGrant)
+        case refused(CacheClaim.CopyRefusal)
+    }
+
+    /// Lease only the exact resident leaf selected by this request's lookup,
+    /// and take its body. `bodyRefusal` is the body's own answer
+    /// (`HybridCacheSnapshot.checkoutRefusal`); structural checks of the
+    /// tree take precedence over it.
+    func leaseLeaf(
         snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey,
-        bodyCopyReason: LeafStorePhase.Report.CopyReason?,
+        bodyRefusal: CacheClaim.CopyRefusal?,
         context: PrefixCacheDiagnostics.Context
-    ) -> LeafCheckout.ClaimResult {
-        guard !snapshot.isWarm else { return .copy(.warmBody) }
-        guard !leafCheckoutDisabled else { return .copy(.checkoutDisabled) }
+    ) -> LeafLeaseOutcome {
+        guard !snapshot.isWarm else { return .refused(.warmBody) }
+        guard !leafCheckoutDisabled else { return .refused(.checkoutDisabled) }
         guard let tree = store.tree(for: partitionKey),
             let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
             hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
             let body = hit.node.state.body
-        else { return .copy(.checkpoint) }
+        else { return .refused(.notResidentLeaf) }
         // Structural checkpoints take precedence over the body's representation.
-        if let bodyCopyReason { return .copy(bodyCopyReason) }
+        if let bodyRefusal { return .refused(bodyRefusal) }
         guard !compressingNodes.contains(ObjectIdentifier(hit.node)) else {
-            return .copy(.immutableBody)
+            return .refused(.compressing)
         }
-        guard body.sharesMovedBody(with: snapshot) else { return .copy(.checkpoint) }
-        guard
-            let lease = tree.beginLeafLease(
-                on: hit.node, context: context, requireDetachedPayload: true)
-        else { return .copy(.pendingFullPayload) }
+        guard body.sharesMovedBody(with: snapshot) else { return .refused(.bodyReplaced) }
+        let lease: LeafLease
+        switch tree.leafLease(on: hit.node, context: context, requireDetachedPayload: true) {
+        case .success(let granted):
+            lease = granted
+        case .failure(let refusal):
+            return .refused(CacheClaim.CopyRefusal(leaseRefusal: refusal))
+        }
         guard tree.takeLeasedBody(lease, on: hit.node) != nil else {
             preconditionFailure("a newly leased resident leaf must have a body")
         }
-        return .claimed(
-            LeafCheckout.Claim(
+        return .leased(
+            LeafLeaseGrant(
                 tree: tree, node: hit.node, lease: lease,
                 didCheckIn: { [weak self, weak tree] node in
                     guard let self, self.evictionConfig.warmCompressionEnabled,
@@ -473,8 +518,8 @@ final class PrefixCacheManager {
     var pendingFullPayloadWait: Duration { evictionConfig.pendingFullPayloadWait }
 
     /// Where the SSD writer stands on the full payload that is still
-    /// aliasing this leaf's body — the sole reason `claimLeaf` answered
-    /// `.copy(.pendingFullPayload)` and the only refusal that clears
+    /// aliasing this leaf's body — the sole reason `leaseLeaf` answered
+    /// `.refused(.pendingFullPayload)` and the only refusal that clears
     /// itself. `.inProgress` means the writer has the payload in hand and
     /// its materialize step will release the body arrays shortly, so a
     /// bounded wait is worth it; `.queued` means it waits behind other

@@ -283,7 +283,7 @@ struct ActiveInferenceReserveTests {
 
     @Test func anUnboundedAdvanceFallsBackToTheBootstrapForGrowth() {
         // A request without an output ceiling advances unboundedly
-        // (`LeafCheckout.maximumAdvance` reports `Int.max`): the growth
+        // (`CacheClaim.maximumAdvance` reports `Int.max`): the growth
         // cannot be priced from bytes per token, so the bootstrap constant
         // stands in for it — and nothing overflows.
         var reserve = ActiveInferenceReserve()
