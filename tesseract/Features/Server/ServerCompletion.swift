@@ -735,7 +735,7 @@ nonisolated final class ServerCompletion {
         // (ADR-0069). A throw concludes it in this scope; a normal return
         // hands it over, and the drive task created below redeems it.
         let (mlxStart, handOver) = try await CacheClaim.withRequestClaim(
-            context: requestContext, prefixCache: prefixCache, memory: memory
+            context: requestContext, prefixCache: prefixCache, sessions: sessions, memory: memory
         ) { claim in
             let mlxStart: HTTPPrefixCacheGeneration
             do {
@@ -764,12 +764,12 @@ nonisolated final class ServerCompletion {
 
             // A drain ran while restore/prefill was suspended: the model is
             // tearing down, so stop the freshly started generation and bail
-            // before wiring up a handle nothing would ever drain.
+            // before wiring up a handle nothing would ever drain. The scope's
+            // conclusion returns a leased leaf.
             if Task.isCancelled || drainGeneration != entryDrainGeneration {
                 startOutcome = "cancelledDuringStart"
                 mlxStart.completion.cancel()
                 await mlxStart.completion.value
-                await Self.rewindLeaf(claim, sessions: sessions)
                 Memory.clearCache()
                 throw CancellationError()
             }
@@ -870,11 +870,12 @@ nonisolated final class ServerCompletion {
     /// Drive one cache-aware completion to its end. Deliberately nonisolated
     /// — see the comment at the call site's `Task`. The drive owns the
     /// request's **Cache Claim** from the hand-over to its conclusion, which
-    /// lets go of the Restore Pins and the reserve lane on every exit path
-    /// (natural finish, cancellation, error). From there on the turn's
-    /// protection is the freshest-leaf floor member, not the in-flight pin
-    /// (ADR-0019). `finishHook` then releases this request's registry slot
-    /// back on the actor.
+    /// runs on every exit path (natural finish, cancellation, error): it
+    /// rewinds a leaf still leased, then lets go of the Restore Pins and the
+    /// reserve lane, so no exit carries cleanup of its own. From there on the
+    /// turn's protection is the freshest-leaf floor member, not the
+    /// in-flight pin (ADR-0019). `finishHook` then releases this request's
+    /// registry slot back on the actor.
     private static func driveCompletion(
         handOver: CacheClaim.HandOver,
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
@@ -1021,7 +1022,6 @@ nonisolated final class ServerCompletion {
                 }) {
                     memory.mark(.generationQuiescent, facts: facts)
                 }
-                await Self.rewindLeaf(claim, sessions: sessions)
                 memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
@@ -1066,7 +1066,6 @@ nonisolated final class ServerCompletion {
 
             if outcome.completionInfo == nil, claim.holdsLease {
                 terminalOutcome = "failed"
-                await Self.rewindLeaf(claim, sessions: sessions)
                 continuation.finish()
                 break drive
             }
@@ -1089,7 +1088,6 @@ nonisolated final class ServerCompletion {
 
             if Task.isCancelled {
                 terminalOutcome = "cancelled"
-                await Self.rewindLeaf(claim, sessions: sessions)
                 memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
@@ -1120,7 +1118,6 @@ nonisolated final class ServerCompletion {
                 trace: &trace,
                 memory: memory
             )
-            await Self.rewindLeaf(claim, sessions: sessions)
             if mlxStart.ssdEnabled, !Task.isCancelled {
                 await prefixCache.persistViewCheckpoints(
                     partitionKey: mlxStart.partitionKey, sessions: sessions)
@@ -1233,12 +1230,10 @@ nonisolated final class ServerCompletion {
             continuation.finish()
         } catch is CancellationError {
             terminalOutcome = "cancelled"
-            await Self.rewindLeaf(claim, sessions: sessions)
             memory.mark(.finishingStream)
             continuation.finish()
         } catch {
             terminalOutcome = "failed"
-            await Self.rewindLeaf(claim, sessions: sessions)
             memory.mark(.finishingStream)
             continuation.finish(
                 throwing: AgentEngineError.generationFailed(
@@ -1284,17 +1279,6 @@ nonisolated final class ServerCompletion {
         }
 
         return (terminalOutcome, speculativeSeed)
-    }
-
-    /// Cleanup must enter the session even when the driving task was cancelled.
-    private static func rewindLeaf(
-        _ claim: CacheClaim, sessions: any ModelSessionProviding
-    ) async {
-        guard claim.holdsLease else { return }
-        let cleanup = Task.detached {
-            await sessions.withSession { session in await claim.rewind(in: session) }
-        }
-        await cleanup.value
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
@@ -1617,562 +1601,557 @@ nonisolated final class ServerCompletion {
                 newPromptTokens: fullTokenCount - restoredOffset,
                 outputCeiling: parameters.maxTokens,
                 speculativeAllowance: dflash2Engages ? DFlash2Support.blockSize : 0)
-            do {
-                switch prefillPlan.restore {
-                case .restore(let cacheOffset, let anchorDelta):
-                    let restoreStarted = Date.timeIntervalSinceReferenceDate
-                    let restoredCache: [any KVCache]?
-                    switch await claim.checkOut(
-                        resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
-                        identityKeySpace: textOnlyIdentityKeySpace, in: session)
-                    {
-                    case .handoff(let taken):
-                        handoff = taken
-                        restoreWaitSeconds = taken.waitSeconds
-                        restoredCache = taken.cache.cache
-                    case .copy(let copy):
-                        restoreCopy = copy
-                        restoreWaitSeconds = copy.waitSeconds
-                        restoredCache = Self.restoreCache(lookupResult, session: session)
-                    case .cold:
-                        restoredCache = Self.restoreCache(lookupResult, session: session)
-                    }
-                    cacheToUse = restoredCache
-                    restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
-                    restoreMode =
-                        handoff != nil
-                        ? "handoff" : restoredCache == nil ? "failedCopy" : "copy"
-                    memory.mark(
-                        .restored,
-                        facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? []).merging([
-                            "restoreMode": restoreMode,
-                            "restoreCopyReason": restoreCopy?.reason.rawValue ?? "none",
-                            "restoreCopyRefusal": restoreCopy?.refusal.rawValue ?? "none",
-                            "restoreCopyWaitMs": PrefixCacheDiagnostics.milliseconds(
-                                restoreWaitSeconds),
-                            "recurrentRewindStateBytes": "\(handoff?.rewindStateBytes ?? 0)",
-                            "leafLeaseActive": "\(handoff != nil)",
-                            "leafLeaseID": handoff?.leaseID.uuidString ?? "none",
-                        ]) { _, new in new })
-                    if !keySpace.isIdentity,
-                        cacheOffset < keySpace.minimumWarmOffset,
-                        let span = imageSpan(from: cacheOffset)
-                    {
-                        // Warm restore *below* a new image (ADR-0007 phase 2):
-                        // continue through the image span chunked, anchored at the
-                        // restored prefix's Position Anchor, then the text tail.
-                        let prefixEnd = keySpace.minimumWarmOffset
-                        imagePrefixInput = span
-                        inputForGeneration = LMInput(
-                            text: LMInput.Text(
-                                tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
-                        executionBaseOffset = prefixEnd
-                        if seedsPositionAnchor {
-                            imageContinuationAnchor = PositionAnchor.seededState(
-                                ropeDelta: anchorDelta)
-                        }
-                    } else {
-                        // Image-free remainder: suffix-only prefill. Layers restore
-                        // with their absolute logical offset intact, and each
-                        // layer's `makeMask` recreates the suffix's causal mask.
-                        let slicedTokens: MLXArray =
-                            tokenNDim <= 1
-                            ? fullInput.text.tokens[cacheOffset...]
-                            : fullInput.text.tokens[0..., cacheOffset...]
-                        inputForGeneration = LMInput(
-                            text: LMInput.Text(tokens: slicedTokens, mask: nil))
-                        executionBaseOffset = cacheOffset
-                        if seedsPositionAnchor {
-                            executorInitialState = PositionAnchor.seededState(
-                                ropeDelta: anchorDelta)
-                        }
-                    }
-                case .cold where !keySpace.isIdentity:
-                    // No valid restore: cold image prefill, but driven through the
-                    // same windowed continuation (anchored at zero) so even the
-                    // fallback is crash-safe.
+            switch prefillPlan.restore {
+            case .restore(let cacheOffset, let anchorDelta):
+                let restoreStarted = Date.timeIntervalSinceReferenceDate
+                let restoredCache: [any KVCache]?
+                switch await claim.checkOut(
+                    resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
+                    identityKeySpace: textOnlyIdentityKeySpace, in: session)
+                {
+                case .handoff(let taken):
+                    handoff = taken
+                    restoreWaitSeconds = taken.waitSeconds
+                    restoredCache = taken.cache.cache
+                case .copy(let copy):
+                    restoreCopy = copy
+                    restoreWaitSeconds = copy.waitSeconds
+                    restoredCache = Self.restoreCache(lookupResult, session: session)
+                case .cold:
+                    restoredCache = Self.restoreCache(lookupResult, session: session)
+                }
+                cacheToUse = restoredCache
+                restoreMs = Date.timeIntervalSinceReferenceDate - restoreStarted
+                restoreMode =
+                    handoff != nil
+                    ? "handoff" : restoredCache == nil ? "failedCopy" : "copy"
+                memory.mark(
+                    .restored,
+                    facts: RequestMemoryTelemetry.cacheFacts(restoredCache ?? []).merging([
+                        "restoreMode": restoreMode,
+                        "restoreCopyReason": restoreCopy?.reason.rawValue ?? "none",
+                        "restoreCopyRefusal": restoreCopy?.refusal.rawValue ?? "none",
+                        "restoreCopyWaitMs": PrefixCacheDiagnostics.milliseconds(
+                            restoreWaitSeconds),
+                        "recurrentRewindStateBytes": "\(handoff?.rewindStateBytes ?? 0)",
+                        "leafLeaseActive": "\(handoff != nil)",
+                        "leafLeaseID": handoff?.leaseID.uuidString ?? "none",
+                    ]) { _, new in new })
+                if !keySpace.isIdentity,
+                    cacheOffset < keySpace.minimumWarmOffset,
+                    let span = imageSpan(from: cacheOffset)
+                {
+                    // Warm restore *below* a new image (ADR-0007 phase 2):
+                    // continue through the image span chunked, anchored at the
+                    // restored prefix's Position Anchor, then the text tail.
                     let prefixEnd = keySpace.minimumWarmOffset
-                    imagePrefixInput =
-                        imageSpan(from: 0)
-                        ?? LMInput(
-                            text: LMInput.Text(
-                                tokens: fullInput.text.tokens[0..., ..<prefixEnd], mask: nil),
-                            image: fullInput.image)
+                    imagePrefixInput = span
                     inputForGeneration = LMInput(
                         text: LMInput.Text(
                             tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
-                    cacheToUse = nil
-                    restoreMs = 0
                     executionBaseOffset = prefixEnd
-                case .cold:
-                    // MTP speculative arm (v1): a text-only cold prompt at greedy
-                    // sampling with a loaded drafter decodes through the vendor
-                    // MTP iterator instead of the chunked-prefill path — unless
-                    // the DFlash2 arm already engaged above (it rides the keyed
-                    // path, not this cold body). The full MTP engagement policy —
-                    // including why only `.directLeaf` traffic qualifies — lives
-                    // on `MTPDrafterSupport.shouldEngage`.
-                    if !dflash2Engages,
-                        MTPDrafterSupport.shouldEngage(
-                            hasDrafter: session.mtpDrafter != nil,
-                            temperature: parameters.temperature,
-                            textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
-                            predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
-                                promptStartsThinking: requestStartsInsideThinkBlock,
-                                // Conservative stand-in: tool *emission* is unknowable
-                                // at engagement time, so defined tools predict as if
-                                // they will be called.
-                                emittedToolCalls: canonicalTools?.isEmpty == false
-                            ),
-                            promptTokens: fullTokenCount,
-                            scratchProfile: fullAttentionScratchProfile
-                        )
-                    {
-                        return try await Self.makeMTPGeneration(
-                            session: session,
-                            fullInput: fullInput,
-                            fullTokens: fullTokens,
-                            fullTokenCount: fullTokenCount,
-                            tokenNDim: tokenNDim,
-                            keySpace: keySpace,
-                            render: keyed.render,
-                            parameters: parameters,
-                            toolSpecs: canonicalTools,
-                            partitionKey: partitionKey,
-                            lookupReason: lookupResult.reason,
-                            lookupMs: lookupMs,
-                            ssdEnabled: ssdEnabled,
-                            seedsPositionAnchor: seedsPositionAnchor,
-                            visionAttentionScratchProfile: visionAttentionScratchProfile,
-                            diagnosticsContext: diagnosticsContext,
-                            progressHandler: progressHandler
-                        )
+                    if seedsPositionAnchor {
+                        imageContinuationAnchor = PositionAnchor.seededState(
+                            ropeDelta: anchorDelta)
                     }
-                    inputForGeneration = fullInput
-                    cacheToUse = nil
-                    restoreMs = 0
-                    executionBaseOffset = 0
+                } else {
+                    // Image-free remainder: suffix-only prefill. Layers restore
+                    // with their absolute logical offset intact, and each
+                    // layer's `makeMask` recreates the suffix's causal mask.
+                    let slicedTokens: MLXArray =
+                        tokenNDim <= 1
+                        ? fullInput.text.tokens[cacheOffset...]
+                        : fullInput.text.tokens[0..., cacheOffset...]
+                    inputForGeneration = LMInput(
+                        text: LMInput.Text(tokens: slicedTokens, mask: nil))
+                    executionBaseOffset = cacheOffset
+                    if seedsPositionAnchor {
+                        executorInitialState = PositionAnchor.seededState(
+                            ropeDelta: anchorDelta)
+                    }
                 }
-                let skippedTokens = prefillPlan.prefillBaseOffset
-                let newTokensToPrefill = fullTokenCount - skippedTokens
-                await progressHandler?(
-                    .cacheLookupFinished(
-                        .init(
-                            reason: String(describing: lookupResult.reason),
-                            cachedTokens: skippedTokens,
-                            sharedPrefixLength: lookupResult.sharedPrefixLength,
-                            promptTokens: fullTokenCount,
-                            newTokensToPrefill: newTokensToPrefill,
-                            lookupMs: lookupMs * 1000,
-                            restoreMs: restoreMs * 1000,
-                            divergence: lookupResult.divergence
-                        )))
-                diagnosticsContext.log(
-                    PrefixCacheDiagnostics.LookupEvent(
-                        reason: lookupResult.reason,
+            case .cold where !keySpace.isIdentity:
+                // No valid restore: cold image prefill, but driven through the
+                // same windowed continuation (anchored at zero) so even the
+                // fallback is crash-safe.
+                let prefixEnd = keySpace.minimumWarmOffset
+                imagePrefixInput =
+                    imageSpan(from: 0)
+                    ?? LMInput(
+                        text: LMInput.Text(
+                            tokens: fullInput.text.tokens[0..., ..<prefixEnd], mask: nil),
+                        image: fullInput.image)
+                inputForGeneration = LMInput(
+                    text: LMInput.Text(
+                        tokens: fullInput.text.tokens[0..., prefixEnd...], mask: nil))
+                cacheToUse = nil
+                restoreMs = 0
+                executionBaseOffset = prefixEnd
+            case .cold:
+                // MTP speculative arm (v1): a text-only cold prompt at greedy
+                // sampling with a loaded drafter decodes through the vendor
+                // MTP iterator instead of the chunked-prefill path — unless
+                // the DFlash2 arm already engaged above (it rides the keyed
+                // path, not this cold body). The full MTP engagement policy —
+                // including why only `.directLeaf` traffic qualifies — lives
+                // on `MTPDrafterSupport.shouldEngage`.
+                if !dflash2Engages,
+                    MTPDrafterSupport.shouldEngage(
+                        hasDrafter: session.mtpDrafter != nil,
+                        temperature: parameters.temperature,
+                        textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
+                        predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
+                            promptStartsThinking: requestStartsInsideThinkBlock,
+                            // Conservative stand-in: tool *emission* is unknowable
+                            // at engagement time, so defined tools predict as if
+                            // they will be called.
+                            emittedToolCalls: canonicalTools?.isEmpty == false
+                        ),
                         promptTokens: fullTokenCount,
-                        sharedPrefixLength: lookupResult.sharedPrefixLength,
-                        skippedPrefillTokens: skippedTokens,
-                        newTokensToPrefill: newTokensToPrefill,
+                        scratchProfile: fullAttentionScratchProfile
+                    )
+                {
+                    return try await Self.makeMTPGeneration(
+                        session: session,
+                        fullInput: fullInput,
+                        fullTokens: fullTokens,
+                        fullTokenCount: fullTokenCount,
+                        tokenNDim: tokenNDim,
+                        keySpace: keySpace,
+                        render: keyed.render,
+                        parameters: parameters,
+                        toolSpecs: canonicalTools,
+                        partitionKey: partitionKey,
+                        lookupReason: lookupResult.reason,
                         lookupMs: lookupMs,
-                        restoreMs: restoreMs,
-                        plannedCheckpoints: prefillPlan.checkpointsToCapture,
-                        hydratedFromSSD: resolved.hydratedFromSSD,
-                        chainPrefixRestore: resolved.wasChainPrefixRestore,
-                        divergence: lookupResult.divergence,
-                        restoreMode: restoreMode, copyReason: restoreCopy?.reason,
-                        copyRefusal: restoreCopy?.refusal,
-                        copyWaitSeconds: restoreWaitSeconds,
-                        backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
-                        warmBody: lookupResult.snapshot?.isWarm == true,
-                        backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
-                    ))
-
-                // 8. Fold the plan's checkpoints plus the transient boundary
-                // helpers (Prefix-View Checkpoints; a planned checkpoint at the same
-                // offset wins) into one capture map for the prefill driver.
-                // Planner guarantees offset uniqueness, so uniqueKeysWithValues
-                // traps loudly on a planner-side invariant break instead of
-                // silently dropping a candidate.
-                let genParams = parameters
-                let plannedCheckpoints = Dictionary(
-                    uniqueKeysWithValues: prefillPlan.checkpointsToCapture.map {
-                        ($0.offset, $0.type)
-                    }
-                )
-                // Preserve-thinking turns never synthesize boundary leaves or
-                // abandonment seeds. Their boundary helpers serve no consumer.
-                let transientOffsets =
-                    renderContext.preservesThinking && textOnlyIdentityKeySpace
-                    ? Set<Int>() : prefillPlan.transientCheckpointOffsets
-                let helperCheckpoints = Dictionary(
-                    uniqueKeysWithValues: transientOffsets.map {
-                        ($0, HybridCacheSnapshot.CheckpointType.branchPoint)
-                    }
-                )
-                let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in
-                    stored
+                        ssdEnabled: ssdEnabled,
+                        seedsPositionAnchor: seedsPositionAnchor,
+                        visionAttentionScratchProfile: visionAttentionScratchProfile,
+                        diagnosticsContext: diagnosticsContext,
+                        progressHandler: progressHandler
+                    )
                 }
-
-                // The DFlash2 arm splits the suffix: the app driver prefills
-                // (and snapshots) through the split, then the iterator's capture
-                // prefill takes the tail for the drafter's hidden-state window.
-                let dflash2SplitOffset: Int? =
-                    dflash2Engages
-                    ? session.dflash2Drafter.map {
-                        dflash2PrefillSplitOffset(
-                            drafter: $0,
-                            checkpointOffsets: allCheckpoints.keys,
-                            executionBaseOffset: executionBaseOffset,
-                            fullTokenCount: fullTokenCount)
-                    } : nil
-
-                // 9. App-owned prefill (ADR-0006): drive chunked forward passes
-                // over the suffix, capturing snapshots at the checkpoint offsets,
-                // quantize the module-owned cache once, then hand it to a
-                // TokenIterator holding only the final prompt token. Quantizing
-                // *before* the iterator (with `kvBits` stripped from its
-                // parameters) guarantees the iterator never swaps cache elements
-                // during decode, so the array this module retains stays the live
-                // final cache for the post-generation leaf capture.
-                // Shared begin-prefill step. The ADR-0014 guard prices the
-                // patches actually fed THIS forward: all images when cold; only
-                // the newly-added images on a warm restore, since earlier images
-                // are already in the restored cache and not re-fed.
-                let begin = try await Self.beginPrefill(
-                    session: session,
-                    restoredCache: cacheToUse,
-                    parameters: genParams,
+                inputForGeneration = fullInput
+                cacheToUse = nil
+                restoreMs = 0
+                executionBaseOffset = 0
+            }
+            let skippedTokens = prefillPlan.prefillBaseOffset
+            let newTokensToPrefill = fullTokenCount - skippedTokens
+            await progressHandler?(
+                .cacheLookupFinished(
+                    .init(
+                        reason: String(describing: lookupResult.reason),
+                        cachedTokens: skippedTokens,
+                        sharedPrefixLength: lookupResult.sharedPrefixLength,
+                        promptTokens: fullTokenCount,
+                        newTokensToPrefill: newTokensToPrefill,
+                        lookupMs: lookupMs * 1000,
+                        restoreMs: restoreMs * 1000,
+                        divergence: lookupResult.divergence
+                    )))
+            diagnosticsContext.log(
+                PrefixCacheDiagnostics.LookupEvent(
+                    reason: lookupResult.reason,
                     promptTokens: fullTokenCount,
-                    cachedTokens: skippedTokens,
-                    pricedImage: imagePrefixInput?.image,
-                    visionAttentionScratchProfile: visionAttentionScratchProfile,
-                    guardLabel: "keyed",
-                    diagnosticsContext: diagnosticsContext,
-                    progressHandler: progressHandler
-                )
-                var liveCache = begin.cache
-                memory.mark(.prefilling, facts: RequestMemoryTelemetry.cacheFacts(liveCache))
-                let prefillResult: (iterator: KeyedDecodeIterator, snapshots: [HybridCacheSnapshot])
-                do {
-                    prefillResult =
-                        try MLXCheckedEvaluation.withErrors { error in
-                            var initialState = executorInitialState
-                            var prefixSnapshots: [HybridCacheSnapshot] = []
-                            if let imagePrefixInput {
+                    sharedPrefixLength: lookupResult.sharedPrefixLength,
+                    skippedPrefillTokens: skippedTokens,
+                    newTokensToPrefill: newTokensToPrefill,
+                    lookupMs: lookupMs,
+                    restoreMs: restoreMs,
+                    plannedCheckpoints: prefillPlan.checkpointsToCapture,
+                    hydratedFromSSD: resolved.hydratedFromSSD,
+                    chainPrefixRestore: resolved.wasChainPrefixRestore,
+                    divergence: lookupResult.divergence,
+                    restoreMode: restoreMode, copyReason: restoreCopy?.reason,
+                    copyRefusal: restoreCopy?.refusal,
+                    copyWaitSeconds: restoreWaitSeconds,
+                    backingLeafOffset: lookupResult.backingLeaf?.tokenOffset,
+                    warmBody: lookupResult.snapshot?.isWarm == true,
+                    backingLeafWarm: lookupResult.backingLeaf?.isWarm == true
+                ))
 
-                                // Crash-safe by construction: the continuation chunks
-                                // the forward, so the peak full-attention scratch is
-                                // bounded to `[heads, window, executionBaseOffset]`,
-                                // not the single-shot `[heads, L, L]`.
-                                try Self.checkChunkedVisionBackstop(
-                                    windowSize: genParams.prefill.stepSize ?? 512,
-                                    contextTokens: executionBaseOffset,
-                                    profile: fullAttentionScratchProfile,
-                                    diagnosticsContext: diagnosticsContext
+            // 8. Fold the plan's checkpoints plus the transient boundary
+            // helpers (Prefix-View Checkpoints; a planned checkpoint at the same
+            // offset wins) into one capture map for the prefill driver.
+            // Planner guarantees offset uniqueness, so uniqueKeysWithValues
+            // traps loudly on a planner-side invariant break instead of
+            // silently dropping a candidate.
+            let genParams = parameters
+            let plannedCheckpoints = Dictionary(
+                uniqueKeysWithValues: prefillPlan.checkpointsToCapture.map {
+                    ($0.offset, $0.type)
+                }
+            )
+            // Preserve-thinking turns never synthesize boundary leaves or
+            // abandonment seeds. Their boundary helpers serve no consumer.
+            let transientOffsets =
+                renderContext.preservesThinking && textOnlyIdentityKeySpace
+                ? Set<Int>() : prefillPlan.transientCheckpointOffsets
+            let helperCheckpoints = Dictionary(
+                uniqueKeysWithValues: transientOffsets.map {
+                    ($0, HybridCacheSnapshot.CheckpointType.branchPoint)
+                }
+            )
+            let allCheckpoints = plannedCheckpoints.merging(helperCheckpoints) { stored, _ in
+                stored
+            }
+
+            // The DFlash2 arm splits the suffix: the app driver prefills
+            // (and snapshots) through the split, then the iterator's capture
+            // prefill takes the tail for the drafter's hidden-state window.
+            let dflash2SplitOffset: Int? =
+                dflash2Engages
+                ? session.dflash2Drafter.map {
+                    dflash2PrefillSplitOffset(
+                        drafter: $0,
+                        checkpointOffsets: allCheckpoints.keys,
+                        executionBaseOffset: executionBaseOffset,
+                        fullTokenCount: fullTokenCount)
+                } : nil
+
+            // 9. App-owned prefill (ADR-0006): drive chunked forward passes
+            // over the suffix, capturing snapshots at the checkpoint offsets,
+            // quantize the module-owned cache once, then hand it to a
+            // TokenIterator holding only the final prompt token. Quantizing
+            // *before* the iterator (with `kvBits` stripped from its
+            // parameters) guarantees the iterator never swaps cache elements
+            // during decode, so the array this module retains stays the live
+            // final cache for the post-generation leaf capture.
+            // Shared begin-prefill step. The ADR-0014 guard prices the
+            // patches actually fed THIS forward: all images when cold; only
+            // the newly-added images on a warm restore, since earlier images
+            // are already in the restored cache and not re-fed.
+            let begin = try await Self.beginPrefill(
+                session: session,
+                restoredCache: cacheToUse,
+                parameters: genParams,
+                promptTokens: fullTokenCount,
+                cachedTokens: skippedTokens,
+                pricedImage: imagePrefixInput?.image,
+                visionAttentionScratchProfile: visionAttentionScratchProfile,
+                guardLabel: "keyed",
+                diagnosticsContext: diagnosticsContext,
+                progressHandler: progressHandler
+            )
+            var liveCache = begin.cache
+            memory.mark(.prefilling, facts: RequestMemoryTelemetry.cacheFacts(liveCache))
+            let prefillResult: (iterator: KeyedDecodeIterator, snapshots: [HybridCacheSnapshot])
+            do {
+                prefillResult =
+                    try MLXCheckedEvaluation.withErrors { error in
+                        var initialState = executorInitialState
+                        var prefixSnapshots: [HybridCacheSnapshot] = []
+                        if let imagePrefixInput {
+
+                            // Crash-safe by construction: the continuation chunks
+                            // the forward, so the peak full-attention scratch is
+                            // bounded to `[heads, window, executionBaseOffset]`,
+                            // not the single-shot `[heads, L, L]`.
+                            try Self.checkChunkedVisionBackstop(
+                                windowSize: genParams.prefill.stepSize ?? 512,
+                                contextTokens: executionBaseOffset,
+                                profile: fullAttentionScratchProfile,
+                                diagnosticsContext: diagnosticsContext
+                            )
+
+                            // Warm/cold image span (ADR-0007 phase 2): the anchored
+                            // `prepare` runs the vision tower once, positions the
+                            // new image from the restored Position Anchor
+                            // (`imageContinuationAnchor`; nil ⇒ anchored at zero, a
+                            // crash-safe cold prefill), and windows the forward so
+                            // the scratch is bounded. Its returned state anchors the
+                            // chunked text tail. A non-identity key space implies the
+                            // recognized vision container, whose session exposes
+                            // the anchored `prepare`.
+                            guard let anchoredPrepare = session.anchoredVisionPrepare
+                            else {
+                                throw AgentEngineError.generationFailed(
+                                    "loaded model does not support anchored vision continuation"
                                 )
-
-                                // Warm/cold image span (ADR-0007 phase 2): the anchored
-                                // `prepare` runs the vision tower once, positions the
-                                // new image from the restored Position Anchor
-                                // (`imageContinuationAnchor`; nil ⇒ anchored at zero, a
-                                // crash-safe cold prefill), and windows the forward so
-                                // the scratch is bounded. Its returned state anchors the
-                                // chunked text tail. A non-identity key space implies the
-                                // recognized vision container, whose session exposes
-                                // the anchored `prepare`.
-                                guard let anchoredPrepare = session.anchoredVisionPrepare
-                                else {
-                                    throw AgentEngineError.generationFailed(
-                                        "loaded model does not support anchored vision continuation"
-                                    )
-                                }
-                                guard
-                                    case .logits(let prepared) = try anchoredPrepare(
-                                        imagePrefixInput,
-                                        liveCache,
-                                        imageContinuationAnchor,
-                                        genParams.prefill.stepSize
-                                    )
-                                else {
-                                    throw AgentEngineError.generationFailed(
-                                        "vision container returned .tokens from anchored prepare"
-                                    )
-                                }
-                                try error.check()
-                                initialState = prepared.state
-                                // A checkpoint at exactly the prefix end is capturable here
-                                // (the executor's relative-checkpoint loop only captures
-                                // strictly past its base) — capture needs materialized
-                                // arrays, so only that branch pays the capture cost.
-                                // The previous async scheduling path let MLX errors
-                                // escape Swift's scoped handler and terminate the app.
-                                // Keep this crash-sensitive image prefix on checked
-                                // synchronous evaluation so failures become throws.
-                                if let type = allCheckpoints[executionBaseOffset] {
-                                    try MLXCheckedEvaluation.eval(liveCache)
-                                    if let snap = session.captureSnapshot(
-                                        cache: liveCache, offset: executionBaseOffset, type: type
-                                    ) {
-                                        prefixSnapshots.append(snap)
-                                    }
-                                } else {
-                                    try MLXCheckedEvaluation.eval(liveCache)
-                                }
                             }
-                            // DFlash2 arm: driver prefill up to the split (the
-                            // split sits at or past the deepest capture, so
-                            // every checkpoint and boundary snapshot lands),
-                            // then the iterator's capture prefill for the tail.
-                            // The driver slice keeps one token back so its final
-                            // capture still fires; that token stays unconsumed
-                            // for the iterator, which prefills [split, end) and
-                            // samples the first token exactly like its cold
-                            // prepare's own-chunk final position.
-                            if let splitOffset = dflash2SplitOffset {
-                                var snapshots = prefixSnapshots
-                                if splitOffset > executionBaseOffset {
-                                    let prefixTokenCount = splitOffset - executionBaseOffset
-                                    let prefixText = LMInput.Text(
-                                        tokens: inputForGeneration.text.tokens[
-                                            ..<(prefixTokenCount + 1)],
-                                        mask: nil)
-                                    let warmed = try prefixCache.storageActivityGate
-                                        .withPrefillMarked {
-                                            try session.prefill(
-                                                text: prefixText,
-                                                cache: liveCache,
-                                                checkpoints: allCheckpoints,
-                                                checkpointBaseOffset: executionBaseOffset,
-                                                prefillStepSize: genParams.prefill.stepSize ?? 512,
-                                                consumeAll: false,
-                                                initialState: initialState,
-                                                evalPolicy: .pipelined
-                                            )
-                                        }
-                                    snapshots += warmed.snapshots
-                                }
-                                try error.check()
-                                var iteratorParams = genParams
-                                iteratorParams.kvBits = nil
-                                memory.mark(
-                                    .dflashPreparing,
-                                    facts: RequestMemoryTelemetry.cacheFacts(liveCache))
-                                let iterator = try session.makeDFlash2DecodeIterator(
-                                    fullInput,
-                                    cache: liveCache,
-                                    prefilledPrefixTokens: splitOffset,
-                                    parameters: iteratorParams
+                            guard
+                                case .logits(let prepared) = try anchoredPrepare(
+                                    imagePrefixInput,
+                                    liveCache,
+                                    imageContinuationAnchor,
+                                    genParams.prefill.stepSize
                                 )
-                                try error.check()
-                                return (iterator: .dflash2(iterator), snapshots: snapshots)
-                            }
-
-                            // Pipeline the image-free text path for TTFT; keep the
-                            // image-text-tail (its cache already holds a large image,
-                            // so the per-chunk score matrix is large) on checked
-                            // synchronous eval so an MLX failure throws not crashes.
-                            let warmed = try prefixCache.storageActivityGate.withPrefillMarked {
-                                try session.prefill(
-                                    text: inputForGeneration.text,
-                                    cache: liveCache,
-                                    checkpoints: allCheckpoints,
-                                    checkpointBaseOffset: executionBaseOffset,
-                                    prefillStepSize: genParams.prefill.stepSize ?? 512,
-                                    consumeAll: false,
-                                    initialState: initialState,
-                                    evalPolicy: imagePrefixInput == nil
-                                        ? .pipelined : .checkedSynchronous
+                            else {
+                                throw AgentEngineError.generationFailed(
+                                    "vision container returned .tokens from anchored prepare"
                                 )
                             }
                             try error.check()
-                            session.quantizeKVCache(&liveCache, parameters: genParams)
+                            initialState = prepared.state
+                            // A checkpoint at exactly the prefix end is capturable here
+                            // (the executor's relative-checkpoint loop only captures
+                            // strictly past its base) — capture needs materialized
+                            // arrays, so only that branch pays the capture cost.
+                            // The previous async scheduling path let MLX errors
+                            // escape Swift's scoped handler and terminate the app.
+                            // Keep this crash-sensitive image prefix on checked
+                            // synchronous evaluation so failures become throws.
+                            if let type = allCheckpoints[executionBaseOffset] {
+                                try MLXCheckedEvaluation.eval(liveCache)
+                                if let snap = session.captureSnapshot(
+                                    cache: liveCache, offset: executionBaseOffset, type: type
+                                ) {
+                                    prefixSnapshots.append(snap)
+                                }
+                            } else {
+                                try MLXCheckedEvaluation.eval(liveCache)
+                            }
+                        }
+                        // DFlash2 arm: driver prefill up to the split (the
+                        // split sits at or past the deepest capture, so
+                        // every checkpoint and boundary snapshot lands),
+                        // then the iterator's capture prefill for the tail.
+                        // The driver slice keeps one token back so its final
+                        // capture still fires; that token stays unconsumed
+                        // for the iterator, which prefills [split, end) and
+                        // samples the first token exactly like its cold
+                        // prepare's own-chunk final position.
+                        if let splitOffset = dflash2SplitOffset {
+                            var snapshots = prefixSnapshots
+                            if splitOffset > executionBaseOffset {
+                                let prefixTokenCount = splitOffset - executionBaseOffset
+                                let prefixText = LMInput.Text(
+                                    tokens: inputForGeneration.text.tokens[
+                                        ..<(prefixTokenCount + 1)],
+                                    mask: nil)
+                                let warmed = try prefixCache.storageActivityGate
+                                    .withPrefillMarked {
+                                        try session.prefill(
+                                            text: prefixText,
+                                            cache: liveCache,
+                                            checkpoints: allCheckpoints,
+                                            checkpointBaseOffset: executionBaseOffset,
+                                            prefillStepSize: genParams.prefill.stepSize ?? 512,
+                                            consumeAll: false,
+                                            initialState: initialState,
+                                            evalPolicy: .pipelined
+                                        )
+                                    }
+                                snapshots += warmed.snapshots
+                            }
+                            try error.check()
                             var iteratorParams = genParams
                             iteratorParams.kvBits = nil
-                            // The iterator seeds any configured penalty processors with
-                            // the full suffix — its own input is only the final prompt
-                            // token, which would otherwise be the entire
-                            // repetition/presence/frequency context. It threads the last
-                            // prefill chunk's state through the prime forward and every
-                            // decode step (PRD #72 — upstream's iterator drops it).
-                            let iterator = session.makeDecodeIterator(
-                                remainder: warmed.remainder,
-                                fullText: inputForGeneration.text,
+                            memory.mark(
+                                .dflashPreparing,
+                                facts: RequestMemoryTelemetry.cacheFacts(liveCache))
+                            let iterator = try session.makeDFlash2DecodeIterator(
+                                fullInput,
                                 cache: liveCache,
-                                state: warmed.state,
+                                prefilledPrefixTokens: splitOffset,
                                 parameters: iteratorParams
                             )
-                            return (
-                                iterator: .standard(iterator),
-                                snapshots: prefixSnapshots + warmed.snapshots
+                            try error.check()
+                            return (iterator: .dflash2(iterator), snapshots: snapshots)
+                        }
+
+                        // Pipeline the image-free text path for TTFT; keep the
+                        // image-text-tail (its cache already holds a large image,
+                        // so the per-chunk score matrix is large) on checked
+                        // synchronous eval so an MLX failure throws not crashes.
+                        let warmed = try prefixCache.storageActivityGate.withPrefillMarked {
+                            try session.prefill(
+                                text: inputForGeneration.text,
+                                cache: liveCache,
+                                checkpoints: allCheckpoints,
+                                checkpointBaseOffset: executionBaseOffset,
+                                prefillStepSize: genParams.prefill.stepSize ?? 512,
+                                consumeAll: false,
+                                initialState: initialState,
+                                evalPolicy: imagePrefixInput == nil
+                                    ? .pipelined : .checkedSynchronous
                             )
                         }
-                } catch is CancellationError {
-                    // **Salvage-on-cancel** (issue #97): the client is gone and
-                    // the GPU just went idle at a chunk boundary — keep the
-                    // progress instead of discarding it. RAM-only, after the
-                    // cancellation landed, so the cancel path's perceived
-                    // latency is unchanged; a re-sent request (or an
-                    // abort-seeded speculative pass) resumes from the salvaged
-                    // offset instead of the restore floor.
-                    if handoff == nil {
-                        await Self.salvageCancelledPrefill(
+                        try error.check()
+                        session.quantizeKVCache(&liveCache, parameters: genParams)
+                        var iteratorParams = genParams
+                        iteratorParams.kvBits = nil
+                        // The iterator seeds any configured penalty processors with
+                        // the full suffix — its own input is only the final prompt
+                        // token, which would otherwise be the entire
+                        // repetition/presence/frequency context. It threads the last
+                        // prefill chunk's state through the prime forward and every
+                        // decode step (PRD #72 — upstream's iterator drops it).
+                        let iterator = session.makeDecodeIterator(
+                            remainder: warmed.remainder,
+                            fullText: inputForGeneration.text,
                             cache: liveCache,
-                            keySpace: keySpace,
-                            restoreBaseOffset: executionBaseOffset,
-                            partitionKey: partitionKey,
-                            requestID: requestID,
-                            prefixCache: prefixCache,
-                            diagnostics: diagnosticsContext
+                            state: warmed.state,
+                            parameters: iteratorParams
+                        )
+                        return (
+                            iterator: .standard(iterator),
+                            snapshots: prefixSnapshots + warmed.snapshots
                         )
                     }
-                    Memory.clearCache()
-                    throw CancellationError()
-                }
-                // Quantization can replace attention objects. Retain the array
-                // that the iterator actually advances, after that replacement.
-                let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
-                let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
-                let boundarySnapshots = prefillResult.snapshots.filter {
-                    transientOffsets.contains($0.tokenOffset)
-                }
-                memory.mark(
-                    .prefilled,
-                    facts: RequestMemoryTelemetry.cacheFacts(liveCache).merging([
-                        "prefillCheckpointArrayBytes":
-                            "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })",
-                        "boundaryCheckpointCount": "\(boundarySnapshots.count)",
-                        "boundaryCheckpointArrayBytes":
-                            "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
-                    ]) { _, new in new })
-                let iterator = prefillResult.iterator
-                if case .dflash2 = iterator {
-                    // The iterator exists — the request will decode speculatively.
-                    // Fired before the token loop so the activity surfaces badge
-                    // the arm live.
-                    await progressHandler?(.speculationEngaged(.dflash2))
-                }
-                await progressHandler?(
-                    .prefillFinished(
-                        .init(
-                            promptTokens: fullTokenCount,
-                            cachedTokens: skippedTokens,
-                            newTokensToPrefill: newTokensToPrefill,
-                            prefillMs: prefillMs * 1000
-                        )))
-
-                // Fold the observed prefill into the rolling FLOPs/s estimate
-                // (slice #84) — a real measured operation on this device.
-                // Tiny residuals are timer noise, not throughput signal.
-                if newTokensToPrefill >= 64, prefillMs > 0 {
-                    let prefillFlops = EvictionPolicy.parentRelativeFlops(
-                        nodeOffset: fullTokenCount,
-                        parentOffset: skippedTokens,
-                        profile: flopProfile
+            } catch is CancellationError {
+                // **Salvage-on-cancel** (issue #97): the client is gone and
+                // the GPU just went idle at a chunk boundary — keep the
+                // progress instead of discarding it. RAM-only, after the
+                // cancellation landed, so the cancel path's perceived
+                // latency is unchanged; a re-sent request (or an
+                // abort-seeded speculative pass) resumes from the salvaged
+                // offset instead of the restore floor.
+                if handoff == nil {
+                    await Self.salvageCancelledPrefill(
+                        cache: liveCache,
+                        keySpace: keySpace,
+                        restoreBaseOffset: executionBaseOffset,
+                        partitionKey: partitionKey,
+                        requestID: requestID,
+                        prefixCache: prefixCache,
+                        diagnostics: diagnosticsContext
                     )
-                    await MainActor.run {
-                        prefixCache.recordPrefillMeasurement(
-                            flops: prefillFlops, seconds: prefillMs
-                        )
-                    }
                 }
-
-                // 10. Split the driver's snapshots into stored checkpoints vs the
-                // request-local transient boundary helpers, then extract payloads
-                // inside this `container.perform` so `MLXArray.asData()` runs on
-                // the Metal-affine thread before the later MainActor store hop.
-                var capturedSnapshots: [HybridCacheSnapshot] = []
-                var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
-                for snapshot in prefillResult.snapshots {
-                    if transientOffsets.contains(snapshot.tokenOffset) {
-                        transientSnapshots[snapshot.tokenOffset] = snapshot
-                    } else {
-                        capturedSnapshots.append(snapshot)
-                    }
-                }
-                let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries
-                    .lastMessage
-                    .flatMap { offset in
-                        transientSnapshots[offset]
-                            ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-                    }
-                let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser
-                    .flatMap { offset in
-                        transientSnapshots[offset]
-                            ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
-                    }
-                let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
-                    capturedSnapshots,
-                    ssdEnabled: ssdEnabled
-                )
-                let snapshotAdmission = SnapshotAdmission.checkpoints(
-                    fullPromptTokens: keySpace.keyPath,
-                    candidates: checkpointCandidates,
-                    partitionKey: partitionKey,
-                    requestID: requestID
-                )
-                for snapshot in capturedSnapshots {
-                    diagnosticsContext.log(
-                        PrefixCacheDiagnostics.CaptureEvent(
-                            offset: snapshot.tokenOffset,
-                            checkpointType: snapshot.checkpointType,
-                            bytes: snapshot.memoryBytes,
-                            duringPrefill: true,
-                            source: "prefill",
-                            checkpointKind: snapshot.checkpointKind
-                        ))
-                }
-
-                // 11. Start the app-owned generation stream.
-                try Task.checkCancellation()
-                let generatedTokens = GeneratedTokenRecorder()
-                memory.mark(.decoding)
-                let (stream, task) = iterator.startGeneration(
-                    promptTokenCount: fullTokenCount,
-                    modelConfiguration: session.configuration,
-                    tokenizer: session.tokenizer,
-                    tools: canonicalTools,
-                    generatedTokens: generatedTokens
-                )
-
-                return HTTPPrefixCacheGeneration(
-                    stream: stream,
-                    completion: task,
-                    finalCacheOwner: finalCacheOwner,
-                    speculativeArm: dflash2Engages ? .dflash2 : nil,
-                    diagnosticsContext: diagnosticsContext,
-                    lookupMs: lookupMs,
-                    restoreMs: restoreMs,
-                    prefillMs: prefillMs,
-                    hydrationSeconds: resolved.hydrationSeconds,
-                    restoredFromSSD: resolved.hydratedFromSSD,
-                    promptTokenCount: fullTokenCount,
-                    skippedPrefillTokens: skippedTokens,
-                    lookupReason: lookupResult.reason,
-                    sharedPrefixLength: lookupResult.sharedPrefixLength,
-                    maximumAdvance: maximumAdvance,
-                    fullTokens: fullTokens,
-                    keySpace: keySpace,
-                    unkeyedReason: nil,
-                    render: keyed.render,
-                    seedsPositionAnchor: seedsPositionAnchor,
-                    snapshotAdmission: snapshotAdmission,
-                    ssdEnabled: ssdEnabled,
-                    partitionKey: partitionKey,
-                    transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
-                    transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                    prefillStepSize: parameters.prefill.stepSize ?? 512,
-                    tokenNDim: tokenNDim,
-                    generatedTokens: generatedTokens,
-                    toolCallFormat: session.configuration.toolCallFormat ?? .json,
-                    restoreMode: restoreMode,
-                    restoreCopy: restoreCopy,
-                    restoreWaitSeconds: restoreWaitSeconds
-                )
-            } catch {
-                await claim.rewind(in: session)
-                throw error
+                Memory.clearCache()
+                throw CancellationError()
             }
+            // Quantization can replace attention objects. Retain the array
+            // that the iterator actually advances, after that replacement.
+            let finalCacheOwner = handoff?.cache ?? FinalGenerationCache(liveCache)
+            let prefillMs = Date.timeIntervalSinceReferenceDate - begin.startedAt
+            let boundarySnapshots = prefillResult.snapshots.filter {
+                transientOffsets.contains($0.tokenOffset)
+            }
+            memory.mark(
+                .prefilled,
+                facts: RequestMemoryTelemetry.cacheFacts(liveCache).merging([
+                    "prefillCheckpointArrayBytes":
+                        "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })",
+                    "boundaryCheckpointCount": "\(boundarySnapshots.count)",
+                    "boundaryCheckpointArrayBytes":
+                        "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
+                ]) { _, new in new })
+            let iterator = prefillResult.iterator
+            if case .dflash2 = iterator {
+                // The iterator exists — the request will decode speculatively.
+                // Fired before the token loop so the activity surfaces badge
+                // the arm live.
+                await progressHandler?(.speculationEngaged(.dflash2))
+            }
+            await progressHandler?(
+                .prefillFinished(
+                    .init(
+                        promptTokens: fullTokenCount,
+                        cachedTokens: skippedTokens,
+                        newTokensToPrefill: newTokensToPrefill,
+                        prefillMs: prefillMs * 1000
+                    )))
+
+            // Fold the observed prefill into the rolling FLOPs/s estimate
+            // (slice #84) — a real measured operation on this device.
+            // Tiny residuals are timer noise, not throughput signal.
+            if newTokensToPrefill >= 64, prefillMs > 0 {
+                let prefillFlops = EvictionPolicy.parentRelativeFlops(
+                    nodeOffset: fullTokenCount,
+                    parentOffset: skippedTokens,
+                    profile: flopProfile
+                )
+                await MainActor.run {
+                    prefixCache.recordPrefillMeasurement(
+                        flops: prefillFlops, seconds: prefillMs
+                    )
+                }
+            }
+
+            // 10. Split the driver's snapshots into stored checkpoints vs the
+            // request-local transient boundary helpers, then extract payloads
+            // inside this `container.perform` so `MLXArray.asData()` runs on
+            // the Metal-affine thread before the later MainActor store hop.
+            var capturedSnapshots: [HybridCacheSnapshot] = []
+            var transientSnapshots: [Int: HybridCacheSnapshot] = [:]
+            for snapshot in prefillResult.snapshots {
+                if transientOffsets.contains(snapshot.tokenOffset) {
+                    transientSnapshots[snapshot.tokenOffset] = snapshot
+                } else {
+                    capturedSnapshots.append(snapshot)
+                }
+            }
+            let transientLastMessageBoundarySnapshot = prefillPlan.transientBoundaries
+                .lastMessage
+                .flatMap { offset in
+                    transientSnapshots[offset]
+                        ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+                }
+            let transientLastUserBoundarySnapshot = prefillPlan.transientBoundaries.lastUser
+                .flatMap { offset in
+                    transientSnapshots[offset]
+                        ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
+                }
+            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
+                capturedSnapshots,
+                ssdEnabled: ssdEnabled
+            )
+            let snapshotAdmission = SnapshotAdmission.checkpoints(
+                fullPromptTokens: keySpace.keyPath,
+                candidates: checkpointCandidates,
+                partitionKey: partitionKey,
+                requestID: requestID
+            )
+            for snapshot in capturedSnapshots {
+                diagnosticsContext.log(
+                    PrefixCacheDiagnostics.CaptureEvent(
+                        offset: snapshot.tokenOffset,
+                        checkpointType: snapshot.checkpointType,
+                        bytes: snapshot.memoryBytes,
+                        duringPrefill: true,
+                        source: "prefill",
+                        checkpointKind: snapshot.checkpointKind
+                    ))
+            }
+
+            // 11. Start the app-owned generation stream.
+            try Task.checkCancellation()
+            let generatedTokens = GeneratedTokenRecorder()
+            memory.mark(.decoding)
+            let (stream, task) = iterator.startGeneration(
+                promptTokenCount: fullTokenCount,
+                modelConfiguration: session.configuration,
+                tokenizer: session.tokenizer,
+                tools: canonicalTools,
+                generatedTokens: generatedTokens
+            )
+
+            return HTTPPrefixCacheGeneration(
+                stream: stream,
+                completion: task,
+                finalCacheOwner: finalCacheOwner,
+                speculativeArm: dflash2Engages ? .dflash2 : nil,
+                diagnosticsContext: diagnosticsContext,
+                lookupMs: lookupMs,
+                restoreMs: restoreMs,
+                prefillMs: prefillMs,
+                hydrationSeconds: resolved.hydrationSeconds,
+                restoredFromSSD: resolved.hydratedFromSSD,
+                promptTokenCount: fullTokenCount,
+                skippedPrefillTokens: skippedTokens,
+                lookupReason: lookupResult.reason,
+                sharedPrefixLength: lookupResult.sharedPrefixLength,
+                maximumAdvance: maximumAdvance,
+                fullTokens: fullTokens,
+                keySpace: keySpace,
+                unkeyedReason: nil,
+                render: keyed.render,
+                seedsPositionAnchor: seedsPositionAnchor,
+                snapshotAdmission: snapshotAdmission,
+                ssdEnabled: ssdEnabled,
+                partitionKey: partitionKey,
+                transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
+                transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
+                prefillStepSize: parameters.prefill.stepSize ?? 512,
+                tokenNDim: tokenNDim,
+                generatedTokens: generatedTokens,
+                toolCallFormat: session.configuration.toolCallFormat ?? .json,
+                restoreMode: restoreMode,
+                restoreCopy: restoreCopy,
+                restoreWaitSeconds: restoreWaitSeconds
+            )
         }
     }
 

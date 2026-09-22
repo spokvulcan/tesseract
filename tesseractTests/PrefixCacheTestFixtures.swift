@@ -336,10 +336,13 @@ extension PrefixCacheManager {
         diagnostics: PrefixCacheDiagnostics.Context,
         modelFingerprint: String? = nil,
         transientBoundary: HybridCacheSnapshot? = nil,
+        sessions: any ModelSessionProviding = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2])),
         tripwire: CacheClaim.Tripwire = .standard
     ) async -> (resolved: Resolved, handOver: CacheClaim.HandOver) {
         let (resolved, handOver) = await CacheClaim.withRequestClaim(
-            context: diagnostics, prefixCache: self, memory: nil, tripwire: tripwire
+            context: diagnostics, prefixCache: self, sessions: sessions, memory: nil,
+            tripwire: tripwire
         ) { claim in
             await resolve(
                 tokens: tokens, promptTokenCount: tokens.count, partitionKey: partitionKey,
@@ -366,7 +369,8 @@ extension PrefixCacheManager {
         tripwire: CacheClaim.Tripwire = .standard
     ) async -> (outcome: CacheClaim.RestoreOutcome, handOver: CacheClaim.HandOver) {
         let (outcome, handOver) = await CacheClaim.withRequestClaim(
-            context: diagnostics, prefixCache: self, memory: nil, tripwire: tripwire
+            context: diagnostics, prefixCache: self, sessions: sessions, memory: nil,
+            tripwire: tripwire
         ) { claim in
             await sessions.withSession { session in
                 await claim.checkOut(

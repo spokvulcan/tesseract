@@ -15,10 +15,11 @@ import os
 /// drive, which redeems the hand-over with `HandOver.withClaim`. A
 /// **Speculative Canonical Prefill** pass owns a copy-only claim of its own
 /// (`withCopyOnlyClaim`). Each scope concludes on exit, whether it returns
-/// or throws: it lets go of the pins, then the lane, in one MainActor hop.
-/// The conclusion never reads task cancellation (stream termination cancels
-/// the drive task on a normal finish too) and runs in a detached task the
-/// scope awaits, so cancellation cannot cut it short.
+/// or throws: a leaf still leased is rewound back into the tree first, then
+/// the pins and the lane go in one MainActor hop. The conclusion never
+/// reads task cancellation (stream termination cancels the drive task on a
+/// normal finish too) and runs in a detached task the scope awaits, so
+/// cancellation cannot cut it short.
 ///
 /// The steps — check-out, check-in, rewind — are ownership steps only, taken
 /// at quiescent points inside the Model Session (their `session` argument is
@@ -199,6 +200,9 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     let requestID: UUID
     private let context: PrefixCacheDiagnostics.Context
     private let prefixCache: PrefixCacheManager
+    /// Where the conclusion rewinds a lease still held; `nil` for a
+    /// copy-only claim, which never holds one.
+    private let sessions: (any ModelSessionProviding)?
     private let memory: RequestMemoryTelemetry?
     private let tripwire: Tripwire
     private let lock = NSLock()
@@ -208,12 +212,14 @@ nonisolated final class CacheClaim: @unchecked Sendable {
 
     private init(
         requestID: UUID, owner: Owner, context: PrefixCacheDiagnostics.Context,
-        prefixCache: PrefixCacheManager, memory: RequestMemoryTelemetry?, tripwire: Tripwire
+        prefixCache: PrefixCacheManager, sessions: (any ModelSessionProviding)?,
+        memory: RequestMemoryTelemetry?, tripwire: Tripwire
     ) {
         self.requestID = requestID
         self.owner = owner
         self.context = context
         self.prefixCache = prefixCache
+        self.sessions = sessions
         self.memory = memory
         self.tripwire = tripwire
     }
@@ -230,10 +236,12 @@ nonisolated final class CacheClaim: @unchecked Sendable {
 
     /// Hold a request's claim for `body`, the request's `start`. A normal
     /// return hands the claim over; a throw concludes it here. The claim's
-    /// request is `context.requestID`.
+    /// request is `context.requestID`; `sessions` is where its conclusion
+    /// rewinds a lease still held.
     static func withRequestClaim<R>(
         context: PrefixCacheDiagnostics.Context,
         prefixCache: PrefixCacheManager,
+        sessions: any ModelSessionProviding,
         memory: RequestMemoryTelemetry?,
         tripwire: Tripwire = .standard,
         _ body: (CacheClaim) async throws -> R
@@ -241,7 +249,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         assert(!ModelSessionScope.isInside, "open a Cache Claim outside the Model Session")
         let claim = CacheClaim(
             requestID: context.requestID, owner: .start, context: context,
-            prefixCache: prefixCache, memory: memory, tripwire: tripwire)
+            prefixCache: prefixCache, sessions: sessions, memory: memory, tripwire: tripwire)
         var handedOver = false
         defer { if !handedOver { await claim.conclude() } }
         let value = try await body(claim)
@@ -262,7 +270,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         assert(!ModelSessionScope.isInside, "open a Cache Claim outside the Model Session")
         let claim = CacheClaim(
             requestID: UUID(), owner: .copyOnly, context: context, prefixCache: prefixCache,
-            memory: nil, tripwire: tripwire)
+            sessions: nil, memory: nil, tripwire: tripwire)
         defer { await claim.conclude() }
         return try await body(CopyOnlyClaim(claim: claim))
     }
@@ -376,8 +384,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         return await rewindHeld()
     }
 
-    /// Whether a lease is held — for the cleanup that must enter the Model
-    /// Session only when a rewind is due.
+    /// Whether the claim still holds the lease its check-out took.
     var holdsLease: Bool { lock.withLock { held != nil } }
 
     /// The turn's maximum advance: the prompt tokens prefilled past the
@@ -556,7 +563,11 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         return true
     }
 
-    /// Exactly once, by an owner scope: let go of the pins, then the lane.
+    /// Exactly once, by an owner scope: the leaf comes back, then the pins
+    /// go, then the lane. A lease still held is rewound in the Model Session
+    /// — the one reason the conclusion enters it, and entering cannot fail
+    /// (ADR-0016) — and the MLX buffer cache is cleared after it, so the
+    /// rewind's compaction does not leave its freed buffers there.
     private func conclude() async {
         let previous = lock.withLock { () -> Owner in
             let previous = owner
@@ -568,9 +579,13 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             return
         }
         let token = Release(requestID: requestID)
-        let prefixCache = prefixCache
-        let memory = memory
-        await Task.detached {
+        await Task.detached { [self] in
+            if holdsLease, let sessions {
+                await sessions.withSession { _ in
+                    await self.rewindHeld()
+                    Memory.clearCache()
+                }
+            }
             memory?.mark(.releasingRequest)
             let facts = await MainActor.run {
                 prefixCache.release(token)

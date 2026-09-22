@@ -333,13 +333,14 @@ nonisolated extension LeafStorePhase {
     // MARK: - Shared tail
 
     /// Inside a Model Session: snapshot `cache` at the stored path's length,
-    /// derive its admission storage (**Deferred Payload Extraction**: an
-    /// extension payload's arrays — the attention suffix slices and the
+    /// check a leaf moved from the leased cache in through the request's
+    /// claim, derive its admission storage (**Deferred Payload Extraction**:
+    /// an extension payload's arrays — the attention suffix slices and the
     /// whole recurrent state — are detached and evaluated here, the host
-    /// copy waits for the SSD writer), admit through the one shared owner — the same path
-    /// the speculative pass uses — and release the MLX buffer pool so it
-    /// doesn't accumulate transient prefill intermediates across requests.
-    /// `timings` carries the stages the caller already ran.
+    /// copy waits for the SSD writer), admit through the one shared owner —
+    /// the same path the speculative pass uses — and release the MLX buffer
+    /// pool so it doesn't accumulate transient prefill intermediates across
+    /// requests. `timings` carries the stages the caller already ran.
     private static func admitLeaf(
         cache: [any KVCache],
         moving: FinalGenerationCache? = nil,
@@ -393,6 +394,22 @@ nonisolated extension LeafStorePhase {
                 "leafCaptureMode": moving == nil ? "copy" : "handoff",
                 "requestCacheLayerCountAfterCapture": "\(moving?.cache.count ?? cache.count)",
             ])
+        // Check in before the payload is extracted (ADR-0069): the check-in
+        // frees the recurrent rewind backup just before an extension payload
+        // allocates arrays of the same shapes, so the check-in peak holds two
+        // copies of the recurrent state, not three. A refused check-in skips
+        // extraction entirely. Nothing can take the leaf in between: check-outs
+        // are serialized by this Model Session, and only a live generation
+        // writes arrays in place.
+        if let moving,
+            case .rewound(let cause) = await context.claim.checkIn(
+                leaf, from: moving, tokens: storedTokens, in: session)
+        {
+            // Not committed: the claim took the objects back and returned
+            // the original leaf.
+            return LeafCapture(
+                skipReason: cause == .cancelled ? "cancelled" : "lease-return-refused")
+        }
         let payloadStart = Date.timeIntervalSinceReferenceDate
         let storage = ServerCompletion.snapshotAdmissionStorage(
             for: leaf,
@@ -409,21 +426,12 @@ nonisolated extension LeafStorePhase {
             ]
         }
         context.memory?.mark(.admittingLeaf, facts: payloadFacts)
-        let admitStart = Date.timeIntervalSinceReferenceDate
-        if let moving,
-            case .rewound(let cause) = await context.claim.checkIn(
-                leaf, from: moving, tokens: storedTokens, in: session)
-        {
-            // Not committed: the claim took the objects back and returned
-            // the original leaf.
-            return LeafCapture(
-                skipReason: cause == .cancelled ? "cancelled" : "lease-return-refused")
-        }
         context.memory?.mark(
             .admittingLeaf,
             facts: [
                 "leafLeaseActive": "false", "recurrentRewindStateBytes": "0",
             ])
+        let admitStart = Date.timeIntervalSinceReferenceDate
         // The reserve observes the source the `leafStore` event will
         // report for this leaf: the same fold, from the same facts.
         let admission = await ServerCompletion.admitStructuredLeaf(

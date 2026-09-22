@@ -154,6 +154,14 @@ struct ServerCompletionExitMatrixTests {
         let events = session.capture.drain()
         #expect(Self.terminal(events)?.field("outcome") == "cancelled")
         #expect(Self.leafRewinds(events) == 1)
+        // The claim's conclusion rewinds after the stream has finished, still
+        // inside the drive: finishingStream, then rewindingLeaf, then
+        // releasingRequest.
+        let order = ["finishingStream", "rewindingLeaf", "releasingRequest"].map { phase in
+            events.firstIndex { Self.isPhaseBegin($0, phase) }
+        }
+        #expect(order.allSatisfy { $0 != nil })
+        #expect(order.compactMap { $0 } == order.compactMap { $0 }.sorted())
         await Self.expectReleased(session.fixture, events)
 
         let resend = try await session.turn(Self.warmRequest, text: "again")
@@ -230,6 +238,9 @@ struct ServerCompletionExitMatrixTests {
             events.contains {
                 $0.eventName == "leafStore" && $0.field("skip") == "lease-return-refused"
             })
+        // The check-in comes before the payload is extracted, so a refused
+        // one never reaches the admission phase.
+        #expect(!events.contains { Self.isPhaseBegin($0, "admittingLeaf") })
         #expect(Self.leafRewinds(events) == 1)
         await Self.expectReleased(session.fixture, events)
 
@@ -323,10 +334,7 @@ struct ServerCompletionExitMatrixTests {
             sourceLocation: sourceLocation)
         #expect(terminal(events)?.field("treeLeaseCount") == "0", sourceLocation: sourceLocation)
         // The request's Cache Claim concluded once: one release.
-        let releases = events.filter {
-            $0.eventName == "requestMemory" && $0.field("phase") == "releasingRequest"
-                && $0.field("sampleKind") == "phaseBegin"
-        }
+        let releases = events.filter { isPhaseBegin($0, "releasingRequest") }
         #expect(releases.count == 1, "exactly one conclusion", sourceLocation: sourceLocation)
     }
 
@@ -334,6 +342,11 @@ struct ServerCompletionExitMatrixTests {
         _ events: [PromptCacheTelemetryEvent]
     ) -> PromptCacheTelemetryEvent? {
         events.last { $0.eventName == "requestMemory" && $0.field("sampleKind") == "terminal" }
+    }
+
+    private static func isPhaseBegin(_ event: PromptCacheTelemetryEvent, _ phase: String) -> Bool {
+        event.eventName == "requestMemory" && event.field("phase") == phase
+            && event.field("sampleKind") == "phaseBegin"
     }
 
     private static func leafRewinds(_ events: [PromptCacheTelemetryEvent]) -> Int {

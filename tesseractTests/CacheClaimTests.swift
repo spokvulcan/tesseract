@@ -61,7 +61,7 @@ struct CacheClaimTests {
         let context = context()
         await #expect(throws: StartFailed.self) {
             _ = try await CacheClaim.withRequestClaim(
-                context: context, prefixCache: manager, memory: nil
+                context: context, prefixCache: manager, sessions: sessions, memory: nil
             ) { claim in
                 _ = await manager.resolve(
                     tokens: [1, 2, 3], promptTokenCount: 3, partitionKey: key,
@@ -86,7 +86,7 @@ struct CacheClaimTests {
         let context = context(modelID: modelID)
         let memory = RequestMemoryTelemetry(context: context)
         let (_, handOver) = await CacheClaim.withRequestClaim(
-            context: context, prefixCache: manager, memory: memory
+            context: context, prefixCache: manager, sessions: sessions, memory: memory
         ) { claim in
             _ = await manager.resolve(
                 tokens: [1, 2, 3], promptTokenCount: 3, partitionKey: key,
@@ -607,6 +607,56 @@ struct CacheClaimTests {
         #expect(manager.lookup(tokens: Array(1...9), partitionKey: key).snapshotTokenOffset == 8)
     }
 
+    /// A drive that ends without checking its leaf in or rewinding it —
+    /// a cancel, a failure, a leaf store that captured nothing: the
+    /// conclusion returns the leaf, and only then lets go of the pins and
+    /// the lane.
+    @Test func theConclusionReturnsALeafStillLeasedBeforeThePinsAndTheLane() async throws {
+        let store = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
+        try admitLeaf(manager, tokens: Array(1...8))
+        let modelID = "cache-claim-conclusion-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let context = context(modelID: modelID)
+        let memory = RequestMemoryTelemetry(context: context)
+        let sessions = sessions
+        let (handoff, handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager, sessions: sessions, memory: memory
+        ) { claim in
+            let resolved = await manager.resolve(
+                tokens: Array(1...9), promptTokenCount: 9, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context, for: claim)
+            return await sessions.withSession { session in
+                await claim.checkOut(
+                    resolved, tokens: Array(1...9), maximumAdvance: 10, identityKeySpace: true,
+                    in: session
+                ).handoff
+            }
+        }
+        let live = try #require(handoff).cache
+        _ = live.cache[0].update(
+            keys: MLXArray.zeros([1, 1, 3, 64]), values: MLXArray.zeros([1, 1, 3, 64]))
+        eval(live.cache)
+        #expect(manager.requestHoldings == .init(lanes: 1, pinnedRequests: 1, leases: 1))
+
+        await handOver.withClaim { _ in }
+
+        #expect(manager.requestHoldings == .none)
+        #expect(live.cache.isEmpty)
+        #expect(manager.lookup(tokens: Array(1...9), partitionKey: key).snapshotTokenOffset == 8)
+        let events = capture.drain()
+        let leafBack = try #require(
+            events.firstIndex {
+                $0.eventName == "leafLeaseEnd" && $0.field("reason") == "rewind"
+            })
+        let released = try #require(
+            events.firstIndex {
+                $0.eventName == "requestMemory" && $0.field("phase") == "releasingRequest"
+            })
+        #expect(leafBack < released, "the leaf is back before the pins and the lane go")
+    }
+
     // MARK: - The copy-only claim
 
     /// A Speculative Canonical Prefill pass pins what it restores from and
@@ -658,7 +708,8 @@ struct CacheClaimTests {
         let context = context(modelID: modelID)
         let memory = RequestMemoryTelemetry(context: context)
         let (_, handOver) = await CacheClaim.withRequestClaim(
-            context: context, prefixCache: manager, memory: memory, tripwire: .reporting
+            context: context, prefixCache: manager, sessions: sessions, memory: memory,
+            tripwire: .reporting
         ) { claim in
             _ = await manager.resolve(
                 tokens: [1, 2, 3], promptTokenCount: 3, partitionKey: key,
@@ -688,7 +739,8 @@ struct CacheClaimTests {
         defer { capture.stop() }
         let context = context(modelID: modelID)
         let (_, handOver) = await CacheClaim.withRequestClaim(
-            context: context, prefixCache: manager, memory: nil, tripwire: .reporting
+            context: context, prefixCache: manager, sessions: sessions, memory: nil,
+            tripwire: .reporting
         ) { _ in }
         let escaped = await handOver.withClaim { claim in claim }
 
@@ -736,7 +788,8 @@ struct CacheClaimTests {
         let resolved = resolved(manager, Array(1...9))
         let sessions = sessions
         let (outcomes, handOver) = await CacheClaim.withRequestClaim(
-            context: context(modelID: modelID), prefixCache: manager, memory: nil,
+            context: context(modelID: modelID), prefixCache: manager, sessions: sessions,
+            memory: nil,
             tripwire: .reporting
         ) { claim in
             await sessions.withSession { session in
