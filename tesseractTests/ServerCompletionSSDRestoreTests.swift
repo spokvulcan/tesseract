@@ -8,9 +8,9 @@ import Testing
 /// intermittent GPU kill on request-path restore of SSD-resident leaves.
 /// A **Segment Chain** is written through to a temp-dir SSD store, a fresh
 /// module warm-starts over it — RAM tier empty, descriptors only — and the
-/// next request must hydrate the chain from disk, restore it onto the toy
-/// model *inside the session*, prefill the suffix, and resume generation:
-/// exactly the restore → prefill → decode window the #136 kills fire in,
+/// next request must hydrate the chain from disk *inside the session*, take
+/// the loaded leaf by handoff (#554), prefill the suffix, and resume
+/// generation: the hydrate → prefill → decode window the #136 kills fire in,
 /// minus the multi-GB model. The kill itself is out of scope; this pins the
 /// sequencing and gives the parked MLX-UAF discriminate plan a fast seat.
 @Suite struct ServerCompletionSSDRestoreTests {
@@ -99,15 +99,12 @@ import Testing
         let (text2, _) = try await collectServerText(handle2)
         #expect(text2 == "Sure.")
 
-        // The hydrated snapshot went through the session's restore verb onto
-        // the model — the #136 crash site — before the suffix prefill.
-        // The finished generation hands off its next leaf without a copy.
+        // The hydrated leaf is handed off, not restored by copy (#554): the
+        // loaded arrays become the live cache with no restore verb, then the
+        // suffix prefill and decode run on them. The finished generation
+        // hands off its next leaf without a copy.
         let verbs = Array(provider.recorder.verbs.dropFirst(verbsBefore))
-        #expect(
-            verbs == [
-                .prepare, .restore, .prefill, .quantizeKVCache, .makeDecodeIterator,
-            ]
-        )
+        #expect(verbs == [.prepare, .prefill, .quantizeKVCache, .makeDecodeIterator])
         await sessionB.drain()
     }
 }

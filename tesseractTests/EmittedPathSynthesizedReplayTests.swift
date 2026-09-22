@@ -783,12 +783,11 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(session.index.statsSnapshot().registrations == 2)
     }
 
-    /// A leaf hydrated from SSD is an immutable body: the check-out falls
-    /// back to a restore by copy, the store reports `copy`, and the
-    /// **Active-Inference Reserve** does not raise its factor for it
-    /// (#522) — the source body is counted in the tree, the live copy in
-    /// the reserve's one leaf plus growth.
-    @Test func aRestoreByCopyDoesNotRaiseTheReservesFactor() async throws {
+    /// A leaf hydrated from SSD is a moved body the load's arrays own, so
+    /// the request that hydrated it takes it by Leaf Handoff (#554) — it no
+    /// longer copies it a second time — and the **Active-Inference Reserve**
+    /// keeps its factor (#522): one leaf plus growth, never two.
+    @Test func anSSDHitHandsTheLoadedLeafOffAndKeepsTheReservesFactor() async throws {
         let ssdRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("emitted-path-reserve-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: ssdRoot) }
@@ -806,9 +805,12 @@ struct EmittedPathSynthesizedReplayTests {
         ])
         let turn2 = try await session.turn(request2, text: "again")
         #expect(turn2.cached == pathLength, turn2.account)
-        #expect(turn2.event("lookup").map(Self.fields)?["restoreMode"] == "copy")
-        #expect(turn2.leafStore["source"] == "copy")
-        #expect(turn2.leafStore["copyReason"] == "immutableBody")
+        let lookup = try #require(turn2.event("lookup").map(Self.fields))
+        #expect(lookup["hydratedFromSSD"] == "true")
+        #expect(lookup["restoreMode"] == "handoff")
+        #expect(lookup["copyReason"] == nil)
+        #expect(turn2.leafStore["source"] == "handoff")
+        #expect(turn2.leafStore["copyReason"] == nil)
         let reserve = try #require(
             await MainActor.run { session.fixture.cacheAdmin.activeInferenceReserve })
         #expect(reserve.copyFactor == 1)

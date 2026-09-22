@@ -278,6 +278,77 @@ struct CacheClaimMemoryEvidenceTests {
         }
     }
 
+    /// Item 5 of #554: an SSD hit takes the loaded leaf by handoff. The
+    /// loaded arrays become the live cache, so across the check-out the
+    /// MLX peak grows by the recurrent backup only, where restoring the same
+    /// leaf by copy grows it by the whole leaf.
+    @Test func anSSDHitCostsNoSecondLeaf() async throws {
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: "cache-claim-evidence-ssd", ramBudgetBytes: 1 << 30,
+            ssdBudgetBytes: 1 << 30)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = CachePartitionKey(
+            modelID: "cache-claim-evidence-ssd", kvBits: nil, kvGroupSize: 64,
+            modelFingerprint: String(repeating: "a", count: 64))
+        let tokens = Array(0..<Self.rows)
+        let body = try hybridLeaf()
+        manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: tokens, snapshot: body,
+                    storage: .ramAndSSD(ServerCompletion.extractSnapshotPayload(body)),
+                    partitionKey: key)))
+        await store.flush()
+        #expect(manager.clearRAMTier() > 0)
+        let leafBytes = body.memoryBytes
+
+        let context = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)
+        let sessions = sessions
+        let requested = tokens + [7]
+        let ((hydrated, handoffPeak, handedOff), handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager, sessions: sessions, memory: nil
+        ) { claim in
+            let resolved = await sessions.withSession { _ in
+                await manager.resolve(
+                    tokens: requested, promptTokenCount: requested.count, partitionKey: key,
+                    modelFingerprint: key.modelFingerprint, diagnostics: context, for: claim)
+            }
+            let start = Self.settledActiveMemory()
+            let outcome = await sessions.withSession { session in
+                await claim.checkOut(
+                    resolved, tokens: requested, maximumAdvance: 2, identityKeySpace: true,
+                    in: session)
+            }
+            let peak = max(0, Memory.peakMemory - start)
+            return (resolved.hydratedFromSSD, peak, outcome.handoff != nil)
+        }
+        #expect(hydrated)
+        #expect(handedOff, "the loaded leaf is taken, not copied")
+        #expect(await handOver.rewindAndConclude(sessions: sessions) == Self.rows)
+
+        // The same leaf restored by copy, as every SSD hit did before.
+        let rewound = try #require(manager.lookup(tokens: requested, partitionKey: key).snapshot)
+        let start = Self.settledActiveMemory()
+        let copy = try rewound.restore()
+        let copyPeak = max(0, Memory.peakMemory - start)
+        withExtendedLifetime(copy) {}
+
+        Self.report(
+            "ssdHit",
+            [
+                "handoffPeakBytes": handoffPeak, "copyRestorePeakBytes": copyPeak,
+                "leafBytes": leafBytes, "recurrentStateBytes": Self.recurrentBytes,
+            ])
+        if Self.assertsPeaks {
+            #expect(
+                handoffPeak <= Self.recurrentBytes + 65_536,
+                "an SSD hit adds only the rewind backup, not a second leaf")
+            #expect(copyPeak >= leafBytes * 9 / 10, "a copy restore costs a whole leaf")
+        }
+        await store.flush()
+    }
+
     /// Settle the device before a measured step: finish pending GPU work so
     /// buffers released earlier (by this test or the previous one) are gone,
     /// empty the buffer cache, and start the peak counter at what is live.

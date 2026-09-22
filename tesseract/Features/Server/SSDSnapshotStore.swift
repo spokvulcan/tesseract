@@ -1541,14 +1541,19 @@ extension SSDSnapshotStore {
 
         // Decode and compose the chain, reconstructing MLXArrays
         // from raw payload bytes inside the caller's Metal-affine
-        // context.
+        // context. A full leaf goes to the tree as a moved body built on
+        // the loaded arrays, which nothing else owns, so the request that
+        // hydrated it takes it by Leaf Handoff instead of copying it again
+        // (ADR-0064 amendment, #554). A layer a move cannot take keeps the
+        // copied body.
         do {
-            return try decodeSegmentChain(
+            let loaded = try decodeSegmentChain(
                 segmentData,
                 snapshotID: snapshotRef.snapshotID,
                 tokenOffset: snapshotRef.tokenOffset,
                 checkpointType: snapshotRef.checkpointType
             )
+            return loaded.movedFromLoad() ?? loaded
         } catch {
             return failLoad(
                 snapshotRef,

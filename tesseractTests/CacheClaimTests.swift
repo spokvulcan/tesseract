@@ -657,6 +657,135 @@ struct CacheClaimTests {
         #expect(leafBack < released, "the leaf is back before the pins and the lane go")
     }
 
+    // MARK: - A leaf loaded from SSD (ADR-0064 amendment)
+
+    /// A snapshot admitted with its full SSD payload, written, then dropped
+    /// from RAM: the next resolve can only hydrate it from disk.
+    private func ssdOnly(
+        _ body: HybridCacheSnapshot, at tokens: [Int], label: String, checkpoint: Bool = false
+    ) async throws -> (
+        manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL,
+        key: CachePartitionKey
+    ) {
+        let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
+            label: label, ramBudgetBytes: 1_000_000)
+        let key = CachePartitionKey(
+            modelID: label, kvBits: nil, kvGroupSize: 64,
+            modelFingerprint: String(repeating: "a", count: 64))
+        let storage = SnapshotAdmission.Storage.ramAndSSD(
+            ServerCompletion.extractSnapshotPayload(body))
+        let admission =
+            checkpoint
+            ? SnapshotAdmission.checkpoints(
+                fullPromptTokens: tokens + [99],
+                candidates: [.init(snapshot: body, storage: storage)], partitionKey: key)
+            : SnapshotAdmission.leaf(
+                storedTokens: tokens, snapshot: body, storage: storage, partitionKey: key)
+        manager.admit(try #require(admission))
+        await store.flush()
+        #expect(manager.clearRAMTier() > 0, "the SSD-backed body leaves RAM")
+        return (manager, store, root, key)
+    }
+
+    private func hybridBody(offset: Int, type: HybridCacheSnapshot.CheckpointType = .leaf) throws
+        -> HybridCacheSnapshot
+    {
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, offset, 64]), MLXArray.ones([1, 1, offset, 64])]
+        let recurrent = MambaCache()
+        // Large enough that `Data` keeps it out of line, so its backing
+        // address reads stably.
+        recurrent.state = [MLXArray.ones([64]) * 3]
+        recurrent.offset = offset
+        return try #require(
+            type == .leaf
+                ? FinalGenerationCache([kv, recurrent]).moveSnapshot(offset: offset)
+                : HybridCacheSnapshot.capture(cache: [kv, recurrent], offset: offset, type: type))
+    }
+
+    /// The loaded arrays have no other owner, so hydration hands the tree a
+    /// moved body and the request takes it by handoff: the live cache is
+    /// the loaded arrays themselves, every value copy of the loaded snapshot
+    /// is emptied, and a rewind returns the leaf with its SSD ref intact.
+    @Test func aLeafLoadedFromSSDIsHandedOffOnItsLoadedArrays() async throws {
+        let (manager, store, root, key) = try await ssdOnly(
+            try hybridBody(offset: 8), at: Array(1...8), label: "claim-ssd-handoff")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = context()
+        let sessions = sessions
+        let (result, handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager, sessions: sessions, memory: nil
+        ) { claim in
+            let resolved = await sessions.withSession { _ in
+                await manager.resolve(
+                    tokens: Array(1...9), promptTokenCount: 9, partitionKey: key,
+                    modelFingerprint: key.modelFingerprint, diagnostics: context, for: claim)
+            }
+            let loaded = resolved.lookup.snapshot
+            let addresses = loaded?.layers.flatMap(\.state).map(backingAddress) ?? []
+            let outcome = await sessions.withSession { session in
+                await claim.checkOut(
+                    resolved, tokens: Array(1...9), maximumAdvance: 10, identityKeySpace: true,
+                    in: session)
+            }
+            return (resolved.hydratedFromSSD, loaded, addresses, outcome)
+        }
+        let (hydrated, loaded, loadedAddresses, outcome) = result
+        #expect(hydrated)
+        let handoff = try #require(outcome.handoff, "a loaded leaf is taken, not copied")
+        let live = handoff.cache.cache.flatMap { $0.innerState() }.map(backingAddress)
+        #expect(!loadedAddresses.isEmpty)
+        #expect(Set(live) == Set(loadedAddresses), "the live cache is the loaded arrays")
+        #expect(loaded?.layers.isEmpty == true, "the moved box empties every value copy")
+        let tree = try #require(store.tree(for: key))
+        #expect(tree.leaseCount == 1)
+
+        #expect(await handOver.rewindAndConclude(sessions: sessions) == 8)
+        let node = try #require(
+            tree.findBestSnapshot(tokens: Array(1...8), updateAccess: false)?.node)
+        #expect(node.state.body != nil)
+        #expect(node.state.committed, "the rewound leaf keeps its SSD ref")
+        await store.flush()
+    }
+
+    /// Only a full leaf is handed to the tree moved. A checkpoint loaded
+    /// from SSD keeps its copied body, and a check-out copies it and says
+    /// why.
+    @Test func aCheckpointLoadedFromSSDStillCopiesAndSaysWhy() async throws {
+        let (manager, store, root, key) = try await ssdOnly(
+            try hybridBody(offset: 8, type: .system), at: Array(1...8),
+            label: "claim-ssd-checkpoint", checkpoint: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = context()
+        let sessions = sessions
+        let (result, handOver) = await CacheClaim.withRequestClaim(
+            context: context, prefixCache: manager, sessions: sessions, memory: nil
+        ) { claim in
+            let resolved = await sessions.withSession { _ in
+                await manager.resolve(
+                    tokens: Array(1...9), promptTokenCount: 9, partitionKey: key,
+                    modelFingerprint: key.modelFingerprint, diagnostics: context, for: claim)
+            }
+            let outcome = await sessions.withSession { session in
+                await claim.checkOut(
+                    resolved, tokens: Array(1...9), maximumAdvance: 10, identityKeySpace: true,
+                    in: session)
+            }
+            return (resolved.hydratedFromSSD, resolved.lookup.snapshot, outcome)
+        }
+        let (hydrated, loaded, outcome) = result
+        #expect(hydrated)
+        let body = try #require(loaded)
+        #expect(!body.sharesMovedBody(with: body), "a checkpoint keeps its copied body")
+        let copy = try #require(outcome.copy)
+        #expect(copy.reason == .checkpoint)
+        // Checkpoint admission lays down the whole prompt path, so the
+        // checkpoint sits inside it rather than at a leaf.
+        #expect(copy.refusal == .notResidentLeaf)
+        #expect(await handOver.rewindAndConclude(sessions: sessions) == nil)
+        await store.flush()
+    }
+
     // MARK: - The copy-only claim
 
     /// A Speculative Canonical Prefill pass pins what it restores from and
