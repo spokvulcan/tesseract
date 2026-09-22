@@ -132,7 +132,7 @@ nonisolated struct EvictionConfiguration: Sendable {
 
     /// How long a request waits for a pending full payload to stop
     /// aliasing the leaf's body before it gives up and restores by copy
-    /// (#523). A full payload is the only **Leaf Checkout** refusal that
+    /// (#523). A full payload is the only check-out refusal that
     /// clears on its own: the SSD writer's materialize step releases the
     /// body arrays, and on the conversation's second turn that is usually
     /// milliseconds away. Zero disables the wait — every

@@ -273,7 +273,7 @@ struct CacheClaimMemoryEvidenceTests {
             ])
         if Self.assertsPeaks {
             #expect(
-                peak <= 2 * layerReplacementBytes,
+                peak <= layerReplacementBytes + 65_536,
                 "the transient is one layer's replacement, not the whole body's")
         }
     }

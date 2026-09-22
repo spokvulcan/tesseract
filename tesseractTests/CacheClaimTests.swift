@@ -211,10 +211,16 @@ struct CacheClaimTests {
     }
 
     /// A lease the tree refuses because the leaf is already leased reads
-    /// `pendingFullPayload` as it always did, and now says why.
-    @Test func anAlreadyLeasedLeafCopiesAndSaysSo() async throws {
+    /// `pendingFullPayload` as it always did, and now says why, whether the
+    /// Pending-Payload Wait runs or is turned off.
+    @Test(arguments: [nil, Duration.zero])
+    func anAlreadyLeasedLeafCopiesAndSaysSo(wait: Duration?) async throws {
         let store = TieredSnapshotStore(ssdConfig: nil)
-        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
+        let manager = PrefixCacheManager(
+            memoryBudgetBytes: 1_000_000,
+            evictionConfig: wait.map { EvictionConfiguration(pendingFullPayloadWait: $0) }
+                ?? EvictionConfiguration(),
+            tieredStore: store)
         try admitLeaf(manager, tokens: Array(1...8))
         let tree = try #require(store.tree(for: key))
         let node = try #require(
@@ -457,6 +463,38 @@ struct CacheClaimTests {
         #expect(backingAddress(restored[0].state[0]) != backingAddress(body.layers[0].state[0]))
     }
 
+    /// The ladder's own rungs, decided from the resolution before the tree
+    /// is asked: a Chain-Prefix Restore, a snapshot whose offset differs
+    /// from the hit's, and a prompt that adds nothing past the leaf. Each
+    /// copies with its checkpoint reason and names its rung.
+    @Test(arguments: ["chainPrefixRestore", "offsetMismatch", "nothingToExtend"])
+    func theLaddersOwnRungsCopyAndNameThemselves(rung: String) async throws {
+        let store = TieredSnapshotStore(ssdConfig: nil)
+        let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
+        try admitLeaf(manager, tokens: Array(1...8))
+        let lookup = manager.lookup(tokens: Array(1...9), partitionKey: key)
+        let snapshot = try #require(lookup.snapshot)
+        // The prompt the check-out is asked to extend: the leaf's own path
+        // adds nothing past it.
+        let tokens = rung == "nothingToExtend" ? Array(1...8) : Array(1...9)
+        let resolved = PrefixCacheManager.Resolved(
+            lookup: rung == "offsetMismatch"
+                ? .init(
+                    snapshot: snapshot, partitionKey: key, snapshotTokenOffset: 7,
+                    sharedPrefixLength: 7,
+                    reason: .hit(snapshotOffset: 7, totalTokens: tokens.count, type: .leaf))
+                : lookup,
+            hydratedFromSSD: false, hydrationSeconds: 0,
+            wasChainPrefixRestore: rung == "chainPrefixRestore")
+        let (outcome, handOver) = await checkOut(resolved, tokens: tokens, manager: manager)
+        let copy = try #require(outcome.copy)
+        #expect(copy.reason == .checkpoint)
+        #expect(copy.refusal.rawValue == rung)
+        #expect(try #require(store.tree(for: key)).leaseCount == 0)
+        #expect(await rewindAndConclude(handOver) == nil)
+    }
+
+    // MARK: - Rewind and check-in
     // MARK: - Rewind and check-in
 
     @Test func aRewindRestoresRecurrentMetadataAndAttentionAfterGrowth() async throws {
@@ -919,20 +957,26 @@ struct CacheClaimTests {
         #expect(manager.requestHoldings.leases == 1, "no exact return is possible here")
     }
 
-    @Test func aSecondCheckOutTripsAndCopiesNothing() async throws {
+    /// A second check-out is a bug in a claim that is still running. The
+    /// tripwire reports it and copies nothing, but lets go of nothing
+    /// either: the claim's own conclusion still returns the leaf first and
+    /// then releases the pins and the lane.
+    @Test func aSecondCheckOutTripsAndTheClaimKeepsItsHoldUntilItConcludes() async throws {
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000)
         try admitLeaf(manager, tokens: Array(1...8))
         let modelID = "cache-claim-second-\(UUID())"
         let capture = TelemetryCapture(modelID: modelID)
         defer { capture.stop() }
-        let resolved = resolved(manager, Array(1...9))
+        let context = context(modelID: modelID)
         let sessions = sessions
         let (outcomes, handOver) = await CacheClaim.withRequestClaim(
-            context: context(modelID: modelID), prefixCache: manager, sessions: sessions,
-            memory: nil,
+            context: context, prefixCache: manager, sessions: sessions, memory: nil,
             tripwire: .reporting
         ) { claim in
-            await sessions.withSession { session in
+            let resolved = await manager.resolve(
+                tokens: Array(1...9), promptTokenCount: 9, partitionKey: key,
+                modelFingerprint: nil, diagnostics: context, for: claim)
+            return await sessions.withSession { session in
                 let first = await claim.checkOut(
                     resolved, tokens: Array(1...9), maximumAdvance: 10, identityKeySpace: true,
                     in: session)
@@ -945,7 +989,12 @@ struct CacheClaimTests {
         #expect(outcomes == (true, true))
         let event = try #require(await Self.tripwireEvent(capture))
         #expect(event.field("violation") == "secondCheckOut")
+        #expect(event.field("lane") == "false")
+        #expect(event.field("pins") == "0")
+        #expect(manager.requestHoldings == .init(lanes: 1, pinnedRequests: 1, leases: 1))
+
         #expect(await rewindAndConclude(handOver) == 8)
+        #expect(manager.requestHoldings == .none)
     }
 
     /// The debug guard's input: both session providers mark the task as

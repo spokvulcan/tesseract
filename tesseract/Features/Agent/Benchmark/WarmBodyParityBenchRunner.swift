@@ -8,7 +8,7 @@ import MLXLMCommon
 /// defines. Every arm drives the same in-process **Server Completion** path
 /// the `prefix-cache-e2e` gate uses; the resident form of the hit body is
 /// selected through `PrefixCacheAdmin`'s measurement overrides (Warm Body
-/// compression at 8 or 4 bits, or **Leaf Checkout** switched off so the fp16
+/// compression at 8 or 4 bits, or the leaf check-out switched off so the fp16
 /// control restores by copy). The dequantization allowance is timed at the
 /// Model Session seam on the actual checked-in body. The runner decides
 /// nothing: it records observations and the per-case verdicts the

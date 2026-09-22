@@ -216,16 +216,18 @@ struct ServerCompletionExitMatrixTests {
             renderContext: Replay.preserving)
         await gate.reached()
         let destination = prompt + generated + [session.queue.eosTokenId]
-        let manager = try #require(session.fixture.cacheAdmin.current)
         let key = CachePartitionKey(
             modelID: session.modelID, kvBits: nil, kvGroupSize: 64,
             modelFingerprint: session.fingerprint,
             templateContextDigest: Self.warmRequest.templateContextDigest)
-        manager.admit(
-            try #require(
-                SnapshotAdmission.leaf(
-                    storedTokens: destination, snapshot: try Self.body(offset: destination.count),
-                    storage: .ramOnly, partitionKey: key)))
+        #expect(
+            session.fixture.cacheAdmin.admitForTesting(
+                try #require(
+                    SnapshotAdmission.leaf(
+                        storedTokens: destination,
+                        snapshot: try Self.body(offset: destination.count),
+                        storage: .ramOnly, partitionKey: key))) != nil,
+            "a live cache takes the competing body")
         gate.open()
         for try await _ in handle.stream {}
         await handle.waitForCompletion()

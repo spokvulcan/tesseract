@@ -131,7 +131,7 @@ final class PrefixCacheManager {
     /// tuning (**Eviction Configuration**).
     private(set) var evictionConfig: EvictionConfiguration
 
-    /// Measurement override (#528): while set, every **Leaf Checkout** is
+    /// Measurement override (#528): while set, every leaf check-out is
     /// refused with the `checkoutDisabled` copy reason, so an fp16 leaf hit
     /// restores by copy — the parity gate's control arm. Never set in
     /// production; the loaded-model runner toggles it through
@@ -490,7 +490,7 @@ final class PrefixCacheManager {
         }
         guard body.sharesMovedBody(with: snapshot) else { return .refused(.bodyReplaced) }
         let lease: LeafLease
-        switch tree.leafLease(on: hit.node, context: context, requireDetachedPayload: true) {
+        switch tree.acquireLeafLease(on: hit.node, context: context, requireDetachedPayload: true) {
         case .success(let granted):
             lease = granted
         case .failure(let refusal):
@@ -513,7 +513,7 @@ final class PrefixCacheManager {
     }
 
     /// The bound on the pending-full-payload wait (#523), an **Eviction
-    /// Configuration** value. Read by **Leaf Checkout** before it decides
+    /// Configuration** value. Read by the **Cache Claim**'s check-out before it decides
     /// whether a `pendingFullPayload` refusal is worth waiting out.
     var pendingFullPayloadWait: Duration { evictionConfig.pendingFullPayloadWait }
 

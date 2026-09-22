@@ -262,6 +262,14 @@ extension ModelSession {
     }
 }
 
+/// Whether the current task is inside a Model Session. Every session
+/// provider sets it around its body, so a Cache Claim scope opened inside a
+/// session, whose conclusion may need the session again while its lock is
+/// not reentrant, traps in debug builds instead of deadlocking (ADR-0069).
+nonisolated enum ModelSessionScope {
+    @TaskLocal static var isInside = false
+}
+
 /// The **Model Session** port: how the Server Completion enters a session.
 /// Production adapter wraps the model container; the test peer enters a toy
 /// model directly. Everything inside `body` runs on the session's isolation —

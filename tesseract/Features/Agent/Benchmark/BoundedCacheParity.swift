@@ -68,10 +68,9 @@ nonisolated enum BoundedCacheParity {
             let head = HybridCacheSnapshot.capture(
                 cache: owner.cache, offset: tokens.count, type: .leaf)
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
-        owner.rewind(with: checkedOut.rewind)
-        guard let returned = owner.moveSnapshot(offset: offset),
-            await MainActor.run(body: { checkedOut.grant.rewind(returned) }) == nil,
-            let rewound = await manager.lookup(tokens: tokens, partitionKey: key).snapshot
+        // The production rewind, compaction included (the Cache Claim's own).
+        _ = await checkedOut.returnByRewind()
+        guard let rewound = await manager.lookup(tokens: tokens, partitionKey: key).snapshot
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
         let leaseCount = await MainActor.run { checkedOut.grant.tree.leaseCount }
         checks.append(
@@ -143,15 +142,6 @@ nonisolated enum BoundedCacheParity {
         try outcome.get()
     }
 
-    /// A leaf checked out through the tree's own lease calls, independently
-    /// of the Cache Claim: the tree's grant, the leaf's cache objects, and
-    /// the recurrent backup its rewind needs.
-    private struct CheckedOutLeaf: @unchecked Sendable {
-        let grant: PrefixCacheManager.LeafLeaseGrant
-        let live: FinalGenerationCache
-        let rewind: LeafRewind
-    }
-
     @MainActor
     private static func checkout(_ snapshot: HybridCacheSnapshot, tokens: [Int], offset: Int)
         async throws
@@ -172,19 +162,13 @@ nonisolated enum BoundedCacheParity {
             snapshot: resolved, tokens: tokens, partitionKey: key,
             bodyRefusal: resolved.checkoutRefusal(maximumAdvance: tokens.count - offset + 1),
             context: .init(requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
-        guard case .leased(let grant) = outcome,
-            let (cache, kinds) = resolved.takeMovingCache()
-        else {
+        guard case .leased(let grant) = outcome else {
             throw HybridCacheCorrectnessError.verificationFailed(
                 failedChecks: ["checkout fell back: \(outcome)"])
         }
-        return (
-            manager,
-            CheckedOutLeaf(
-                grant: grant, live: FinalGenerationCache(cache),
-                rewind: LeafRewind(cache: cache, kinds: kinds, offset: grant.lease.offset)),
-            key
-        )
+        // The production check-out's move, outside a Cache Claim: the bench
+        // checks the tree and the move, not the claim's lifecycle.
+        return (manager, CheckedOutLeaf.take(resolved, under: grant), key)
     }
 
     private static func prefill(

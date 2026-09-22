@@ -31,10 +31,12 @@ import os
 /// without concluding (a hand-over never redeemed), a hand-over redeemed
 /// twice, a second check-out, or a step taken while the claim is between
 /// owners or after it concluded. Debug builds trap. Release builds log an
-/// error, emit a `cacheClaimTripwire` event naming the request and what it
-/// held, and let go of the pins and the lane on the MainActor. A Leaf Lease
-/// still held stays held — no exact return is possible without the session —
-/// and the event names it.
+/// error and emit a `cacheClaimTripwire` event naming the request and what
+/// it held. A claim dropped unconcluded, which nothing else will conclude,
+/// also lets go of its pins and lane on the MainActor; any other violation
+/// leaves that to the claim's own conclusion, after the leaf is back. A Leaf
+/// Lease still held stays held (no exact return is possible without the
+/// session), and the event names it.
 nonisolated final class CacheClaim: @unchecked Sendable {
 
     // MARK: - Tokens
@@ -55,6 +57,8 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         /// Own the claim for `body`, then conclude it. A second redemption
         /// trips the tripwire and concludes nothing.
         func withClaim<R>(_ body: (CacheClaim) async throws -> R) async rethrows -> R {
+            // This conclusion is the one that may enter the session again.
+            assert(!ModelSessionScope.isInside, "redeem a Cache Claim outside the Model Session")
             let redeemed = claim.redeem()
             defer { if redeemed { await claim.conclude() } }
             return try await body(claim)
@@ -66,7 +70,8 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     /// How the request restores, decided by the check-out.
     enum RestoreOutcome: Sendable {
         /// Nothing to check out: a miss, or a resolved snapshot without a
-        /// partition, which plan application restores by copy if it can.
+        /// partition, which plan application restores by copy if it can. A
+        /// check-out the tripwire refused answers this too.
         case cold
         /// Restore by copy, with why the leaf was not taken.
         case copy(Copy)
@@ -188,15 +193,6 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         case start, inTransit, drive, copyOnly, concluded
     }
 
-    /// The lease a handoff took: the tree's grant, the live cache the claim
-    /// handed to the request, and the backup exact rewind needs. References
-    /// only; the token path stays in the tree.
-    private struct HeldLease {
-        let grant: PrefixCacheManager.LeafLeaseGrant
-        let live: FinalGenerationCache
-        let rewind: LeafRewind
-    }
-
     let requestID: UUID
     private let context: PrefixCacheDiagnostics.Context
     private let prefixCache: PrefixCacheManager
@@ -207,7 +203,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     private let tripwire: Tripwire
     private let lock = NSLock()
     private var owner: Owner
-    private var held: HeldLease?
+    private var held: CheckedOutLeaf?
     private var checkedOut = false
 
     private init(
@@ -228,8 +224,9 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         let (owner, lease) = lock.withLock { (self.owner, held?.grant.lease) }
         guard owner != .concluded else { return }
         Self.trip(
-            .droppedUnconcluded, owner: owner, lease: lease, requestID: requestID,
-            context: context, prefixCache: prefixCache, tripwire: tripwire)
+            .droppedUnconcluded, owner: owner, lease: lease, releasing: true,
+            requestID: requestID, context: context, prefixCache: prefixCache,
+            tripwire: tripwire)
     }
 
     // MARK: - Owner scopes
@@ -328,22 +325,19 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         // they all read `pendingFullPayload`.
         if case .refused(let refusal) = leased, refusal.isLeaseRefusal {
             (leased, waited) = await awaitPendingFullPayload(
-                snapshot: snapshot, tokens: tokens, partitionKey: key, bodyRefusal: bodyRefusal)
+                refusal, snapshot: snapshot, tokens: tokens, partitionKey: key,
+                bodyRefusal: bodyRefusal)
         }
         switch leased {
         case .refused(let refusal):
             return copy(refusal, waited: waited)
         case .leased(let grant):
-            guard let (cache, kinds) = snapshot.takeMovingCache() else {
-                preconditionFailure("an eligible leased leaf must own cache objects")
-            }
-            let live = FinalGenerationCache(cache)
-            let rewind = LeafRewind(cache: cache, kinds: kinds, offset: grant.lease.offset)
-            lock.withLock { held = HeldLease(grant: grant, live: live, rewind: rewind) }
+            let taken = CheckedOutLeaf.take(snapshot, under: grant)
+            lock.withLock { held = taken }
             return .handoff(
                 Handoff(
-                    cache: live, leaseID: grant.lease.id, rewindStateBytes: rewind.stateBytes,
-                    waitSeconds: waited))
+                    cache: taken.live, leaseID: grant.lease.id,
+                    rewindStateBytes: taken.rewind.stateBytes, waitSeconds: waited))
         }
     }
 
@@ -420,9 +414,11 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     /// The wait is an `await`, never a blocking sleep: no Metal work runs
     /// and no thread is held, and it happens before any Model Session verb
     /// touches the cache. Cancellation settles it as a copy at once.
+    /// `refusal` is the tree's answer to the first attempt; a copy that
+    /// settles without asking the tree again keeps it.
     private func awaitPendingFullPayload(
-        snapshot: HybridCacheSnapshot, tokens: [Int], partitionKey: CachePartitionKey,
-        bodyRefusal: CopyRefusal?
+        _ refusal: CopyRefusal, snapshot: HybridCacheSnapshot, tokens: [Int],
+        partitionKey: CachePartitionKey, bodyRefusal: CopyRefusal?
     ) async -> (outcome: PrefixCacheManager.LeafLeaseOutcome, waitedSeconds: TimeInterval) {
         let prefixCache = prefixCache
         let context = context
@@ -436,7 +432,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
                 bodyRefusal: bodyRefusal, context: context)
         }
         let bound = await prefixCache.pendingFullPayloadWait
-        guard bound > .zero else { return (.refused(.pendingFullPayload), 0) }
+        guard bound > .zero else { return (.refused(refusal), 0) }
         switch await progress() {
         case .absent:
             // The writer let go between the refusal and this read, so the
@@ -446,7 +442,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         case .queued:
             // Queued behind other writes, with no bounded completion time
             // of its own. This request copies now, exactly as before #523.
-            return (.refused(.pendingFullPayload), 0)
+            return (.refused(refusal), 0)
         case .inProgress:
             break
         }
@@ -462,7 +458,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
             if await progress() != .inProgress { break }
         }
         let waitedSeconds = elapsed.seconds
-        guard !Task.isCancelled else { return (.refused(.pendingFullPayload), waitedSeconds) }
+        guard !Task.isCancelled else { return (.refused(refusal), waitedSeconds) }
         return (await reattempt(), waitedSeconds)
     }
 
@@ -474,7 +470,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
     @discardableResult
     private func rewindHeld() async -> Int? {
         guard
-            let held = lock.withLock({ () -> HeldLease? in
+            let held = lock.withLock({ () -> CheckedOutLeaf? in
                 defer { self.held = nil }
                 return self.held
             })
@@ -482,18 +478,7 @@ nonisolated final class CacheClaim: @unchecked Sendable {
         let lease = held.grant.lease
         memory?.mark(
             .rewindingLeaf, facts: ["recurrentRewindStateBytes": "\(held.rewind.stateBytes)"])
-        held.live.rewind(with: held.rewind)
-        // The rewound cache's attention arrays keep the capacity the aborted
-        // generation grew into; the leaf inherits it (#501 measured, #534
-        // compacts above the threshold). Read here, before the move takes
-        // the cache objects.
-        let compaction = AttentionCapacityCompaction.compactIfNeeded(held.live.cache)
-        let rewoundFacts = RequestMemoryTelemetry.cacheFacts(held.live.cache)
-        guard let body = held.live.moveSnapshot(offset: lease.offset) else {
-            preconditionFailure("a checked-out cache must remain capturable")
-        }
-        let refusal = await MainActor.run { held.grant.rewind(body) }
-        precondition(refusal == nil, "the lease must accept its own leaf back on rewind")
+        let (compaction, rewoundFacts) = await held.returnByRewind()
         lease.context.log(
             LeafRewindEvent(
                 lease: lease, recurrentBytes: held.rewind.stateBytes,
@@ -597,26 +582,33 @@ nonisolated final class CacheClaim: @unchecked Sendable {
 
     // MARK: - Tripwire
 
+    /// A violation by a claim that is still referenced: its owner scope
+    /// still concludes it, returning the leaf before the pins and the lane,
+    /// so the tripwire reports and lets go of nothing.
     private func trip(_ violation: Violation, owner: Owner? = nil) {
         let (current, lease) = lock.withLock { (self.owner, held?.grant.lease) }
         Self.trip(
-            violation, owner: owner ?? current, lease: lease, requestID: requestID,
-            context: context, prefixCache: prefixCache, tripwire: tripwire)
+            violation, owner: owner ?? current, lease: lease, releasing: false,
+            requestID: requestID, context: context, prefixCache: prefixCache,
+            tripwire: tripwire)
     }
 
+    /// `releasing` only for a claim dropped unconcluded, which nothing else
+    /// will ever conclude: its pins and lane go here, and a lease it still
+    /// holds stays held, since only the Model Session can return it exactly.
     private static func trip(
-        _ violation: Violation, owner: Owner, lease: LeafLease?, requestID: UUID,
-        context: PrefixCacheDiagnostics.Context, prefixCache: PrefixCacheManager,
-        tripwire: Tripwire
+        _ violation: Violation, owner: Owner, lease: LeafLease?, releasing: Bool,
+        requestID: UUID, context: PrefixCacheDiagnostics.Context,
+        prefixCache: PrefixCacheManager, tripwire: Tripwire
     ) {
         let message =
-            "Cache Claim tripwire: \(violation.rawValue) — request \(requestID.uuidString) "
-            + "(\(owner.rawValue)); letting go of its pins and lane"
+            "Cache Claim tripwire: \(violation.rawValue), request \(requestID.uuidString) "
+            + "(\(owner.rawValue))" + (releasing ? "; letting go of its pins and lane" : "")
             + (lease.map { ", keeping its lease \($0.id.uuidString)" } ?? "") + " (ADR-0069)"
         Log.server.error("\(message)")
         let token = Release(requestID: requestID)
         Task { @MainActor in
-            let released = prefixCache.release(token)
+            let released = releasing ? prefixCache.release(token) : (lane: false, pins: 0)
             context.log(
                 CacheClaimTripwireEvent(
                     violation: violation, owner: owner.rawValue, claimRequestID: requestID,
@@ -634,6 +626,52 @@ nonisolated struct CopyOnlyClaim: Sendable {
 
     /// See `CacheClaim.resolutionEntry()`.
     func resolutionEntry() -> UUID? { claim.resolutionEntry() }
+}
+
+/// A leaf taken by **Leaf Handoff** under a Leaf Lease: the tree's grant,
+/// the leaf's own cache objects as the live cache, and the recurrent backup
+/// exact rewind needs. References only; the token path stays in the tree.
+/// The Cache Claim holds one per handoff. The bounded-cache parity bench
+/// takes and rewinds a leaf through this same code, outside any claim.
+nonisolated struct CheckedOutLeaf: @unchecked Sendable {
+    let grant: PrefixCacheManager.LeafLeaseGrant
+    let live: FinalGenerationCache
+    let rewind: LeafRewind
+
+    /// Move `snapshot`'s cache objects out under `grant`, keeping the
+    /// recurrent backup: the check-out's only array allocation.
+    static func take(
+        _ snapshot: HybridCacheSnapshot, under grant: PrefixCacheManager.LeafLeaseGrant
+    ) -> CheckedOutLeaf {
+        guard let (cache, kinds) = snapshot.takeMovingCache() else {
+            preconditionFailure("an eligible leased leaf must own cache objects")
+        }
+        return CheckedOutLeaf(
+            grant: grant, live: FinalGenerationCache(cache),
+            rewind: LeafRewind(cache: cache, kinds: kinds, offset: grant.lease.offset))
+    }
+
+    /// **Leaf Rewind**: trim and rebuild the live cache to the leased
+    /// offset, compact the attention capacity it grew into, and move it back
+    /// under the leased node, ending the lease. Inside the Model Session,
+    /// after generation has quiesced. Returns the compaction and the
+    /// rewound cache's facts, read before the move takes the objects.
+    func returnByRewind() async -> (
+        compaction: AttentionCapacityCompaction.Outcome, facts: [String: String]
+    ) {
+        live.rewind(with: rewind)
+        // The rewound cache's attention arrays keep the capacity the aborted
+        // generation grew into; the leaf inherits it (#501 measured, #534
+        // compacts above the threshold).
+        let compaction = AttentionCapacityCompaction.compactIfNeeded(live.cache)
+        let facts = RequestMemoryTelemetry.cacheFacts(live.cache)
+        guard let body = live.moveSnapshot(offset: grant.lease.offset) else {
+            preconditionFailure("a checked-out cache must remain capturable")
+        }
+        let refusal = await MainActor.run { grant.rewind(body) }
+        precondition(refusal == nil, "the lease must accept its own leaf back on rewind")
+        return (compaction, facts)
+    }
 }
 
 /// What a tripped claim held when it tripped: its lane and its pins, which
@@ -664,12 +702,4 @@ nonisolated struct CacheClaimTripwireEvent: PrefixCacheDiagnostics.Payload {
         }
         return fields
     }
-}
-
-/// Whether the current task is inside a Model Session. Both session
-/// providers set it, so an owner scope opened inside a session — whose
-/// conclusion may need the session again, and the session's lock is not
-/// reentrant — traps in debug builds instead of deadlocking.
-nonisolated enum ModelSessionScope {
-    @TaskLocal static var isInside = false
 }

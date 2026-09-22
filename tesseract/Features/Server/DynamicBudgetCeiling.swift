@@ -200,7 +200,7 @@ final class InMemoryMemoryHeadroomSource: MemoryHeadroomSource {
 /// KV working set at end of turn *is* its leaf, so the lane is the
 /// largest leaf this cache has admitted, plus the growth the turn may
 /// add — the leaf's observed bytes per token times the turn's maximum
-/// advance, the quantity **Leaf Checkout** already computes. The
+/// advance, the quantity the **Cache Claim**'s check-out computes. The
 /// capture deep copy that once made the structural peak twice the leaf
 /// is gone on every turn **Leaf Handoff** (ADR-0064) moves, so the
 /// doubling applies only while the most recent leaf store was a capture

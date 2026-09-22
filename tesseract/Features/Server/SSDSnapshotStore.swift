@@ -770,7 +770,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// the writer's state at the moment of the call and never a guess.
     ///
     /// The completion path consults this through the **Prefix Cache
-    /// Manager** when **Leaf Checkout** is refused for a pending full
+    /// Manager** when a **Cache Claim**'s check-out is refused for a pending full
     /// payload (#523): `.inProgress` is worth a bounded wait, `.queued` is
     /// not.
     func pendingPayloadProgress(snapshotID: String) -> PendingPayloadProgress {

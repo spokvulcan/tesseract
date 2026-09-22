@@ -1129,15 +1129,16 @@ extension TokenRadixTree {
         requireDetachedPayload: Bool = false
     ) -> LeafLease? {
         guard
-            case .success(let lease) = leafLease(
+            case .success(let lease) = acquireLeafLease(
                 on: node, context: context, requireDetachedPayload: requireDetachedPayload)
         else { return nil }
         return lease
     }
 
-    /// `beginLeafLease`, answering why when the tree refuses (the refusal
-    /// is logged either way).
-    func leafLease(
+    /// Begin a lease on `node`, answering why when the tree refuses (the
+    /// refusal is logged either way). `beginLeafLease` is the same without
+    /// the reason.
+    func acquireLeafLease(
         on node: RadixTreeNode, context: PrefixCacheDiagnostics.Context,
         requireDetachedPayload: Bool = false
     ) -> Result<LeafLease, LeafLeaseRefusedEvent.Reason> {
