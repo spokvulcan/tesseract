@@ -22,7 +22,7 @@ import Testing
             let view = try #require(prefilled.snapshots.first)
             for var layer in live { layer.state = layer.state.map { $0.asType(dtype) } }
             let full = try #require(session.captureSnapshot(cache: live, offset: 8, type: .leaf))
-            let warm = try session.compress(full)
+            let warm = try session.compress(full, bits: 8)
             let baseline = try session.restore(view, backingLeaf: full)
             let restored = try session.restore(view, backingLeaf: warm)
             #expect(restored.first is KVCacheSimple)
@@ -169,7 +169,7 @@ import Testing
             let full = try #require(
                 session.captureSnapshot(
                     cache: live + [recurrent], offset: 4, type: .leaf))
-            let warm = try session.compress(full)
+            let warm = try session.compress(full, bits: 8)
             #expect(warm.isWarm)
             #expect(warm.memoryBytes < full.memoryBytes)
             #expect(warm.checkoutCopyReason(maximumAdvance: 10)?.rawValue == "warmBody")

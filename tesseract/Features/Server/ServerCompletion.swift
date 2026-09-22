@@ -174,6 +174,12 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
         guard let checkout else { return }
         memory?.mark(.rewindingLeaf, facts: ["recurrentRewindStateBytes": "\(rewindStateBytes)"])
         checkout.rewind(cache: &cache)
+        // The rewound cache's attention arrays keep the capacity the aborted
+        // generation grew into; the leaf inherits it (#501 measured, #534
+        // compacts above the threshold). Read here, before the move takes
+        // the cache objects.
+        let compaction = AttentionCapacityCompaction.compactIfNeeded(cache)
+        let rewoundFacts = RequestMemoryTelemetry.cacheFacts(cache)
         guard let body = moveSnapshot(offset: checkout.claim.lease.offset) else {
             preconditionFailure("a checked-out cache must remain capturable")
         }
@@ -181,7 +187,13 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
             body, tokens: checkout.originalTokens, reason: .rewind)
         precondition(returned, "the lease must accept its original path on rewind")
         checkout.claim.lease.context.log(
-            LeafRewindEvent(lease: checkout.claim.lease, recurrentBytes: rewindStateBytes),
+            LeafRewindEvent(
+                lease: checkout.claim.lease, recurrentBytes: rewindStateBytes,
+                fullAttentionArrayBytes: Int(
+                    rewoundFacts["requestFullAttentionArrayBytes"] ?? "") ?? 0,
+                fullAttentionLogicalBytes: Int(
+                    rewoundFacts["requestFullAttentionLogicalBytes"] ?? "") ?? 0,
+                compactedBytes: compaction.freedBytes),
             level: .notice)
         var report = LeafStorePhase.Report()
         report.mode = "keyed"
@@ -195,6 +207,13 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
             facts: [
                 "leafSource": "rewind", "recurrentRewindStateBytes": "0",
                 "leafLeaseActive": "false",
+                "rewoundLeafFullAttentionArrayBytes":
+                    rewoundFacts["requestFullAttentionArrayBytes"] ?? "0",
+                "rewoundLeafFullAttentionLogicalBytes":
+                    rewoundFacts["requestFullAttentionLogicalBytes"] ?? "0",
+                "rewoundLeafFullAttentionUnusedArrayBytes":
+                    rewoundFacts["requestFullAttentionUnusedArrayBytes"] ?? "0",
+                "rewoundLeafCompactedBytes": "\(compaction.freedBytes)",
             ])
     }
 

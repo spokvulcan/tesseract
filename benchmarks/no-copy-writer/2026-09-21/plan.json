@@ -1,0 +1,83 @@
+{
+  "status": "APPROVED",
+  "purpose": "#469 acceptance: matched ~3 GB leaf write (and an eviction stage) on the pre-no-copy baseline vs the current build; enqueue-to-commit wall time and peak process footprint",
+  "ownerApproval": "Owner (spokvulcan) standing approval granted in session on 2026-09-20 for loaded-model, long-context and reload benchmarks on this host; plan filled in and committed by the agent under that approval on 2026-09-21; thresholds re-derived for 48 GiB",
+  "host": "Mac15,9 (Apple M3 Max), 48 GiB, macOS 27.0 (26A428)",
+  "builds": {
+    "baseline": {
+      "appCommit": "e146ba46ecbcf6e060e4fd8e59d85ebae0734bb7",
+      "vendorCommit": "51542c4e0bf4e8f054012ccfbd576e7a494db3c1",
+      "binary": "/private/tmp/claude-501/-Users-owl-projects-tesseract/57cbe85d-ab2f-4823-bec5-9d89c4236ea3/scratchpad/dd-469/Build/Products/Release/Tesseract Agent.app/Contents/MacOS/Tesseract Agent",
+      "binarySHA256": "d160acbf0eb3724191b7cb387e0c1b8bd60e75f86f5d3977c2f67c01ebff2507",
+      "built": "xcodebuild Release from a detached git worktree of e146ba46 with the submodule at its pinned commit, separate DerivedData"
+    },
+    "current": {
+      "appCommit": "440acfca9c61fde7c9a39660c2137aee736db8d7",
+      "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
+      "binary": "/Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app/Contents/MacOS/Tesseract Agent",
+      "binarySHA256": "6947d30f12401f9c7fb967666439b2e60d4d73832e5541739cc8d72a33c6f976",
+      "built": "scripts/dev.sh build release at app commit 3d1c0d35 (the same binary used for the #534 verification and the #532 run; commits since are docs, benchmarks and scripts only)"
+    }
+  },
+  "armOrder": [
+    "baseline",
+    "current"
+  ],
+  "model": "qwen3.8-27b",
+  "modelFolders": [
+    "mlx-community_Qwen3.8-27B-4bit",
+    "incoai_Qwen3.8-27B-DFlash2"
+  ],
+  "speculation": "app default (DFlash2 draft)",
+  "kv": "unquantized (float16)",
+  "port": 18321,
+  "reasoningEffort": "low",
+  "shortOutputTokens": 64,
+  "settleSeconds": 5,
+  "ramBudgetCapBytes": 6442450944,
+  "ssdRoot": "fresh empty directory under the run's output directory for every arm (-prefixCacheSSDDirectoryOverride)",
+  "fillerFile": "/Users/owl/projects/tesseract/CONTEXT.md",
+  "fillerSHA256": "a3c120295fef3d2701417fef9388623c2a6308daf51859bb2548ca5d29204b5f",
+  "steps": [
+    {
+      "id": "A-doc",
+      "conversation": "a",
+      "kind": "document",
+      "characters": 165000,
+      "fillerOffset": 0,
+      "role": "clean leaf sample 1 (~2.7 GB expected)"
+    },
+    {
+      "id": "B-doc",
+      "conversation": "b",
+      "kind": "document",
+      "characters": 165000,
+      "fillerOffset": 45000,
+      "role": "clean leaf sample 2 (resident ~5.4 GB, under the cap)"
+    },
+    {
+      "id": "C-doc",
+      "conversation": "c",
+      "kind": "document",
+      "characters": 60000,
+      "fillerOffset": 90000,
+      "role": "eviction stage: resident crosses the 6 GiB cap; records whether the evicted leaf is demoted or dropped"
+    }
+  ],
+  "resources": {
+    "minimumInitialAvailableBytes": 21474836480,
+    "expectedPeakBytes": 27917287424,
+    "footprintStopBytes": 36507222016,
+    "minimumAvailableStopBytes": 6442450944,
+    "swapGrowthStopBytes": 1073741824,
+    "pressureStopLevel": 4,
+    "minimumInitialDiskFreeBytes": 32212254720,
+    "minimumDiskFreeStopBytes": 16106127360,
+    "maximumRequestSeconds": 400,
+    "maximumWriteSettleSeconds": 120,
+    "maximumCampaignSeconds": 1800,
+    "sampleIntervalMilliseconds": 250,
+    "cancelGraceSeconds": 5
+  },
+  "privateOutputDirectory": "/Users/owl/bench-results/no-copy-writer-2026-09-21"
+}

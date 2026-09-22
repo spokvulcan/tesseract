@@ -1,0 +1,178 @@
+{
+  "run": "run4-compaction",
+  "privateDirectory": "/Users/owl/bench-results/allocation-profile-2026-09-21-run4-compaction",
+  "binarySHA256": "6947d30f12401f9c7fb967666439b2e60d4d73832e5541739cc8d72a33c6f976",
+  "sourceRevision": "3bedf96062915cd717f342c225ef354c65d69a80",
+  "outcome": {
+    "diagnosticsRotations": 0,
+    "elapsedSeconds": 574.2901278749923,
+    "endUTC": "2026-09-21T09:00:42.689792+00:00",
+    "exitCode": -15,
+    "failure": "available memory stop",
+    "maxPressureLevel": 2,
+    "maxSampledFootprintBytes": 28150754536,
+    "maxSystemSwapGrowthBytes": 0,
+    "minSampledAvailableBytes": 6081642496,
+    "sampleCount": 2253
+  },
+  "requests": [
+    {
+      "label": "p8k-grow",
+      "promptTokens": 7020,
+      "cachedTokens": 0,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 41.2,
+      "peakActiveMlxBytes": 17677362064,
+      "peakFootprintBytes": 20014115592,
+      "settledFootprintBytes": 18466500152,
+      "checkInUnusedBytes": [
+        5505024,
+        5505024,
+        16580608,
+        16580608
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p8k-cancel",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "generated": 300,
+      "cancelled": true,
+      "responseSeconds": 13.6,
+      "peakActiveMlxBytes": 17071352392,
+      "peakFootprintBytes": 18942586424,
+      "settledFootprintBytes": 17877986632,
+      "checkInUnusedBytes": [],
+      "rewind": [
+        {
+          "offset": 7018,
+          "fullAttentionArrayBytes": 510066688,
+          "fullAttentionLogicalBytes": 459931648,
+          "fullAttentionUnusedArrayBytes": 50135040,
+          "compactedBytes": 0
+        }
+      ]
+    },
+    {
+      "label": "p8k-after",
+      "promptTokens": 7037,
+      "cachedTokens": 7018,
+      "generated": 56,
+      "cancelled": false,
+      "responseSeconds": 3.0,
+      "peakActiveMlxBytes": 17653621412,
+      "peakFootprintBytes": 18479590584,
+      "settledFootprintBytes": 18665450800,
+      "checkInUnusedBytes": [
+        45088768,
+        45088768,
+        16580608,
+        16580608
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p32k-grow",
+      "promptTokens": 30566,
+      "cachedTokens": 7035,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 137.0,
+      "peakActiveMlxBytes": 22298796592,
+      "peakFootprintBytes": 24058916024,
+      "settledFootprintBytes": 21397859536,
+      "checkInUnusedBytes": [
+        64290816,
+        64290816,
+        16580608,
+        16580608
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p32k-cancel",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "generated": 1024,
+      "cancelled": true,
+      "responseSeconds": 55.0,
+      "peakActiveMlxBytes": 18670756412,
+      "peakFootprintBytes": 22126898408,
+      "settledFootprintBytes": 19391802600,
+      "checkInUnusedBytes": [],
+      "rewind": [
+        {
+          "offset": 30564,
+          "fullAttentionArrayBytes": 2019819520,
+          "fullAttentionLogicalBytes": 2003042304,
+          "fullAttentionUnusedArrayBytes": 16777216,
+          "compactedBytes": 100466688
+        }
+      ]
+    },
+    {
+      "label": "p32k-after",
+      "promptTokens": 30583,
+      "cachedTokens": 30564,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 3.9,
+      "peakActiveMlxBytes": 20707058222,
+      "peakFootprintBytes": 22671404264,
+      "settledFootprintBytes": 21413014760,
+      "checkInUnusedBytes": [
+        11337728,
+        11337728,
+        16580608,
+        16580608
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p64k-grow",
+      "promptTokens": 60908,
+      "cachedTokens": 30581,
+      "generated": 64,
+      "cancelled": false,
+      "responseSeconds": 200.0,
+      "peakActiveMlxBytes": 26661906104,
+      "peakFootprintBytes": 28125293800,
+      "settledFootprintBytes": 23443795176,
+      "checkInUnusedBytes": [
+        4784128,
+        4784128,
+        16580608,
+        16580608
+      ],
+      "rewind": []
+    },
+    {
+      "label": "p64k-cancel",
+      "promptTokens": null,
+      "cachedTokens": null,
+      "generated": 1024,
+      "cancelled": true,
+      "responseSeconds": 58.8,
+      "peakActiveMlxBytes": 20660709944,
+      "peakFootprintBytes": 24082279656,
+      "settledFootprintBytes": 21387537640,
+      "checkInUnusedBytes": [],
+      "rewind": [
+        {
+          "offset": 60906,
+          "fullAttentionArrayBytes": 4008312832,
+          "fullAttentionLogicalBytes": 3991535616,
+          "fullAttentionUnusedArrayBytes": 16777216,
+          "compactedBytes": 100466688
+        }
+      ]
+    }
+  ],
+  "stopSample": {
+    "stage": "p64k-after",
+    "processFootprintBytes": 28150754536,
+    "availableBytes": 6081642496
+  }
+}

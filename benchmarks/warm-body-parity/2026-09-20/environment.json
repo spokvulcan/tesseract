@@ -1,0 +1,159 @@
+{
+  "baselineSystemSwapUsedBytes": 3583967232,
+  "binarySHA256": "de072f293d944bf663d8e78766343ddfe626a719fd087e78a2c83a50448fee25",
+  "command": [
+    "/Users/owl/Library/Developer/Xcode/DerivedData/tesseract-buwysfpnwmzyucelgewutuddcvgv/Build/Products/Release/Tesseract Agent.app/Contents/MacOS/Tesseract Agent",
+    "--warm-parity-bench",
+    "--warm-parity-plan",
+    "/Users/owl/projects/tesseract/benchmarks/warm-body-parity/2026-09-20/owner-plan.json",
+    "--bench-model",
+    "/Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit",
+    "--bench-model-id",
+    "qwen3.8-27b",
+    "--bench-output",
+    "/Users/owl/bench-results/warm-body-parity-2026-09-20-run2/harness",
+    "--bench-source-revision",
+    "51c670d457843ad11f96c27bc82178b4dadfa6ac",
+    "-isServerEnabled",
+    "NO"
+  ],
+  "initialAvailableBytes": 30896914432,
+  "initialDiskFreeBytes": 112178688000,
+  "os": "ProductName:\t\tmacOS\nProductVersion:\t\t27.0\nBuildVersion:\t\t26A428\n",
+  "physicalMemoryBytes": 51539607552,
+  "plan": {
+    "appCommit": "57cd12a9",
+    "cases": [
+      {
+        "description": "Bounded direct-leaf continuation. Expected restore offset: the whole leaf (>= 4096 prefix + setup turn), source warm or copy per arm. Boundary kind: canonicalUser.",
+        "id": "direct-4k",
+        "kind": "directLeaf",
+        "prefixTokens": 4096,
+        "reasoningEffort": null,
+        "setupOutputTokens": 160
+      },
+      {
+        "description": "Planned view: two forks (alpha/beta) off the same 16k system prefix, then a third fork that restores the Prefix-View Checkpoint at the fork point through its Backing Leaf. Expected view offset: the shared prefix (>= 16384, learned from the warmup block's lookup and recorded). Boundary kind: canonicalUser.",
+        "id": "view-16k",
+        "kind": "plannedView",
+        "prefixTokens": 16384,
+        "reasoningEffort": null,
+        "setupOutputTokens": 160
+      },
+      {
+        "description": "Think-stripping boundary under reasoning_effort=low, preserve_thinking=false. Timed hit is a direct leaf hit on the canonical leaf; the transient boundary view at the end of the timed turn resolves against the arm's form (leafStore path=boundary). Boundary kind: canonicalUser (think-stripped).",
+        "id": "boundary-8k",
+        "kind": "thinkStrippingBoundary",
+        "prefixTokens": 8192,
+        "reasoningEffort": "low",
+        "setupOutputTokens": 320
+      },
+      {
+        "description": "Long direct-leaf continuation, ~2.2 GB fp16 body on this model. Expected restore offset >= 32768. Boundary kind: canonicalUser. Runs last so an early stop preserves the smaller cases.",
+        "id": "direct-32k",
+        "kind": "directLeaf",
+        "prefixTokens": 32768,
+        "reasoningEffort": null,
+        "setupOutputTokens": 160
+      }
+    ],
+    "corpus": {
+      "fillerFile": "/Users/owl/projects/tesseract/CONTEXT.md",
+      "fillerSHA256": "8c5220149287d639c82e74129df074e3838a5c5cb45ae4187ebeb701b38278bc",
+      "orderedCaseIDs": [
+        "direct-4k",
+        "view-16k",
+        "boundary-8k",
+        "direct-32k"
+      ],
+      "unsupportedCases": [
+        "tool continuation (the runner drives text turns only; no tool round trip)",
+        "cancel/resend (no cancellation path in the runner)",
+        "transient boundary view as a standalone case (covered only as the boundary-8k case's end-of-turn view)"
+      ]
+    },
+    "host": {
+      "identifier": "Mac15,9 (Apple M3 Max), owner's machine",
+      "mlxVersion": "spokvulcan/mlx-swift 6058402c676de25560051acda772e80d86d696d1 (via Vendor/mlx-swift-lm a3c1776)",
+      "osVersion": "macOS 27.0 (26A428), Xcode 27.0",
+      "ramBytes": 51539607552
+    },
+    "instrumentationCommit": "57cd12a9",
+    "model": {
+      "configSHA256": "14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85",
+      "directory": "/Users/owl/Library/Application Support/models/mlx-community_Qwen3.8-27B-4bit",
+      "id": "qwen3.8-27b",
+      "templateSHA256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+      "tokenizerSHA256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+    },
+    "orders": [
+      [
+        "fp16",
+        "8",
+        "4"
+      ],
+      [
+        "fp16",
+        "4",
+        "8"
+      ],
+      [
+        "8",
+        "fp16",
+        "4"
+      ],
+      [
+        "8",
+        "4",
+        "fp16"
+      ],
+      [
+        "4",
+        "fp16",
+        "8"
+      ],
+      [
+        "4",
+        "8",
+        "fp16"
+      ]
+    ],
+    "ownerApproval": "Owner approval granted in session on 2026-09-20 (standing approval for unattended loaded-model, long-context and reload benchmarks on this host; thresholds re-derived for 48 GiB below). Attempt 1 (runner 2df00ecd, manifest 3557e960) was stopped by the owner during the warmup block on instrumentation defects (arm overrides applied before the cache manager existed; wrong leaf measured); no measured block was reached. Attempt 2 uses the corrected runner below.",
+    "preRegistrationCommit": "d770ba4a",
+    "privateOutputDirectory": "/Users/owl/Library/Application Support/BenchLocal/warm-body-parity-2026-09-20",
+    "releaseBinarySHA256": "de072f293d944bf663d8e78766343ddfe626a719fd087e78a2c83a50448fee25",
+    "resources": {
+      "cancelGraceSeconds": 5,
+      "expectedModelAndCachePeakBytes": 25769803776,
+      "footprintStopBytes": 32212254720,
+      "maximumCampaignSeconds": 14400,
+      "maximumRequestSeconds": 300,
+      "minimumAvailableStopBytes": 6442450944,
+      "minimumInitialAvailableBytes": 21474836480,
+      "pressureStopLevel": 4,
+      "sampleIntervalMilliseconds": 250,
+      "swapGrowthStopBytes": 1073741824
+    },
+    "settings": {
+      "groupSize": 64,
+      "liveKVDtype": "float16",
+      "maximumOutputTokens": 320,
+      "maximumPromptTokens": 40960,
+      "mode": "affine",
+      "seed": 0,
+      "speculationPolicy": "off",
+      "temperature": 0,
+      "timedOutputTokens": 32,
+      "warmBits": [
+        8,
+        4
+      ]
+    },
+    "status": "APPROVED",
+    "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29"
+  },
+  "planSHA256": "8b8b9ff46f77afb66f61036b56a20e82d86dc7a3fea8493881a0d3a8eaf136d2",
+  "sourceRevision": "51c670d457843ad11f96c27bc82178b4dadfa6ac",
+  "startUTC": "2026-09-20T23:33:54.929462+00:00",
+  "workingTreeDirty": false
+}

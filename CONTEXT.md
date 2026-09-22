@@ -111,6 +111,12 @@ fail that shape guard, which then rides whole. The extraction edge slices the
 former into a **Leaf Extension Admission** and detaches the latter whole;
 check-out eligibility hands off only trimmable sliceable attention beside
 recurrent whole-state; **Leaf Rewind** trims the former and rebuilds the latter.
+**Capacity Compaction** (#534) rebuilds sliceable attention at the offset's
+rows plus one growth step, on **Leaf Rewind** and at check-in, when the rows a
+generation grew into but no longer addresses exceed the smaller of a quarter
+of the body and 64 MB (the 2026-09-21 profile: a cancelled long generation
+retains 50–117 MB, an ordinary check-in 5–17 MB); whole-state and quantized
+layers are untouched. _Avoid_: trim (trim moves the offset, the arrays stay).
 _Avoid_: demoted (a mis-shaped attention layer *is* whole-state — **Snapshot
 Demotion** is the RAM-to-SSD move); layer type; class-name matching (a consumer
 reads the kind, never re-derives it); sliceable class (the class alone is not

@@ -1,0 +1,12 @@
+{
+  "diagnosticsRotations": 0,
+  "elapsedSeconds": 574.2901278749923,
+  "endUTC": "2026-09-21T09:00:42.689792+00:00",
+  "exitCode": -15,
+  "failure": "available memory stop",
+  "maxPressureLevel": 2,
+  "maxSampledFootprintBytes": 28150754536,
+  "maxSystemSwapGrowthBytes": 0,
+  "minSampledAvailableBytes": 6081642496,
+  "sampleCount": 2253
+}

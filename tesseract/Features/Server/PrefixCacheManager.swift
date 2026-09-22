@@ -131,6 +131,13 @@ final class PrefixCacheManager {
     /// tuning (**Eviction Configuration**).
     private(set) var evictionConfig: EvictionConfiguration
 
+    /// Measurement override (#528): while set, every **Leaf Checkout** is
+    /// refused with the `checkoutDisabled` copy reason, so an fp16 leaf hit
+    /// restores by copy — the parity gate's control arm. Never set in
+    /// production; the loaded-model runner toggles it through
+    /// `PrefixCacheAdmin`.
+    private(set) var leafCheckoutDisabled = false
+
     /// Lifetime telemetry counters for this cache: hit tokens served,
     /// recovered-vs-terminal eviction outcomes, hydrations. Surfaced on
     /// the telemetry snapshot; never consulted by any policy.
@@ -428,6 +435,7 @@ final class PrefixCacheManager {
         context: PrefixCacheDiagnostics.Context
     ) -> LeafCheckout.ClaimResult {
         guard !snapshot.isWarm else { return .copy(.warmBody) }
+        guard !leafCheckoutDisabled else { return .copy(.checkoutDisabled) }
         guard let tree = store.tree(for: partitionKey),
             let hit = tree.findBestSnapshot(tokens: tokens, updateAccess: false),
             hit.node.isLeaf, hit.node.tokenOffset == snapshot.tokenOffset,
@@ -2271,6 +2279,56 @@ final class PrefixCacheManager {
         evictionConfig.alpha = alpha
     }
 
+    /// Override the Compressed Warm Tier's **Eviction Configuration** for a
+    /// measurement (#528): the flag, the bit width, the Hot Leaf Set's path
+    /// limit and the opportunistic fraction. Reserved for the loaded-model
+    /// parity runner; production reads the configuration's defaults.
+    func setWarmCompression(
+        enabled: Bool, bits: Int, hotLeafPathLimit: Int, opportunisticFraction: Double
+    ) {
+        precondition(!enabled || modelSessions != nil)
+        precondition(EvictionConfiguration.supportedWarmCompressionBits.contains(bits))
+        precondition(hotLeafPathLimit >= 0 && (0...1).contains(opportunisticFraction))
+        evictionConfig.warmCompressionEnabled = enabled
+        evictionConfig.warmCompressionBits = bits
+        evictionConfig.hotLeafPathLimit = hotLeafPathLimit
+        evictionConfig.opportunisticCompressionFraction = opportunisticFraction
+        hotLeaves.removeAll()
+    }
+
+    /// Measurement override (#528): see `leafCheckoutDisabled`.
+    func setLeafCheckoutDisabled(_ disabled: Bool) {
+        leafCheckoutDisabled = disabled
+    }
+
+    /// The most recently accessed resident `.leaf` body with its full token
+    /// path from the root, for the parity runner: the body whose form the
+    /// next hit restores (and, on the Model Session, the quantized prefix
+    /// the dequantization allowance is timed on), and the token ids a live
+    /// turn fed — prompt plus generated — which the runner compares across
+    /// arms. Read-only; the body stays in the tree.
+    func freshestLeaf(minimumOffset: Int = 0) -> (body: HybridCacheSnapshot, tokens: [Int])? {
+        var freshest: (node: RadixTreeNode, body: HybridCacheSnapshot)?
+        for (_, tree) in store.orderedPartitions() {
+            for node in tree.allSnapshotNodes() {
+                guard let body = node.state.body, body.checkpointType == .leaf,
+                    !body.isPrefixView, body.tokenOffset >= minimumOffset
+                else { continue }
+                if freshest == nil || node.lastAccessTime > freshest!.node.lastAccessTime {
+                    freshest = (node, body)
+                }
+            }
+        }
+        guard let freshest else { return nil }
+        var tokens: [Int] = []
+        var current: RadixTreeNode? = freshest.node
+        while let node = current {
+            tokens.insert(contentsOf: node.edgeTokens, at: 0)
+            current = node.parent
+        }
+        return (freshest.body, tokens)
+    }
+
     /// The floor's membership and cost in one walk (ADR-0019): the
     /// in-flight requests' pinned restore-path nodes plus the single
     /// most-recently-extended `.leaf` body across all partitions (the
@@ -2635,6 +2693,7 @@ final class PrefixCacheManager {
             drainRequested = false
             let opportunisticRequested = opportunisticCompressionRequested
             opportunisticCompressionRequested = false
+            let bits = evictionConfig.warmCompressionBits
             await sessions.withSession { session in
                 let now = ContinuousClock.now
                 var attempted: Set<UUID> = []
@@ -2648,7 +2707,7 @@ final class PrefixCacheManager {
                     do {
                         if work.compress {
                             attempted.insert(work.snapshot.bodyID)
-                            replacement = try session.compress(work.snapshot)
+                            replacement = try session.compress(work.snapshot, bits: bits)
                         } else if work.needsFullDemotion {
                             // Stored Form stays full fp16 until #531. Conversion and
                             // materialization stay on the Model Session thread.
@@ -2701,7 +2760,8 @@ final class PrefixCacheManager {
                 WarmCompressEvent(
                     offset: replacement.tokenOffset, bytesBefore: work.snapshot.memoryBytes,
                     bytesAfter: replacement.memoryBytes, seconds: seconds,
-                    source: work.opportunistic ? .opportunistic : .drain))
+                    source: work.opportunistic ? .opportunistic : .drain,
+                    bits: replacement.warmBits))
         } else {
             // A failed conversion is not permission to turn a recoverable
             // eviction into data loss. This pass can consider another body.

@@ -181,8 +181,24 @@ nonisolated struct LeafLeaseDeferredEvent: PrefixCacheDiagnostics.Payload {
 nonisolated struct LeafRewindEvent: PrefixCacheDiagnostics.Payload {
     let lease: LeafLease
     let recurrentBytes: Int
+    /// The rewound cache's full-attention array extents versus the rows the
+    /// lease offset addresses: their difference is the growth capacity the
+    /// aborted generation left in the leaf (#501 / #534).
+    var fullAttentionArrayBytes = 0
+    var fullAttentionLogicalBytes = 0
+    /// Bytes the #534 compaction freed before the move (`0` below threshold).
+    var compactedBytes = 0
     let eventName = "leafRewind"
     var fields: [(String, String)] {
-        lease.fields + [("recurrentRewindStateBytes", "\(recurrentBytes)")]
+        lease.fields + [
+            ("recurrentRewindStateBytes", "\(recurrentBytes)"),
+            ("fullAttentionArrayBytes", "\(fullAttentionArrayBytes)"),
+            ("fullAttentionLogicalBytes", "\(fullAttentionLogicalBytes)"),
+            (
+                "fullAttentionUnusedArrayBytes",
+                "\(fullAttentionArrayBytes - fullAttentionLogicalBytes)"
+            ),
+            ("compactedBytes", "\(compactedBytes)"),
+        ]
     }
 }

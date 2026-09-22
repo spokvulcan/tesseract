@@ -993,16 +993,49 @@ work is part of this unit-test evidence.
 The [pre-registered owner gate](../benchmarks/warm-body-parity/2026-09-19/README.md)
 defines fp16 restore-by-copy, warm-8 and experimental warm-4 arms, fidelity and
 paired TTFT thresholds, memory observations and a mandatory owner resource
-manifest. Results are **not run** and Warm Bodies remain default-off. No loaded
-workload is authorized on the preparation Mac.
+manifest. The [2026-09-20 owner run](../benchmarks/warm-body-parity/2026-09-20/README.md)
+executed it: **the 8-bit gate failed in all four cases** (deterministic greedy
+divergence from the fp16 control; warm-8's paired TTFT excess above its
+dequantize allowance in two cases). Warm Bodies remain default-off.
 
-The existing `CanonicalEchoFidelityCorpusTests` reads tokenizer files and
-checks token paths. It does not restore a Warm Body or establish generated
-token parity. Existing loaded cache runners also do not implement the #528
-three-arm timing protocol. The pre-registration records this execution gap;
-owner-reviewed instrumentation and a frozen manifest are required before the
-loaded campaign. The prefix suites above remain the small-cache regression
-evidence; their success does not flip the flag or unblock #531.
+The runner is `--warm-parity-bench --warm-parity-plan <owner-plan.json>`
+(`WarmBodyParityBenchRunner`), launched only through
+`scripts/warm_body_parity.py --app <Release binary> --plan <manifest> --output <new dir>`,
+which refuses a manifest that is not `APPROVED` or committed, verifies the
+binary and model checksums, samples footprint/available/pressure/swap every
+250 ms and terminates the harness on a breach without retry. Per case the
+runner runs one warmup block and the six pre-registered arm orders; per
+observation it clears the RAM tier, arms the form through `PrefixCacheAdmin`
+(`setWarmCompression`, `setLeafCheckoutDisabled` for the control), runs the
+setup turn(s) plus a short unrelated turn so the Budget Floor lets the case
+leaf compress, verifies the resident form, times the dequantization
+allowance on that body at the Model Session seam, then times the hit (TTFT
+from submission to first delta) and walks Canonical-Echo fidelity over the
+arm's own recordings. Records are appended as they exist
+(`observations.jsonl`, `dequantize.jsonl`, `copy.jsonl`, `fidelity.jsonl`);
+`benchmarks/warm-body-parity/2026-09-20/verdicts.py` applies the rules to
+them.
+
+`CanonicalEchoFidelityCorpusTests` reads tokenizer files and checks token
+paths; it did not see the greedy divergence and is not warm-restore evidence.
+The prefix suites above remain the small-cache regression evidence; their
+success does not flip the flag or unblock #531.
+
+### Attention capacity compaction (#534)
+
+`AttentionCapacityCompactionTests` drives real `KVCacheSimple` layers: a long
+trimmed generation compacts to the offset's rows plus one step with fresh
+backing addresses and identical logical rows; below the threshold nothing
+changes; the threshold is the smaller of a quarter of the body and 64 MB;
+quantized and recurrent layers are untouched. The `leafRewind` event reports
+`fullAttentionArrayBytes`, `fullAttentionLogicalBytes`,
+`fullAttentionUnusedArrayBytes` and `compactedBytes`; the `leafStore` event
+and the `capturingLeaf` memory sample report `compactedBytes` /
+`leafCompactedBytes`. The threshold's source measurement is the
+[2026-09-21 cancelled-generation profile](../benchmarks/allocation-profile/2026-09-21/README.md)
+(`scripts/cancelled_generation_profile.py`, under a committed plan with the
+48 GiB stops), which found 50–117 MB retained after a cancelled generation
+and 5–17 MB at ordinary check-in, inherited by the next turn's live leaf.
 
 ### No-copy SSD writer (#469)
 
@@ -1092,4 +1125,9 @@ seam and `ChainPrefixHydrationTests`, with rendered fields covered by
 the prefix cache suites above. The owner-only `--ssd-read-bench` harness and
 pre-registered throughput/adoption protocol are documented in
 [`benchmarks/ssd-read/2026-09-19/README.md`](../benchmarks/ssd-read/2026-09-19/README.md).
+The owner run of 2026-09-21
+([`benchmarks/ssd-read/2026-09-21/README.md`](../benchmarks/ssd-read/2026-09-21/README.md))
+was a null result: sequentialMap 1.09x and positional 0.73x of mapped on a
+61k-token chain, under the 2.0x gate, so production keeps `mappedIfSafe` and
+the arm selector stays harness-only.
 Do not run the loaded-model harness as part of automated verification.

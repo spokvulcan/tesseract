@@ -545,8 +545,8 @@ nonisolated struct RecordingModelSession: ModelSession {
         return try base.restore(snapshot, backingLeaf: backingLeaf)
     }
 
-    func compress(_ snapshot: HybridCacheSnapshot) throws -> HybridCacheSnapshot {
-        try base.compress(snapshot)
+    func compress(_ snapshot: HybridCacheSnapshot, bits: Int) throws -> HybridCacheSnapshot {
+        try base.compress(snapshot, bits: bits)
     }
 
     func prefill(

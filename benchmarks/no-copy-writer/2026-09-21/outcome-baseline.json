@@ -1,0 +1,15 @@
+{
+  "arm": "baseline",
+  "diagnosticsRotations": 0,
+  "elapsedSeconds": 223.09643387503456,
+  "endUTC": "2026-09-21T09:14:26.787250+00:00",
+  "exitCode": -15,
+  "failure": "available memory stop",
+  "manifestPresent": false,
+  "maxPressureLevel": 1,
+  "maxSampledFootprintBytes": 26374777680,
+  "maxSystemSwapGrowthBytes": 0,
+  "minSampledAvailableBytes": 6341312512,
+  "sampleCount": 866,
+  "ssdRootBytes": 295
+}

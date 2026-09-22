@@ -96,6 +96,10 @@ nonisolated struct ModelFlopProfile: Equatable, Sendable {
 /// (`ModelFlopProfile.fallback`, `alpha = 0`), so eviction behavior is
 /// unchanged. See `CONTEXT.md` → Eviction tuning (**Eviction Configuration**).
 nonisolated struct EvictionConfiguration: Sendable {
+    /// The bit widths the parity gate registers: 8 (production) and 4
+    /// (experiment). Anything else is refused at construction.
+    static let supportedWarmCompressionBits: Set<Int> = [4, 8]
+
     /// FLOP/state-size profile the recovery-cost term scores against.
     /// Immutable for the life of the cache — a model swap builds a new
     /// cache.
@@ -113,6 +117,12 @@ nonisolated struct EvictionConfiguration: Sendable {
 
     /// Opt-in until the owner completes the parity gate (#528).
     var warmCompressionEnabled: Bool
+
+    /// Bit width of a Warm Body's attention arrays (#528). Production
+    /// compression is 8 bits; 4 bits is the experimental arm of the parity
+    /// gate and becomes an option only after passing it. Group size and
+    /// affine mode are fixed by `HybridCacheSnapshot.compressed(bits:)`.
+    var warmCompressionBits: Int
 
     /// Most recently checked-in paths kept exempt from compression (#529).
     var hotLeafPathLimit: Int
@@ -136,16 +146,19 @@ nonisolated struct EvictionConfiguration: Sendable {
         estimates: MeasuredSecondsEstimates = MeasuredSecondsEstimates(),
         pendingFullPayloadWait: Duration = .milliseconds(500),
         warmCompressionEnabled: Bool = false,
+        warmCompressionBits: Int = 8,
         hotLeafPathLimit: Int = 2,
         opportunisticCompressionFraction: Double = 0.75
     ) {
         precondition(hotLeafPathLimit >= 0)
+        precondition(Self.supportedWarmCompressionBits.contains(warmCompressionBits))
         precondition((0...1).contains(opportunisticCompressionFraction))
         self.flopProfile = flopProfile
         self.alpha = alpha
         self.estimates = estimates
         self.pendingFullPayloadWait = pendingFullPayloadWait
         self.warmCompressionEnabled = warmCompressionEnabled
+        self.warmCompressionBits = warmCompressionBits
         self.hotLeafPathLimit = hotLeafPathLimit
         self.opportunisticCompressionFraction = opportunisticCompressionFraction
     }

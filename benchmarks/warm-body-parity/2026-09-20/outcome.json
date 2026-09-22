@@ -1,0 +1,13 @@
+{
+  "elapsedSeconds": 8102.161271249992,
+  "endUTC": "2026-09-21T01:48:57.186248+00:00",
+  "exitCode": 1,
+  "maxPressureLevel": 1,
+  "maxSampledFootprintBytes": 29106433208,
+  "maxSystemSwapGrowthBytes": 0,
+  "minSampledAvailableBytes": 7087374336,
+  "reportDirectory": "/Users/owl/bench-results/warm-body-parity-2026-09-20-run2/harness/warm-parity-2C733796-EFDC-41BE-B0CC-5BF28E4E92C3",
+  "resourceStop": null,
+  "sampleCount": 31687,
+  "verdicts": null
+}

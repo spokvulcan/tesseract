@@ -168,10 +168,11 @@ disclosure line is the owner's to write.
 
 ## Capacity reservation carry (2026-09-19, #533)
 
-The #533 app branch advances the gitlink from `51542c4` to `f177464` on
-`codex/533-cache-capacity-reservation`. This is a fast-forward carry; the shared
-`pin-upstream-mlx-swift` branch and every historical tip remain unchanged while
-the app PR is under review. `f177464` adds `KVCache.reserveCapacity(_:)`, honored
+The #533 app branch advanced the gitlink from `51542c4` to `f177464` on
+`codex/533-cache-capacity-reservation`; the current pin (`a3c1776` on
+`fix/550-load-memory-retention`) carries that commit underneath the later
+#550 work. This was a fast-forward carry; the shared
+`pin-upstream-mlx-swift` branch and every historical tip remain unchanged. `f177464` adds `KVCache.reserveCapacity(_:)`, honored
 by simple and quantized attention caches and forwarded by CacheList. Allocation
 increments double from 256 rows to 4096; prompt reservations use the initial
 granule. Logical state, metadata and persistence formats stay unchanged.
@@ -186,7 +187,14 @@ it merges and the app re-pins to that upstream revision (ADR-0006).
 Validation: the carried revision passes the six new capacity tests and nine
 existing serialization/copy/empty-cache tests; the clean upstream branch passes
 `pre-commit run --all-files` with the Xcode formatter and nine selected capacity/serialization/copy tests
-against upstream dependency pins. The app's final 795 tests in 58 prefix-cache
+against upstream dependency pins. Re-checked 2026-09-21 on the same
+`a7162cd`: upstream `main` is still `c6446cf` (nothing to rebase),
+`pre-commit run --all-files` passes, and `xcodebuild test` passes the six
+`CacheCapacityTests` plus the three cited free-function cache tests
+(`swift test` cannot load the Metal library here, as the vendor's
+CONTRIBUTING notes). The PR text is prepared at
+`docs/mlx-swift-lm-533-upstream-pr.md`; posting waits on the owner's
+attestation. The app's final 795 tests in 58 prefix-cache
 and touched suites pass, including canonical, speculative and raw prefill
 reservation regressions. Both Standards and Spec review are clear after the
 missing-path fix. Test-host model prewarms are disabled.

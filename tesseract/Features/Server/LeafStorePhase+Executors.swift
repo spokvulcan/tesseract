@@ -102,6 +102,8 @@ nonisolated extension LeafStorePhase {
         var residualTokens = 0
         var handedOff = false
         var copyReason: Report.CopyReason?
+        /// Bytes the #534 compaction freed before the capture (`0` below threshold).
+        var compactedBytes = 0
         var timings = Timings()
     }
 
@@ -346,8 +348,14 @@ nonisolated extension LeafStorePhase {
     ) async -> LeafCapture {
         var timings = timings
         let storedTokens = context.storedTokens
+        // #534: a check-in keeps whatever capacity the growth granule rounded
+        // up, and a returned leaf carries a rewound generation's rows; compact
+        // above the threshold before the capture takes the arrays.
+        let compaction = AttentionCapacityCompaction.compactIfNeeded(moving?.cache ?? cache)
         context.memory?.mark(
-            .capturingLeaf, facts: RequestMemoryTelemetry.cacheFacts(moving?.cache ?? cache))
+            .capturingLeaf,
+            facts: RequestMemoryTelemetry.cacheFacts(moving?.cache ?? cache).merging(
+                ["leafCompactedBytes": "\(compaction.freedBytes)"], uniquingKeysWith: { $1 }))
         let captureStart = Date.timeIntervalSinceReferenceDate
         guard
             let leaf = moving != nil
@@ -434,6 +442,7 @@ nonisolated extension LeafStorePhase {
             residualTokens: residualTokens,
             handedOff: moving != nil,
             copyReason: context.copyReason,
+            compactedBytes: compaction.freedBytes,
             timings: timings
         )
     }

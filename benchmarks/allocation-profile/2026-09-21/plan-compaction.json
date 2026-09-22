@@ -1,0 +1,56 @@
+{
+  "status": "APPROVED",
+  "ownerApproval": "Owner standing approval for unattended loaded-model and long-context runs on this host, granted in session 2026-09-20; thresholds re-derived for 48 GiB.",
+  "purpose": "#534 verification: the same cancelled-generation profile on the build with Capacity Compaction; expect compactedBytes > 0 on the 30k and 61k rewinds and the next turn's live leaf below 20 MB retained.",
+  "appCommit": "3d1c0d35",
+  "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
+  "releaseBinarySHA256": "6947d30f12401f9c7fb967666439b2e60d4d73832e5541739cc8d72a33c6f976",
+  "host": "Mac15,9 (Apple M3 Max), 48 GiB, macOS 27.0 (26A428)",
+  "model": "qwen3.8-27b",
+  "modelFolders": [
+    "mlx-community_Qwen3.8-27B-4bit",
+    "incoai_Qwen3.8-27B-DFlash2"
+  ],
+  "speculation": "app default (DFlash2 draft)",
+  "kv": "unquantized (float16)",
+  "port": 18321,
+  "reasoningEffort": "low",
+  "shortOutputTokens": 64,
+  "longOutputTokens": 4096,
+  "settleSeconds": 5,
+  "fillerFile": "/Users/owl/projects/tesseract/CONTEXT.md",
+  "fillerSHA256": "a3c120295fef3d2701417fef9388623c2a6308daf51859bb2548ca5d29204b5f",
+  "steps": [
+    {
+      "id": "p8k",
+      "addCharacters": 30000,
+      "cancelAfterTokens": 300,
+      "expectedPromptTokensApprox": 8000
+    },
+    {
+      "id": "p32k",
+      "addCharacters": 100000,
+      "cancelAfterTokens": 1024,
+      "expectedPromptTokensApprox": 33000
+    },
+    {
+      "id": "p64k",
+      "addCharacters": 130000,
+      "cancelAfterTokens": 1024,
+      "expectedPromptTokensApprox": 66000
+    }
+  ],
+  "resources": {
+    "minimumInitialAvailableBytes": 21474836480,
+    "expectedPeakBytes": 30064771072,
+    "footprintStopBytes": 36507222016,
+    "minimumAvailableStopBytes": 6442450944,
+    "swapGrowthStopBytes": 1073741824,
+    "pressureStopLevel": 4,
+    "maximumRequestSeconds": 400,
+    "maximumCampaignSeconds": 3600,
+    "sampleIntervalMilliseconds": 250,
+    "cancelGraceSeconds": 5
+  },
+  "note": "Filler is CONTEXT.md at the app commit; it gained the Capacity Compaction paragraph since run 2, so prompt sizes differ by a few tokens."
+}
