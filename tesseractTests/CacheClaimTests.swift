@@ -659,14 +659,19 @@ struct CacheClaimTests {
 
     // MARK: - A leaf loaded from SSD (ADR-0064 amendment)
 
+    /// A manager whose only copy of a body is on SSD.
+    private struct SSDOnly {
+        let manager: PrefixCacheManager
+        let store: TieredSnapshotStore
+        let root: URL
+        let key: CachePartitionKey
+    }
+
     /// A snapshot admitted with its full SSD payload, written, then dropped
     /// from RAM: the next resolve can only hydrate it from disk.
     private func ssdOnly(
         _ body: HybridCacheSnapshot, at tokens: [Int], label: String, checkpoint: Bool = false
-    ) async throws -> (
-        manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL,
-        key: CachePartitionKey
-    ) {
+    ) async throws -> SSDOnly {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: label, ramBudgetBytes: 1_000_000)
         let key = CachePartitionKey(
@@ -684,7 +689,7 @@ struct CacheClaimTests {
         manager.admit(try #require(admission))
         await store.flush()
         #expect(manager.clearRAMTier() > 0, "the SSD-backed body leaves RAM")
-        return (manager, store, root, key)
+        return SSDOnly(manager: manager, store: store, root: root, key: key)
     }
 
     private func hybridBody(offset: Int, type: HybridCacheSnapshot.CheckpointType = .leaf) throws
@@ -708,9 +713,12 @@ struct CacheClaimTests {
     /// the loaded arrays themselves, every value copy of the loaded snapshot
     /// is emptied, and a rewind returns the leaf with its SSD ref intact.
     @Test func aLeafLoadedFromSSDIsHandedOffOnItsLoadedArrays() async throws {
-        let (manager, store, root, key) = try await ssdOnly(
+        let ssd = try await ssdOnly(
             try hybridBody(offset: 8), at: Array(1...8), label: "claim-ssd-handoff")
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { try? FileManager.default.removeItem(at: ssd.root) }
+        let manager = ssd.manager
+        let store = ssd.store
+        let key = ssd.key
         let context = context()
         let sessions = sessions
         let (result, handOver) = await CacheClaim.withRequestClaim(
@@ -752,10 +760,13 @@ struct CacheClaimTests {
     /// from SSD keeps its copied body, and a check-out copies it and says
     /// why.
     @Test func aCheckpointLoadedFromSSDStillCopiesAndSaysWhy() async throws {
-        let (manager, store, root, key) = try await ssdOnly(
+        let ssd = try await ssdOnly(
             try hybridBody(offset: 8, type: .system), at: Array(1...8),
             label: "claim-ssd-checkpoint", checkpoint: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { try? FileManager.default.removeItem(at: ssd.root) }
+        let manager = ssd.manager
+        let store = ssd.store
+        let key = ssd.key
         let context = context()
         let sessions = sessions
         let (result, handOver) = await CacheClaim.withRequestClaim(
