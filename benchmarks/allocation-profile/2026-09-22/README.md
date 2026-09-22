@@ -79,6 +79,73 @@ reallocate, and the next turn after a compaction pays at most one whole-body
 copy. The chosen policy and the numbers behind it are recorded below and in
 ADR-0069's as-built notes.
 
-## Results
+## Results (taken 2026-09-22, after the rule above was committed)
 
-Not taken yet.
+[`summary.json`](summary.json) holds the scalars: the thirteen diagnostics
+files' SHA-256, 1,742 benchmark request ids excluded, 387 observations, 222
+of them paired with a next turn.
+
+The script needed two fixes before its numbers could be read, and neither
+changes a definition. Its first run failed on the sink's ISO 8601
+timestamps. Those are whole seconds, so sorting by them put a leaf's store
+ahead of its own capture sample whenever both fell in one second, and most
+check-ins went uncounted. The script now keeps the sink's append order (a
+day's rotated `.jsonl.old` first), and "later" means later in that order. A
+run between the two fixes counted 71 observations and reached the same
+decision.
+
+| | Check-ins | Rewinds |
+| --- | ---: | ---: |
+| Observations | 384 | 3 |
+| Compactable under today's threshold | 144 | 3 |
+| Paired with a next turn | 219 | 3 |
+| Retained capacity, median / max | 13.4 / 225.4 MiB | 272 / 272 MiB |
+| Retained rows, median / max | 215 / 3,607 | 4,352 / 4,352 |
+| Retained share of the tree budget, median / p90 | 0.13% / 0.47% | 53.7% (one reading) |
+| Next suffix, median / max | 30 / 11,512 rows | 259 / 474 rows |
+| Next suffix fits the retained rows | 163 of 219 | 3 of 3 |
+| Next suffix fits 256 spare rows | 176 of 219 | 1 of 3 |
+| Residency before the next turn, median / max | 1 / 467 s | 9 / 14 s |
+
+Ordinary check-ins keep little: mostly what is left of the last 256-row
+growth step, a fraction of a percent of the tree budget, for about a second
+before the next turn. The share passes 100% only at 137K-token contexts on
+the 27B, where the tree budget itself had fallen to 8.4 MiB. Of the 144
+check-ins that count as compactable, 140 are short contexts (74 to 790
+tokens) whose quarter-body threshold is a few MiB. They keep at most one
+step, which compaction leaves alone, and their next turns add 17 rows at the
+median and 92 at most. The other four are agent turns on the 27B at 43K to
+46K tokens, where one decode growth step is thousands of rows: they kept 95
+to 225 MiB, compaction freed 79 to 209 MiB of it, and their next turns added
+29, 247, 378 and 400 rows. 56 next turns grew past everything their leaf
+kept and would have grown whatever compaction did.
+
+Rewinds keep as much as the longest check-ins: 105 to 272 MiB after
+cancelled generations on the 27B, held for 5 to 14 seconds, in one reading
+more than half the tree budget. Their next turns added 253, 259 and 474
+rows.
+
+### Decision
+
+E has 45 members (42 check-ins, 3 rewinds). W is 4 of 45, 0.09: the two
+long check-ins whose next turns added 378 and 400 rows, and the two rewinds
+whose next turns added 259 and 474, all of which the freed capacity would
+have held and 256 spare rows did not. That is under 0.20, so by the rule
+registered above **today's rule stays**: the threshold (the smaller of a
+quarter of the body and 64 MiB), one 256-row step of spare rows, and both
+exits compacting. No code changes for item 6.
+
+The four cases are worth the record. Compaction there cost the next turn a
+whole-body growth copy it would not otherwise have made, and in exchange
+freed 88 to 256 MiB until that turn. For the two check-ins
+the next turn came within the same second, so the freed capacity bought
+nothing; for the rewinds it was held 5 to 14 seconds. The sample has four
+such cases, split between the exits; a later measurement with more long
+agent turns can revisit spare rows at long contexts.
+
+The toy decode checks the kept rule through the Server Completion module
+(`ServerCompletionKeyedSequencingTests`): a next turn that fits the capacity
+its leaf kept prefills and decodes without reallocating
+(`aNextTurnThatFitsTheKeptCapacityDoesNotReallocate`), and the resend after
+a compacted rewind grows the body exactly once
+(`theNextTurnAfterACompactionGrowsTheBodyAtMostOnce`).

@@ -12,6 +12,7 @@ token ids, request ids or timestamps leave the diagnostics directory.
 The definitions and the decision rule are preregistered in README.md.
 """
 import argparse
+import datetime
 import glob
 import hashlib
 import json
@@ -44,6 +45,14 @@ def number(value):
         return None
 
 
+def seconds(timestamp):
+    """The sink's ISO 8601 timestamps, as epoch seconds."""
+    try:
+        return datetime.datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
 def benchmark_request_ids(repo):
     ids = set()
     for path in glob.glob(os.path.join(repo, "benchmarks", "**", "*"), recursive=True):
@@ -54,9 +63,15 @@ def benchmark_request_ids(repo):
     return ids
 
 
+def chronological(path):
+    """A day's rotated earlier records (`.jsonl.old`) come before its current file."""
+    name = os.path.basename(path)
+    return (name[:-4], 0) if name.endswith(".old") else (name, 1)
+
+
 def load(diagnostics, excluded):
     files = sorted(glob.glob(os.path.join(diagnostics, "*.jsonl")) +
-                   glob.glob(os.path.join(diagnostics, "*.jsonl.old")))
+                   glob.glob(os.path.join(diagnostics, "*.jsonl.old")), key=chronological)
     events, digests = [], {}
     for path in files:
         with open(path, "rb") as handle:
@@ -72,8 +87,11 @@ def load(diagnostics, excluded):
                     continue
                 event["_fields"] = fields(event)
                 event["_request"] = request
+                event["_time"] = seconds(event.get("timestamp"))
                 events.append(event)
-    events.sort(key=lambda e: (e.get("timestamp", 0), e["_fields"].get("sequence", "")))
+    # Timestamps are whole seconds: a stable sort keeps the sink's append
+    # order within one, and that order is what "later" means below.
+    events.sort(key=lambda e: e["_time"])
     # The same event can sit in both the rotated and the current file.
     unique, seen = [], set()
     for event in events:
@@ -81,6 +99,7 @@ def load(diagnostics, excluded):
         if key in seen:
             continue
         seen.add(key)
+        event["_index"] = len(unique)
         unique.append(event)
     return unique, digests
 
@@ -103,7 +122,8 @@ def observations(events):
                 capture = last_capture["_fields"]
                 found.append({
                     "kind": "checkIn", "model": model, "request": request,
-                    "time": event.get("timestamp", 0), "offset": int(f["leafOffset"]),
+                    "time": event["_time"], "index": event["_index"],
+                    "offset": int(f["leafOffset"]),
                     "logicalBytes": number(capture.get("requestFullAttentionLogicalBytes")),
                     "unusedBytes": number(capture.get("requestFullAttentionUnusedArrayBytes")),
                     "compactedBytes": number(capture.get("leafCompactedBytes")) or 0.0,
@@ -113,7 +133,8 @@ def observations(events):
             elif name == "leafRewind":
                 found.append({
                     "kind": "rewind", "model": model, "request": request,
-                    "time": event.get("timestamp", 0), "offset": int(f["offset"]),
+                    "time": event["_time"], "index": event["_index"],
+                    "offset": int(f["offset"]),
                     "logicalBytes": number(f.get("fullAttentionLogicalBytes")),
                     "unusedBytes": number(f.get("fullAttentionUnusedArrayBytes")),
                     "compactedBytes": number(f.get("compactedBytes")) or 0.0,
@@ -143,7 +164,7 @@ def pair(found, events):
         threshold = min(obs["logicalBytes"] / 4, THRESHOLD_CAP)
         obs["compactable"] = obs["retainedBytes"] > threshold
         nxt = next((e for e in lookups
-                    if e.get("timestamp", 0) > obs["time"] and e.get("modelID") == obs["model"]
+                    if e["_index"] > obs["index"] and e.get("modelID") == obs["model"]
                     and e["_request"] != obs["request"]
                     and e["_fields"].get("reason") == "hit"
                     and number(e["_fields"].get("snapshotOffset")) == obs["offset"]), None)
@@ -156,7 +177,7 @@ def pair(found, events):
         obs["next"] = {
             "suffix": number(f.get("newTokensToPrefill")),
             "generated": (stored - prompt) if stored is not None and prompt else None,
-            "residencySeconds": nxt.get("timestamp", 0) - obs["time"],
+            "residencySeconds": nxt["_time"] - obs["time"],
         }
     return found
 

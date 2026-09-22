@@ -1,0 +1,5674 @@
+{
+  "byKind": {
+    "checkIn": {
+      "compactable": 144,
+      "nextGenerated": {
+        "max": 45330.0,
+        "median": 253.5,
+        "min": 29.0,
+        "n": 142,
+        "p90": 2706.0
+      },
+      "nextSuffix": {
+        "max": 11512.0,
+        "median": 30.0,
+        "min": 2.0,
+        "n": 219,
+        "p90": 956.0
+      },
+      "observations": 384,
+      "paired": 219,
+      "residencySeconds": {
+        "max": 467.0,
+        "median": 1.0,
+        "min": 0.0,
+        "n": 219,
+        "p90": 42.0
+      },
+      "retainedMiB": {
+        "max": 225.4375,
+        "median": 13.4375,
+        "min": 0.1875,
+        "n": 384,
+        "p90": 15.3125
+      },
+      "retainedMiBSeconds": {
+        "max": 5808.3125,
+        "median": 7.4375,
+        "min": 0.0,
+        "n": 219,
+        "p90": 529.71875
+      },
+      "retainedRows": {
+        "max": 3607.0,
+        "median": 215.0,
+        "min": 3.0,
+        "n": 384,
+        "p90": 253.0
+      },
+      "retainedShareOfBudget": {
+        "max": 1.8443993243792247,
+        "median": 0.0012567770974294525,
+        "min": 1.868214295415595e-05,
+        "n": 371,
+        "p90": 0.004651588371408169
+      },
+      "suffixFitsRetained": 163,
+      "suffixFitsTodaysSpare": 176,
+      "turnFitsRetained": 28
+    },
+    "rewind": {
+      "compactable": 3,
+      "nextGenerated": {
+        "max": 444.0,
+        "median": 308.5,
+        "min": 173.0,
+        "n": 2,
+        "p90": 444.0
+      },
+      "nextSuffix": {
+        "max": 474.0,
+        "median": 259.0,
+        "min": 253.0,
+        "n": 3,
+        "p90": 474.0
+      },
+      "observations": 3,
+      "paired": 3,
+      "residencySeconds": {
+        "max": 14.0,
+        "median": 9.0,
+        "min": 5.0,
+        "n": 3,
+        "p90": 14.0
+      },
+      "retainedMiB": {
+        "max": 272.0,
+        "median": 272.0,
+        "min": 104.5,
+        "n": 3,
+        "p90": 272.0
+      },
+      "retainedMiBSeconds": {
+        "max": 2448.0,
+        "median": 1463.0,
+        "min": 1360.0,
+        "n": 3,
+        "p90": 2448.0
+      },
+      "retainedRows": {
+        "max": 4352.0,
+        "median": 4352.0,
+        "min": 1672.0,
+        "n": 3,
+        "p90": 4352.0
+      },
+      "retainedShareOfBudget": {
+        "max": 0.5370923168102317,
+        "median": 0.5370923168102317,
+        "min": 0.5370923168102317,
+        "n": 1,
+        "p90": 0.5370923168102317
+      },
+      "suffixFitsRetained": 3,
+      "suffixFitsTodaysSpare": 1,
+      "turnFitsRetained": 2
+    }
+  },
+  "decision": {
+    "rule": "a",
+    "why": "growth copies compaction caused: 0.09 <= 0.20"
+  },
+  "diagnosticsFiles": {
+    "2026-09-13.jsonl": "fedc20b4e159d8dc52738551c019ff1cbd4c58e84cfc1e9fd21024128e542689",
+    "2026-09-15.jsonl": "8ed81ff73144b0828bee1b836c00d3546273b39bacf50d93e733ae02b4db7f1c",
+    "2026-09-16.jsonl": "cdebb69cc9d785aeeb72625478e5677cb6ebe9dc19ffce0f496150269f564e96",
+    "2026-09-16.jsonl.old": "87b5f59be942e4f55d52ab00c7282d0548e35a6b68f33d111a86687849d1a2f0",
+    "2026-09-18.jsonl": "5f54650903be5e99031b19bbb26e0dd8b46cb739db48b53751cc6b53ddc3cea8",
+    "2026-09-18.jsonl.old": "05b1df3128cbd2d7c48763c6f8653e37b058bc8409d25ba3d2a689f9bcd0fd11",
+    "2026-09-19.jsonl": "caf13470c28fec572ae03549e8c26a02665b3d6ac6ce39914e65bc7599481d3e",
+    "2026-09-19.jsonl.old": "9f5d0e1fcbcad65d86c67959ce404169146b32f191d0fc57f0637d20c2e7f487",
+    "2026-09-20.jsonl": "267e3281bda2d185bd31a6ed407a946f3365c9b10dff0ec2aa14f60e153e2456",
+    "2026-09-20.jsonl.old": "88f07e791a84b4940a18c5cbd8eca7a40d1e5dddb3c820db0e32a40795dac6b9",
+    "2026-09-21.jsonl": "7b398d59cb2752633d66854b4bb8645d7d33925762354ac306e62aea85965eea",
+    "2026-09-21.jsonl.old": "e45ab0cc4e720896ee0eb0d61ec7b6a5ecf50b42f1c4057b301fa3c282e3f3bd",
+    "2026-09-22.jsonl": "90b0802ec26887f1a681b7d2d1f8cafe7c1ce817f2ebc36cd70d705d3c5f35b0"
+  },
+  "excludedBenchmarkRequestIDs": 1742,
+  "observations": 387,
+  "paired": 222,
+  "records": [
+    {
+      "budgetBytes": 8769227980.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 52.0,
+        "residencySeconds": 18.0,
+        "suffix": 18.0
+      },
+      "offset": 2772,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8769227980.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 82.0,
+        "residencySeconds": 0.0,
+        "suffix": 114.0
+      },
+      "offset": 2842,
+      "retainedBytes": 9764864.0,
+      "retainedRows": 149.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9167817932.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 53.0,
+        "residencySeconds": 5.0,
+        "suffix": 13.0
+      },
+      "offset": 3038,
+      "retainedBytes": 2228224.0,
+      "retainedRows": 34.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9167817932.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 34.0,
+        "residencySeconds": 0.0,
+        "suffix": 18.0
+      },
+      "offset": 3104,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9167817932.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 92.0,
+        "residencySeconds": 4.0,
+        "suffix": 13.0
+      },
+      "offset": 3156,
+      "retainedBytes": 11272192.0,
+      "retainedRows": 172.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9167817932.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 51.0,
+        "residencySeconds": 4.0,
+        "suffix": 12.0
+      },
+      "offset": 3261,
+      "retainedBytes": 4390912.0,
+      "retainedRows": 67.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9572987699.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 3324,
+      "retainedBytes": 17039360.0,
+      "retainedRows": 260.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9572987699.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 44.0,
+        "residencySeconds": 3.0,
+        "suffix": 13.0
+      },
+      "offset": 3060,
+      "retainedBytes": 17563648.0,
+      "retainedRows": 268.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9112846336.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 216.0,
+        "residencySeconds": 21.0,
+        "suffix": 17.0
+      },
+      "offset": 3117,
+      "retainedBytes": 13828096.0,
+      "retainedRows": 211.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9112846336.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 3350,
+      "retainedBytes": 15335424.0,
+      "retainedRows": 234.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9137527193.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 49.0,
+        "residencySeconds": 16.0,
+        "suffix": 18.0
+      },
+      "offset": 2767,
+      "retainedBytes": 3211264.0,
+      "retainedRows": 49.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9137527193.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 37.0,
+        "residencySeconds": 0.0,
+        "suffix": 78.0
+      },
+      "offset": 2834,
+      "retainedBytes": 15597568.0,
+      "retainedRows": 238.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9850545766.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": null,
+      "offset": 2949,
+      "retainedBytes": 8060928.0,
+      "retainedRows": 123.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6813279846.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 167.0,
+        "residencySeconds": 0.0,
+        "suffix": 30.0
+      },
+      "offset": 5710,
+      "retainedBytes": 11665408.0,
+      "retainedRows": 178.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6813279846.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 102.0,
+        "residencySeconds": 12.0,
+        "suffix": 18.0
+      },
+      "offset": 5907,
+      "retainedBytes": 3866624.0,
+      "retainedRows": 59.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6813279846.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 68.0,
+        "residencySeconds": 1.0,
+        "suffix": 18.0
+      },
+      "offset": 6027,
+      "retainedBytes": 7667712.0,
+      "retainedRows": 117.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8532315340.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 6113,
+      "retainedBytes": 2031616.0,
+      "retainedRows": 31.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8532498841.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 118.0,
+        "residencySeconds": 0.0,
+        "suffix": 114.0
+      },
+      "offset": 2878,
+      "retainedBytes": 12713984.0,
+      "retainedRows": 194.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8532498841.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 49.0,
+        "residencySeconds": 0.0,
+        "suffix": 78.0
+      },
+      "offset": 3110,
+      "retainedBytes": 1572864.0,
+      "retainedRows": 24.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8532498841.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 3237,
+      "retainedBytes": 8454144.0,
+      "retainedRows": 129.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4625281843.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 170.0,
+        "residencySeconds": 0.0,
+        "suffix": 30.0
+      },
+      "offset": 21662,
+      "retainedBytes": 6422528.0,
+      "retainedRows": 98.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4625281843.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 82.0,
+        "residencySeconds": 1.0,
+        "suffix": 95.0
+      },
+      "offset": 21862,
+      "retainedBytes": 3670016.0,
+      "retainedRows": 56.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4625281843.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 227.0,
+        "residencySeconds": 1.0,
+        "suffix": 22.0
+      },
+      "offset": 22039,
+      "retainedBytes": 5177344.0,
+      "retainedRows": 79.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4625281843.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 573.0,
+        "residencySeconds": 0.0,
+        "suffix": 51.0
+      },
+      "offset": 22288,
+      "retainedBytes": 15728640.0,
+      "retainedRows": 240.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7365158502.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 234.0,
+        "residencySeconds": 0.0,
+        "suffix": 17.0
+      },
+      "offset": 22912,
+      "retainedBytes": 8388608.0,
+      "retainedRows": 128.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7631601664.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 80.0,
+        "residencySeconds": 58.0,
+        "suffix": 14.0
+      },
+      "offset": 23163,
+      "retainedBytes": 8716288.0,
+      "retainedRows": 133.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7631601664.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 8064.0,
+        "residencySeconds": 8.0,
+        "suffix": 16.0
+      },
+      "offset": 23257,
+      "retainedBytes": 2555904.0,
+      "retainedRows": 39.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7727271116.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 794.0,
+        "residencySeconds": 0.0,
+        "suffix": 203.0
+      },
+      "offset": 31337,
+      "retainedBytes": 9895936.0,
+      "retainedRows": 151.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6545093427.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 117.0,
+        "residencySeconds": 0.0,
+        "suffix": 36.0
+      },
+      "offset": 32334,
+      "retainedBytes": 11665408.0,
+      "retainedRows": 178.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7714386739.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 392.0,
+        "residencySeconds": 1.0,
+        "suffix": 17.0
+      },
+      "offset": 32487,
+      "retainedBytes": 1638400.0,
+      "retainedRows": 25.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7714386739.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 80.0,
+        "residencySeconds": 24.0,
+        "suffix": 13.0
+      },
+      "offset": 32896,
+      "retainedBytes": 8388608.0,
+      "retainedRows": 128.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7664933273.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": {
+        "generated": 57.0,
+        "residencySeconds": 0.0,
+        "suffix": 15.0
+      },
+      "offset": 32989,
+      "retainedBytes": 2293760.0,
+      "retainedRows": 35.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7947170611.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b-paro",
+      "next": null,
+      "offset": 33061,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14495383552.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 442,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14495383552.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 3.0,
+        "suffix": 2.0
+      },
+      "offset": 443,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 2.0
+      },
+      "offset": 443,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 26.0
+      },
+      "offset": 577,
+      "retainedBytes": 3637248.0,
+      "retainedRows": 111.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 92.0
+      },
+      "offset": 476,
+      "retainedBytes": 6946816.0,
+      "retainedRows": 212.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 566,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 531,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 531,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 14393815859.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 532,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 479166464.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 445,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 479166464.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 441,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 479166464.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 442,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 479166464.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 441,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 479166464.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 442,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13936820224.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 90.0,
+        "suffix": 19.0
+      },
+      "offset": 443,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13901575168.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 67.0,
+        "suffix": 21.0
+      },
+      "offset": 460,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13682900992.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 443,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13965551206.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 479,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13568060928.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 22.0
+      },
+      "offset": 222,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13437317939.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 4.0,
+        "suffix": 2.0
+      },
+      "offset": 242,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13568060928.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 2.0
+      },
+      "offset": 242,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13104552345.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 222,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13671727104.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 90.0
+      },
+      "offset": 156,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13671727104.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 244,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 13568060928.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.5-4b-paro",
+      "next": null,
+      "offset": 244,
+      "retainedBytes": 8290304.0,
+      "retainedRows": 253.0,
+      "rowBytes": 32768.0
+    },
+    {
+      "budgetBytes": 6194908364.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 46.0,
+        "residencySeconds": 20.0,
+        "suffix": 18.0
+      },
+      "offset": 2769,
+      "retainedBytes": 3080192.0,
+      "retainedRows": 47.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6194908364.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 79.0,
+        "residencySeconds": 1.0,
+        "suffix": 152.0
+      },
+      "offset": 2833,
+      "retainedBytes": 15663104.0,
+      "retainedRows": 239.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6315861606.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 103.0,
+        "residencySeconds": 6.0,
+        "suffix": 14.0
+      },
+      "offset": 3064,
+      "retainedBytes": 17301504.0,
+      "retainedRows": 264.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6315861606.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 73.0,
+        "residencySeconds": 0.0,
+        "suffix": 118.0
+      },
+      "offset": 3181,
+      "retainedBytes": 9633792.0,
+      "retainedRows": 147.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6315861606.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 3372,
+      "retainedBytes": 13893632.0,
+      "retainedRows": 212.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6315861606.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 2762,
+      "retainedBytes": 15007744.0,
+      "retainedRows": 229.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6746839449.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 3335,
+      "retainedBytes": 16318464.0,
+      "retainedRows": 249.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5931558502.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 4114.0,
+        "residencySeconds": 0.0,
+        "suffix": 27.0
+      },
+      "offset": 44468,
+      "retainedBytes": 4980736.0,
+      "retainedRows": 76.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5930968678.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 994.0,
+        "residencySeconds": 0.0,
+        "suffix": 34.0
+      },
+      "offset": 48609,
+      "retainedBytes": 2031616.0,
+      "retainedRows": 31.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6104652185.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 345.0,
+        "residencySeconds": 0.0,
+        "suffix": 33.0
+      },
+      "offset": 49637,
+      "retainedBytes": 1769472.0,
+      "retainedRows": 27.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7063745331.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 309.0,
+        "residencySeconds": 0.0,
+        "suffix": 37.0
+      },
+      "offset": 50015,
+      "retainedBytes": 10551296.0,
+      "retainedRows": 161.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7063745331.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 316.0,
+        "residencySeconds": 0.0,
+        "suffix": 330.0
+      },
+      "offset": 50361,
+      "retainedBytes": 4653056.0,
+      "retainedRows": 71.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6720284262.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1387.0,
+        "residencySeconds": 0.0,
+        "suffix": 11512.0
+      },
+      "offset": 51007,
+      "retainedBytes": 12648448.0,
+      "retainedRows": 193.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6720284262.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1453.0,
+        "residencySeconds": 0.0,
+        "suffix": 38.0
+      },
+      "offset": 63906,
+      "retainedBytes": 6160384.0,
+      "retainedRows": 94.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6115937484.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 147.0,
+        "residencySeconds": 1.0,
+        "suffix": 27.0
+      },
+      "offset": 65397,
+      "retainedBytes": 9109504.0,
+      "retainedRows": 139.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4786002329.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 208.0,
+        "residencySeconds": 63.0,
+        "suffix": 220.0
+      },
+      "offset": 65571,
+      "retainedBytes": 14483456.0,
+      "retainedRows": 221.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4786002329.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1106.0,
+        "residencySeconds": 0.0,
+        "suffix": 92.0
+      },
+      "offset": 65999,
+      "retainedBytes": 3211264.0,
+      "retainedRows": 49.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4774232064.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 350.0,
+        "residencySeconds": 2.0,
+        "suffix": 238.0
+      },
+      "offset": 67197,
+      "retainedBytes": 8585216.0,
+      "retainedRows": 131.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4098752512.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 691.0,
+        "residencySeconds": 0.0,
+        "suffix": 78.0
+      },
+      "offset": 67785,
+      "retainedBytes": 3604480.0,
+      "retainedRows": 55.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4098752512.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2373.0,
+        "residencySeconds": 0.0,
+        "suffix": 548.0
+      },
+      "offset": 68554,
+      "retainedBytes": 3538944.0,
+      "retainedRows": 54.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4074622156.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 344.0,
+        "residencySeconds": 1.0,
+        "suffix": 28.0
+      },
+      "offset": 71475,
+      "retainedBytes": 13434880.0,
+      "retainedRows": 205.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4081175756.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 527.0,
+        "residencySeconds": 89.0,
+        "suffix": 107.0
+      },
+      "offset": 71847,
+      "retainedBytes": 5832704.0,
+      "retainedRows": 89.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4081175756.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1963.0,
+        "residencySeconds": 2.0,
+        "suffix": 409.0
+      },
+      "offset": 72481,
+      "retainedBytes": 14614528.0,
+      "retainedRows": 223.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3209835315.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 164.0,
+        "residencySeconds": 0.0,
+        "suffix": 28.0
+      },
+      "offset": 74853,
+      "retainedBytes": 10158080.0,
+      "retainedRows": 155.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3471756492.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2097.0,
+        "residencySeconds": 124.0,
+        "suffix": 982.0
+      },
+      "offset": 75045,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3471756492.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1305.0,
+        "residencySeconds": 0.0,
+        "suffix": 28.0
+      },
+      "offset": 78124,
+      "retainedBytes": 13893632.0,
+      "retainedRows": 212.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4840488960.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 586.0,
+        "residencySeconds": 0.0,
+        "suffix": 34.0
+      },
+      "offset": 79457,
+      "retainedBytes": 10420224.0,
+      "retainedRows": 159.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4459161190.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 572.0,
+        "residencySeconds": 0.0,
+        "suffix": 34.0
+      },
+      "offset": 80077,
+      "retainedBytes": 3342336.0,
+      "retainedRows": 51.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4380635955.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 752.0,
+        "residencySeconds": 98.0,
+        "suffix": 213.0
+      },
+      "offset": 80683,
+      "retainedBytes": 13959168.0,
+      "retainedRows": 213.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3745631436.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1291.0,
+        "residencySeconds": 3.0,
+        "suffix": 776.0
+      },
+      "offset": 81648,
+      "retainedBytes": 1048576.0,
+      "retainedRows": 16.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3822701772.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 636.0,
+        "residencySeconds": 1.0,
+        "suffix": 2325.0
+      },
+      "offset": 83715,
+      "retainedBytes": 16580608.0,
+      "retainedRows": 253.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3464455782.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 634.0,
+        "residencySeconds": 1.0,
+        "suffix": 2321.0
+      },
+      "offset": 86676,
+      "retainedBytes": 7077888.0,
+      "retainedRows": 108.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5607928627.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 861.0,
+        "residencySeconds": 0.0,
+        "suffix": 83.0
+      },
+      "offset": 89631,
+      "retainedBytes": 14745600.0,
+      "retainedRows": 225.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4683372953.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 160.0,
+        "residencySeconds": 0.0,
+        "suffix": 27.0
+      },
+      "offset": 90575,
+      "retainedBytes": 3211264.0,
+      "retainedRows": 49.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4614848512.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 5449.0,
+        "residencySeconds": 1.0,
+        "suffix": 3972.0
+      },
+      "offset": 90762,
+      "retainedBytes": 7733248.0,
+      "retainedRows": 118.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4614848512.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 561.0,
+        "residencySeconds": 0.0,
+        "suffix": 34.0
+      },
+      "offset": 100183,
+      "retainedBytes": 11075584.0,
+      "retainedRows": 169.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4484562944.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 461.0,
+        "residencySeconds": 1.0,
+        "suffix": 33.0
+      },
+      "offset": 100778,
+      "retainedBytes": 5636096.0,
+      "retainedRows": 86.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3659504025.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 3260.0,
+        "residencySeconds": 99.0,
+        "suffix": 3285.0
+      },
+      "offset": 101272,
+      "retainedBytes": 6815744.0,
+      "retainedRows": 104.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2877082828.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 250.0,
+        "residencySeconds": 0.0,
+        "suffix": 34.0
+      },
+      "offset": 107817,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3395437158.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2706.0,
+        "residencySeconds": 99.0,
+        "suffix": 3896.0
+      },
+      "offset": 108101,
+      "retainedBytes": 12255232.0,
+      "retainedRows": 187.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3395437158.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 252.0,
+        "residencySeconds": 1.0,
+        "suffix": 34.0
+      },
+      "offset": 114703,
+      "retainedBytes": 15794176.0,
+      "retainedRows": 241.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2667882700.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1781.0,
+        "residencySeconds": 99.0,
+        "suffix": 3356.0
+      },
+      "offset": 114989,
+      "retainedBytes": 13828096.0,
+      "retainedRows": 211.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2667882700.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 242.0,
+        "residencySeconds": 0.0,
+        "suffix": 34.0
+      },
+      "offset": 120126,
+      "retainedBytes": 12713984.0,
+      "retainedRows": 194.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 1927981241.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2100.0,
+        "residencySeconds": 99.0,
+        "suffix": 2624.0
+      },
+      "offset": 120402,
+      "retainedBytes": 11403264.0,
+      "retainedRows": 174.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 1927981241.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 281.0,
+        "residencySeconds": 0.0,
+        "suffix": 28.0
+      },
+      "offset": 125126,
+      "retainedBytes": 3801088.0,
+      "retainedRows": 58.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 1763813849.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2754.0,
+        "residencySeconds": 79.0,
+        "suffix": 3230.0
+      },
+      "offset": 125435,
+      "retainedBytes": 17104896.0,
+      "retainedRows": 261.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 1763813849.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 126.0,
+        "residencySeconds": 1.0,
+        "suffix": 34.0
+      },
+      "offset": 131419,
+      "retainedBytes": 10813440.0,
+      "retainedRows": 165.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 844841670.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 237.0,
+        "residencySeconds": 0.0,
+        "suffix": 155.0
+      },
+      "offset": 131579,
+      "retainedBytes": 17104896.0,
+      "retainedRows": 261.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 844841670.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 331.0,
+        "residencySeconds": 0.0,
+        "suffix": 1065.0
+      },
+      "offset": 131971,
+      "retainedBytes": 8192000.0,
+      "retainedRows": 125.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 330816492.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 921.0,
+        "residencySeconds": 0.0,
+        "suffix": 130.0
+      },
+      "offset": 133367,
+      "retainedBytes": 17367040.0,
+      "retainedRows": 265.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 221895718.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 223.0,
+        "residencySeconds": 0.0,
+        "suffix": 26.0
+      },
+      "offset": 134418,
+      "retainedBytes": 15597568.0,
+      "retainedRows": 238.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 201134028.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1147.0,
+        "residencySeconds": 1.0,
+        "suffix": 831.0
+      },
+      "offset": 134667,
+      "retainedBytes": 16056320.0,
+      "retainedRows": 245.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 201134028.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 174.0,
+        "residencySeconds": 1.0,
+        "suffix": 27.0
+      },
+      "offset": 136645,
+      "retainedBytes": 3866624.0,
+      "retainedRows": 59.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8812044.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 128.0,
+        "residencySeconds": 0.0,
+        "suffix": 32.0
+      },
+      "offset": 136846,
+      "retainedBytes": 7471104.0,
+      "retainedRows": 114.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8812044.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 270.0,
+        "residencySeconds": 0.0,
+        "suffix": 716.0
+      },
+      "offset": 137006,
+      "retainedBytes": 13762560.0,
+      "retainedRows": 210.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8812044.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 706.0,
+        "residencySeconds": 96.0,
+        "suffix": 124.0
+      },
+      "offset": 137992,
+      "retainedBytes": 16252928.0,
+      "retainedRows": 248.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1513.0,
+        "residencySeconds": 1.0,
+        "suffix": 4889.0
+      },
+      "offset": 138822,
+      "retainedBytes": 12189696.0,
+      "retainedRows": 186.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 303.0,
+        "residencySeconds": 0.0,
+        "suffix": 1687.0
+      },
+      "offset": 145224,
+      "retainedBytes": 12058624.0,
+      "retainedRows": 184.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 486.0,
+        "residencySeconds": 1.0,
+        "suffix": 155.0
+      },
+      "offset": 147214,
+      "retainedBytes": 15859712.0,
+      "retainedRows": 242.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 66.0,
+        "residencySeconds": 7.0,
+        "suffix": 14.0
+      },
+      "offset": 147855,
+      "retainedBytes": 7405568.0,
+      "retainedRows": 113.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 147935,
+      "retainedBytes": 2162688.0,
+      "retainedRows": 33.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13437252403.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1374,
+      "retainedBytes": 16646144.0,
+      "retainedRows": 254.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14031794995.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 102.0,
+        "residencySeconds": 0.0,
+        "suffix": 19.0
+      },
+      "offset": 1191,
+      "retainedBytes": 11862016.0,
+      "retainedRows": 181.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14031794995.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 95.0,
+        "residencySeconds": 0.0,
+        "suffix": 59.0
+      },
+      "offset": 1312,
+      "retainedBytes": 3932160.0,
+      "retainedRows": 60.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14031794995.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 129.0,
+        "residencySeconds": 1.0,
+        "suffix": 29.0
+      },
+      "offset": 1466,
+      "retainedBytes": 10616832.0,
+      "retainedRows": 162.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14031794995.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1624,
+      "retainedBytes": 262144.0,
+      "retainedRows": 4.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14738731827.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 120.0,
+        "residencySeconds": 0.0,
+        "suffix": 27.0
+      },
+      "offset": 1186,
+      "retainedBytes": 12255232.0,
+      "retainedRows": 187.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14738731827.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1333,
+      "retainedBytes": 2621440.0,
+      "retainedRows": 40.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14738731827.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 74.0,
+        "residencySeconds": 0.0,
+        "suffix": 45.0
+      },
+      "offset": 1208,
+      "retainedBytes": 10747904.0,
+      "retainedRows": 164.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14738731827.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 115.0,
+        "residencySeconds": 0.0,
+        "suffix": 36.0
+      },
+      "offset": 1327,
+      "retainedBytes": 2949120.0,
+      "retainedRows": 45.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 14738731827.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1478,
+      "retainedBytes": 9830400.0,
+      "retainedRows": 150.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11809036697.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1007,
+      "retainedBytes": 3801088.0,
+      "retainedRows": 58.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12048439705.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1198,
+      "retainedBytes": 524288.0,
+      "retainedRows": 8.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12202383769.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1734,
+      "retainedBytes": 15794176.0,
+      "retainedRows": 241.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12202383769.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1220,
+      "retainedBytes": 15859712.0,
+      "retainedRows": 242.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12919295180.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 839,
+      "retainedBytes": 7471104.0,
+      "retainedRows": 114.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12919295180.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 970,
+      "retainedBytes": 15466496.0,
+      "retainedRows": 236.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10761034256.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 169.0,
+        "residencySeconds": 0.0,
+        "suffix": 25.0
+      },
+      "offset": 757,
+      "retainedBytes": 6160384.0,
+      "retainedRows": 94.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10580944486.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 466.0,
+        "residencySeconds": 1.0,
+        "suffix": 85.0
+      },
+      "offset": 951,
+      "retainedBytes": 4063232.0,
+      "retainedRows": 62.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10580944486.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 29.0,
+        "residencySeconds": 1.0,
+        "suffix": 18.0
+      },
+      "offset": 1502,
+      "retainedBytes": 14221312.0,
+      "retainedRows": 217.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10457002803.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 1549,
+      "retainedBytes": 13697024.0,
+      "retainedRows": 209.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10198659891.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 82.0,
+        "residencySeconds": 22.0,
+        "suffix": 36.0
+      },
+      "offset": 6311,
+      "retainedBytes": 8388608.0,
+      "retainedRows": 128.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10198659891.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 36.0,
+        "residencySeconds": 2.0,
+        "suffix": 52.0
+      },
+      "offset": 6429,
+      "retainedBytes": 9043968.0,
+      "retainedRows": 138.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11271143424.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 6517,
+      "retainedBytes": 3276800.0,
+      "retainedRows": 50.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12434931712.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 106.0,
+        "residencySeconds": 0.0,
+        "suffix": 950.0
+      },
+      "offset": 5769,
+      "retainedBytes": 9830400.0,
+      "retainedRows": 150.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12434931712.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 153.0,
+        "residencySeconds": 4.0,
+        "suffix": 791.0
+      },
+      "offset": 6825,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12434931712.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 505.0,
+        "residencySeconds": 4.0,
+        "suffix": 3187.0
+      },
+      "offset": 7769,
+      "retainedBytes": 5242880.0,
+      "retainedRows": 80.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12985905971.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 119.0,
+        "residencySeconds": 5.0,
+        "suffix": 180.0
+      },
+      "offset": 11461,
+      "retainedBytes": 9699328.0,
+      "retainedRows": 148.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12484791500.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 255.0,
+        "residencySeconds": 0.0,
+        "suffix": 1988.0
+      },
+      "offset": 11760,
+      "retainedBytes": 13959168.0,
+      "retainedRows": 213.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12484791500.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 180.0,
+        "residencySeconds": 0.0,
+        "suffix": 2999.0
+      },
+      "offset": 14003,
+      "retainedBytes": 3997696.0,
+      "retainedRows": 61.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12493127680.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 213.0,
+        "residencySeconds": 1.0,
+        "suffix": 114.0
+      },
+      "offset": 17182,
+      "retainedBytes": 9764864.0,
+      "retainedRows": 149.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12323337011.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 473.0
+      },
+      "offset": 17509,
+      "retainedBytes": 5111808.0,
+      "retainedRows": 78.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12323337011.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 34.0,
+        "suffix": 17.0
+      },
+      "offset": 19004,
+      "retainedBytes": 2686976.0,
+      "retainedRows": 41.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12947423232.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 23.0,
+        "suffix": 38.0
+      },
+      "offset": 19051,
+      "retainedBytes": 14483456.0,
+      "retainedRows": 221.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10267367833.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 2716.0,
+        "residencySeconds": 28.0,
+        "suffix": 32.0
+      },
+      "offset": 20096,
+      "retainedBytes": 786432.0,
+      "retainedRows": 12.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12325329305.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 243.0,
+        "residencySeconds": 0.0,
+        "suffix": 956.0
+      },
+      "offset": 22844,
+      "retainedBytes": 4456448.0,
+      "retainedRows": 68.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11575623680.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 176.0,
+        "residencySeconds": 1.0,
+        "suffix": 42.0
+      },
+      "offset": 24043,
+      "retainedBytes": 5308416.0,
+      "retainedRows": 81.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11575623680.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 84.0,
+        "residencySeconds": 1.0,
+        "suffix": 56.0
+      },
+      "offset": 24261,
+      "retainedBytes": 7798784.0,
+      "retainedRows": 119.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11836955033.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 215.0,
+        "residencySeconds": 1.0,
+        "suffix": 42.0
+      },
+      "offset": 24401,
+      "retainedBytes": 15400960.0,
+      "retainedRows": 235.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11836955033.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 185.0,
+        "residencySeconds": 0.0,
+        "suffix": 3616.0
+      },
+      "offset": 24658,
+      "retainedBytes": 15335424.0,
+      "retainedRows": 234.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11836955033.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 9780.0,
+        "residencySeconds": 0.0,
+        "suffix": 9421.0
+      },
+      "offset": 28459,
+      "retainedBytes": 2555904.0,
+      "retainedRows": 39.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12379029504.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 80.0,
+        "residencySeconds": 0.0,
+        "suffix": 32.0
+      },
+      "offset": 47660,
+      "retainedBytes": 16711680.0,
+      "retainedRows": 255.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10473085337.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 909.0
+      },
+      "offset": 47772,
+      "retainedBytes": 9371648.0,
+      "retainedRows": 143.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10473085337.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 49271,
+      "retainedBytes": 2424832.0,
+      "retainedRows": 37.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8020046643.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 645.0,
+        "residencySeconds": 189.0,
+        "suffix": 67.0
+      },
+      "offset": 17894,
+      "retainedBytes": 9568256.0,
+      "retainedRows": 146.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10662654771.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 28.0
+      },
+      "offset": 18606,
+      "retainedBytes": 3670016.0,
+      "retainedRows": 56.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9431259545.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 18735,
+      "retainedBytes": 8323072.0,
+      "retainedRows": 127.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5894537215.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 484.0,
+        "residencySeconds": 467.0,
+        "suffix": 67.0
+      },
+      "offset": 9881,
+      "retainedBytes": 13041664.0,
+      "retainedRows": 199.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6976787250.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 28.0
+      },
+      "offset": 10432,
+      "retainedBytes": 14221312.0,
+      "retainedRows": 217.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6206927667.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 10844,
+      "retainedBytes": 6553600.0,
+      "retainedRows": 100.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9349287116.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 13.0,
+        "suffix": 14.0
+      },
+      "offset": 5678,
+      "retainedBytes": 14286848.0,
+      "retainedRows": 218.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9349287116.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 212.0,
+        "residencySeconds": 16.0,
+        "suffix": 16.0
+      },
+      "offset": 5758,
+      "retainedBytes": 12124160.0,
+      "retainedRows": 185.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9065516236.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 89.0,
+        "residencySeconds": 0.0,
+        "suffix": 52.0
+      },
+      "offset": 5986,
+      "retainedBytes": 1835008.0,
+      "retainedRows": 28.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9933370163.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 84.0
+      },
+      "offset": 6127,
+      "retainedBytes": 7536640.0,
+      "retainedRows": 115.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9933370163.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 40.0,
+        "suffix": 28.0
+      },
+      "offset": 6708,
+      "retainedBytes": 12255232.0,
+      "retainedRows": 187.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9292034867.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 222.0,
+        "residencySeconds": 210.0,
+        "suffix": 39.0
+      },
+      "offset": 7748,
+      "retainedBytes": 458752.0,
+      "retainedRows": 7.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10715345715.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 199.0,
+        "residencySeconds": 0.0,
+        "suffix": 950.0
+      },
+      "offset": 8009,
+      "retainedBytes": 16449536.0,
+      "retainedRows": 251.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9524884275.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 488.0,
+        "residencySeconds": 5.0,
+        "suffix": 2192.0
+      },
+      "offset": 9158,
+      "retainedBytes": 8585216.0,
+      "retainedRows": 131.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9524884275.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": 668.0,
+        "residencySeconds": 3.0,
+        "suffix": 4193.0
+      },
+      "offset": 11838,
+      "retainedBytes": 8912896.0,
+      "retainedRows": 136.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 9173349171.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 4.0,
+        "suffix": 678.0
+      },
+      "offset": 16699,
+      "retainedBytes": 196608.0,
+      "retainedRows": 3.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8552631500.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 19427,
+      "retainedBytes": 5767168.0,
+      "retainedRows": 88.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12881952768.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 237.0,
+        "suffix": 20.0
+      },
+      "offset": 298,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10761034256.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 354,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12690024038.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 88.0
+      },
+      "offset": 232,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12690024038.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 356,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10761034256.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 356,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13057903820.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 511,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13057903820.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 39.0,
+        "suffix": 17.0
+      },
+      "offset": 512,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13202109235.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 31.0,
+        "suffix": 17.0
+      },
+      "offset": 512,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13202109235.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 29.0,
+        "suffix": 17.0
+      },
+      "offset": 512,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13202109235.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 26.0
+      },
+      "offset": 593,
+      "retainedBytes": 8716288.0,
+      "retainedRows": 133.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13202109235.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 17.0
+      },
+      "offset": 723,
+      "retainedBytes": 16711680.0,
+      "retainedRows": 255.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13202109235.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 790,
+      "retainedBytes": 13172736.0,
+      "retainedRows": 201.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13202109235.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 607,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 17073159225.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 607,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 17073159225.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 750368478.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12740526080.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 3.0,
+        "suffix": 17.0
+      },
+      "offset": 512,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11223238368.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 19.0
+      },
+      "offset": 558,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13007663923.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 512,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13007663923.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 613,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10761034256.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 5.0,
+        "suffix": 20.0
+      },
+      "offset": 298,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12176995123.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 220,
+      "retainedBytes": 14614528.0,
+      "retainedRows": 223.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12176995123.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 220,
+      "retainedBytes": 14614528.0,
+      "retainedRows": 223.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12176995123.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 354,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12176995123.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 20.0
+      },
+      "offset": 297,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12176995123.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 353,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12176995123.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 298,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10761034256.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 354,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12427211571.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 353,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12448589414.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 88.0
+      },
+      "offset": 232,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12448589414.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 356,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10761034256.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "bonsai-2-27b",
+      "next": null,
+      "offset": 356,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12051536339.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 506,
+      "retainedBytes": 14876672.0,
+      "retainedRows": 227.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12051536339.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 59.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 44.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 43.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 26.0
+      },
+      "offset": 582,
+      "retainedBytes": 9437184.0,
+      "retainedRows": 144.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 17.0
+      },
+      "offset": 749,
+      "retainedBytes": 16711680.0,
+      "retainedRows": 255.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 819,
+      "retainedBytes": 12976128.0,
+      "retainedRows": 198.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 606,
+      "retainedBytes": 14155776.0,
+      "retainedRows": 216.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 606,
+      "retainedBytes": 14155776.0,
+      "retainedRows": 216.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10115249158.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 751304704.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8347913382.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 12.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7465984160.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 19.0
+      },
+      "offset": 556,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6725648460.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 515,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6725648460.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 611,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12049439033.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 506,
+      "retainedBytes": 14876672.0,
+      "retainedRows": 227.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 12049439033.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 53.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 39.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 38.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 26.0
+      },
+      "offset": 582,
+      "retainedBytes": 9437184.0,
+      "retainedRows": 144.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 17.0
+      },
+      "offset": 749,
+      "retainedBytes": 16711680.0,
+      "retainedRows": 255.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 819,
+      "retainedBytes": 12976128.0,
+      "retainedRows": 198.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 606,
+      "retainedBytes": 14155776.0,
+      "retainedRows": 216.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 606,
+      "retainedBytes": 14155776.0,
+      "retainedRows": 216.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10123021516.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 751304704.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 8273058412.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 11.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7465984160.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 19.0
+      },
+      "offset": 556,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6727509606.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 515,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6727509606.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 611,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6367503974.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 506,
+      "retainedBytes": 14876672.0,
+      "retainedRows": 227.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 6367503974.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 42.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 32.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 31.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 26.0
+      },
+      "offset": 582,
+      "retainedBytes": 9437184.0,
+      "retainedRows": 144.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 17.0
+      },
+      "offset": 749,
+      "retainedBytes": 16711680.0,
+      "retainedRows": 255.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 819,
+      "retainedBytes": 12976128.0,
+      "retainedRows": 198.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 606,
+      "retainedBytes": 14155776.0,
+      "retainedRows": 216.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 606,
+      "retainedBytes": 14155776.0,
+      "retainedRows": 216.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5471784140.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 751304704.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 608,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 4325192499.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 7.0,
+        "suffix": 17.0
+      },
+      "offset": 510,
+      "retainedBytes": 14680064.0,
+      "retainedRows": 224.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 7465984160.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 3.0,
+        "suffix": 19.0
+      },
+      "offset": 556,
+      "retainedBytes": 14548992.0,
+      "retainedRows": 222.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3158887628.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 515,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 3158887628.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 611,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11244776477.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11257215210.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11257215210.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11257215210.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11257215210.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11257215210.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11353382736.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11353382736.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11353382736.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11353382736.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11353382736.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11394290308.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11394290308.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11394290308.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11394290308.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11394290308.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11332004893.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11332004893.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11332004893.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11332004893.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11332004893.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11400319620.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11400319620.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11400319620.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11400319620.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11400319620.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11391708189.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 2.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11391708189.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11391708189.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11391708189.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11391708189.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11389375108.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 25.0
+      },
+      "offset": 4330,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11389375108.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11389375108.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 12.0
+      },
+      "offset": 4391,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11389375108.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11389375108.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 4408,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10843027690.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10843027690.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10843027690.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10843027690.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10843027690.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 10843027690.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13342071540.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13342071540.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11760550684.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11760550684.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11760550684.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11760550684.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11760550684.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11760550684.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13865279063.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13865279063.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11957853366.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11957853366.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11957853366.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11957853366.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11957853366.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11957853366.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13352381220.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13352381220.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11571374467.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11571374467.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11571374467.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11571374467.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11571374467.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11571374467.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13862220170.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13862220170.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11969636739.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11969636739.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11969636739.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11969636739.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11969636739.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11969636739.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13363168445.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13363168445.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11846940239.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11846940239.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11846940239.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11846940239.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11846940239.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11846940239.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13255532119.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13255532119.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11776423503.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11776423503.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11776423503.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11776423503.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11776423503.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11776423503.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13906221041.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13906221041.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11698815772.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11698815772.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11698815772.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16617,
+      "retainedBytes": 5701632.0,
+      "retainedRows": 87.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11698815772.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11698815772.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 11698815772.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 1.0,
+        "suffix": 12.0
+      },
+      "offset": 16510,
+      "retainedBytes": 14090240.0,
+      "retainedRows": 215.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13117041444.0,
+      "compactable": true,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 74,
+      "retainedBytes": 15925248.0,
+      "retainedRows": 243.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 13117041444.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 16527,
+      "retainedBytes": 16121856.0,
+      "retainedRows": 246.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 1208648428.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 6928.0,
+        "residencySeconds": 1.0,
+        "suffix": 3846.0
+      },
+      "offset": 32487,
+      "retainedBytes": 54591488.0,
+      "retainedRows": 833.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": true,
+      "compactedBytes": 82444288.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 750.0,
+        "residencySeconds": 1.0,
+        "suffix": 29.0
+      },
+      "offset": 43261,
+      "retainedBytes": 99221504.0,
+      "retainedRows": 1514.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 968147070.0,
+      "compactable": true,
+      "compactedBytes": 217382912.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 964.0,
+        "residencySeconds": 0.0,
+        "suffix": 378.0
+      },
+      "offset": 44040,
+      "retainedBytes": 234160128.0,
+      "retainedRows": 3573.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": true,
+      "compactedBytes": 197263360.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 601.0,
+        "residencySeconds": 0.0,
+        "suffix": 400.0
+      },
+      "offset": 45382,
+      "retainedBytes": 214040576.0,
+      "retainedRows": 3266.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 901280760.0,
+      "compactable": true,
+      "compactedBytes": 219611136.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 247.0
+      },
+      "offset": 46383,
+      "retainedBytes": 236388352.0,
+      "retainedRows": 3607.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": true,
+      "compactedBytes": 268435456.0,
+      "kind": "rewind",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 9.0,
+        "suffix": 253.0
+      },
+      "offset": 46383,
+      "retainedBytes": 285212672.0,
+      "retainedRows": 4352.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": true,
+      "compactedBytes": 268435456.0,
+      "kind": "rewind",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 173.0,
+        "residencySeconds": 5.0,
+        "suffix": 259.0
+      },
+      "offset": 46383,
+      "retainedBytes": 285212672.0,
+      "retainedRows": 4352.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 48.0,
+        "residencySeconds": 14.0,
+        "suffix": 13.0
+      },
+      "offset": 46815,
+      "retainedBytes": 5242880.0,
+      "retainedRows": 80.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2927961206.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 46876,
+      "retainedBytes": 1245184.0,
+      "retainedRows": 19.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5396391526.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 121.0,
+        "residencySeconds": 4.0,
+        "suffix": 30.0
+      },
+      "offset": 61599,
+      "retainedBytes": 6356992.0,
+      "retainedRows": 97.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5396391526.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 106.0,
+        "residencySeconds": 0.0,
+        "suffix": 23.0
+      },
+      "offset": 61750,
+      "retainedBytes": 6881280.0,
+      "retainedRows": 105.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 5396391526.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 48.0,
+        "residencySeconds": 0.0,
+        "suffix": 58.0
+      },
+      "offset": 61879,
+      "retainedBytes": 4784128.0,
+      "retainedRows": 73.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 3551.0,
+        "residencySeconds": 1.0,
+        "suffix": 51.0
+      },
+      "offset": 61985,
+      "retainedBytes": 14614528.0,
+      "retainedRows": 223.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1267.0,
+        "residencySeconds": 1.0,
+        "suffix": 511.0
+      },
+      "offset": 65587,
+      "retainedBytes": 13434880.0,
+      "retainedRows": 205.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1071.0,
+        "residencySeconds": 0.0,
+        "suffix": 557.0
+      },
+      "offset": 67365,
+      "retainedBytes": 14352384.0,
+      "retainedRows": 219.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 144971279.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1855.0,
+        "residencySeconds": 1.0,
+        "suffix": 663.0
+      },
+      "offset": 68993,
+      "retainedBytes": 8323072.0,
+      "retainedRows": 127.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 190283543.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2499.0,
+        "residencySeconds": 0.0,
+        "suffix": 121.0
+      },
+      "offset": 71511,
+      "retainedBytes": 11075584.0,
+      "retainedRows": 169.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 762338177.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 2714.0,
+        "residencySeconds": 1.0,
+        "suffix": 113.0
+      },
+      "offset": 74131,
+      "retainedBytes": 7143424.0,
+      "retainedRows": 109.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 944608770.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 4042.0,
+        "residencySeconds": 0.0,
+        "suffix": 757.0
+      },
+      "offset": 76958,
+      "retainedBytes": 6422528.0,
+      "retainedRows": 98.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 801158703.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 327.0,
+        "residencySeconds": 0.0,
+        "suffix": 507.0
+      },
+      "offset": 81757,
+      "retainedBytes": 10682368.0,
+      "retainedRows": 163.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2861299555.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 335.0,
+        "residencySeconds": 0.0,
+        "suffix": 54.0
+      },
+      "offset": 82591,
+      "retainedBytes": 6356992.0,
+      "retainedRows": 97.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2861299555.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 74.0,
+        "residencySeconds": 148.0,
+        "suffix": 14.0
+      },
+      "offset": 82980,
+      "retainedBytes": 14417920.0,
+      "retainedRows": 220.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 1956416859.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 45330.0,
+        "residencySeconds": 32.0,
+        "suffix": 14.0
+      },
+      "offset": 83068,
+      "retainedBytes": 8650752.0,
+      "retainedRows": 132.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 2858119603.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 4047.0,
+        "residencySeconds": 0.0,
+        "suffix": 30.0
+      },
+      "offset": 128412,
+      "retainedBytes": 6553600.0,
+      "retainedRows": 100.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 337954578.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 1551.0,
+        "residencySeconds": 1.0,
+        "suffix": 39.0
+      },
+      "offset": 132489,
+      "retainedBytes": 7798784.0,
+      "retainedRows": 119.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 7212.0,
+        "residencySeconds": 1.0,
+        "suffix": 1047.0
+      },
+      "offset": 134079,
+      "retainedBytes": 4259840.0,
+      "retainedRows": 65.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 0.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 785.0,
+        "residencySeconds": 1.0,
+        "suffix": 101.0
+      },
+      "offset": 142338,
+      "retainedBytes": 16646144.0,
+      "retainedRows": 254.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 206165446.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": null,
+        "residencySeconds": 0.0,
+        "suffix": 468.0
+      },
+      "offset": 143224,
+      "retainedBytes": 8912896.0,
+      "retainedRows": 136.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 204017426.0,
+      "compactable": true,
+      "compactedBytes": 92798976.0,
+      "kind": "rewind",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 444.0,
+        "residencySeconds": 14.0,
+        "suffix": 474.0
+      },
+      "offset": 143224,
+      "retainedBytes": 109576192.0,
+      "retainedRows": 1672.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 204017426.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": {
+        "generated": 95.0,
+        "residencySeconds": 10.0,
+        "suffix": 18.0
+      },
+      "offset": 144142,
+      "retainedBytes": 15859712.0,
+      "retainedRows": 242.0,
+      "rowBytes": 65536.0
+    },
+    {
+      "budgetBytes": 748546579.0,
+      "compactable": false,
+      "compactedBytes": 0.0,
+      "kind": "checkIn",
+      "model": "qwen3.8-27b",
+      "next": null,
+      "offset": 144255,
+      "retainedBytes": 8454144.0,
+      "retainedRows": 129.0,
+      "rowBytes": 65536.0
+    }
+  ]
+}
