@@ -324,3 +324,28 @@ extension SnapshotAdmission.CheckpointCandidate {
         )
     }
 }
+
+extension PrefixCacheManager {
+    /// Resolve for a fresh request **Cache Claim** and hand the claim over
+    /// unredeemed: it keeps the lane and the Restore Pins resolution added
+    /// until `handOver.withClaim { _ in }` concludes it. The claim belongs
+    /// to `diagnostics.requestID`.
+    func resolveHoldingClaim(
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        modelFingerprint: String? = nil,
+        transientBoundary: HybridCacheSnapshot? = nil,
+        tripwire: CacheClaim.Tripwire = .standard
+    ) async -> (resolved: Resolved, handOver: CacheClaim.HandOver) {
+        let (resolved, handOver) = await CacheClaim.withRequestClaim(
+            context: diagnostics, prefixCache: self, memory: nil, tripwire: tripwire
+        ) { claim in
+            await resolve(
+                tokens: tokens, promptTokenCount: tokens.count, partitionKey: partitionKey,
+                modelFingerprint: modelFingerprint, diagnostics: diagnostics,
+                transientBoundary: transientBoundary, for: claim)
+        }
+        return (resolved, handOver)
+    }
+}

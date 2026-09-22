@@ -56,10 +56,9 @@ import MLXLMCommon
             path: prefix + [30, 30, 30, 30], snapshot: full,
             partitionKey: key, lastAccessTime: .now - .seconds(2))
         let context = diagnostics
-        let resolved = await manager.resolve(
-            tokens: prefix + [99], promptTokenCount: 5, partitionKey: key, modelFingerprint: nil,
-            diagnostics: context, transientBoundary: transient ? view : nil,
-            pinningRestorePathFor: context.requestID)
+        let (resolved, handOver) = await manager.resolveHoldingClaim(
+            tokens: prefix + [99], partitionKey: key, diagnostics: context,
+            transientBoundary: transient ? view : nil)
         let selected = warmOffset == 6 ? warm : full
         #expect(resolved.lookup.backingLeaf?.bodyID == selected.bodyID)
         // The hit is served through the backer, which earns it (ADR-0068).
@@ -86,7 +85,7 @@ import MLXLMCommon
         let remaining = tier.getOrCreateTree(for: key).allSnapshotNodes().compactMap(\.state.body)
             .filter { !$0.isPrefixView }
         #expect(remaining.map(\.bodyID) == [selected.bodyID])
-        manager.completeRequest(requestID: context.requestID)
+        await handOver.withClaim { _ in }
         _ = manager.clearRAMTier()
         #expect(manager.totalSnapshotBytes == 0)
     }
@@ -94,13 +93,11 @@ import MLXLMCommon
     @Test func finalRequestSettlementRetiresViewsWhoseLeafWasNeverStored() async throws {
         let store = TieredSnapshotStore(ssdConfig: nil)
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
-        let first = diagnostics
-        let second = diagnostics
-        for context in [first, second] {
-            _ = await manager.resolve(
-                tokens: Array(1...8), promptTokenCount: 8, partitionKey: key,
-                modelFingerprint: nil, diagnostics: context,
-                pinningRestorePathFor: context.requestID)
+        var handOvers: [CacheClaim.HandOver] = []
+        for _ in 0..<2 {
+            let (_, handOver) = await manager.resolveHoldingClaim(
+                tokens: Array(1...8), partitionKey: key, diagnostics: diagnostics)
+            handOvers.append(handOver)
         }
         let recurrent = MambaCache()
         recurrent.state = [MLXArray([Float(42)])]
@@ -109,11 +106,11 @@ import MLXLMCommon
                 cache: [recurrent], offset: 4, type: .branchPoint, prefixView: true))
         manager.restoreSnapshot(
             path: Array(1...4), snapshot: view, partitionKey: key, lastAccessTime: .now)
-        manager.completeRequest(requestID: first.requestID)
+        await handOvers[0].withClaim { _ in }
         #expect(manager.totalSnapshotBytes == 4)
         // The remaining request skips/fails leaf storage. No lookup visits
         // the view again: completion must release its non-evictable state.
-        manager.completeRequest(requestID: second.requestID)
+        await handOvers[1].withClaim { _ in }
         #expect(manager.totalSnapshotBytes == 0)
         let tree = store.getOrCreateTree(for: key)
         #expect(tree.snapshotCount == 0)
@@ -144,11 +141,9 @@ import MLXLMCommon
         manager.restoreSnapshot(
             path: Array(1...8), snapshot: try hybrid(offset: 8, value: 100),
             partitionKey: key, lastAccessTime: .now)
-        let context = diagnostics
         let fork = [1, 2, 3, 4, 90]
-        let resolved = await manager.resolve(
-            tokens: fork, promptTokenCount: fork.count, partitionKey: key,
-            modelFingerprint: nil, diagnostics: context, pinningRestorePathFor: context.requestID)
+        let (resolved, handOver) = await manager.resolveHoldingClaim(
+            tokens: fork, partitionKey: key, diagnostics: diagnostics)
         #expect(resolved.lookup.backingLeaf?.tokenOffset == 6)
         #expect(resolved.lookup.snapshot?.memoryBytes == 4)
         let telemetry = manager.makeTelemetrySnapshot()
@@ -167,7 +162,7 @@ import MLXLMCommon
         _ = manager.clearRAMTier()
         #expect(manager.totalSnapshotBytes == 3080)
         #expect(manager.lookup(tokens: fork, partitionKey: key).snapshot?.tokenOffset == 4)
-        manager.completeRequest(requestID: context.requestID)
+        await handOver.withClaim { _ in }
         _ = manager.clearRAMTier()
         #expect(manager.totalSnapshotBytes == 0)
     }

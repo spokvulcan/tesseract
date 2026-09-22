@@ -517,11 +517,13 @@ nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
         _ body: @Sendable (any ModelSession, V) async throws -> R
     ) async rethrows -> R {
         try await container.perform(nonSendable: payload) { context, payload in
-            try await body(
-                ContextBackedModelSession(
-                    context: context, mtpDrafter: mtpDrafter?.value,
-                    dflash2Drafter: dflash2Drafter?.value),
-                payload)
+            try await ModelSessionScope.$isInside.withValue(true) {
+                try await body(
+                    ContextBackedModelSession(
+                        context: context, mtpDrafter: mtpDrafter?.value,
+                        dflash2Drafter: dflash2Drafter?.value),
+                    payload)
+            }
         }
     }
 }

@@ -300,8 +300,8 @@ struct ServerCompletionExitMatrixTests {
     // MARK: - Helpers
 
     /// Facts 2 and 3 of every exit, read once the drive has finished: no
-    /// lane, no pins and no lease for the request, one release — and the
-    /// terminal sample agrees about the lease.
+    /// lane, no pins and no lease for the request, and one conclusion of
+    /// its Cache Claim — and the terminal sample agrees about the lease.
     private static func expectReleased(
         _ fixture: ServerCompletionFixture, _ events: [PromptCacheTelemetryEvent],
         sourceLocation: SourceLocation = #_sourceLocation
@@ -313,6 +313,12 @@ struct ServerCompletionExitMatrixTests {
             fixture.cacheAdmin.requestHoldings == PrefixCacheManager.RequestHoldings.none,
             sourceLocation: sourceLocation)
         #expect(terminal(events)?.field("treeLeaseCount") == "0", sourceLocation: sourceLocation)
+        // The request's Cache Claim concluded once: one release.
+        let releases = events.filter {
+            $0.eventName == "requestMemory" && $0.field("phase") == "releasingRequest"
+                && $0.field("sampleKind") == "phaseBegin"
+        }
+        #expect(releases.count == 1, "exactly one conclusion", sourceLocation: sourceLocation)
     }
 
     private static func terminal(

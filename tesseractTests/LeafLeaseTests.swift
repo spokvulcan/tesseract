@@ -93,7 +93,7 @@ struct LeafLeaseTests {
         #expect(tree.totalSnapshotBytes == 0)
     }
 
-    @Test func leaseSurvivesPinAgeOutPressureAndRAMClearUntilExplicitReturn() throws {
+    @Test func leaseSurvivesAClaimReleasePressureAndRAMClearUntilExplicitReturn() async throws {
         let store = TieredSnapshotStore(ssdConfig: nil)
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000, tieredStore: store)
         let tokens = Array(1...8)
@@ -104,25 +104,26 @@ struct LeafLeaseTests {
                     storedTokens: tokens, snapshot: body, storage: .ramOnly, partitionKey: key)))
         let tree = try #require(store.tree(for: key))
         let node = try #require(tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node)
-        let requestID = UUID()
-        let lease = try #require(
-            tree.beginLeafLease(
-                on: node,
-                context: .init(
-                    requestID: requestID, modelID: key.modelID, kvBits: nil, kvGroupSize: 64)))
-        manager.pinRestorePath(node: node, requestID: requestID)
+        let context = PrefixCacheDiagnostics.Context(
+            requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)
+        let lease = try #require(tree.beginLeafLease(on: node, context: context))
+        let (pinned, owner) = await manager.resolveHoldingClaim(
+            tokens: tokens, partitionKey: key, diagnostics: context)
+        #expect(pinned.lookup.snapshot != nil)
         let freshTokens = Array(20...27)
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
                     storedTokens: freshTokens, snapshot: snapshot(), storage: .ramOnly,
                     partitionKey: key)))
-        let fresh = try #require(
-            tree.findBestSnapshot(tokens: freshTokens, updateAccess: false)?.node)
-        for _ in 0..<12 { manager.pinRestorePath(node: fresh, requestID: UUID()) }
-        manager.completeRequest(requestID: requestID)
+        let (_, other) = await manager.resolveHoldingClaim(
+            tokens: freshTokens, partitionKey: key,
+            diagnostics: .init(
+                requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        // Letting go of the pins and the lane never ends a lease.
+        await owner.withClaim { _ in }
 
-        try #require(manager.budgetFloorBytes() == 8_320, "the expired pin cannot end the lease")
+        try #require(manager.budgetFloorBytes() == 8_320, "a claim's release cannot end the lease")
         manager.setMemoryBudget(0)
         #expect(tree.totalSnapshotBytes == 8_320)
         #expect(manager.clearRAMTier() == 0)
@@ -133,6 +134,7 @@ struct LeafLeaseTests {
         #expect(tree.totalSnapshotBytes == 4_160, "only the pinned fresh leaf survives")
         #expect(manager.memoryTelemetryFacts()["treeLeasedBytes"] == "0")
         #expect(manager.memoryTelemetryFacts()["treeLeaseCount"] == "0")
+        await other.withClaim { _ in }
     }
 
     @Test func preparedBorrowedPayloadBlocksCheckoutUntilTheWriteFinishes() async throws {

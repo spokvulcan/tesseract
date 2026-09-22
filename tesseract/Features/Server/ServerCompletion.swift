@@ -757,10 +757,10 @@ nonisolated final class ServerCompletion {
 
         let prefixCache = await ensurePrefixCache(on: actor, sessions: sessions)
         let requestID = UUID()
-        let memory = RequestMemoryTelemetry(
-            context: PrefixCacheDiagnostics.Context(
-                requestID: requestID, modelID: modelID,
-                kvBits: parameters.kvBits, kvGroupSize: parameters.kvGroupSize))
+        let requestContext = PrefixCacheDiagnostics.Context(
+            requestID: requestID, modelID: modelID,
+            kvBits: parameters.kvBits, kvGroupSize: parameters.kvGroupSize)
+        let memory = RequestMemoryTelemetry(context: requestContext)
         let memorySampler = memory.startSampling()
         memory.mark(.preparing, facts: ["modelWeightBytes": "\(modelWeightBytes)"])
         var handedToDrive = false
@@ -776,52 +776,50 @@ nonisolated final class ServerCompletion {
         // Canonicalize tools once so the leaf re-tokenization uses the same dict
         // iteration order as the prefill path inside makeHTTPPrefixCacheGeneration.
         let canonicalTools = LLMActor.canonicalizeToolSpecs(toolSpecs)
-        let mlxStart: HTTPPrefixCacheGeneration
-        do {
-            mlxStart = try await withTaskCancellationHandler {
-                try await makeHTTPPrefixCacheGeneration(
-                    on: actor,
-                    sessions: sessions,
-                    conversation: conversation,
-                    requestID: requestID,
-                    modelID: modelID,
-                    parameters: genParams,
-                    toolSpecs: canonicalTools,
-                    prefixCache: prefixCache,
-                    renderContext: renderContext,
-                    progressHandler: progressHandler,
-                    memory: memory
-                )
-            } onCancel: {
-                memory.recordCancellationSignal(origin: "caller")
-            }
-        } catch {
-            if error is CancellationError { startOutcome = "cancelledDuringStart" }
-            memory.mark(
-                .releasingRequest,
-                facts: await MainActor.run {
-                    prefixCache.completeRequest(requestID: requestID)
-                    return prefixCache.memoryTelemetryFacts()
-                })
-            throw error
-        }
 
-        // A drain ran while restore/prefill was suspended: the model is
-        // tearing down, so stop the freshly started generation and bail
-        // before wiring up a handle nothing would ever drain.
-        if Task.isCancelled || drainGeneration != entryDrainGeneration {
-            startOutcome = "cancelledDuringStart"
-            mlxStart.completion.cancel()
-            await mlxStart.completion.value
-            await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
-            memory.mark(
-                .releasingRequest,
-                facts: await MainActor.run {
-                    prefixCache.completeRequest(requestID: requestID)
-                    return prefixCache.memoryTelemetryFacts()
-                })
-            Memory.clearCache()
-            throw CancellationError()
+        // Everything up to the drive holds the request's **Cache Claim**
+        // (ADR-0069). A throw concludes it in this scope; a normal return
+        // hands it over, and the drive task created below redeems it.
+        let (mlxStart, handOver) = try await CacheClaim.withRequestClaim(
+            context: requestContext, prefixCache: prefixCache, memory: memory
+        ) { claim in
+            let mlxStart: HTTPPrefixCacheGeneration
+            do {
+                mlxStart = try await withTaskCancellationHandler {
+                    try await makeHTTPPrefixCacheGeneration(
+                        on: actor,
+                        sessions: sessions,
+                        conversation: conversation,
+                        requestID: requestID,
+                        modelID: modelID,
+                        parameters: genParams,
+                        toolSpecs: canonicalTools,
+                        prefixCache: prefixCache,
+                        claim: claim,
+                        renderContext: renderContext,
+                        progressHandler: progressHandler,
+                        memory: memory
+                    )
+                } onCancel: {
+                    memory.recordCancellationSignal(origin: "caller")
+                }
+            } catch {
+                if error is CancellationError { startOutcome = "cancelledDuringStart" }
+                throw error
+            }
+
+            // A drain ran while restore/prefill was suspended: the model is
+            // tearing down, so stop the freshly started generation and bail
+            // before wiring up a handle nothing would ever drain.
+            if Task.isCancelled || drainGeneration != entryDrainGeneration {
+                startOutcome = "cancelledDuringStart"
+                mlxStart.completion.cancel()
+                await mlxStart.completion.value
+                await Self.rewindLeaf(mlxStart.finalCacheOwner, sessions: sessions, memory: memory)
+                Memory.clearCache()
+                throw CancellationError()
+            }
+            return mlxStart
         }
 
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
@@ -871,10 +869,10 @@ nonisolated final class ServerCompletion {
         let traceLog = completionTraceLog
         let driveBox = UnsafeSendableBox<() async -> Void>({
             await Self.driveCompletion(
+                handOver: handOver,
                 mlxStartBox: mlxStartBox,
                 conversation: conversation,
                 sessions: sessions,
-                canonicalTools: canonicalTools,
                 requestID: requestID,
                 loadedModelWeightBytes: loadedModelWeightBytes,
                 memory: memory,
@@ -914,18 +912,20 @@ nonisolated final class ServerCompletion {
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable function_body_length function_parameter_count
-    /// Drive one cache-aware completion to its end: the stream-loop run with
-    /// the server's sink, snapshot admissions, leaf capture, and the
-    /// request-end tuner record. Deliberately nonisolated — see the comment
-    /// at the call site's `Task`. `finishHook` runs after every exit path
-    /// (natural finish, cancellation, error) and releases this request's
-    /// registry slot back on the actor.
+    // swiftlint:disable function_parameter_count
+    /// Drive one cache-aware completion to its end. Deliberately nonisolated
+    /// — see the comment at the call site's `Task`. The drive owns the
+    /// request's **Cache Claim** from the hand-over to its conclusion, which
+    /// lets go of the Restore Pins and the reserve lane on every exit path
+    /// (natural finish, cancellation, error). From there on the turn's
+    /// protection is the freshest-leaf floor member, not the in-flight pin
+    /// (ADR-0019). `finishHook` then releases this request's registry slot
+    /// back on the actor.
     private static func driveCompletion(
+        handOver: CacheClaim.HandOver,
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
         conversation: HTTPPrefixCacheConversation,
         sessions: any ModelSessionProviding,
-        canonicalTools: [ToolSpec]?,
         requestID: UUID,
         loadedModelWeightBytes: Int64,
         memory: RequestMemoryTelemetry,
@@ -938,6 +938,55 @@ nonisolated final class ServerCompletion {
         finishHook: @escaping @Sendable () async -> Void,
         scheduleSpeculative: @escaping @Sendable (SpeculativeCanonicalPrefill.Seed) async -> Void
     ) async {
+        // swiftlint:enable function_parameter_count
+        let (terminalOutcome, speculativeSeed) = await handOver.withClaim { claim in
+            await drive(
+                claim: claim,
+                mlxStartBox: mlxStartBox,
+                conversation: conversation,
+                sessions: sessions,
+                requestID: requestID,
+                loadedModelWeightBytes: loadedModelWeightBytes,
+                memory: memory,
+                prefixCache: prefixCache,
+                renderContext: renderContext,
+                traceLog: traceLog,
+                driver: driver,
+                loopCancel: loopCancel,
+                continuation: continuation
+            )
+        }
+        await finishHook()
+        // After the registry slot is released: hand the speculative seed to
+        // the actor, which schedules it only if the module is still quiescent
+        // (a newer start, or a drain since this request entered, wins).
+        if let speculativeSeed {
+            await scheduleSpeculative(speculativeSeed)
+        }
+        memory.finish(outcome: terminalOutcome)
+    }
+
+    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
+    // swiftlint:disable function_body_length function_parameter_count
+    /// The drive's work under the claim: the stream-loop run with the
+    /// server's sink, snapshot admissions, leaf capture, and the request-end
+    /// tuner record. Returns the request's terminal outcome and the
+    /// Speculative Canonical Prefill seed, if one is to be scheduled.
+    private static func drive(
+        claim: CacheClaim,
+        mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
+        conversation: HTTPPrefixCacheConversation,
+        sessions: any ModelSessionProviding,
+        requestID: UUID,
+        loadedModelWeightBytes: Int64,
+        memory: RequestMemoryTelemetry,
+        prefixCache: PrefixCacheManager,
+        renderContext: TemplateRenderContext,
+        traceLog: CompletionTraceLog,
+        driver: ManagedGenerationDriver,
+        loopCancel: LateBoundCancel,
+        continuation: AsyncThrowingStream<AgentGeneration, Error>.Continuation
+    ) async -> (outcome: String, speculativeSeed: SpeculativeCanonicalPrefill.Seed?) {
         // swiftlint:enable function_body_length function_parameter_count
         let mlxStart = mlxStartBox.value
         let diagnosticsContext = mlxStart.diagnosticsContext
@@ -1104,6 +1153,7 @@ nonisolated final class ServerCompletion {
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
+                claim: claim,
                 conversation: conversation,
                 sessions: sessions,
                 requestID: requestID,
@@ -1278,25 +1328,7 @@ nonisolated final class ServerCompletion {
             )
         }
 
-        // Release this request's Budget Floor restore pins on every exit
-        // path (this tail runs after natural finish, cancellation, and
-        // error alike — same guarantee as `finishHook`). From here on the
-        // turn's protection is the freshest-leaf floor member, not the
-        // in-flight pin (ADR-0019).
-        memory.mark(.releasingRequest)
-        let releasedFacts = await MainActor.run {
-            prefixCache.completeRequest(requestID: requestID)
-            return prefixCache.memoryTelemetryFacts()
-        }
-        memory.mark(.releasingRequest, facts: releasedFacts)
-        await finishHook()
-        // After the registry slot is released: hand the speculative seed to
-        // the actor, which schedules it only if the module is still quiescent
-        // (a newer start, or a drain since this request entered, wins).
-        if let speculativeSeed {
-            await scheduleSpeculative(speculativeSeed)
-        }
-        memory.finish(outcome: terminalOutcome)
+        return (terminalOutcome, speculativeSeed)
     }
 
     /// Cleanup must enter the session even when the driving task was cancelled.
@@ -1334,6 +1366,7 @@ nonisolated final class ServerCompletion {
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         prefixCache: PrefixCacheManager,
+        claim: CacheClaim,
         renderContext: TemplateRenderContext = .canonical,
         progressHandler: ServerInferenceProgressHandler?,
         memory: RequestMemoryTelemetry
@@ -1469,7 +1502,7 @@ nonisolated final class ServerCompletion {
                 partitionKey: partitionKey,
                 modelFingerprint: modelFingerprint,
                 diagnostics: diagnosticsContext,
-                pinningRestorePathFor: diagnosticsContext.requestID
+                for: claim
             )
             let lookupResult = resolved.lookup
             // Plan AFTER resolution, against the settled tree: any promote or

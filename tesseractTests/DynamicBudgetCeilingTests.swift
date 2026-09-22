@@ -604,23 +604,20 @@ struct DynamicBudgetCeilingManagerTests {
 
         // Two requests register their lanes through resolve — a miss
         // still counts: the generation's working set exists either way.
-        let first = UUID()
-        let second = UUID()
-        _ = await manager.resolve(
-            tokens: [1, 2, 3], promptTokenCount: 3, partitionKey: key,
-            modelFingerprint: nil, diagnostics: diagnostics,
-            pinningRestorePathFor: first
-        )
-        _ = await manager.resolve(
-            tokens: [4, 5, 6], promptTokenCount: 3, partitionKey: key,
-            modelFingerprint: nil, diagnostics: diagnostics,
-            pinningRestorePathFor: second
-        )
+        // Each claim is handed over and not yet redeemed, so it keeps its
+        // lane until the hand-over concludes it.
+        var handOvers: [CacheClaim.HandOver] = []
+        for tokens in [[1, 2, 3], [4, 5, 6]] {
+            let (_, handOver) = await manager.resolveHoldingClaim(
+                tokens: tokens, partitionKey: key,
+                diagnostics: .init(
+                    requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+            handOvers.append(handOver)
+        }
         manager.reevaluateBudgetCeiling()
         #expect(manager.budgetBand.ceilingBytes == twoLanes)
 
-        manager.completeRequest(requestID: first)
-        manager.completeRequest(requestID: second)
+        for handOver in handOvers { await handOver.withClaim { _ in } }
         manager.reevaluateBudgetCeiling()
         #expect(manager.budgetBand.ceilingBytes == oneLane)
     }

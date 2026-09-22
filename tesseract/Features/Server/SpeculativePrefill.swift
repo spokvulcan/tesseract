@@ -184,18 +184,20 @@ nonisolated enum SpeculativeCanonicalPrefill {
         container: ModelContainer,
         prefixCache: PrefixCacheManager
     ) async {
-        let restorePinID = UUID()
-        await run(
-            seed: seed, container: container, prefixCache: prefixCache,
-            restorePinID: restorePinID)
-        await prefixCache.completeRequest(requestID: restorePinID)
+        // The pass holds a copy-only **Cache Claim** of its own: it pins
+        // what it restores from and holds a lane, can never take a leaf,
+        // and lets both go when the scope concludes, preempted or not.
+        await CacheClaim.withCopyOnlyClaim(context: seed.diagnostics, prefixCache: prefixCache) {
+            claim in
+            await run(seed: seed, container: container, prefixCache: prefixCache, claim: claim)
+        }
     }
 
     private static func run(
         seed: Seed,
         container: ModelContainer,
         prefixCache: PrefixCacheManager,
-        restorePinID: UUID
+        claim: CopyOnlyClaim
     ) async {
         // swiftlint:enable function_body_length
         let diagnostics = seed.diagnostics
@@ -285,7 +287,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 modelFingerprint: seed.partitionKey.modelFingerprint,
                 diagnostics: diagnostics,
                 transientBoundary: transientBoundary,
-                pinningRestorePathFor: restorePinID,
+                for: claim,
                 // Yield to a preempting foreground request at the
                 // hydration read's segment boundaries (PRD #149 item 7)
                 // — a background pass must never make a user wait out a

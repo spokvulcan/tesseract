@@ -106,10 +106,10 @@ final class PrefixCacheManager {
     /// estimate folded from observed leaf sizes, subtracted from every
     /// measured ceiling before the cache sees it.
     private(set) var activeInferenceReserve = ActiveInferenceReserve()
-    /// Requests currently inside their completion drive (registered by
-    /// `resolve`, released by `completeRequest`). The reserve is
-    /// count-aware over this set — floored at one lane, so the next
-    /// request always has room even when the server idles.
+    /// Requests whose **Cache Claim** is open (added by `resolve`, let go
+    /// by the claim's `release`). The reserve is count-aware over this set
+    /// — floored at one lane, so the next request always has room even
+    /// when the server idles.
     private var activeRequestIDs: Set<UUID> = []
     /// Throttle anchor for the measurement cadence.
     private var lastCeilingReevaluation: ContinuousClock.Instant?
@@ -716,12 +716,13 @@ final class PrefixCacheManager {
     /// read never stalls the UI (ADR-0001) — the off-main handle is the
     /// **Snapshot Hydrating** seam the hit context carries.
     ///
-    /// `pinningRestorePathFor` — the requesting completion's ID, or `nil`
-    /// for callers whose restores need no floor protection (the
-    /// preemptible speculative pass, tests). When set, the hit node is
-    /// pinned into the **Budget Floor** until `completeRequest` releases
-    /// it: no drain may evict the body an in-flight request restored
-    /// from (ADR-0019).
+    /// `for claim` — the request's **Cache Claim**. Resolution adds the
+    /// claim's lane in the **Active-Inference Reserve**, on a hit and on a
+    /// miss alike, and pins the hit node into the **Budget Floor**: no drain
+    /// may evict the body an in-flight request restored from (ADR-0019).
+    /// The claim lets both go when it concludes. A Speculative Canonical
+    /// Prefill pass resolves for its copy-only claim; tests and benchmarks
+    /// that need no floor protection resolve with no claim.
     ///
     /// `transientBoundary` is a request-local Prefix-View Checkpoint captured
     /// on `tokens`' prefix; callers validate that original path before passing
@@ -742,8 +743,59 @@ final class PrefixCacheManager {
         modelFingerprint: String?,
         diagnostics: PrefixCacheDiagnostics.Context,
         transientBoundary: HybridCacheSnapshot? = nil,
-        pinningRestorePathFor pinRequestID: UUID? = nil,
+        for claim: CacheClaim,
         interruption: (@Sendable () -> Bool)? = nil
+    ) async -> Resolved {
+        await resolve(
+            tokens: tokens, promptTokenCount: promptTokenCount, partitionKey: partitionKey,
+            modelFingerprint: modelFingerprint, diagnostics: diagnostics,
+            transientBoundary: transientBoundary, holder: claim.resolutionEntry(),
+            interruption: interruption)
+    }
+
+    /// Snapshot Resolution for a Speculative Canonical Prefill pass.
+    nonisolated func resolve(
+        tokens: [Int],
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        modelFingerprint: String?,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        transientBoundary: HybridCacheSnapshot? = nil,
+        for claim: CopyOnlyClaim,
+        interruption: (@Sendable () -> Bool)? = nil
+    ) async -> Resolved {
+        await resolve(
+            tokens: tokens, promptTokenCount: promptTokenCount, partitionKey: partitionKey,
+            modelFingerprint: modelFingerprint, diagnostics: diagnostics,
+            transientBoundary: transientBoundary, holder: claim.resolutionEntry(),
+            interruption: interruption)
+    }
+
+    /// Snapshot Resolution that pins nothing and holds no lane.
+    nonisolated func resolve(
+        tokens: [Int],
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        modelFingerprint: String?,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        transientBoundary: HybridCacheSnapshot? = nil,
+        interruption: (@Sendable () -> Bool)? = nil
+    ) async -> Resolved {
+        await resolve(
+            tokens: tokens, promptTokenCount: promptTokenCount, partitionKey: partitionKey,
+            modelFingerprint: modelFingerprint, diagnostics: diagnostics,
+            transientBoundary: transientBoundary, holder: nil, interruption: interruption)
+    }
+
+    private nonisolated func resolve(
+        tokens: [Int],
+        promptTokenCount: Int,
+        partitionKey: CachePartitionKey,
+        modelFingerprint: String?,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        transientBoundary: HybridCacheSnapshot?,
+        holder pinRequestID: UUID?,
+        interruption: (@Sendable () -> Bool)?
     ) async -> Resolved {
         // A failed hydration clears the faulted node (its committed ref or
         // chain-prefix point), which strictly shrinks the body-less hittable
@@ -2364,8 +2416,8 @@ final class PrefixCacheManager {
         {
             bytes += body.memoryBytes
         }
-        for entry in restorePins {
-            for pin in entry.pins {
+        for pins in restorePins.values {
+            for pin in pins {
                 guard let node = pin.node,
                     let body = node.state.body,
                     nodes.insert(ObjectIdentifier(node)).inserted
@@ -2385,44 +2437,18 @@ final class PrefixCacheManager {
         weak var node: RadixTreeNode?
     }
 
-    private struct RequestRestorePins {
-        let requestID: UUID
-        var pins: [RestorePin]
-    }
-
-    /// Insertion-ordered pin sets, one per in-flight request. Bounded by
-    /// `maxPinnedRequests` as a leak backstop: a request whose release
-    /// hook never fires (a crashed drive path) ages out instead of
-    /// inflating the floor forever.
-    private var restorePins: [RequestRestorePins] = []
-    private static let maxPinnedRequests = 8
+    /// Pin sets, one per open **Cache Claim**. Only a claim lets its entry
+    /// go (`release(_:)`); a claim that never concludes trips its tripwire
+    /// rather than ageing out, so no quota can take a pin from a request
+    /// that is still running.
+    private var restorePins: [UUID: [RestorePin]] = [:]
 
     /// Pin a resolved restore-path node into the **Budget Floor** for
     /// the duration of its request: no drain may evict the body an
     /// in-flight request restored from (ADR-0019). Called by `resolve`
-    /// when the caller passes its request ID; released by
-    /// `completeRequest`.
-    func pinRestorePath(node: RadixTreeNode, requestID: UUID) {
-        if let index = restorePins.firstIndex(where: { $0.requestID == requestID }) {
-            restorePins[index].pins.append(RestorePin(node: node))
-            return
-        }
-        if restorePins.count >= Self.maxPinnedRequests {
-            // Ageing out a pin set removes that request's restore path
-            // from the floor while it may still be in flight — a floor
-            // breach, so it is surfaced (ADR-0019: never a silent policy
-            // outcome), not just absorbed. Reaching here at all means
-            // more concurrent requests than the backstop expects.
-            let evicted = restorePins.removeFirst()
-            Log.agent.error(
-                "restore-pin backstop overflow: dropping pins for request "
-                    + "\(evicted.requestID.uuidString) (>\(Self.maxPinnedRequests) in flight) — "
-                    + "its restore path leaves the Budget Floor early (ADR-0019)"
-            )
-        }
-        restorePins.append(
-            RequestRestorePins(requestID: requestID, pins: [RestorePin(node: node)])
-        )
+    /// for the claim it resolves for.
+    private func pinRestorePath(node: RadixTreeNode, requestID: UUID) {
+        restorePins[requestID, default: []].append(RestorePin(node: node))
     }
 
     /// What the cache holds for requests in flight: one **Active-Inference
@@ -2443,16 +2469,18 @@ final class PrefixCacheManager {
             leases: store.orderedPartitions().reduce(0) { $0 + $1.tree.leaseCount })
     }
 
-    /// Release a request's restore pins and its reserve lane.
-    /// Idempotent; called from the completion drive's all-exit-paths
-    /// tail. From here on the turn's protection is the freshest-leaf
-    /// floor member, not the pin.
-    func completeRequest(requestID: UUID) {
-        restorePins.removeAll { $0.requestID == requestID }
-        activeRequestIDs.remove(requestID)
+    /// Let go of a claim's Restore Pins, then its reserve lane. Only a
+    /// **Cache Claim** can mint the token, in its conclusion or its
+    /// tripwire. Idempotent. From here on the turn's protection is the
+    /// freshest-leaf floor member, not the pin. Returns what it let go.
+    @discardableResult
+    func release(_ claim: CacheClaim.Release) -> (lane: Bool, pins: Int) {
+        let pins = restorePins.removeValue(forKey: claim.requestID)?.count ?? 0
+        let lane = activeRequestIDs.remove(claim.requestID) != nil
         if activeRequestIDs.isEmpty {
             for (_, tree) in store.orderedPartitions() { tree.retireUnbackedViews() }
         }
+        return (lane, pins)
     }
 
     // MARK: - Eviction
@@ -2817,8 +2845,8 @@ final class PrefixCacheManager {
     @discardableResult
     func clearRAMTier() -> Int {
         var pinned: Set<ObjectIdentifier> = []
-        for entry in restorePins {
-            for pin in entry.pins {
+        for pins in restorePins.values {
+            for pin in pins {
                 guard let node = pin.node else { continue }
                 pinned.insert(ObjectIdentifier(node))
             }

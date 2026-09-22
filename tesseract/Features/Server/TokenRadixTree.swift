@@ -1165,7 +1165,8 @@ extension TokenRadixTree {
     }
 
     /// Caller must return a quiescent body; cancellation/error callers rewind
-    /// first. Neither completeRequest nor the Restore Pin backstop ends a lease.
+    /// first. Only check-in and rewind end a lease: a Cache Claim letting go
+    /// of its pins and lane never does.
     @discardableResult
     func endLeafLease(
         _ lease: LeafLease, on node: RadixTreeNode,

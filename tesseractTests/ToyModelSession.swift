@@ -698,18 +698,21 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let hasMTPDrafter = self.hasMTPDrafter
         let prefillFault = self.prefillFault
         return try await container.perform(nonSendable: payload) { context, payload in
-            return try await body(
-                RecordingModelSession(
-                    base: ContextBackedModelSession(
-                        context: context, mtpDrafter: hasMTPDrafter ? InactiveMTPDrafter() : nil),
-                    recorder: recorder,
-                    prefillFault: prefillFault,
-                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
-                    anchoredVisionPrepareOverride: anchorsVision
-                        ? Self.toyAnchoredVisionPrepare(context) : nil
-                ),
-                payload
-            )
+            try await ModelSessionScope.$isInside.withValue(true) {
+                try await body(
+                    RecordingModelSession(
+                        base: ContextBackedModelSession(
+                            context: context, mtpDrafter: hasMTPDrafter ? InactiveMTPDrafter() : nil
+                        ),
+                        recorder: recorder,
+                        prefillFault: prefillFault,
+                        producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
+                        anchoredVisionPrepareOverride: anchorsVision
+                            ? Self.toyAnchoredVisionPrepare(context) : nil
+                    ),
+                    payload
+                )
+            }
         }
     }
 

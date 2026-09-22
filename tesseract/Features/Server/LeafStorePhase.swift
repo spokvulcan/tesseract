@@ -52,6 +52,9 @@ nonisolated enum LeafStorePhase {
     /// drive ran, the session provider, and the admission context.
     struct Inputs: Sendable {
         let mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>
+        /// The request's **Cache Claim**, owned by the drive: the boundary
+        /// route resolves for it.
+        let claim: CacheClaim
         let sessions: any ModelSessionProviding
         let requestID: UUID
         let prefixCache: PrefixCacheManager
@@ -85,6 +88,7 @@ nonisolated enum LeafStorePhase {
     // swiftlint:disable function_parameter_count
     static func run(
         mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>,
+        claim: CacheClaim,
         conversation: HTTPPrefixCacheConversation,
         sessions: any ModelSessionProviding,
         requestID: UUID,
@@ -99,7 +103,7 @@ nonisolated enum LeafStorePhase {
     ) async -> Result {
         // swiftlint:enable function_parameter_count
         let inputs = Inputs(
-            mlxStartBox: mlxStartBox, sessions: sessions, requestID: requestID,
+            mlxStartBox: mlxStartBox, claim: claim, sessions: sessions, requestID: requestID,
             prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
             containsImages: conversation.messages.contains { !$0.images.isEmpty }, memory: memory)
         let mlxStart = inputs.mlxStart
@@ -457,7 +461,7 @@ nonisolated enum LeafStorePhase {
                         modelFingerprint: mlxStart.partitionKey.modelFingerprint,
                         diagnostics: diagnostics,
                         transientBoundary: matchingView,
-                        pinningRestorePathFor: diagnostics.requestID
+                        for: inputs.claim
                     ).lookup
                 }
             }
