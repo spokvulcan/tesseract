@@ -316,7 +316,9 @@ struct CompletionDeliveryTests {
             )
             returned.set()
         }
-        let deadline = ContinuousClock.now + .seconds(5)
+        // Generous: the loop ends as soon as the finish arrives, and a
+        // loaded full-target run can take many seconds to schedule it.
+        let deadline = ContinuousClock.now + .seconds(30)
         while await !sink.calls.contains(where: { if case .finish = $0 { true } else { false } }),
             ContinuousClock.now < deadline
         {
@@ -356,6 +358,7 @@ struct CompletionDeliveryTests {
         #expect(await replay.messages.isEmpty)
         #expect(await hasPhase(log, .cancelled))
         #expect(scripted.cancelled.isSet)
+        #expect(scripted.drained.isSet, "a disconnect cancels the drive, then waits for it")
     }
 
     /// The non-streaming transport now runs under the Stream Lifecycle Driver
