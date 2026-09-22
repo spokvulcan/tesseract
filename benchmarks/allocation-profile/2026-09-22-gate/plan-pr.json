@@ -1,0 +1,50 @@
+{
+  "status": "APPROVED",
+  "ownerApproval": "The owner approved the #554 real-model memory gate as written in the PRD's Testing Decisions on 2026-09-22, and gave the go-ahead to quit the app and run it on 2026-09-22: qwen3.8-27b with its DFlash2 draft; Release builds of main at 52ccbf8f and of the PR head, run with the app closed in the order main, PR, main, PR; the p8k and p32k steps only; #553's stops; no retry after a stop.",
+  "purpose": "#554 gate, PR arm: the cancelled-generation profile at 8k and 33k, compared step for step with the other arm in the same session.",
+  "appCommit": "5995a0d1",
+  "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
+  "releaseBinarySHA256": "a1b225e85aa2ab0a9a2bec282ff59a2a0d33165882e3b1879058474fbef74bcf",
+  "host": "Mac15,9 (Apple M3 Max), 48 GiB, macOS 27.0 (26A428)",
+  "model": "qwen3.8-27b",
+  "modelFolders": [
+    "mlx-community_Qwen3.8-27B-4bit",
+    "incoai_Qwen3.8-27B-DFlash2"
+  ],
+  "speculation": "app default (DFlash2 draft)",
+  "kv": "unquantized (float16)",
+  "port": 18321,
+  "reasoningEffort": "low",
+  "shortOutputTokens": 64,
+  "longOutputTokens": 4096,
+  "settleSeconds": 5,
+  "fillerFile": "/Users/owl/projects/tesseract-gate-main/CONTEXT.md",
+  "fillerSHA256": "a3c120295fef3d2701417fef9388623c2a6308daf51859bb2548ca5d29204b5f",
+  "steps": [
+    {
+      "id": "p8k",
+      "addCharacters": 30000,
+      "cancelAfterTokens": 300,
+      "expectedPromptTokensApprox": 8000
+    },
+    {
+      "id": "p32k",
+      "addCharacters": 100000,
+      "cancelAfterTokens": 1024,
+      "expectedPromptTokensApprox": 33000
+    }
+  ],
+  "resources": {
+    "minimumInitialAvailableBytes": 21474836480,
+    "expectedPeakBytes": 30064771072,
+    "footprintStopBytes": 36507222016,
+    "minimumAvailableStopBytes": 6442450944,
+    "swapGrowthStopBytes": 1073741824,
+    "pressureStopLevel": 4,
+    "maximumRequestSeconds": 400,
+    "maximumCampaignSeconds": 3600,
+    "sampleIntervalMilliseconds": 250,
+    "cancelGraceSeconds": 5
+  },
+  "note": "The filler is CONTEXT.md at 52ccbf8f, the same bytes as #553's compaction run, so both arms and that baseline see the same prompts. The 66k step is out of scope for this approval."
+}
