@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.15.0](https://github.com/spokvulcan/tesseract/compare/v1.14.1...v1.15.0) (2026-09-22)
+
+
+### Features
+
+* **cache:** add opt-in warm body compression ([#540](https://github.com/spokvulcan/tesseract/issues/540)) ([7531ae3](https://github.com/spokvulcan/tesseract/commit/7531ae3765b35c2270970a274db3e98a08b9848a))
+* **cache:** add RAM prefix-view checkpoints ([#539](https://github.com/spokvulcan/tesseract/issues/539)) ([9e9d91e](https://github.com/spokvulcan/tesseract/commit/9e9d91e0a27eb743aee172d1e6891641fe4a198c))
+* **cache:** compress cold leaves after check-in ([#546](https://github.com/spokvulcan/tesseract/issues/546)) ([dd83d2c](https://github.com/spokvulcan/tesseract/commit/dd83d2c5b30359ad9f39254d927d6ab44e7c6f06))
+* **cache:** persist detached prefix-view checkpoints ([#545](https://github.com/spokvulcan/tesseract/issues/545)) ([884dfa5](https://github.com/spokvulcan/tesseract/commit/884dfa534ea05c1ac2a5df0d04e96ffe713752df))
+* **cache:** price the Active-Inference Reserve on one leaf plus growth ([#537](https://github.com/spokvulcan/tesseract/issues/537)) ([6cc03e1](https://github.com/spokvulcan/tesseract/commit/6cc03e1bff4a043b4ab777c1ce3aa93d15fa6535))
+* **cache:** restore prefix views from warm backers ([#547](https://github.com/spokvulcan/tesseract/issues/547)) ([0681170](https://github.com/spokvulcan/tesseract/commit/06811703ec38965426696601c1cab56c95951569))
+* **cache:** run the [#520](https://github.com/spokvulcan/tesseract/issues/520) prefix cache memory program on the 48 GiB host ([#553](https://github.com/spokvulcan/tesseract/issues/553)) ([ed9751a](https://github.com/spokvulcan/tesseract/commit/ed9751a5cb70f2b88e0a4785540b033eb091bdd5))
+* **cache:** wait briefly for a pending first payload before copying the leaf ([#538](https://github.com/spokvulcan/tesseract/issues/538)) ([e146ba4](https://github.com/spokvulcan/tesseract/commit/e146ba46ecbcf6e060e4fd8e59d85ebae0734bb7))
+
+
+### Bug Fixes
+
+* **cache:** credit a prefix view reuse to its Backing Leaf ([#550](https://github.com/spokvulcan/tesseract/issues/550)) ([59b2b2e](https://github.com/spokvulcan/tesseract/commit/59b2b2e6a935f2ad4b618d57e26b111b740ef607))
+
+
+### Performance Improvements
+
+* **cache:** move the boundary leaf's re-prefilled cache instead of copying it ([#552](https://github.com/spokvulcan/tesseract/issues/552)) ([994d067](https://github.com/spokvulcan/tesseract/commit/994d0674d36e4e4699eb0f00d9b3f5678ee94d12))
+* **cache:** preregister SSD hydration read experiment ([#543](https://github.com/spokvulcan/tesseract/issues/543)) ([01aef5e](https://github.com/spokvulcan/tesseract/commit/01aef5eda8244d9dad9bd178b8f79483988a2f2a))
+* **cache:** reserve prompt capacity and grow geometrically ([#542](https://github.com/spokvulcan/tesseract/issues/542)) ([278aebe](https://github.com/spokvulcan/tesseract/commit/278aebef78c6e4b3bd4694dd9d0ef62f1c17196b))
+* **cache:** stream borrowed SSD payload arrays ([#541](https://github.com/spokvulcan/tesseract/issues/541)) ([ead9118](https://github.com/spokvulcan/tesseract/commit/ead911822c05510b40708bffe3fc349c87ad3c4a))
+* **cache:** use prefix views for transient boundaries ([#544](https://github.com/spokvulcan/tesseract/issues/544)) ([e94e149](https://github.com/spokvulcan/tesseract/commit/e94e149d47dece8c96256f4efb905b93261a9a20))
+
+
+### Code Refactoring
+
+* **cache:** give every snapshot layer one kind, sliceable attention or whole-state ([#535](https://github.com/spokvulcan/tesseract/issues/535)) ([cf1d67c](https://github.com/spokvulcan/tesseract/commit/cf1d67c2daca7e1d0f15c1d66575161a4d336e34))
+
+
+### Documentation
+
+* **cache:** preregister warm body parity gate ([#548](https://github.com/spokvulcan/tesseract/issues/548)) ([d770ba4](https://github.com/spokvulcan/tesseract/commit/d770ba4a7103b148ed88311c30ed097f16a8eeb2))
+
 ## [1.14.1](https://github.com/spokvulcan/tesseract/compare/v1.14.0...v1.14.1) (2026-09-18)
 
 
