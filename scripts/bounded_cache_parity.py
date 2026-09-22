@@ -11,6 +11,7 @@ import subprocess
 import time
 
 from allocation_inventory_probe import GIB, OSProbe, file_digest, write_json
+from warm_body_parity import available_bytes
 
 
 def main():
@@ -21,8 +22,9 @@ def main():
     args = parser.parse_args()
     plan = {"promptTokens": 2048, "leafOffset": 1024, "sentinelTokens": 1,
             "kvBits": None, "maxSeconds": 600, "sampleIntervalSeconds": 0.25,
-            "footprintStopBytes": 32 * GIB, "swapGrowthStopBytes": 2 * GIB,
-            "allowedPressureLevels": [1, 2], "model": "qwen3.8-27b",
+            "footprintStopBytes": 32 * GIB, "minimumAvailableStopBytes": 6 * GIB,
+            "swapGrowthStopBytes": 1 * GIB, "allowedPressureLevels": [1, 2],
+            "model": "qwen3.8-27b",
             "speculationLoadPolicy": "dflash2", "speculativeDecodingExercised": False}
     if not args.run:
         print(json.dumps(plan, indent=2))
@@ -44,6 +46,7 @@ def main():
                                     "bytes": path.stat().st_size, "sha256": file_digest(path)})
     write_json(args.output / "model-files.json", model_files)
     probe = OSProbe()
+    page_size = probe.sysctl("vm.pagesize", ctypes.c_uint32()).value
     before = probe.read(os.getpid())
     if before["pressureLevel"] != 1:
         parser.error("Starting memory pressure must be normal")
@@ -81,11 +84,14 @@ def main():
                     if child.poll() is not None:
                         break
                     raise
+                sample["availableBytes"] = available_bytes(probe, page_size)
                 samples.append(sample)
                 if sample["pressureLevel"] not in plan["allowedPressureLevels"]:
                     stop = "memory pressure"
                 elif sample["processFootprintBytes"] >= plan["footprintStopBytes"]:
                     stop = "process footprint"
+                elif sample["availableBytes"] < plan["minimumAvailableStopBytes"]:
+                    stop = "available memory"
                 elif sample["systemSwapUsedBytes"] - before["systemSwapUsedBytes"] >= plan["swapGrowthStopBytes"]:
                     stop = "system swap growth"
                 elif time.monotonic() - started >= plan["maxSeconds"]:
@@ -122,6 +128,7 @@ def main():
     outcome = {"exitCode": child.returncode, "resourceStop": stop, "passed": passed,
                "elapsedSeconds": time.monotonic() - started,
                "maxSampledFootprintBytes": max((s["processFootprintBytes"] for s in samples), default=None),
+               "minSampledAvailableBytes": min((s["availableBytes"] for s in samples), default=None),
                "maxSystemSwapGrowthBytes": max((s["systemSwapUsedBytes"] - before["systemSwapUsedBytes"]
                                                 for s in samples), default=None)}
     write_json(args.output / "outcome.json", outcome)

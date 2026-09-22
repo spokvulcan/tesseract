@@ -681,8 +681,9 @@ The gate does not run speculative decoding; use the separate HTTP replay for
 that behavior. It cannot be combined with `--bench-replay-request`.
 
 `scripts/bounded_cache_parity.py` prints the fixed plan without `--run` and
-wraps this gate in fixed resource stops (32 GiB sampled footprint, 2 GiB additional
-system swap, critical/unknown pressure, ten-minute deadline). Use a Release binary,
+wraps this gate in fixed resource stops (32 GiB sampled footprint, 6 GiB minimum
+available memory, 1 GiB additional system swap, critical/unknown pressure,
+ten-minute deadline). Use a Release binary,
 a new output directory and one validation process. Quit the app first and
 restore it afterward. The scratch SSD store is flushed and removed on success,
 thrown failure and cooperative cancellation. `BoundedCacheParityTests` exercises
