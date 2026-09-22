@@ -41,6 +41,8 @@ private nonisolated func makeInternalInferenceStream(
             await start?.waitForCompletion()
             continuation.finish()
         } catch {
+            start?.cancel()
+            await start?.waitForCompletion()
             continuation.finish(throwing: error)
         }
     }
