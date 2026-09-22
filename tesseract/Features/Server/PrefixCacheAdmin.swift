@@ -20,7 +20,9 @@ import Foundation
 /// same contract the retired actor forwards had.
 @MainActor
 final class PrefixCacheAdmin {
-    private weak var current: PrefixCacheManager?
+    /// The live manager, readable so hermetic suites can stage tree state
+    /// the request path cannot reach on its own.
+    private(set) weak var current: PrefixCacheManager?
 
     nonisolated init() {}
 
@@ -41,6 +43,12 @@ final class PrefixCacheAdmin {
     /// leaf observations folded so far (#522). `nil` when no cache is live.
     var activeInferenceReserve: ActiveInferenceReserve? {
         current?.activeInferenceReserve
+    }
+
+    /// What the live cache holds for requests in flight — reserve lanes,
+    /// Restore Pins, Leaf Leases. `nil` when no cache is live.
+    var requestHoldings: PrefixCacheManager.RequestHoldings? {
+        current?.requestHoldings
     }
 
     /// The live cache's **Eviction Configuration**, or `nil`. Lets tests

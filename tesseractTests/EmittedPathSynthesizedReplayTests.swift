@@ -67,6 +67,10 @@ struct EmittedPathSynthesizedReplayTests {
             Issue.record("cancelled prefill must throw")
         } catch is CancellationError {}
         await draining?.value
+        // The cancelled start gave back its Restore Pins, its reserve lane
+        // and the leaf it had leased.
+        #expect(
+            session.fixture.cacheAdmin.requestHoldings == PrefixCacheManager.RequestHoldings.none)
         let events = session.capture.drain()
         let terminal = try #require(
             events.last {
@@ -928,6 +932,7 @@ struct EmittedPathSynthesizedReplayTests {
             identity: ModelIdentity? = nil,
             ssdConfig: SSDPrefixCacheConfig? = nil,
             hasMTPDrafter: Bool = false,
+            prefillFault: ToyPrefillFault? = nil,
             onForward: (@Sendable (Int) -> Void)? = nil
         ) {
             let uuid = UUID().uuidString
@@ -945,7 +950,8 @@ struct EmittedPathSynthesizedReplayTests {
                 vision: vision,
                 reportsFlatTextTokens: vision == nil,
                 anchorsVision: vision != nil,
-                hasMTPDrafter: hasMTPDrafter)
+                hasMTPDrafter: hasMTPDrafter,
+                prefillFault: prefillFault)
             self.tokenizer = tokenizer
             self.queue = queue
             self.provider = provider

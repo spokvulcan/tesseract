@@ -2425,6 +2425,24 @@ final class PrefixCacheManager {
         )
     }
 
+    /// What the cache holds for requests in flight: one **Active-Inference
+    /// Reserve** lane each, the requests holding **Restore Pins**, and the
+    /// trees' **Leaf Leases**. The reserve and the **Budget Floor** are
+    /// priced from exactly these.
+    struct RequestHoldings: Equatable, Sendable {
+        var lanes = 0
+        var pinnedRequests = 0
+        var leases = 0
+
+        static let none = RequestHoldings()
+    }
+
+    var requestHoldings: RequestHoldings {
+        RequestHoldings(
+            lanes: activeRequestIDs.count, pinnedRequests: restorePins.count,
+            leases: store.orderedPartitions().reduce(0) { $0 + $1.tree.leaseCount })
+    }
+
     /// Release a request's restore pins and its reserve lane.
     /// Idempotent; called from the completion drive's all-exit-paths
     /// tail. From here on the turn's protection is the freshest-leaf
