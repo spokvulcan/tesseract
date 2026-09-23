@@ -354,7 +354,9 @@ nonisolated enum ImagePlaceholderRuns {
     /// than the processor expanded: the caller keeps the processor's own
     /// list.
     static func expand(renderTokens: [Int], padTokenId: Int, runLengths: [Int]) -> [Int]? {
-        guard renderTokens.count { $0 == padTokenId } == runLengths.count else { return nil }
+        guard renderTokens.count(where: { $0 == padTokenId }) == runLengths.count else {
+            return nil
+        }
         var expanded: [Int] = []
         expanded.reserveCapacity(renderTokens.count + runLengths.reduce(0, +) - runLengths.count)
         var runIndex = 0

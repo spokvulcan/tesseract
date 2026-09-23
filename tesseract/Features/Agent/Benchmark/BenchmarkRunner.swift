@@ -599,9 +599,9 @@ final class BenchmarkRunner {
     private func hardwareString() -> String {
         var size: size_t = 0
         sysctlbyname("hw.model", nil, &size, nil, 0)
-        var model = [CChar](repeating: 0, count: size)
+        var model = [UInt8](repeating: 0, count: size)
         sysctlbyname("hw.model", &model, &size, nil, 0)
-        let hwModel = String(cString: model)
+        let hwModel = String(bytes: model.prefix { $0 != 0 }, encoding: .utf8) ?? "unknown"
 
         let memGB = ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)
         return "\(hwModel), \(memGB)GB"

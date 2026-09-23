@@ -185,7 +185,7 @@ struct CompletionHandler: Sendable {
             requestModel: completionRequest.model,
             physical: ""
         )
-        let logHandle = await activityLog.startRequest(
+        let logHandle = activityLog.startRequest(
             completionID: completionID,
             model: requestedModelName,
             stream: completionRequest.stream == true,
@@ -215,10 +215,10 @@ struct CompletionHandler: Sendable {
                 }
             }
         } catch is CancellationError {
-            await activityLog.cancel(handle: logHandle)
+            activityLog.cancel(handle: logHandle)
             try await writer.send(.serviceUnavailable("Request cancelled"))
         } catch is LeaseTimeoutError {
-            await activityLog.fail(handle: logHandle, error: "Model is busy")
+            activityLog.fail(handle: logHandle, error: "Model is busy")
             let base = HTTPResponse.serviceUnavailable("Model is busy, try again later")
             try await writer.send(
                 HTTPResponse(
@@ -228,7 +228,7 @@ struct CompletionHandler: Sendable {
                     body: base.body
                 ))
         } catch AgentEngineError.modelNotDownloaded(let id) {
-            await activityLog.fail(handle: logHandle, error: "Model not downloaded")
+            activityLog.fail(handle: logHandle, error: "Model not downloaded")
             // Post-lease race: validated pre-lease, then the model was
             // deleted from Settings → Models while we were queued. Surface
             // the same 404 `model_not_found` shape as the pre-lease path so
@@ -236,10 +236,10 @@ struct CompletionHandler: Sendable {
             // whether the check failed before or after queueing.
             try await writer.send(.modelNotFound(modelID: id, reason: .notDownloaded))
         } catch let error as AgentEngineError {
-            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
+            activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try await writer.send(.serviceUnavailable(error.localizedDescription))
         } catch {
-            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
+            activityLog.fail(handle: logHandle, error: error.localizedDescription)
             Log.server.error("Completion handler error: \(error)")
             try await writer.send(.internalError(error.localizedDescription))
         }
@@ -269,12 +269,12 @@ struct CompletionHandler: Sendable {
         case .success(let started):
             generation = started
         case .failure(let error) where error is CancellationError:
-            await activityLog.cancel(handle: logHandle)
+            activityLog.cancel(handle: logHandle)
             try? await writer.send(.serviceUnavailable("Request cancelled"))
             return
         case .failure(let error):
             Log.server.error("Generation failed to start: \(error)")
-            await activityLog.fail(handle: logHandle, error: error.localizedDescription)
+            activityLog.fail(handle: logHandle, error: error.localizedDescription)
             try? await writer.send(
                 .serviceUnavailable("Generation failed: \(error.localizedDescription)"))
             return

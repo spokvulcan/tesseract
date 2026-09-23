@@ -129,9 +129,8 @@ actor MemoryEmbedder {
     /// cosine 0.96 between "I love cats." and "He is from Europe.").
     private func encodeAndPool(_ texts: [String], applyLayerNorm: Bool = true) async -> [[Float]] {
         guard let container, !texts.isEmpty else { return [] }
-        return await container.perform {
-            (model: EmbeddingModel, tokenizer: MLXLMCommon.Tokenizer, pooling: Pooling) -> [[Float]]
-            in
+        return await container.perform { context -> [[Float]] in
+            let (model, tokenizer, pooling) = (context.model, context.tokenizer, context.pooling)
             let eos = tokenizer.eosTokenId ?? 151_643
             let inputs = texts.map { text in
                 var tokens = tokenizer.encode(text: Self.truncate(text), addSpecialTokens: true)

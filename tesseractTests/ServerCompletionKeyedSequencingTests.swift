@@ -263,7 +263,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         let fixture = ServerCompletionFixture(
             provider: ToyModelSessionProvider(
                 model: ToyLanguageModel(script: render + [100], headDim: 32), tokenizer: tokenizer))
-        var parameters = await Self.parameters(kvBits: kvBits)
+        var parameters = Self.parameters(kvBits: kvBits)
         parameters.prefillStepSize = 64
         parameters.maxTokens = 8192
         let cold = try await fixture.start(conversation: first, parameters: parameters)

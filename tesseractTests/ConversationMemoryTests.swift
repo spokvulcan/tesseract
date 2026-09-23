@@ -73,8 +73,7 @@ struct ConversationMemoryTests {
     func enrichKeepsABareMessageBare() async throws {
         let memory = alwaysRecalling()
         let user = UserMessage(content: "hello")
-        let out = await memory.enrich(user)
-        let enriched = try #require(out as? UserMessage)
+        let enriched = await memory.enrich(user)
         #expect(enriched.injectedContext == Self.block)
         #expect(enriched.id == user.id)
     }

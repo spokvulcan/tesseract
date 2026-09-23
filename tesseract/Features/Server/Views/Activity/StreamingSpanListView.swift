@@ -134,7 +134,8 @@ private struct LiveStreamingText: View {
                 styled(Text(split.stable))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            styled(Text(split.live) + Text("▍").foregroundColor(.green))
+            let caret = Text("▍").foregroundColor(.green)
+            styled(Text("\(Text(split.live))\(caret)"))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

@@ -130,7 +130,7 @@ nonisolated struct DFlash2BenchRunner {
             guard let biases else { throw DFlash2BenchError.draftMissing }
             eval(x, wq, scales, biases)
             let launch = {
-                quantizedMatmul(
+                quantizedMM(
                     x, wq, scales: scales, biases: biases, transpose: true, groupSize: 64,
                     bits: 4)
             }
@@ -492,7 +492,6 @@ nonisolated struct DFlash2BenchRunner {
         }
         var timing: Timing?
         for lay in layouts {
-            let rope = RoPE(dimensions: lay.rd, traditional: false, base: base, scale: 1)
             MLXRandom.seed(31)
             let qw =
                 (MLXRandom.normal([lay.hd]) * 0.1 + 1).asType(.bfloat16)
@@ -553,7 +552,6 @@ nonisolated struct DFlash2BenchRunner {
         let (lay, rows, offset, qw, kw) = (
             timing.layout, timing.rows, timing.offset, timing.qw, timing.kw
         )
-        let rope = RoPE(dimensions: lay.rd, traditional: false, base: base, scale: 1)
         let arms: [(String, () -> [MLXArray])] = [
             (
                 "normrope-ops",

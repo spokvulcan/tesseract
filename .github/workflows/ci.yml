@@ -36,8 +36,11 @@ permissions:
 
 env:
   # Semver range so a runner-image refresh doesn't brick CI; keep the floor
-  # roughly in sync with the local toolchain (currently Xcode 26.6).
-  XCODE_VERSION: "^26.4"
+  # roughly in sync with the local toolchain (currently Xcode 27.0). Each
+  # Xcode major has its own runner image — macos-26 carries only 26.x — so a
+  # major bump changes the jobs' runs-on label too (here and in
+  # release-build.yml).
+  XCODE_VERSION: "^27.0"
 
 concurrency:
   # Label requests must not cancel the normal PR lint, and manual runs must
@@ -51,7 +54,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-build')
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
@@ -66,7 +69,7 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Cache SPM checkouts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: DerivedData/SourcePackages
           key: spm-${{ runner.os }}-${{ hashFiles('tesseract.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
@@ -92,7 +95,7 @@ jobs:
     if: >-
       github.event_name != 'pull_request' ||
       (github.event.action == 'labeled' && github.event.label.name == 'run-build')
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
@@ -107,7 +110,7 @@ jobs:
         run: xcodebuild -downloadComponent MetalToolchain
 
       - name: Cache SPM checkouts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: DerivedData/SourcePackages
           key: spm-${{ runner.os }}-${{ hashFiles('tesseract.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
@@ -136,7 +139,7 @@ jobs:
 
       - name: Upload test results on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: test-results
           path: TestResults.xcresult

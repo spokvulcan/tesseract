@@ -229,9 +229,9 @@ struct EmissaryConceptView: View {
         let words = feed.spokenWords.prefix(feed.revealedWordCount)
         let settled = words.dropLast().joined(separator: " ")
         let newest = words.last ?? ""
-        return
-            (Text(settled.isEmpty ? "" : settled + " ").foregroundStyle(.secondary)
-            + Text(newest).foregroundStyle(.primary))
+        let settledText = Text(settled.isEmpty ? "" : settled + " ").foregroundStyle(.secondary)
+        let newestText = Text(newest).foregroundStyle(.primary)
+        return Text("\(settledText)\(newestText)")
             .font(.system(size: 13.5, weight: .medium, design: .rounded))
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())

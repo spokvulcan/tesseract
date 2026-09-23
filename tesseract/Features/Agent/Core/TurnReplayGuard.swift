@@ -91,7 +91,7 @@ nonisolated struct TurnReplayGuard {
     static func signature(of message: AssistantMessage) -> String? {
         let calls = message.toolCalls
         guard !calls.isEmpty else { return nil }
-        let text = (message.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = message.text.trimmingCharacters(in: .whitespacesAndNewlines)
         let callSignatures = calls.map { call in
             "\(call.name)|\(canonicalizeHTTPPrefixCacheToolArgumentsJSON(call.argumentsJSON))"
         }

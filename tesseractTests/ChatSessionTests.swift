@@ -358,7 +358,7 @@ struct ChatSessionTests {
 
     @Test func emptyCancelledTurnIsDropped() {
         let session = makeChatSession()
-        var builder = AssistantPartsBuilder()
+        let builder = AssistantPartsBuilder()
 
         session.handle(.agentStart)
         session.handle(.messageStart(message: builder.snapshot()))

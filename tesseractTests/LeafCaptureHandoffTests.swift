@@ -61,8 +61,8 @@ struct LeafCaptureHandoffTests {
     @Test func admittedLeafOwnsTheOriginalObjectsAndCheckpointStillCopies() throws {
         let request = owner()
         let retainedRequest = request
-        weak var attention = request.cache[0] as? KVCacheSimple
-        weak var recurrent = request.cache[1] as? MambaCache
+        weak let attention = request.cache[0] as? KVCacheSimple
+        weak let recurrent = request.cache[1] as? MambaCache
         let addresses = request.cache.flatMap(\.state).map(backingAddress)
         let arrayIDs = request.cache.flatMap(\.state).map(ObjectIdentifier.init)
         let checkpoint = try #require(
@@ -127,7 +127,7 @@ struct LeafCaptureHandoffTests {
             demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) })
         defer { try? FileManager.default.removeItem(at: root) }
         let request = owner()
-        weak var attention = request.cache[0] as? KVCacheSimple
+        weak let attention = request.cache[0] as? KVCacheSimple
         let expected = request.cache[0].state[0].asData(access: .copy).data
         try admit(request, into: manager)
         try admit(owner(), into: manager, tokens: Array(20...27))

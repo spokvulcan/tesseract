@@ -25,7 +25,7 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
     public func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws {
         if model != nil, loadedSpec == spec { return }
         onPhase?(.loadingWeights)
-        let loaded = try await TTSModelUtils.loadModel(modelRepo: spec.repo)
+        let loaded = try await TTS.loadModel(modelRepo: spec.repo)
         guard let qwen = loaded as? Qwen3TTSModel else {
             throw SpeechEngineError.modelUnavailable(
                 "loaded model for \(spec.repo) is not a Qwen3-TTS model")

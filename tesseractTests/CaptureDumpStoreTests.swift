@@ -14,6 +14,7 @@
 import AVFoundation
 import Foundation
 import Testing
+import os
 
 @testable import Tesseract_Agent
 
@@ -134,17 +135,17 @@ struct CaptureDumpStoreTests {
     @Test func protectedRecordingsSurviveRingEviction() async {
         let directory = makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        var protected: Set<String> = []
+        let protected = OSAllocatedUnfairLock<Set<String>>(initialState: [])
         let store = CaptureDumpStore(
             directory: directory,
             limits: .init(maxRecordings: 2, maxTotalBytes: .max),
-            protectedFileNames: { protected }
+            protectedFileNames: { protected.withLock { $0 } }
         )
 
         // Oldest recording becomes protected (its pair went gold).
         let firstName = store.save(makeCapture())
         await store.flush()
-        if let firstName { protected.insert(firstName) }
+        if let firstName { protected.withLock { _ = $0.insert(firstName) } }
 
         for _ in 0..<3 {
             store.save(makeCapture())

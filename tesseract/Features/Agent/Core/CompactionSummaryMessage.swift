@@ -14,6 +14,12 @@ nonisolated struct CompactionSummaryMessage: CustomAgentMessage, PersistableMess
     let tokensBefore: Int
     let timestamp: Date
 
+    /// Spelled out only to keep `customType` in persisted JSON: a constant is
+    /// encoded but never decoded, and the synthesized keys warn about that.
+    private enum CodingKeys: String, CodingKey {
+        case customType, id, summary, tokensBefore, timestamp
+    }
+
     init(id: UUID = UUID(), summary: String, tokensBefore: Int, timestamp: Date = Date()) {
         self.id = id
         self.summary = summary
