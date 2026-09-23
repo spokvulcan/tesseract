@@ -324,3 +324,75 @@ extension SnapshotAdmission.CheckpointCandidate {
         )
     }
 }
+
+extension PrefixCacheManager {
+    /// Resolve for a fresh request **Cache Claim** and hand the claim over
+    /// unredeemed: it keeps the lane and the Restore Pins resolution added
+    /// until `handOver.withClaim { _ in }` concludes it. The claim belongs
+    /// to `diagnostics.requestID`.
+    func resolveHoldingClaim(
+        tokens: [Int],
+        partitionKey: CachePartitionKey,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        modelFingerprint: String? = nil,
+        transientBoundary: HybridCacheSnapshot? = nil,
+        sessions: any ModelSessionProviding = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2])),
+        tripwire: CacheClaim.Tripwire = .standard
+    ) async -> (resolved: Resolved, handOver: CacheClaim.HandOver) {
+        let (resolved, handOver) = await CacheClaim.withRequestClaim(
+            context: diagnostics, prefixCache: self, sessions: sessions, memory: nil,
+            tripwire: tripwire
+        ) { claim in
+            await resolve(
+                tokens: tokens, promptTokenCount: tokens.count, partitionKey: partitionKey,
+                modelFingerprint: modelFingerprint, diagnostics: diagnostics,
+                transientBoundary: transientBoundary, for: claim)
+        }
+        return (resolved, handOver)
+    }
+}
+
+extension PrefixCacheManager {
+    /// Check `resolved` out for a fresh request **Cache Claim** inside the
+    /// toy Model Session, and hand the claim over unredeemed with whatever
+    /// it holds: a handoff keeps its lease until the claim rewinds or checks
+    /// in.
+    func checkOutHoldingClaim(
+        _ resolved: Resolved,
+        tokens: [Int],
+        maximumAdvance: Int = 10,
+        identityKeySpace: Bool = true,
+        diagnostics: PrefixCacheDiagnostics.Context,
+        sessions: any ModelSessionProviding = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2])),
+        tripwire: CacheClaim.Tripwire = .standard
+    ) async -> (outcome: CacheClaim.RestoreOutcome, handOver: CacheClaim.HandOver) {
+        let (outcome, handOver) = await CacheClaim.withRequestClaim(
+            context: diagnostics, prefixCache: self, sessions: sessions, memory: nil,
+            tripwire: tripwire
+        ) { claim in
+            await sessions.withSession { session in
+                await claim.checkOut(
+                    resolved, tokens: tokens, maximumAdvance: maximumAdvance,
+                    identityKeySpace: identityKeySpace, in: session)
+            }
+        }
+        return (outcome, handOver)
+    }
+}
+
+extension CacheClaim.HandOver {
+    /// Redeem the hand-over, rewind whatever the claim still leases in the
+    /// toy Model Session, and conclude: the rewound leaf's offset, `nil`
+    /// when nothing was leased.
+    @discardableResult
+    func rewindAndConclude(
+        sessions: any ModelSessionProviding = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [1, 2]))
+    ) async -> Int? {
+        await withClaim { claim in
+            await sessions.withSession { session in await claim.rewind(in: session) }
+        }
+    }
+}

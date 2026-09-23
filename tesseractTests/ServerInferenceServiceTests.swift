@@ -513,6 +513,93 @@ struct ServerInferenceServiceTests {
         #expect(completion.calls.count == 1)
     }
 
+    /// A completed agent-chat completion still has its drive's tail to run,
+    /// which gives the request's Cache Claim back. The chat's stream ends
+    /// only after that tail, so the agent's next turn cannot overlap it in
+    /// the Active-Inference Reserve (ADR-0069), exactly as HTTP delivery
+    /// waits.
+    @Test func sharedGenerateClosureEndsTheStreamOnlyAfterACompletedDrive() async throws {
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        let drive = AsyncFlag()
+        let driveFinished = LeaseAcquiredSignal()
+        let cancelledEarly = LeaseAcquiredSignal()
+        completion.start = HTTPServerGenerationStart(
+            stream: makeEventStream(textChunks: ["done"]),
+            cachedTokenCount: 0,
+            // Stream termination cancels the start once it is over; only a
+            // cancel that lands while the drive still runs would matter.
+            cancel: { if !driveFinished.isSet { cancelledEarly.set() } },
+            waitForCompletion: {
+                await drive.waitUntilSet()
+                driveFinished.set()
+            }
+        )
+        let service = ServerInferenceService(
+            completionStarter: completion,
+            engine: engine,
+            modelStateProvider: { nil }
+        )
+        let generate = makeServerInferenceGenerateClosure(
+            inferenceService: service,
+            parametersProvider: { .default }
+        )
+        let stream = generate("System", [.user(content: "Hello")], nil, nil)
+        let ended = LeaseAcquiredSignal()
+        let consumer = Task {
+            let text = try await collectText(from: stream)
+            ended.set()
+            return text
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!ended.isSet, "the chat's stream must outlast the drive's tail")
+        await drive.set()
+        #expect(try await consumer.value == "done")
+        #expect(!cancelledEarly.isSet, "a completed drive is awaited, not cancelled")
+    }
+
+    /// A failed agent-chat completion still has its drive's tail to run.
+    /// The chat's stream reports the failure only after that tail, as HTTP
+    /// delivery cancels and waits for the drive on a failure.
+    @Test func sharedGenerateClosureReportsAFailureOnlyAfterTheDrive() async throws {
+        struct Failed: Error {}
+        let engine = StubManagedInferenceEngine()
+        let completion = StubServerCompletionStarter()
+        let drive = AsyncFlag()
+        let cancelled = LeaseAcquiredSignal()
+        let (failing, feed) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
+        feed.yield(.text("par"))
+        feed.finish(throwing: Failed())
+        completion.start = HTTPServerGenerationStart(
+            stream: failing,
+            cachedTokenCount: 0,
+            cancel: { cancelled.set() },
+            waitForCompletion: { await drive.waitUntilSet() }
+        )
+        let service = ServerInferenceService(
+            completionStarter: completion,
+            engine: engine,
+            modelStateProvider: { nil }
+        )
+        let generate = makeServerInferenceGenerateClosure(
+            inferenceService: service,
+            parametersProvider: { .default }
+        )
+        let stream = generate("System", [.user(content: "Hello")], nil, nil)
+        let ended = LeaseAcquiredSignal()
+        let consumer = Task {
+            defer { ended.set() }
+            return try await collectText(from: stream)
+        }
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!ended.isSet, "the chat's failure must wait for the drive's tail")
+        await drive.set()
+        await #expect(throws: Failed.self) { try await consumer.value }
+        #expect(cancelled.isSet, "a failed drive is cancelled, then awaited")
+    }
+
     @Test func sharedGenerateClosureCancelsUnderlyingServiceStartWhenConsumerTaskIsCancelled() async
     {
         let engine = StubManagedInferenceEngine()

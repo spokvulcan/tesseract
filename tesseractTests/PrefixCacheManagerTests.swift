@@ -74,22 +74,21 @@ struct WarmBodyDrainTests {
                         path: Array(repeating: index + 1, count: 8), snapshot: bodies[index],
                         partitionKey: key, lastAccessTime: .now - .seconds(10 - index))
                 }
-                @MainActor func claim(_ index: Int) -> LeafCheckout.Claim? {
-                    let result = manager.claimLeaf(
+                @MainActor func lease(_ index: Int) -> PrefixCacheManager.LeafLeaseGrant? {
+                    let result = manager.leaseLeaf(
                         snapshot: bodies[index - 1], tokens: Array(repeating: index, count: 8),
-                        partitionKey: key, bodyCopyReason: nil,
+                        partitionKey: key, bodyRefusal: nil,
                         context: .init(
                             requestID: UUID(), modelID: "toy", kvBits: nil, kvGroupSize: 64))
-                    if case .claimed(let claim) = result { return claim }
+                    if case .leased(let grant) = result { return grant }
                     return nil
                 }
-                let leased = try #require(claim(2))
+                let leased = try #require(lease(2))
                 for index in [3, 4] {
-                    let checkedOut = try #require(claim(index))
+                    let checkedOut = try #require(lease(index))
                     #expect(
-                        checkedOut.returnBody(
-                            bodies[index - 1], tokens: Array(repeating: index, count: 8),
-                            reason: .checkIn))
+                        checkedOut.checkIn(
+                            bodies[index - 1], tokens: Array(repeating: index, count: 8)) == nil)
                 }
                 return leased
             }
@@ -114,8 +113,7 @@ struct WarmBodyDrainTests {
             #expect(snapshot.isWarm == (path == 1 || (path == 3 && limit == 1)))
         }
         #expect(leased.node.leafLease?.id == leased.lease.id)
-        #expect(
-            leased.returnBody(bodies[1], tokens: Array(repeating: 2, count: 8), reason: .rewind))
+        #expect(leased.rewind(bodies[1]) == nil)
         #expect(
             manager.lookup(tokens: Array(repeating: 2, count: 8), partitionKey: key)
                 .snapshot?.isWarm == false)
@@ -248,18 +246,23 @@ struct WarmBodyDrainTests {
             partitionKey: key, modelFingerprint: nil, diagnostics: context)
         for identityKeySpace in [true, false] {
             for tokens in [Array(repeating: 2, count: 8), Array(repeating: 2, count: 8) + [9]] {
-                let attempt = await LeafCheckout.attempt(
-                    resolved: resolved, tokens: tokens, maximumAdvance: 10,
-                    identityKeySpace: identityKeySpace, prefixCache: manager, context: context)
-                #expect(attempt.owner == nil)
-                #expect(attempt.copyReason == .warmBody)
+                let (outcome, handOver) = await manager.checkOutHoldingClaim(
+                    resolved, tokens: tokens, identityKeySpace: identityKeySpace,
+                    diagnostics: context, sessions: sessions)
+                guard case .copy(let copy) = outcome else {
+                    Issue.record("a Warm Body must restore by copy")
+                    continue
+                }
+                #expect(copy.reason == .warmBody)
+                #expect(copy.refusal == .warmBody)
+                #expect(await handOver.rewindAndConclude(sessions: sessions) == nil)
             }
         }
         _ = tree.insertPath(tokens: Array(repeating: 2, count: 8) + [9])
-        let claim = manager.claimLeaf(
+        let outcome = manager.leaseLeaf(
             snapshot: warm, tokens: Array(repeating: 2, count: 8) + [9],
-            partitionKey: key, bodyCopyReason: .warmBody, context: context)
-        if case .copy(.warmBody) = claim {
+            partitionKey: key, bodyRefusal: .warmBody, context: context)
+        if case .refused(.warmBody) = outcome {
         } else {
             Issue.record("Warm branch must report warmBody")
         }

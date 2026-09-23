@@ -102,6 +102,10 @@ nonisolated enum PrefixCacheDiagnostics {
 
         let restoreMode: String?
         let copyReason: LeafStorePhase.Report.CopyReason?
+        /// The precise rung that refused the leaf (`CacheClaim.CopyRefusal`),
+        /// rendered beside `copyReason` only on a copy restore, so every
+        /// other lookup line stays byte-stable.
+        let copyRefusal: CacheClaim.CopyRefusal?
         /// Seconds the restore waited for a pending full payload to stop
         /// aliasing the leaf's body before it settled (#523). Rendered
         /// beside `copyReason` only when a wait actually happened, so the
@@ -124,6 +128,7 @@ nonisolated enum PrefixCacheDiagnostics {
             chainPrefixRestore: Bool = false,
             divergence: PrefixDivergenceProbe? = nil,
             restoreMode: String? = nil, copyReason: LeafStorePhase.Report.CopyReason? = nil,
+            copyRefusal: CacheClaim.CopyRefusal? = nil,
             copyWaitSeconds: TimeInterval = 0,
             backingLeafOffset: Int? = nil,
             warmBody: Bool = false,
@@ -164,6 +169,7 @@ nonisolated enum PrefixCacheDiagnostics {
             self.divergence = divergence
             self.restoreMode = restoreMode
             self.copyReason = copyReason
+            self.copyRefusal = copyRefusal
             self.copyWaitSeconds = copyWaitSeconds
             self.backingLeafOffset = backingLeafOffset
             self.warmBody = warmBody
@@ -195,6 +201,7 @@ nonisolated enum PrefixCacheDiagnostics {
                 fields.append(("backingLeafForm", backingLeafWarm ? "warm" : "ownedBody"))
             }
             if let copyReason { fields.append(("copyReason", copyReason.rawValue)) }
+            if let copyRefusal { fields.append(("copyRefusal", copyRefusal.rawValue)) }
             if copyWaitSeconds > 0 {
                 fields.append(
                     ("copyWaitMs", PrefixCacheDiagnostics.milliseconds(copyWaitSeconds)))

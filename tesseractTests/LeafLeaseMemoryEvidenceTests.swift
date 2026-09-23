@@ -73,6 +73,10 @@ struct LeafLeaseMemoryEvidenceTests {
                 record("beforeLease", iteration: iteration, requestID: requestID)
                 let lease = try #require(tree.beginLeafLease(on: node, context: context))
                 retiredLeases.append(lease)
+                // The request's claim pins the leased leaf; handed over and
+                // not yet redeemed, it holds the pin until it concludes.
+                let (_, handOver) = await manager.resolveHoldingClaim(
+                    tokens: tokens, partitionKey: key, diagnostics: context)
                 memory?.mark(.decoding, facts: manager.memoryTelemetryFacts())
                 record("leased", iteration: iteration, requestID: requestID)
                 do {
@@ -82,7 +86,6 @@ struct LeafLeaseMemoryEvidenceTests {
                                 lease, on: node, returning: body, tokens: tokens,
                                 reason: outcome == "completed" ? .checkIn : .rewind))
                     }
-                    manager.pinRestorePath(node: node, requestID: requestID)
                     manager.setMemoryBudget(0)
                     #expect(manager.clearRAMTier() == 0)
                     #expect(tree.totalSnapshotBytes == 4_160)
@@ -94,7 +97,7 @@ struct LeafLeaseMemoryEvidenceTests {
                 } catch is CancellationError {
                     memory?.recordCancellationSignal(origin: "caller")
                 } catch is SimulatedFailure {}
-                manager.completeRequest(requestID: requestID)
+                await handOver.withClaim { _ in }
                 #expect(tree.leaseCount == 0)
                 #expect(tree.leasedBytes == 0)
                 #expect(

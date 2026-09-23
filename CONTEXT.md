@@ -174,14 +174,16 @@ nothing between two owners); zero-copy (the SSD write still copies); cache
 sharing (one owner at a time, never two).
 
 **Leaf Lease**:
-The claim a running generation holds on the leaf it took by **Leaf Handoff**,
-from check-out to check-in: while it holds, the tree may not drop the body,
-demote it, clear the RAM tier of it, promote it into an SSD write, or let the
-SSD writer read from it. Ends only at check-in or **Leaf Rewind**, never by
-age-out; the leased bytes stay counted even while the tree holds no body.
-_Avoid_: **Restore Pin** (the weak claim of a copy restore — it protects a path,
-it does not own a body); GPU lease (the inference arbiter's turn-taking, a
-different resource); lock, refcount (one owner needs neither).
+The part of a **Cache Claim** that owns the leaf the request took by **Leaf
+Handoff**, from check-out to check-in: while it holds, the tree may not drop the
+body, demote it, clear the RAM tier of it, promote it into an SSD write, or let
+the SSD writer read from it. Ends only at check-in or **Leaf Rewind**; nothing
+else ends it, not even the claim's tripwire. The leased bytes stay counted even
+while the tree holds no body.
+_Avoid_: **Restore Pin** (the weak hold of a copy restore: it protects a path,
+it does not own a body); **Cache Claim** for the lease alone (the lease is one
+part of a claim); GPU lease (the inference arbiter's turn-taking, a different
+resource); lock, refcount (one owner needs neither).
 
 **Leaf Rewind**:
 Returning a leaf taken by **Leaf Handoff** to its exact pre-check-out state when
@@ -193,6 +195,21 @@ _Avoid_: **Think-Strip Rewind** (a render-caused prefix invalidation,
 unrelated); rollback (the vendor's speculative-decoding checkpoint, which aliases
 and is not used here); discard (the pre-handoff cancel outcome, which loses the
 conversation's cache).
+
+**Cache Claim**:
+One request's whole hold on the prefix cache: its lane in the **Active-Inference
+Reserve**, its **Restore Pins**, and, when it takes the leaf by **Leaf Handoff**, its
+**Leaf Lease**. **Snapshot Resolution** opens it, and it concludes exactly once,
+inside the request's GPU lease. The claim is where the request learns whether it
+takes the leaf or restores by copy, and why; a claim that took the leaf ends only
+by check-in or **Leaf Rewind**, and the leaf is back before the pins and the lane
+are let go. Every keyed request holds one, a miss included; a **Speculative
+Canonical Prefill** pass holds its own, which never takes a leaf. A claim dropped
+without concluding, or concluded twice, is a bug its tripwire reports, not a
+leak an age-out trims.
+_Avoid_: Cache Turn (a turn is the conversation's generation turn); **Leaf Lease**
+or **Restore Pin** for the whole (each is one part of a claim); restore (the claim
+decides handoff or copy, and plan application performs the copy); lock, refcount.
 
 **State Effect**:
 The topology-only outcome of a **Snapshot State** transition: `settled`,
@@ -2064,6 +2081,10 @@ prefix-cache snapshot pin.)
 
 ### Batch inference
 
+_Not pursued (2026-09-22): the Batch Engine was reverted in 72d61ed3 and PRD #173
+closed as not planned, so these terms name the ADR-0022 design, not running code.
+"Lanes" in the **Active-Inference Reserve** are in-flight generations, not these._
+
 **Batch Engine**:
 The single generation engine that holds the GPU lease whenever any **Lane** is
 live, driving every lane's prefill and decode on the model-affine actor;
@@ -2237,14 +2258,15 @@ _Avoid_: demote-if-possible (the old best-effort reading), terminal drop as an
 eviction strategy, survival-gate veto of a demotion.
 
 **Restore Pin**:
-An in-flight request's claim on the node it restored from: pinned into the **Budget
-Floor** at resolve, released at the completion drive's all-exit-paths tail, so no
-drain may evict the body a running generation depends on. Weak by reference — a pin
-protects, it does not own.
+The part of a request's **Cache Claim** that protects the path it restored from:
+pinned into the **Budget Floor** at resolve and released when the claim concludes,
+so no drain may evict the body a running generation depends on. Weak by reference:
+a pin protects, it does not own. Nothing ages a pin out while its request runs.
 _Avoid_: node lock, refcount; lease unqualified (the **Leaf Lease** is the strong
-claim of a **Leaf Handoff** — it owns the body for the turn — and the GPU lease is
-arbitration; a pin is neither); leaf pinning (pins hold restore *paths*, not the
-newest leaf — that floor member is recency-defined).
+hold of a **Leaf Handoff**, which owns the body for the turn, and the GPU lease is
+arbitration; a pin is neither); **Cache Claim** for the pin alone (a pin is one part
+of a claim); leaf pinning (pins hold restore *paths*, not the newest leaf; that
+floor member is recency-defined).
 
 **Guarantee-Class Write**:
 The mandatory SSD write of the newest end-of-turn leaf — the write the **Leaf Home
@@ -2291,10 +2313,10 @@ per-architecture cost model; `alpha` and the wait bound are the mutable halves.)
 
 **Pending-Payload Wait**:
 The bounded pause a request takes instead of copying a leaf it is about to own:
-when **Leaf Checkout** is refused only because the leaf's full payload still
-aliases the body, and the SSD writer reports that payload *in progress*, the
-request waits for the writer to finish using the borrowed arrays and then
-re-attempts the check-out. Bounded by the **Eviction Configuration**'s
+when its **Cache Claim**'s check-out is refused only because the leaf's full
+payload still aliases the body, and the SSD writer reports that payload *in
+progress*, the request waits for the writer to finish using the borrowed arrays
+and then re-attempts the check-out. Bounded by the **Eviction Configuration**'s
 `pendingFullPayloadWait` (500 ms); an `await`, never a blocking sleep, and never
 across a model verb. A payload still *queued* behind other writes has no bounded
 completion time and is not waited for — that request copies at once, and a

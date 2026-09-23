@@ -484,11 +484,34 @@ nonisolated final class ModelVerbRecorder: @unchecked Sendable {
     }
 }
 
+/// A one-shot failure of the toy session's `prefill` verb. Armed, the next
+/// prefill throws before it touches the cache — the shape of a checked MLX
+/// error surfacing from a suffix prefill after the restore already ran.
+nonisolated final class ToyPrefillFault: @unchecked Sendable {
+    struct Injected: Error {}
+
+    private let lock = NSLock()
+    private var armed = false
+
+    func arm() {
+        lock.withLock { armed = true }
+    }
+
+    func fireIfArmed() throws {
+        let fire = lock.withLock {
+            defer { armed = false }
+            return armed
+        }
+        if fire { throw Injected() }
+    }
+}
+
 /// Decorator over the real verb implementations: records each verb, then
 /// forwards to `ContextBackedModelSession` — nothing is reimplemented.
 nonisolated struct RecordingModelSession: ModelSession {
     let base: any ModelSession
     let recorder: ModelVerbRecorder
+    var prefillFault: ToyPrefillFault?
     /// Forces the LLM-class `producesFlatTextTokens` answer over the toy
     /// context — the shape of a vision-family checkpoint the VLM factory
     /// rejected, silently loaded as a text-only instance. No toy model class
@@ -560,6 +583,7 @@ nonisolated struct RecordingModelSession: ModelSession {
         evalPolicy: PrefillExecutor.EvalPolicy
     ) throws -> PrefillExecutor.Output {
         recorder.record(.prefill)
+        try prefillFault?.fireIfArmed()
         let output = try base.prefill(
             text: text,
             cache: cache,
@@ -636,6 +660,8 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     /// vision-container shape; the stub's pad run stands in for the tower).
     let anchorsVision: Bool
     let hasMTPDrafter: Bool
+    /// Fails the next `prefill` verb once armed; `nil` never fails.
+    let prefillFault: ToyPrefillFault?
 
     init(
         model: ToyLanguageModel,
@@ -645,11 +671,13 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         vision: ToyUserInputProcessor.VisionStub? = nil,
         reportsFlatTextTokens: Bool = false,
         anchorsVision: Bool = false,
-        hasMTPDrafter: Bool = false
+        hasMTPDrafter: Bool = false,
+        prefillFault: ToyPrefillFault? = nil
     ) {
         self.reportsFlatTextTokens = reportsFlatTextTokens
         self.anchorsVision = anchorsVision
         self.hasMTPDrafter = hasMTPDrafter
+        self.prefillFault = prefillFault
         self.container = ModelContainer(
             context: ModelContext(
                 configuration: configuration,
@@ -668,18 +696,23 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let reportsFlatTextTokens = self.reportsFlatTextTokens
         let anchorsVision = self.anchorsVision
         let hasMTPDrafter = self.hasMTPDrafter
+        let prefillFault = self.prefillFault
         return try await container.perform(nonSendable: payload) { context, payload in
-            return try await body(
-                RecordingModelSession(
-                    base: ContextBackedModelSession(
-                        context: context, mtpDrafter: hasMTPDrafter ? InactiveMTPDrafter() : nil),
-                    recorder: recorder,
-                    producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
-                    anchoredVisionPrepareOverride: anchorsVision
-                        ? Self.toyAnchoredVisionPrepare(context) : nil
-                ),
-                payload
-            )
+            try await ModelSessionScope.$isInside.withValue(true) {
+                try await body(
+                    RecordingModelSession(
+                        base: ContextBackedModelSession(
+                            context: context, mtpDrafter: hasMTPDrafter ? InactiveMTPDrafter() : nil
+                        ),
+                        recorder: recorder,
+                        prefillFault: prefillFault,
+                        producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
+                        anchoredVisionPrepareOverride: anchorsVision
+                            ? Self.toyAnchoredVisionPrepare(context) : nil
+                    ),
+                    payload
+                )
+            }
         }
     }
 

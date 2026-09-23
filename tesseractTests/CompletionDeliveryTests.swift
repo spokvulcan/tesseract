@@ -80,14 +80,34 @@ private struct ScriptedGeneration {
 
 private let scriptedInfo = GenerationFixtures.info(promptTokenCount: 12, generationTokenCount: 3)
 
+/// The work a drive still does after its stream has ended, held open until
+/// the test lets it finish.
+private actor DriveTail {
+    private var finished = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func run() async {
+        guard !finished else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func finish() {
+        finished = true
+        for waiter in waiters { waiter.resume() }
+        waiters = []
+    }
+}
+
 /// A started generation whose stream yields `events` and then finishes. With
 /// `hangAfterEvents`, the stream stays open after the last event until
-/// `cancel` runs — the shape of a client dropping mid-decode.
+/// `cancel` runs — the shape of a client dropping mid-decode. `drive` is
+/// what awaiting the generation waits for once the stream is over.
 private func scriptedGeneration(
     _ events: [AgentGeneration],
     hangAfterEvents: Bool = false,
     failure: (any Error)? = nil,
-    cachedTokenCount: Int = 5
+    cachedTokenCount: Int = 5,
+    drive: @escaping @Sendable () async -> Void = {}
 ) -> ScriptedGeneration {
     let cancelled = LeaseAcquiredSignal()
     let drained = LeaseAcquiredSignal()
@@ -110,7 +130,10 @@ private func scriptedGeneration(
             cancelled.set()
             continuation.finish()
         },
-        waitForCompletion: { drained.set() },
+        waitForCompletion: {
+            await drive()
+            drained.set()
+        },
         diagnostics: .unavailable
     )
     return ScriptedGeneration(generation: generation, cancelled: cancelled, drained: drained)
@@ -270,6 +293,51 @@ struct CompletionDeliveryTests {
         #expect(!scripted.cancelled.isSet)
     }
 
+    /// A completed request's drive still concludes its Cache Claim after the
+    /// stream ends, and the GPU lease must cover that (ADR-0069). Delivery
+    /// hands the client its last chunk first, then waits for the drive
+    /// without cancelling it.
+    @Test func aCompletedDeliveryWaitsForTheDriveBeforeReturning() async throws {
+        let tail = DriveTail()
+        let scripted = scriptedGeneration(
+            [.text("done"), .info(scriptedInfo)], drive: { await tail.run() })
+        let sink = RecordingSink()
+        let (log, handle) = await makeTrace(stream: false)
+        let returned = LeaseAcquiredSignal()
+
+        let delivery = Task {
+            await CompletionDelivery.deliver(
+                scripted.generation,
+                maxTokens: nil,
+                sink: sink,
+                activityLog: log,
+                logHandle: handle,
+                recordReplay: { _ in }
+            )
+            returned.set()
+        }
+        // Generous: the loop ends as soon as the finish arrives, and a
+        // loaded full-target run can take many seconds to schedule it.
+        let deadline = ContinuousClock.now + .seconds(30)
+        while await !sink.calls.contains(where: { if case .finish = $0 { true } else { false } }),
+            ContinuousClock.now < deadline
+        {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(
+            await sink.calls.last
+                == .finish(text: "done", finishReason: .stop, cachedTokens: 5),
+            "the client's last chunk must not wait for the drive")
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!returned.isSet, "delivery must not return while the drive is still running")
+
+        await tail.finish()
+        await delivery.value
+        #expect(scripted.drained.isSet)
+        #expect(!scripted.cancelled.isSet, "a completed drive is awaited, not cancelled")
+        #expect(await hasPhase(log, .completed))
+    }
+
     /// A finish the sink could not deliver is a disconnect: the log reads
     /// cancelled and nothing is replayed as the next turn's assistant message.
     @Test func undeliveredFinishCancelsLogAndSkipsReplay() async {
@@ -290,6 +358,7 @@ struct CompletionDeliveryTests {
         #expect(await replay.messages.isEmpty)
         #expect(await hasPhase(log, .cancelled))
         #expect(scripted.cancelled.isSet)
+        #expect(scripted.drained.isSet, "a disconnect cancels the drive, then waits for it")
     }
 
     /// The non-streaming transport now runs under the Stream Lifecycle Driver

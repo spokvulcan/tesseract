@@ -41,7 +41,7 @@ struct AttentionCapacityCompactionTests {
         #expect(before.bodyBytes == 8 * 512 * 2_048)
         #expect(before.retainedBytes == 8 * 512 * (capacity - 2_048))
         #expect(before.thresholdBytes == before.bodyBytes / 4)
-        let oldAddresses = addresses(cache)
+        let oldAddresses = cache.map { addresses([$0]) }
 
         let outcome = AttentionCapacityCompaction.compactIfNeeded(cache)
 
@@ -52,9 +52,17 @@ struct AttentionCapacityCompactionTests {
             let arrays = layer.innerState()
             #expect(arrays.map { $0.dim(2) } == [2_048 + 256, 2_048 + 256])
             #expect(layer.state.map { $0.dim(2) } == [2_048, 2_048])
-            #expect(layer.state.allSatisfy { $0.asType(.float32).sum().item(Float.self) == Float(2 * 2_048 * 64) })
+            #expect(
+                layer.state.allSatisfy {
+                    $0.asType(.float32).sum().item(Float.self) == Float(2 * 2_048 * 64)
+                })
         }
-        #expect(Set(addresses(cache)).isDisjoint(with: Set(oldAddresses)))
+        // Each layer's replacement owns fresh storage. Layers compact one at
+        // a time, so a later layer may reuse an earlier layer's freed buffer;
+        // none may share the arrays it replaces.
+        for (layer, old) in zip(cache, oldAddresses) {
+            #expect(Set(addresses([layer])).isDisjoint(with: Set(old)))
+        }
         let after = AttentionCapacityCompaction.measure(cache)
         #expect(after.retainedBytes == 8 * 512 * 256)
     }
@@ -82,8 +90,8 @@ struct AttentionCapacityCompactionTests {
     @Test func wholeStateAndQuantizedLayersAreUntouched() throws {
         let cache = makeCache(layers: 2, rows: 2_048 + 20_000)
         for layer in cache { layer.trim(20_000) }
-        let quantized = try (makeCache(layers: 1, rows: 512)[0] as! KVCacheSimple).toQuantized(
-            groupSize: 64, bits: 8)
+        let plain = try #require(makeCache(layers: 1, rows: 512)[0] as? KVCacheSimple)
+        let quantized = try plain.toQuantized(groupSize: 64, bits: 8)
         let mamba = MambaCache()
         let mixed: [any KVCache] = cache + [quantized, mamba]
         let outcome = AttentionCapacityCompaction.compactIfNeeded(mixed)

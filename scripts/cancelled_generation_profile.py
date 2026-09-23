@@ -37,6 +37,9 @@ def main():
     parser.add_argument("--app", type=pathlib.Path, required=True)
     parser.add_argument("--plan", type=pathlib.Path, required=True)
     parser.add_argument("--output", type=pathlib.Path, required=True)
+    parser.add_argument("--ssd-directory", type=pathlib.Path,
+                        help="a new directory the app's SSD prefix cache uses for this campaign "
+                             "alone, so it starts cold and the owner's cache is untouched")
     args = parser.parse_args()
     plan = json.loads(args.plan.read_text())
     if plan.get("status") != "APPROVED":
@@ -48,6 +51,8 @@ def main():
         parser.error("Commit the plan before running")
     if args.output.exists():
         parser.error("Refusing to overwrite an evidence directory")
+    if args.ssd_directory is not None and args.ssd_directory.exists():
+        parser.error("The SSD directory must be new, so the campaign starts cold")
     if subprocess.run(["pgrep", "-x", "Tesseract Agent"], capture_output=True).returncode == 0:
         parser.error("Quit the existing app before this isolated campaign")
     port = plan["port"]
@@ -67,6 +72,9 @@ def main():
         parser.error("Initial available memory below the plan minimum")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     launch = ["-serverPort", str(port), "-isServerEnabled", "YES"]
+    if args.ssd_directory is not None:
+        args.ssd_directory.mkdir(parents=True)
+        launch += ["-prefixCacheSSDDirectoryOverride", str(args.ssd_directory.resolve())]
     write_json(args.output / "environment.json", {
         "plan": plan, "planSHA256": file_digest(args.plan), "sourceRevision": head,
         "workingTreeDirty": subprocess.run(["git", "diff", "--quiet", "HEAD"], capture_output=True).returncode != 0,

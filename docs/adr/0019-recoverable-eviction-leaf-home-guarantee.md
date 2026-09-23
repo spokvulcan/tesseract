@@ -212,3 +212,25 @@ behavior remain unchanged.
 `ssdPayloadPrepare` replaces `ssdPayloadMaterialize`; accepted `ssdAdmit` adds
 `writeMs` and `enqueueToCommitMs`. The 3 GB loaded-leaf wall-time and peak-footprint
 comparison remains owner work under the capture-handoff resource constraints.
+
+## Amendment 2026-09-22: a Cache Claim holds the Restore Pins, and the age-out is retired (#554)
+
+Accepted with ADR-0069. A request's Restore Pins, its lane in the
+Active-Inference Reserve and, after a Leaf Handoff, its Leaf Lease are now one
+**Cache Claim**. Snapshot Resolution opens it and it concludes exactly once,
+inside the request's GPU lease, after the leaf is back. The manager keeps its
+pin table, but only a claim's conclusion releases an entry: `completeRequest`
+is gone, and so are the table's cap of eight requests and its age-out.
+
+The backstop described in the 2026-09-12 amendment therefore no longer
+exists. It could end a pin while its request still ran, and it never freed a
+lane. In its place a claim that is dropped without concluding, or concluded
+twice, trips a runtime tripwire: debug builds trap, and release builds log an
+error, emit a `cacheClaimTripwire` event and release the claim's pins and lane
+on the MainActor. A lease the tripwire finds still held stays held and is
+named in the event, since only check-in or Leaf Rewind can return it exactly.
+
+The rest stands. A Restore Pin is still the weak hold of a request that
+restored by copy: it protects a restore path in the Budget Floor and owns
+nothing. The Leaf Lease is still the strong one, and the Leaf Home Guarantee
+and enqueue-before-delete are unchanged.

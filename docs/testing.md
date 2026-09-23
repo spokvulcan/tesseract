@@ -52,6 +52,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/SnapshotLayerKindTests \
   -only-testing:tesseractTests/LeafCaptureHandoffTests \
   -only-testing:tesseractTests/LeafLeaseTests \
+  -only-testing:tesseractTests/CacheClaimTests \
+  -only-testing:tesseractTests/ServerCompletionExitMatrixTests \
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
@@ -146,9 +148,9 @@ entry. `SnapshotResolutionLadderTests` checks nearest/unleased selection,
 recency and all fall-through rungs. `TokenRadixTreeTests` checks byte accounting,
 eviction exclusion, lease/check-in and last-backer self-heal.
 `SnapshotResolutionTests` checks both Restore Pins, view-only panel bytes, and
-retirement after the final active request skips leaf storage. `LeafCheckoutTests`
-checks that views retain the `checkpoint` copy reason in image and quantized
-partitions.
+retirement after the final active request skips leaf storage. `CacheClaimTests`
+checks that a view copies with the `checkpoint` copy reason and the `prefixView`
+refusal in image and quantized partitions.
 `ServerCompletionExtractSnapshotPayloadsTests` keeps views RAM-only;
 `ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
 canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`
@@ -679,8 +681,9 @@ The gate does not run speculative decoding; use the separate HTTP replay for
 that behavior. It cannot be combined with `--bench-replay-request`.
 
 `scripts/bounded_cache_parity.py` prints the fixed plan without `--run` and
-wraps this gate in fixed resource stops (32 GiB sampled footprint, 2 GiB additional
-system swap, critical/unknown pressure, ten-minute deadline). Use a Release binary,
+wraps this gate in fixed resource stops (32 GiB sampled footprint, 6 GiB minimum
+available memory, 1 GiB additional system swap, critical/unknown pressure,
+ten-minute deadline). Use a Release binary,
 a new output directory and one validation process. Quit the app first and
 restore it afterward. The scratch SSD store is flushed and removed on success,
 thrown failure and cooperative cancellation. `BoundedCacheParityTests` exercises
@@ -774,11 +777,12 @@ vision-loaded model for image-specific validation.
 
 ### Tree-side Leaf Lease evidence (#479)
 
-`LeafLeaseTests` exercises body-drop refusal, pressure and Restore Pin
-age-out, RAM clear, demotion and queued promotion, same-path replacement,
-ancestor supersession, check-in growth, both writer/acquisition race orders,
-writer failures, and base/suffix ordering. All caches are small, real MLX
-caches; production checkout is covered by the #480 suites below.
+`LeafLeaseTests` exercises body-drop refusal, pressure and a Cache Claim's
+release of its pins and lane, RAM clear, demotion and queued promotion,
+same-path replacement, ancestor supersession, check-in growth, both
+writer/acquisition race orders, writer failures, and base/suffix ordering. All
+caches are small, real MLX caches; the production check-out is covered by the
+Cache Claim suites below.
 
 Review regressions also cover pending-only return destinations, a tombstoned
 writer still reading an empty structural destination, request/lease identity
@@ -813,8 +817,9 @@ long-context footprint reduction.
 SSD pending counters in `requestMemory`. Lease events carry the request ID,
 lease ID, original offset and bytes; end events add returned offset/bytes,
 growth, and `checkIn` or `rewind`. Writer deferral includes the snapshot ID.
-Only explicit quiescent check-in/rewind ends a lease; `completeRequest`, the
-pin age-out limit, forced SSD flush and write-eagerness timeout cannot do so.
+Only explicit quiescent check-in/rewind ends a lease; a Cache Claim's release
+of its pins and lane (the tripwire's included), forced SSD flush and
+write-eagerness timeout cannot do so.
 
 See the [preserved small-cache evidence](../benchmarks/leaf-lease/2026-09-12/README.md)
 for the before/after ownership table, request IDs, diagnostic extracts and
@@ -855,10 +860,12 @@ approval requirement in the capture baseline still applies to #480.
 
 ### Production Leaf Checkout and Rewind evidence (#480)
 
-`LeafCheckoutTests` checks object identity and physical array independence,
+The check-out now belongs to the Cache Claim (#554), and its attempt cases
+moved from the deleted `LeafCheckoutTests` to `CacheClaimTests`, described
+in the next section. They check object identity and physical array independence,
 body removal/accounting, exact recurrent state and metadata after growth,
-every intentional fallback, and pending-full-payload materialization. It also
-covers the bounded pending-payload wait (#523): a payload that materializes
+every intentional fallback, and pending-full-payload materialization. They also
+cover the bounded pending-payload wait (#523): a payload that materializes
 inside the bound becomes a handoff, one that outlasts it copies and reports the
 waited time, and a payload still queued behind other writes copies at once
 without waiting. `SSDSnapshotStoreTests` covers the writer's own answer —
@@ -905,6 +912,49 @@ owner approval of a bounded resource plan and a suitable environment.
 [PR #503 review follow-up evidence](../benchmarks/leaf-checkout/2026-09-12-review/README.md)
 records each external finding's disposition, the final clean full-target run,
 and the explicitly isolated allocation run after these hardening changes.
+
+### Cache Claim (#554)
+
+`CacheClaimTests` goes through the claim's interface on the real manager and
+tree: a miss holds only its lane and a hit also pins its path; a start that
+throws and a cancelled drive each conclude once; the check-out's typed outcome,
+with its copy reason, precise refusal and waited time, for every refusal and
+wait case; check-in committed, refused and cancelled; the leaf back before the
+pins and the lane; a copy-only claim; the tripwire's violations in reporting
+mode, including a lease it cannot return; and a leaf loaded from SSD handed off
+on its loaded arrays with its SSD ref kept, while a loaded checkpoint still
+copies and says why.
+
+`ServerCompletionExitMatrixTests` runs every way a keyed request can end
+through the Server Completion fixture on the toy Model Session: a completed
+handoff, copy and cold turn, a startup cancel by the caller and by the drain, a
+decode cancel, a suffix prefill that fails after the handoff (decode has no
+failure exit), a refused check-in, a think-stripping turn and the direct-turn
+guard. Each case waits for the drive, then checks that the leaf is back (no
+lease, and a resend hits at its offset), that no pins or lane remain, and that
+the request was released exactly once. `CompletionDeliveryTests` and
+`ServerInferenceServiceTests` check that a completed request's delivery waits
+for its drive on the HTTP and agent-chat paths. The compaction retune's toy
+decodes are in `ServerCompletionKeyedSequencingTests`, and the SSD restore
+harness expects the loaded leaf to be handed off with no restore call.
+
+`CacheClaimMemoryEvidenceTests` measures the MLX peak around one step at a time
+on synthetic caches: check-in before extraction, a refused check-in, the
+check-out's only allocation, per-layer compaction, and an SSD hit handed off.
+The peak counter is process-global, so the byte assertions need the suite to
+run alone:
+
+```bash
+TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests \
+TEST_RUNNER_TESSERACT_CACHE_CLAIM_MEMORY_EVIDENCE=1 xcodebuild test \
+  -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation -parallel-testing-enabled NO \
+  -only-testing:tesseractTests/CacheClaimMemoryEvidenceTests
+```
+
+Without the flag the steps still run and their functional assertions hold, and
+the measured bytes are printed either way (`CACHE_CLAIM_EVIDENCE=`). ADR-0069's
+as-built notes record the numbers.
 
 ### Opt-in Warm Bodies (#527, #529)
 
@@ -1036,6 +1086,13 @@ and the `capturingLeaf` memory sample report `compactedBytes` /
 (`scripts/cancelled_generation_profile.py`, under a committed plan with the
 48 GiB stops), which found 50–117 MB retained after a cancelled generation
 and 5–17 MB at ordinary check-in, inherited by the next turn's live leaf.
+
+Since #554 compaction builds, evaluates and swaps in one layer at a time, so
+a later layer may reuse an earlier layer's freed buffer: the test checks each
+replacement against the arrays it replaced. The
+[2026-09-22 retune measurement](../benchmarks/allocation-profile/2026-09-22/README.md)
+kept the threshold and the one-step target by a rule registered before its
+numbers were read.
 
 ### No-copy SSD writer (#469)
 

@@ -87,7 +87,7 @@ nonisolated extension LeafStorePhase {
         enum CopyReason: String, Sendable {
             case quantized, imageKeySpace, checkpoint, immutableBody, pendingFullPayload,
                 untrimmable, rotating, warmBody
-            /// The parity gate's control arm (#528): **Leaf Checkout**
+            /// The parity gate's control arm (#528): the leaf check-out
             /// switched off through `PrefixCacheAdmin`, so an eligible fp16
             /// leaf restores by copy. Never reported in production.
             case checkoutDisabled
@@ -96,6 +96,9 @@ nonisolated extension LeafStorePhase {
         var handedOff = false
         var restoreMode: String?
         var restoreCopyReason: CopyReason?
+        /// The precise rung that refused the leaf on a copy restore
+        /// (`CacheClaim.CopyRefusal`); `copyReason` keeps the coarser value.
+        var restoreCopyRefusal: CacheClaim.CopyRefusal?
         /// Seconds the restore waited for a pending full payload before
         /// falling back to a copy, or before the writer released the body
         /// and the check-out succeeded (#523). `0` when nothing waited.
@@ -149,6 +152,9 @@ nonisolated extension LeafStorePhase {
             if let source { fields.append(("source", source.rawValue)) }
             if let copyReason = restoreCopyReason ?? copyReason {
                 fields.append(("copyReason", copyReason.rawValue))
+            }
+            if let restoreCopyRefusal {
+                fields.append(("copyRefusal", restoreCopyRefusal.rawValue))
             }
             if restoreCopyWaitSeconds > 0 {
                 fields.append(("copyWaitMs", ms(restoreCopyWaitSeconds)))

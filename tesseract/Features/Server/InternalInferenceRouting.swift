@@ -31,12 +31,18 @@ private nonisolated func makeInternalInferenceStream(
                 }
             }
 
+            // The drive lets go of what the request holds in the prefix cache
+            // after its stream ends. The agent's next turn starts when this
+            // stream ends, so it waits for that too, as HTTP delivery does.
+            await start?.waitForCompletion()
             continuation.finish()
         } catch is CancellationError {
             start?.cancel()
             await start?.waitForCompletion()
             continuation.finish()
         } catch {
+            start?.cancel()
+            await start?.waitForCompletion()
             continuation.finish(throwing: error)
         }
     }

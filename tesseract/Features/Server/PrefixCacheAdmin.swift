@@ -43,6 +43,20 @@ final class PrefixCacheAdmin {
         current?.activeInferenceReserve
     }
 
+    /// What the live cache holds for requests in flight — reserve lanes,
+    /// Restore Pins, Leaf Leases. `nil` when no cache is live.
+    var requestHoldings: PrefixCacheManager.RequestHoldings? {
+        current?.requestHoldings
+    }
+
+    /// Admit a snapshot into the live cache, so a hermetic suite can stage
+    /// tree state the request path cannot reach on its own (a body already
+    /// sitting where a turn's leaf would go). `nil` when no cache is live.
+    @discardableResult
+    func admitForTesting(_ admission: SnapshotAdmission) -> PrefixCacheManager.StoreDiagnostics? {
+        current?.admit(admission)
+    }
+
     /// The live cache's **Eviction Configuration**, or `nil`. Lets tests
     /// assert the cache construction folded the model's `flopProfile` in.
     var evictionConfig: EvictionConfiguration? {

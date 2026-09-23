@@ -337,6 +337,101 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         #expect(capacities == [256, 768, 1792, 3840])
     }
 
+    // MARK: - Compaction against the next turn's growth (#554, item 6)
+
+    /// A leaf keeps the capacity its turn grew into when compaction leaves it
+    /// alone: a next turn whose suffix fits that capacity prefills and decodes
+    /// without reallocating the attention body.
+    @MainActor
+    @Test func aNextTurnThatFitsTheKeptCapacityDoesNotReallocate() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let first = Self.conversation([.init(role: .user, content: "Hi")])
+        let next = Self.conversation([
+            .init(role: .user, content: "Hi"), .assistant(content: "Hello!"),
+            .init(role: .user, content: "More?"),
+        ])
+        let render = try tokenizer.applyChatTemplate(
+            messages: next.promptMessages, tools: nil, additionalContext: nil)
+        let model = ToyLanguageModel(script: render + Array("Sure.".utf8).map(Int.init))
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(model: model, tokenizer: tokenizer),
+            modelID: "compaction-fits-\(UUID())")
+        #expect(
+            try await collectServerText(
+                try await fixture.start(conversation: first, parameters: Self.parameters())
+            ).text == "Hello!")
+        let kept = try #require(model.capacityRecords.values.last).capacity
+        let before = model.capacityRecords.values.count
+
+        let handle = try await fixture.start(conversation: next, parameters: Self.parameters())
+        #expect(handle.cachedTokenCount > 0)
+        #expect(try await collectServerText(handle).text == "Sure.")
+        let turn = model.capacityRecords.values.dropFirst(before)
+        #expect(!turn.isEmpty)
+        #expect(
+            turn.allSatisfy { $0.capacity == kept },
+            "the next turn fits the kept capacity: \(turn.map(\.capacity)) vs \(kept)")
+        await fixture.drain()
+    }
+
+    /// A cancelled long generation leaves the rewound leaf far more capacity
+    /// than its body, and compaction rebuilds it at the offset plus one step.
+    /// The resend adds more than that step, so it grows the body once, and
+    /// only once: compaction never makes the next turn pay two whole-body
+    /// copies.
+    @MainActor
+    @Test func theNextTurnAfterACompactionGrowsTheBodyAtMostOnce() async throws {
+        let tokenizer = ToySequencingTokenizer()
+        let first = Self.conversation([.init(role: .user, content: "Hi")])
+        let long = Self.conversation([
+            .init(role: .user, content: "Hi"), .assistant(content: "Hello!"),
+            .init(role: .user, content: String(repeating: "m", count: 300)),
+        ])
+        let render = try tokenizer.applyChatTemplate(
+            messages: long.promptMessages, tools: nil, additionalContext: nil)
+        let gate = ForwardGate(threshold: render.count + 300, armed: false)
+        let model = ToyLanguageModel(
+            script: render + Array(String(repeating: "x", count: 1_000).utf8).map(Int.init),
+            onForward: gate.onForward)
+        let modelID = "compaction-grows-once-\(UUID())"
+        let capture = TelemetryCapture(modelID: modelID)
+        defer { capture.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(model: model, tokenizer: tokenizer),
+            modelID: modelID)
+        _ = try await collectServerText(
+            try await fixture.start(conversation: first, parameters: Self.parameters()))
+
+        // The long generation, cancelled well past the prompt: the rewind
+        // returns the first leaf with the rows the decode grew into.
+        gate.arm()
+        let cancelled = try await fixture.start(conversation: long, parameters: Self.parameters())
+        await gate.reached()
+        cancelled.cancel()
+        gate.open()
+        for try await _ in cancelled.stream {}
+        await cancelled.waitForCompletion()
+        let rewind = try #require(capture.drain().last { $0.eventName == "leafRewind" })
+        let compacted = try #require(rewind.intField("compactedBytes"))
+        #expect(compacted > 0, "the rewound leaf is compacted")
+        // Two toy layers of one 4-wide float32 head, keys and values: 64 B a row.
+        let keptRows = try #require(rewind.intField("fullAttentionArrayBytes")) / 64
+        let leafOffset = try #require(rewind.intField("offset"))
+        #expect(keptRows == leafOffset + 256)
+
+        var short = Self.parameters()
+        short.maxTokens = 4
+        let before = model.capacityRecords.values.count
+        let resend = try await fixture.start(conversation: long, parameters: short)
+        #expect(resend.cachedTokenCount == leafOffset)
+        _ = try await collectServerText(resend)
+        let capacities = model.capacityRecords.values.dropFirst(before).map(\.capacity)
+        #expect(!capacities.isEmpty)
+        #expect(Set(capacities).count == 1, "one growth, not two: \(capacities)")
+        #expect(capacities.allSatisfy { $0 > keptRows && $0 >= render.count })
+        await fixture.drain()
+    }
+
     @MainActor
     @Test func emptyDirectTurnReturnsItsLeafWithoutTryingToCaptureTheRewoundCache() async throws {
         let tokenizer = ToySequencingTokenizer()

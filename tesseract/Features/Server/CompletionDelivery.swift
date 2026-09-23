@@ -25,6 +25,11 @@ import MLXLMCommon
 ///   never received is not replayed as the next turn's assistant message, and
 ///   the Requests log never says "completed" for bytes that never left the
 ///   socket.
+/// - Every outcome waits for the drive before the script returns: a
+///   completed one after the client's last byte, without cancelling it, and
+///   the rest after cancelling it. The drive's tail still releases what the
+///   request holds in the prefix cache, and the caller's GPU lease must
+///   cover that.
 /// - `Log.server` lines and `ServerGenerationLog` transitions have one home.
 ///
 /// `nonisolated` so it composes with the handler's off-actor delivery with no
@@ -310,7 +315,7 @@ nonisolated enum CompletionDelivery {
                     cachedTokenCount: generation.cachedTokenCount
                 ))
             guard delivered else {
-                generation.cancel()
+                await cancelAndDrain(generation)
                 await activityLog.cancel(handle: logHandle)
                 let source: DisconnectSource = sink.isStreaming ? .chunkWrite : .bodyWrite
                 Log.server.info(
@@ -341,6 +346,11 @@ nonisolated enum CompletionDelivery {
                     + "decodeTokS=\(String(format: "%.1f", info?.tokensPerSecond ?? 0))"
             )
             await activityLog.complete(handle: logHandle, finishReason: finishReason.rawValue)
+            // The drive lets go of what the request holds in the prefix cache
+            // after its stream ends. Waiting keeps that inside the GPU lease,
+            // so the next request cannot overlap this one in the
+            // Active-Inference Reserve. The client already has its last chunk.
+            await generation.waitForCompletion()
 
         case .disconnected(let source):
             Log.server.info(

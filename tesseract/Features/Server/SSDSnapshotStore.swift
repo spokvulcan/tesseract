@@ -770,7 +770,7 @@ nonisolated final class SSDSnapshotStore: @unchecked Sendable, SnapshotHydrating
     /// the writer's state at the moment of the call and never a guess.
     ///
     /// The completion path consults this through the **Prefix Cache
-    /// Manager** when **Leaf Checkout** is refused for a pending full
+    /// Manager** when a **Cache Claim**'s check-out is refused for a pending full
     /// payload (#523): `.inProgress` is worth a bounded wait, `.queued` is
     /// not.
     func pendingPayloadProgress(snapshotID: String) -> PendingPayloadProgress {
@@ -1541,14 +1541,19 @@ extension SSDSnapshotStore {
 
         // Decode and compose the chain, reconstructing MLXArrays
         // from raw payload bytes inside the caller's Metal-affine
-        // context.
+        // context. A full leaf goes to the tree as a moved body built on
+        // the loaded arrays, which nothing else owns, so the request that
+        // hydrated it takes it by Leaf Handoff instead of copying it again
+        // (ADR-0064 amendment, #554). A layer a move cannot take keeps the
+        // copied body.
         do {
-            return try decodeSegmentChain(
+            let loaded = try decodeSegmentChain(
                 segmentData,
                 snapshotID: snapshotRef.snapshotID,
                 tokenOffset: snapshotRef.tokenOffset,
                 checkpointType: snapshotRef.checkpointType
             )
+            return loaded.movedFromLoad() ?? loaded
         } catch {
             return failLoad(
                 snapshotRef,

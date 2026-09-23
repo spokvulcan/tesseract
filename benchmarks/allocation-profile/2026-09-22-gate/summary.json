@@ -1,0 +1,2457 @@
+{
+  "campaigns": {
+    "run1-main-probe": {
+      "arm": "main",
+      "initialAvailableBytes": null,
+      "kind": "probe",
+      "outcome": {
+        "appExitCode": -15,
+        "completedRequests": 7,
+        "elapsedSeconds": 144.9997232920141,
+        "failure": null,
+        "resourceStops": []
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "cold",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3430",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 20096825696,
+          "peakActiveMlxBytes": 17983899650,
+          "peakFootprintBytes": 19644967640,
+          "promptTokens": 3430,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 23.12,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17395688656,
+          "settledFootprintBytes": 18387266792,
+          "settledSampleFootprintBytes": 18387266792,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3558",
+              "path": "live",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3558,
+          "cancelled": false,
+          "generatedTokens": 54,
+          "label": "warm",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3558"
+          },
+          "osPeakFootprintBytes": 19571666104,
+          "peakActiveMlxBytes": 18172668924,
+          "peakFootprintBytes": 19571666104,
+          "promptTokens": 3577,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.41,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17412465872,
+          "settledFootprintBytes": 18564771024,
+          "settledSampleFootprintBytes": 18564771024,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3631",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3631,
+          "cancelled": false,
+          "generatedTokens": 125,
+          "label": "grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3378",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3631"
+          },
+          "osPeakFootprintBytes": 20657450192,
+          "peakActiveMlxBytes": 18923890760,
+          "peakFootprintBytes": 20657450192,
+          "promptTokens": 7009,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 17.79,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17633962824,
+          "settledFootprintBytes": 19014610152,
+          "settledSampleFootprintBytes": 19014610152,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": null,
+          "label": "cancel-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21215735016,
+          "peakActiveMlxBytes": 19158773120,
+          "peakFootprintBytes": 21166583016,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 3.01,
+          "rewinds": [
+            {
+              "compactedBytes": 301989888,
+              "fullAttentionArrayBytes": 484376576,
+              "fullAttentionLogicalBytes": 467599360,
+              "offset": 7135
+            }
+          ],
+          "settledActiveMlxBytes": 17645431624,
+          "settledFootprintBytes": 19910962240,
+          "settledSampleFootprintBytes": 19910962240,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7135,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "resend-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21825580096,
+          "peakActiveMlxBytes": 19352693952,
+          "peakFootprintBytes": 21731699776,
+          "promptTokens": 11953,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 26.0,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117428,
+          "settledFootprintBytes": 19446148400,
+          "settledSampleFootprintBytes": 19446148400,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12081",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 12081,
+          "cancelled": false,
+          "generatedTokens": 78,
+          "label": "warm-repeat-1",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "24",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "12081"
+          },
+          "osPeakFootprintBytes": 19810774176,
+          "peakActiveMlxBytes": 18609338164,
+          "peakFootprintBytes": 19810823328,
+          "promptTokens": 12105,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.65,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117428,
+          "settledFootprintBytes": 19129756712,
+          "settledSampleFootprintBytes": 19129756712,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12183",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 12183,
+          "cancelled": false,
+          "generatedTokens": 48,
+          "label": "warm-repeat-2",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "21",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "12183"
+          },
+          "osPeakFootprintBytes": 19812772904,
+          "peakActiveMlxBytes": 18609403632,
+          "peakFootprintBytes": 19817524264,
+          "promptTokens": 12204,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.3,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117428,
+          "settledFootprintBytes": 19127266464,
+          "settledSampleFootprintBytes": 19127266464,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12253",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run1"
+    },
+    "run1-main-profile": {
+      "arm": "main",
+      "initialAvailableBytes": 30983880704,
+      "kind": "profile",
+      "outcome": {
+        "diagnosticsRotations": 0,
+        "elapsedSeconds": 272.7701685409993,
+        "exitCode": -15,
+        "failure": null,
+        "maxPressureLevel": 1,
+        "maxSampledFootprintBytes": 25351384152,
+        "maxSystemSwapGrowthBytes": 0,
+        "minSampledAvailableBytes": 11135778816
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p8k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "7020",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 21291363176,
+          "peakActiveMlxBytes": 18539319188,
+          "peakFootprintBytes": 20788046696,
+          "promptTokens": 7020,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 42.01,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17637432941,
+          "settledFootprintBytes": 19456568744,
+          "settledSampleFootprintBytes": 19645328808,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "boundary",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 300,
+          "label": "p8k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 20457614832,
+          "peakActiveMlxBytes": 18553595249,
+          "peakFootprintBytes": 20457647600,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 5.68,
+          "rewinds": [
+            {
+              "compactedBytes": 0,
+              "fullAttentionArrayBytes": 486539264,
+              "fullAttentionLogicalBytes": 459931648,
+              "offset": 7018
+            }
+          ],
+          "settledActiveMlxBytes": 17647378029,
+          "settledFootprintBytes": 18843708672,
+          "settledSampleFootprintBytes": 19032419584,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7018,
+          "cancelled": false,
+          "generatedTokens": 57,
+          "label": "p8k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 19890580736,
+          "peakActiveMlxBytes": 18589015769,
+          "peakFootprintBytes": 20178906200,
+          "promptTokens": 7037,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.65,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17638481517,
+          "settledFootprintBytes": 19632450792,
+          "settledSampleFootprintBytes": 19821210856,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7035",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7035,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "23531",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7035"
+          },
+          "osPeakFootprintBytes": 25351384152,
+          "peakActiveMlxBytes": 23199456909,
+          "peakFootprintBytes": 25502362712,
+          "promptTokens": 30566,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 134.16,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19180920429,
+          "settledFootprintBytes": 22393171032,
+          "settledSampleFootprintBytes": 22581226584,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 1024,
+          "label": "p32k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 23673351280,
+          "peakActiveMlxBytes": 20195583273,
+          "peakFootprintBytes": 23968017520,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 32.07,
+          "rewinds": [
+            {
+              "compactedBytes": 60555264,
+              "fullAttentionArrayBytes": 2019819520,
+              "fullAttentionLogicalBytes": 2003042304,
+              "offset": 30564
+            }
+          ],
+          "settledActiveMlxBytes": 19181264493,
+          "settledFootprintBytes": 20382035032,
+          "settledSampleFootprintBytes": 20570319960,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 30564,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 22654905456,
+          "peakActiveMlxBytes": 21666181673,
+          "peakFootprintBytes": 24781368432,
+          "promptTokens": 30583,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 2.92,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19181974027,
+          "settledFootprintBytes": 22414896240,
+          "settledSampleFootprintBytes": 22603492464,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30581",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run1"
+    },
+    "run2-pr-probe": {
+      "arm": "pr",
+      "initialAvailableBytes": null,
+      "kind": "probe",
+      "outcome": {
+        "appExitCode": -15,
+        "completedRequests": 7,
+        "elapsedSeconds": 145.15863125002943,
+        "failure": null,
+        "resourceStops": []
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "cold",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3430",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 19667220784,
+          "peakActiveMlxBytes": 17992484940,
+          "peakFootprintBytes": 19651079016,
+          "promptTokens": 3430,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 22.64,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17395688684,
+          "settledFootprintBytes": 18392968544,
+          "settledSampleFootprintBytes": 18392968544,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3558",
+              "path": "live",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3558,
+          "cancelled": false,
+          "generatedTokens": 54,
+          "label": "warm",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3558"
+          },
+          "osPeakFootprintBytes": 19572534624,
+          "peakActiveMlxBytes": 18179566592,
+          "peakFootprintBytes": 19577892192,
+          "promptTokens": 3577,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.42,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17412465900,
+          "settledFootprintBytes": 18570407240,
+          "settledSampleFootprintBytes": 18570407240,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3631",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3631,
+          "cancelled": false,
+          "generatedTokens": 125,
+          "label": "grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3378",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3631"
+          },
+          "osPeakFootprintBytes": 20664118552,
+          "peakActiveMlxBytes": 18918450796,
+          "peakFootprintBytes": 20664118552,
+          "promptTokens": 7009,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 17.96,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17634028384,
+          "settledFootprintBytes": 19022441848,
+          "settledSampleFootprintBytes": 19022441848,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": null,
+          "label": "cancel-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21223681400,
+          "peakActiveMlxBytes": 19158658456,
+          "peakFootprintBytes": 21174529400,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 3.0,
+          "rewinds": [
+            {
+              "compactedBytes": 301989888,
+              "fullAttentionArrayBytes": 484376576,
+              "fullAttentionLogicalBytes": 467599360,
+              "offset": 7135
+            }
+          ],
+          "settledActiveMlxBytes": 17645251424,
+          "settledFootprintBytes": 18649591040,
+          "settledSampleFootprintBytes": 18649591040,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7135,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "resend-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21957242112,
+          "peakActiveMlxBytes": 19528314412,
+          "peakFootprintBytes": 21725342976,
+          "promptTokens": 11953,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 26.05,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117492,
+          "settledFootprintBytes": 19454651864,
+          "settledSampleFootprintBytes": 19454651864,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12081",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 12081,
+          "cancelled": false,
+          "generatedTokens": 78,
+          "label": "warm-repeat-1",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "24",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "12081"
+          },
+          "osPeakFootprintBytes": 19819769184,
+          "peakActiveMlxBytes": 18609272696,
+          "peakFootprintBytes": 19819785568,
+          "promptTokens": 12105,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.68,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117492,
+          "settledFootprintBytes": 19138391416,
+          "settledSampleFootprintBytes": 19138391416,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12183",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 12183,
+          "cancelled": false,
+          "generatedTokens": 48,
+          "label": "warm-repeat-2",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "21",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "12183"
+          },
+          "osPeakFootprintBytes": 19821669656,
+          "peakActiveMlxBytes": 18608961332,
+          "peakFootprintBytes": 19826421016,
+          "promptTokens": 12204,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.29,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117492,
+          "settledFootprintBytes": 19135868112,
+          "settledSampleFootprintBytes": 19135868112,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12253",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run2"
+    },
+    "run2-pr-profile": {
+      "arm": "pr",
+      "initialAvailableBytes": 33566081024,
+      "kind": "profile",
+      "outcome": {
+        "diagnosticsRotations": 0,
+        "elapsedSeconds": 257.97481379198143,
+        "exitCode": -15,
+        "failure": null,
+        "maxPressureLevel": 1,
+        "maxSampledFootprintBytes": 25151663504,
+        "maxSystemSwapGrowthBytes": 0,
+        "minSampledAvailableBytes": 10525982720
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p8k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "7020",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 20829318088,
+          "peakActiveMlxBytes": 18607804220,
+          "peakFootprintBytes": 20739795912,
+          "promptTokens": 7020,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 39.03,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17637432990,
+          "settledFootprintBytes": 19409481368,
+          "settledSampleFootprintBytes": 19597979288,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "boundary",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 300,
+          "label": "p8k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 20409724568,
+          "peakActiveMlxBytes": 18457617246,
+          "peakFootprintBytes": 20409691824,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 5.58,
+          "rewinds": [
+            {
+              "compactedBytes": 0,
+              "fullAttentionArrayBytes": 486539264,
+              "fullAttentionLogicalBytes": 459931648,
+              "offset": 7018
+            }
+          ],
+          "settledActiveMlxBytes": 17647378078,
+          "settledFootprintBytes": 18795834864,
+          "settledSampleFootprintBytes": 18984381936,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7018,
+          "cancelled": false,
+          "generatedTokens": 57,
+          "label": "p8k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 19841822240,
+          "peakActiveMlxBytes": 18589015858,
+          "peakFootprintBytes": 20131098000,
+          "promptTokens": 7037,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.62,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17638481566,
+          "settledFootprintBytes": 19583364640,
+          "settledSampleFootprintBytes": 19772010016,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7035",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7035,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "23531",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7035"
+          },
+          "osPeakFootprintBytes": 25151663504,
+          "peakActiveMlxBytes": 23199309502,
+          "peakFootprintBytes": 25453686160,
+          "promptTokens": 30566,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 123.61,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19277323934,
+          "settledFootprintBytes": 22344101264,
+          "settledSampleFootprintBytes": 22946967024,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 1024,
+          "label": "p32k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 23696960912,
+          "peakActiveMlxBytes": 20109174174,
+          "peakFootprintBytes": 23324405136,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 29.18,
+          "rewinds": [
+            {
+              "compactedBytes": 60555264,
+              "fullAttentionArrayBytes": 2019819520,
+              "fullAttentionLogicalBytes": 2003042304,
+              "offset": 30564
+            }
+          ],
+          "settledActiveMlxBytes": 19181117086,
+          "settledFootprintBytes": 20331146640,
+          "settledSampleFootprintBytes": 20519464336,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 30564,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 24635747752,
+          "peakActiveMlxBytes": 21666165369,
+          "peakFootprintBytes": 24723516840,
+          "promptTokens": 30583,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 2.64,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19181974107,
+          "settledFootprintBytes": 22366678440,
+          "settledSampleFootprintBytes": 22554996136,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30581",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run2"
+    },
+    "run3-main-probe": {
+      "arm": "main",
+      "initialAvailableBytes": null,
+      "kind": "probe",
+      "outcome": {
+        "appExitCode": -15,
+        "completedRequests": 7,
+        "elapsedSeconds": 146.93807987502078,
+        "failure": null,
+        "resourceStops": []
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "cold",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3430",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 20271397168,
+          "peakActiveMlxBytes": 17992484792,
+          "peakFootprintBytes": 19599665808,
+          "promptTokens": 3430,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 23.39,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17395688680,
+          "settledFootprintBytes": 18334149504,
+          "settledSampleFootprintBytes": 18334149504,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3558",
+              "path": "live",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3558,
+          "cancelled": false,
+          "generatedTokens": 54,
+          "label": "warm",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3558"
+          },
+          "osPeakFootprintBytes": 19789081448,
+          "peakActiveMlxBytes": 18167950344,
+          "peakFootprintBytes": 19797240680,
+          "promptTokens": 3577,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.47,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17412465896,
+          "settledFootprintBytes": 18793130808,
+          "settledSampleFootprintBytes": 18793130808,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3631",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3631,
+          "cancelled": false,
+          "generatedTokens": 125,
+          "label": "grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3378",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3631"
+          },
+          "osPeakFootprintBytes": 20605954872,
+          "peakActiveMlxBytes": 18756216844,
+          "peakFootprintBytes": 20605954872,
+          "promptTokens": 7009,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 18.17,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17634028388,
+          "settledFootprintBytes": 19246754736,
+          "settledSampleFootprintBytes": 19246754736,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": null,
+          "label": "cancel-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21168057288,
+          "peakActiveMlxBytes": 19100020388,
+          "peakFootprintBytes": 21118905288,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 3.01,
+          "rewinds": [
+            {
+              "compactedBytes": 301989888,
+              "fullAttentionArrayBytes": 484376576,
+              "fullAttentionLogicalBytes": 467599360,
+              "offset": 7135
+            }
+          ],
+          "settledActiveMlxBytes": 17645382500,
+          "settledFootprintBytes": 20108602216,
+          "settledSampleFootprintBytes": 20108602216,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7135,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "resend-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21979294544,
+          "peakActiveMlxBytes": 19692760036,
+          "peakFootprintBytes": 21974559568,
+          "promptTokens": 11953,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 26.62,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117484,
+          "settledFootprintBytes": 19646065608,
+          "settledSampleFootprintBytes": 19646065608,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12081",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 12081,
+          "cancelled": false,
+          "generatedTokens": 78,
+          "label": "warm-repeat-1",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "24",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "12081"
+          },
+          "osPeakFootprintBytes": 20044868504,
+          "peakActiveMlxBytes": 18703858108,
+          "peakFootprintBytes": 20045179800,
+          "promptTokens": 12105,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.73,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117484,
+          "settledFootprintBytes": 19364014952,
+          "settledSampleFootprintBytes": 19364014952,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12183",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 12183,
+          "cancelled": false,
+          "generatedTokens": 48,
+          "label": "warm-repeat-2",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "21",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "12183"
+          },
+          "osPeakFootprintBytes": 20014852992,
+          "peakActiveMlxBytes": 18751043921,
+          "peakFootprintBytes": 20019374976,
+          "promptTokens": 12204,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.35,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17966117484,
+          "settledFootprintBytes": 19328068504,
+          "settledSampleFootprintBytes": 19328068504,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "12253",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run3"
+    },
+    "run3-main-profile": {
+      "arm": "main",
+      "initialAvailableBytes": 33284882432,
+      "kind": "profile",
+      "outcome": {
+        "diagnosticsRotations": 0,
+        "elapsedSeconds": 262.9106578339706,
+        "exitCode": -15,
+        "failure": null,
+        "maxPressureLevel": 1,
+        "maxSampledFootprintBytes": 25024277520,
+        "maxSystemSwapGrowthBytes": 0,
+        "minSampledAvailableBytes": 11772575744
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p8k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "7020",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 21162650304,
+          "peakActiveMlxBytes": 18592305208,
+          "peakFootprintBytes": 20753066688,
+          "promptTokens": 7020,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 39.2,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17637432978,
+          "settledFootprintBytes": 19421588880,
+          "settledSampleFootprintBytes": 19610152336,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "boundary",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 300,
+          "label": "p8k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 20432023048,
+          "peakActiveMlxBytes": 18565359002,
+          "peakFootprintBytes": 20432055816,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 5.55,
+          "rewinds": [
+            {
+              "compactedBytes": 0,
+              "fullAttentionArrayBytes": 486539264,
+              "fullAttentionLogicalBytes": 459931648,
+              "offset": 7018
+            }
+          ],
+          "settledActiveMlxBytes": 17647378066,
+          "settledFootprintBytes": 18817969384,
+          "settledSampleFootprintBytes": 19006532864,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7018,
+          "cancelled": false,
+          "generatedTokens": 57,
+          "label": "p8k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 19978349584,
+          "peakActiveMlxBytes": 18589015846,
+          "peakFootprintBytes": 20149873680,
+          "promptTokens": 7037,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.59,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17638481554,
+          "settledFootprintBytes": 19605613752,
+          "settledSampleFootprintBytes": 19794095288,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7035",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7035,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "23531",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7035"
+          },
+          "osPeakFootprintBytes": 25024277520,
+          "peakActiveMlxBytes": 23199063730,
+          "peakFootprintBytes": 24723467280,
+          "promptTokens": 30566,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 127.89,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19807510162,
+          "settledFootprintBytes": 22367808528,
+          "settledSampleFootprintBytes": 23500647584,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 1024,
+          "label": "p32k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 23379799056,
+          "peakActiveMlxBytes": 20272472702,
+          "peakFootprintBytes": 23938100240,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 31.38,
+          "rewinds": [
+            {
+              "compactedBytes": 60555264,
+              "fullAttentionArrayBytes": 2019819520,
+              "fullAttentionLogicalBytes": 2003042304,
+              "offset": 30564
+            }
+          ],
+          "settledActiveMlxBytes": 19180920466,
+          "settledFootprintBytes": 20354771984,
+          "settledSampleFootprintBytes": 20543237136,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 30564,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 22596774952,
+          "peakActiveMlxBytes": 21666099821,
+          "peakFootprintBytes": 24739146768,
+          "promptTokens": 30583,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 2.65,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19181974095,
+          "settledFootprintBytes": 22382373904,
+          "settledSampleFootprintBytes": 22570740752,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30581",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run3"
+    },
+    "run4-pr-probe": {
+      "arm": "pr",
+      "initialAvailableBytes": null,
+      "kind": "probe",
+      "outcome": {
+        "appExitCode": -15,
+        "completedRequests": 4,
+        "elapsedSeconds": 116.26016408298165,
+        "failure": "Diagnostics rotated; campaign stopped to preserve attribution",
+        "resourceStops": []
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 128,
+          "label": "cold",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3430",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 20001896824,
+          "peakActiveMlxBytes": 18047999792,
+          "peakFootprintBytes": 19649883128,
+          "promptTokens": 3430,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 23.67,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17395688680,
+          "settledFootprintBytes": 18391641416,
+          "settledSampleFootprintBytes": 18391641416,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3558",
+              "path": "live",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3558,
+          "cancelled": false,
+          "generatedTokens": 54,
+          "label": "warm",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3558"
+          },
+          "osPeakFootprintBytes": 19849440656,
+          "peakActiveMlxBytes": 18207337456,
+          "peakFootprintBytes": 19861499280,
+          "promptTokens": 3577,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.43,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17412465896,
+          "settledFootprintBytes": 18853768592,
+          "settledSampleFootprintBytes": 18853768592,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "3631",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 3631,
+          "cancelled": false,
+          "generatedTokens": 125,
+          "label": "grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "3378",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "3631"
+          },
+          "osPeakFootprintBytes": 20667477368,
+          "peakActiveMlxBytes": 18474412072,
+          "peakFootprintBytes": 20667477368,
+          "promptTokens": 7009,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 18.0,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17633995596,
+          "settledFootprintBytes": 19305852376,
+          "settledSampleFootprintBytes": 19305852376,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "live",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": null,
+          "label": "cancel-growth",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "4818",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7135"
+          },
+          "osPeakFootprintBytes": 21227695576,
+          "peakActiveMlxBytes": 19041136272,
+          "peakFootprintBytes": 21129391576,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 3.01,
+          "rewinds": [
+            {
+              "compactedBytes": 301989888,
+              "fullAttentionArrayBytes": 484376576,
+              "fullAttentionLogicalBytes": 467599360,
+              "offset": 7135
+            }
+          ],
+          "settledActiveMlxBytes": 17645251404,
+          "settledFootprintBytes": 18899201424,
+          "settledSampleFootprintBytes": 18899201424,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7135",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 3
+      },
+      "run": "run4"
+    },
+    "run4-pr-profile": {
+      "arm": "pr",
+      "initialAvailableBytes": 32923467776,
+      "kind": "profile",
+      "outcome": {
+        "diagnosticsRotations": 0,
+        "elapsedSeconds": 261.59396216698224,
+        "exitCode": -15,
+        "failure": null,
+        "maxPressureLevel": 1,
+        "maxSampledFootprintBytes": 25473657848,
+        "maxSystemSwapGrowthBytes": 0,
+        "minSampledAvailableBytes": 10514776064
+      },
+      "requests": [
+        {
+          "cachedTokens": 0,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p8k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "7020",
+            "reason": "missNoEntries",
+            "restoreMode": "cold",
+            "snapshotOffset": "nil"
+          },
+          "osPeakFootprintBytes": 20815047336,
+          "peakActiveMlxBytes": 18607804640,
+          "peakFootprintBytes": 20754148008,
+          "promptTokens": 7020,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 40.36,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17637432965,
+          "settledFootprintBytes": 19423636616,
+          "settledSampleFootprintBytes": 19612101768,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "boundary",
+              "restoreMode": "cold",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 300,
+          "label": "p8k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 20705324216,
+          "peakActiveMlxBytes": 18615166285,
+          "peakFootprintBytes": 20705668280,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 5.65,
+          "rewinds": [
+            {
+              "compactedBytes": 0,
+              "fullAttentionArrayBytes": 486539264,
+              "fullAttentionLogicalBytes": 459931648,
+              "offset": 7018
+            }
+          ],
+          "settledActiveMlxBytes": 17647378053,
+          "settledFootprintBytes": 18815675480,
+          "settledSampleFootprintBytes": 19278687320,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7018",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7018,
+          "cancelled": false,
+          "generatedTokens": 57,
+          "label": "p8k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7018"
+          },
+          "osPeakFootprintBytes": 20135177304,
+          "peakActiveMlxBytes": 18638234933,
+          "peakFootprintBytes": 20428467192,
+          "promptTokens": 7037,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 1.64,
+          "rewinds": [],
+          "settledActiveMlxBytes": 17638481541,
+          "settledFootprintBytes": 19602975808,
+          "settledSampleFootprintBytes": 20070837312,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "7035",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 7035,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-grow",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "23531",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "7035"
+          },
+          "osPeakFootprintBytes": 25473657848,
+          "peakActiveMlxBytes": 23199063697,
+          "peakFootprintBytes": 25010269200,
+          "promptTokens": 30566,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 127.57,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19807510149,
+          "settledFootprintBytes": 22365940752,
+          "settledSampleFootprintBytes": 23575391368,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": null,
+          "cancelled": true,
+          "generatedTokens": 1024,
+          "label": "p32k-cancel",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "36",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 24020380688,
+          "peakActiveMlxBytes": 20226499873,
+          "peakFootprintBytes": 23611665448,
+          "promptTokens": null,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 29.19,
+          "rewinds": [
+            {
+              "compactedBytes": 60555264,
+              "fullAttentionArrayBytes": 2019819520,
+              "fullAttentionLogicalBytes": 2003042304,
+              "offset": 30564
+            }
+          ],
+          "settledActiveMlxBytes": 19180920453,
+          "settledFootprintBytes": 20367633424,
+          "settledSampleFootprintBytes": 20802464784,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30564",
+              "path": "rewind",
+              "restoreMode": "handoff",
+              "source": "rewind"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        },
+        {
+          "cachedTokens": 30564,
+          "cancelled": false,
+          "generatedTokens": 64,
+          "label": "p32k-after",
+          "lookup": {
+            "hydratedFromSSD": "false",
+            "newTokensToPrefill": "19",
+            "reason": "hit",
+            "restoreMode": "handoff",
+            "snapshotOffset": "30564"
+          },
+          "osPeakFootprintBytes": 23098027072,
+          "peakActiveMlxBytes": 21666099848,
+          "peakFootprintBytes": 25004780584,
+          "promptTokens": 30583,
+          "releasingRequestPhases": 1,
+          "responseSeconds": 2.66,
+          "rewinds": [],
+          "settledActiveMlxBytes": 19181974122,
+          "settledFootprintBytes": 22391827496,
+          "settledSampleFootprintBytes": 22825872424,
+          "settledTreeLeaseCount": 0,
+          "stores": [
+            {
+              "compactedBytes": "0",
+              "leafOffset": "30581",
+              "path": "boundary",
+              "restoreMode": "handoff",
+              "source": "handoff"
+            }
+          ],
+          "terminalTreeLeaseCount": 0
+        }
+      ],
+      "reserveLanes": {
+        "1": 4
+      },
+      "run": "run4"
+    }
+  },
+  "memoryComparison": {
+    "probe:cancel-growth": {
+      "peakActiveMlxBytes": {
+        "main": [
+          19158773120,
+          19100020388
+        ],
+        "mainSpread": 58752732,
+        "pr": [
+          19158658456,
+          19041136272
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          21166583016,
+          21118905288
+        ],
+        "mainSpread": 47677728,
+        "pr": [
+          21174529400,
+          21129391576
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19910962240,
+          20108602216
+        ],
+        "mainSpread": 197639976,
+        "pr": [
+          18649591040,
+          18899201424
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      }
+    },
+    "probe:cold": {
+      "peakActiveMlxBytes": {
+        "main": [
+          17983899650,
+          17992484792
+        ],
+        "mainSpread": 8585142,
+        "pr": [
+          17992484940,
+          18047999792
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "peakFootprintBytes": {
+        "main": [
+          19644967640,
+          19599665808
+        ],
+        "mainSpread": 45301832,
+        "pr": [
+          19651079016,
+          19649883128
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          18387266792,
+          18334149504
+        ],
+        "mainSpread": 53117288,
+        "pr": [
+          18392968544,
+          18391641416
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      }
+    },
+    "probe:grow": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18923890760,
+          18756216844
+        ],
+        "mainSpread": 167673916,
+        "pr": [
+          18918450796,
+          18474412072
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          20657450192,
+          20605954872
+        ],
+        "mainSpread": 51495320,
+        "pr": [
+          20664118552,
+          20667477368
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19014610152,
+          19246754736
+        ],
+        "mainSpread": 232144584,
+        "pr": [
+          19022441848,
+          19305852376
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      }
+    },
+    "probe:resend-growth": {
+      "peakActiveMlxBytes": {
+        "main": [
+          19352693952,
+          19692760036
+        ],
+        "mainSpread": 340066084,
+        "pr": [
+          19528314412
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          21731699776,
+          21974559568
+        ],
+        "mainSpread": 242859792,
+        "pr": [
+          21725342976
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19446148400,
+          19646065608
+        ],
+        "mainSpread": 199917208,
+        "pr": [
+          19454651864
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      }
+    },
+    "probe:warm": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18172668924,
+          18167950344
+        ],
+        "mainSpread": 4718580,
+        "pr": [
+          18179566592,
+          18207337456
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "peakFootprintBytes": {
+        "main": [
+          19571666104,
+          19797240680
+        ],
+        "mainSpread": 225574576,
+        "pr": [
+          19577892192,
+          19861499280
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          18564771024,
+          18793130808
+        ],
+        "mainSpread": 228359784,
+        "pr": [
+          18570407240,
+          18853768592
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      }
+    },
+    "probe:warm-repeat-1": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18609338164,
+          18703858108
+        ],
+        "mainSpread": 94519944,
+        "pr": [
+          18609272696
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          19810823328,
+          20045179800
+        ],
+        "mainSpread": 234356472,
+        "pr": [
+          19819785568
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19129756712,
+          19364014952
+        ],
+        "mainSpread": 234258240,
+        "pr": [
+          19138391416
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      }
+    },
+    "probe:warm-repeat-2": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18609403632,
+          18751043921
+        ],
+        "mainSpread": 141640289,
+        "pr": [
+          18608961332
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          19817524264,
+          20019374976
+        ],
+        "mainSpread": 201850712,
+        "pr": [
+          19826421016
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19127266464,
+          19328068504
+        ],
+        "mainSpread": 200802040,
+        "pr": [
+          19135868112
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      }
+    },
+    "profile:p32k-after": {
+      "peakActiveMlxBytes": {
+        "main": [
+          21666181673,
+          21666099821
+        ],
+        "mainSpread": 81852,
+        "pr": [
+          21666165369,
+          21666099848
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          24781368432,
+          24739146768
+        ],
+        "mainSpread": 42221664,
+        "pr": [
+          24723516840,
+          25004780584
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          22414896240,
+          22382373904
+        ],
+        "mainSpread": 32522336,
+        "pr": [
+          22366678440,
+          22391827496
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      }
+    },
+    "profile:p32k-cancel": {
+      "peakActiveMlxBytes": {
+        "main": [
+          20195583273,
+          20272472702
+        ],
+        "mainSpread": 76889429,
+        "pr": [
+          20109174174,
+          20226499873
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          23968017520,
+          23938100240
+        ],
+        "mainSpread": 29917280,
+        "pr": [
+          23324405136,
+          23611665448
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      },
+      "settledFootprintBytes": {
+        "main": [
+          20382035032,
+          20354771984
+        ],
+        "mainSpread": 27263048,
+        "pr": [
+          20331146640,
+          20367633424
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      }
+    },
+    "profile:p32k-grow": {
+      "peakActiveMlxBytes": {
+        "main": [
+          23199456909,
+          23199063730
+        ],
+        "mainSpread": 393179,
+        "pr": [
+          23199309502,
+          23199063697
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "peakFootprintBytes": {
+        "main": [
+          25502362712,
+          24723467280
+        ],
+        "mainSpread": 778895432,
+        "pr": [
+          25453686160,
+          25010269200
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "settledFootprintBytes": {
+        "main": [
+          22393171032,
+          22367808528
+        ],
+        "mainSpread": 25362504,
+        "pr": [
+          22344101264,
+          22365940752
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      }
+    },
+    "profile:p8k-after": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18589015769,
+          18589015846
+        ],
+        "mainSpread": 77,
+        "pr": [
+          18589015858,
+          18638234933
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "peakFootprintBytes": {
+        "main": [
+          20178906200,
+          20149873680
+        ],
+        "mainSpread": 29032520,
+        "pr": [
+          20131098000,
+          20428467192
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19632450792,
+          19605613752
+        ],
+        "mainSpread": 26837040,
+        "pr": [
+          19583364640,
+          19602975808
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      }
+    },
+    "profile:p8k-cancel": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18553595249,
+          18565359002
+        ],
+        "mainSpread": 11763753,
+        "pr": [
+          18457617246,
+          18615166285
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "peakFootprintBytes": {
+        "main": [
+          20457647600,
+          20432055816
+        ],
+        "mainSpread": 25591784,
+        "pr": [
+          20409691824,
+          20705668280
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "settledFootprintBytes": {
+        "main": [
+          18843708672,
+          18817969384
+        ],
+        "mainSpread": 25739288,
+        "pr": [
+          18795834864,
+          18815675480
+        ],
+        "prBelowEveryMain": true,
+        "prWithinMainRange": true
+      }
+    },
+    "profile:p8k-grow": {
+      "peakActiveMlxBytes": {
+        "main": [
+          18539319188,
+          18592305208
+        ],
+        "mainSpread": 52986020,
+        "pr": [
+          18607804220,
+          18607804640
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": false
+      },
+      "peakFootprintBytes": {
+        "main": [
+          20788046696,
+          20753066688
+        ],
+        "mainSpread": 34980008,
+        "pr": [
+          20739795912,
+          20754148008
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      },
+      "settledFootprintBytes": {
+        "main": [
+          19456568744,
+          19421588880
+        ],
+        "mainSpread": 34979864,
+        "pr": [
+          19409481368,
+          19423636616
+        ],
+        "prBelowEveryMain": false,
+        "prWithinMainRange": true
+      }
+    }
+  },
+  "prOnly": {
+    "pr-e2e": {
+      "elapsedSeconds": 59.9278903749655,
+      "exitCode": 0,
+      "maxPressureLevel": 1,
+      "maxSampledFootprintBytes": 20661992232,
+      "maxSystemSwapGrowthBytes": 0,
+      "minSampledAvailableBytes": 12716490752,
+      "resourceStop": null,
+      "sampleCount": 236
+    },
+    "pr-parity": {
+      "elapsedSeconds": 40.62579600000754,
+      "exitCode": 0,
+      "maxSampledFootprintBytes": 20672000504,
+      "maxSystemSwapGrowthBytes": 0,
+      "minSampledAvailableBytes": 13836107776,
+      "passed": true,
+      "resourceStop": null
+    }
+  }
+}

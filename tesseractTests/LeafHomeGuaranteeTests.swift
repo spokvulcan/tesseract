@@ -82,39 +82,35 @@ struct LeafHomeGuaranteeTests {
     }
 
     /// An in-flight request's pinned restore path is a floor member: no
-    /// drain may evict the body the request restored from, until
-    /// `completeRequest` releases the pin (ADR-0019).
-    @Test func pinnedRestorePathSurvivesDrainsUntilReleased() {
-        let store = TieredSnapshotStore(ssdConfig: nil)
-        let manager = PrefixCacheManager(
-            memoryBudgetBytes: snapBytes * 10, tieredStore: store
-        )
+    /// drain may evict the body the request restored from, until the
+    /// request's **Cache Claim** concludes and lets the pin go (ADR-0019).
+    @Test func pinnedRestorePathSurvivesDrainsUntilReleased() async {
+        let manager = PrefixCacheManager(memoryBudgetBytes: snapBytes * 10)
         PrefixCacheTestFixtures.admitUniformLeaf(
             manager, tokens: Array(20...39), partitionKey: key)  // restore base
+        let (resolved, handOver) = await manager.resolveHoldingClaim(
+            tokens: Array(20...39), partitionKey: key,
+            diagnostics: .init(
+                requestID: UUID(), modelID: "leaf-home-guarantee-test", kvBits: nil,
+                kvGroupSize: 64))
+        #expect(resolved.lookup.snapshot != nil)
         PrefixCacheTestFixtures.admitUniformLeaf(
             manager, tokens: Array(40...49), partitionKey: key)  // freshest leaf
-
-        let tree = store.tree(for: key)!
-        let (baseNode, _) = tree.findBestSnapshot(
-            tokens: Array(20...39), updateAccess: false
-        )!
-        let requestID = UUID()
-        manager.pinRestorePath(node: baseNode, requestID: requestID)
         #expect(manager.budgetFloorBytes() == snapBytes * 2, "pin + freshest leaf")
 
         manager.setMemoryBudget(0)
         #expect(manager.lookup(tokens: Array(20...39), partitionKey: key).snapshot != nil)
         #expect(manager.lookup(tokens: Array(40...49), partitionKey: key).snapshot != nil)
 
-        manager.completeRequest(requestID: requestID)
+        await handOver.withClaim { _ in }
         manager.setMemoryBudget(0)
         #expect(manager.lookup(tokens: Array(20...39), partitionKey: key).snapshot == nil)
         #expect(manager.lookup(tokens: Array(40...49), partitionKey: key).snapshot != nil)
     }
 
-    /// End-to-end pin plumbing: `resolve(pinningRestorePathFor:)` pins
-    /// the hit node for the requesting completion, and the pin holds
-    /// through a pressure collapse that would otherwise evict it.
+    /// End-to-end pin plumbing: resolving for a claim pins the hit node,
+    /// and the pin holds through a pressure collapse that would otherwise
+    /// evict it.
     @Test func resolvePinsTheHitNodeForTheRequest() async {
         let pressure = InMemoryMemoryPressureSource()
         let manager = PrefixCacheManager(
@@ -125,19 +121,11 @@ struct LeafHomeGuaranteeTests {
         PrefixCacheTestFixtures.admitUniformLeaf(
             manager, tokens: Array(40...49), partitionKey: key)
 
-        let requestID = UUID()
-        let diagnostics = PrefixCacheDiagnostics.Context(
-            requestID: requestID, modelID: "leaf-home-guarantee-test",
-            kvBits: nil, kvGroupSize: 64
-        )
-        let resolved = await manager.resolve(
-            tokens: Array(20...39),
-            promptTokenCount: 20,
-            partitionKey: key,
-            modelFingerprint: nil,
-            diagnostics: diagnostics,
-            pinningRestorePathFor: requestID
-        )
+        let (resolved, handOver) = await manager.resolveHoldingClaim(
+            tokens: Array(20...39), partitionKey: key,
+            diagnostics: .init(
+                requestID: UUID(), modelID: "leaf-home-guarantee-test", kvBits: nil,
+                kvGroupSize: 64))
         #expect(resolved.lookup.snapshot != nil)
 
         // A later turn makes a different leaf the freshest — the resolved
@@ -153,7 +141,7 @@ struct LeafHomeGuaranteeTests {
         // for the second collapse.
         #expect(manager.lookup(tokens: Array(60...79), partitionKey: key).snapshot != nil)
 
-        manager.completeRequest(requestID: requestID)
+        await handOver.withClaim { _ in }
         pressure.send(.critical)
         #expect(manager.lookup(tokens: Array(20...39), partitionKey: key).snapshot == nil)
         #expect(manager.lookup(tokens: Array(60...79), partitionKey: key).snapshot != nil)

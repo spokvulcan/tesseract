@@ -58,20 +58,20 @@ nonisolated enum AttentionCapacityCompaction {
     }
 
     /// Compact in place when the retained capacity exceeds the threshold.
-    /// Runs inside the Model Session on a request-private cache; evaluates
-    /// the rebuilt arrays before returning.
+    /// Runs inside the Model Session on a request-private cache. One layer
+    /// at a time (#554): each layer's replacement is evaluated, and its old
+    /// arrays released, before the next layer allocates, so the transient is
+    /// one layer's share of the body rather than the whole of it.
     @discardableResult
     static func compactIfNeeded(_ cache: [any KVCache]) -> Outcome {
         var outcome = measure(cache)
         guard outcome.retainedBytes > outcome.thresholdBytes else { return outcome }
-        var rebuilt: [MLXArray] = []
         for (layer, capacity, rowBytes) in measurable(cache) {
             let step = layer.step
             let target = layer.offset + step
             guard capacity > target else { continue }
-            let arrays = layer.innerState()
             let offset = layer.offset
-            let fresh = arrays.map { array -> MLXArray in
+            let fresh = layer.innerState().map { array -> MLXArray in
                 var shape = array.shape
                 shape[2] = target
                 let replacement = MLXArray.zeros(shape, dtype: array.dtype)
@@ -83,11 +83,10 @@ nonisolated enum AttentionCapacityCompaction {
             layer.state = fresh
             layer.trim(step)
             precondition(layer.offset == offset)
-            rebuilt += fresh
+            eval(fresh)
             outcome.freedBytes += rowBytes * (capacity - target)
             outcome.compactedLayers += 1
         }
-        eval(rebuilt)
         return outcome
     }
 }

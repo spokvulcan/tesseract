@@ -143,8 +143,8 @@ tesseract/
 │   │   ├── ServerInferenceService.swift   # Dispatcher: Completion Route → two arms
 │   │   ├── CompletionRoute.swift      # Pure cache-aware vs standard decision
 │   │   ├── ServerCompletion.swift     # Actor-confined cache-aware execution module
-│   │   ├── LeafCheckout.swift        # Model Session checkout eligibility, ownership transfer and recurrent rewind (ADR-0064)
-│   │   ├── LeafLease.swift           # Scalar lease identity and shared tree/writer exclusion
+│   │   ├── CacheClaim.swift          # Cache Claim: a request's lane, pins and Leaf Lease; check-out, check-in, rewind; one conclusion (ADR-0069)
+│   │   ├── LeafLease.swift           # Scalar lease identity, shared tree/writer exclusion, exact recurrent rewind
 │   │   ├── PrefixCacheManager.swift   # Radix-tree KV snapshot cache (RAM tier)
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
@@ -438,7 +438,10 @@ Repeated prompts are accelerated by a tiered KV prefix cache
 `AlphaTuner` remains in source but is not attached to production caches: its
 replay allocated multi-gigabyte synthetic arrays and blocked MainActor
 ([#504](https://github.com/spokvulcan/tesseract/issues/504)). The Budget Floor,
-pressure response and SSD demotion remain active. Vocabulary: CONTEXT.md → Prefix cache snapshot
+pressure response and SSD demotion remain active. Each keyed request holds one
+Cache Claim (`CacheClaim`, ADR-0069): its reserve lane, its Restore Pins and,
+after a Leaf Handoff, its Leaf Lease, concluded exactly once inside the
+request's GPU lease. Vocabulary: CONTEXT.md → Prefix cache snapshot
 lifecycle, SSD snapshot ledger, Prefill orchestration, Eviction tuning.
 Verification gates: docs/testing.md → Loaded-model verification.
 `Features/Server/Integrations/` configures external clients against the live

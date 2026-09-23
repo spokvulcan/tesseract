@@ -357,3 +357,70 @@ the leaf — the session logs measured the same copy at 4.45 GB at 69k tokens.
 `hybrid-cache-correctness` and `prefix-cache-e2e` both pass on the same
 model. The session audit, the A/B, its driver and its limits are in
 [`benchmarks/boundary-leaf-move/2026-09-20/`](../../benchmarks/boundary-leaf-move/2026-09-20/README.md).
+
+## Amendment 2026-09-22: a leaf loaded from SSD is handed off (#554)
+
+Before this amendment only a resident moved body could be checked out. An SSD
+hit decoded the leaf's chain into fresh MLX arrays and admitted them as a
+copied body; the check-out refused it with `immutableBody`, and the restore
+deep-copied it into the live cache. For the whole turn the process held two
+leaves: the tree's body, pinned, and the request's copy.
+
+SSD hydration now gives the tree a moved body. `loadSync` decodes the chain as
+before, then builds the leaf's cache objects directly on the arrays it just
+loaded, evaluates any chain layer it joined lazily (once, inside the Model
+Session, where hydration already runs), and boxes the objects as the node's
+moved body. The request that hydrated the leaf takes it by Leaf Handoff under
+the same guards a captured leaf faces.
+
+The one-owner rule holds for the loaded arrays:
+
+- every array is allocated fresh and copied out of its file mapping, and the
+  mappings are released when the load returns, so no file view or read cache
+  shares them;
+- a node that is already on SSD enqueues no SSD write, so no pending full
+  payload can alias the body;
+- the moved box empties every value copy of the snapshot when the check-out
+  takes the objects, so a retained lookup result cannot reach them afterwards.
+
+Only a full leaf loaded by `loadSync` becomes a moved body. A Chain-Prefix
+Restore, system and branch-point checkpoints, warm bodies, quantized
+partitions, and any layer a move cannot take keep the copied body and copy as
+before, with their reasons.
+
+Leaf Rewind and check-in treat an SSD-loaded leaf like any other leased leaf.
+Taking the body leaves the node with its SSD ref, and returning the leaf
+restores the body beside that ref, so the next extension still chains from it.
+An SSD-loaded handoff reports `restoreMode=handoff` and `source=handoff`; the
+`lookup` event's existing `hydratedFromSSD` flag tells it apart from a RAM
+handoff.
+
+The saving is the restore copy and the second resident leaf: one leaf per SSD
+hit, about 4.1 GB at 61k tokens on the 27B. The loaded attention arrays have
+exactly the offset's capacity, so the first suffix prefill still grows the body
+once, as a copied restore did. The model-free evidence in
+`CacheClaimMemoryEvidenceTests` measures the check-out of a loaded 8 MiB hybrid
+leaf at the 4 MiB recurrent rewind backup and nothing else, where restoring the
+same leaf by copy costs the whole 8 MiB.
+
+## Amendment 2026-09-22: the check-out belongs to the Cache Claim (#554)
+
+Accepted with ADR-0069. The check-out, the Pending-Payload Wait, Leaf Rewind
+and check-in are now steps of the request's **Cache Claim**, and the Leaf
+Lease is one part of that claim. `LeafCheckout` and the manager's `claimLeaf`
+are gone: the claim's check-out runs the same guard ladder and asks the
+manager's `leaseLeaf`, the wait keeps its bound, its poll and its queued,
+in-progress and absent rules, and exact rewind is unchanged. Three things
+differ.
+
+- The claim keeps the leased node instead of a copy of the leaf's token path,
+  and a rewind returns the body under the node's own path.
+- The restore outcome is typed. A copy carries its precise refusal in the new
+  `copyRefusal` field, so a leaf that is already leased reads `alreadyLeased`
+  there; `copyReason` keeps today's values and still reads
+  `pendingFullPayload` for it.
+- The executors check the leaf in before they extract its SSD extension
+  payload, not after. Check-in still precedes admission (#498).
+
+The pin table's age-out, which this ADR exempted the lease from, no longer
+exists (ADR-0019's 2026-09-22 amendment).

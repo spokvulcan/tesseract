@@ -262,6 +262,14 @@ extension ModelSession {
     }
 }
 
+/// Whether the current task is inside a Model Session. Every session
+/// provider sets it around its body, so a Cache Claim scope opened inside a
+/// session, whose conclusion may need the session again while its lock is
+/// not reentrant, traps in debug builds instead of deadlocking (ADR-0069).
+nonisolated enum ModelSessionScope {
+    @TaskLocal static var isInside = false
+}
+
 /// The **Model Session** port: how the Server Completion enters a session.
 /// Production adapter wraps the model container; the test peer enters a toy
 /// model directly. Everything inside `body` runs on the session's isolation —
@@ -517,11 +525,13 @@ nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
         _ body: @Sendable (any ModelSession, V) async throws -> R
     ) async rethrows -> R {
         try await container.perform(nonSendable: payload) { context, payload in
-            try await body(
-                ContextBackedModelSession(
-                    context: context, mtpDrafter: mtpDrafter?.value,
-                    dflash2Drafter: dflash2Drafter?.value),
-                payload)
+            try await ModelSessionScope.$isInside.withValue(true) {
+                try await body(
+                    ContextBackedModelSession(
+                        context: context, mtpDrafter: mtpDrafter?.value,
+                        dflash2Drafter: dflash2Drafter?.value),
+                    payload)
+            }
         }
     }
 }

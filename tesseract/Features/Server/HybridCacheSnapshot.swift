@@ -272,7 +272,8 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         return snapshot
     }
 
-    /// Inspect/consume only in the Model Session, after the tree grants a lease.
+    /// Why this body cannot be checked out, or `nil` when it can. Inspect
+    /// only in the Model Session, before the tree grants a lease.
     ///
     /// Eligibility reads each layer's ``LayerState/Kind``: sliceable
     /// attention must be unquantized and trimmable back to the leaf offset
@@ -280,15 +281,15 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
     /// whole-state layer must be recurrent (the rewind rebuilds it from its
     /// saved copy) — a rotating or chunked buffer, or an attention layer
     /// the shape guard kept whole, cannot promise its prefix back. The
-    /// kind decides; the copy reason still names the class, the way
-    /// ADR-0064 records it.
-    func checkoutCopyReason(maximumAdvance: Int) -> LeafStorePhase.Report.CopyReason? {
+    /// kind decides; the refusal still names the class, the way ADR-0064
+    /// records it.
+    func checkoutRefusal(maximumAdvance: Int) -> CacheClaim.CopyRefusal? {
         guard !isWarm else { return .warmBody }
-        guard checkpointType == .leaf else { return .checkpoint }
+        guard checkpointType == .leaf else { return .notLeafCheckpoint }
         guard case .moved(let owner) = body else { return .immutableBody }
-        guard !owner.cache.isEmpty else { return .checkpoint }
+        guard !owner.cache.isEmpty else { return .emptyBody }
         for (entry, layer) in zip(owner.cache, owner.layers) {
-            if entry is QuantizedKVCache { return .quantized }
+            if entry is QuantizedKVCache { return .quantizedLayer }
             switch layer.kind {
             case .sliceableAttention:
                 guard maximumAdvance >= 0, entry.isTrimmable(after: maximumAdvance) else {
@@ -477,9 +478,47 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
         )
         var copiedArrays: [MLXArray] = []
         copiedArrays.reserveCapacity(layers.count * 2)
-        let restored: [any KVCache] = try layers.enumerated().map {
-            layerIndex, layerState -> any KVCache in
-            if isWarm || (isPrefixView && backingLeaf?.isWarm == true),
+        let restored = try makeCaches(
+            layers, copyStrategy: copyStrategy,
+            dequantizesWarm: isWarm || (isPrefixView && backingLeaf?.isWarm == true),
+            copiedArrays: &copiedArrays)
+        // One pipeline sync for the whole restore (same rationale as the
+        // capture path — see ``capture(cache:offset:type:copyStrategy:)``).
+        eval(copiedArrays)
+        return restored
+    }
+
+    /// A leaf SSD hydration just materialized, as a moved body (ADR-0064
+    /// amendment, #554): the loaded arrays have no other owner — every
+    /// array was allocated fresh and copied out of its file mapping, and the
+    /// mappings are released when the load returns — so the leaf's cache
+    /// objects are built on them directly, with no copy, and boxed for
+    /// **Leaf Handoff**. A chain layer the load joined lazily is evaluated
+    /// once, here, in the Model Session where hydration runs. `nil` when
+    /// this is not a copied full leaf, or a layer is one a move cannot take
+    /// (quantized, unknown class): the copied body stays.
+    func movedFromLoad() -> HybridCacheSnapshot? {
+        guard case .copied(let layers) = body, checkpointType == .leaf else { return nil }
+        var ignored: [MLXArray] = []
+        guard
+            var cache = try? makeCaches(
+                layers, copyStrategy: nil, dequantizesWarm: false, copiedArrays: &ignored),
+            Self.canCaptureMoving(cache: cache)
+        else { return nil }
+        eval(cache)
+        return Self.captureMoving(cache: &cache, offset: tokenOffset)
+    }
+
+    /// Build a live cache object per layer. `copyStrategy` deep-copies every
+    /// array into a private backing (restore); `nil` builds on the layer's
+    /// own arrays, for a body nothing else owns (`movedFromLoad`). Copies
+    /// are appended to `copiedArrays` for the caller's one `eval`.
+    private func makeCaches(
+        _ layers: [LayerState], copyStrategy: CopyStrategy?, dequantizesWarm: Bool,
+        copiedArrays: inout [MLXArray]
+    ) throws -> [any KVCache] {
+        try layers.enumerated().map { layerIndex, layerState -> any KVCache in
+            if dequantizesWarm,
                 layerState.kind == .sliceableAttention,
                 layerState.className == "QuantizedKVCache"
             {
@@ -544,7 +583,9 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
                 // Deep copy, not an alias: the rebuilt live cache must own
                 // private buffers so its in-place `update` writes never reach
                 // the tree-stored snapshot's backing. See ``deepCopyState(_:)``.
+                // Without a strategy the arrays are the caller's to give away.
                 cache.state = layerState.state.map { array -> MLXArray in
+                    guard let copyStrategy else { return array }
                     let copy = Self.deepCopyState(array, strategy: copyStrategy)
                     copiedArrays.append(copy)
                     return copy
@@ -562,10 +603,6 @@ nonisolated struct HybridCacheSnapshot: @unchecked Sendable {
 
             return cache
         }
-        // One pipeline sync for the whole restore (same rationale as the
-        // capture path — see ``capture(cache:offset:type:copyStrategy:)``).
-        eval(copiedArrays)
-        return restored
     }
 
     enum ViewRestoreError: Error {

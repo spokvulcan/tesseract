@@ -96,6 +96,9 @@ def main():
     parser.add_argument("--comparison-label")
     parser.add_argument("--max-cancel-signal-delay-seconds", type=float)
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--ssd-directory", type=pathlib.Path,
+                        help="a new directory the app's SSD prefix cache uses for this campaign "
+                             "alone, so it starts cold and the owner's cache is untouched")
     args = parser.parse_args()
     allowed_pressure = (1, 2) if args.allow_pressure_warning else (1,)
     plan = {"footprintStopBytes": args.footprint_stop_gib * GIB,
@@ -112,6 +115,8 @@ def main():
         return
     if args.output.exists():
         parser.error("Refusing to overwrite an evidence directory")
+    if args.ssd_directory is not None and args.ssd_directory.exists():
+        parser.error("The SSD directory must be new, so the campaign starts cold")
     # A bound port or an existing app makes isolation unproven.
     with socket.socket() as probe_socket:
         probe_socket.bind(("127.0.0.1", args.port))
@@ -149,6 +154,10 @@ def main():
                 "os": subprocess.check_output(["sw_vers"], text=True),
                 "physicalMemoryBytes": probe.sysctl("hw.memsize", ctypes.c_uint64()).value,
                 "launchArguments": ["-serverPort", str(args.port), "-isServerEnabled", "YES"]}
+    if args.ssd_directory is not None:
+        args.ssd_directory.mkdir(parents=True)
+        metadata["launchArguments"] += [
+            "-prefixCacheSSDDirectoryOverride", str(args.ssd_directory.resolve())]
     write_json(args.output / "environment.json", metadata)
     (args.output / "instrumentation.patch").write_bytes(
         subprocess.check_output(["git", "diff", "--", "tesseract"]))

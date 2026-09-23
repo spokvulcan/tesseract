@@ -53,7 +53,8 @@ nonisolated enum BoundedCacheParity {
             try continuation(
                 context, tokens: tokens, base: offset, cache: copied.restore()), cold)
 
-        let (manager, owner, key) = try await checkout(moved, tokens: tokens, offset: offset)
+        let (manager, checkedOut, key) = try await checkout(moved, tokens: tokens, offset: offset)
+        let owner = checkedOut.live
         checks.append(
             .init(
                 name: "checkoutOwnership", passed: cache.isEmpty && moved.layers.isEmpty,
@@ -67,14 +68,16 @@ nonisolated enum BoundedCacheParity {
             let head = HybridCacheSnapshot.capture(
                 cache: owner.cache, offset: tokens.count, type: .leaf)
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
-        await owner.rewindIfNeeded()
+        // The production rewind, compaction included (the Cache Claim's own).
+        _ = await checkedOut.returnByRewind()
         guard let rewound = await manager.lookup(tokens: tokens, partitionKey: key).snapshot
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
+        let leaseCount = await MainActor.run { checkedOut.grant.tree.leaseCount }
         checks.append(
             .init(
                 name: "rewindOwnership",
-                passed: owner.cache.isEmpty && owner.rewindStateBytes == 0,
-                detail: "requestLayers=\(owner.cache.count) rewindBytes=\(owner.rewindStateBytes)"))
+                passed: owner.cache.isEmpty && leaseCount == 0,
+                detail: "requestLayers=\(owner.cache.count) treeLeases=\(leaseCount)"))
         checkState("rewoundPrefix", CacheStateBytes(try rewound.restore()), prefix)
         checkContinuation(
             "rewoundContinuation",
@@ -142,7 +145,7 @@ nonisolated enum BoundedCacheParity {
     @MainActor
     private static func checkout(_ snapshot: HybridCacheSnapshot, tokens: [Int], offset: Int)
         async throws
-        -> (PrefixCacheManager, FinalGenerationCache, CachePartitionKey)
+        -> (PrefixCacheManager, CheckedOutLeaf, CachePartitionKey)
     {
         let manager = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let key = CachePartitionKey(modelID: "bounded-parity", kvBits: nil, kvGroupSize: 64)
@@ -152,18 +155,20 @@ nonisolated enum BoundedCacheParity {
                 partitionKey: key)
         else { throw HybridCacheCorrectnessError.snapshotCaptureFailed }
         manager.admit(admission)
-        let attempt = await LeafCheckout.attempt(
-            resolved: .init(
-                lookup: manager.lookup(tokens: tokens, partitionKey: key),
-                hydratedFromSSD: false, hydrationSeconds: 0),
-            tokens: tokens, maximumAdvance: tokens.count - offset + 1,
-            identityKeySpace: true, prefixCache: manager,
-            context: .init(requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
-        guard let owner = attempt.owner else {
-            throw HybridCacheCorrectnessError.verificationFailed(
-                failedChecks: ["checkout fell back: \(String(describing: attempt.copyReason))"])
+        guard let resolved = manager.lookup(tokens: tokens, partitionKey: key).snapshot else {
+            throw HybridCacheCorrectnessError.snapshotCaptureFailed
         }
-        return (manager, owner, key)
+        let outcome = manager.leaseLeaf(
+            snapshot: resolved, tokens: tokens, partitionKey: key,
+            bodyRefusal: resolved.checkoutRefusal(maximumAdvance: tokens.count - offset + 1),
+            context: .init(requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        guard case .leased(let grant) = outcome else {
+            throw HybridCacheCorrectnessError.verificationFailed(
+                failedChecks: ["checkout fell back: \(outcome)"])
+        }
+        // The production check-out's move, outside a Cache Claim: the bench
+        // checks the tree and the move, not the claim's lifecycle.
+        return (manager, CheckedOutLeaf.take(resolved, under: grant), key)
     }
 
     private static func prefill(
