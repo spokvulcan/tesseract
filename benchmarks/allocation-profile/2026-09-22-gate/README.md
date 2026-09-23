@@ -31,6 +31,23 @@ the same stops as the profile.
 The model is `qwen3.8-27b` with its DFlash2 draft, KV unquantized. The profile
 filler is `CONTEXT.md` at `52ccbf8f`, the same bytes as #553's compaction run.
 
+Each campaign runs against its own new SSD cache directory, set through the
+app's `prefixCacheSSDDirectoryOverride` setting as a launch argument, so it
+starts cold and the owner's cache is neither read nor written.
+
+## Attempt 1, stopped (2026-09-22)
+
+The first attempt shared the owner's SSD cache, which still held #553's run of
+the same prompts. The first campaign's first request hit 7,018 of its 7,020
+tokens from SSD, at a node #553's conversation continues past, so no build can
+lease it. The cancelled turn restored by copy and had no lease to rewind, and
+the profile driver stopped on "Cancelled request produced no Leaf Rewind"
+after 45 seconds. No resource stop was near (lowest available memory
+10.5 GiB). The gate was stopped after the next campaign's first request.
+Every later campaign would also have warm-started from the one before it, so
+the owner approved rerunning the whole gate with a new SSD directory per
+campaign. The records stay in the private results directory.
+
 ## Stops, fixed now
 
 Footprint over 34 GiB, available memory under 6 GiB, swap up by more than

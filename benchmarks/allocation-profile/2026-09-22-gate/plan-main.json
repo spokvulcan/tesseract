@@ -1,6 +1,6 @@
 {
   "status": "APPROVED",
-  "ownerApproval": "The owner approved the #554 real-model memory gate as written in the PRD's Testing Decisions on 2026-09-22, and gave the go-ahead to quit the app and run it on 2026-09-22: qwen3.8-27b with its DFlash2 draft; Release builds of main at 52ccbf8f and of the PR head, run with the app closed in the order main, PR, main, PR; the p8k and p32k steps only; #553's stops; no retry after a stop.",
+  "ownerApproval": "The owner approved the #554 real-model memory gate as written in the PRD's Testing Decisions on 2026-09-22, and gave the go-ahead to quit the app and run it on 2026-09-22: qwen3.8-27b with its DFlash2 draft; Release builds of main at 52ccbf8f and of the PR head, run with the app closed in the order main, PR, main, PR; the p8k and p32k steps only; #553's stops; no retry after a stop. After attempt 1 found the shared SSD cache warm, the owner approved on 2026-09-23 rerunning the whole gate with each campaign on its own new SSD cache directory.",
   "purpose": "#554 gate, main arm: the cancelled-generation profile at 8k and 33k, compared step for step with the other arm in the same session.",
   "appCommit": "52ccbf8f",
   "vendorCommit": "a3c1776c3262ce0839ac6819ceaaa9ba6986aa29",
@@ -46,5 +46,5 @@
     "sampleIntervalMilliseconds": 250,
     "cancelGraceSeconds": 5
   },
-  "note": "The filler is CONTEXT.md at 52ccbf8f, the same bytes as #553's compaction run, so both arms and that baseline see the same prompts. The 66k step is out of scope for this approval."
+  "note": "The filler is CONTEXT.md at 52ccbf8f, the same bytes as #553's compaction run, so both arms and that baseline see the same prompts. Each campaign runs against its own new SSD cache directory (the app's prefixCacheSSDDirectoryOverride setting, passed as a launch argument), so it starts cold and the owner's cache is untouched. The 66k step is out of scope for this approval."
 }
