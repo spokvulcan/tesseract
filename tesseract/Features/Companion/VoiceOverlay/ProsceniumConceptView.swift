@@ -155,9 +155,9 @@ struct ProsceniumConceptView: View {
         let words = feed.spokenWords.prefix(feed.revealedWordCount)
         let dimmed = words.dropLast(3).joined(separator: " ")
         let lit = words.suffix(3).joined(separator: " ")
-        return
-            (Text(dimmed.isEmpty ? "" : dimmed + " ").foregroundStyle(.tertiary)
-            + Text(lit).foregroundStyle(.primary))
+        let dimmedText = Text(dimmed.isEmpty ? "" : dimmed + " ").foregroundStyle(.tertiary)
+        let litText = Text(lit).foregroundStyle(.primary)
+        return Text("\(dimmedText)\(litText)")
             .font(.system(size: 19, weight: .semibold))
             .multilineTextAlignment(.center)
             .lineLimit(3)

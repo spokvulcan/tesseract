@@ -644,7 +644,7 @@ final class WarmBodyParityBenchRunner {
         } else if arm == .fp16, !freshest.body.isWarm {
             let measurement = try await engine.llmActor.withModelContainer {
                 [body = freshest.body] container in
-                try await container.perform { _ in
+                await container.perform { _ in
                     Self.measureCopy(body, offset: prefixOffset, caseID: spec.id, block: block)
                 }
             }
@@ -1070,7 +1070,7 @@ final class WarmBodyParityBenchRunner {
                 } else if armObservations.count != manifest.orders.count
                     || paired.count != manifest.orders.count
                     || dequant.count != manifest.orders.count * 6 || invalidCount > 0
-                    || control.count { !$0.invalid.isEmpty } > 0
+                    || control.count(where: { !$0.invalid.isEmpty }) > 0
                 {
                     verdict = "INCONCLUSIVE"
                 } else if mismatches == 0, boundaries > 0, coverage, tokenMismatches == 0,

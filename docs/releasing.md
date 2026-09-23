@@ -126,7 +126,9 @@ read workflow-file diffs yourself before merging.**
   nested binary (both are caught earlier by `verify-signing.sh`).
 - **`setup-xcode` can't find a matching version:** the runner image moved;
   adjust `XCODE_VERSION` in `ci.yml` + `release-build.yml` (kept as a `^`
-  range so this should be rare).
+  range so this should be rare). Each Xcode major has its own runner image
+  (`xcode-27` carries only Xcode 27), so a major bump also changes the macOS
+  jobs' `runs-on` label in both files.
 - **A test suite is flaky on runners** (virtualized Metal): quarantine that
   one suite (skip trait + tracking issue) — do not remove tests from CI
   wholesale (ADR-0017).

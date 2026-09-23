@@ -15,7 +15,7 @@ on:
         type: string
 
 env:
-  XCODE_VERSION: "^26.4" # keep in sync with ci.yml
+  XCODE_VERSION: "^27.0" # keep in sync with ci.yml, runs-on label included
 
 permissions:
   contents: write
@@ -84,7 +84,7 @@ jobs:
   build:
     name: build-sign-notarize
     needs: gate-on-green
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
@@ -152,7 +152,7 @@ jobs:
 
       - name: Upload build artifacts (debugging aid)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: release-dist
           path: dist/

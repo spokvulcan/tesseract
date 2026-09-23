@@ -70,7 +70,7 @@ struct AgentTokenizer: Sendable {
 
     /// Decodes token IDs back to text.
     func decode(_ tokens: [Int]) async -> String {
-        await container.decode(tokens: tokens)
+        await container.decode(tokenIds: tokens)
     }
 
     /// Decodes token IDs back to text, optionally stripping special tokens from the output.

@@ -733,7 +733,7 @@ struct HybridCacheSnapshotTests {
                     #expect(arrA.shape == arrB.shape)
                     #expect(arrA.dtype == arrB.dtype)
                     #expect(
-                        arrA.asData() == arrB.asData(),
+                        arrA.asData(access: .copy).data == arrB.asData(access: .copy).data,
                         "layer state bytes mismatch after round-trip")
                 }
             }

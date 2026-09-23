@@ -426,9 +426,9 @@ actor LLMActor {
         // Identity only: a strong local would keep the whole model alive
         // until this function returns, past every release below.
         let containerAtEntry = modelContainer.map(ObjectIdentifier.init)
-        weak var releasedContainer = modelContainer
-        weak var releasedMTPDrafter: AnyObject? = mtpDrafter?.value as AnyObject?
-        weak var releasedDFlash2Drafter: AnyObject? = dflash2Drafter?.value as AnyObject?
+        weak let releasedContainer = modelContainer
+        weak let releasedMTPDrafter: AnyObject? = mtpDrafter?.value as AnyObject?
+        weak let releasedDFlash2Drafter: AnyObject? = dflash2Drafter?.value as AnyObject?
         if let serverCompletion {
             await serverCompletion.drainActiveCompletion(on: self)
         }

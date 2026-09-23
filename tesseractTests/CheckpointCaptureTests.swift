@@ -13,7 +13,7 @@ struct CheckpointCaptureTests {
         let attention = KVCacheSimple()
         let recurrent = MambaCache()
         let cache: [any KVCache] = [attention, recurrent]
-        let (_, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
+        let (_, snapshots) = HybridCacheSnapshot.chunkedPrefill(
             totalTokens: 9, prefillStepSize: 4,
             checkpoints: [2: .system, 6: .branchPoint], checkpointBaseOffset: 0,
             cache: cache
@@ -74,7 +74,7 @@ struct CheckpointCaptureTests {
             }
         )
         var chunks: [Int] = []
-        let (consumed, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
+        let (consumed, snapshots) = HybridCacheSnapshot.chunkedPrefill(
             totalTokens: totalTokens,
             prefillStepSize: prefillStepSize,
             checkpoints: checkpoints,
@@ -391,7 +391,7 @@ struct CheckpointCaptureTests {
         // initialOffset=100 matches a checkpoint → captured before any processChunk.
         let cache = makeCache()
         var chunks: [Int] = []
-        let (_, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
+        let (_, snapshots) = HybridCacheSnapshot.chunkedPrefill(
             totalTokens: 200,
             prefillStepSize: 256,
             checkpoints: [100: .system],
@@ -428,7 +428,7 @@ struct CheckpointCaptureTests {
 
     @Test func checkpointMapTagsEachSnapshotWithItsType() throws {
         let cache = makeCache()
-        let (_, snapshots) = try HybridCacheSnapshot.chunkedPrefill(
+        let (_, snapshots) = HybridCacheSnapshot.chunkedPrefill(
             totalTokens: 800,
             prefillStepSize: 256,
             checkpoints: [200: .system, 500: .branchPoint],

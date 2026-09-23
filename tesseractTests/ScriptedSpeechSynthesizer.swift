@@ -87,7 +87,7 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
                     continuation.yield(.done(capturedAnchor: captured))
                     continuation.finish()
                 } catch is CancellationError {
-                    await self.noteCancelled()
+                    self.noteCancelled()
                     continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)

@@ -1017,11 +1017,10 @@ nonisolated final class ServerCompletion {
                 terminalOutcome = "cancelled"
                 // The driver has awaited generation. Sample its final cache
                 // on-session even though cancellation bypasses leaf capture.
-                if let facts = try? await sessions.withSession({ _ in
+                let facts = await sessions.withSession { _ in
                     RequestMemoryTelemetry.cacheFacts(mlxStartBox.value.finalCache)
-                }) {
-                    memory.mark(.generationQuiescent, facts: facts)
                 }
+                memory.mark(.generationQuiescent, facts: facts)
                 memory.mark(.finishingStream)
                 Memory.clearCache()
                 continuation.finish()
@@ -2502,7 +2501,7 @@ nonisolated final class ServerCompletion {
     /// ordinary keyed path, whose app-owned prefill preserves the boundary
     /// snapshots and restores warm.)
     // swiftlint:disable:next function_parameter_count
-    private static func makeSpeculativeGeneration<I: TokenIteratorProtocol>(
+    private static func makeSpeculativeGeneration<I: TokenIteratorProtocol & SendableMetatype>(
         arm: SpeculativeArm,
         session: any ModelSession,
         fullInput: LMInput,

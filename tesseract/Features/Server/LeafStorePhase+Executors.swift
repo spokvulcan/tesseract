@@ -130,33 +130,23 @@ nonisolated extension LeafStorePhase {
         path: Report.Path
     ) async -> LeafCapture {
         let extensionBase = await context.resolveExtensionBase()
-        do {
-            return try await sessions.withSession { session in
-                // `finalCache` is non-`Sendable` `[any KVCache]` — reached
-                // through the boxed generation instead of a direct capture.
-                let generation = mlxStartBox.value
-                let moving =
-                    move && context.copyReason == nil && generation.speculativeArm != .mtp
-                    ? generation.finalCacheOwner : nil
-                return await admitLeaf(
-                    cache: moving == nil ? generation.finalCache : [],
-                    moving: moving,
-                    path: path,
-                    session: session,
-                    residualTokens: 0,
-                    extensionBase: extensionBase,
-                    context: context,
-                    timings: Timings()
-                )
-            }
-        } catch {
-            context.diagnosticsContext.logSkip(
-                stage: context.stages.capture,
-                reason: "live-capture-threw",
-                level: .warning,
-                extraFields: [("error", error.localizedDescription)]
+        return await sessions.withSession { session in
+            // `finalCache` is non-`Sendable` `[any KVCache]` — reached
+            // through the boxed generation instead of a direct capture.
+            let generation = mlxStartBox.value
+            let moving =
+                move && context.copyReason == nil && generation.speculativeArm != .mtp
+                ? generation.finalCacheOwner : nil
+            return await admitLeaf(
+                cache: moving == nil ? generation.finalCache : [],
+                moving: moving,
+                path: path,
+                session: session,
+                residualTokens: 0,
+                extensionBase: extensionBase,
+                context: context,
+                timings: Timings()
             )
-            return LeafCapture(skipReason: "live-capture-threw")
         }
     }
 

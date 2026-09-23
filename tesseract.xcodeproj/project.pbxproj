@@ -46,9 +46,22 @@
 		E0C654A92F2E946B003C1B55 /* tesseractUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = tesseractUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		E0F1B0012F90C000003C1B55 /* Exceptions for "tesseract" folder in "tesseract" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = E0C6548F2F2E946A003C1B55 /* tesseract */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		E0C654922F2E946A003C1B55 /* tesseract */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				E0F1B0012F90C000003C1B55 /* Exceptions for "tesseract" folder in "tesseract" target */,
+			);
 			path = tesseract;
 			sourceTree = "<group>";
 		};

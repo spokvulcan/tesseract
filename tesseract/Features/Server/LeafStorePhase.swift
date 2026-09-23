@@ -453,7 +453,7 @@ nonisolated enum LeafStorePhase {
                     else { return Optional<HybridCacheSnapshot>.none }
                     return boundary
                 }
-                return try? await inputs.sessions.withSession { _ in
+                return await inputs.sessions.withSession { _ in
                     await inputs.prefixCache.resolve(
                         tokens: tokens,
                         promptTokenCount: tokens.count,

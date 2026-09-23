@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Constants
 
 /// Tool name used in SystemPromptAssembler gate check and tool definition.
-nonisolated(unsafe) let skillToolName = "use_skill"
+nonisolated let skillToolName = "use_skill"
 
 // MARK: - SkillTool Factory
 

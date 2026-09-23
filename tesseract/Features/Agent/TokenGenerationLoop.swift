@@ -123,7 +123,7 @@ nonisolated enum TokenGenerationLoop {
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
-        iterator: consuming some TokenIteratorProtocol,
+        iterator: consuming some TokenIteratorProtocol & SendableMetatype,
         tools: [ToolSpec]? = nil,
         generatedTokens: GeneratedTokenRecorder? = nil
     ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
@@ -149,12 +149,13 @@ nonisolated enum TokenGenerationLoop {
     /// stop-token set (`eosTokenIds` + tokenizer EOS + `extraEOSTokens`), the
     /// prompt/generation timing split, and the final MLX stream synchronize.
     /// Exists because upstream's public raw entry point is hardcoded to its
-    /// concrete `TokenIterator`.
+    /// concrete `TokenIterator`. The iterator's type crosses into the
+    /// generation task, hence `SendableMetatype`.
     private static func rawTokenTask(
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
-        iterator: consuming some TokenIteratorProtocol,
+        iterator: consuming some TokenIteratorProtocol & SendableMetatype,
         generatedTokens: GeneratedTokenRecorder?
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()

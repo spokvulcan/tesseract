@@ -27,7 +27,7 @@ import Foundation
 @MainActor
 final class BrowserMCPScreenshotStore {
 
-    static let retainedDayDirectories = 30
+    nonisolated static let retainedDayDirectories = 30
     /// Per-day byte budget across all artifacts (~2,800 screenshots at
     /// the ~90 KB observed size).
     static let maxBytesPerDay = 256 * 1024 * 1024

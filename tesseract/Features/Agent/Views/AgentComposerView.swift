@@ -259,7 +259,7 @@ struct AgentComposerView: View {
         }
         .onAppear {
             visionAvailability.refresh()
-            voiceInput.onVoiceTranscription = { [weak composerDraft] text in
+            voiceInput.onVoiceTranscription = { [weak composerDraft = composerDraft] text in
                 guard let composerDraft else { return }
                 if composerDraft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     composerDraft.text = text
