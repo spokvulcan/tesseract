@@ -1,7 +1,7 @@
 # ADR-0069: The Cache Claim concludes a request's hold on the prefix cache exactly once, inside its GPU lease
 
-- Status: Accepted (as built through #554; the real-model gate's result is
-  added when it runs)
+- Status: Accepted (as built through #554; the real-model gate's memory rule
+  was not met as written, see its result below)
 - Date: 2026-09-22
 - Relates to: ADR-0064 (the Leaf Lease becomes one part of a claim; its
   pin-table age-out exemption becomes moot), ADR-0019 (the Restore Pin's
@@ -139,8 +139,14 @@ inside a Model Session; both session providers mark the scope for it.
 hand-over redeemed twice, a claim concluded twice, a second check-out, a step
 taken while the claim is handed over but not yet redeemed, and a step after
 the conclusion. The `cacheClaimTripwire` event names the violation, the owner,
-the pins and lane it released, and any lease still held with its offset and
-bytes. Tests run the tripwire in a reporting mode that does not trap.
+what it released and any lease still held with its offset and bytes. Only a
+claim dropped unconcluded, which nothing else will ever conclude, has its
+pins and lane released by the tripwire. Every other violation leaves that to
+the claim's own conclusion, so the leaf is still back first. Tests run the
+tripwire in a reporting mode that does not trap. It cannot tell owners apart
+once the drive holds the claim: a reference that escapes `start` and takes a
+step after the hand-over is redeemed goes unreported. Catching that needs a
+handle per owner, which the considered options rejected.
 
 **The exits.** The eight exit-path rewinds and the four release calls are
 gone. The drive's catch arms no longer rewind; the drive's conclusion does,
@@ -149,13 +155,21 @@ after cancellation, rewinds in the same step and says why. The exit matrix
 (`ServerCompletionExitMatrixTests`) covers every exit the PRD lists, and two
 of them end differently from the PRD's wording. Decode has no failure exit
 (the stream loop never throws), so the failure case is a suffix prefill that
-throws after the handoff. A think-stripping turn does not rewind: the
-boundary route checks the leaf in as its views' Backing Leaf and stores the
-canonical leaf from the boundary (ADR-0068).
+throws after the handoff. A think-stripping turn with a Prefix-View boundary
+does not rewind: the boundary route checks the leaf in as its views' Backing
+Leaf and stores the canonical leaf from the boundary (ADR-0068). A boundary
+turn without one still takes the explicit rewind step.
 
 **Delivery.** HTTP completion delivery awaits the drive on `.completed`, and
-the internal agent-chat route awaits a completed drive before it ends its
-stream.
+cancels and awaits it on every other outcome, an undelivered finish included.
+The internal agent-chat route does the same: it waits for a completed drive
+before ending its stream, and cancels and waits for a failed one before
+reporting the failure.
+
+**The parity bench.** The bounded-cache parity bench takes and rewinds its
+leaf through `CheckedOutLeaf`, the same code the claim's check-out and Leaf
+Rewind run, compaction included, but outside any claim: it checks the tree and
+the move, not the claim's lifecycle.
 
 **`copyRefusal`.** It is on the `lookup` and `leafStore` events, and as
 `restoreCopyRefusal` on the `restored` phase of `requestMemory`. Every lease
@@ -190,8 +204,42 @@ took capacity the next turn would have used, under the registered 0.20. The
 threshold, the one 256-row step of spare rows and both compacting exits stay.
 A toy decode checks the kept rule through the Server Completion module.
 
-### Still to record
+### What the tests do not cover yet
 
-The real-model A/B gate runs on the finished branch under the plan the owner
-approved on 2026-09-22. Its numbers go next to #553's baseline, and this
-section gains the result.
+- No exit-matrix case reaches a boundary turn without a Prefix-View boundary,
+  the one think-stripping case that still takes the explicit rewind step.
+- The body refusals `emptyBody` and `quantizedLayer` and the manager's
+  `compressing` and `bodyReplaced` have no claim-level test.
+- A leaf loaded from SSD has no other owner by construction, so the refused
+  case the PRD names is covered only by the resident pending-payload test.
+- The SSD memory checks (backing addresses, the kept SSD ref, the peak) run
+  at the claim's interface, where they are observable. The Server Completion
+  SSD harness checks only that the hit makes no restore call.
+
+### The real-model gate (2026-09-23)
+
+Run under the plan the owner approved, with one change the owner approved
+after the first attempt: every campaign ran on its own new SSD cache
+directory, since the shared cache still held #553's run of the same prompts
+and would have warm-started every campaign. The plans, the pass rule and the
+results are in
+[`benchmarks/allocation-profile/2026-09-22-gate/`](../../benchmarks/allocation-profile/2026-09-22-gate/README.md),
+next to #553's baseline. No resource stop fired, and the lowest available
+memory was 9.8 GiB.
+
+- Restore modes, copy reasons and leaf sources matched main step for step,
+  every sample of the reserve reported one lane, the lease count was 0 after
+  every request, parity passed its 18 checks and the e2e run its 22.
+- The memory rule was not met as written. 22 of the PR's 69 readings sit above
+  both main runs, 9 of them within 10 MB. The largest are 0.21 to 0.23 GiB of
+  peak footprint in the PR's second profile run at three steps where its
+  first run was at or below main; main's own runs differ by up to 0.73 GiB.
+- After a cancelled generation, the PR settles about 1.1 GiB lower than main
+  (17.37 and 17.60 GiB against 18.54 and 18.73), because the conclusion clears
+  MLX's buffer cache after the rewind's compaction.
+- The PR's second probe completed four of its seven requests: it was stopped
+  from outside, then stopped again when the diagnostics sink rotated. No SSD
+  hit occurred in any campaign, so the SSD-loaded handoff rests on the
+  model-free evidence above.
+
+Whether the memory readings above main are noise is the owner's call.
