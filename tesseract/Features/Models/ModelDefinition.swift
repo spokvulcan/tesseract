@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import TesseractSpeech
 
 enum ModelCategory: String, CaseIterable, Identifiable, Sendable {
     case speechToText = "Speech-to-Text"
@@ -68,7 +69,14 @@ struct ModelDefinition: Identifiable, Sendable {
 
     var cacheSubdirectory: String? {
         guard case .huggingFace(let repo, _, _) = source else { return nil }
-        return repo.replacingOccurrences(of: "/", with: "_")
+        return Self.storageSubdirectory(forRepo: repo)
+    }
+
+    /// A repo's directory name under the model store: "/" flattened to "_",
+    /// the same layout the vendored resolver loads from (mlx-audio-swift
+    /// patch #11).
+    nonisolated static func storageSubdirectory(forRepo repo: String) -> String {
+        repo.replacingOccurrences(of: "/", with: "_")
     }
 
     var requiredExtension: String? {
@@ -93,6 +101,24 @@ extension ModelDefinition {
     static let defaultTextToSpeechModelID = "qwen3-tts-voicedesign"
     static let defaultProofreadModelID = "qwen3.5-0.8b-proofread"
     static let defaultEmbeddingModelID = "qwen3-embedding-0.6b"
+
+    /// The Voice Engine's checkpoint. The catalog entry downloads and verifies
+    /// this repo and `SpeechEngine` loads it, so both read this one spec.
+    /// ADR-0037 precision gate, measured 2026-07-13 (v2-listen longform,
+    /// 480-word article, release): q8 peaks at 3.29 GB, over the ≤3 GB
+    /// envelope; q6 peaks at 2.88 GB. q6 is the shipped default.
+    static let textToSpeechModelSpec: TTSModelSpec = .voiceDesign17B(.q6)
+
+    /// Hub download size of each VoiceDesign precision (the repo's file
+    /// listing, 2026-09-24), so the entry's size follows the spec if the
+    /// precision gate ever flips.
+    private static var textToSpeechDownloadSize: String {
+        switch textToSpeechModelSpec.precision {
+        case .q6: "~2.7 GB"
+        case .q8: "~3.1 GB"
+        case .bf16: "~4.5 GB"
+        }
+    }
 
     static let all: [ModelDefinition] = [
         ModelDefinition(
@@ -141,10 +167,10 @@ extension ModelDefinition {
             description: "Natural-sounding text-to-speech with customizable voice.",
             category: .textToSpeech,
             source: .huggingFace(
-                repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16",
+                repo: textToSpeechModelSpec.repo,
                 requiredExtension: "safetensors"
             ),
-            sizeDescription: "~4.2 GB",
+            sizeDescription: textToSpeechDownloadSize,
             dependencies: []
         ),
         ModelDefinition(

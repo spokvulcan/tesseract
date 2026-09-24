@@ -529,6 +529,15 @@ model answers `false` uncached so a later download re-probes. Distinct from
 **Vision Mode**: this memoizes intrinsic capability, not load-state.
 _Avoid_: vision toggle (a **Vision Mode** concept), per-view capability flag.
 
+**Retired Checkpoint**:
+A directory in the model store that an earlier catalog entry downloaded and
+that no entry lists or loads anymore. Removed once at launch, because the
+Models page shows only catalog entries and offers no way to delete it. The one
+today is the Voice Engine's bf16: the entry downloaded it while `SpeechEngine`
+loaded q6. The entry and the engine now read one spec,
+`ModelDefinition.textToSpeechModelSpec`.
+_Avoid_: orphaned model, legacy download (both suggest the user chose it).
+
 ### Prefill orchestration
 
 **Prefill Plan**:
