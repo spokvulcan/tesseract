@@ -2465,11 +2465,13 @@ The rolling pull request that automation keeps open against `main`, holding the
 next semantic version and its accumulated changelog. Merging it *is* the release
 decision — the tag, the GitHub Release, and the signed build all follow
 mechanically from that one merge.
-_Avoid_: version-bump PR, release branch (no such branch exists), draft release.
+_Avoid_: version-bump PR, release branch (no such branch exists), draft release
+(that is the GitHub Release before the **Release Pipeline** publishes it).
 
 **Release Pipeline**:
 The automated path from a merged **Release PR** to a downloadable, notarized
 disk image attached to the GitHub Release — gated on the released commit's CI
-being green, with no human step inside it.
+being green, with no human step inside it. The GitHub Release stays a draft
+until the image is attached; publishing it is the pipeline's last step.
 _Avoid_: deploy (nothing is deployed to a server), publish flow, the CI workflow
 that builds pull requests (a gate the pipeline consumes, not the pipeline).

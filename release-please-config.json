@@ -2,6 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "bootstrap-sha": "3acc6992ff97c981619632356b8dca5b784f2807",
   "include-v-in-tag": true,
+  "draft": true,
+  "force-tag-creation": true,
   "packages": {
     ".": {
       "release-type": "simple",
