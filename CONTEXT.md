@@ -1587,6 +1587,14 @@ itself.
 _Avoid_: episode dedup(lication) — the rule turns the twin away at the door
 rather than deleting it later; episode merging.
 
+**Episode Origin**:
+The memory store an episode was first written in. Each store takes a random id
+when it is created and stamps it on every episode it writes, so that two stores,
+the Mac's and the phone's, can later be merged by query. An unstamped episode
+belongs to the store that holds it and was written before stamping began.
+_Avoid_: device id (it names a store, not hardware: a reinstall is a new origin),
+source (a belief's source episodes), platform.
+
 **Owner's Veto**:
 The revision path that answers "that's wrong": the memory flips to *contested*
 — a status change, never an edit or a delete — and the next sleep re-reads its
@@ -2079,6 +2087,16 @@ _Avoid_: arbiter protocol / arbitering, lease provider; widening it before a
 peer-consuming caller needs the member. ("Lease" unqualified = GPU lease, not the
 prefix-cache snapshot pin.)
 
+**Foreground Gate**:
+The phone's one switch between "GPU work may start" and "the app is leaving the
+foreground". It is owned by the **Inference Arbiter**, because iOS refuses GPU
+work from a backgrounded app. While it is closed, no lease is granted, and every
+GPU consumer stops at its next safe point: a reply pauses after its current token
+(it is never cancelled), speech redoes its in-flight segment, and consolidation
+yields.
+_Avoid_: background mode (the audio entitlement that keeps playback alive),
+suspension (the OS's act, not the app's), GPU lock, pause (unqualified).
+
 ### Batch inference
 
 _Not pursued (2026-09-22): the Batch Engine was reverted in 72d61ed3 and PRD #173
@@ -2436,6 +2454,19 @@ Welcome Window dissolves — there is never a moment with zero windows on screen
 the landing surface must state download progress honestly if setup is still
 running.
 _Avoid_: dismissal, close animation.
+
+### Phone (ADR-0066)
+
+**Device Tier**:
+The phone's sizing class, read once at launch from physical memory. It is the
+one answer to every "how much fits on this phone" question: context window,
+output cap, compaction preset, prefix-cache budgets, buffer-cache limit, the
+catalog entries offered, and the free memory the neural voice needs before it
+loads. Below the floor the tier is *unsupported*. v1 has one supported tier,
+8 GB, which larger phones share until someone measures them (ADR-0066
+amendment).
+_Avoid_: RAM tier (the prefix cache's in-memory tier), device profile, memory
+class; per-setting device checks (the tier answers them all, once).
 
 ### App composition
 
