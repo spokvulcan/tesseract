@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import TesseractSpeech
 import Testing
 
 @testable import Tesseract_Agent
@@ -116,6 +117,21 @@ struct ModelCatalogTests {
 
         #expect(ModelCatalog.isVisionCapable(definition: withheld, directory: visionDir) == false)
         #expect(ModelCatalog.isVisionCapable(definition: served, directory: visionDir) == true)
+    }
+
+    // MARK: - Voice Engine entry
+
+    /// The entry downloads the checkpoint `SpeechEngine` is built with, with
+    /// no path prefix, so the files land in the directory the vendored
+    /// resolver loads from. The entry used to name bf16 while the engine
+    /// loaded q6.
+    @Test func voiceEngineEntryNamesTheCheckpointTheEngineLoads() throws {
+        let entry = try #require(
+            ModelDefinition.withID(ModelDefinition.defaultTextToSpeechModelID))
+
+        #expect(entry.category == .textToSpeech)
+        #expect(entry.repoID == ModelDefinition.textToSpeechModelSpec.repo)
+        #expect(entry.pathPrefix == nil)
     }
 
     // MARK: - Fixtures

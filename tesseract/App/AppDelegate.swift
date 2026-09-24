@@ -35,6 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // where `modelStorageURL` is first evaluated.
         SandboxMigration.migrateModelsIfNeeded()
 
+        // The Voice Engine entry used to download a bf16 checkpoint the engine
+        // never loaded; remove it once, in the background.
+        RetiredCheckpoints.scheduleRemoval()
+
         // Setup window lifecycle tracking
         setupWindowTracking()
 

@@ -828,10 +828,9 @@ final class DependencyContainer: ObservableObject {
     lazy var textExtractor = TextExtractor()
     lazy var speechEnginePresenter = SpeechEnginePresenter(
         engine: SpeechEngine(
-            // ADR-0037 precision gate, measured 2026-07-13 (v2-listen longform,
-            // 480-word article, release): q8 peaks at 3.29 GB — over the ≤3 GB
-            // envelope — q6 at 2.88 GB. q6 is the shipped default.
-            model: .voiceDesign17B(.q6),
+            // The catalog's Voice Engine entry downloads this same spec; the
+            // ADR-0037 precision gate is recorded there.
+            model: ModelDefinition.textToSpeechModelSpec,
             synthesizer: Qwen3Synthesizer(),
             gpu: ArbiterGPULease(arbiter: inferenceArbiter)
         )

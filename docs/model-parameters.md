@@ -209,7 +209,7 @@ between families and modes, so it gets its own column.
 | Catalog id | Repo | Facts from the checkpoint |
 | --- | --- | --- |
 | `qwen3-embedding-0.6b` | mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ | `qwen3`, 28 layers, context 32,768, 4-bit group 64 |
-| `qwen3-tts-voicedesign` | mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16 | `qwen3_tts`; `generation_config`: temperature 0.9, top_p 1.0, top_k 50, repetition_penalty 1.05 |
+| `qwen3-tts-voicedesign` | mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-6bit (`ModelDefinition.textToSpeechModelSpec`, the spec `SpeechEngine` loads) | `qwen3_tts`, 6-bit group 64; `generation_config`: temperature 0.9, top_p 1.0, top_k 50, repetition_penalty 1.05 |
 | `whisper-large-v3-turbo` / `-compact` | argmaxinc/whisperkit-coreml | CoreML; no generation_config |
 | `qwen3.5-0.8b-proofread` | mlx-community/Qwen3.5-0.8B-4bit | see Qwen3.5 above; non-thinking by default, 24 layers |
 

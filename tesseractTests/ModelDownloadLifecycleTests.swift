@@ -14,6 +14,7 @@
 
 import Combine
 import Foundation
+import TesseractSpeech
 import Testing
 
 @testable import Tesseract_Agent
@@ -249,6 +250,62 @@ struct ModelDownloadLifecycleTests {
         let verified = try await harness.waitForSettled(id: "alpha")
         #expect(verified == .downloaded(sizeOnDisk: 69))
         #expect(harness.sizeOnDisk(repo: "fixture/alpha", path: "tokenizer.json") == 5)
+    }
+
+    // MARK: - Voice Engine
+
+    /// Download and verify both work on the checkpoint `SpeechEngine` loads,
+    /// nested speech tokenizer included, in the directory the engine loads
+    /// from. Before, the catalog fetched bf16 and the engine pulled q6 on
+    /// its own, with no progress and no verify.
+    @Test func voiceEngineDownloadAndVerifyUseTheEngineCheckpoint() async throws {
+        let entry = try #require(
+            ModelDefinition.withID(ModelDefinition.defaultTextToSpeechModelID))
+        let repo = ModelDefinition.textToSpeechModelSpec.repo
+        let harness = try LifecycleHarness(
+            definitions: [entry],
+            repos: [
+                repo: [
+                    .init(path: "config.json", size: 16),
+                    .init(path: "model.safetensors", size: 64),
+                    .init(path: "speech_tokenizer/config.json", size: 8),
+                    .init(path: "speech_tokenizer/model.safetensors", size: 32),
+                ]
+            ]
+        )
+        defer { harness.tearDown() }
+
+        harness.manager.download(modelID: entry.id)
+        let downloaded = try await harness.waitForSettled(id: entry.id)
+        #expect(downloaded == .downloaded(sizeOnDisk: 120))
+        #expect(
+            harness.manager.modelPath(for: entry.id)
+                == harness.storageRoot.modelDirectory(forRepo: repo))
+
+        // Verify repairs a lost speech tokenizer from the same repo.
+        try harness.removeFile(repo: repo, path: "speech_tokenizer/model.safetensors")
+        harness.manager.verifyAndRepair(modelID: entry.id)
+        let verified = try await harness.waitForSettled(id: entry.id)
+        #expect(verified == .downloaded(sizeOnDisk: 120))
+        #expect(harness.fetching.listedRepos == [repo, repo])
+        #expect(harness.fetching.fetchedFiles.last == "\(repo)/speech_tokenizer/model.safetensors")
+    }
+
+    /// An existing user's bf16 copy doesn't count as the Voice Engine: the
+    /// manager comes up normally with it on disk, and the entry reads "not
+    /// downloaded" instead of vouching for files the engine never loads.
+    @Test func bf16LeftoverDoesNotCountAsTheVoiceEngine() throws {
+        let entry = try #require(
+            ModelDefinition.withID(ModelDefinition.defaultTextToSpeechModelID))
+        let bf16 = TTSModelSpec.voiceDesign17B(.bf16).repo
+        let harness = try LifecycleHarness(definitions: [entry], repos: [:])
+        defer { harness.tearDown() }
+
+        try harness.placeFile(repo: bf16, path: "config.json", size: 16)
+        try harness.placeFile(repo: bf16, path: "model.safetensors", size: 64)
+        harness.manager.refreshAllStatuses()
+
+        #expect(harness.manager.status(for: entry.id) == .notDownloaded)
     }
 
     // MARK: - Errors
