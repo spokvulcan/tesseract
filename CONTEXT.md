@@ -686,6 +686,18 @@ occupies context.
 _Avoid_: think retention hack (vendor-sanctioned where the template declares it);
 template patching (vendor templates are never edited); global setting (per-model).
 
+**Generation Prompt**:
+What the chat template appends after the last message to open the assistant
+turn under one render context — on the Qwen3.5/3.8 templates an open `<think>`
+block by default, a closed empty one when the request turns thinking off.
+Measured from the template, never spelled by hand; whether generation starts
+inside a think block, whether the turn carries one the template will later
+strip, and where the last-message boundary sits are all read from it
+(ADR-0070).
+_Avoid_: prompt-starts-thinking (the retired load-time guess, blind to a
+request's kwargs); generation-prompt string (a hand-spelled copy of it);
+assistant header (only its family-specific first part).
+
 ### Reasoning effort
 
 **Reasoning Effort**:
@@ -725,6 +737,18 @@ returns values; the completion module owns effects.
 _Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
 new entry points (ADR-0015's seam is untouched); extracting plan application
 (recorded shallow — see ADR-0033).
+
+**Keyed Request**:
+What **Request Keying** yields for a request it can key: its identities (the
+partition, the **Cache Key Space**, the **Conversation Render**) together with
+every per-request fact later phases read, each derived once there — the
+**Generation Prompt**, whether it is text-only by instance truth (no image
+reached the model, whatever the request carried), the prefill step. Its
+counterpart is the **Unkeyed Completion**, which carries the same facts and no
+keys (ADR-0070).
+_Avoid_: request context, keyed turn; a fact re-derived at a call site (the
+defect class the value exists to end); the request's own image list as
+"text-only" (request intent, not instance truth).
 
 **Completion Trace Accumulator**:
 The fold of one cache-aware **Server Completion**'s trace facts into the terminal
