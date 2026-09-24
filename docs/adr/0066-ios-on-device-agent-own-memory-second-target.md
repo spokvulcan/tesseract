@@ -107,3 +107,70 @@ exposed the real seam, with its own ADR.
 - The JIT kernels are unproven on A18 until the first milestone — a
   throwaway app that loads the 4B and generates one token — runs on the
   owner's iPhone 16 Pro Max.
+
+## Amendment 2026-09-24 — v1 fitted to the phone (#515)
+
+The PRD was checked against `main` and Apple's documentation, and the owner
+settled four open points. Decisions 1–3 stand; these details change.
+
+- **The 12 GB tier moves past v1.** It can't be measured on the owner's 8 GB
+  phone, and the 9B is an 8.6 GB download. Every supported phone gets the
+  8 GB configuration, 12 GB phones included; the **Device Tier** keeps the
+  seam, so a 12 GB value is one addition later. The 64k window and the
+  VoiceDesign experiment go with it.
+- **A small SSD prefix tier on the phone**, replacing "RAM prefix tier only,
+  no SSD tier". The Budget Floor keeps only in-flight restores and the latest
+  leaf; `.system` chains are protected by the SSD tier (ADR-0019). RAM only
+  would re-prefill the system prompt for every new conversation and after
+  every relaunch iOS forces.
+- **The voice yields; the window doesn't shrink.** On 8 GB the estimated set
+  (~2.3 GB weights, ~1.07 GB KV at 32k, 0.35 GB embedder, and the 0.6B voice,
+  1.97 GB on disk) is past the ~5 GB the app can expect. The window stays at
+  32k. The neural voice loads only when there is room, and read-aloud uses the
+  system voice otherwise. This replaces "co-resident with the LLM".
+- **No background GPU work.** Apple grants background GPU time only to
+  continued-processing tasks on iPads with M3 or later, and on no iPhone. There
+  is nothing for the gated `BGProcessingTask` experiment to verify, so the
+  path is dropped rather than built behind a flag.
+- **A backgrounded reply pauses.** The **Foreground Gate**, owned by the
+  arbiter, closes when the scene leaves the active state. A reply stops after
+  its current token with its KV held and resumes on return; the partial reply
+  is saved first in case iOS ends the app. The arbiter also gains a TTS-only
+  unload, so "the GPU lease and arbiter are unchanged" no longer holds for the
+  arbiter; the GPU Lease Queue is unchanged.
+- **Episode Origin names a store, not a device.** Each memory store takes a
+  random id at creation, stamped into every episode it writes. Unstamped
+  episodes are the Mac's, from before stamping. The consequence "the Mac's
+  episodes gain a device stamp now" hasn't been done; it is slice 2 of the
+  PRD.
+- **Figures corrected.** The 4B's Prepared Checkpoint is 3.86 GB on disk. The
+  published artifact leaves out the vision encoder, which brings it to about
+  3.2 GB. The "2.3 GB" above is its resident size, once the loader has
+  quantized the embeddings. The first run needs the model and the embedder,
+  about 3.5 GB, and the voice's ~2 GB follows.
+
+### Amendments this makes
+
+- **ADR-0032.** The Prepared Checkpoint gains a published mode, for an
+  artifact made on one machine and loaded on another:
+  - The manifest doesn't depend on the source files' modification times.
+  - The artifact loads with no originals present.
+  - A bad artifact fails with a typed error, and the app re-downloads it,
+    because there is nothing to re-convert from.
+
+  "Self-heal, never fail" stands for local artifacts. The rejection of
+  fully-final parameters stands too: the published artifact is the same
+  prepared form. The weight-identity contract changes in published mode.
+  `ModelFingerprint` skips Prepared Checkpoint file names, and on the phone
+  that file is the only weights file, so there the published manifest's
+  identity joins the fingerprint. Without it the SSD tier's partition key
+  would hash no weights at all.
+- **ADR-0018.** On the phone the ceiling reads its headroom from
+  `os_proc_available_memory()`, the per-app limit iOS enforces. The kernel
+  buckets and the Working-Set Bound are Mac readings. The band, the floor and
+  the reserve's shape are unchanged. Device Tier supplies the starting budget
+  and the output cap the reserve prices growth from.
+- **ADR-0039, decision 5.** The trigger that unloads the voice at critical
+  memory pressure was listed but never wired on the Mac. On the phone, Phone
+  App Bindings wires it, and the engine still doesn't know the app. There, an
+  unload hands the rest of the utterance to the system voice.
