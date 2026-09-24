@@ -1,8 +1,9 @@
 # Release Build — dispatched by release-please.yml after a GitHub Release is
-# created (or manually re-run: gh workflow run release-build.yml --ref vX.Y.Z
-# -f tag=vX.Y.Z). Gates on the released commit's CI, then builds, signs
-# (Developer ID), notarizes, staples, and uploads the DMG + dSYMs to the
-# existing Release. Secrets and one-time setup: docs/releasing.md.
+# created as a draft (or manually re-run: gh workflow run release-build.yml
+# --ref vX.Y.Z -f tag=vX.Y.Z). Gates on the released commit's CI, then builds,
+# signs (Developer ID), notarizes, staples, uploads the DMG + dSYMs to the
+# existing Release, and only then publishes it. Secrets and one-time setup:
+# docs/releasing.md.
 
 name: Release Build
 
@@ -149,6 +150,23 @@ jobs:
             dist/Tesseract.dmg \
             "dist/Tesseract-$VERSION-dSYMs.zip" \
             --clobber
+
+      # The Release stays a draft until its DMG is attached, so the README's
+      # releases/latest/download/Tesseract.dmg link never resolves to a
+      # release without one. Latest goes to the highest version: re-running
+      # an older tag's build after a newer release shipped publishes it
+      # without moving the download link back.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          LATEST=$(gh release view --json tagName --jq .tagName)
+          NEWEST=$(printf '%s\n' "$LATEST" "$TAG" | sort -V | tail -n1)
+          if [ "$NEWEST" = "$TAG" ]; then MAKE_LATEST=true; else MAKE_LATEST=false; fi
+          echo "Publishing $TAG (current latest: $LATEST, make latest: $MAKE_LATEST)"
+          gh release edit "$TAG" --draft=false --latest="$MAKE_LATEST"
 
       - name: Upload build artifacts (debugging aid)
         if: always()

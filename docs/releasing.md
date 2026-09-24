@@ -15,8 +15,8 @@ How Tesseract ships. Decision record: `docs/adr/0017-release-please-signed-notar
    produce a Release PR (all types are non-hidden via `changelog-sections`
    in `release-please-config.json`; release-please's default would release
    only on `feat`/`fix`/`deps`).
-3. On merge, Release Please creates the tag (`vX.Y.Z`) and the GitHub
-   Release, then dispatches `release-build.yml`.
+3. On merge, Release Please creates the tag (`vX.Y.Z`) and a **draft**
+   GitHub Release, then dispatches `release-build.yml`.
 4. `release-build.yml` requires CI (`build-release`, `test`, `lint`) to be
    green for the release's code state (the tagged commit's parent — normally
    already finished, so the gate is instant), then: archives with Developer ID signing,
@@ -27,6 +27,17 @@ How Tesseract ships. Decision record: `docs/adr/0017-release-please-signed-notar
      `https://github.com/spokvulcan/tesseract/releases/latest/download/Tesseract.dmg`
    - `Tesseract-<version>-dSYMs.zip` — keep these; they are the only way to
      symbolicate a user's crash report.
+5. Only then does it publish the Release, which makes it Latest unless a
+   newer release is already out (say, when re-running an older tag's build).
+
+Releases start as drafts because the stable URL follows whichever release is
+Latest. v1.15.0 was published before its build ran, the build then failed at
+the gate, and the stable URL returned a 404. A draft is never Latest, so
+while a build runs, or after one fails, the URL keeps serving the previous
+DMG. GitHub normally creates a draft's tag only when it is published;
+`force-tag-creation` in `release-please-config.json` creates it up front,
+because the build checks out the tag and Release Please finds the previous
+release by it.
 
 The version is injected at build time (`MARKETING_VERSION` from the tag,
 `CURRENT_PROJECT_VERSION` from the run number). The pbxproj's own version is
@@ -108,6 +119,17 @@ read workflow-file diffs yourself before merging.**
 - **Re-run a failed release build:**
   `gh workflow run release-build.yml --ref vX.Y.Z -f tag=vX.Y.Z`
   (idempotent — assets upload with `--clobber`).
+  A successful run publishes the draft.
+- **A release that can't build from its tag** (its code is red and the fix
+  needs a new commit): leave the draft. The fix ships with the next Release
+  PR; the draft is visible only to collaborators, and its notes stay in
+  `CHANGELOG.md`. If you delete it, keep the tag (`gh release delete` does
+  unless you pass `--cleanup-tag`): Release Please finds the previous release
+  by it.
+- **Move Latest to another release:** `gh release edit vX.Y.Z --latest`,
+  which moves the stable URL with it. Only needed for a release that was
+  published without its DMG, by hand or before releases started as drafts
+  (v1.15.0).
 - **Skip a commit from the changelog:** it can't be skipped retroactively;
   fix the PR title before merge. That is the entire reason `pr-title.yml`
   exists.

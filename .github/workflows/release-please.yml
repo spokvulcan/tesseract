@@ -1,6 +1,7 @@
 # Release Please maintains the Release PR on main; merging that PR makes it
-# create the tag + GitHub Release, after which this workflow explicitly
-# dispatches the asset build. The explicit dispatch is required: releases
+# create the tag + a draft GitHub Release, after which this workflow
+# explicitly dispatches the asset build; the build publishes the release
+# once its DMG is attached. The explicit dispatch is required: releases
 # created with the default GITHUB_TOKEN never trigger other workflows
 # (ADR-0017 — chosen over a long-lived PAT).
 
