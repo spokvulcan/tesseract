@@ -431,8 +431,13 @@ nonisolated enum CanonicalEchoFidelity {
         tokenizer: any Tokenizer,
         renderContext: TemplateRenderContext
     ) -> SimulatedRegistration {
+        // The request's own thinking resolution, as the live stream driver
+        // and Leaf Store run with it: an emitted `enable_thinking: false`
+        // closes the think block, so the turn is not a canonical-user leaf.
+        let startsInsideThinkBlock = renderContext.startsInsideThinkBlock(
+            promptStartsThinking: learning.promptStartsThinking)
         let mode = LeafStorePhase.selectHTTPLeafStoreMode(
-            startsInsideThinkBlock: learning.promptStartsThinking,
+            startsInsideThinkBlock: startsInsideThinkBlock,
             emittedToolCalls: !echo.toolCalls.isEmpty)
         let index: EmittedPathIndex
         let fingerprint: String
@@ -494,8 +499,7 @@ nonisolated enum CanonicalEchoFidelity {
                     storedRenderBytes: bytes, storedMessage: echo, promptPath: prompt,
                     generatedTokens: generatedTokens, stoppedOn: marker.tokenID,
                     toolCallFormat: learning.toolCallFormat, tools: probeToolSpecs,
-                    startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
-                        promptStartsThinking: learning.promptStartsThinking)
+                    startsInsideThinkBlock: startsInsideThinkBlock
                 ))
             let registered = monotonicSeconds()
             simulated.registerSeconds = registered - registerStart
