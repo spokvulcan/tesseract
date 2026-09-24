@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.16.0](https://github.com/spokvulcan/tesseract/compare/v1.15.0...v1.16.0) (2026-09-24)
+
+
+### Features
+
+* **cache:** give each request one Cache Claim, concluded inside its GPU lease ([#555](https://github.com/spokvulcan/tesseract/issues/555)) ([8611745](https://github.com/spokvulcan/tesseract/commit/861174571c8d77ced89f5ba9c7e9c4a6af7d89e3))
+
+
+### Continuous Integration
+
+* build with Xcode 27 and clear the compiler warnings ([#557](https://github.com/spokvulcan/tesseract/issues/557)) ([431f87f](https://github.com/spokvulcan/tesseract/commit/431f87fb5c520956d378b4918cd0f9b794f20445))
+* publish each release only once its DMG is attached ([#558](https://github.com/spokvulcan/tesseract/issues/558)) ([59c7205](https://github.com/spokvulcan/tesseract/commit/59c72058824efe6b9e4775a339469283f1ab6bfd))
+
 ## [1.15.0](https://github.com/spokvulcan/tesseract/compare/v1.14.1...v1.15.0) (2026-09-22)
 
 
