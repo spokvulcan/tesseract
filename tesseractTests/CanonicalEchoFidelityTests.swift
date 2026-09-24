@@ -356,4 +356,53 @@ struct CanonicalEchoFidelityTests {
         #expect(report.skipped.isEmpty)
         #expect(report.mismatchCount == 0)
     }
+
+    // MARK: - Emitted Path learning
+
+    /// The walk decides a stop turn's leaf as the live Leaf Store does, from
+    /// the request's own thinking resolution. On a thinking-default template
+    /// a request that emits `enable_thinking: false` generates outside any
+    /// think block, so the live server selects `directLeaf`, captures live
+    /// and registers; with thinking on, the think-stripping template sends
+    /// the same turn to the canonical-leaf boundary.
+    @Test(arguments: [true, false])
+    func stopTurnLeafFollowsTheRequestsThinkingResolution(enableThinking: Bool) async throws {
+        func openAI(_ role: OpenAI.ChatRole, _ content: String) -> OpenAI.ChatMessage {
+            OpenAI.ChatMessage(role: role, content: .text(content))
+        }
+        let renderContext =
+            enableThinking
+            ? TemplateRenderContext.canonical
+            : TemplateRenderContext(kwargs: [.enableThinking: false], preservesThinking: false)
+        let requests = [
+            CanonicalEchoFidelity.RecordedRequest(
+                messages: [openAI(.system, "sys"), openAI(.user, "hi")],
+                tools: nil, renderContext: renderContext),
+            CanonicalEchoFidelity.RecordedRequest(
+                messages: [
+                    openAI(.system, "sys"), openAI(.user, "hi"),
+                    openAI(.assistant, "hello world"), openAI(.user, "more"),
+                ],
+                tools: nil, renderContext: renderContext),
+        ]
+        let learning = CanonicalEchoFidelity.EmittedPathLearning(
+            fingerprint: "echo-thinking-\(UUID())", toolCallFormat: .xmlFunction,
+            promptStartsThinking: true)
+
+        let report = await CanonicalEchoFidelity.walkSession(
+            requests: requests, sessionAffinity: "ses_thinking", modelID: "toy-qwen38",
+            tokenizer: EmittedPathToyTokenizer(), learning: learning)
+
+        #expect(report.skipped.isEmpty)
+        let verdict = try #require(report.boundaries.first?.emittedPath)
+        if enableThinking {
+            #expect(verdict.mode == HTTPLeafStoreMode.canonicalUserLeaf.rawValue)
+            #expect(verdict.source == LeafStorePhase.Report.Source.boundary.rawValue)
+            #expect(!verdict.registered)
+        } else {
+            #expect(verdict.mode == HTTPLeafStoreMode.directLeaf.rawValue)
+            #expect(verdict.source == LeafStorePhase.Report.Source.live.rawValue)
+            #expect(verdict.registration == "registered")
+        }
+    }
 }

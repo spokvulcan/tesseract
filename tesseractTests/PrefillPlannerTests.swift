@@ -381,6 +381,33 @@ import MLXLMCommon
         #expect(boundaries.lastMessageOffset == tokens.count - genPromptBytes)
     }
 
+    @Test func lastMessageOffsetSubtractsTheClosedThinkPromptWhenTheRequestDisablesThinking()
+        throws
+    {
+        // A thinking-default template under an emitted `enable_thinking:
+        // false` ends the prompt in the closed, empty think block.
+        let tokenizer = FakeChatMLTokenizer()
+        let noThinking = TemplateRenderContext(
+            kwargs: [.enableThinking: false], preservesThinking: false)
+        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
+        )
+        let tokens = try tokenizer.applyChatTemplate(
+            messages: conv.promptMessages, tools: nil,
+            additionalContext: noThinking.additionalContext())
+
+        let boundaries = try PrefillPlanner.detectBoundaries(
+            conversation: conv,
+            promptStartsThinking: true,
+            keySpace: .identity(keyPath: tokens),
+            render: makeRender(tokenizer, renderContext: noThinking)
+        )
+
+        let genPromptBytes = FakeChatMLTokenizer.generationPrompt(
+            thinking: true, thinkingDisabled: true
+        ).utf8.count
+        #expect(boundaries.lastMessageOffset == tokens.count - genPromptBytes)
+    }
+
     @Test func lastMessageOffsetIsNilWhenTheGenerationPromptSuffixDoesNotMatch() throws {
         // Tokens rendered with the thinking prompt, but detection told the turn
         // is non-thinking ⇒ the suffix won't match ⇒ no last-message boundary.

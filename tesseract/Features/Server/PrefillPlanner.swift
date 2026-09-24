@@ -124,6 +124,10 @@ nonisolated enum PrefillPlanner {
     /// The MLXLMCommon `Tokenizer` protocol doesn't expose `addGenerationPrompt`,
     /// so the last-message boundary is found by encoding the known generation
     /// prompt string and subtracting it from the full token suffix.
+    /// `promptStartsThinking` is the loaded template's fact; which prompt this
+    /// request ends in is resolved against `render.renderContext`, since an
+    /// emitted `enable_thinking: false` swaps the open think block for the
+    /// closed, empty one.
     ///
     /// `render` is the request's **Conversation Render** — its last-user
     /// re-render engages the C27 truncated resolve internally (text key space
@@ -155,9 +159,15 @@ nonisolated enum PrefillPlanner {
         // outside the **Conversation Render** module's template application
         // by design (ticket #473 audit).
         let genPromptStr =
-            promptStartsThinking
-            ? "<|im_start|>assistant\n<think>\n"
-            : "<|im_start|>assistant\n"
+            if render.renderContext.startsInsideThinkBlock(
+                promptStartsThinking: promptStartsThinking)
+            {
+                "<|im_start|>assistant\n<think>\n"
+            } else if promptStartsThinking {
+                "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            } else {
+                "<|im_start|>assistant\n"
+            }
         let genPromptTokens = tokenizer.encode(text: genPromptStr, addSpecialTokens: false)
         let lastMessageOffset: Int?
         if !genPromptTokens.isEmpty,

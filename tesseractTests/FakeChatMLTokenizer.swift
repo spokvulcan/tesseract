@@ -9,7 +9,9 @@ import MLXLMCommon
 /// `applyChatTemplate` reproduces the `<|im_start|>role\ncontent<|im_end|>\n`
 /// envelope, optionally renders a `<tools>count</tools>` marker, and — unless
 /// `add_generation_prompt` is false — appends the generation prompt (think or
-/// non-think per `promptStartsThinking`).
+/// non-think per `promptStartsThinking`; on a thinking template an explicit
+/// `enable_thinking: false` swaps the open block for the closed, empty one,
+/// the Qwen3.5+ shape).
 ///
 /// `StablePrefixDetectorTests` keeps its own `MockTokenizer`: it renders tools as
 /// `[tools:...]` and has no generation-prompt support, so it is a genuinely
@@ -107,17 +109,22 @@ struct FakeChatMLTokenizer: Tokenizer {
             tokens += encode(text: "<tools>\(tools.count)</tools>\n", addSpecialTokens: false)
         }
         let addGenerationPrompt = (additionalContext?["add_generation_prompt"] as? Bool) ?? true
+        let enableThinking =
+            (additionalContext?[TemplateRenderFlag.enableThinking.rawValue] as? Bool) ?? true
         if addGenerationPrompt {
             tokens += encode(
-                text: Self.generationPrompt(thinking: promptStartsThinking),
+                text: Self.generationPrompt(
+                    thinking: promptStartsThinking, thinkingDisabled: !enableThinking),
                 addSpecialTokens: false
             )
         }
         return tokens
     }
 
-    static func generationPrompt(thinking: Bool) -> String {
-        thinking ? "<|im_start|>assistant\n<think>\n" : "<|im_start|>assistant\n"
+    static func generationPrompt(thinking: Bool, thinkingDisabled: Bool = false) -> String {
+        guard thinking else { return "<|im_start|>assistant\n" }
+        return thinkingDisabled
+            ? "<|im_start|>assistant\n<think>\n\n</think>\n\n" : "<|im_start|>assistant\n<think>\n"
     }
 
     /// Remove one `<think>…</think>` block (plus a trailing newline) from an

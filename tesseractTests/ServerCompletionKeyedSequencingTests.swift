@@ -140,6 +140,56 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         await fixture.drain()
     }
 
+    /// On a thinking-default template, a request that emits
+    /// `enable_thinking: false` ends its prompt in the closed, empty think
+    /// block instead of the open one. The prefill must find the last-message
+    /// boundary either way: after a tool result it sits past the last-user
+    /// boundary, so the drive captures two request-local boundary helpers
+    /// whether or not the request thinks.
+    @MainActor
+    @Test(arguments: [true, false])
+    func toolResultTurnCapturesTheLastMessageBoundaryWhetherOrNotTheRequestThinks(
+        enableThinking: Bool
+    ) async throws {
+        var tokenizer = FakeChatMLTokenizer()
+        tokenizer.stripsThinkBeforeLastUser = true
+        let renderContext =
+            enableThinking
+            ? TemplateRenderContext.canonical
+            : TemplateRenderContext(kwargs: [.enableThinking: false], preservesThinking: false)
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [
+                .init(role: .user, content: "question"),
+                .assistant(content: "calling"),
+                .init(role: .tool, content: "result"),
+            ],
+            templateContextDigest: renderContext.digest)
+        let prompt = try tokenizer.applyChatTemplate(
+            messages: conversation.promptMessages, tools: nil,
+            additionalContext: renderContext.additionalContext())
+        let completion = enableThinking ? "thought</think>ok" : "ok"
+        let modelID = "last-message-boundary-\(UUID())"
+        let telemetry = TelemetryCapture(modelID: modelID)
+        defer { telemetry.stop() }
+        let fixture = ServerCompletionFixture(
+            provider: ToyModelSessionProvider(
+                model: ToyLanguageModel(script: prompt + Array(completion.utf8).map(Int.init)),
+                tokenizer: tokenizer),
+            promptStartsThinking: true, modelID: modelID)
+        let handle = try await fixture.start(
+            conversation: conversation, parameters: Self.parameters(),
+            renderContext: renderContext)
+        #expect(try await collectServerText(handle).text == "ok")
+        let prefilled = try #require(
+            telemetry.drain().first {
+                $0.eventName == "requestMemory" && $0.field("phase") == "prefilled"
+                    && $0.field("boundaryCheckpointArrayBytes") != nil
+            })
+        #expect(prefilled.field("boundaryCheckpointCount") == "2")
+        await fixture.drain()
+    }
+
     @MainActor
     @Test(arguments: [false, true])
     func plannedBranchViewReportsCaptureAndLookupThroughTheModelSession(ssdEnabled: Bool)

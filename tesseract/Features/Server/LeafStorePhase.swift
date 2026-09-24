@@ -93,7 +93,7 @@ nonisolated enum LeafStorePhase {
         sessions: any ModelSessionProviding,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
-        promptStartsThinking: Bool,
+        startsInsideThinkBlock: Bool,
         assistantText: String,
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
@@ -136,7 +136,7 @@ nonisolated enum LeafStorePhase {
         let storedConversation = conversation.appendingAssistant(storedMessage)
 
         let leafStoreMode = Self.selectHTTPLeafStoreMode(
-            promptStartsThinking: promptStartsThinking,
+            startsInsideThinkBlock: startsInsideThinkBlock,
             emittedToolCalls: !toolCalls.isEmpty
         )
         result.report.mode = leafStoreMode.rawValue
@@ -153,7 +153,7 @@ nonisolated enum LeafStorePhase {
             mode: leafStoreMode,
             storedMessage: storedMessage,
             generatedTokens: mlxStart.generatedTokens.snapshot,
-            startsInsideThinkBlock: promptStartsThinking
+            startsInsideThinkBlock: startsInsideThinkBlock
         )
 
         // 2. The fast-path eligibility (GPU-free, no render): the live final
@@ -592,13 +592,13 @@ nonisolated enum LeafStorePhase {
     // MARK: - Mode selection
 
     static func selectHTTPLeafStoreMode(
-        promptStartsThinking: Bool,
+        startsInsideThinkBlock: Bool,
         emittedToolCalls: Bool
     ) -> HTTPLeafStoreMode {
         if emittedToolCalls {
             return .directToolLeaf
         }
-        if promptStartsThinking {
+        if startsInsideThinkBlock {
             return .canonicalUserLeaf
         }
         return .directLeaf
