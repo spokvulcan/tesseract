@@ -1109,7 +1109,7 @@ nonisolated final class ServerCompletion {
                 sessions: sessions,
                 requestID: requestID,
                 prefixCache: prefixCache,
-                promptStartsThinking: driver.startsInsideThinkBlock,
+                startsInsideThinkBlock: driver.startsInsideThinkBlock,
                 assistantText: accumulator.text,
                 assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
@@ -1406,7 +1406,10 @@ nonisolated final class ServerCompletion {
             // including the generation-prompt suffix subtraction and the
             // last-user re-render — in one tested place, against the key
             // space's own path so boundary offsets are key-space offsets by
-            // construction.
+            // construction. It takes the load-time template fact, not
+            // `requestStartsInsideThinkBlock`: it resolves this request's
+            // generation prompt (open, closed-empty, or no think block)
+            // against the render's own context.
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
                 promptStartsThinking: promptStartsThinking,
@@ -1700,7 +1703,7 @@ nonisolated final class ServerCompletion {
                         temperature: parameters.temperature,
                         textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
                         predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
-                            promptStartsThinking: requestStartsInsideThinkBlock,
+                            startsInsideThinkBlock: requestStartsInsideThinkBlock,
                             // Conservative stand-in: tool *emission* is unknowable
                             // at engagement time, so defined tools predict as if
                             // they will be called.

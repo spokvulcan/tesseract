@@ -271,6 +271,7 @@ let chatMLGreedyPieces = [
 nonisolated func makeRender(
     _ tokenizer: any MLXLMCommon.Tokenizer,
     toolSpecs: [ToolSpec]? = nil,
+    renderContext: TemplateRenderContext = .canonical,
     fingerprint: String? = nil,
     base: [Int]? = nil,
     cache: RenderTokenCache = .shared
@@ -278,7 +279,7 @@ nonisolated func makeRender(
     let render = ConversationRender.forRequest(
         tokenizer: tokenizer,
         toolSpecs: toolSpecs,
-        renderContext: .canonical,
+        renderContext: renderContext,
         modelFingerprint: fingerprint,
         cache: cache
     )

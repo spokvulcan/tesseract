@@ -7,7 +7,7 @@ struct ServerCompletionLeafStoreModeTests {
     @Test func toolCallTurnsPreferDirectToolLeafOnThinkingTemplates() {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
-                promptStartsThinking: true,
+                startsInsideThinkBlock: true,
                 emittedToolCalls: true
             ) == .directToolLeaf
         )
@@ -16,7 +16,7 @@ struct ServerCompletionLeafStoreModeTests {
     @Test func stopTurnsUseCanonicalUserLeafOnThinkingTemplates() {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
-                promptStartsThinking: true,
+                startsInsideThinkBlock: true,
                 emittedToolCalls: false
             ) == .canonicalUserLeaf
         )
@@ -25,7 +25,7 @@ struct ServerCompletionLeafStoreModeTests {
     @Test func nonThinkingTemplatesKeepDirectLeafForNormalReplies() {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
-                promptStartsThinking: false,
+                startsInsideThinkBlock: false,
                 emittedToolCalls: false
             ) == .directLeaf
         )
@@ -34,7 +34,7 @@ struct ServerCompletionLeafStoreModeTests {
     @Test func toolCallsStillForceDirectToolLeafWithoutThinkingPrompt() {
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
-                promptStartsThinking: false,
+                startsInsideThinkBlock: false,
                 emittedToolCalls: true
             ) == .directToolLeaf
         )
@@ -49,13 +49,13 @@ struct ServerCompletionLeafStoreModeTests {
             kwargs: [.enableThinking: false], preservesThinking: false)
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
-                promptStartsThinking: render.startsInsideThinkBlock(promptStartsThinking: true),
+                startsInsideThinkBlock: render.startsInsideThinkBlock(promptStartsThinking: true),
                 emittedToolCalls: false
             ) == .directLeaf
         )
         #expect(
             LeafStorePhase.selectHTTPLeafStoreMode(
-                promptStartsThinking: TemplateRenderContext.canonical.startsInsideThinkBlock(
+                startsInsideThinkBlock: TemplateRenderContext.canonical.startsInsideThinkBlock(
                     promptStartsThinking: true),
                 emittedToolCalls: false
             ) == .canonicalUserLeaf

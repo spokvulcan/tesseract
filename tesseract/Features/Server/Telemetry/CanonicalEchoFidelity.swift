@@ -432,7 +432,7 @@ nonisolated enum CanonicalEchoFidelity {
         renderContext: TemplateRenderContext
     ) -> SimulatedRegistration {
         let mode = LeafStorePhase.selectHTTPLeafStoreMode(
-            promptStartsThinking: learning.promptStartsThinking,
+            startsInsideThinkBlock: learning.promptStartsThinking,
             emittedToolCalls: !echo.toolCalls.isEmpty)
         let index: EmittedPathIndex
         let fingerprint: String
