@@ -529,6 +529,15 @@ model answers `false` uncached so a later download re-probes. Distinct from
 **Vision Mode**: this memoizes intrinsic capability, not load-state.
 _Avoid_: vision toggle (a **Vision Mode** concept), per-view capability flag.
 
+**Model Completeness**:
+When a catalog entry's folder counts as downloaded. The default is any file
+with the entry's required extension, at any depth. The Voice Engine uses the
+speech engine's own checkpoint rule instead (`Qwen3Checkpoint`: talker weights,
+text tokenizer, speech tokenizer), so the catalog can't show a folder as
+downloaded that the engine refuses to load.
+_Avoid_: "has weights" (one nested `.safetensors` is not a checkpoint), verify
+(that compares sizes against the hub listing, a separate step).
+
 **Retired Checkpoint**:
 A directory in the model store that an earlier catalog entry downloaded and
 that no entry lists or loads anymore. Removed once at launch, because the

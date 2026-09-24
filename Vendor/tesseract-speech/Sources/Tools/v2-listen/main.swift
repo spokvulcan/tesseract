@@ -12,6 +12,7 @@
 //          [--precision 8bit|6bit|bf16] [--out-dir DIR] [--text-file PATH] [--seed N]
 
 import Foundation
+import HuggingFace
 import MLXAudioCore
 import TesseractSpeech
 
@@ -145,9 +146,19 @@ let args = parseArgs()
 let outDir = URL(fileURLWithPath: args.outDir, isDirectory: true)
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
+// The engine only loads from disk, so the harness fetches the checkpoint
+// first: the vendored resolver, into the Application Support store the app
+// also uses (a checkpoint the app downloaded is reused as-is).
+let modelSpec = spec(for: args.precision)
+guard let repoID = Repo.ID(rawValue: modelSpec.repo) else {
+    fatalError("invalid repo id \(modelSpec.repo)")
+}
+let checkpoint = try await ModelUtils.resolveOrDownloadModel(
+    repoID: repoID, requiredExtension: "safetensors")
+
 let engine = SpeechEngine(
-    model: spec(for: args.precision),
-    synthesizer: Qwen3Synthesizer(),
+    model: modelSpec,
+    synthesizer: Qwen3Synthesizer(checkpointDirectory: { [checkpoint] _ in checkpoint }),
     gpu: ImmediateLease(),
     diagnostics: args.timing ? StderrTimingTap() : nil
 )

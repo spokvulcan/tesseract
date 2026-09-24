@@ -826,15 +826,24 @@ final class DependencyContainer: ObservableObject {
     // TesseractSpeech package behind its ports; the presenter mirrors
     // residency for views and the arbiter; the coordinator drives sessions.
     lazy var textExtractor = TextExtractor()
-    lazy var speechEnginePresenter = SpeechEnginePresenter(
-        engine: SpeechEngine(
-            // The catalog's Voice Engine entry downloads this same spec; the
-            // ADR-0037 precision gate is recorded there.
-            model: ModelDefinition.textToSpeechModelSpec,
-            synthesizer: Qwen3Synthesizer(),
-            gpu: ArbiterGPULease(arbiter: inferenceArbiter)
+    lazy var speechEnginePresenter: SpeechEnginePresenter = {
+        // The catalog's Voice Engine entry downloads this same spec (the
+        // ADR-0037 precision gate is recorded there), and the engine loads it
+        // from that entry's folder: the store root plus the repo's
+        // subdirectory, as `modelPath(for:)` builds it. The engine never
+        // downloads; without the files it throws `modelUnavailable`.
+        let store = ModelDownloadManager.modelStorageURL
+        return SpeechEnginePresenter(
+            engine: SpeechEngine(
+                model: ModelDefinition.textToSpeechModelSpec,
+                synthesizer: Qwen3Synthesizer(checkpointDirectory: { spec in
+                    store.appendingPathComponent(
+                        ModelDefinition.storageSubdirectory(forRepo: spec.repo))
+                }),
+                gpu: ArbiterGPULease(arbiter: inferenceArbiter)
+            )
         )
-    )
+    }()
     lazy var ttsNotchPanelController = TTSNotchPanelController()
     lazy var speechCoordinator: SpeechCoordinator = {
         // `playback` is left to the coordinator's production default
@@ -848,10 +857,20 @@ final class DependencyContainer: ObservableObject {
         let coordinator = SpeechCoordinator(
             textExtractor: textExtractor,
             engine: speechEnginePresenter,
+            voiceEngineStatus: { [modelDownloadManager] in
+                // Re-read from disk: the folder can change behind the
+                // catalog's back (deleted in Finder, fetched by v2-listen).
+                let id = ModelDefinition.defaultTextToSpeechModelID
+                modelDownloadManager.refreshStatus(for: id)
+                return modelDownloadManager.status(for: id)
+            },
             settings: settingsManager,
             notchOverlay: ttsNotchPanelController
         )
         coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
+        coordinator.onVoiceEngineMissing = {
+            (NSApp.delegate as? AppDelegate)?.navigateToModels()
+        }
         return coordinator
     }()
 

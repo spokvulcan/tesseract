@@ -262,31 +262,24 @@ struct ModelDownloadLifecycleTests {
         let entry = try #require(
             ModelDefinition.withID(ModelDefinition.defaultTextToSpeechModelID))
         let repo = ModelDefinition.textToSpeechModelSpec.repo
-        let harness = try LifecycleHarness(
-            definitions: [entry],
-            repos: [
-                repo: [
-                    .init(path: "config.json", size: 16),
-                    .init(path: "model.safetensors", size: 64),
-                    .init(path: "speech_tokenizer/config.json", size: 8),
-                    .init(path: "speech_tokenizer/model.safetensors", size: 32),
-                ]
-            ]
-        )
+        let listing = try Self.voiceEngineListing()
+        let total = Int64(listing.reduce(0) { $0 + $1.size })
+        let harness = try LifecycleHarness(definitions: [entry], repos: [repo: listing])
         defer { harness.tearDown() }
 
         harness.manager.download(modelID: entry.id)
         let downloaded = try await harness.waitForSettled(id: entry.id)
-        #expect(downloaded == .downloaded(sizeOnDisk: 120))
-        #expect(
-            harness.manager.modelPath(for: entry.id)
-                == harness.storageRoot.modelDirectory(forRepo: repo))
+        #expect(downloaded == .downloaded(sizeOnDisk: total))
+        let folder = try #require(harness.manager.modelPath(for: entry.id))
+        #expect(folder == harness.storageRoot.modelDirectory(forRepo: repo))
+        // What the catalog calls downloaded, the engine's own check accepts.
+        #expect(Qwen3Checkpoint.missingFiles(in: folder).isEmpty)
 
         // Verify repairs a lost speech tokenizer from the same repo.
         try harness.removeFile(repo: repo, path: "speech_tokenizer/model.safetensors")
         harness.manager.verifyAndRepair(modelID: entry.id)
         let verified = try await harness.waitForSettled(id: entry.id)
-        #expect(verified == .downloaded(sizeOnDisk: 120))
+        #expect(verified == .downloaded(sizeOnDisk: total))
         #expect(harness.fetching.listedRepos == [repo, repo])
         #expect(harness.fetching.fetchedFiles.last == "\(repo)/speech_tokenizer/model.safetensors")
     }
@@ -306,6 +299,53 @@ struct ModelDownloadLifecycleTests {
         harness.manager.refreshAllStatuses()
 
         #expect(harness.manager.status(for: entry.id) == .notDownloaded)
+    }
+
+    /// A folder holding everything but the talker weights isn't the Voice
+    /// Engine, even though `speech_tokenizer/model.safetensors` is there.
+    /// Download then fetches only what's missing. Before, any nested
+    /// `.safetensors` read as downloaded, and the engine's own resolver
+    /// deleted the folder and pulled the whole repo again.
+    @Test func voiceEngineWithoutTalkerWeightsIsNotDownloaded() async throws {
+        let entry = try #require(
+            ModelDefinition.withID(ModelDefinition.defaultTextToSpeechModelID))
+        let repo = ModelDefinition.textToSpeechModelSpec.repo
+        let listing = try Self.voiceEngineListing()
+        let harness = try LifecycleHarness(definitions: [entry], repos: [repo: listing])
+        defer { harness.tearDown() }
+
+        for file in listing where file.path != "model.safetensors" {
+            try harness.placeFile(
+                repo: repo, path: file.path,
+                data: file.contents ?? Data(count: file.size))
+        }
+        harness.manager.refreshAllStatuses()
+        #expect(harness.manager.status(for: entry.id) == .notDownloaded)
+
+        harness.manager.download(modelID: entry.id)
+        let settled = try await harness.waitForSettled(id: entry.id)
+        #expect(settled == .downloaded(sizeOnDisk: Int64(listing.reduce(0) { $0 + $1.size })))
+        #expect(harness.fetching.fetchedFiles == ["\(repo)/model.safetensors"])
+    }
+
+    /// One entry re-read from disk, for a caller about to use the model: a
+    /// folder removed outside the app reads as not downloaded.
+    @Test func refreshStatusRereadsOneEntryFromDisk() async throws {
+        let harness = try LifecycleHarness(
+            definitions: [Self.model("alpha", repo: "fixture/alpha")],
+            repos: [:]
+        )
+        defer { harness.tearDown() }
+
+        try harness.placeFile(repo: "fixture/alpha", path: "model.safetensors", size: 8)
+        harness.manager.refreshStatus(for: "alpha")
+        #expect(harness.manager.status(for: "alpha") == .downloaded(sizeOnDisk: 8))
+
+        try FileManager.default.removeItem(
+            at: harness.storageRoot.modelDirectory(forRepo: "fixture/alpha"))
+        #expect(harness.manager.status(for: "alpha") == .downloaded(sizeOnDisk: 8), "cached")
+        harness.manager.refreshStatus(for: "alpha")
+        #expect(harness.manager.status(for: "alpha") == .notDownloaded)
     }
 
     // MARK: - Errors
@@ -364,6 +404,24 @@ struct ModelDownloadLifecycleTests {
     }
 
     // MARK: - Fixtures
+
+    /// The Voice Engine repo's file set: talker weights and index, text
+    /// tokenizer (vocab + merges; `tokenizer.json` is generated on first
+    /// load), and the nested speech tokenizer.
+    static func voiceEngineListing() throws -> [InMemoryModelFetching.ScriptedFile] {
+        [
+            try .json("config.json", ["model_type": "qwen3_tts"]),
+            .init(path: "model.safetensors", size: 64),
+            try .json(
+                "model.safetensors.index.json",
+                ["weight_map": ["talker.model.norm.weight": "model.safetensors"]]),
+            .init(path: "tokenizer_config.json", size: 8),
+            .init(path: "vocab.json", size: 8),
+            .init(path: "merges.txt", size: 8),
+            .init(path: "speech_tokenizer/config.json", size: 8),
+            .init(path: "speech_tokenizer/model.safetensors", size: 32),
+        ]
+    }
 
     static func model(
         _ id: String,
@@ -427,10 +485,14 @@ final class LifecycleHarness {
     /// Pre-place a file on disk under the model dir, as a completed download
     /// (or a truncated leftover) would have left it.
     func placeFile(repo: String, path: String, size: Int) throws {
+        try placeFile(repo: repo, path: path, data: Data(count: size))
+    }
+
+    func placeFile(repo: String, path: String, data: Data) throws {
         let target = fileURL(repo: repo, path: path)
         try FileManager.default.createDirectory(
             at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(count: size).write(to: target)
+        try data.write(to: target)
     }
 
     func removeFile(repo: String, path: String) throws {

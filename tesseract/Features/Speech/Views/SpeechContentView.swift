@@ -16,6 +16,7 @@ struct SpeechContentView: View {
     @Environment(SpeechCoordinator.self) private var speechCoordinator
     @Environment(SpeechEnginePresenter.self) private var speechEngine
     @Environment(SettingsManager.self) private var settings
+    @EnvironmentObject private var downloadManager: ModelDownloadManager
 
     @AppStorage("ttsParametersPanelVisible") private var isParametersPanelVisible: Bool = true
     @State private var inputText: String = ""
@@ -30,6 +31,9 @@ struct SpeechContentView: View {
         .padding(.horizontal, Theme.Spacing.xxl)
         .padding(.top, SpeechPageStyle.rhythm)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            voiceEngineNotice
+        }
         .safeAreaInset(edge: .bottom) {
             SpeechTransportBar(
                 state: speechCoordinator.state,
@@ -37,7 +41,7 @@ struct SpeechContentView: View {
                 modelLoadingStatus: speechEngine.loadingStatus,
                 hasText: !inputText.isEmpty,
                 hotkeyHint: settings.ttsHotkey.displayString,
-                onSpeak: { speechCoordinator.speakText(inputText) },
+                onSpeak: { speechCoordinator.speakText(inputText, userInitiated: true) },
                 onStop: { speechCoordinator.stop() },
                 onPause: { speechCoordinator.pause() },
                 onResume: { speechCoordinator.resume() }
@@ -59,5 +63,49 @@ struct SpeechContentView: View {
             }
         }
         .navigationTitle("Speech")
+        .onAppear {
+            downloadManager.refreshStatus(for: ModelDefinition.defaultTextToSpeechModelID)
+        }
+    }
+
+    /// Speech can't start until the Voice Engine is on disk, and the engine
+    /// never downloads it, so say so before Speak is pressed.
+    @ViewBuilder
+    private var voiceEngineNotice: some View {
+        let id = ModelDefinition.defaultTextToSpeechModelID
+        switch downloadManager.status(for: id) {
+        case .notDownloaded:
+            let size = ModelDefinition.withID(id)?.sizeDescription ?? ""
+            noticeRow {
+                Image(systemName: "arrow.down.circle")
+                    .foregroundStyle(.secondary)
+                Text("Speech needs the Voice Engine (\(size)), which isn't downloaded yet.")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: Theme.Spacing.sm)
+                Button("Open Models") {
+                    (NSApp.delegate as? AppDelegate)?.navigateToModels()
+                }
+                .buttonStyle(.borderless)
+            }
+        case .downloading(let progress):
+            noticeRow {
+                ProgressView(value: progress)
+                    .controlSize(.small)
+                    .frame(width: 80)
+                Text("The Voice Engine is downloading: \(Int(progress * 100))%")
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: Theme.Spacing.sm)
+            }
+        case .downloaded, .verifying, .error:
+            // `.error` is on the Models page; Speak re-checks the disk.
+            EmptyView()
+        }
+    }
+
+    private func noticeRow<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: Theme.Spacing.sm, content: content)
+            .font(.callout)
+            .padding(.horizontal, Theme.Spacing.xxl)
+            .padding(.top, SpeechPageStyle.rhythm)
     }
 }

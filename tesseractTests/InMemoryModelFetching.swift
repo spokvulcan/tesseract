@@ -25,6 +25,14 @@ final class InMemoryModelFetching: ModelFetching {
     struct ScriptedFile {
         let path: String
         let size: Int
+        /// What a fetch writes; `size` zero bytes when nil.
+        var contents: Data?
+
+        /// A file that must parse after download, like a `config.json`.
+        static func json(_ path: String, _ object: [String: Any]) throws -> ScriptedFile {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            return ScriptedFile(path: path, size: data.count, contents: data)
+        }
     }
 
     var repos: [String: [ScriptedFile]]
@@ -66,7 +74,7 @@ final class InMemoryModelFetching: ModelFetching {
         }
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(count: file.size).write(to: destination)
+        try (file.contents ?? Data(count: file.size)).write(to: destination)
     }
 
     func resolveSnapshot(
@@ -82,7 +90,7 @@ final class InMemoryModelFetching: ModelFetching {
             let target = modelDir.appendingPathComponent(file.path)
             try FileManager.default.createDirectory(
                 at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(count: file.size).write(to: target)
+            try (file.contents ?? Data(count: file.size)).write(to: target)
             onProgress(Double(index + 1) / Double(files.count))
         }
     }

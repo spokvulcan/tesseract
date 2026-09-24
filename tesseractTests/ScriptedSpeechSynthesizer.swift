@@ -21,6 +21,8 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
     }
 
     var script = Script()
+    /// Whether the checkpoint is "on disk" — the engine's pre-lease check.
+    private(set) var checkpointOnDisk = true
     private(set) var requests: [SegmentRequest] = []
     private(set) var loadCount = 0
     private(set) var primedVoices: [String?] = []
@@ -28,6 +30,13 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
     private(set) var sawCancellation = false
 
     func configure(_ script: Script) { self.script = script }
+    func setCheckpointOnDisk(_ onDisk: Bool) { checkpointOnDisk = onDisk }
+
+    func checkAvailable(_ spec: TTSModelSpec) async throws {
+        guard checkpointOnDisk else {
+            throw SpeechEngineError.modelUnavailable("\(spec.repo) is not downloaded")
+        }
+    }
 
     func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws {
         loadCount += 1

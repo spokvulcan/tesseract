@@ -199,8 +199,9 @@ public enum Readiness: Int, Sendable, Equatable, Comparable {
     }
 }
 
+/// No download phase: the engine only loads a checkpoint already on disk.
+/// Fetching it is the app's model download manager's job.
 public enum EnginePhase: Sendable, Equatable {
-    case downloading(fraction: Double)
     case loadingWeights
     case warmingKernels
     case primingVoice

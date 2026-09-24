@@ -844,6 +844,12 @@ approval requirement in the capture baseline still applies to #480.
   `manifestDirty` under the lock but writes the manifest file after unlocking,
   so the test's `flushManifestForTesting` can no-op while the debounce task's
   write is still in flight and the `fileExists` check lands first.
+- Speech engine package tests: `swift test --package-path Vendor/tesseract-speech`
+  (needs the `Vendor/mlx-swift-lm` submodule checked out). Scripted adapters
+  only, no weights and no GPU: `EngineContractTests` (the ADR-0038 contracts,
+  plus `ModelAvailabilityTests`: a missing checkpoint fails before the GPU
+  lease) and `Qwen3CheckpointTests` (the Voice Engine completeness rule, and
+  `Qwen3Synthesizer` refusing to fetch or delete anything).
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits

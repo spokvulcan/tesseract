@@ -49,3 +49,38 @@ The LLM stack's own conventions are decisive context (read this session): `LLMAc
 - First press of the day pays ~1.9 s cold start (budgeted, measured).
 - Keep-warm holds ~2+ GB resident indefinitely after first use — exactly what the #338 idle-warm budget licenses.
 - Relying on the LLM's 2 GB pool cap couples TTS transient behavior to an LLM-owned constant; acceptable because the lease serializes use and the pinning test would catch a future TTS path that inflates the pool beyond it.
+
+## Amendment (2026-09-24): lazy load reads the disk only
+
+"Load lazily on first use" (§2) used to mean resolve or download, then load.
+The vendored resolver looked in the model store, and when the Voice Engine's
+folder was missing or incomplete it deleted the folder and downloaded the
+snapshot itself: no progress in the UI, no verify, and inside the GPU lease, so
+a multi-GB fetch held up LLM work. Once #561 pointed the catalog entry at the
+same q6 repo, that fallback was the only way the engine reached the network.
+
+Now:
+
+- `Qwen3Synthesizer` gets the checkpoint folder from the app (the Model
+  Catalog's Voice Engine folder) and loads it with
+  `Qwen3TTSModel.fromModelDirectory`. It never calls the resolver. No vendor
+  change: the resolver stays for `v2-listen`, which fetches its checkpoint
+  before it builds the engine.
+- The Speech Synthesizer port gains `checkAvailable(_:)`, a disk-only check the
+  engine runs before taking the lease. A missing checkpoint throws
+  `modelUnavailable` without leasing, loading, or touching the folder.
+  `EnginePhase.downloading` is gone.
+- The check is `Qwen3Checkpoint.missingFiles(in:)`, and the catalog uses the
+  same rule to decide whether the Voice Engine counts as downloaded (**Model
+  Completeness**). Before, any nested `.safetensors` counted, including a
+  folder holding only `speech_tokenizer/model.safetensors`.
+- `SpeechCoordinator` reads the Voice Engine's status before each request.
+  Not downloaded: a request the user made (the hotkey, a Speak button, a
+  message's speak action) opens the Models page, and speech the app starts on
+  its own (auto-speak, the Companion) shows the error only. Downloading or
+  verifying: the request stops with that status. The Speech page shows the
+  same state before Speak is pressed. `PinnedVoice` fingerprints are unchanged.
+
+Cost: a user who skipped the Voice Engine in onboarding has to download it
+before anything is spoken. Before, the first spoken reply fetched ~2.7 GB
+silently.

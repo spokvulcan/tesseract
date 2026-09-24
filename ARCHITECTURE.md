@@ -291,7 +291,10 @@ playback**):
   `Vendor/tesseract-speech` package (ADR-0038/0039), consumed through its
   session/utterance API. Its own ports live in the package: `SpeechSynthesizing`
   (model port; production adapter `Qwen3Synthesizer` → re-vendored MLXAudioTTS)
-  and `GPULeasing` (app adapter `ArbiterGPULease` over `InferenceArbiter`). The
+  and `GPULeasing` (app adapter `ArbiterGPULease` over `InferenceArbiter`).
+  `Qwen3Synthesizer` loads only the folder the app hands it (the Model Catalog's
+  Voice Engine folder) and never downloads; the engine checks that folder before
+  taking the GPU lease and throws `modelUnavailable` when it's incomplete. The
   app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
   mirror for views and the arbiter — a presenter, not a facade: orchestration
   lives in the package engine.
