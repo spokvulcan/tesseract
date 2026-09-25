@@ -51,8 +51,12 @@ nonisolated final class ToolCallParser {
 
     private static let toolStartTag = "<tool_call>"
     private static let toolEndTag = "</tool_call>"
-    private static let thinkStartTag = "<think>"
-    private static let thinkEndTag = "</think>"
+    /// The think-block tags as this parser spells them. The **Generation
+    /// Prompt** measurement reads a think block by the same two, so the
+    /// parser and the measurement cannot disagree about what one is
+    /// (ADR-0070).
+    static let thinkStartTag = "<think>"
+    static let thinkEndTag = "</think>"
 
     private var buffer = ""
     private var insideThinkBlock = false

@@ -673,14 +673,16 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
         lock.withLock { stats }
     }
 
-    /// Drop the cached entry, template hashes, and stats. Called on model
-    /// unload (the entry holds a whole render's bytes plus its token list —
-    /// megabytes at long context — and none of it is valid for the next
-    /// model), and by the test/bench harnesses between cases.
+    /// Drop the cached entry, template hashes, Generation Prompt probes and
+    /// stats. Called on model unload (the entry holds a whole render's bytes
+    /// plus its token list — megabytes at long context — and none of it is
+    /// valid for the next model), and by the test/bench harnesses between
+    /// cases.
     func reset() {
         lock.withLock {
             entry = nil
             templateHashes = [:]
+            generationPromptProbes.clear()
             stats = Stats()
             resolutionsSinceSummary = 0
         }
@@ -717,6 +719,8 @@ nonisolated final class RenderTokenCache: @unchecked Sendable {
     /// seams bypass the cache instead of synthesizing a shared key, so two
     /// models can never share a memo slot.
     private var templateHashes: [String: String] = [:]
+    /// The **Generation Prompt** probes measured this load (ADR-0070).
+    let generationPromptProbes = GenerationPromptProbeMemo()
     private var stats = Stats()
     private var resolutionsSinceSummary = 0
     private let lock = NSLock()
