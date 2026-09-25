@@ -7,7 +7,7 @@ import MLXLMCommon
 /// All three are token offsets into the full tokenized conversation:
 /// - `stablePrefixOffset` — system + tools boundary (via `StablePrefixDetector`).
 /// - `lastMessageOffset` — where the final history message ends, right before
-///   the assistant-generation prompt (e.g. `<|im_start|>assistant\n<think>\n`).
+///   the request's **Generation Prompt** (e.g. `<|im_start|>assistant\n<think>\n`).
 /// - `lastUserOffset` — where the conversation ends when re-rendered up to and
 ///   including the last user message (no generation prompt). Stable across
 ///   think-block rewriting of older assistant turns.
@@ -19,17 +19,23 @@ nonisolated struct PrefillBoundaries: Sendable, Equatable {
     /// translated into key space, so only that boundary is dropped (the
     /// request, its lookup, and the other boundaries keep working).
     let lastUserTranslationFailure: CacheKeySpace.TranslationFailure?
+    /// Why the last-message boundary was not placed: the request's
+    /// Generation Prompt is unknown (ADR-0070). The caller logs it as a
+    /// skip; the other boundaries keep working.
+    let generationPromptUnknown: GenerationPrompt.Unknown?
 
     init(
         stablePrefixOffset: Int?,
         lastMessageOffset: Int?,
         lastUserOffset: Int?,
-        lastUserTranslationFailure: CacheKeySpace.TranslationFailure? = nil
+        lastUserTranslationFailure: CacheKeySpace.TranslationFailure? = nil,
+        generationPromptUnknown: GenerationPrompt.Unknown? = nil
     ) {
         self.stablePrefixOffset = stablePrefixOffset
         self.lastMessageOffset = lastMessageOffset
         self.lastUserOffset = lastUserOffset
         self.lastUserTranslationFailure = lastUserTranslationFailure
+        self.generationPromptUnknown = generationPromptUnknown
     }
 }
 
@@ -115,19 +121,18 @@ nonisolated struct PrefillPlan: Sendable {
 nonisolated enum PrefillPlanner {
     /// Detect the three prefill boundaries for one request. Depends only on a
     /// `Tokenizer`; runs the same two-probe stable-prefix detection plus the
-    /// generation-prompt suffix subtraction and the last-user re-render.
+    /// last-message arithmetic and the last-user re-render.
     ///
     /// All offsets are detected against `keySpace.keyPath` — the one token
     /// path the radix tree is driven with — so they cannot land in the wrong
     /// space on an image-bearing request.
     ///
-    /// The MLXLMCommon `Tokenizer` protocol doesn't expose `addGenerationPrompt`,
-    /// so the last-message boundary is found by encoding the known generation
-    /// prompt string and subtracting it from the full token suffix.
-    /// `promptStartsThinking` is the loaded template's fact; which prompt this
-    /// request ends in is resolved against `render.renderContext`, since an
-    /// emitted `enable_thinking: false` swaps the open think block for the
-    /// closed, empty one.
+    /// The last-message boundary is the key path minus the request's
+    /// **Generation Prompt**, which Request Keying measured from the template
+    /// and checked against this same key path (ADR-0070): no generation
+    /// prompt is spelled here, so a template that is not ChatML-shaped, or
+    /// that thinks only when asked, gets its boundary too. An empty prompt
+    /// places none, and an unknown one places none and says why.
     ///
     /// `render` is the request's **Conversation Render** — its last-user
     /// re-render engages the C27 truncated resolve internally (text key space
@@ -137,7 +142,7 @@ nonisolated enum PrefillPlanner {
     /// inexactness falling back to the full `applyChatTemplate`.
     static func detectBoundaries(
         conversation: HTTPPrefixCacheConversation,
-        promptStartsThinking: Bool,
+        generationPrompt: GenerationPrompt,
         keySpace: CacheKeySpace,
         render: ConversationRender
     ) throws -> PrefillBoundaries {
@@ -151,30 +156,13 @@ nonisolated enum PrefillPlanner {
             tokenizer: tokenizer
         )
 
-        // A standalone plain-text encode of the generation-prompt string,
-        // subtracted from the key path's tail to find the last-message
-        // boundary. It measures and never builds a prompt, and the text it
-        // encodes sits after the last end-of-turn marker — so it can never
-        // coincide with an **Emitted Path Index** prefix (ADR-0063) and stays
-        // outside the **Conversation Render** module's template application
-        // by design (ticket #473 audit).
-        let genPromptStr =
-            if render.renderContext.startsInsideThinkBlock(
-                promptStartsThinking: promptStartsThinking)
-            {
-                "<|im_start|>assistant\n<think>\n"
-            } else if promptStartsThinking {
-                "<|im_start|>assistant\n<think>\n\n</think>\n\n"
-            } else {
-                "<|im_start|>assistant\n"
-            }
-        let genPromptTokens = tokenizer.encode(text: genPromptStr, addSpecialTokens: false)
+        // The key path ends with the checked prompt's tokens, so the last
+        // message ends where they begin.
         let lastMessageOffset: Int?
-        if !genPromptTokens.isEmpty,
-            fullTokens.count > genPromptTokens.count,
-            Array(fullTokens.suffix(genPromptTokens.count)).elementsEqual(genPromptTokens)
+        if let promptTokens = generationPrompt.tokens, !promptTokens.isEmpty,
+            fullTokens.count > promptTokens.count
         {
-            lastMessageOffset = fullTokens.count - genPromptTokens.count
+            lastMessageOffset = fullTokens.count - promptTokens.count
         } else {
             lastMessageOffset = nil
         }
@@ -217,7 +205,8 @@ nonisolated enum PrefillPlanner {
             stablePrefixOffset: stablePrefixOffset,
             lastMessageOffset: lastMessageOffset,
             lastUserOffset: lastUserOffset,
-            lastUserTranslationFailure: lastUserTranslationFailure
+            lastUserTranslationFailure: lastUserTranslationFailure,
+            generationPromptUnknown: generationPrompt.unknownReason
         )
     }
 

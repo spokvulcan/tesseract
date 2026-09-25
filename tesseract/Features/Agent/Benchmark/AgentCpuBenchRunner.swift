@@ -275,7 +275,8 @@ final class AgentCpuBenchRunner {
         fixtures[index].fullTokens = fullTokens
         let boundaries = try PrefillPlanner.detectBoundaries(
             conversation: conversation,
-            promptStartsThinking: true,
+            generationPrompt: render.checkedGenerationPrompt(
+                fed: fixtures[index].fullTokens, diagnostics: nil),
             keySpace: .identity(keyPath: fixtures[index].fullTokens),
             render: render
         )
@@ -367,11 +368,15 @@ final class AgentCpuBenchRunner {
         let render = Self.makeRender(
             tokenizer: tokenizer, canonicalTools: canonicalTools, fingerprint: fingerprint
         )
+        // Request Keying checks the Generation Prompt before the planner
+        // runs, so the check sits outside the timed span.
+        let generationPrompt = render.checkedGenerationPrompt(
+            fed: fixture.fullTokens, diagnostics: nil)
         var p4 = 0.0
         let p4Start = ContinuousClock.now
         _ = try PrefillPlanner.detectBoundaries(
             conversation: conversation,
-            promptStartsThinking: true,
+            generationPrompt: generationPrompt,
             keySpace: .identity(keyPath: fixture.fullTokens),
             render: render
         )

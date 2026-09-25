@@ -38,6 +38,10 @@ nonisolated enum RequestKeyingPhase {
         /// admission probes) draws on. Image-agnostic: its renders carry
         /// one pad per image, which `keySpace` translates.
         let render: ConversationRender
+        /// The request's **Generation Prompt**, checked against `keySpace`'s
+        /// key path (ADR-0070): what the planner subtracts to place the
+        /// last-message boundary.
+        let generationPrompt: GenerationPrompt
         /// The recognized vision container mis-positions M-RoPE on any
         /// nil-state warm forward — text-only restores included — so the
         /// Position Anchor is seeded whenever the family is recognized AND
@@ -238,6 +242,12 @@ nonisolated enum RequestKeyingPhase {
             }
         }
 
+        // 4. The request's Generation Prompt: the template's probe for this
+        // render context, checked against the key path this request feeds.
+        // Its tail is text in every key space, so image runs never touch it.
+        let generationPrompt = render.checkedGenerationPrompt(
+            fed: keySpace.keyPath, diagnostics: diagnostics)
+
         return .keyed(
             Keyed(
                 fullInput: fullInput,
@@ -247,6 +257,7 @@ nonisolated enum RequestKeyingPhase {
                 partitionKey: partitionKey,
                 keySpace: keySpace,
                 render: render,
+                generationPrompt: generationPrompt,
                 seedsPositionAnchor: effectiveImageKeying != nil
             ))
     }

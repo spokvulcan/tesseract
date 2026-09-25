@@ -1403,19 +1403,23 @@ nonisolated final class ServerCompletion {
 
             // 4. Detect the prefill boundaries (stable prefix + last-message +
             // last-user). The Prefill Planner owns this tokenizer-affine work —
-            // including the generation-prompt suffix subtraction and the
-            // last-user re-render — in one tested place, against the key
-            // space's own path so boundary offsets are key-space offsets by
-            // construction. It takes the load-time template fact, not
-            // `requestStartsInsideThinkBlock`: it resolves this request's
-            // generation prompt (open, closed-empty, or no think block)
-            // against the render's own context.
+            // the last-message arithmetic on the request's measured
+            // Generation Prompt and the last-user re-render — in one tested
+            // place, against the key space's own path so boundary offsets are
+            // key-space offsets by construction.
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
-                promptStartsThinking: promptStartsThinking,
+                generationPrompt: keyed.generationPrompt,
                 keySpace: keySpace,
                 render: keyed.render
             )
+            if let unknown = boundaries.generationPromptUnknown {
+                diagnosticsContext.logSkip(
+                    stage: "lastMessageBoundary",
+                    reason: "generation-prompt-unknown",
+                    extraFields: [("generationPrompt", unknown.rawValue)]
+                )
+            }
             if let failure = boundaries.lastUserTranslationFailure {
                 diagnosticsContext.logSkip(
                     stage: "lastUserBoundary",

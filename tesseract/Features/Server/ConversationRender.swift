@@ -18,8 +18,9 @@
 //  once and reaches every server spelling. What stays outside, by design:
 //  the processor `prepare` a bypassing request falls back to (the vendor
 //  and in-tree PARO input processors, which ADR-0063 decision 5 narrows in
-//  #475), the planner's generation-prompt measure, and the agent hand-off
-//  suffix — the last two plain-text encodes past the last end-of-turn marker.
+//  #475), and the agent hand-off suffix, a plain-text encode past the last
+//  end-of-turn marker. The **Generation Prompt** the planner once spelled
+//  and encoded by hand is measured here (ADR-0070).
 //
 //  Emitted Path Resolve (tickets #475/#476): every render that produces
 //  bytes — the cache's resolves and the split render+encode the fallbacks
@@ -75,9 +76,8 @@ import MLXLMCommon
 nonisolated struct ConversationRender: @unchecked Sendable {
 
     /// The request's tokenizer — exposed because sibling tokenizer-affine
-    /// work (`StablePrefixDetector`, the generation-prompt suffix encode)
-    /// legitimately shares it; the *render choreography* is what callers must
-    /// not re-open.
+    /// work (`StablePrefixDetector`) legitimately shares it; the *render
+    /// choreography* is what callers must not re-open.
     let tokenizer: any Tokenizer
 
     /// The request's canonicalized tool specs — one value for every render
