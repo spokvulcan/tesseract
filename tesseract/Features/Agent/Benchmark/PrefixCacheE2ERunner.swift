@@ -285,6 +285,14 @@ final class PrefixCacheE2ERunner {
             checks: &checks
         )
 
+        try await runThinkingOffScenario(
+            engine: engine,
+            modelID: modelID,
+            systemPrompt: systemPrompt,
+            params: params,
+            checks: &checks
+        )
+
         let restartResult = try await runSSDRestartScenario(
             originalEngine: engine,
             modelDir: modelDir,
@@ -358,6 +366,8 @@ final class PrefixCacheE2ERunner {
 
     private struct RequestResult {
         let cachedTokens: Int
+        /// The whole prompt's token count, as the start reported it.
+        let promptTokens: Int
         let ttftSeconds: Double
         let generatedText: String
         let assistantText: String
@@ -422,18 +432,21 @@ final class PrefixCacheE2ERunner {
         systemPrompt: String,
         messages: [BenchmarkMessage],
         toolSpecs: [ToolSpec],
-        parameters: AgentGenerateParameters
+        parameters: AgentGenerateParameters,
+        renderContext: TemplateRenderContext = .canonical
     ) async throws -> RequestResult {
         let prefixCacheConversation = HTTPPrefixCacheConversation(
             systemPrompt: systemPrompt,
-            messages: messages.map(\.prefixCacheMessage)
+            messages: messages.map(\.prefixCacheMessage),
+            templateContextDigest: renderContext.digest
         )
         let startInstant = ContinuousClock.now
         let start = try await engine.llmActor.startServerCompletion(
             modelID: modelID,
             conversation: prefixCacheConversation,
             toolSpecs: toolSpecs,
-            parameters: parameters
+            parameters: parameters,
+            renderContext: renderContext
         )
 
         var ttftSeconds: Double = 0
@@ -485,6 +498,7 @@ final class PrefixCacheE2ERunner {
 
         return RequestResult(
             cachedTokens: start.cachedTokenCount,
+            promptTokens: start.diagnostics.promptTokenCount,
             ttftSeconds: ttftSeconds,
             generatedText: generatedText,
             assistantText: assistantText,
@@ -601,6 +615,7 @@ final class PrefixCacheE2ERunner {
         let trimmedReasoning = assistantReasoning.trimmingCharacters(in: .whitespacesAndNewlines)
         return RequestResult(
             cachedTokens: 0,
+            promptTokens: 0,
             ttftSeconds: 0,
             generatedText: generatedText,
             assistantText: assistantText,
@@ -944,6 +959,103 @@ final class PrefixCacheE2ERunner {
         return stats?.snapshotsByType[.branchPoint] ?? 0
     }
     // swiftlint:enable function_body_length
+
+    // MARK: - Step T: Thinking-off stop turn (ADR-0070)
+
+    /// A stop turn with thinking off, then the next user turn. The first
+    /// turn's prompt closes an empty think block that the template drops
+    /// from history once the next user message arrives, so its leaf is the
+    /// canonical user leaf, ending at the stripped turn's assistant header,
+    /// and the next turn restores to there (#562). Stored under the fed
+    /// path instead, the next turn would re-prefill from the system
+    /// checkpoint. Both turns' TTFT land in the log for the A/B against
+    /// main. Skipped on a template that declares no `enable_thinking`.
+    private func runThinkingOffScenario(
+        engine: AgentEngine,
+        modelID: String,
+        systemPrompt: String,
+        params: AgentGenerateParameters,
+        checks: inout [CheckResult]
+    ) async throws {
+        log("\n── Step T: Thinking-off stop turn ──")
+        let declared = await engine.llmActor.loadedDeclaredTemplateFlags()
+        guard declared.contains(.enableThinking) else {
+            log("  skipped: the template declares no enable_thinking")
+            return
+        }
+        let thinkingOff = TemplateRenderContext.resolve(
+            requestKwargs: [TemplateRenderFlag.enableThinking.rawValue: false],
+            appDesired: [:],
+            declaredFlags: declared,
+            templateDefaults: await engine.llmActor.loadedTemplateFlagDefaults()
+        )
+        try await logGenerationPromptProbeCost(engine: engine, renderContext: thinkingOff)
+        let question = "Name one prime number between 10 and 20. Answer in one word."
+        let first = try await runRequest(
+            engine: engine, modelID: modelID, systemPrompt: systemPrompt,
+            messages: [.user(question)], toolSpecs: [], parameters: params,
+            renderContext: thinkingOff)
+        log(
+            "  T1 cachedTokens=\(first.cachedTokens) promptTokens=\(first.promptTokens) "
+                + "ttft=\(String(format: "%.3f", first.ttftSeconds))s")
+        let second = try await runRequest(
+            engine: engine, modelID: modelID, systemPrompt: systemPrompt,
+            messages: [
+                .user(question),
+                .assistant(content: first.assistantText, reasoning: nil),
+                .user("Name another one."),
+            ],
+            toolSpecs: [], parameters: params, renderContext: thinkingOff)
+        log(
+            "  T2 cachedTokens=\(second.cachedTokens) promptTokens=\(second.promptTokens) "
+                + "ttft=\(String(format: "%.3f", second.ttftSeconds))s")
+        // The canonical leaf ends at the first turn's assistant header: its
+        // prompt minus the closed think block, a handful of tokens.
+        let leafFloor = first.promptTokens - 8
+        checks.append(
+            CheckResult(
+                name: "thinking_off_next_turn_hits_the_stored_leaf",
+                passed: second.cachedTokens >= leafFloor,
+                detail:
+                    "cachedTokens=\(second.cachedTokens) expected >= \(leafFloor) "
+                    + "(T1 prompt \(first.promptTokens) minus its closed think block); "
+                    + "ttftT1=\(String(format: "%.3f", first.ttftSeconds))s "
+                    + "ttftT2=\(String(format: "%.3f", second.ttftSeconds))s"
+            ))
+    }
+
+    /// The Generation Prompt probe's cost on the loaded tokenizer, reported
+    /// apart from the TTFTs: the two renders a new render context pays once,
+    /// then the memo hit every later request in that context pays. A private
+    /// cache keeps the shared memo cold, so T1 still pays the real probe.
+    private func logGenerationPromptProbeCost(
+        engine: AgentEngine, renderContext: TemplateRenderContext
+    ) async throws {
+        let cost = try await engine.llmActor.withModelContainer { container in
+            await container.perform { context in
+                let cache = RenderTokenCache()
+                let clock = ContinuousClock()
+                var tokens: Int?
+                let cold = clock.measure {
+                    tokens =
+                        ConversationRender.generationPromptProbe(
+                            tokenizer: context.tokenizer, renderContext: renderContext,
+                            modelFingerprint: "prefix-cache-e2e", cache: cache
+                        ).measuredTokenCount
+                }
+                let warm = clock.measure {
+                    _ = ConversationRender.generationPromptProbe(
+                        tokenizer: context.tokenizer, renderContext: renderContext,
+                        modelFingerprint: "prefix-cache-e2e", cache: cache)
+                }
+                return (cold: cold, warm: warm, tokens: tokens)
+            }
+        }
+        log(
+            "  generation prompt probe: cold=\(String(format: "%.2f", cost.cold.seconds * 1000))ms "
+                + "warm=\(String(format: "%.3f", cost.warm.seconds * 1000))ms "
+                + "tokens=\(cost.tokens.map(String.init) ?? "unknown")")
+    }
 
     // MARK: - Step X: SSD restart scenario
 
