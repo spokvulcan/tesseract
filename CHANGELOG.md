@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.16.1](https://github.com/spokvulcan/tesseract/compare/v1.16.0...v1.16.1) (2026-09-25)
+
+
+### Bug Fixes
+
+* **models:** download the 6-bit Voice Engine checkpoint the speech engine loads ([#561](https://github.com/spokvulcan/tesseract/issues/561)) ([cda6fd9](https://github.com/spokvulcan/tesseract/commit/cda6fd933cfd80e56621a4a0e1c4ceb1d905c021))
+* **server:** measure the Generation Prompt and derive each request's facts once ([#566](https://github.com/spokvulcan/tesseract/issues/566)) ([d732376](https://github.com/spokvulcan/tesseract/commit/d732376a9d73df552c7664e480c0ab840b1cb17b))
+* **server:** read enable_thinking per request in the prefill planner and echo replay ([#563](https://github.com/spokvulcan/tesseract/issues/563)) ([9b6bc1f](https://github.com/spokvulcan/tesseract/commit/9b6bc1f3ab23ae1a7ccb78c82bdbb2f53bc3eac2))
+* **speech:** stop the speech engine downloading its own checkpoint ([#565](https://github.com/spokvulcan/tesseract/issues/565)) ([afa18f6](https://github.com/spokvulcan/tesseract/commit/afa18f697438214ec7925939404dd58ddbe18f4c))
+
+
+### Documentation
+
+* **adr:** propose ADR-0070 Keyed Request and measured Generation Prompt ([#564](https://github.com/spokvulcan/tesseract/issues/564)) ([6ed1a21](https://github.com/spokvulcan/tesseract/commit/6ed1a21f9f3e7a0ae5a51a91968c8663acdbb363))
+* amend ADR-0066 to fit iOS v1 to the phone ([#559](https://github.com/spokvulcan/tesseract/issues/559)) ([63bab15](https://github.com/spokvulcan/tesseract/commit/63bab154e2c20416ee300fe5fbdca1c8af9da14f))
+
 ## [1.16.0](https://github.com/spokvulcan/tesseract/compare/v1.15.0...v1.16.0) (2026-09-24)
 
 
