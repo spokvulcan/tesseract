@@ -31,6 +31,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ServerInferenceServiceTests \
   -only-testing:tesseractTests/ServerCompletionDrainTests \
   -only-testing:tesseractTests/ServerCompletionLeafStoreModeTests \
+  -only-testing:tesseractTests/ServerCompletionGenerationPromptTests \
+  -only-testing:tesseractTests/RequestFactsTests \
   -only-testing:tesseractTests/ServerCompletionLeafSkipLogTests \
   -only-testing:tesseractTests/LeafStoreFastPathTests \
   -only-testing:tesseractTests/CompletionProjectionTests \
@@ -64,6 +66,8 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/PrefillPlannerTests \
   -only-testing:tesseractTests/LeafAdmissionBuilderTests \
   -only-testing:tesseractTests/ConversationRenderSourceShapeTests \
+  -only-testing:tesseractTests/GenerationPromptProbeTests \
+  -only-testing:tesseractTests/GenerationPromptCatalogRealTests \
   -only-testing:tesseractTests/ConversationRenderProbeParityTests \
   -only-testing:tesseractTests/ConversationRenderProbeParityRealTests \
   -only-testing:tesseractTests/SnapshotResolutionTests \
@@ -138,6 +142,23 @@ after checking its fixtures, rather than the broad target. In particular,
 `MemoryEmbedderQualityTests`, and `RecallToolSmokeTests` intentionally load the
 installed embedder. The prefix block's `Real` suites load tokenizer files,
 not model weights. Leave corpus and allocation opt-ins unset.
+
+The **Generation Prompt** (ADR-0070) is covered at three levels.
+`GenerationPromptProbeTests` measures a fake template of every shape the probe
+tells apart (`TemplateShapeTokenizer`): thinking by default, thinking only when
+asked, a template that is not ChatML-shaped, an empty append, a merge across the
+append point, a prompt that depends on the conversation, a throwing template and
+a history rewrite. It also pins the memo's cost: two renders for a new render
+context, none after. `ServerCompletionGenerationPromptTests` runs every consumer
+through the toy Model Session: a thinking-off stop turn whose leaf the next user
+turn hits, a stop-turn table after a tool result, the unknown state's answers and
+an unkeyed thinking stream; `RequestFactsTests` checks what Request Keying
+derives. `GenerationPromptCatalogRealTests` is the catalog gate. It loads the
+tokenizer of every catalog chat model downloaded under
+`~/Library/Application Support/models` (override with
+`TEST_RUNNER_TESSERACT_MODELS_ROOT`), requires each to measure by default and with
+thinking off, and fails when it checked none. It is skipped where that directory
+does not exist, and a skip must be reported as one.
 
 The planned Prefix-View Checkpoint slice (#524, ADR-0068) is covered at the
 existing seams. `CheckpointCaptureTests` checks synchronized whole-state-only

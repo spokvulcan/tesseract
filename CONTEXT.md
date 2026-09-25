@@ -411,9 +411,9 @@ issue #439 defect class). The two probe pairs use its cache-free probe verbs
 (cancellable, no cache telemetry). The render cache stays the implementation
 below it, and no server source outside the two applies the chat template
 (source-shape-tested); the processor `prepare` a bypassing request falls back
-to, the planner's generation-prompt measure and the agent hand-off suffix stay
-outside by design — the last two plain-text encodes past the last end-of-turn
-marker.
+to and the agent hand-off suffix, a plain-text encode past the last end-of-turn
+marker, stay outside by design. The **Generation Prompt** the planner once
+spelled by hand is measured inside it (ADR-0070).
 _Avoid_: re-render (unqualified), probe tokenization, per-call-site
 `applyChatTemplate` (the rendering it standardizes, not a synonym for it);
 RenderTokenSource (the dissolved predecessor — eligibility as a free-standing
