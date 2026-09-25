@@ -61,19 +61,19 @@ nonisolated enum EmittedPathFidelity {
     /// processor (whose tag state machine handles one
     /// boundary per chunk, so a whole turn in one chunk would not parse as
     /// the stream did), the app parser, the accumulator.
-    /// `startsInsideThinkBlock` is the request's (the generation prompt
-    /// opened a `<think>` block the model closes).
+    /// `generationPrompt` is the request's: the parser starts inside a think
+    /// block exactly when the stream's did.
     static func replay(
         contentIDs: [Int],
         tokenizer: any Tokenizer,
         toolCallFormat: ToolCallFormat,
         tools: [ToolSpec]?,
-        startsInsideThinkBlock: Bool
+        generationPrompt: GenerationPrompt
     ) -> HTTPPrefixCacheMessage {
         var detokenizer = LinearStreamingDetokenizer(tokenizer: tokenizer)
         let processor = ToolCallProcessor(format: toolCallFormat, tools: tools)
         var deltaTracker = ToolCallDeltaTracker(format: toolCallFormat)
-        let parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
+        let parser = ToolCallParser(generationPrompt: generationPrompt)
         var accumulator = GenerationAccumulator()
         var libraryParsedToolCalls = false
 
@@ -135,12 +135,12 @@ nonisolated enum EmittedPathFidelity {
         tokenizer: any Tokenizer,
         toolCallFormat: ToolCallFormat,
         tools: [ToolSpec]?,
-        startsInsideThinkBlock: Bool,
+        generationPrompt: GenerationPrompt,
         stored: HTTPPrefixCacheMessage
     ) -> Verdict {
         let emitted = replay(
             contentIDs: contentIDs, tokenizer: tokenizer, toolCallFormat: toolCallFormat,
-            tools: tools, startsInsideThinkBlock: startsInsideThinkBlock)
+            tools: tools, generationPrompt: generationPrompt)
         return compare(emitted: emitted, stored: stored)
     }
 

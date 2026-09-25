@@ -935,6 +935,7 @@ struct EmittedPathSynthesizedReplayTests {
             ssdConfig: SSDPrefixCacheConfig? = nil,
             hasMTPDrafter: Bool = false,
             prefillFault: ToyPrefillFault? = nil,
+            recurrentElements: Int = 0,
             onForward: (@Sendable (Int) -> Void)? = nil
         ) {
             let uuid = UUID().uuidString
@@ -946,7 +947,8 @@ struct EmittedPathSynthesizedReplayTests {
             configuration.eosTokenIds = [tokenizer.endOfTurnID]
             let streamTokenizer: any Tokenizer = fault.map { $0(tokenizer) } ?? tokenizer
             let provider = ToyModelSessionProvider(
-                model: ToyLanguageModel(completions: queue, onForward: onForward),
+                model: ToyLanguageModel(
+                    completions: queue, recurrentElements: recurrentElements, onForward: onForward),
                 tokenizer: streamTokenizer,
                 configuration: configuration,
                 vision: vision,
@@ -983,7 +985,7 @@ struct EmittedPathSynthesizedReplayTests {
         ) -> ServerCompletionFixture {
             ServerCompletionFixture(
                 provider: provider, fingerprint: fingerprint, ssdConfig: ssdConfig,
-                identity: identity, promptStartsThinking: true, emittedPathIndex: index,
+                identity: identity, emittedPathIndex: index,
                 modelID: modelID)
         }
 

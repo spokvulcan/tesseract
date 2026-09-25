@@ -87,6 +87,14 @@ nonisolated final class ToolCallParser {
         }
     }
 
+    /// A parser for a generation whose prompt is `generationPrompt`: inside a
+    /// think block exactly when the prompt opens one. An unknown prompt
+    /// starts outside, where text streams as content until a stray
+    /// `</think>` reclassifies what is still buffered (ADR-0070).
+    nonisolated convenience init(generationPrompt: GenerationPrompt) {
+        self.init(startsInsideThinkBlock: generationPrompt.startsInsideThinkBlock)
+    }
+
     /// Process a chunk of streaming text and return any events.
     nonisolated func processChunk(_ chunk: String) -> [Event] {
         buffer += chunk

@@ -55,12 +55,15 @@ nonisolated enum RequestKeyingPhase {
         case keyed(Keyed)
         /// Key-space construction failed: serve an **Unkeyed Completion**
         /// from the prepared input, under the partition key (for
-        /// diagnostics), with zero cache participation.
+        /// diagnostics), with zero cache participation. It still carries
+        /// its Generation Prompt, checked against the prompt tokens, so its
+        /// stream parses from the start its prompt left.
         case unkeyed(
             fullInput: LMInput,
             fullTokens: [Int],
             partitionKey: CachePartitionKey,
-            reason: CacheKeySpace.UnkeyedReason
+            reason: CacheKeySpace.UnkeyedReason,
+            generationPrompt: GenerationPrompt
         )
     }
 
@@ -220,7 +223,9 @@ nonisolated enum RequestKeyingPhase {
                 fullInput: fullInput,
                 fullTokens: fullTokens,
                 partitionKey: partitionKey,
-                reason: reason
+                reason: reason,
+                generationPrompt: render.checkedGenerationPrompt(
+                    fed: fullTokens, diagnostics: diagnostics)
             )
         }
         // Grid instrumentation (ADR-0007 phase 2): the processed image grid

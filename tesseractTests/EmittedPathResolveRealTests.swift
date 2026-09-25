@@ -99,7 +99,7 @@ struct EmittedPathResolveRealTests {
     /// render's bytes.
     private static func registerLiveTurn(
         render: ConversationRender, prompt: [Int], stored: HTTPPrefixCacheConversation,
-        echo: HTTPPrefixCacheMessage, tools: [ToolSpec]?, startsInsideThinkBlock: Bool
+        echo: HTTPPrefixCacheMessage, tools: [ToolSpec]?
     ) throws -> (path: [Int], outcome: EmittedPathRegistration.Outcome) {
         let eligible: (EmittedPathIndex, String, EndOfTurnMarker)?
         if case .eligible(let index, let fingerprint, let marker) = render.emittedPathEligibility()
@@ -121,7 +121,7 @@ struct EmittedPathResolveRealTests {
                 tokenizer: render.tokenizer, storedRenderBytes: storedBytes, storedMessage: echo,
                 promptPath: prompt, generatedTokens: Array(path[prompt.count...]),
                 stoppedOn: marker.tokenID, toolCallFormat: .qwen35, tools: tools,
-                startsInsideThinkBlock: startsInsideThinkBlock))
+                generationPrompt: render.checkedGenerationPrompt(fed: prompt, diagnostics: nil)))
         return (path, outcome)
     }
 
@@ -316,7 +316,6 @@ struct EmittedPathResolveRealTests {
     @Test(.enabled(if: modelAvailable))
     func theRequestEdgeServesTheRegisteredPathAcrossAToolCallBoundary() async throws {
         let tokenizer = try await Self.loadTokenizer()
-        let identity = ModelIdentity(directory: Self.modelDirectory)
         let index = EmittedPathIndex(byteBudget: 1 << 20)
         let tools = [Self.readTool]
         let context = TemplateRenderContext.canonical
@@ -328,9 +327,7 @@ struct EmittedPathResolveRealTests {
             index: index)
         let prompt = try #require(requestN.fullRender(messages: turn.previous.promptMessages))
         let (path, outcome) = try Self.registerLiveTurn(
-            render: requestN, prompt: prompt, stored: turn.stored, echo: turn.echo, tools: tools,
-            startsInsideThinkBlock: context.startsInsideThinkBlock(
-                promptStartsThinking: identity.promptStartsThinking))
+            render: requestN, prompt: prompt, stored: turn.stored, echo: turn.echo, tools: tools)
         guard case .registered(let registered) = outcome else {
             Issue.record("expected a registration, got \(outcome)")
             return
@@ -432,7 +429,6 @@ struct EmittedPathResolveRealTests {
     func theWholePreviousTurnHitsUnderThePreserveThinkingRender() async throws {
         let directory = Self.preserveThinkingModelDirectory
         let tokenizer = try await #huggingFaceTokenizerLoader().load(from: directory)
-        let identity = ModelIdentity(directory: directory)
         let index = EmittedPathIndex(byteBudget: 1 << 20)
         let context = TemplateRenderContext(flags: [.preserveThinking])
         let fingerprint = "real-preserve-thinking"
@@ -454,9 +450,7 @@ struct EmittedPathResolveRealTests {
             index: index)
         let prompt = try #require(requestN.fullRender(messages: previous.promptMessages))
         let (path, outcome) = try Self.registerLiveTurn(
-            render: requestN, prompt: prompt, stored: stored, echo: echo, tools: nil,
-            startsInsideThinkBlock: context.startsInsideThinkBlock(
-                promptStartsThinking: identity.promptStartsThinking))
+            render: requestN, prompt: prompt, stored: stored, echo: echo, tools: nil)
         #expect(
             tokenizer.decode(tokenIds: Array(path[prompt.count...]), skipSpecialTokens: false)
                 .contains("A short thought"))
@@ -483,15 +477,12 @@ struct EmittedPathResolveRealTests {
     func theFidelityGateReadsTheRealToolCallRender() async throws {
         let tokenizer = try await Self.loadTokenizer()
         let rendering = try #require(tokenizer as? any ChatTemplateRendering)
-        let identity = ModelIdentity(directory: Self.modelDirectory)
         let index = EmittedPathIndex(byteBudget: 1 << 20)
         let marker = try #require(
             ConversationRender.endOfTurnMarker(
                 index: index, fingerprint: Self.fingerprint, tokenizer: tokenizer))
         let tools = [Self.readTool]
         let context = TemplateRenderContext.canonical
-        let startsInsideThinkBlock = context.startsInsideThinkBlock(
-            promptStartsThinking: identity.promptStartsThinking)
 
         let turn = ToolCallTurn()
         let prompt = Self.encode(
@@ -499,6 +490,9 @@ struct EmittedPathResolveRealTests {
             try rendering.renderChatTemplate(
                 messages: turn.previous.promptMessages, tools: tools,
                 additionalContext: context.additionalContext()))
+        let generationPrompt = ConversationRender.checkedGenerationPrompt(
+            tokenizer: tokenizer, renderContext: context, modelFingerprint: nil, fed: prompt,
+            diagnostics: nil)
         var storedContext = context.additionalContext() ?? [:]
         storedContext["add_generation_prompt"] = false
         let storedTokens = Self.encode(
@@ -512,12 +506,12 @@ struct EmittedPathResolveRealTests {
 
         let replayed = EmittedPathFidelity.replay(
             contentIDs: contentIDs, tokenizer: tokenizer, toolCallFormat: .qwen35, tools: tools,
-            startsInsideThinkBlock: startsInsideThinkBlock)
+            generationPrompt: generationPrompt)
         #expect(replayed == turn.echo)
         #expect(
             EmittedPathFidelity.check(
                 contentIDs: contentIDs, tokenizer: tokenizer, toolCallFormat: .qwen35,
-                tools: tools, startsInsideThinkBlock: startsInsideThinkBlock, stored: turn.echo)
+                tools: tools, generationPrompt: generationPrompt, stored: turn.echo)
                 == .match)
 
         let other = HTTPPrefixCacheMessage.assistant(
@@ -528,7 +522,7 @@ struct EmittedPathResolveRealTests {
             ])
         let rejected = EmittedPathFidelity.check(
             contentIDs: contentIDs, tokenizer: tokenizer, toolCallFormat: .qwen35,
-            tools: tools, startsInsideThinkBlock: startsInsideThinkBlock, stored: other)
+            tools: tools, generationPrompt: generationPrompt, stored: other)
         guard case .mismatch(let mismatch) = rejected else {
             Issue.record("a different argument must be rejected")
             return

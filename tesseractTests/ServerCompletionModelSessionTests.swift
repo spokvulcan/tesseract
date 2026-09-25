@@ -259,6 +259,9 @@ import Testing
                 fullInput: fullInput,
                 fullTokens: fullTokens,
                 reason: .unrecognizedPlaceholderFamily,
+                generationPrompt: ConversationRender.checkedGenerationPrompt(
+                    tokenizer: session.tokenizer, renderContext: .canonical, modelFingerprint: nil,
+                    fed: fullTokens, diagnostics: nil),
                 parameters: GenerateParameters(temperature: 0),
                 toolSpecs: nil,
                 partitionKey: CachePartitionKey(
@@ -365,6 +368,9 @@ import Testing
                 fullInput: fullInput,
                 fullTokens: LLMActor.extractTokenSequence(fullInput.text.tokens),
                 reason: .placeholderRunCountMismatch,
+                generationPrompt: ConversationRender.checkedGenerationPrompt(
+                    tokenizer: session.tokenizer, renderContext: .canonical, modelFingerprint: nil,
+                    fed: LLMActor.extractTokenSequence(fullInput.text.tokens), diagnostics: nil),
                 parameters: GenerateParameters(temperature: 0),
                 toolSpecs: nil,
                 partitionKey: CachePartitionKey(

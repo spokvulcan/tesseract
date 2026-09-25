@@ -19,9 +19,11 @@ nonisolated final class GenerationPromptProbeMemo: @unchecked Sendable {
     /// Whose probe an entry is: the model fingerprint's, or, when the
     /// fingerprint is unknown, one tokenizer instance's. A value-type
     /// tokenizer has no instance to key on and is measured on every ask;
-    /// production always knows the fingerprint.
+    /// production always knows the fingerprint. The tokenizer's type rides
+    /// along with a fingerprint, so two kinds of tokenizer handed one
+    /// fingerprint (test doubles) never share a probe.
     private enum Owner: Hashable {
-        case fingerprint(String)
+        case fingerprint(String, tokenizerType: ObjectIdentifier)
         case tokenizer(ObjectIdentifier)
     }
 
@@ -99,7 +101,9 @@ nonisolated final class GenerationPromptProbeMemo: @unchecked Sendable {
         modelFingerprint: String?, tokenizer: any Tokenizer, contextDigest: String
     ) -> (key: Key, instance: AnyObject?)? {
         if let modelFingerprint {
-            return (Key(owner: .fingerprint(modelFingerprint), contextDigest: contextDigest), nil)
+            let owner = Owner.fingerprint(
+                modelFingerprint, tokenizerType: ObjectIdentifier(type(of: tokenizer)))
+            return (Key(owner: owner, contextDigest: contextDigest), nil)
         }
         guard type(of: tokenizer) is AnyClass else { return nil }
         let instance = tokenizer as AnyObject

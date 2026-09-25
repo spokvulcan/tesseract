@@ -125,7 +125,7 @@ struct GenerationPromptProbeTests {
         var tokenizer = FakeChatMLTokenizer()
         #expect(try Self.measured(tokenizer).thinkBlock == .opens)
         #expect(try Self.measured(tokenizer, Self.thinkingOff).thinkBlock == .closed)
-        tokenizer.promptStartsThinking = false
+        tokenizer.thinkingTemplate = false
         let plain = try Self.measured(tokenizer)
         #expect(plain.thinkBlock == .none)
         #expect(

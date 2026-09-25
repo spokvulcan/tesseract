@@ -147,3 +147,25 @@ nonisolated final class TemplateShapeTokenizer: ChatTemplateRendering, @unchecke
     var eosToken: String? { "<|im_end|>" }
     var unknownToken: String? { nil }
 }
+
+/// A request's **Generation Prompt** measured through `tokenizer`'s template,
+/// as Request Keying measures it: the probe under `renderContext`, checked
+/// against a one-message request rendered with the prompt. Tests take their
+/// think-block state from a template this way, never from a flag: a thinking
+/// template (the default toy) opens a block, `thinkingOff` on it closes one,
+/// and a template without think tags (`TemplateShapeTokenizer(.gemma)`, a
+/// non-thinking `FakeChatMLTokenizer`) has none.
+/// A template that fails to render feeds nothing, so its prompt checks as
+/// unknown and the caller's expectations say so.
+nonisolated func measuredGenerationPrompt(
+    _ tokenizer: any Tokenizer = EmittedPathToyTokenizer(),
+    renderContext: TemplateRenderContext = .canonical
+) -> GenerationPrompt {
+    let fed =
+        (try? tokenizer.applyChatTemplate(
+            messages: [["role": "user", "content": "hi"]], tools: nil,
+            additionalContext: renderContext.additionalContext())) ?? []
+    return ConversationRender.checkedGenerationPrompt(
+        tokenizer: tokenizer, renderContext: renderContext, modelFingerprint: nil, fed: fed,
+        cache: RenderTokenCache(), diagnostics: nil)
+}

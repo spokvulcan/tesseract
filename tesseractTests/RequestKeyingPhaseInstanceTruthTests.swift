@@ -91,7 +91,7 @@ import Testing
                     tokenNDim: keyed.tokenNDim,
                     renderIneligibility: keyed.render.ineligibility?.rawValue
                 )
-            case .unkeyed(let input, let fullTokens, _, let reason):
+            case .unkeyed(let input, let fullTokens, _, let reason, _):
                 return OutcomeFacts(
                     isKeyed: false,
                     isIdentity: false,

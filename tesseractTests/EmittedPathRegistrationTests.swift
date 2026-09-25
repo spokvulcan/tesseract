@@ -59,7 +59,9 @@ struct EmittedPathRegistrationTests {
             stoppedOn: stoppedOn,
             toolCallFormat: .xmlFunction,
             tools: nil,
-            startsInsideThinkBlock: false)
+            generationPrompt: ConversationRender.checkedGenerationPrompt(
+                tokenizer: tokenizer, renderContext: .canonical, modelFingerprint: nil,
+                fed: prompt, diagnostics: nil))
     }
 
     @Test func aTurnStoppedOnTheMarkerRegistersThePathAsFed() throws {
@@ -159,7 +161,7 @@ struct EmittedPathRegistrationTests {
             storedMessage: inputs.storedMessage, promptPath: inputs.promptPath,
             generatedTokens: inputs.generatedTokens, stoppedOn: inputs.stoppedOn,
             toolCallFormat: inputs.toolCallFormat, tools: inputs.tools,
-            startsInsideThinkBlock: inputs.startsInsideThinkBlock)
+            generationPrompt: inputs.generationPrompt)
         guard case .skipped(let skip) = EmittedPathRegistration.register(inputs) else {
             Issue.record("expected a skip")
             return

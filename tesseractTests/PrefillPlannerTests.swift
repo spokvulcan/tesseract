@@ -379,7 +379,7 @@ import MLXLMCommon
             prompt: "<|im_start|>assistant\n<think>\n\n</think>\n\n"),
         LastMessageCase(
             name: "non-thinking template",
-            tokenizer: FakeChatMLTokenizer(promptStartsThinking: false),
+            tokenizer: FakeChatMLTokenizer(thinkingTemplate: false),
             prompt: "<|im_start|>assistant\n"),
         // The Qwen3.5-0.8B shape. Before the prompt was measured, the planner
         // spelled the open block from the load-time guess, which reads this

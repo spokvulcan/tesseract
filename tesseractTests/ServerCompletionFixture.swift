@@ -19,17 +19,17 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
     let provider: ToyModelSessionProvider
     let modelID: String
 
-    /// `promptStartsThinking` is the loaded-model fact the leaf-store mode
-    /// selection reads; `emittedPathIndex` the index this module registers
-    /// into and resolves against (the process-wide one unless a hermetic
-    /// suite hands it a private instance); `modelID` names the requests in
-    /// telemetry, so parallel suites can tell their events apart.
+    /// `emittedPathIndex` is the index this module registers into and
+    /// resolves against (the process-wide one unless a hermetic suite hands
+    /// it a private instance); `modelID` names the requests in telemetry, so
+    /// parallel suites can tell their events apart. Whether generation
+    /// starts inside a think block comes from the provider's tokenizer: its
+    /// template's measured **Generation Prompt**, never a flag.
     init(
         provider: ToyModelSessionProvider,
         fingerprint: String? = nil,
         ssdConfig: SSDPrefixCacheConfig? = nil,
         identity: ModelIdentity? = nil,
-        promptStartsThinking: Bool = false,
         emittedPathIndex: EmittedPathIndex = .shared,
         modelID: String = "toy/model"
     ) {
@@ -45,7 +45,6 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
             )
         }
         module.installLoadedModelFacts(
-            promptStartsThinking: promptStartsThinking,
             modelWeightBytes: 0,
             prefixCacheBudgetBytes: 1 << 30
         )

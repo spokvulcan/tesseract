@@ -145,6 +145,10 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// `ToolCallProcessor` parsed with, so the Emitted Path fidelity check
     /// replays the emitted ids through the same parser (ADR-0063).
     let toolCallFormat: ToolCallFormat
+    /// The request's **Generation Prompt**, checked against what it fed
+    /// (ADR-0070): the stream parser's start, the leaf-store mode and the
+    /// fidelity replay all read it.
+    let generationPrompt: GenerationPrompt
     /// How the request restored (`cold`, `copy`, `failedCopy`, `handoff`),
     /// as the claim's check-out decided it — one input to the stored
     /// leaf's source.
@@ -413,7 +417,7 @@ nonisolated final class ServerCompletion {
     // MARK: - Load-time facts
 
     /// Load-time, directory-derived facts about the current model — tool-call
-    /// format, Qwen3.5 family/MoE, prompt-starts-thinking, and flop profile.
+    /// format, Qwen3.5 family/MoE, and flop profile.
     /// Installed by the actor's load path; `nil` before load and after unload
     /// (the actor drops the whole module at unload).
     private(set) var modelIdentity: ModelIdentity?
@@ -448,9 +452,6 @@ nonisolated final class ServerCompletion {
     /// no other suite's fingerprint resets.
     private(set) var emittedPathIndex: EmittedPathIndex = .shared
 
-    /// Whether the loaded model's template starts generation inside a
-    /// `<think>` block. Installed after the container verify.
-    private var promptStartsThinking = false
     private var modelWeightBytes: Int64 = 0
     private var defaultPrefixCacheMemoryBudgetBytes =
         LLMActor.Defaults.fallbackPrefixCacheMemoryBudgetBytes
@@ -529,11 +530,9 @@ nonisolated final class ServerCompletion {
     /// after a successful load. Drops any pre-load prefix cache so the next
     /// use rebuilds it with the real FLOP profile and auto-sized budget.
     func installLoadedModelFacts(
-        promptStartsThinking: Bool,
         modelWeightBytes: Int64,
         prefixCacheBudgetBytes: Int
     ) {
-        self.promptStartsThinking = promptStartsThinking
         self.modelWeightBytes = modelWeightBytes
         self.defaultPrefixCacheMemoryBudgetBytes = prefixCacheBudgetBytes
         self._prefixCache = nil
@@ -780,8 +779,7 @@ nonisolated final class ServerCompletion {
         let loadedModelWeightBytes = modelWeightBytes
 
         let driver = ManagedGenerationDriver(
-            startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
-                promptStartsThinking: promptStartsThinking),
+            startsInsideThinkBlock: mlxStart.generationPrompt.startsInsideThinkBlock,
             logContext: "request_id=\(requestID.uuidString)"
         )
         let actorRef = actor
@@ -1109,7 +1107,6 @@ nonisolated final class ServerCompletion {
                 sessions: sessions,
                 requestID: requestID,
                 prefixCache: prefixCache,
-                startsInsideThinkBlock: driver.startsInsideThinkBlock,
                 assistantText: accumulator.text,
                 assistantReasoning: accumulator.thinking,
                 toolCalls: toolCalls,
@@ -1318,15 +1315,6 @@ nonisolated final class ServerCompletion {
         // Capture module state for the non-MainActor closure below —
         // the closure runs on the **Model Session**'s isolation and cannot
         // sync-read the actor-confined module.
-        let promptStartsThinking = self.promptStartsThinking
-        // The per-request thinking resolution: the same value the stream
-        // driver and the Leaf Store phase run with. An emitted
-        // `enable_thinking: false` closes the template's think block, so a
-        // thinking-default template still yields `.directLeaf` traffic for
-        // that request — the MTP predictor below must see this value, not
-        // the load-time flag alone (#460).
-        let requestStartsInsideThinkBlock = renderContext.startsInsideThinkBlock(
-            promptStartsThinking: promptStartsThinking)
         let modelFingerprint = self.modelFingerprint
         let emittedPathIndex = self.emittedPathIndex
         let imageKeying = self.modelIdentity?.imageKeying
@@ -1377,12 +1365,13 @@ nonisolated final class ServerCompletion {
             ) {
             case .keyed(let identities):
                 keyed = identities
-            case .unkeyed(let fullInput, let fullTokens, let partitionKey, let reason):
+            case .unkeyed(let fullInput, let fullTokens, let partitionKey, let reason, let prompt):
                 return try await Self.makeUnkeyedGeneration(
                     session: session,
                     fullInput: fullInput,
                     fullTokens: fullTokens,
                     reason: reason,
+                    generationPrompt: prompt,
                     parameters: parameters,
                     toolSpecs: canonicalTools,
                     partitionKey: partitionKey,
@@ -1707,7 +1696,8 @@ nonisolated final class ServerCompletion {
                         temperature: parameters.temperature,
                         textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
                         predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
-                            startsInsideThinkBlock: requestStartsInsideThinkBlock,
+                            generationPrompt: keyed.generationPrompt,
+                            renderContext: renderContext,
                             // Conservative stand-in: tool *emission* is unknowable
                             // at engagement time, so defined tools predict as if
                             // they will be called.
@@ -1725,6 +1715,7 @@ nonisolated final class ServerCompletion {
                         tokenNDim: tokenNDim,
                         keySpace: keySpace,
                         render: keyed.render,
+                        generationPrompt: keyed.generationPrompt,
                         parameters: parameters,
                         toolSpecs: canonicalTools,
                         partitionKey: partitionKey,
@@ -2031,6 +2022,10 @@ nonisolated final class ServerCompletion {
                     "prefillCheckpointArrayBytes":
                         "\(prefillResult.snapshots.reduce(0) { $0 + $1.memoryBytes })",
                     "boundaryCheckpointCount": "\(boundarySnapshots.count)",
+                    "boundaryCheckpointOffsets": boundarySnapshots.isEmpty
+                        ? "none"
+                        : boundarySnapshots.map(\.tokenOffset).sorted().map(String.init)
+                            .joined(separator: ","),
                     "boundaryCheckpointArrayBytes":
                         "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                 ]) { _, new in new })
@@ -2154,6 +2149,7 @@ nonisolated final class ServerCompletion {
                 tokenNDim: tokenNDim,
                 generatedTokens: generatedTokens,
                 toolCallFormat: session.configuration.toolCallFormat ?? .json,
+                generationPrompt: keyed.generationPrompt,
                 restoreMode: restoreMode,
                 restoreCopy: restoreCopy,
                 restoreWaitSeconds: restoreWaitSeconds
@@ -2311,6 +2307,7 @@ nonisolated final class ServerCompletion {
         fullInput: LMInput,
         fullTokens: [Int],
         reason: CacheKeySpace.UnkeyedReason,
+        generationPrompt: GenerationPrompt,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
@@ -2441,7 +2438,8 @@ nonisolated final class ServerCompletion {
             prefillStepSize: parameters.prefill.stepSize ?? 512,
             tokenNDim: fullInput.text.tokens.ndim,
             generatedTokens: generatedTokens,
-            toolCallFormat: session.configuration.toolCallFormat ?? .json
+            toolCallFormat: session.configuration.toolCallFormat ?? .json,
+            generationPrompt: generationPrompt
         )
     }
 
@@ -2463,6 +2461,7 @@ nonisolated final class ServerCompletion {
         tokenNDim: Int,
         keySpace: CacheKeySpace,
         render: ConversationRender,
+        generationPrompt: GenerationPrompt,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
@@ -2483,6 +2482,7 @@ nonisolated final class ServerCompletion {
             tokenNDim: tokenNDim,
             keySpace: keySpace,
             render: render,
+            generationPrompt: generationPrompt,
             parameters: parameters,
             toolSpecs: toolSpecs,
             partitionKey: partitionKey,
@@ -2517,6 +2517,7 @@ nonisolated final class ServerCompletion {
         tokenNDim: Int,
         keySpace: CacheKeySpace,
         render: ConversationRender,
+        generationPrompt: GenerationPrompt,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
         partitionKey: CachePartitionKey,
@@ -2615,7 +2616,8 @@ nonisolated final class ServerCompletion {
             prefillStepSize: parameters.prefill.stepSize ?? 512,
             tokenNDim: tokenNDim,
             generatedTokens: generatedTokens,
-            toolCallFormat: session.configuration.toolCallFormat ?? .json
+            toolCallFormat: session.configuration.toolCallFormat ?? .json,
+            generationPrompt: generationPrompt
         )
     }
 

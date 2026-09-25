@@ -77,8 +77,9 @@ nonisolated enum LeafStorePhase {
         /// Every id the decode loop fed past the prompt, in order, stop id
         /// included (`GeneratedTokenRecorder`).
         let generatedTokens: [Int]
-        /// Whether the generation began inside a `<think>` block.
-        let startsInsideThinkBlock: Bool
+        /// The request's **Generation Prompt**: where the generation began,
+        /// so the fidelity replay parses from the same start the stream did.
+        let generationPrompt: GenerationPrompt
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); the phase keeps the drive's
@@ -93,7 +94,6 @@ nonisolated enum LeafStorePhase {
         sessions: any ModelSessionProviding,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
-        startsInsideThinkBlock: Bool,
         assistantText: String,
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
@@ -108,6 +108,7 @@ nonisolated enum LeafStorePhase {
             containsImages: conversation.messages.contains { !$0.images.isEmpty }, memory: memory)
         let mlxStart = inputs.mlxStart
         var result = Result()
+        result.report.generationPrompt = mlxStart.generationPrompt.traceValue
 
         // An Unkeyed Completion never touches the radix tree — construction
         // failed, so no token path of this request can be trusted as a key.
@@ -136,7 +137,8 @@ nonisolated enum LeafStorePhase {
         let storedConversation = conversation.appendingAssistant(storedMessage)
 
         let leafStoreMode = Self.selectHTTPLeafStoreMode(
-            startsInsideThinkBlock: startsInsideThinkBlock,
+            generationPrompt: mlxStart.generationPrompt,
+            renderContext: render.renderContext,
             emittedToolCalls: !toolCalls.isEmpty
         )
         result.report.mode = leafStoreMode.rawValue
@@ -153,7 +155,7 @@ nonisolated enum LeafStorePhase {
             mode: leafStoreMode,
             storedMessage: storedMessage,
             generatedTokens: mlxStart.generatedTokens.snapshot,
-            startsInsideThinkBlock: startsInsideThinkBlock
+            generationPrompt: mlxStart.generationPrompt
         )
 
         // 2. The fast-path eligibility (GPU-free, no render): the live final
@@ -582,7 +584,7 @@ nonisolated enum LeafStorePhase {
                 stoppedOn: mlxStart.generatedTokens.stopToken,
                 toolCallFormat: mlxStart.toolCallFormat,
                 tools: render.toolSpecs,
-                startsInsideThinkBlock: turn.startsInsideThinkBlock
+                generationPrompt: turn.generationPrompt
             ))
         let seconds = secondsSince(start)
         EmittedPathRegistration.emit(outcome, registerSeconds: seconds, in: diagnostics)
@@ -591,17 +593,34 @@ nonisolated enum LeafStorePhase {
 
     // MARK: - Mode selection
 
+    /// The one leaf-store mode rule (ADR-0070), read by the Leaf Store after
+    /// the turn, by MTP engagement before it (with defined tools counting as
+    /// called), and by the replay harness. A tool-call turn renders verbatim
+    /// for its result, so it takes the direct tool leaf. A stop turn takes
+    /// the canonical user leaf whenever its prompt carries a think block,
+    /// open or closed, under a think-stripping render: the template drops
+    /// either from history once a new user message arrives, so the leaf has
+    /// to be the re-rendered form. Under the Preserve-Thinking Render a
+    /// closed block stays verbatim and takes the direct leaf; an open one
+    /// keeps the canonical user leaf, which the fast path captures live. A
+    /// prompt with no think block takes the direct leaf, and an unknown one
+    /// the canonical user leaf, which is correct for any template.
     static func selectHTTPLeafStoreMode(
-        startsInsideThinkBlock: Bool,
+        generationPrompt: GenerationPrompt,
+        renderContext: TemplateRenderContext,
         emittedToolCalls: Bool
     ) -> HTTPLeafStoreMode {
         if emittedToolCalls {
             return .directToolLeaf
         }
-        if startsInsideThinkBlock {
+        switch generationPrompt.thinkBlock {
+        case .opens, .unknown:
             return .canonicalUserLeaf
+        case .closed:
+            return renderContext.preservesThinking ? .directLeaf : .canonicalUserLeaf
+        case .none:
+            return .directLeaf
         }
-        return .directLeaf
     }
 
     /// The diagnostics stage labels of a boundary leaf mode — the exact

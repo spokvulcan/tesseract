@@ -82,7 +82,9 @@ nonisolated enum EmittedPathRegistration {
         let stoppedOn: Int?
         let toolCallFormat: ToolCallFormat
         let tools: [ToolSpec]?
-        let startsInsideThinkBlock: Bool
+        /// The request's **Generation Prompt**: the fidelity replay parses
+        /// from the start the stream parsed from.
+        let generationPrompt: GenerationPrompt
     }
 
     struct Registered: Equatable, Sendable {
@@ -129,7 +131,7 @@ nonisolated enum EmittedPathRegistration {
             tokenizer: inputs.tokenizer,
             toolCallFormat: inputs.toolCallFormat,
             tools: inputs.tools,
-            startsInsideThinkBlock: inputs.startsInsideThinkBlock,
+            generationPrompt: inputs.generationPrompt,
             stored: inputs.storedMessage
         ) {
             inputs.index.noteFidelityRejection()

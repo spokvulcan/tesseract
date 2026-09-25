@@ -720,7 +720,6 @@ actor LLMActor {
         modelContainer = container
         agentTokenizer = tokenizer
         ensureServerCompletion().installLoadedModelFacts(
-            promptStartsThinking: startsThinking,
             modelWeightBytes: modelWeightBytes,
             prefixCacheBudgetBytes: prefixCacheBudgetBytes
         )

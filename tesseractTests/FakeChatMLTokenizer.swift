@@ -8,16 +8,19 @@ import MLXLMCommon
 ///
 /// `applyChatTemplate` reproduces the `<|im_start|>role\ncontent<|im_end|>\n`
 /// envelope, optionally renders a `<tools>count</tools>` marker, and — unless
-/// `add_generation_prompt` is false — appends the generation prompt (think or
-/// non-think per `promptStartsThinking`; on a thinking template an explicit
-/// `enable_thinking: false` swaps the open block for the closed, empty one,
-/// the Qwen3.5+ shape).
+/// `add_generation_prompt` is false — appends the generation prompt: on a
+/// `thinkingTemplate` an open think block, or the closed, empty one under an
+/// explicit `enable_thinking: false` (the Qwen3.5+ shape); otherwise the bare
+/// assistant header. Tokenizes without rendering text, so it is the fused
+/// case of the **Generation Prompt** measurement.
 ///
 /// `StablePrefixDetectorTests` keeps its own `MockTokenizer`: it renders tools as
 /// `[tools:...]` and has no generation-prompt support, so it is a genuinely
 /// different template, not a copy of this one.
 struct FakeChatMLTokenizer: Tokenizer {
-    var promptStartsThinking = true
+    /// The template's shape: a thinking template's generation prompt opens a
+    /// think block; off, it is the bare `<|im_start|>assistant\n` header.
+    var thinkingTemplate = true
 
     /// Mirrors the PARO think-strip: when set, assistant turns that precede a
     /// later user message render with their `<think>…</think>` block removed
@@ -112,19 +115,15 @@ struct FakeChatMLTokenizer: Tokenizer {
         let enableThinking =
             (additionalContext?[TemplateRenderFlag.enableThinking.rawValue] as? Bool) ?? true
         if addGenerationPrompt {
-            tokens += encode(
-                text: Self.generationPrompt(
-                    thinking: promptStartsThinking, thinkingDisabled: !enableThinking),
-                addSpecialTokens: false
-            )
+            let prompt =
+                !thinkingTemplate
+                ? "<|im_start|>assistant\n"
+                : enableThinking
+                    ? "<|im_start|>assistant\n<think>\n"
+                    : "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            tokens += encode(text: prompt, addSpecialTokens: false)
         }
         return tokens
-    }
-
-    static func generationPrompt(thinking: Bool, thinkingDisabled: Bool = false) -> String {
-        guard thinking else { return "<|im_start|>assistant\n" }
-        return thinkingDisabled
-            ? "<|im_start|>assistant\n<think>\n\n</think>\n\n" : "<|im_start|>assistant\n<think>\n"
     }
 
     /// Remove one `<think>…</think>` block (plus a trailing newline) from an

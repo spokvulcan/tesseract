@@ -22,13 +22,35 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
     static let userMarkTokenId = 311
     static let toolMarkTokenId = 313
 
+    /// The template's shape: when set, the assistant mark stands for an
+    /// assistant header that opens a think block, so the measured
+    /// **Generation Prompt** opens one. Off, the prompt has no think tag.
+    var thinking = false
+
     func encode(text: String, addSpecialTokens: Bool) -> [Int] {
         Array(text.utf8).map(Int.init)
     }
     func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String {
-        // Lossy byte decode; marker ids (≥ 256) are dropped like specials.
-        // swiftlint:disable:next optional_data_string_conversion
-        String(decoding: tokenIds.compactMap { UInt8(exactly: $0) }, as: UTF8.self)
+        // Lossy byte decode; marker ids (≥ 256) are dropped like specials,
+        // except a thinking template's assistant mark, which spells its
+        // open think block.
+        var text = ""
+        var bytes: [UInt8] = []
+        func flush() {
+            // swiftlint:disable:next optional_data_string_conversion
+            text += String(decoding: bytes, as: UTF8.self)
+            bytes.removeAll()
+        }
+        for id in tokenIds {
+            if let byte = UInt8(exactly: id) {
+                bytes.append(byte)
+            } else if thinking, id == Self.assistantMarkTokenId {
+                flush()
+                text += "<think>\n"
+            }
+        }
+        flush()
+        return text
     }
     func tokenize(text: String) -> [String] { [] }
     func convertTokenToId(_ token: String) -> Int? { nil }
@@ -101,7 +123,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
                     script: prompt + Array("thought</think>ok".utf8).map(Int.init),
                     recurrentElements: recurrentElements),
                 tokenizer: tokenizer),
-            promptStartsThinking: true, modelID: modelID)
+            modelID: modelID)
         let handle = try await fixture.start(
             conversation: conversation, parameters: Self.parameters())
         #expect(try await collectServerText(handle).text == "ok")
@@ -176,7 +198,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
             provider: ToyModelSessionProvider(
                 model: ToyLanguageModel(script: prompt + Array(completion.utf8).map(Int.init)),
                 tokenizer: tokenizer),
-            promptStartsThinking: true, modelID: modelID)
+            modelID: modelID)
         let handle = try await fixture.start(
             conversation: conversation, parameters: Self.parameters(),
             renderContext: renderContext)
@@ -259,7 +281,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
 
     @MainActor
     @Test func canonicalFallbackRestoresAPlannedBranchView() async throws {
-        let tokenizer = ToySequencingTokenizer()
+        let tokenizer = ToySequencingTokenizer(thinking: true)
         let completions = ToyCompletionQueue(
             generationPrompts: [[ToySequencingTokenizer.assistantMarkTokenId]],
             eosTokenId: ToySequencingTokenizer.eotTokenId)
@@ -269,7 +291,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         let fixture = ServerCompletionFixture(
             provider: ToyModelSessionProvider(
                 model: ToyLanguageModel(completions: completions), tokenizer: tokenizer),
-            promptStartsThinking: true, modelID: modelID)
+            modelID: modelID)
         let preserving = TemplateRenderContext(
             kwargs: [.preserveThinking: true], preservesThinking: true)
         // Seed a full leaf on the preserving fast path. Assistant-only
@@ -343,7 +365,7 @@ nonisolated struct ToySequencingTokenizer: Tokenizer {
         let records = model.capacityRecords
         let fixture = ServerCompletionFixture(
             provider: ToyModelSessionProvider(model: model, tokenizer: tokenizer),
-            promptStartsThinking: true, modelID: "capacity-canonical-\(UUID())")
+            modelID: "capacity-canonical-\(UUID())")
         var parameters = Self.parameters()
         parameters.prefillStepSize = 64
         let handle = try await fixture.start(conversation: conversation, parameters: parameters)
