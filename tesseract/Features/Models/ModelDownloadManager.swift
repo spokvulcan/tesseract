@@ -7,6 +7,7 @@ import Foundation
 import Combine
 import os
 import MLXAudioCore
+import TesseractSpeech
 
 enum ModelStatus: Equatable, Sendable {
     case notDownloaded
@@ -93,17 +94,28 @@ final class ModelDownloadManager: ObservableObject {
 
     func refreshAllStatuses() {
         for model in definitions {
-            // Don't overwrite in-progress download or error states
-            if let existing = statuses[model.id] {
-                switch existing {
-                case .downloading, .verifying, .error:
-                    continue
-                case .notDownloaded, .downloaded:
-                    break
-                }
-            }
-            statuses[model.id] = computeStatus(for: model)
+            refresh(model)
         }
+    }
+
+    /// Re-reads one entry from disk: a caller about to use a model gets disk
+    /// truth, not the status from the last full refresh.
+    func refreshStatus(for id: String) {
+        guard let model = definitions.first(where: { $0.id == id }) else { return }
+        refresh(model)
+    }
+
+    private func refresh(_ model: ModelDefinition) {
+        // Don't overwrite in-progress download or error states
+        if let existing = statuses[model.id] {
+            switch existing {
+            case .downloading, .verifying, .error:
+                return
+            case .notDownloaded, .downloaded:
+                break
+            }
+        }
+        statuses[model.id] = computeStatus(for: model)
     }
 
     /// Disk truth: status recomputed from what is actually on disk.
@@ -126,9 +138,15 @@ final class ModelDownloadManager: ObservableObject {
             return .notDownloaded
         }
 
-        // Search recursively for required files (handles nested dirs like transformer/)
-        let hasRequired = Self.hasFileRecursively(in: checkDir, withExtension: requiredExtension)
-        guard hasRequired else { return .notDownloaded }
+        let isComplete: Bool
+        switch model.completeness {
+        case .anyRequiredFile:
+            // Search recursively for required files (handles nested dirs like transformer/)
+            isComplete = Self.hasFileRecursively(in: checkDir, withExtension: requiredExtension)
+        case .qwen3TTSCheckpoint:
+            isComplete = Qwen3Checkpoint.missingFiles(in: checkDir).isEmpty
+        }
+        guard isComplete else { return .notDownloaded }
 
         let totalSize = Self.directorySize(at: checkDir)
         return .downloaded(sizeOnDisk: totalSize)

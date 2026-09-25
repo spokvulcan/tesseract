@@ -72,7 +72,13 @@ public struct AudioFormat: Sendable, Equatable {
 }
 
 public protocol SpeechSynthesizing: Sendable {
-    /// Resolve/download + load weights. Idempotent for the same spec.
+    /// Throws `SpeechEngineError.modelUnavailable` unless `spec`'s checkpoint
+    /// is complete on local disk. Disk only (no GPU, no network), so the
+    /// engine runs it before taking the lease: a missing model fails fast
+    /// instead of holding the GPU.
+    func checkAvailable(_ spec: TTSModelSpec) async throws
+    /// Load weights from the local checkpoint. Never downloads. Idempotent
+    /// for the same spec.
     func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws
     /// Kernel/JIT + fused-weight + tokenizer warmup. Requires loaded.
     func warmUp() async throws

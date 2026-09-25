@@ -299,6 +299,63 @@ private let shortText = "Hello there, this is a short utterance."
     }
 }
 
+/// The engine only loads a checkpoint already on disk. A missing one throws
+/// `modelUnavailable` before the GPU lease, so it never blocks LLM work.
+@Suite struct ModelAvailabilityTests {
+
+    private func expectModelUnavailable(
+        _ body: () async throws -> Void, sourceLocation: SourceLocation = #_sourceLocation
+    ) async {
+        let error = await #expect(throws: SpeechEngineError.self, sourceLocation: sourceLocation) {
+            try await body()
+        }
+        guard let error else { return }  // #expect recorded the miss
+        guard case .modelUnavailable = error else {
+            Issue.record("expected modelUnavailable, got \(String(describing: error))",
+                sourceLocation: sourceLocation)
+            return
+        }
+    }
+
+    @Test func missingCheckpointFailsBeforeTheLease() async throws {
+        let (engine, synth, lease) = await makeEngine()
+        await synth.setCheckpointOnDisk(false)
+
+        await expectModelUnavailable {
+            _ = try await engine.session(.readAloud, voice: .standard(language: "en"))
+        }
+        await expectModelUnavailable { try await engine.prepare(.warm) }
+
+        #expect(await lease.acquisitions == 0, "no GPU lease for a model that isn't there")
+        #expect(await synth.loadCount == 0)
+        #expect(await engine.readiness == .unloaded)
+    }
+
+    @Test func checkpointArrivingLaterLoadsNormally() async throws {
+        let (engine, synth, _) = await makeEngine()
+        await synth.setCheckpointOnDisk(false)
+        await expectModelUnavailable {
+            _ = try await engine.session(.companion, voice: .standard(language: "en"))
+        }
+
+        // The download finishes; the failure left nothing behind to clear.
+        await synth.setCheckpointOnDisk(true)
+        let session = try await engine.session(.companion, voice: .standard(language: "en"))
+        for try await _ in try await session.speak(shortText).events {}
+
+        #expect(await synth.loadCount == 1)
+        #expect(await engine.readiness == .warm)
+    }
+
+    @Test func concurrentOpensShareOneCheck() async throws {
+        let (engine, synth, _) = await makeEngine()
+        async let a: Void = engine.prepare(.loaded)
+        async let b: Void = engine.prepare(.loaded)
+        _ = try await (a, b)
+        #expect(await synth.availabilityChecks == 1, "the check rides the coalesced load")
+    }
+}
+
 @Suite struct LifecycleTests {
 
     @Test func lazyLoadOnFirstUseThenWarm() async throws {

@@ -13,23 +13,41 @@ import MLXAudioTTS
 import MLXLMCommon
 
 public actor Qwen3Synthesizer: SpeechSynthesizing {
+    private let checkpointDirectory: @Sendable (TTSModelSpec) -> URL
     private var model: Qwen3TTSModel?
     private var loadedSpec: TTSModelSpec?
     private var installedAnchor: AnchorHandle?
     private var warmed = false
 
-    public init() {}
+    /// `checkpointDirectory` says where a spec's checkpoint lives on disk. In
+    /// the app that's the Model Catalog's directory for the Voice Engine. The
+    /// synthesizer only loads from there and never downloads.
+    public init(checkpointDirectory: @escaping @Sendable (TTSModelSpec) -> URL) {
+        self.checkpointDirectory = checkpointDirectory
+    }
 
     // MARK: - Lifecycle
 
+    public func checkAvailable(_ spec: TTSModelSpec) async throws {
+        let directory = checkpointDirectory(spec)
+        let missing = Qwen3Checkpoint.missingFiles(in: directory)
+        guard missing.isEmpty else {
+            throw SpeechEngineError.modelUnavailable(
+                "\(spec.repo) is not downloaded (\(directory.path) is missing "
+                    + "\(missing.joined(separator: ", ")))")
+        }
+    }
+
     public func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws {
         if model != nil, loadedSpec == spec { return }
+        // Again here for direct callers: without it a missing speech
+        // tokenizer loads "fine" and then can't make sound.
+        try await checkAvailable(spec)
         onPhase?(.loadingWeights)
-        let loaded = try await TTS.loadModel(modelRepo: spec.repo)
-        guard let qwen = loaded as? Qwen3TTSModel else {
-            throw SpeechEngineError.modelUnavailable(
-                "loaded model for \(spec.repo) is not a Qwen3-TTS model")
-        }
+        // Straight to the local loader. `TTS.loadModel(modelRepo:)` would
+        // treat a repo id (or a directory it can't read a config.json from)
+        // as something to fetch from the hub.
+        let qwen = try await Qwen3TTSModel.fromModelDirectory(checkpointDirectory(spec))
         model = qwen
         loadedSpec = spec
         installedAnchor = nil

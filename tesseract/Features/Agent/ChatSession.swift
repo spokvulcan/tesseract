@@ -930,7 +930,7 @@ final class ChatSession {
         for item in items {
             if case .assistant(let assistant) = item, assistant.id == messageID {
                 let text = assistant.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !text.isEmpty { speechCoordinator?.speakText(text) }
+                if !text.isEmpty { speechCoordinator?.speakText(text, userInitiated: true) }
                 return
             }
         }

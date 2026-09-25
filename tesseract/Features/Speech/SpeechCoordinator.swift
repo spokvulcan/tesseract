@@ -29,6 +29,10 @@ final class SpeechCoordinator {
 
     private let textExtractor: any TextExtracting
     private let engine: SpeechEnginePresenter
+    /// The Voice Engine's download status, read before each request. The
+    /// engine only loads a checkpoint already on disk, so speech waits for
+    /// the Models page download instead of starting its own.
+    private let voiceEngineStatus: @MainActor () -> ModelStatus
     private let playback: any AudioPlayback
     private let settings: SettingsManager
     private let notchOverlay: (any WordHighlightSurface)?
@@ -49,6 +53,11 @@ final class SpeechCoordinator {
         case standard
         case voiceSession
     }
+
+    /// Called when a request the user made (the hotkey, a Speak button) finds
+    /// no Voice Engine on disk; the app opens the Models page. Speech the app
+    /// starts on its own (auto-speak, the Companion) only shows the error.
+    var onVoiceEngineMissing: (@MainActor () -> Void)?
 
     /// The voice-session sink (ADR-0041), installed by the composition root.
     /// `nil` (or a `.standard` route) keeps the dedicated engine.
@@ -71,12 +80,14 @@ final class SpeechCoordinator {
     init(
         textExtractor: any TextExtracting,
         engine: SpeechEnginePresenter,
+        voiceEngineStatus: @escaping @MainActor () -> ModelStatus,
         playback: any AudioPlayback = AudioPlaybackManager(),
         settings: SettingsManager,
         notchOverlay: (any WordHighlightSurface)? = nil
     ) {
         self.textExtractor = textExtractor
         self.engine = engine
+        self.voiceEngineStatus = voiceEngineStatus
         self.playback = playback
         self.settings = settings
         self.notchOverlay = notchOverlay
@@ -114,9 +125,12 @@ final class SpeechCoordinator {
     /// Speak text directly (for in-app usage). `showsOverlay: false` plays
     /// audio-only — for callers that bring their own visual surface (the
     /// Companion voice overlay, #328) and must not raise the TTS notch too.
+    /// `userInitiated`: the user asked for this speech (a Speak button), so a
+    /// missing Voice Engine sends them to the Models page.
     func speakText(
         _ text: String, showsOverlay: Bool = true,
         route: PlaybackRoute = .standard,
+        userInitiated: Bool = false,
         onSuccess: (@MainActor @Sendable () -> Void)? = nil
     ) {
         guard !text.isEmpty else { return }
@@ -131,7 +145,9 @@ final class SpeechCoordinator {
         // 2026-07-16 self-echo trace, ADR-0041).
         state = .generating(progress: "")
         activeTask = Task {
-            await generateAndPlay(text: text, showsOverlay: showsOverlay)
+            guard await voiceEngineReady(userInitiated: userInitiated) else { return }
+            await generateAndPlay(
+                text: text, showsOverlay: showsOverlay, userInitiated: userInitiated)
         }
     }
 
@@ -236,17 +252,50 @@ final class SpeechCoordinator {
 
     private func captureAndSpeak() async {
         state = .capturingText
+        // Before the capture: without a Voice Engine there's no reason to
+        // touch the user's selection.
+        guard await voiceEngineReady(userInitiated: true) else { return }
 
         do {
             let text = try await textExtractor.extractSelectedText()
             currentText = text
-            await generateAndPlay(text: text)
+            await generateAndPlay(text: text, userInitiated: true)
         } catch is CancellationError {
             state = .idle
         } catch {
             Log.speech.error("Failed to capture text: \(error)")
             await presentTransientError(error.localizedDescription)
         }
+    }
+
+    /// Whether to go ahead with a request. Without the Voice Engine on disk
+    /// the request stops here and says why.
+    private func voiceEngineReady(userInitiated: Bool) async -> Bool {
+        let message: String
+        switch voiceEngineStatus() {
+        case .downloaded, .error:
+            // `.error` is a failed download or verify, not proof the files
+            // are gone. The engine checks the disk itself before loading.
+            return true
+        case .downloading(let progress):
+            message = "The Voice Engine is still downloading (\(Int(progress * 100))%)."
+        case .verifying:
+            message = "The Voice Engine is being verified. Try again in a moment."
+        case .notDownloaded:
+            await presentVoiceEngineMissing(userInitiated: userInitiated)
+            return false
+        }
+        speechCompletionCallback = nil
+        await presentTransientError(message)
+        return false
+    }
+
+    private func presentVoiceEngineMissing(userInitiated: Bool) async {
+        Log.speech.info(
+            "Voice Engine not downloaded; speech request dropped (userInitiated=\(userInitiated))")
+        speechCompletionCallback = nil
+        if userInitiated { onVoiceEngineMissing?() }
+        await presentTransientError("Download the Voice Engine in Models to hear speech.")
     }
 
     /// A session binds the settings voice to cached model state; reopen only
@@ -278,7 +327,9 @@ final class SpeechCoordinator {
         }
     }
 
-    private func generateAndPlay(text: String, showsOverlay: Bool = true) async {
+    private func generateAndPlay(
+        text: String, showsOverlay: Bool = true, userInitiated: Bool
+    ) async {
         // One resolution for the whole utterance: nil means audio-only, and
         // every overlay touch below no-ops.
         let overlay = showsOverlay ? notchOverlay : nil
@@ -333,6 +384,13 @@ final class SpeechCoordinator {
             // stop() already tore playback and overlay down.
             speechCompletionCallback = nil
             if state != .idle { state = .idle }
+        } catch SpeechEngineError.modelUnavailable(let detail) {
+            // The catalog said downloaded, but the engine's disk check found
+            // the checkpoint gone or partial.
+            Log.speech.error("Voice Engine unavailable: \(detail)")
+            activeSink.stop()
+            notchOverlay?.dismiss()
+            await presentVoiceEngineMissing(userInitiated: userInitiated)
         } catch {
             Log.speech.error("Speech generation failed: \(error)")
             speechCompletionCallback = nil

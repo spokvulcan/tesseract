@@ -50,6 +50,16 @@ struct CompanionFile: Sendable {
     let path: String
 }
 
+/// How `ModelDownloadManager` decides that an entry's files are on disk.
+enum ModelCompleteness: Sendable {
+    /// Any file with the entry's required extension, at any depth.
+    case anyRequiredFile
+    /// Everything `Qwen3Synthesizer` needs, judged by its own rule
+    /// (`Qwen3Checkpoint`). The catalog then can't call a Voice Engine
+    /// downloaded that the speech engine would refuse to load.
+    case qwen3TTSCheckpoint
+}
+
 struct ModelDefinition: Identifiable, Sendable {
     let id: String
     let displayName: String
@@ -66,6 +76,8 @@ struct ModelDefinition: Identifiable, Sendable {
     /// classes, and a vision-mode load would silently never speculate. Lifted
     /// by map #457 once the VLM wrapper hosts the MLXLLM engine (#459).
     var textOnlyOverride: Bool = false
+    /// When the entry's directory counts as downloaded.
+    var completeness: ModelCompleteness = .anyRequiredFile
 
     var cacheSubdirectory: String? {
         guard case .huggingFace(let repo, _, _) = source else { return nil }
@@ -171,7 +183,11 @@ extension ModelDefinition {
                 requiredExtension: "safetensors"
             ),
             sizeDescription: textToSpeechDownloadSize,
-            dependencies: []
+            dependencies: [],
+            // Top-level talker shards, tokenizer, and the nested speech
+            // tokenizer. Any one `.safetensors` (the default) would count a
+            // folder holding only `speech_tokenizer/model.safetensors`.
+            completeness: .qwen3TTSCheckpoint
         ),
         ModelDefinition(
             id: "qwen3.5-0.8b-proofread",

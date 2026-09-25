@@ -18,7 +18,17 @@ import TesseractSpeech
 @MainActor
 final class InMemoryTextExtractor: TextExtracting {
     var result: Result<String, Error> = .success("Hello world.")
-    func extractSelectedText() async throws -> String { try result.get() }
+    private(set) var extractCount = 0
+    func extractSelectedText() async throws -> String {
+        extractCount += 1
+        return try result.get()
+    }
+}
+
+/// The Voice Engine's catalog status as the coordinator reads it.
+@MainActor
+final class VoiceEngineStatusStub {
+    var status: ModelStatus = .downloaded(sizeOnDisk: 1)
 }
 
 @MainActor
@@ -35,6 +45,10 @@ private struct Harness {
     let overlay: RecordingHighlightSurface
     let settings: SettingsManager
     let presenter: SpeechEnginePresenter
+    let textExtractor = InMemoryTextExtractor()
+    let voiceEngine = VoiceEngineStatusStub()
+    /// Fires when the coordinator sends the user to the Models page.
+    let modelsPage = CallbackProbe()
 
     init(script: ScriptedSpeechSynthesizer.Script = .init()) async {
         synthesizer = ScriptedSpeechSynthesizer()
@@ -46,12 +60,20 @@ private struct Harness {
         overlay = RecordingHighlightSurface()
         settings = SettingsManager(store: InMemorySettingsStore())
         coordinator = SpeechCoordinator(
-            textExtractor: InMemoryTextExtractor(),
+            textExtractor: textExtractor,
             engine: presenter,
+            voiceEngineStatus: { [voiceEngine] in voiceEngine.status },
             playback: playback,
             settings: settings,
             notchOverlay: overlay
         )
+        coordinator.onVoiceEngineMissing = { [modelsPage] in modelsPage.fire() }
+    }
+
+    /// The message of a settled `.error` state, nil otherwise.
+    var errorMessage: String? {
+        if case .error(let message) = coordinator.state { return message }
+        return nil
     }
 }
 
@@ -255,6 +277,94 @@ struct SpeechCoordinatorTests {
         try await Task.sleep(for: .milliseconds(100))
         // The fade died with the utterance — no further steps.
         #expect(harness.playback.setVolumeCalls.count == countAtStop)
+    }
+
+    // MARK: Voice Engine availability (the engine never downloads)
+
+    @Test
+    func userRequestWithoutVoiceEngineOpensModelsAndLoadsNothing() async throws {
+        let harness = await Harness()
+        harness.voiceEngine.status = .notDownloaded
+
+        harness.coordinator.speakText("Hello world.", userInitiated: true)
+        #expect(await waitUntil { harness.errorMessage != nil })
+
+        #expect(harness.errorMessage?.contains("Voice Engine") == true)
+        #expect(harness.modelsPage.fireCount == 1)
+        #expect(await harness.synthesizer.loadCount == 0)
+        #expect(harness.playback.startedSampleRates.isEmpty)
+        #expect(!harness.presenter.isLoading)
+    }
+
+    /// Auto-speak and the Companion speak on their own; a missing Voice
+    /// Engine shows the error but doesn't pull the window to Models.
+    @Test
+    func automaticSpeechWithoutVoiceEngineStaysPut() async throws {
+        let harness = await Harness()
+        harness.voiceEngine.status = .notDownloaded
+
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.errorMessage != nil })
+
+        #expect(harness.modelsPage.fireCount == 0)
+        #expect(await harness.synthesizer.loadCount == 0)
+    }
+
+    @Test
+    func hotkeyWithoutVoiceEngineSkipsTheCaptureAndOpensModels() async throws {
+        let harness = await Harness()
+        harness.voiceEngine.status = .notDownloaded
+
+        harness.coordinator.onHotkeyPressed()
+        #expect(await waitUntil { harness.errorMessage != nil })
+
+        #expect(harness.textExtractor.extractCount == 0, "selection left alone")
+        #expect(harness.modelsPage.fireCount == 1)
+    }
+
+    /// Onboarding or the Models page is still fetching it: say so, and
+    /// don't load a half-written checkpoint.
+    @Test
+    func downloadingVoiceEngineWaitsWithoutLoading() async throws {
+        let harness = await Harness()
+        harness.voiceEngine.status = .downloading(progress: 0.4)
+
+        harness.coordinator.speakText("Hello world.", userInitiated: true)
+        #expect(await waitUntil { harness.errorMessage != nil })
+
+        #expect(harness.errorMessage?.contains("40%") == true)
+        #expect(harness.modelsPage.fireCount == 0)
+        #expect(await harness.synthesizer.loadCount == 0)
+    }
+
+    /// The catalog said downloaded, but the engine's disk check found the
+    /// folder gone: the same outcome as a missing Voice Engine.
+    @Test
+    func engineFindingNoCheckpointIsTreatedAsMissing() async throws {
+        let harness = await Harness()
+        await harness.synthesizer.setCheckpointOnDisk(false)
+
+        harness.coordinator.speakText("Hello world.", userInitiated: true)
+        #expect(await waitUntil { harness.errorMessage != nil })
+
+        #expect(harness.errorMessage?.contains("Voice Engine") == true)
+        #expect(harness.modelsPage.fireCount == 1)
+        #expect(await harness.synthesizer.loadCount == 0)
+        #expect(!harness.presenter.isModelLoaded)
+        #expect(!harness.presenter.isLoading)
+    }
+
+    /// A failed download or verify isn't proof the files are gone; the
+    /// engine's disk check decides.
+    @Test
+    func errorStatusStillLetsTheEngineCheckTheDisk() async throws {
+        let harness = await Harness()
+        harness.voiceEngine.status = .error("The network connection was lost.")
+
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        #expect(harness.modelsPage.fireCount == 0)
+        harness.playback.firePlaybackFinished()
     }
 
     @Test

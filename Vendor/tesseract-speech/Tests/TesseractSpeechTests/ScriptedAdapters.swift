@@ -14,6 +14,10 @@ actor ScriptedSynthesizer: SpeechSynthesizing {
     }
 
     var script = Script()
+    /// Whether the checkpoint is "on disk". Flip it to simulate a download
+    /// finishing (or the folder being deleted) between calls.
+    private(set) var checkpointOnDisk = true
+    private(set) var availabilityChecks = 0
     private(set) var requests: [SegmentRequest] = []
     private(set) var loadCount = 0
     private(set) var warmUpCount = 0
@@ -25,6 +29,14 @@ actor ScriptedSynthesizer: SpeechSynthesizing {
     private(set) var sawCancellation = false
 
     func configure(_ script: Script) { self.script = script }
+    func setCheckpointOnDisk(_ onDisk: Bool) { checkpointOnDisk = onDisk }
+
+    func checkAvailable(_ spec: TTSModelSpec) async throws {
+        availabilityChecks += 1
+        guard checkpointOnDisk else {
+            throw SpeechEngineError.modelUnavailable("\(spec.repo) is not downloaded")
+        }
+    }
 
     func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws {
         loadCount += 1

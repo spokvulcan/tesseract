@@ -86,6 +86,9 @@ public actor SpeechEngine {
             return
         }
         let task = Task { [model, synthesizer, gpu] in
+            // Before the lease: a checkpoint that isn't on disk fails here
+            // rather than queueing behind, or holding up, LLM work.
+            try await synthesizer.checkAvailable(model)
             try await gpu.withLease {
                 try await synthesizer.load(model, onPhase: onPhase)
                 try await synthesizer.warmUp()

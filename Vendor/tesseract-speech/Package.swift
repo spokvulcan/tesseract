@@ -11,6 +11,9 @@ let package = Package(
         .package(path: "../mlx-audio-swift"),
         .package(path: "../mlx-swift-lm"),
         .package(url: "https://github.com/spokvulcan/mlx-swift", revision: "6058402c676de25560051acda772e80d86d696d1"),
+        // v2-listen only: the harness fetches its own checkpoint, since the
+        // engine never downloads. Same requirement as mlx-audio-swift's.
+        .package(url: "https://github.com/huggingface/swift-huggingface.git", .upToNextMajor(from: "0.8.1")),
     ],
     targets: [
         .target(
@@ -37,6 +40,7 @@ let package = Package(
             dependencies: [
                 "TesseractSpeech",
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
+                .product(name: "HuggingFace", package: "swift-huggingface"),
             ],
             path: "Sources/Tools/v2-listen"
         ),
