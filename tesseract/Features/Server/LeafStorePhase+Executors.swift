@@ -62,8 +62,8 @@ nonisolated extension LeafStorePhase {
         init(storedTokens: [Int], inputs: Inputs, stages: LeafStages, ssdEnabled: Bool? = nil) {
             let mlxStart = inputs.mlxStart
             self.storedTokens = storedTokens
-            partitionKey = mlxStart.partitionKey
-            self.ssdEnabled = ssdEnabled ?? mlxStart.ssdEnabled
+            partitionKey = inputs.request.facts.partitionKey
+            self.ssdEnabled = ssdEnabled ?? inputs.request.facts.ssdEnabled
             requestID = inputs.requestID
             prefixCache = inputs.prefixCache
             diagnosticsContext = inputs.diagnosticsContext
@@ -73,9 +73,9 @@ nonisolated extension LeafStorePhase {
             restoreMode = mlxStart.restoreMode
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
-                inputs.containsImages || !mlxStart.keySpace.isIdentity
+                inputs.containsImages || !inputs.request.keySpace.isIdentity
                 ? .imageKeySpace
-                : mlxStart.partitionKey.kvBits != nil ? .quantized : nil
+                : inputs.request.facts.partitionKey.kvBits != nil ? .quantized : nil
         }
 
         /// The SSD extension base for `storedTokens`, resolved before the

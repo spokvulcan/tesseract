@@ -57,7 +57,7 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// True when the restored snapshot was hydrated from the SSD tier.
     let restoredFromSSD: Bool
     /// Total prompt tokens (full conversation, ignoring slicing).
-    let promptTokenCount: Int
+    var promptTokenCount: Int { facts.promptTokenCount }
     /// Number of leading tokens skipped because the cache already covered them.
     let skippedPrefillTokens: Int
     /// Lookup outcome classification, surfaced for in-app observability.
@@ -73,48 +73,43 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
 
     // -- Post-generation store context (radix tree flow) --
 
-    /// Flat token sequence for the full prompt (1D extraction from potentially
-    /// 2D VLM tensor). REAL prepared tokens — safe to re-forward through the
-    /// model. Radix-tree paths use
-    /// `keySpace.keyPath` instead, which replaces image runs with
-    /// digest-derived pseudo-tokens that must never reach an embedding lookup.
-    let fullTokens: [Int]
-    /// The request's **Cache Key Space** — identity for text-only requests.
-    /// Owns the key path the radix tree was driven with and translates the
-    /// post-generation stored render the same way.
-    let keySpace: CacheKeySpace
-    /// Non-nil when this is an **Unkeyed Completion**: no valid Cache Key Path
-    /// could be built, so the request was served with zero cache
-    /// participation — the post-generation store flow must stay away from the
-    /// radix tree entirely.
-    let unkeyedReason: CacheKeySpace.UnkeyedReason?
-    /// The request's **Conversation Render**, sealed at Request Keying — the
-    /// one render authority the post-generation phases (leaf-store measure,
-    /// admission probes) draw on. `nil` exactly for an **Unkeyed
-    /// Completion**, which the leaf store leaves before any render.
-    let render: ConversationRender?
-    /// Whether warm forwards must seed the **Position Anchor** (the loaded
-    /// family is the recognized vision container). False for text models,
-    /// where restored prefills keep their nil-state behavior.
-    let seedsPositionAnchor: Bool
+    /// What **Request Keying** made of the request (ADR-0070): a **Keyed
+    /// Request**, whose identities and facts the post-generation phases take
+    /// whole, or an **Unkeyed Completion**'s request, which has facts and no
+    /// keys, so the store flow cannot reach the radix tree with a placeholder.
+    enum Keying: Sendable {
+        case keyed(KeyedRequest)
+        case unkeyed(UnkeyedRequest)
+
+        var facts: RequestFacts {
+            switch self {
+            case .keyed(let request): request.facts
+            case .unkeyed(let request): request.facts
+            }
+        }
+
+        var keyed: KeyedRequest? {
+            guard case .keyed(let request) = self else { return nil }
+            return request
+        }
+
+        var unkeyedReason: CacheKeySpace.UnkeyedReason? {
+            guard case .unkeyed(let request) = self else { return nil }
+            return request.reason
+        }
+    }
+
+    let keying: Keying
+    var facts: RequestFacts { keying.facts }
 
     /// The wire string for `Diagnostics.cacheReason`: the lookup outcome, or
     /// the unkeyed degradation when the request never reached the lookup.
     var cacheReasonDescription: String {
-        unkeyedReason.map { "unkeyed(\($0.rawValue))" } ?? String(describing: lookupReason)
+        keying.unkeyedReason.map { "unkeyed(\($0.rawValue))" } ?? String(describing: lookupReason)
     }
     /// Validated mid-prefill checkpoint admission, if any checkpoints survived
     /// extraction-edge path validation.
     let snapshotAdmission: SnapshotAdmission?
-    /// SSD persistence tier gate, sampled once on `LLMActor`'s own
-    /// isolation at `makeHTTPPrefixCacheGeneration` entry. Downstream
-    /// post-generation sites (unstripped leaf + stripped leaf) read
-    /// this through the captured `mlxStart` instead of re-sampling
-    /// the module's `ssdConfig`, which they cannot do without crossing
-    /// the Metal-affine scope boundary.
-    let ssdEnabled: Bool
-    /// Partition key used for cache routing.
-    let partitionKey: CachePartitionKey
     /// Request-local helper snapshot captured at the end of the last history
     /// message. Never stored or persisted; used to synthesize the direct
     /// tool-continuation leaf for tool-call turns.
@@ -124,31 +119,11 @@ nonisolated struct HTTPPrefixCacheGeneration: @unchecked Sendable {
     /// canonical user-continuation leaf for templates that rewrite the
     /// assistant/tool suffix after the last user.
     let transientLastUserBoundarySnapshot: HybridCacheSnapshot?
-    /// Chunked prefill step size from the request's `GenerateParameters`,
-    /// plumbed out so the post-generation canonical-leaf path can use the
-    /// same chunk size when re-prefilling the canonical assistant residual
-    /// on top of the restored last-message-boundary snapshot.
-    let prefillStepSize: Int
-    /// Rank of the processor-prepared token tensor (1 for pure LLMs, 2
-    /// for conditional-generation models like Qwen3.5). Post-generation
-    /// leaf-capture rebuilds residual inputs from a raw `[Int]` via
-    /// `MLXArray(...)` (which is 1D), but the MLXVLM `prepare` indexes
-    /// the tensor with two axes — passing 1D there crashes in
-    /// `getRopeIndex` on `inputIds.dim(1)`.
-    let tokenNDim: Int
     /// The ids the decode loop fed past the prompt (stop token included),
     /// filled by the generation task and read by the **Leaf Store** phase
     /// once `completion` has finished — the tail of the turn's **Emitted
     /// Path**, which the live leaf is keyed on and the index registers.
     let generatedTokens: GeneratedTokenRecorder
-    /// The loaded model's tool-call format — what the generation loop's
-    /// `ToolCallProcessor` parsed with, so the Emitted Path fidelity check
-    /// replays the emitted ids through the same parser (ADR-0063).
-    let toolCallFormat: ToolCallFormat
-    /// The request's **Generation Prompt**, checked against what it fed
-    /// (ADR-0070): the stream parser's start, the leaf-store mode and the
-    /// fidelity replay all read it.
-    let generationPrompt: GenerationPrompt
     /// How the request restored (`cold`, `copy`, `failedCopy`, `handoff`),
     /// as the claim's check-out decided it — one input to the stored
     /// leaf's source.
@@ -779,7 +754,7 @@ nonisolated final class ServerCompletion {
         let loadedModelWeightBytes = modelWeightBytes
 
         let driver = ManagedGenerationDriver(
-            startsInsideThinkBlock: mlxStart.generationPrompt.startsInsideThinkBlock,
+            startsInsideThinkBlock: mlxStart.facts.generationPrompt.startsInsideThinkBlock,
             logContext: "request_id=\(requestID.uuidString)"
         )
         let actorRef = actor
@@ -1114,9 +1089,9 @@ nonisolated final class ServerCompletion {
                 trace: &trace,
                 memory: memory
             )
-            if mlxStart.ssdEnabled, !Task.isCancelled {
+            if mlxStart.facts.ssdEnabled, !Task.isCancelled {
                 await prefixCache.persistViewCheckpoints(
-                    partitionKey: mlxStart.partitionKey, sessions: sessions)
+                    partitionKey: mlxStart.facts.partitionKey, sessions: sessions)
             }
             leafResult.report.restoreMode = mlxStart.restoreMode
             leafResult.report.restoreCopyReason = mlxStart.restoreCopy?.reason
@@ -1143,14 +1118,14 @@ nonisolated final class ServerCompletion {
             // successful leaf stores.
             let capturedSnapshots = storedSnapshotsForTuner
             let leafCapture = leafStoreForTuner
-            let unkeyed = mlxStart.unkeyedReason != nil
-            let keyPath = mlxStart.keySpace.keyPath
+            let unkeyed = mlxStart.keying.unkeyedReason != nil
+            let keyPath = mlxStart.keying.keyed?.keySpace.keyPath ?? mlxStart.facts.promptTokens
             let (finalStats, finalBudgetBytes, finalEstimates) = await MainActor.run {
                 // Unkeyed Completions stay out of the tuner's workload trace —
                 // they never participated in the cache this trace models.
                 if !unkeyed {
                     prefixCache.recordRequest(
-                        partitionKey: mlxStart.partitionKey,
+                        partitionKey: mlxStart.facts.partitionKey,
                         promptTokens: keyPath,
                         capturedSnapshots: capturedSnapshots,
                         leafStore: leafCapture,
@@ -1179,7 +1154,7 @@ nonisolated final class ServerCompletion {
             leafResult.report.tailSeconds = Date.timeIntervalSinceReferenceDate - generationEnded
             // ADR-0063: fold the request's Emitted Path resolves (request
             // edge, planner, leaf store) into the same account.
-            let emittedPathSummary = mlxStart.render?.emittedPathTelemetry?.summary
+            let emittedPathSummary = mlxStart.keying.keyed?.render.emittedPathTelemetry?.summary
             leafResult.report.emittedPathResolves = emittedPathSummary
             diagnosticsContext.log(leafResult.report, level: .notice)
 
@@ -1194,8 +1169,8 @@ nonisolated final class ServerCompletion {
                     requestID: requestID,
                     modelID: diagnosticsContext.modelID,
                     start: CompletionTraceAccumulator.StartFacts(
-                        partitionDigest: mlxStart.partitionKey.partitionDigest,
-                        unkeyedReason: mlxStart.unkeyedReason,
+                        partitionDigest: mlxStart.facts.partitionKey.partitionDigest,
+                        unkeyedReason: mlxStart.keying.unkeyedReason,
                         keyPath: keyPath,
                         lookupReason: mlxStart.lookupReason,
                         restoredFromSSD: mlxStart.restoredFromSSD,
@@ -1253,19 +1228,13 @@ nonisolated final class ServerCompletion {
         // seed path already requires.
         if speculativeSeed == nil,
             Task.isCancelled,
-            // Keyed only: the render is nil exactly for an Unkeyed Completion.
-            let render = mlxStart.render,
+            case .keyed(let request) = mlxStart.keying,
             mlxStart.transientLastUserBoundarySnapshot != nil,
             !renderContext.preservesThinking
         {
             speculativeSeed = SpeculativeCanonicalPrefill.makeSeed(
                 storedConversation: conversation,
-                render: render,
-                keySpace: mlxStart.keySpace,
-                partitionKey: mlxStart.partitionKey,
-                prefillStepSize: mlxStart.prefillStepSize,
-                ssdEnabled: mlxStart.ssdEnabled,
-                seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+                request: request,
                 canonicalLeafOffset: mlxStart.transientLastUserBoundarySnapshot?
                     .tokenOffset ?? 0,
                 transientBoundary: mlxStart.transientLastUserBoundarySnapshot,
@@ -1346,11 +1315,13 @@ nonisolated final class ServerCompletion {
                 return (value, Date.timeIntervalSinceReferenceDate - started)
             }
 
-            // 1–3b. The Request Keying phase: prepared input, flat token
-            // sequence, Marconi partition key, and the request's **Cache Key
-            // Space** — or the degrade signal when key-space construction
+            // 1–3b. The Request Keying phase: the prepared input and the
+            // **Keyed Request** — the partition key, the request's **Cache Key
+            // Space** and Conversation Render, and every per-request fact —
+            // or an Unkeyed Completion's request when key-space construction
             // fails, in which case the whole request is served unkeyed.
-            let keyed: RequestKeyingPhase.Keyed
+            let request: KeyedRequest
+            let fullInput: LMInput
             switch try await RequestKeyingPhase.run(
                 session: session,
                 conversation: conversation,
@@ -1360,35 +1331,32 @@ nonisolated final class ServerCompletion {
                 modelID: modelID,
                 modelFingerprint: modelFingerprint,
                 imageKeying: imageKeying,
+                ssdEnabled: ssdEnabled,
                 emittedPathIndex: emittedPathIndex,
                 diagnostics: diagnosticsContext
             ) {
-            case .keyed(let identities):
-                keyed = identities
-            case .unkeyed(let fullInput, let fullTokens, let partitionKey, let reason, let prompt):
+            case .keyed(let keyed, let input):
+                request = keyed
+                fullInput = input
+            case .unkeyed(let unkeyed, let input):
                 return try await Self.makeUnkeyedGeneration(
                     session: session,
-                    fullInput: fullInput,
-                    fullTokens: fullTokens,
-                    reason: reason,
-                    generationPrompt: prompt,
+                    request: unkeyed,
+                    input: input,
                     parameters: parameters,
                     toolSpecs: canonicalTools,
-                    partitionKey: partitionKey,
                     fullAttentionScratchProfile: fullAttentionScratchProfile,
                     visionAttentionScratchProfile: visionAttentionScratchProfile,
-                    ssdEnabled: ssdEnabled,
                     diagnosticsContext: diagnosticsContext,
                     progressHandler: progressHandler
                 )
             }
-            let fullInput = keyed.fullInput
-            let fullTokens = keyed.fullTokens
-            let fullTokenCount = keyed.fullTokenCount
-            let tokenNDim = keyed.tokenNDim
-            let partitionKey = keyed.partitionKey
-            let keySpace = keyed.keySpace
-            let seedsPositionAnchor = keyed.seedsPositionAnchor
+            let facts = request.facts
+            let fullTokenCount = facts.promptTokenCount
+            let tokenNDim = facts.tokenNDim
+            let partitionKey = facts.partitionKey
+            let keySpace = request.keySpace
+            let seedsPositionAnchor = request.seedsPositionAnchor
 
             // 4. Detect the prefill boundaries (stable prefix + last-message +
             // last-user). The Prefill Planner owns this tokenizer-affine work —
@@ -1398,9 +1366,7 @@ nonisolated final class ServerCompletion {
             // key-space offsets by construction.
             let boundaries = try PrefillPlanner.detectBoundaries(
                 conversation: conversation,
-                generationPrompt: keyed.generationPrompt,
-                keySpace: keySpace,
-                render: keyed.render
+                request: request
             )
             if let unknown = boundaries.generationPromptUnknown {
                 diagnosticsContext.logSkip(
@@ -1695,34 +1661,21 @@ nonisolated final class ServerCompletion {
                         hasDrafter: session.mtpDrafter != nil,
                         temperature: parameters.temperature,
                         textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
-                        predictedLeafStoreMode: LeafStorePhase.selectHTTPLeafStoreMode(
-                            generationPrompt: keyed.generationPrompt,
-                            renderContext: renderContext,
-                            // Conservative stand-in: tool *emission* is unknowable
-                            // at engagement time, so defined tools predict as if
-                            // they will be called.
-                            emittedToolCalls: canonicalTools?.isEmpty == false
-                        ),
+                        // Tool emission is unknowable at engagement time, so
+                        // defined tools predict as if they will be called.
+                        predictedLeafStoreMode: facts.predictedLeafStoreMode,
                         promptTokens: fullTokenCount,
                         scratchProfile: fullAttentionScratchProfile
                     )
                 {
                     return try await Self.makeMTPGeneration(
                         session: session,
-                        fullInput: fullInput,
-                        fullTokens: fullTokens,
-                        fullTokenCount: fullTokenCount,
-                        tokenNDim: tokenNDim,
-                        keySpace: keySpace,
-                        render: keyed.render,
-                        generationPrompt: keyed.generationPrompt,
+                        request: request,
+                        input: fullInput,
                         parameters: parameters,
                         toolSpecs: canonicalTools,
-                        partitionKey: partitionKey,
                         lookupReason: lookupResult.reason,
                         lookupMs: lookupMs,
-                        ssdEnabled: ssdEnabled,
-                        seedsPositionAnchor: seedsPositionAnchor,
                         visionAttentionScratchProfile: visionAttentionScratchProfile,
                         diagnosticsContext: diagnosticsContext,
                         progressHandler: progressHandler
@@ -1846,7 +1799,7 @@ nonisolated final class ServerCompletion {
                             // bounded to `[heads, window, executionBaseOffset]`,
                             // not the single-shot `[heads, L, L]`.
                             try Self.checkChunkedVisionBackstop(
-                                windowSize: genParams.prefill.stepSize ?? 512,
+                                windowSize: facts.prefillStepSize,
                                 contextTokens: executionBaseOffset,
                                 profile: fullAttentionScratchProfile,
                                 diagnosticsContext: diagnosticsContext
@@ -1924,7 +1877,7 @@ nonisolated final class ServerCompletion {
                                             cache: liveCache,
                                             checkpoints: allCheckpoints,
                                             checkpointBaseOffset: executionBaseOffset,
-                                            prefillStepSize: genParams.prefill.stepSize ?? 512,
+                                            prefillStepSize: facts.prefillStepSize,
                                             consumeAll: false,
                                             initialState: initialState,
                                             evalPolicy: .pipelined
@@ -1933,8 +1886,6 @@ nonisolated final class ServerCompletion {
                                 snapshots += warmed.snapshots
                             }
                             try error.check()
-                            var iteratorParams = genParams
-                            iteratorParams.kvBits = nil
                             memory.mark(
                                 .dflashPreparing,
                                 facts: RequestMemoryTelemetry.cacheFacts(liveCache))
@@ -1942,7 +1893,7 @@ nonisolated final class ServerCompletion {
                                 fullInput,
                                 cache: liveCache,
                                 prefilledPrefixTokens: splitOffset,
-                                parameters: iteratorParams
+                                parameters: facts.decodeParameters
                             )
                             try error.check()
                             return (iterator: .dflash2(iterator), snapshots: snapshots)
@@ -1958,7 +1909,7 @@ nonisolated final class ServerCompletion {
                                 cache: liveCache,
                                 checkpoints: allCheckpoints,
                                 checkpointBaseOffset: executionBaseOffset,
-                                prefillStepSize: genParams.prefill.stepSize ?? 512,
+                                prefillStepSize: facts.prefillStepSize,
                                 consumeAll: false,
                                 initialState: initialState,
                                 evalPolicy: imagePrefixInput == nil
@@ -1967,8 +1918,6 @@ nonisolated final class ServerCompletion {
                         }
                         try error.check()
                         session.quantizeKVCache(&liveCache, parameters: genParams)
-                        var iteratorParams = genParams
-                        iteratorParams.kvBits = nil
                         // The iterator seeds any configured penalty processors with
                         // the full suffix — its own input is only the final prompt
                         // token, which would otherwise be the entire
@@ -1980,7 +1929,7 @@ nonisolated final class ServerCompletion {
                             fullText: inputForGeneration.text,
                             cache: liveCache,
                             state: warmed.state,
-                            parameters: iteratorParams
+                            parameters: facts.decodeParameters
                         )
                         return (
                             iterator: .standard(iterator),
@@ -2130,26 +2079,15 @@ nonisolated final class ServerCompletion {
                 prefillMs: prefillMs,
                 hydrationSeconds: resolved.hydrationSeconds,
                 restoredFromSSD: resolved.hydratedFromSSD,
-                promptTokenCount: fullTokenCount,
                 skippedPrefillTokens: skippedTokens,
                 lookupReason: lookupResult.reason,
                 sharedPrefixLength: lookupResult.sharedPrefixLength,
                 maximumAdvance: maximumAdvance,
-                fullTokens: fullTokens,
-                keySpace: keySpace,
-                unkeyedReason: nil,
-                render: keyed.render,
-                seedsPositionAnchor: seedsPositionAnchor,
+                keying: .keyed(request),
                 snapshotAdmission: snapshotAdmission,
-                ssdEnabled: ssdEnabled,
-                partitionKey: partitionKey,
                 transientLastMessageBoundarySnapshot: transientLastMessageBoundarySnapshot,
                 transientLastUserBoundarySnapshot: transientLastUserBoundarySnapshot,
-                prefillStepSize: parameters.prefill.stepSize ?? 512,
-                tokenNDim: tokenNDim,
                 generatedTokens: generatedTokens,
-                toolCallFormat: session.configuration.toolCallFormat ?? .json,
-                generationPrompt: keyed.generationPrompt,
                 restoreMode: restoreMode,
                 restoreCopy: restoreCopy,
                 restoreWaitSeconds: restoreWaitSeconds
@@ -2304,30 +2242,25 @@ nonisolated final class ServerCompletion {
     /// production reaches it only through `makeHTTPPrefixCacheGeneration`.
     static func makeUnkeyedGeneration(
         session: any ModelSession,
-        fullInput: LMInput,
-        fullTokens: [Int],
-        reason: CacheKeySpace.UnkeyedReason,
-        generationPrompt: GenerationPrompt,
+        request: UnkeyedRequest,
+        input fullInput: LMInput,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
-        partitionKey: CachePartitionKey,
         fullAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
         visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
-        ssdEnabled: Bool,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
         // swiftlint:enable function_body_length function_parameter_count
+        let facts = request.facts
         diagnosticsContext.logSkip(
             stage: "cacheKeySpace",
-            reason: reason.rawValue,
+            reason: request.reason.rawValue,
             level: .warning,
-            extraFields: [("promptTokens", "\(fullTokens.count)")]
+            extraFields: [("promptTokens", "\(facts.promptTokenCount)")]
         )
 
-        let fullTokenCount = fullInput.text.tokens.dim(-1)
-        var iteratorParams = parameters
-        iteratorParams.kvBits = nil
+        let fullTokenCount = facts.promptTokenCount
         // Shared begin-prefill step. The ADR-0014 guard runs here — ABOVE the
         // `WindowedVisionContinuation` cast, so a vision model that does NOT
         // conform (and takes the single-shot else-path below) is guarded too.
@@ -2362,7 +2295,7 @@ nonisolated final class ServerCompletion {
             // continuation runs under a scoped MLX error handler so a runtime
             // failure surfaces as a throw, not a process-fatal dispatch.
             try checkChunkedVisionBackstop(
-                windowSize: parameters.prefill.stepSize ?? 512,
+                windowSize: facts.prefillStepSize,
                 contextTokens: fullTokenCount,
                 profile: fullAttentionScratchProfile,
                 diagnosticsContext: diagnosticsContext
@@ -2371,7 +2304,7 @@ nonisolated final class ServerCompletion {
                 let built = try session.makePreparingDecodeIterator(
                     fullInput,
                     cache: cache,
-                    parameters: iteratorParams,
+                    parameters: facts.decodeParameters,
                     prepare: { input, cache, windowSize in
                         try anchoredPrepare(input, cache, nil, windowSize)
                     }
@@ -2383,7 +2316,7 @@ nonisolated final class ServerCompletion {
             iterator = try session.makePreparingDecodeIterator(
                 fullInput,
                 cache: cache,
-                parameters: iteratorParams,
+                parameters: facts.decodeParameters,
                 prepare: nil
             )
         }
@@ -2418,28 +2351,17 @@ nonisolated final class ServerCompletion {
             prefillMs: prefillMs,
             hydrationSeconds: 0,
             restoredFromSSD: false,
-            promptTokenCount: fullTokenCount,
             skippedPrefillTokens: 0,
             lookupReason: .missNoEntries,
             sharedPrefixLength: 0,
             maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
                 speculativeAllowance: 0),
-            fullTokens: fullTokens,
-            keySpace: .identity(keyPath: fullTokens),
-            unkeyedReason: reason,
-            render: nil,
-            seedsPositionAnchor: false,
+            keying: .unkeyed(request),
             snapshotAdmission: nil,
-            ssdEnabled: ssdEnabled,
-            partitionKey: partitionKey,
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
-            prefillStepSize: parameters.prefill.stepSize ?? 512,
-            tokenNDim: fullInput.text.tokens.ndim,
-            generatedTokens: generatedTokens,
-            toolCallFormat: session.configuration.toolCallFormat ?? .json,
-            generationPrompt: generationPrompt
+            generatedTokens: generatedTokens
         )
     }
 
@@ -2455,20 +2377,12 @@ nonisolated final class ServerCompletion {
     // swiftlint:disable:next function_parameter_count
     static func makeMTPGeneration(
         session: any ModelSession,
-        fullInput: LMInput,
-        fullTokens: [Int],
-        fullTokenCount: Int,
-        tokenNDim: Int,
-        keySpace: CacheKeySpace,
-        render: ConversationRender,
-        generationPrompt: GenerationPrompt,
+        request: KeyedRequest,
+        input fullInput: LMInput,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
-        partitionKey: CachePartitionKey,
         lookupReason: PrefixCacheManager.LookupReason,
         lookupMs: TimeInterval,
-        ssdEnabled: Bool,
-        seedsPositionAnchor: Bool,
         visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?
@@ -2476,20 +2390,12 @@ nonisolated final class ServerCompletion {
         try await makeSpeculativeGeneration(
             arm: .mtp,
             session: session,
-            fullInput: fullInput,
-            fullTokens: fullTokens,
-            fullTokenCount: fullTokenCount,
-            tokenNDim: tokenNDim,
-            keySpace: keySpace,
-            render: render,
-            generationPrompt: generationPrompt,
+            request: request,
+            input: fullInput,
             parameters: parameters,
             toolSpecs: toolSpecs,
-            partitionKey: partitionKey,
             lookupReason: lookupReason,
             lookupMs: lookupMs,
-            ssdEnabled: ssdEnabled,
-            seedsPositionAnchor: seedsPositionAnchor,
             visionAttentionScratchProfile: visionAttentionScratchProfile,
             diagnosticsContext: diagnosticsContext,
             progressHandler: progressHandler
@@ -2511,33 +2417,24 @@ nonisolated final class ServerCompletion {
     private static func makeSpeculativeGeneration<I: TokenIteratorProtocol & SendableMetatype>(
         arm: SpeculativeArm,
         session: any ModelSession,
-        fullInput: LMInput,
-        fullTokens: [Int],
-        fullTokenCount: Int,
-        tokenNDim: Int,
-        keySpace: CacheKeySpace,
-        render: ConversationRender,
-        generationPrompt: GenerationPrompt,
+        request: KeyedRequest,
+        input fullInput: LMInput,
         parameters: GenerateParameters,
         toolSpecs: [ToolSpec]?,
-        partitionKey: CachePartitionKey,
         lookupReason: PrefixCacheManager.LookupReason,
         lookupMs: TimeInterval,
-        ssdEnabled: Bool,
-        seedsPositionAnchor: Bool,
         visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?,
         makeIterator: (any ModelSession, LMInput, [any KVCache], GenerateParameters) throws -> I
     ) async throws -> HTTPPrefixCacheGeneration {
+        let fullTokenCount = request.facts.promptTokenCount
         diagnosticsContext.logSkip(
             stage: "prefill",
             reason: "\(arm.rawValue)-speculative-arm",
             extraFields: [("promptTokens", "\(fullTokenCount)")]
         )
 
-        var iteratorParams = parameters
-        iteratorParams.kvBits = nil
         let begin = try await beginPrefill(
             session: session,
             restoredCache: nil,
@@ -2557,7 +2454,7 @@ nonisolated final class ServerCompletion {
                 session,
                 fullInput,
                 cache,
-                iteratorParams
+                request.facts.decodeParameters
             )
             try error.check()
             return built
@@ -2596,28 +2493,17 @@ nonisolated final class ServerCompletion {
             prefillMs: prefillMs,
             hydrationSeconds: 0,
             restoredFromSSD: false,
-            promptTokenCount: fullTokenCount,
             skippedPrefillTokens: 0,
             lookupReason: lookupReason,
             sharedPrefixLength: 0,
             maximumAdvance: CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
                 speculativeAllowance: MTPDrafterSupport.blockSize),
-            fullTokens: fullTokens,
-            keySpace: keySpace,
-            unkeyedReason: nil,
-            render: render,
-            seedsPositionAnchor: seedsPositionAnchor,
+            keying: .keyed(request),
             snapshotAdmission: nil,
-            ssdEnabled: ssdEnabled,
-            partitionKey: partitionKey,
             transientLastMessageBoundarySnapshot: nil,
             transientLastUserBoundarySnapshot: nil,
-            prefillStepSize: parameters.prefill.stepSize ?? 512,
-            tokenNDim: tokenNDim,
-            generatedTokens: generatedTokens,
-            toolCallFormat: session.configuration.toolCallFormat ?? .json,
-            generationPrompt: generationPrompt
+            generatedTokens: generatedTokens
         )
     }
 

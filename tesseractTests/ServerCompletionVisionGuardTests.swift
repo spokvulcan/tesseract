@@ -99,7 +99,7 @@ import UniformTypeIdentifiers
     /// test drives), with a rejecting profile: same typed error, same
     /// no-forward ordering.
     @Test func unkeyedArmRejectsOversizedVisionTowerBeforeAnyForward() async throws {
-        let tokenizer = FakeChatMLTokenizer()
+        let tokenizer = ToySequencingTokenizer()
         let forwards = ForwardLog()
         let prompt = try tokenizer.applyChatTemplate(
             messages: [["role": "user", "content": "Hi"]], tools: nil, additionalContext: nil
@@ -111,9 +111,8 @@ import UniformTypeIdentifiers
 
         await #expect(throws: AgentEngineError.self) {
             try await provider.withSession { session in
-                let prepared = try await session.prepare(
-                    UserInput(messages: [["role": "user", "content": "Hi"]])
-                )
+                let (request, prepared) = try await ToyRequestKeying.unkeyedRequest(
+                    in: session, userText: "Hi")
                 let fullInput = LMInput(
                     text: prepared.text,
                     image: LMInput.ProcessedImage(
@@ -123,23 +122,14 @@ import UniformTypeIdentifiers
                 )
                 _ = try await ServerCompletion.makeUnkeyedGeneration(
                     session: session,
-                    fullInput: fullInput,
-                    fullTokens: LLMActor.extractTokenSequence(fullInput.text.tokens),
-                    reason: .placeholderRunCountMismatch,
-                    generationPrompt: ConversationRender.checkedGenerationPrompt(
-                        tokenizer: session.tokenizer, renderContext: .canonical,
-                        modelFingerprint: nil,
-                        fed: LLMActor.extractTokenSequence(fullInput.text.tokens), diagnostics: nil),
+                    request: request,
+                    input: fullInput,
                     parameters: GenerateParameters(temperature: 0),
                     toolSpecs: nil,
-                    partitionKey: CachePartitionKey(
-                        modelID: "toy/model", kvBits: nil, kvGroupSize: 64
-                    ),
                     fullAttentionScratchProfile: nil,
                     visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile(
                         attentionHeads: 16, bytesPerElement: 2
                     ),
-                    ssdEnabled: false,
                     diagnosticsContext: PrefixCacheDiagnostics.Context(
                         requestID: UUID(), modelID: "toy/model", kvBits: nil, kvGroupSize: 64
                     ),

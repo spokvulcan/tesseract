@@ -81,24 +81,24 @@ import Testing
                 modelFingerprint: modelFingerprint,
                 imageKeying: imageKeying
             ) {
-            case .keyed(let keyed):
+            case .keyed(let keyed, _):
                 return OutcomeFacts(
                     isKeyed: true,
                     isIdentity: keyed.keySpace.isIdentity,
                     seedsPositionAnchor: keyed.seedsPositionAnchor,
                     unkeyedReason: nil,
-                    fullTokens: keyed.fullTokens,
-                    tokenNDim: keyed.tokenNDim,
+                    fullTokens: keyed.facts.promptTokens,
+                    tokenNDim: keyed.facts.tokenNDim,
                     renderIneligibility: keyed.render.ineligibility?.rawValue
                 )
-            case .unkeyed(let input, let fullTokens, _, let reason, _):
+            case .unkeyed(let unkeyed, _):
                 return OutcomeFacts(
                     isKeyed: false,
                     isIdentity: false,
                     seedsPositionAnchor: false,
-                    unkeyedReason: reason.rawValue,
-                    fullTokens: fullTokens,
-                    tokenNDim: input.text.tokens.ndim,
+                    unkeyedReason: unkeyed.reason.rawValue,
+                    fullTokens: unkeyed.facts.promptTokens,
+                    tokenNDim: unkeyed.facts.tokenNDim,
                     renderIneligibility: nil
                 )
             }

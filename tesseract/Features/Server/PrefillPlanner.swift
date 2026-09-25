@@ -142,6 +142,19 @@ nonisolated enum PrefillPlanner {
     /// inexactness falling back to the full `applyChatTemplate`.
     static func detectBoundaries(
         conversation: HTTPPrefixCacheConversation,
+        request: KeyedRequest
+    ) throws -> PrefillBoundaries {
+        try detectBoundaries(
+            conversation: conversation, generationPrompt: request.facts.generationPrompt,
+            keySpace: request.keySpace, render: request.render)
+    }
+
+    /// `detectBoundaries(conversation:request:)` from its ingredients: the
+    /// internal seam the tokenizer-only planner tests and the CPU bench
+    /// drive, with a Generation Prompt measured and checked against
+    /// `keySpace`'s key path exactly as Request Keying checks it.
+    static func detectBoundaries(
+        conversation: HTTPPrefixCacheConversation,
         generationPrompt: GenerationPrompt,
         keySpace: CacheKeySpace,
         render: ConversationRender

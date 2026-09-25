@@ -214,16 +214,11 @@ struct ServerCompletionDrainTests {
         gate.arm()
 
         let stored = turn1.appendingAssistant(.assistant(content: "OK"))
+        let request = try await ToyRequestKeying.keyedRequest(
+            provider: fixture.provider, conversation: turn1, prefillStepSize: 1024)
         let seed = SpeculativeCanonicalPrefill.makeSeed(
             storedConversation: stored,
-            render: ConversationRender.uncached(tokenizer: tokenizer),
-            keySpace: .identity(keyPath: []),
-            partitionKey: CachePartitionKey(
-                modelID: "toy/model", kvBits: nil, kvGroupSize: 64
-            ),
-            prefillStepSize: 1024,
-            ssdEnabled: false,
-            seedsPositionAnchor: false,
+            request: request,
             canonicalLeafOffset: 0,
             diagnostics: PrefixCacheDiagnostics.Context(
                 requestID: UUID(), modelID: "toy/model", kvBits: nil, kvGroupSize: 64
