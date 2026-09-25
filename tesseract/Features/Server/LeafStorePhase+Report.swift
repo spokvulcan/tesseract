@@ -105,6 +105,10 @@ nonisolated extension LeafStorePhase {
         var restoreCopyWaitSeconds: TimeInterval = 0
         var copyReason: CopyReason?
         var mode = "unkeyed"
+        /// The request's **Generation Prompt** in trace spelling (`opens`,
+        /// `closed`, `none`, or `unknown(<reason>)`, ADR-0070): what the
+        /// stream parser started from and the mode was chosen by.
+        var generationPrompt: String?
         var path: Path = .skipped
         var skipReason: String?
         /// The leaf's source, once one was stored: the live final cache
@@ -149,6 +153,7 @@ nonisolated extension LeafStorePhase {
         var fields: [(String, String)] {
             let ms = PrefixCacheDiagnostics.milliseconds
             var fields = [("mode", mode), ("path", path.rawValue)]
+            if let generationPrompt { fields.append(("generationPrompt", generationPrompt)) }
             if let source { fields.append(("source", source.rawValue)) }
             if let copyReason = restoreCopyReason ?? copyReason {
                 fields.append(("copyReason", copyReason.rawValue))

@@ -23,6 +23,11 @@ private final class LockedRecorder: Sendable {
     func snapshot() -> [AgentGeneration] { store.withLock { $0 } }
 }
 
+/// The prompts a handle reports, measured from toy templates (ADR-0070): a
+/// thinking request's opens a think block, a plain template's has none.
+private let opensThinkBlock = measuredGenerationPrompt()
+private let noThinkBlock = measuredGenerationPrompt(FakeChatMLTokenizer(thinkingTemplate: false))
+
 /// A controllable raw handle whose stream stays open until cancelled, recording
 /// how many times `cancel` / `waitForCompletion` were invoked.
 private actor StreamProbe {
@@ -32,14 +37,17 @@ private actor StreamProbe {
 
     /// Build a handle; `initial` events are yielded up front and the stream is
     /// left open (it only finishes on `cancel`).
-    func makeHandle(initial: [RawGeneration] = []) -> GenerationStreamLoop.RawGenerationHandle {
+    func makeHandle(
+        initial: [RawGeneration] = [], generationPrompt: GenerationPrompt = noThinkBlock
+    ) -> GenerationStreamLoop.RawGenerationHandle {
         let (stream, continuation) = AsyncStream<RawGeneration>.makeStream()
         self.continuation = continuation
         for event in initial { continuation.yield(event) }
         return GenerationStreamLoop.RawGenerationHandle(
             stream: stream,
             cancel: { Task { await self.cancel() } },
-            waitForCompletion: { await self.wait() }
+            waitForCompletion: { await self.wait() },
+            generationPrompt: generationPrompt
         )
     }
 
@@ -71,6 +79,7 @@ private func waitUntil(
 /// `waitForCompletion` default to no-ops; pass a probe's closures to observe them.
 private func cannedHandle(
     _ events: [RawGeneration],
+    generationPrompt: GenerationPrompt = noThinkBlock,
     cancel: @escaping @Sendable () -> Void = {},
     waitForCompletion: @escaping @Sendable () async -> Void = {}
 ) -> GenerationStreamLoop.RawGenerationHandle {
@@ -80,7 +89,8 @@ private func cannedHandle(
     return GenerationStreamLoop.RawGenerationHandle(
         stream: stream,
         cancel: cancel,
-        waitForCompletion: waitForCompletion
+        waitForCompletion: waitForCompletion,
+        generationPrompt: generationPrompt
     )
 }
 
@@ -144,8 +154,7 @@ nonisolated struct GenerationStreamLoopTests {
                 [
                     .chunk(longReasoning), .chunk(repeated),
                     .chunk("</think>Final answer."), info(generated: 25_000),
-                ], cancel: { cancelled.withLock { $0 = true } }),
-            startsInsideThinkBlock: true)
+                ], generationPrompt: opensThinkBlock, cancel: { cancelled.withLock { $0 = true } }))
         let outcome = try await loop.run(sink: recorder.sink)
         #expect(recorder.events.compactMap(\.asThinking).joined() == longReasoning + repeated)
         #expect(recorder.events.compactMap(\.asText).joined() == "Final answer.")
@@ -154,12 +163,32 @@ nonisolated struct GenerationStreamLoopTests {
         #expect(!outcome.cancelled)
     }
 
+    /// The loop's parser starts where the handle's Generation Prompt left
+    /// the model (ADR-0070): inside a think block when the prompt opens one,
+    /// outside when it closed an empty one, where a stray `</think>` only
+    /// reclassifies what is still buffered.
+    @Test(arguments: [true, false])
+    func parserStartsWhereTheHandlesGenerationPromptLeftTheModel(opens: Bool) async throws {
+        let closed = measuredGenerationPrompt(
+            renderContext: TemplateRenderContext(
+                kwargs: [.enableThinking: false], preservesThinking: false))
+        let recorder = SinkRecorder()
+        let loop = GenerationStreamLoop(
+            initial: cannedHandle(
+                [.chunk("plan"), .chunk("</think>answer"), info()],
+                generationPrompt: opens ? opensThinkBlock : closed))
+        _ = try await loop.run(sink: recorder.sink)
+        let thinking = recorder.events.compactMap(\.asThinking).joined()
+        let text = recorder.events.compactMap(\.asText).joined()
+        #expect(thinking == (opens ? "plan" : ""))
+        #expect(text == (opens ? "answer" : "plananswer"))
+    }
+
     @Test
     func plainTextStreamForwardsTextCapturesInfoAndEndsNaturally() async throws {
         let recorder = SinkRecorder()
         let loop = GenerationStreamLoop(
-            initial: cannedHandle([.chunk("hello world"), info(generated: 7)]),
-            startsInsideThinkBlock: false
+            initial: cannedHandle([.chunk("hello world"), info(generated: 7)])
         )
 
         let outcome = try await loop.run(sink: recorder.sink)
@@ -187,8 +216,7 @@ nonisolated struct GenerationStreamLoopTests {
                 // tool calls, so both must be suppressed.
                 .chunk("<tool_call>\n{\"name\":\"appcall\",\"arguments\":{}}</tool_call>"),
                 info(),
-            ]),
-            startsInsideThinkBlock: false
+            ])
         )
 
         let outcome = try await loop.run(sink: recorder.sink)
@@ -216,8 +244,7 @@ nonisolated struct GenerationStreamLoopTests {
                 toolCallGen(name: "read"),
                 .toolCallBufferDelta(#"{"name": "wri"#),
                 info(),
-            ]),
-            startsInsideThinkBlock: false
+            ])
         )
 
         _ = try await loop.run(sink: recorder.sink)
@@ -237,8 +264,7 @@ nonisolated struct GenerationStreamLoopTests {
                 // Vendor buffered a `<tool_call>` body but the model hit EOS
                 // before the close tag — no `.toolCall`, no `.info`.
                 .toolCallBufferDelta("<tool_call>\n<read>\n<file_path>/x</file_path>")
-            ]),
-            startsInsideThinkBlock: false
+            ])
         )
 
         _ = try await loop.run(sink: recorder.sink)
@@ -262,8 +288,7 @@ nonisolated struct GenerationStreamLoopTests {
                 toolCallGen(name: "read", arguments: ["file_path": "/x"]),
                 // ...so EOS sees an empty dropped buffer — nothing malformed.
                 info(),
-            ]),
-            startsInsideThinkBlock: false
+            ])
         )
 
         _ = try await loop.run(sink: recorder.sink)
@@ -277,8 +302,8 @@ nonisolated struct GenerationStreamLoopTests {
         let probe = StreamProbe()
         let recorder = LockedRecorder()
         let loop = GenerationStreamLoop(
-            initial: await probe.makeHandle(initial: [.chunk("Still reasoning.\n")]),
-            startsInsideThinkBlock: true)
+            initial: await probe.makeHandle(
+                initial: [.chunk("Still reasoning.\n")], generationPrompt: opensThinkBlock))
         let task = Task { try await loop.run(sink: recorder.sink) }
         let received = await waitUntil {
             recorder.snapshot().contains { $0.asThinking != nil }
@@ -299,8 +324,7 @@ nonisolated struct GenerationStreamLoopTests {
         let probe = StreamProbe()
         let initial = await probe.makeHandle(initial: [.chunk("never consumed")])
         let loop = GenerationStreamLoop(
-            initial: initial,
-            startsInsideThinkBlock: false
+            initial: initial
         )
 
         // Cancel BEFORE `run` is awaited — the "available pre-`run`" contract.
@@ -321,8 +345,7 @@ nonisolated struct GenerationStreamLoopTests {
         let loop = GenerationStreamLoop(
             // Trailing `<` is held back by the parser as a possible partial tag;
             // it is only flushed by finalize(). No `.info` ⇒ silent close.
-            initial: cannedHandle([.chunk("answer<")]),
-            startsInsideThinkBlock: false
+            initial: cannedHandle([.chunk("answer<")])
         )
 
         let outcome = try await loop.run(sink: recorder.sink)
@@ -339,8 +362,7 @@ nonisolated struct GenerationStreamLoopTests {
     func diagnosticsPopulatedEvenWhenStreamEndsWithInfo() async throws {
         let recorder = SinkRecorder()
         let loop = GenerationStreamLoop(
-            initial: cannedHandle([.chunk("done"), info()]),
-            startsInsideThinkBlock: false
+            initial: cannedHandle([.chunk("done"), info()])
         )
 
         let outcome = try await loop.run(sink: recorder.sink)
@@ -360,11 +382,13 @@ nonisolated struct GenerationStreamLoopTests {
         continuation.finish()
         let start = HTTPServerRawGenerationStart(
             stream: stream,
+            generationPrompt: opensThinkBlock,
             cancel: { cancelCalls.withLock { $0 += 1 } },
             waitForCompletion: { waitCalls.withLock { $0 += 1 } }
         )
 
         let handle = GenerationStreamLoop.RawGenerationHandle(start)
+        #expect(handle.generationPrompt == opensThinkBlock)
 
         handle.cancel()
         await handle.waitForCompletion()
@@ -389,7 +413,8 @@ nonisolated struct GenerationStreamLoopTests {
 
         let handle = GenerationStreamLoop.RawGenerationHandle(
             stream: stream,
-            completion: completion
+            completion: completion,
+            generationPrompt: noThinkBlock
         )
 
         handle.cancel()

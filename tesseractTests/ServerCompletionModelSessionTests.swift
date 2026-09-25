@@ -221,7 +221,7 @@ import Testing
     private static let userText = "Hi"
     private static let completionText = "Hello!"
 
-    private static func promptTokens(_ tokenizer: FakeChatMLTokenizer) throws -> [Int] {
+    private static func promptTokens(_ tokenizer: ToySequencingTokenizer) throws -> [Int] {
         try tokenizer.applyChatTemplate(
             messages: [["role": "user", "content": userText]],
             tools: nil,
@@ -229,10 +229,12 @@ import Testing
         )
     }
 
+    /// The toy renders only a message's text parts, so the image-bearing
+    /// request Request Keying degrades to unkeyed prepares this same prompt.
     private static func makeProvider() throws -> (
         ToyModelSessionProvider, prompt: [Int], completion: [Int]
     ) {
-        let tokenizer = FakeChatMLTokenizer()
+        let tokenizer = ToySequencingTokenizer()
         let prompt = try promptTokens(tokenizer)
         let completion = Array(completionText.utf8).map(Int.init)
         let model = ToyLanguageModel(script: prompt + completion)
@@ -250,23 +252,16 @@ import Testing
         let progress = ProgressEventLog()
 
         let generation = try await provider.withSession { session in
-            let fullInput = try await session.prepare(
-                UserInput(messages: [["role": "user", "content": Self.userText]])
-            )
-            let fullTokens = LLMActor.extractTokenSequence(fullInput.text.tokens)
+            let (request, input) = try await ToyRequestKeying.unkeyedRequest(
+                in: session, userText: Self.userText)
             return try await ServerCompletion.makeUnkeyedGeneration(
                 session: session,
-                fullInput: fullInput,
-                fullTokens: fullTokens,
-                reason: .unrecognizedPlaceholderFamily,
+                request: request,
+                input: input,
                 parameters: GenerateParameters(temperature: 0),
                 toolSpecs: nil,
-                partitionKey: CachePartitionKey(
-                    modelID: "toy/model", kvBits: nil, kvGroupSize: 64
-                ),
                 fullAttentionScratchProfile: nil,
                 visionAttentionScratchProfile: nil,
-                ssdEnabled: false,
                 diagnosticsContext: Self.diagnostics(),
                 progressHandler: { event in progress.append(event) }
             )
@@ -274,7 +269,7 @@ import Testing
 
         // The toy processor's prepared tokens must match the script's prompt —
         // otherwise every downstream assertion is about the wrong sequence.
-        #expect(generation.fullTokens == prompt)
+        #expect(generation.facts.promptTokens == prompt)
 
         var text = ""
         var info: GenerateCompletionInfo?
@@ -307,7 +302,7 @@ import Testing
         #expect(finalOffset == prompt.count + completion.count + 1)
 
         // Unkeyed metadata: zero cache participation, by contract.
-        #expect(generation.unkeyedReason == .unrecognizedPlaceholderFamily)
+        #expect(generation.keying.unkeyedReason == .unrecognizedPlaceholderFamily)
         #expect(generation.skippedPrefillTokens == 0)
         #expect(generation.promptTokenCount == prompt.count)
         #expect(generation.snapshotAdmission == nil)
@@ -347,9 +342,8 @@ import Testing
         let (provider, prompt, completion) = try Self.makeProvider()
 
         let generation = try await provider.withSession { session in
-            let prepared = try await session.prepare(
-                UserInput(messages: [["role": "user", "content": Self.userText]])
-            )
+            let (request, prepared) = try await ToyRequestKeying.unkeyedRequest(
+                in: session, userText: Self.userText)
             // Attach a tiny processed image so the arm takes its image
             // branch; the toy model has no anchored vision `prepare`,
             // so the query returns nil and the single-shot path runs.
@@ -362,17 +356,12 @@ import Testing
             )
             return try await ServerCompletion.makeUnkeyedGeneration(
                 session: session,
-                fullInput: fullInput,
-                fullTokens: LLMActor.extractTokenSequence(fullInput.text.tokens),
-                reason: .placeholderRunCountMismatch,
+                request: request,
+                input: fullInput,
                 parameters: GenerateParameters(temperature: 0),
                 toolSpecs: nil,
-                partitionKey: CachePartitionKey(
-                    modelID: "toy/model", kvBits: nil, kvGroupSize: 64
-                ),
                 fullAttentionScratchProfile: nil,
                 visionAttentionScratchProfile: nil,
-                ssdEnabled: false,
                 diagnosticsContext: Self.diagnostics(),
                 progressHandler: nil
             )
@@ -385,8 +374,8 @@ import Testing
         await generation.completion.value
 
         #expect(text == Self.completionText)
-        #expect(generation.fullTokens == prompt)
-        #expect(generation.unkeyedReason == .placeholderRunCountMismatch)
+        #expect(generation.facts.promptTokens == prompt)
+        #expect(generation.keying.unkeyedReason == .unrecognizedPlaceholderFamily)
         #expect(generation.finalCache.first?.offset == prompt.count + completion.count + 1)
         #expect(
             provider.recorder.verbs

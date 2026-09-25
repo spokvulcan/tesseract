@@ -51,8 +51,12 @@ nonisolated final class ToolCallParser {
 
     private static let toolStartTag = "<tool_call>"
     private static let toolEndTag = "</tool_call>"
-    private static let thinkStartTag = "<think>"
-    private static let thinkEndTag = "</think>"
+    /// The think-block tags as this parser spells them. The **Generation
+    /// Prompt** measurement reads a think block by the same two, so the
+    /// parser and the measurement cannot disagree about what one is
+    /// (ADR-0070).
+    static let thinkStartTag = "<think>"
+    static let thinkEndTag = "</think>"
 
     private var buffer = ""
     private var insideThinkBlock = false
@@ -73,11 +77,17 @@ nonisolated final class ToolCallParser {
     /// `<tool_call>` block's body. Reset on every `</tool_call>` close.
     private var toolCallCurrentName: String?
 
-    /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
-    ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
-    ///   to the prompt). Initial chunks are emitted as `.thinking` events.
-    nonisolated init(startsInsideThinkBlock: Bool = false) {
-        if startsInsideThinkBlock {
+    /// A parser for a stream that starts outside any think block.
+    nonisolated init() {}
+
+    /// A parser for a generation whose prompt is `generationPrompt`: inside a
+    /// think block exactly when the prompt opens one (the Qwen3.5 and
+    /// Qwen3.8 templates append `<think>\n` by default), so the first chunks
+    /// are emitted as `.thinking` events. An unknown prompt starts outside,
+    /// where text streams as content until a stray `</think>` reclassifies
+    /// what is still buffered (ADR-0070).
+    nonisolated init(generationPrompt: GenerationPrompt) {
+        if generationPrompt.startsInsideThinkBlock {
             self.insideThinkBlock = true
             self.pendingThinkStart = true
         }

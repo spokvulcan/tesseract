@@ -17,17 +17,11 @@ import Foundation
 
 nonisolated struct ManagedGenerationDriver: Sendable {
 
-    /// Whether the rendered prompt ends inside an open `<think>` block —
-    /// exposed because the server's leaf-store mode selection keys on it.
-    let startsInsideThinkBlock: Bool
-
     private let logContext: String
 
-    init(
-        startsInsideThinkBlock: Bool,
-        logContext: String
-    ) {
-        self.startsInsideThinkBlock = startsInsideThinkBlock
+    /// The loop's think-block start comes from the initial handle's
+    /// **Generation Prompt**, never from the driver (ADR-0070).
+    init(logContext: String) {
         self.logContext = logContext
     }
 
@@ -44,11 +38,7 @@ nonisolated struct ManagedGenerationDriver: Sendable {
         cancelBridge: LateBoundCancel,
         sink: GenerationStreamLoop.Sink
     ) async throws -> GenerationStreamLoop.Outcome {
-        let loop = GenerationStreamLoop(
-            initial: initial,
-            startsInsideThinkBlock: startsInsideThinkBlock,
-            logContext: logContext
-        )
+        let loop = GenerationStreamLoop(initial: initial, logContext: logContext)
         cancelBridge.fill(loop.cancelCurrent)
 
         let outcome = try await loop.run(sink: sink)

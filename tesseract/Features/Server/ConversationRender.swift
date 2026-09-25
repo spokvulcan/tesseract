@@ -18,8 +18,9 @@
 //  once and reaches every server spelling. What stays outside, by design:
 //  the processor `prepare` a bypassing request falls back to (the vendor
 //  and in-tree PARO input processors, which ADR-0063 decision 5 narrows in
-//  #475), the planner's generation-prompt measure, and the agent hand-off
-//  suffix — the last two plain-text encodes past the last end-of-turn marker.
+//  #475), and the agent hand-off suffix, a plain-text encode past the last
+//  end-of-turn marker. The **Generation Prompt** the planner once spelled
+//  and encoded by hand is measured here (ADR-0070).
 //
 //  Emitted Path Resolve (tickets #475/#476): every render that produces
 //  bytes — the cache's resolves and the split render+encode the fallbacks
@@ -75,9 +76,8 @@ import MLXLMCommon
 nonisolated struct ConversationRender: @unchecked Sendable {
 
     /// The request's tokenizer — exposed because sibling tokenizer-affine
-    /// work (`StablePrefixDetector`, the generation-prompt suffix encode)
-    /// legitimately shares it; the *render choreography* is what callers must
-    /// not re-open.
+    /// work (`StablePrefixDetector`) legitimately shares it; the *render
+    /// choreography* is what callers must not re-open.
     let tokenizer: any Tokenizer
 
     /// The request's canonicalized tool specs — one value for every render
@@ -91,6 +91,13 @@ nonisolated struct ConversationRender: @unchecked Sendable {
     /// The fingerprint every cache resolve keys under, or `nil` to bypass
     /// the cache and render in full (see the header). Fixed at construction.
     private(set) var cacheFingerprint: String?
+
+    /// The loaded model's fingerprint as the render was built with it, kept
+    /// when `bypassing(_:)` drops the cache: the key the **Generation
+    /// Prompt** probe is remembered under. `nil` for an unknown fingerprint
+    /// and for uncached renders, whose probe is remembered per tokenizer
+    /// instance instead.
+    private let modelFingerprint: String?
 
     /// The stored (base) conversation's render-space token list, when the
     /// leaf store already computed the identical render this request (C31).
@@ -186,6 +193,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
             toolSpecs: toolSpecs,
             renderContext: renderContext,
             cacheFingerprint: eligibility.fingerprint,
+            modelFingerprint: modelFingerprint,
             baseRenderTokens: nil,
             cache: cache,
             emittedPathIndex: emittedPathIndex,
@@ -215,6 +223,7 @@ nonisolated struct ConversationRender: @unchecked Sendable {
             toolSpecs: toolSpecs,
             renderContext: renderContext,
             cacheFingerprint: nil,
+            modelFingerprint: nil,
             baseRenderTokens: nil,
             cache: .shared,
             emittedPathIndex: emittedPathIndex,
@@ -673,5 +682,281 @@ nonisolated struct ConversationRender: @unchecked Sendable {
             index: emittedPathIndex, fingerprint: fingerprint, tokenizer: tokenizer,
             telemetry: nil, spelling: .agentEdge, renderedBytes: resolution.renderedBytes,
             canonical: resolution.tokens)
+    }
+}
+
+// MARK: - The Generation Prompt (ADR-0070)
+
+nonisolated extension ConversationRender {
+
+    /// The template-level **Generation Prompt** under this render's context:
+    /// two one-message probe renders, remembered per model fingerprint and
+    /// render context in the **Render+Token Cache** (per tokenizer instance
+    /// when the fingerprint is unknown). Never rendered with tools. A
+    /// request reads only what `checkedGenerationPrompt(fed:diagnostics:)`
+    /// returns, the probe checked against what that request fed.
+    var generationPromptProbe: GenerationPrompt.Probe {
+        Self.generationPromptProbe(
+            tokenizer: tokenizer, renderContext: renderContext,
+            modelFingerprint: modelFingerprint, cache: cache)
+    }
+
+    /// The probe from raw ingredients, for the agent's Raw Generation Start
+    /// and the load-time measure, which have no request render. The same
+    /// memo as the instance property: one pair of renders per model and
+    /// render context, whoever asks first.
+    static func generationPromptProbe(
+        tokenizer: any Tokenizer,
+        renderContext: TemplateRenderContext,
+        modelFingerprint: String?,
+        cache: RenderTokenCache = .shared
+    ) -> GenerationPrompt.Probe {
+        cache.generationPromptProbes.probe(
+            modelFingerprint: modelFingerprint, tokenizer: tokenizer,
+            contextDigest: renderContext.digest
+        ) {
+            measureGenerationPrompt(tokenizer: tokenizer, renderContext: renderContext)
+        }
+    }
+
+    /// The request's **Generation Prompt**: this render's probe checked
+    /// against the tokens the request fed (its **Cache Key Path**, or the
+    /// prompt tokens of an Unkeyed Completion). An unknown result logs its
+    /// reason on the request's diagnostics every time and a warning once
+    /// per model and render context.
+    func checkedGenerationPrompt(
+        fed fedTokens: [Int], diagnostics: PrefixCacheDiagnostics.Context?
+    ) -> GenerationPrompt {
+        Self.checkedGenerationPrompt(
+            tokenizer: tokenizer, renderContext: renderContext,
+            modelFingerprint: modelFingerprint, fed: fedTokens, cache: cache,
+            diagnostics: diagnostics)
+    }
+
+    /// `checkedGenerationPrompt(fed:diagnostics:)` from raw ingredients.
+    static func checkedGenerationPrompt(
+        tokenizer: any Tokenizer,
+        renderContext: TemplateRenderContext,
+        modelFingerprint: String?,
+        fed fedTokens: [Int],
+        cache: RenderTokenCache = .shared,
+        diagnostics: PrefixCacheDiagnostics.Context?
+    ) -> GenerationPrompt {
+        let prompt = generationPromptProbe(
+            tokenizer: tokenizer, renderContext: renderContext,
+            modelFingerprint: modelFingerprint, cache: cache
+        ).checked(against: fedTokens)
+        guard let reason = prompt.unknownReason else { return prompt }
+        let digest = String(renderContext.digest.prefix(12))
+        diagnostics?.logSkip(
+            stage: "generationPrompt", reason: reason.rawValue,
+            extraFields: [("contextDigest", digest)])
+        if cache.generationPromptProbes.firstUnknown(
+            modelFingerprint: modelFingerprint, tokenizer: tokenizer,
+            contextDigest: renderContext.digest, reason: reason)
+        {
+            Log.server.warning(
+                "generation prompt unknown (\(reason.rawValue)) under render context \(digest): "
+                    + "the stream parser starts outside a think block, a stop turn takes the "
+                    + "canonical user leaf, MTP stays off and no last-message boundary is placed")
+        }
+        return prompt
+    }
+
+    /// The Generation Prompt a one-message request gets under the canonical
+    /// render context: the load-time measure the chat view's thinking
+    /// spinner reads before any turn has tokenized (display only). Warms the
+    /// probe memo for the canonical context as it goes.
+    static func canonicalGenerationPrompt(
+        tokenizer: any Tokenizer, modelFingerprint: String?, cache: RenderTokenCache = .shared
+    ) -> GenerationPrompt {
+        let request: [[String: any Sendable]] = [
+            ["role": "user", "content": GenerationPrompt.probeContent]
+        ]
+        let fed =
+            (try? applyTemplate(
+                tokenizer: tokenizer, messages: request, tools: nil, additionalContext: nil))?
+            .tokens ?? []
+        return generationPromptProbe(
+            tokenizer: tokenizer, renderContext: .canonical, modelFingerprint: modelFingerprint,
+            cache: cache
+        ).checked(against: fed)
+    }
+
+    /// Stage one of the measurement: one user message rendered with and
+    /// without the generation prompt under `renderContext`, through the
+    /// module's one template application. The prompt measures only when the
+    /// render without it is a byte prefix of the render with it and encoding
+    /// the whole equals encoding the prefix followed by the suffix, so no
+    /// token merges across the append point (the hard-boundary check the
+    /// end-of-turn marker makes). A tokenizer that cannot render text is
+    /// checked as a token prefix, and the text is the suffix's decode. An
+    /// empty difference is measured: the template appends nothing.
+    private static func measureGenerationPrompt(
+        tokenizer: any Tokenizer, renderContext: TemplateRenderContext
+    ) -> GenerationPrompt.Probe {
+        let probe: [[String: any Sendable]] = [
+            ["role": "user", "content": GenerationPrompt.probeContent]
+        ]
+        let withPrompt: Rendered
+        let withoutPrompt: Rendered
+        do {
+            withPrompt = try applyTemplate(
+                tokenizer: tokenizer, messages: probe, tools: nil,
+                additionalContext: renderContext.additionalContext())
+            withoutPrompt = try applyTemplate(
+                tokenizer: tokenizer, messages: probe, tools: nil,
+                additionalContext: renderContext.additionalContext(
+                    merging: ["add_generation_prompt": false]))
+        } catch {
+            return GenerationPrompt.Probe(failed: .renderFailed)
+        }
+        guard let withBytes = withPrompt.bytes, let withoutBytes = withoutPrompt.bytes else {
+            guard withPrompt.tokens.starts(with: withoutPrompt.tokens) else {
+                return GenerationPrompt.Probe(failed: .notAnAppend)
+            }
+            let tokens = Array(withPrompt.tokens[withoutPrompt.tokens.count...])
+            return GenerationPrompt.Probe(
+                tokens: tokens, text: tokenizer.decode(tokenIds: tokens, skipSpecialTokens: false))
+        }
+        guard withBytes.starts(with: withoutBytes),
+            let text = String(bytes: withBytes[withoutBytes.count...], encoding: .utf8)
+        else { return GenerationPrompt.Probe(failed: .notAnAppend) }
+        let tokens = tokenizer.encode(text: text, addSpecialTokens: false)
+        guard withoutPrompt.tokens + tokens == withPrompt.tokens else {
+            return GenerationPrompt.Probe(failed: .unstableSplit)
+        }
+        return GenerationPrompt.Probe(tokens: tokens, text: text)
+    }
+}
+
+/// The **Generation Prompt** (CONTEXT.md, ADR-0070): what the chat template
+/// appends after the last message to open the assistant turn under one
+/// render context. Measured from the template in two stages, never spelled
+/// by hand: the probe (`ConversationRender.generationPromptProbe`), then
+/// the check against what one request fed (`Probe.checked(against:)`).
+/// Whether generation starts inside a think block, whether the turn
+/// carries one a think-stripping template will drop from history, and
+/// where the last-message boundary sits are all read from the checked
+/// value. Constructible only by that derivation, so no caller can pair a
+/// template with a flag it does not produce.
+nonisolated struct GenerationPrompt: Sendable, Equatable {
+
+    /// The think block the prompt leaves generation in.
+    enum ThinkBlock: Sendable, Equatable {
+        /// The prompt's last think-open tag has no close tag after it:
+        /// generation starts inside a think block.
+        case opens
+        /// The prompt carries a think block it also closes, as
+        /// `enable_thinking: false` does on the Qwen3.5 and Qwen3.8
+        /// templates.
+        case closed
+        /// A measured prompt with no think tag, an empty one included.
+        case none
+        /// The prompt could not be measured, or this request did not feed
+        /// what was measured. Every consumer has its own answer for it.
+        case unknown(Unknown)
+    }
+
+    /// Why a request's Generation Prompt is unknown.
+    enum Unknown: String, Sendable, Equatable, Hashable {
+        /// A probe render threw.
+        case renderFailed
+        /// The render without the prompt is not a prefix of the render
+        /// with it: adding the prompt rewrote what came before.
+        case notAnAppend
+        /// A token merges across the append point, so the prompt's tokens
+        /// depend on what precedes them.
+        case unstableSplit
+        /// The request's fed tokens do not end with the probe's: its
+        /// template's prompt depends on the conversation or the tools.
+        case notFed
+    }
+
+    /// The prompt's tokens: `nil` when unknown, empty when the template
+    /// appends nothing.
+    let tokens: [Int]?
+    let thinkBlock: ThinkBlock
+
+    /// Whether the stream parser starts inside a think block.
+    var startsInsideThinkBlock: Bool { thinkBlock == .opens }
+
+    /// Why the prompt is unknown, or `nil` when it was measured.
+    var unknownReason: Unknown? {
+        guard case .unknown(let reason) = thinkBlock else { return nil }
+        return reason
+    }
+
+    /// The trace spelling: `opens`, `closed`, `none`, or `unknown(<reason>)`.
+    var traceValue: String {
+        switch thinkBlock {
+        case .opens: "opens"
+        case .closed: "closed"
+        case .none: "none"
+        case .unknown(let reason): "unknown(\(reason.rawValue))"
+        }
+    }
+
+    fileprivate init(tokens: [Int]?, thinkBlock: ThinkBlock) {
+        self.tokens = tokens
+        self.thinkBlock = thinkBlock
+    }
+
+    /// The probe conversation's one user message: no think tag, so every
+    /// tag in the difference is the template's own.
+    fileprivate static let probeContent = "generation-prompt probe"
+
+    /// Stage one: the template-level measurement, remembered per model and
+    /// render context. Not a fact a consumer may read; `checked(against:)`
+    /// turns it into one for a request.
+    struct Probe: Sendable, Equatable {
+        fileprivate enum Measurement: Sendable, Equatable {
+            case measured(tokens: [Int], thinkBlock: ThinkBlock)
+            case failed(Unknown)
+        }
+
+        fileprivate let measurement: Measurement
+
+        fileprivate init(failed reason: Unknown) {
+            measurement = .failed(reason)
+        }
+
+        fileprivate init(tokens: [Int], text: String) {
+            measurement = .measured(tokens: tokens, thinkBlock: Self.thinkBlock(in: text))
+        }
+
+        /// Stage two: what one request may read. The probe's tokens when
+        /// `fedTokens` ends with them, `.unknown(.notFed)` when it does not,
+        /// the probe's own failure when it failed.
+        func checked(against fedTokens: [Int]) -> GenerationPrompt {
+            switch measurement {
+            case .failed(let reason):
+                return GenerationPrompt(tokens: nil, thinkBlock: .unknown(reason))
+            case .measured(let tokens, let thinkBlock):
+                guard fedTokens.count >= tokens.count,
+                    fedTokens.suffix(tokens.count).elementsEqual(tokens)
+                else { return GenerationPrompt(tokens: nil, thinkBlock: .unknown(.notFed)) }
+                return GenerationPrompt(tokens: tokens, thinkBlock: thinkBlock)
+            }
+        }
+
+        /// The measured prompt's token count, `nil` when the probe failed.
+        /// Only for the replay harness's prefill arithmetic about a request
+        /// it never renders with a prompt; a consumer reads a checked value.
+        var measuredTokenCount: Int? {
+            guard case .measured(let tokens, _) = measurement else { return nil }
+            return tokens.count
+        }
+
+        /// The think block in a measured prompt's text, by the stream
+        /// parser's own tags.
+        private static func thinkBlock(in text: String) -> ThinkBlock {
+            let open = ToolCallParser.thinkStartTag
+            let close = ToolCallParser.thinkEndTag
+            guard let lastOpen = text.range(of: open, options: .backwards) else {
+                return text.contains(close) ? .closed : .none
+            }
+            return text[lastOpen.upperBound...].contains(close) ? .closed : .opens
+        }
     }
 }

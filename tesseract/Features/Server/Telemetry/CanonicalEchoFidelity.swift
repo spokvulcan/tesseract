@@ -96,49 +96,14 @@ nonisolated enum CanonicalEchoFidelity {
         let index: EmittedPathIndex
         let fingerprint: String
         let toolCallFormat: ToolCallFormat
-        /// Whether the template's generation prompt opens a `<think>` block
-        /// (the model identity's `promptStartsThinking`).
-        let promptStartsThinking: Bool
-        /// Generation-prompt token counts per render context, measured once.
-        let generationPromptProbe = GenerationPromptProbe()
 
         init(
-            fingerprint: String, toolCallFormat: ToolCallFormat, promptStartsThinking: Bool,
+            fingerprint: String, toolCallFormat: ToolCallFormat,
             byteBudget: Int = EmittedPathIndex.defaultByteBudget
         ) {
             self.index = EmittedPathIndex(byteBudget: byteBudget)
             self.fingerprint = fingerprint
             self.toolCallFormat = toolCallFormat
-            self.promptStartsThinking = promptStartsThinking
-        }
-    }
-
-    /// The tokens a render context's generation prompt adds after a
-    /// conversation's last end-of-turn marker: the difference between the
-    /// probe conversation rendered with and without the prompt. Special
-    /// tokens bound the prompt on both sides, so the count is independent
-    /// of the conversation it follows. Memoized per context digest — one
-    /// pair of tiny renders per distinct context over a walk.
-    nonisolated final class GenerationPromptProbe: @unchecked Sendable {
-        private let lock = NSLock()
-        private var counts: [String: Int] = [:]
-
-        func tokenCount(tokenizer: any Tokenizer, renderContext: TemplateRenderContext) -> Int? {
-            let key = renderContext.digest
-            if let known = lock.withLock({ counts[key] }) { return known }
-            let probe: [[String: any Sendable]] = [["role": "user", "content": "probe"]]
-            guard
-                let withPrompt = try? ConversationRender.stablePrefixProbeRender(
-                    tokenizer: tokenizer, messages: probe, tools: nil,
-                    additionalContext: renderContext.additionalContext()),
-                let withoutPrompt = try? ConversationRender.stablePrefixProbeRender(
-                    tokenizer: tokenizer, messages: probe, tools: nil,
-                    additionalContext: renderContext.additionalContext(
-                        merging: ["add_generation_prompt": false]))
-            else { return nil }
-            let count = withPrompt.count - withoutPrompt.count
-            lock.withLock { counts[key] = count }
-            return count
         }
     }
 
@@ -285,18 +250,16 @@ nonisolated enum CanonicalEchoFidelity {
                 probeRender = probeRender.carryingBaseRender(storedTokens)
             }
         }
+        let nextRenderer = ConversationRender.uncached(
+            tokenizer: tokenizer, toolSpecs: nextToolSpecs,
+            renderContext: nextRenderContext,
+            emittedPathIndex: learning?.index,
+            emittedPathFingerprint: learning?.fingerprint,
+            emittedPathTelemetry: telemetry
+        )
         let nextRender: [Int]
         do {
-            nextRender =
-                try ConversationRender
-                .uncached(
-                    tokenizer: tokenizer, toolSpecs: nextToolSpecs,
-                    renderContext: nextRenderContext,
-                    emittedPathIndex: learning?.index,
-                    emittedPathFingerprint: learning?.fingerprint,
-                    emittedPathTelemetry: telemetry
-                )
-                .continuationRender(messages: next.promptMessages)
+            nextRender = try nextRenderer.continuationRender(messages: next.promptMessages)
         } catch {
             let verdict = Verdict.noPath(reason: "next-render-failed: \(error)")
             return BoundaryReport(boundary: boundary, leaf: verdict, speculation: nil)
@@ -305,10 +268,10 @@ nonisolated enum CanonicalEchoFidelity {
             let summary = telemetry?.summary ?? .init()
             // The request edge renders the same bytes plus the generation
             // prompt, which special tokens bound on both sides: its token
-            // count is the continuation render's plus the prompt's.
-            let generationPrompt = learning?.generationPromptProbe.tokenCount(
-                tokenizer: tokenizer, renderContext: nextRenderContext)
-            let nextPrefilled = generationPrompt.map {
+            // count is the continuation render's plus the prompt's. The walk
+            // never renders request N+1 with its prompt, so it reads the
+            // probe's own count rather than a checked prompt.
+            let nextPrefilled = nextRenderer.generationPromptProbe.measuredTokenCount.map {
                 nextRender.count + $0 - (summary.lastIndexedPrefix ?? 0)
             }
             return EmittedPathVerdict(
@@ -431,13 +394,16 @@ nonisolated enum CanonicalEchoFidelity {
         tokenizer: any Tokenizer,
         renderContext: TemplateRenderContext
     ) -> SimulatedRegistration {
-        // The request's own thinking resolution, as the live stream driver
-        // and Leaf Store run with it: an emitted `enable_thinking: false`
-        // closes the think block, so the turn is not a canonical-user leaf.
-        let startsInsideThinkBlock = renderContext.startsInsideThinkBlock(
-            promptStartsThinking: learning.promptStartsThinking)
+        // Request N's prompt as the live request edge fed it (generation
+        // prompt included), and its Generation Prompt checked against it:
+        // the stream parser's start and the leaf-store mode read that, as
+        // they do live. A prompt that fails to render checks as unknown.
+        let prompt = try? ConversationRender.stablePrefixProbeRender(
+            tokenizer: tokenizer, messages: previous.promptMessages, tools: probeToolSpecs,
+            additionalContext: renderContext.additionalContext())
+        let generationPrompt = render.checkedGenerationPrompt(fed: prompt ?? [], diagnostics: nil)
         let mode = LeafStorePhase.selectHTTPLeafStoreMode(
-            startsInsideThinkBlock: startsInsideThinkBlock,
+            generationPrompt: generationPrompt, renderContext: renderContext,
             emittedToolCalls: !echo.toolCalls.isEmpty)
         let index: EmittedPathIndex
         let fingerprint: String
@@ -450,6 +416,11 @@ nonisolated enum CanonicalEchoFidelity {
             fingerprint = scoped
             marker = derived
         }
+        guard let prompt else {
+            return SimulatedRegistration(
+                registration: EmittedPathRegistration.SkipReason.renderUnavailable.rawValue,
+                mode: mode)
+        }
         do {
             let rendered = try render.storedRender(messages: stored.promptMessages)
             guard let markerIndex = rendered.tokens.lastIndex(of: marker.tokenID) else {
@@ -457,9 +428,6 @@ nonisolated enum CanonicalEchoFidelity {
                     registration: EmittedPathRegistration.SkipReason.noEndOfTurnMarker.rawValue,
                     storedTokens: rendered.tokens, mode: mode)
             }
-            let prompt = try ConversationRender.stablePrefixProbeRender(
-                tokenizer: tokenizer, messages: previous.promptMessages, tools: probeToolSpecs,
-                additionalContext: renderContext.additionalContext())
             let path = Array(rendered.tokens[...markerIndex])
             guard path.starts(with: prompt) else {
                 return SimulatedRegistration(
@@ -499,7 +467,7 @@ nonisolated enum CanonicalEchoFidelity {
                     storedRenderBytes: bytes, storedMessage: echo, promptPath: prompt,
                     generatedTokens: generatedTokens, stoppedOn: marker.tokenID,
                     toolCallFormat: learning.toolCallFormat, tools: probeToolSpecs,
-                    startsInsideThinkBlock: startsInsideThinkBlock
+                    generationPrompt: generationPrompt
                 ))
             let registered = monotonicSeconds()
             simulated.registerSeconds = registered - registerStart

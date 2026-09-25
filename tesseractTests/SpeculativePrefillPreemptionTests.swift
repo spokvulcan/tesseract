@@ -91,10 +91,16 @@ import Testing
         } else if backingState == "departed" {
             _ = tree.dropBody(node: backer)
         }
+        // The request whose answer `stored` records, keyed as Server
+        // Completion keys it: its key path begins with the view's `prefix`.
+        let request = try await ToyRequestKeying.keyedRequest(
+            provider: provider,
+            conversation: HTTPPrefixCacheConversation(
+                systemPrompt: nil, messages: Array(stored.messages.dropLast())),
+            modelID: key.modelID, prefillStepSize: 256)
+        #expect(Array(request.keySpace.keyPath.prefix(prefix.count)) == prefix)
         let seed = SpeculativeCanonicalPrefill.makeSeed(
-            storedConversation: stored, render: render, keySpace: .identity(keyPath: prefix),
-            partitionKey: key, prefillStepSize: 256, ssdEnabled: false,
-            seedsPositionAnchor: false, canonicalLeafOffset: 0,
+            storedConversation: stored, request: request, canonicalLeafOffset: 0,
             transientBoundary: backingState == "planned" ? nil : view,
             ramOnlySpine: ramOnlySpine, diagnostics: diagnostics)
         await SpeculativeCanonicalPrefill.run(
@@ -197,14 +203,15 @@ import Testing
         )
         _ = manager.admit(boundaryAdmission)
 
+        let request = try await ToyRequestKeying.keyedRequest(
+            provider: provider,
+            conversation: HTTPPrefixCacheConversation(
+                systemPrompt: nil, messages: Array(stored.messages.dropLast())),
+            prefillStepSize: 1024)
+        #expect(request.facts.partitionKey == partitionKey)
         let seed = SpeculativeCanonicalPrefill.makeSeed(
             storedConversation: stored,
-            render: ConversationRender.uncached(tokenizer: tokenizer),
-            keySpace: .identity(keyPath: []),
-            partitionKey: partitionKey,
-            prefillStepSize: 1024,
-            ssdEnabled: false,
-            seedsPositionAnchor: false,
+            request: request,
             canonicalLeafOffset: 0,
             diagnostics: diagnostics
         )

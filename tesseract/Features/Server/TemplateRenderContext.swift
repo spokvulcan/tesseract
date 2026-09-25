@@ -3,12 +3,12 @@ import MLXLMCommon
 
 nonisolated enum TemplateRenderFlag: String, CaseIterable, Sendable, Hashable, Codable {
     case preserveThinking = "preserve_thinking"
-    /// Whether the model thinks at all this turn. Every current thinking
-    /// template defaults it **on** (the `enable_thinking is defined and … is
-    /// false` shape only fires on an explicit `false`), so the kwarg is
-    /// emitted only when a request turns thinking off — which also swaps the
-    /// generation prompt to a closed, empty think block, see
-    /// ``TemplateRenderContext/disablesThinking``.
+    /// Whether the model thinks at all this turn. The kwarg is emitted only
+    /// where the request differs from the template's own default: off on a
+    /// thinking-default template, on on one that thinks only when asked.
+    /// What it does to the generation prompt (a closed, empty think block,
+    /// or an open one) is measured, never inferred from the flag: see
+    /// **Generation Prompt** (ADR-0070).
     case enableThinking = "enable_thinking"
 }
 
@@ -84,23 +84,6 @@ nonisolated struct TemplateRenderContext: Sendable, Hashable {
         self.kwargs = kwargs
         self.preservesThinking = preservesThinking
         self.reasoningEffort = reasoningEffort
-    }
-
-    /// Whether this render turns the model's thinking off entirely: an emitted
-    /// `enable_thinking: false` also swaps the template's generation prompt to
-    /// a closed, empty think block — see ``startsInsideThinkBlock(promptStartsThinking:)``.
-    var disablesThinking: Bool {
-        kwargs[.enableThinking] == false
-    }
-
-    /// Whether the stream parser starts inside an open `<think>` block under
-    /// this render: the template's generation prompt opens one and this render
-    /// doesn't swap it for the closed, empty block an emitted
-    /// `enable_thinking: false` produces. The one home for the derivation —
-    /// stream-loop drivers must take their `startsInsideThinkBlock` from here,
-    /// never from `promptStartsThinking` alone.
-    func startsInsideThinkBlock(promptStartsThinking: Bool) -> Bool {
-        promptStartsThinking && !disablesThinking
     }
 
     /// Strip-by-default convenience (the Qwen3.6 polarity): the historical

@@ -251,7 +251,6 @@ struct ReasoningEffortTests {
                 templateDefaults: [.enableThinking: templateDefault]
             )
             #expect(resolved.kwargs.isEmpty)
-            #expect(!resolved.disablesThinking)
         }
     }
 
@@ -263,7 +262,6 @@ struct ReasoningEffortTests {
             templateDefaults: [.enableThinking: true]
         )
         #expect(resolved.kwargs == [.enableThinking: false])
-        #expect(resolved.disablesThinking)
         #expect(resolved.digest != HTTPPrefixCacheConversation.defaultTemplateContextDigest)
     }
 

@@ -87,8 +87,7 @@ struct EmittedPathReplayCorpusTests {
         // One index across the walk, as one loaded model has one.
         let learning = CanonicalEchoFidelity.EmittedPathLearning(
             fingerprint: "replay:\(modelDirectory.lastPathComponent)",
-            toolCallFormat: toolCallFormat,
-            promptStartsThinking: identity.promptStartsThinking)
+            toolCallFormat: toolCallFormat)
 
         var total = CanonicalEchoFidelity.EmittedPathSessionSummary()
         var failures: [EmittedPathReplayGate.Failure] = []

@@ -147,13 +147,14 @@ struct StablePrefixDetector {
         return parts.joined(separator: "|")
     }
 
-    /// Hash of a token-ID slice as little-endian Int32 bytes (vocab IDs fit
-    /// in 32 bits). Used for the fullTokens prefix verification on memo hits.
+    /// Hash of a token-ID slice as little-endian Int64 bytes. Used for the
+    /// fullTokens prefix verification on memo hits. Not Int32: a key path's
+    /// image pseudo-tokens are digest-derived and can lie outside 32 bits,
+    /// and a memo entry from another template can cover them.
     private nonisolated static func tokenHash(_ tokens: ArraySlice<Int>) -> String {
-        var data = Data(capacity: tokens.count * 4)
+        var data = Data(capacity: tokens.count * 8)
         for token in tokens {
-            var v = Int32(token)
-            data.append(Data(bytes: &v, count: 4))
+            withUnsafeBytes(of: Int64(token).littleEndian) { data.append(contentsOf: $0) }
         }
         return sha256Hex(data)
     }

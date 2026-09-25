@@ -52,6 +52,9 @@ nonisolated enum LeafStorePhase {
     /// drive ran, the session provider, and the admission context.
     struct Inputs: Sendable {
         let mlxStartBox: UnsafeSendableBox<HTTPPrefixCacheGeneration>
+        /// The request as Request Keying keyed it: its key space, render and
+        /// facts, whole (ADR-0070).
+        let request: KeyedRequest
         /// The request's **Cache Claim**, owned by the drive: the boundary
         /// route resolves for it.
         let claim: CacheClaim
@@ -59,7 +62,6 @@ nonisolated enum LeafStorePhase {
         let requestID: UUID
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
-        let containsImages: Bool
         let memory: RequestMemoryTelemetry?
         var mlxStart: HTTPPrefixCacheGeneration { mlxStartBox.value }
     }
@@ -67,7 +69,7 @@ nonisolated enum LeafStorePhase {
     /// The turn facts shared by both routes: the stored conversation (prompt
     /// plus the generated assistant turn), the request's render, the
     /// selected mode and the appended message the fidelity check compares
-    /// against.
+    /// against. The request's own facts ride on `Inputs.request`.
     struct Turn: Sendable {
         let storedConversation: HTTPPrefixCacheConversation
         let render: ConversationRender
@@ -77,8 +79,6 @@ nonisolated enum LeafStorePhase {
         /// Every id the decode loop fed past the prompt, in order, stop id
         /// included (`GeneratedTokenRecorder`).
         let generatedTokens: [Int]
-        /// Whether the generation began inside a `<think>` block.
-        let startsInsideThinkBlock: Bool
     }
 
     // Evolving MVP mid-refactor (see CLAUDE.md); the phase keeps the drive's
@@ -93,7 +93,6 @@ nonisolated enum LeafStorePhase {
         sessions: any ModelSessionProviding,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
-        startsInsideThinkBlock: Bool,
         assistantText: String,
         assistantReasoning: String?,
         toolCalls: [HTTPPrefixCacheToolCall],
@@ -102,30 +101,31 @@ nonisolated enum LeafStorePhase {
         memory: RequestMemoryTelemetry? = nil
     ) async -> Result {
         // swiftlint:enable function_parameter_count
-        let inputs = Inputs(
-            mlxStartBox: mlxStartBox, claim: claim, sessions: sessions, requestID: requestID,
-            prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
-            containsImages: conversation.messages.contains { !$0.images.isEmpty }, memory: memory)
-        let mlxStart = inputs.mlxStart
+        let mlxStart = mlxStartBox.value
         var result = Result()
+        result.report.generationPrompt = mlxStart.facts.generationPrompt.traceValue
 
         // An Unkeyed Completion never touches the radix tree — construction
         // failed, so no token path of this request can be trusted as a key.
-        if let unkeyedReason = mlxStart.unkeyedReason {
+        let request: KeyedRequest
+        switch mlxStart.keying {
+        case .unkeyed(let unkeyed):
             result.report.recordSkip(
                 LeafSkipLog(
                     stage: "leafStore", reason: "unkeyed-completion", level: .info,
-                    extraFields: [("unkeyedReason", unkeyedReason.rawValue)]),
+                    extraFields: [("unkeyedReason", unkeyed.reason.rawValue)]),
                 in: diagnosticsContext)
             result.report.recordEmittedPathSkip(
                 .ineligibleRender, fields: [("cause", "unkeyed")], in: diagnosticsContext)
             return result
+        case .keyed(let keyed):
+            request = keyed
         }
-        guard let render = mlxStart.render else {
-            // The render is nil exactly for an Unkeyed Completion, which the
-            // guard above already returned on.
-            return result
-        }
+        let inputs = Inputs(
+            mlxStartBox: mlxStartBox, request: request, claim: claim, sessions: sessions,
+            requestID: requestID, prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
+            memory: memory)
+        let render = request.render
 
         // 1. Build the stored conversation (prompt + generated assistant turn).
         let storedMessage = HTTPPrefixCacheMessage.assistant(
@@ -135,10 +135,7 @@ nonisolated enum LeafStorePhase {
         )
         let storedConversation = conversation.appendingAssistant(storedMessage)
 
-        let leafStoreMode = Self.selectHTTPLeafStoreMode(
-            startsInsideThinkBlock: startsInsideThinkBlock,
-            emittedToolCalls: !toolCalls.isEmpty
-        )
+        let leafStoreMode = request.facts.leafStoreMode(emittedToolCalls: !toolCalls.isEmpty)
         result.report.mode = leafStoreMode.rawValue
         diagnosticsContext.log(
             PrefixCacheDiagnostics.LeafModeEvent(
@@ -152,8 +149,7 @@ nonisolated enum LeafStorePhase {
             render: render,
             mode: leafStoreMode,
             storedMessage: storedMessage,
-            generatedTokens: mlxStart.generatedTokens.snapshot,
-            startsInsideThinkBlock: startsInsideThinkBlock
+            generatedTokens: mlxStart.generatedTokens.snapshot
         )
 
         // 2. The fast-path eligibility (GPU-free, no render): the live final
@@ -163,7 +159,7 @@ nonisolated enum LeafStorePhase {
         let decision = LiveLeafCapture.decide(
             mode: leafStoreMode,
             preservesThinking: preservesThinking,
-            promptKeyPath: mlxStart.keySpace.keyPath,
+            promptKeyPath: inputs.request.keySpace.keyPath,
             generatedTokens: turn.generatedTokens,
             cacheOffset: httpPrefixCacheReportedTokenCount(mlxStart.finalCache)
         )
@@ -187,7 +183,7 @@ nonisolated enum LeafStorePhase {
             {
                 let offset = httpPrefixCacheReportedTokenCount(mlxStart.finalCache)
                 let path = LiveLeafCapture.livePath(
-                    promptKeyPath: mlxStart.keySpace.keyPath,
+                    promptKeyPath: inputs.request.keySpace.keyPath,
                     generatedTokens: turn.generatedTokens, offset: offset)
                 let backer = await captureLiveLeaf(
                     sessions: sessions, mlxStartBox: mlxStartBox,
@@ -236,7 +232,7 @@ nonisolated enum LeafStorePhase {
         if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens {
             if let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
                 path: boundaryBackingLeafPath, sparing: canonical,
-                partitionKey: mlxStart.partitionKey)
+                partitionKey: inputs.request.facts.partitionKey)
             {
                 trace.logSupersessions([released], diagnostics: diagnosticsContext)
             } else {
@@ -264,14 +260,12 @@ nonisolated enum LeafStorePhase {
         inputs: Inputs,
         result: inout Result
     ) async {
-        let mlxStart = inputs.mlxStart
-
         // 1. Register the turn's Emitted Path.
         registerEmittedPath(turn: turn, inputs: inputs, report: &result.report)
 
         // 2/3. Capture at the cache's offset, admit under the live path.
         let livePath = LiveLeafCapture.livePath(
-            promptKeyPath: mlxStart.keySpace.keyPath,
+            promptKeyPath: inputs.request.keySpace.keyPath,
             generatedTokens: turn.generatedTokens,
             offset: offset)
         // A tool-call boundary under a think-stripping template still arms
@@ -300,7 +294,6 @@ nonisolated enum LeafStorePhase {
         inputs: Inputs,
         result: inout Result
     ) async {
-        let mlxStart = inputs.mlxStart
         let diagnostics = inputs.diagnosticsContext
 
         // The stored conversation's render-space tokens, translated into key
@@ -327,7 +320,7 @@ nonisolated enum LeafStorePhase {
             return
         }
         let storedTokens: [Int]
-        switch mlxStart.keySpace.translate(renderTokens: storedRenderTokens) {
+        switch inputs.request.keySpace.translate(renderTokens: storedRenderTokens) {
         case .success(let translated):
             storedTokens = translated
         case .failure(let failure):
@@ -381,8 +374,8 @@ nonisolated enum LeafStorePhase {
             boundarySnapshot: route.boundary,
             backingLeaf: route.backingLeaf,
             positionAnchorRopeDelta: route.positionAnchorRopeDelta,
-            prefillStepSize: mlxStart.prefillStepSize,
-            tokenNDim: mlxStart.tokenNDim,
+            prefillStepSize: inputs.request.facts.prefillStepSize,
+            tokenNDim: inputs.request.facts.tokenNDim,
             context: LeafAdmissionContext(
                 storedTokens: route.storedTokens, inputs: inputs,
                 stages: leafStages(for: boundaryMode))
@@ -427,7 +420,7 @@ nonisolated enum LeafStorePhase {
             mode: mode,
             storedConversation: storedConversation,
             storedTokens: storedTokens,
-            keySpace: mlxStart.keySpace,
+            keySpace: inputs.request.keySpace,
             render: probeRender
         ) {
         case .tokens(let tokens):
@@ -448,8 +441,9 @@ nonisolated enum LeafStorePhase {
             @Sendable ([Int], HybridCacheSnapshot?) async -> PrefixCacheManager.LookupResult? = {
                 tokens, view in
                 let matchingView = view.flatMap { boundary in
-                    guard mlxStart.keySpace.keyPath.count >= boundary.tokenOffset,
-                        tokens.starts(with: mlxStart.keySpace.keyPath.prefix(boundary.tokenOffset))
+                    guard inputs.request.keySpace.keyPath.count >= boundary.tokenOffset,
+                        tokens.starts(
+                            with: inputs.request.keySpace.keyPath.prefix(boundary.tokenOffset))
                     else { return Optional<HybridCacheSnapshot>.none }
                     return boundary
                 }
@@ -457,8 +451,8 @@ nonisolated enum LeafStorePhase {
                     await inputs.prefixCache.resolve(
                         tokens: tokens,
                         promptTokenCount: tokens.count,
-                        partitionKey: mlxStart.partitionKey,
-                        modelFingerprint: mlxStart.partitionKey.modelFingerprint,
+                        partitionKey: inputs.request.facts.partitionKey,
+                        modelFingerprint: inputs.request.facts.partitionKey.modelFingerprint,
                         diagnostics: diagnostics,
                         transientBoundary: matchingView,
                         for: inputs.claim
@@ -469,7 +463,7 @@ nonisolated enum LeafStorePhase {
             mode: mode,
             probedTokens: probedTokens,
             transientBoundary: transientBoundary,
-            keySpace: mlxStart.keySpace,
+            keySpace: inputs.request.keySpace,
             resolveBoundary: { await resolveBoundary($0, nil)?.snapshot }
         )
         switch plan {
@@ -488,7 +482,7 @@ nonisolated enum LeafStorePhase {
                         Array(tokens.prefix(boundary.tokenOffset)), boundary),
                     let snapshot = resolved.snapshot,
                     snapshot.tokenOffset > 0, snapshot.tokenOffset < tokens.count,
-                    snapshot.tokenOffset >= mlxStart.keySpace.minimumWarmOffset
+                    snapshot.tokenOffset >= inputs.request.keySpace.minimumWarmOffset
                 else {
                     report.recordSkip(
                         leafSkipLog(
@@ -504,9 +498,10 @@ nonisolated enum LeafStorePhase {
             // always defined; on the vision container the residual reprefill
             // must resume with it seeded.
             var positionAnchorRopeDelta: Int?
-            if mlxStart.seedsPositionAnchor {
+            if inputs.request.seedsPositionAnchor {
                 guard
-                    let delta = mlxStart.keySpace.positionAnchorDelta(upTo: boundary.tokenOffset)
+                    let delta = inputs.request.keySpace.positionAnchorDelta(
+                        upTo: boundary.tokenOffset)
                 else {
                     report.recordSkip(
                         LeafSkipLog(
@@ -577,12 +572,12 @@ nonisolated enum LeafStorePhase {
                 tokenizer: render.tokenizer,
                 storedRenderBytes: storedRenderBytes,
                 storedMessage: turn.storedMessage,
-                promptPath: mlxStart.keySpace.renderSpacePath,
+                promptPath: inputs.request.keySpace.renderSpacePath,
                 generatedTokens: turn.generatedTokens,
                 stoppedOn: mlxStart.generatedTokens.stopToken,
-                toolCallFormat: mlxStart.toolCallFormat,
+                toolCallFormat: inputs.request.facts.toolCallFormat,
                 tools: render.toolSpecs,
-                startsInsideThinkBlock: turn.startsInsideThinkBlock
+                generationPrompt: inputs.request.facts.generationPrompt
             ))
         let seconds = secondsSince(start)
         EmittedPathRegistration.emit(outcome, registerSeconds: seconds, in: diagnostics)
@@ -591,17 +586,34 @@ nonisolated enum LeafStorePhase {
 
     // MARK: - Mode selection
 
+    /// The one leaf-store mode rule (ADR-0070), read by the Leaf Store after
+    /// the turn, by MTP engagement before it (with defined tools counting as
+    /// called), and by the replay harness. A tool-call turn renders verbatim
+    /// for its result, so it takes the direct tool leaf. A stop turn takes
+    /// the canonical user leaf whenever its prompt carries a think block,
+    /// open or closed, under a think-stripping render: the template drops
+    /// either from history once a new user message arrives, so the leaf has
+    /// to be the re-rendered form. Under the Preserve-Thinking Render a
+    /// closed block stays verbatim and takes the direct leaf; an open one
+    /// keeps the canonical user leaf, which the fast path captures live. A
+    /// prompt with no think block takes the direct leaf, and an unknown one
+    /// the canonical user leaf, which is correct for any template.
     static func selectHTTPLeafStoreMode(
-        startsInsideThinkBlock: Bool,
+        generationPrompt: GenerationPrompt,
+        renderContext: TemplateRenderContext,
         emittedToolCalls: Bool
     ) -> HTTPLeafStoreMode {
         if emittedToolCalls {
             return .directToolLeaf
         }
-        if startsInsideThinkBlock {
+        switch generationPrompt.thinkBlock {
+        case .opens, .unknown:
             return .canonicalUserLeaf
+        case .closed:
+            return renderContext.preservesThinking ? .directLeaf : .canonicalUserLeaf
+        case .none:
+            return .directLeaf
         }
-        return .directLeaf
     }
 
     /// The diagnostics stage labels of a boundary leaf mode — the exact
@@ -654,12 +666,7 @@ nonisolated enum LeafStorePhase {
         }
         return SpeculativeCanonicalPrefill.makeSeed(
             storedConversation: turn.storedConversation,
-            render: turn.render,
-            keySpace: mlxStart.keySpace,
-            partitionKey: mlxStart.partitionKey,
-            prefillStepSize: mlxStart.prefillStepSize,
-            ssdEnabled: mlxStart.ssdEnabled,
-            seedsPositionAnchor: mlxStart.seedsPositionAnchor,
+            request: inputs.request,
             canonicalLeafOffset: leafOffset,
             transientBoundary: mlxStart.transientLastUserBoundarySnapshot,
             idleDelay: plan.idleDelay,

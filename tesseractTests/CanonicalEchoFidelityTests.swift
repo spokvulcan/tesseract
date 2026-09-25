@@ -359,21 +359,39 @@ struct CanonicalEchoFidelityTests {
 
     // MARK: - Emitted Path learning
 
-    /// The walk decides a stop turn's leaf as the live Leaf Store does, from
-    /// the request's own thinking resolution. On a thinking-default template
-    /// a request that emits `enable_thinking: false` generates outside any
-    /// think block, so the live server selects `directLeaf`, captures live
-    /// and registers; with thinking on, the think-stripping template sends
-    /// the same turn to the canonical-leaf boundary.
-    @Test(arguments: [true, false])
-    func stopTurnLeafFollowsTheRequestsThinkingResolution(enableThinking: Bool) async throws {
+    /// The walk decides a stop turn's leaf as the live Leaf Store does, by
+    /// the one mode rule over the request's measured Generation Prompt
+    /// (ADR-0070). Under a think-stripping render a stop turn takes the
+    /// canonical user leaf whether its prompt opens a think block or closes
+    /// an empty one (`enable_thinking: false`): the template drops either
+    /// from history once the next user message arrives. Under the
+    /// Preserve-Thinking Render the closed block stays verbatim, so the turn
+    /// takes the direct leaf, captures live and registers, and its fidelity
+    /// replay parses from outside a think block as the stream did.
+    struct StopTurnCase: Sendable, CustomTestStringConvertible {
+        let enableThinking: Bool
+        let preserveThinking: Bool
+        let mode: HTTPLeafStoreMode
+        var testDescription: String {
+            "thinking \(enableThinking ? "on" : "off"), "
+                + (preserveThinking ? "preserve-thinking" : "think-stripping")
+        }
+    }
+
+    @Test(arguments: [
+        StopTurnCase(enableThinking: true, preserveThinking: false, mode: .canonicalUserLeaf),
+        StopTurnCase(enableThinking: false, preserveThinking: false, mode: .canonicalUserLeaf),
+        StopTurnCase(enableThinking: false, preserveThinking: true, mode: .directLeaf),
+    ])
+    func stopTurnLeafFollowsTheRequestsGenerationPrompt(_ testCase: StopTurnCase) async throws {
         func openAI(_ role: OpenAI.ChatRole, _ content: String) -> OpenAI.ChatMessage {
             OpenAI.ChatMessage(role: role, content: .text(content))
         }
-        let renderContext =
-            enableThinking
-            ? TemplateRenderContext.canonical
-            : TemplateRenderContext(kwargs: [.enableThinking: false], preservesThinking: false)
+        var kwargs: [TemplateRenderFlag: Bool] = [:]
+        if !testCase.enableThinking { kwargs[.enableThinking] = false }
+        if testCase.preserveThinking { kwargs[.preserveThinking] = true }
+        let renderContext = TemplateRenderContext(
+            kwargs: kwargs, preservesThinking: testCase.preserveThinking)
         let requests = [
             CanonicalEchoFidelity.RecordedRequest(
                 messages: [openAI(.system, "sys"), openAI(.user, "hi")],
@@ -386,8 +404,7 @@ struct CanonicalEchoFidelityTests {
                 tools: nil, renderContext: renderContext),
         ]
         let learning = CanonicalEchoFidelity.EmittedPathLearning(
-            fingerprint: "echo-thinking-\(UUID())", toolCallFormat: .xmlFunction,
-            promptStartsThinking: true)
+            fingerprint: "echo-thinking-\(UUID())", toolCallFormat: .xmlFunction)
 
         let report = await CanonicalEchoFidelity.walkSession(
             requests: requests, sessionAffinity: "ses_thinking", modelID: "toy-qwen38",
@@ -395,12 +412,11 @@ struct CanonicalEchoFidelityTests {
 
         #expect(report.skipped.isEmpty)
         let verdict = try #require(report.boundaries.first?.emittedPath)
-        if enableThinking {
-            #expect(verdict.mode == HTTPLeafStoreMode.canonicalUserLeaf.rawValue)
+        #expect(verdict.mode == testCase.mode.rawValue)
+        if testCase.mode == .canonicalUserLeaf {
             #expect(verdict.source == LeafStorePhase.Report.Source.boundary.rawValue)
             #expect(!verdict.registered)
         } else {
-            #expect(verdict.mode == HTTPLeafStoreMode.directLeaf.rawValue)
             #expect(verdict.source == LeafStorePhase.Report.Source.live.rawValue)
             #expect(verdict.registration == "registered")
         }

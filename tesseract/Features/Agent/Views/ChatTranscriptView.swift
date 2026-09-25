@@ -230,16 +230,18 @@ private struct LiveMessageSection: View {
         }
 
         // The Waiting Row: queued behind the lease (cold start) or in a turn
-        // prefill. Gated on `promptStartsThinking` — the turn's first tokens
-        // are then guaranteed to be thinking, so the live "Thinking…" row
-        // takes over with no geometry change. While the model is still
-        // loading, the gate can't be read for the incoming model, so the row
-        // shows for all models ("Loading model…" is true regardless); a
-        // non-thinking model drops the row once loaded. How a prefill wait
-        // should present for non-thinking models is deferred — every model
-        // the app currently ships starts its turns thinking.
+        // prefill. Gated on the loaded template's canonical Generation Prompt
+        // opening a think block — the turn's first tokens are then thinking,
+        // so the live "Thinking…" row takes over with no geometry change.
+        // While the model is still loading, the gate can't be read for the
+        // incoming model, so the row shows for all models ("Loading model…"
+        // is true regardless); a non-thinking model drops the row once
+        // loaded. How a prefill wait should present for non-thinking models
+        // is deferred — every agent model the app ships starts its turns
+        // thinking.
         if session.showsWaitingRow,
-            !agentEngine.isModelLoaded || agentEngine.promptStartsThinking
+            !agentEngine.isModelLoaded
+                || agentEngine.canonicalGenerationPrompt?.startsInsideThinkBlock == true
         {
             WaitingRow(isModelLoaded: agentEngine.isModelLoaded)
         }

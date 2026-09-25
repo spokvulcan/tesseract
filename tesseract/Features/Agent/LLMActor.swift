@@ -112,7 +112,8 @@ actor LLMActor {
     ///   - ssdConfig: Snapshot of the SSD prefix-cache config, normally
     ///     produced by `SettingsManager.makeSSDPrefixCacheConfig()`. `nil`
     ///     disables SSD for the lifetime of this load.
-    /// - Returns: The resolved ``AgentTokenizer`` and whether the template starts inside a think block.
+    /// - Returns: The resolved ``AgentTokenizer`` and the loaded template's **Generation Prompt**
+    ///   under the canonical render context (display only, ADR-0070).
     @discardableResult
     func loadModel(
         from directory: URL,
@@ -120,7 +121,7 @@ actor LLMActor {
         ssdConfig: SSDPrefixCacheConfig? = nil,
         ramBudgetCapBytes: Int? = nil,
         speculation: SpeculationMode = .automatic
-    ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
+    ) async throws -> (AgentTokenizer, canonicalGenerationPrompt: GenerationPrompt) {
         let loadClock = ContinuousClock()
         let loadStart = loadClock.now
         let identity = ModelIdentity(directory: directory)
@@ -649,7 +650,7 @@ actor LLMActor {
     private func verifyAndStore(
         container: ModelContainer,
         identity: ModelIdentity
-    ) async throws -> (AgentTokenizer, promptStartsThinking: Bool) {
+    ) async throws -> (AgentTokenizer, canonicalGenerationPrompt: GenerationPrompt) {
         // Wrap in withError so C++ MLX errors (e.g. matmul shape mismatches) throw
         // instead of calling fatalError via the default error handler.
         // `TESSERACT_SKIP_WARMUP_GENERATION=1` skips the one-token warmup so a
@@ -672,7 +673,13 @@ actor LLMActor {
             "Tool-call format resolved — "
                 + "\(resolvedToolCallFormat.map { "\($0)" } ?? "json (default)")"
         )
-        let startsThinking = identity.promptStartsThinking
+        // Measured from the loaded template (ADR-0070), which also warms the
+        // probe memo for the canonical render context.
+        let fingerprint = activeModelFingerprint
+        let canonicalGenerationPrompt = await container.perform { context in
+            ConversationRender.canonicalGenerationPrompt(
+                tokenizer: context.tokenizer, modelFingerprint: fingerprint)
+        }
         let profile = identity.flopProfile
         let modelWeightBytes = await container.perform { context in
             context.model.parameters().flattened().reduce(into: Int64.zero) { partial, item in
@@ -720,11 +727,10 @@ actor LLMActor {
         modelContainer = container
         agentTokenizer = tokenizer
         ensureServerCompletion().installLoadedModelFacts(
-            promptStartsThinking: startsThinking,
             modelWeightBytes: modelWeightBytes,
             prefixCacheBudgetBytes: prefixCacheBudgetBytes
         )
-        return (tokenizer, startsThinking)
+        return (tokenizer, canonicalGenerationPrompt)
     }
 
     /// Single install site for per-load snapshot state, delegated to the

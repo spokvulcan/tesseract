@@ -53,13 +53,17 @@ final class AgentEngine {
 
     private(set) var agentTokenizer: AgentTokenizer?
 
-    /// Whether the loaded model's template starts generation inside a `<think>` block.
-    private(set) var promptStartsThinking = false
+    /// The loaded template's **Generation Prompt** under the canonical render
+    /// context, measured at load (ADR-0070). Display only: the chat view's
+    /// thinking spinner reads it before any turn has tokenized; every
+    /// generation reads the prompt its own start measured. `nil` when
+    /// unloaded.
+    private(set) var canonicalGenerationPrompt: GenerationPrompt?
 
     /// The loaded model's template-declared render flags
-    /// (`ModelIdentity.declaredTemplateFlags`) — cached at load like
-    /// `promptStartsThinking` so the server dispatcher can read it
-    /// synchronously on the MainActor (issue #98). Empty when unloaded.
+    /// (`ModelIdentity.declaredTemplateFlags`) — cached at load so the
+    /// server dispatcher can read it synchronously on the MainActor
+    /// (issue #98). Empty when unloaded.
     private(set) var declaredTemplateFlags: Set<TemplateRenderFlag> = []
 
     /// Template-default value per declared render flag
@@ -178,7 +182,7 @@ final class AgentEngine {
         defer { isLoading = false }
 
         do {
-            let (tokenizer, startsThinking) = try await llmActor.loadModel(
+            let (tokenizer, generationPrompt) = try await llmActor.loadModel(
                 from: directory,
                 visionMode: visionMode,
                 ssdConfig: resolveSSDConfig(),
@@ -196,7 +200,7 @@ final class AgentEngine {
             )
 
             agentTokenizer = tokenizer
-            promptStartsThinking = startsThinking
+            canonicalGenerationPrompt = generationPrompt
             declaredTemplateFlags = await llmActor.loadedDeclaredTemplateFlags()
             templateFlagDefaults = await llmActor.loadedTemplateFlagDefaults()
             declaresReasoningEffort = await llmActor.loadedDeclaresReasoningEffort()
@@ -218,7 +222,7 @@ final class AgentEngine {
             isModelLoaded = true
             loadingStatus = ""
             Log.agent.info(
-                "Model loaded — promptStartsThinking=\(promptStartsThinking) "
+                "Model loaded — generationPrompt=\(generationPrompt.traceValue) "
                     + "agentRenderKwargs=\(agentRenderContext.kwargs)")
         } catch {
             loadingStatus = ""
@@ -378,7 +382,7 @@ final class AgentEngine {
     func unloadModel() {
         cancelGeneration()
         agentTokenizer = nil
-        promptStartsThinking = false
+        canonicalGenerationPrompt = nil
         declaredTemplateFlags = []
         templateFlagDefaults = [:]
         declaresReasoningEffort = false
@@ -429,9 +433,9 @@ final class AgentEngine {
 
     private func startManagedGeneration(
         input: UserInput,
+        renderContext: TemplateRenderContext,
         toolSpecs: [ToolSpec]?,
         parameters: AgentGenerateParameters,
-        startsInsideThinkBlock: Bool? = nil,
         progressHandler: ServerInferenceProgressHandler? = nil
     ) throws -> HTTPServerGenerationStart {
         guard isModelLoaded else {
@@ -439,11 +443,9 @@ final class AgentEngine {
         }
 
         let actor = llmActor
-        return wrapManagedGeneration(
-            startsInsideThinkBlock: startsInsideThinkBlock
-        ) {
+        return wrapManagedGeneration {
             try await actor.startRawGeneration(
-                prompt: .fresh(input),
+                prompt: .fresh(input, renderContext: renderContext),
                 toolSpecs: toolSpecs,
                 parameters: parameters,
                 progressHandler: progressHandler
@@ -451,9 +453,11 @@ final class AgentEngine {
         }
     }
 
+    /// Drive a raw generation through the managed envelope. The stream's
+    /// think-block start comes from the Generation Prompt the launched start
+    /// reports (ADR-0070).
     func wrapManagedGeneration(
         cachedTokenCount: Int = 0,
-        startsInsideThinkBlock: Bool? = nil,
         launch: @escaping @Sendable () async throws -> HTTPServerRawGenerationStart
     ) -> HTTPServerGenerationStart {
         isGenerating = true
@@ -461,13 +465,7 @@ final class AgentEngine {
         let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
         let generationID = UUID()
 
-        let driver = ManagedGenerationDriver(
-            // `nil` = the template's own default; a render context that
-            // disables thinking passes an explicit `false` (the generation
-            // prompt then holds a closed, empty think block).
-            startsInsideThinkBlock: startsInsideThinkBlock ?? promptStartsThinking,
-            logContext: "generation_id=\(generationID.uuidString)"
-        )
+        let driver = ManagedGenerationDriver(logContext: "generation_id=\(generationID.uuidString)")
 
         // The loop owns raw-handle cancellation. Its `cancelCurrent` must
         // be wired into `start.cancel` synchronously, but the loop can't be built
@@ -527,6 +525,7 @@ extension AgentEngine: ManagedInferenceStarting {
     ) throws -> HTTPServerGenerationStart {
         try startManagedGeneration(
             input: UserInput(prompt: prompt),
+            renderContext: .canonical,
             toolSpecs: nil,
             parameters: parameters
         )
@@ -549,10 +548,9 @@ extension AgentEngine: ManagedInferenceStarting {
         )
         return try startManagedGeneration(
             input: input,
+            renderContext: renderContext,
             toolSpecs: toolSpecs,
             parameters: parameters,
-            startsInsideThinkBlock: renderContext.startsInsideThinkBlock(
-                promptStartsThinking: promptStartsThinking),
             progressHandler: progressHandler
         )
     }

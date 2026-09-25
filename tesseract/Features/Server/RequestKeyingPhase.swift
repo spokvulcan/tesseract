@@ -3,13 +3,14 @@
 //  tesseract
 //
 //  The **Request Keying** phase of a cache-aware **Server Completion**: turn
-//  one HTTP conversation into the identities every later phase keys on — the
-//  prepared model input, the flat token sequence, the global Marconi
-//  partition key, and the request's **Cache Key Space** (identity and free
-//  for text-only requests). A key-space construction failure degrades the
-//  whole request to an **Unkeyed Completion** — served normally, zero cache
-//  participation — surfaced here as data for the caller to act on.
-//  Previously steps 1–3b inline in the generation builder.
+//  one HTTP conversation into a **Keyed Request** — the identities every
+//  later phase keys on (the global Marconi partition key, the request's
+//  **Cache Key Space**, identity and free for text-only requests, and its
+//  **Conversation Render**) plus every per-request fact those phases read,
+//  derived once here (ADR-0070) — beside the prepared model input. A
+//  key-space construction failure degrades the whole request to an
+//  **Unkeyed Completion** — served normally, zero cache participation —
+//  which carries the same facts and no keys, as a case of its own.
 //
 //  Runs inside the **Model Session** (ADR-0016): `prepare` is
 //  tokenizer/processor-affine, so the phase is called from within the
@@ -22,42 +23,143 @@ import Foundation
 import MLX
 import MLXLMCommon
 
-nonisolated enum RequestKeyingPhase {
+/// The per-request facts every phase after **Request Keying** reads,
+/// derived once, where the request's instance truth lives (ADR-0070). Each
+/// used to be re-derived by the phases that read it, and the copies drifted.
+/// Constructible only by `RequestKeyingPhase.run`, so no phase can pair a
+/// request with a fact it does not have.
+nonisolated struct RequestFacts: Sendable {
+    /// The prepared prompt as a flat token list (the 1D extraction of a
+    /// possibly 2D vision tensor): real ids, safe to re-forward. The radix
+    /// tree keys on the **Cache Key Path** instead, whose image runs are
+    /// digest pseudo-tokens that must never reach an embedding.
+    let promptTokens: [Int]
+    /// Rank of the prepared token tensor: 1 on the LLM-class processor, 2
+    /// (`[1, seq]`) on a vision container. The boundary residual re-prefill
+    /// rebuilds inputs from a flat list at this rank.
+    let tokenNDim: Int
+    /// The partition the request's cache work routes to.
+    let partitionKey: CachePartitionKey
+    let renderContext: TemplateRenderContext
+    /// The request's **Generation Prompt**, checked against what it fed.
+    let generationPrompt: GenerationPrompt
+    /// Whether the request defined tools: MTP engagement predicts they will
+    /// be called, since emission is unknowable before decode.
+    let toolsDefined: Bool
+    /// Whether the request is text-only by instance truth: no image reached
+    /// the model. A text-class instance drops a request's images (#439), so
+    /// such a request is text-only by construction, however many images it
+    /// carried. The Cache Claim check-out, the leaf capture, speculative-arm
+    /// engagement and transient-boundary gating all read this one fact. For
+    /// a keyed request it is exactly an identity **Cache Key Space**.
+    let isTextOnly: Bool
+    /// The chunked prefill step, for the request's own prefill and every
+    /// re-prefill after it (the boundary residual, the speculative pass).
+    let prefillStepSize: Int
+    /// What every decode iterator runs with: the request's parameters with
+    /// `kvBits` cleared, because the module quantizes the cache itself
+    /// before the iterator sees it (ADR-0006).
+    let decodeParameters: GenerateParameters
+    /// The SSD tier gate, sampled once per request.
+    let ssdEnabled: Bool
+    /// The tool-call format the generation loop parses with, so the Emitted
+    /// Path fidelity replay parses the emitted ids the same way.
+    let toolCallFormat: ToolCallFormat
 
-    /// The identities of a keyed request — what resolution, planning, plan
-    /// application, and the leaf store all key on.
-    struct Keyed {
-        let fullInput: LMInput
-        let fullTokens: [Int]
-        let fullTokenCount: Int
-        let tokenNDim: Int
-        let partitionKey: CachePartitionKey
-        let keySpace: CacheKeySpace
-        /// The request's **Conversation Render** — the one render authority
-        /// every later phase (planner boundary, leaf-store measure,
-        /// admission probes) draws on. Image-agnostic: its renders carry
-        /// one pad per image, which `keySpace` translates.
-        let render: ConversationRender
-        /// The recognized vision container mis-positions M-RoPE on any
-        /// nil-state warm forward — text-only restores included — so the
-        /// Position Anchor is seeded whenever the family is recognized AND
-        /// the loaded instance is that container, not just when this
-        /// request carries images. A text-class instance of a vision family
-        /// never reads the seeded state and gets `false`.
-        let seedsPositionAnchor: Bool
+    var promptTokenCount: Int { promptTokens.count }
+
+    /// The finished turn's leaf-store mode: the one rule over the think
+    /// block and the render context (`LeafStorePhase.selectHTTPLeafStoreMode`).
+    func leafStoreMode(emittedToolCalls: Bool) -> HTTPLeafStoreMode {
+        LeafStorePhase.selectHTTPLeafStoreMode(
+            generationPrompt: generationPrompt, renderContext: renderContext,
+            emittedToolCalls: emittedToolCalls)
     }
 
+    /// The mode MTP engagement predicts before decode: defined tools count
+    /// as called.
+    var predictedLeafStoreMode: HTTPLeafStoreMode {
+        leafStoreMode(emittedToolCalls: toolsDefined)
+    }
+
+    fileprivate init(
+        promptTokens: [Int], tokenNDim: Int, partitionKey: CachePartitionKey,
+        renderContext: TemplateRenderContext, generationPrompt: GenerationPrompt,
+        toolsDefined: Bool, isTextOnly: Bool, parameters: GenerateParameters, ssdEnabled: Bool,
+        toolCallFormat: ToolCallFormat
+    ) {
+        self.promptTokens = promptTokens
+        self.tokenNDim = tokenNDim
+        self.partitionKey = partitionKey
+        self.renderContext = renderContext
+        self.generationPrompt = generationPrompt
+        self.toolsDefined = toolsDefined
+        self.isTextOnly = isTextOnly
+        self.prefillStepSize = parameters.prefill.stepSize ?? 512
+        var decodeParameters = parameters
+        decodeParameters.kvBits = nil
+        self.decodeParameters = decodeParameters
+        self.ssdEnabled = ssdEnabled
+        self.toolCallFormat = toolCallFormat
+    }
+}
+
+/// A **Keyed Request** (CONTEXT.md): the identities every later phase keys
+/// on, the request's **Cache Key Space** and **Conversation Render**, with
+/// its facts. What resolution, planning, the drive, the Leaf Store phase and
+/// the Speculative Canonical Prefill seed take whole.
+nonisolated struct KeyedRequest: Sendable {
+    let facts: RequestFacts
+    /// The request's **Cache Key Space** — identity for text-only requests.
+    /// Owns the key path the radix tree is driven with and translates every
+    /// later render the same way.
+    let keySpace: CacheKeySpace
+    /// The request's **Conversation Render** — the one render authority
+    /// every later phase (planner boundary, leaf-store measure, admission
+    /// probes) draws on. Image-agnostic: its renders carry one pad per image,
+    /// which `keySpace` translates.
+    let render: ConversationRender
+    /// The recognized vision container mis-positions M-RoPE on any
+    /// nil-state warm forward — text-only restores included — so the
+    /// Position Anchor is seeded whenever the family is recognized AND
+    /// the loaded instance is that container, not just when this
+    /// request carries images. A text-class instance of a vision family
+    /// never reads the seeded state and gets `false`.
+    let seedsPositionAnchor: Bool
+
+    fileprivate init(
+        facts: RequestFacts, keySpace: CacheKeySpace, render: ConversationRender,
+        seedsPositionAnchor: Bool
+    ) {
+        self.facts = facts
+        self.keySpace = keySpace
+        self.render = render
+        self.seedsPositionAnchor = seedsPositionAnchor
+    }
+}
+
+/// An **Unkeyed Completion**'s request: no valid Cache Key Path could be
+/// built, so it has no key space and no render, only its facts and why. A
+/// case of its own, so no phase can read a placeholder key.
+nonisolated struct UnkeyedRequest: Sendable {
+    let facts: RequestFacts
+    let reason: CacheKeySpace.UnkeyedReason
+
+    fileprivate init(facts: RequestFacts, reason: CacheKeySpace.UnkeyedReason) {
+        self.facts = facts
+        self.reason = reason
+    }
+}
+
+nonisolated enum RequestKeyingPhase {
+
+    /// What keying made of the request. The prepared input rides beside the
+    /// request and never leaves the **Model Session** (ADR-0016).
     enum Outcome {
-        case keyed(Keyed)
+        case keyed(KeyedRequest, input: LMInput)
         /// Key-space construction failed: serve an **Unkeyed Completion**
-        /// from the prepared input, under the partition key (for
-        /// diagnostics), with zero cache participation.
-        case unkeyed(
-            fullInput: LMInput,
-            fullTokens: [Int],
-            partitionKey: CachePartitionKey,
-            reason: CacheKeySpace.UnkeyedReason
-        )
+        /// from the prepared input with zero cache participation.
+        case unkeyed(UnkeyedRequest, input: LMInput)
     }
 
     static func run(
@@ -69,6 +171,7 @@ nonisolated enum RequestKeyingPhase {
         modelID: String,
         modelFingerprint: String?,
         imageKeying: ModelIdentity.ImageKeying?,
+        ssdEnabled: Bool = false,
         emittedPathIndex: EmittedPathIndex = .shared,
         diagnostics: PrefixCacheDiagnostics.Context? = nil
     ) async throws -> Outcome {
@@ -172,9 +275,8 @@ nonisolated enum RequestKeyingPhase {
                 if mismatch { render = render.bypassing(.placeholderStructureMismatch) }
             }
         }
-        // Sequence length is always the LAST dim. For LLM models tokens are
-        // 1D [seq], for VLM models (ParoQuant Qwen35) they are 2D [batch, seq].
-        let fullTokenCount = fullInput.text.tokens.dim(-1)
+        // For LLM models tokens are 1D [seq], for VLM models (ParoQuant
+        // Qwen35) they are 2D [batch, seq].
         let tokenNDim = fullInput.text.tokens.ndim
 
         // 2. Extract flat token sequence for radix tree operations.
@@ -193,6 +295,21 @@ nonisolated enum RequestKeyingPhase {
             modelFingerprint: modelFingerprint,
             templateContextDigest: conversation.templateContextDigest
         )
+
+        // The request's facts, once. Only the Generation Prompt differs by
+        // outcome: it is checked against what the request feeds, the key
+        // path when keyed, the prompt tokens when not.
+        let toolCallFormat = session.configuration.toolCallFormat ?? .json
+        func facts(checkedAgainst fed: [Int]) -> RequestFacts {
+            RequestFacts(
+                promptTokens: fullTokens, tokenNDim: tokenNDim, partitionKey: partitionKey,
+                renderContext: renderContext,
+                generationPrompt: render.checkedGenerationPrompt(
+                    fed: fed, diagnostics: diagnostics),
+                toolsDefined: canonicalTools?.isEmpty == false, isTextOnly: keyedImages.isEmpty,
+                parameters: parameters,
+                ssdEnabled: ssdEnabled, toolCallFormat: toolCallFormat)
+        }
 
         // 3b. Build the request's **Cache Key Space** from the prepared
         // tokens, the conversation's images, and the family's image
@@ -213,11 +330,8 @@ nonisolated enum RequestKeyingPhase {
             keySpace = space
         case .failure(let reason):
             return .unkeyed(
-                fullInput: fullInput,
-                fullTokens: fullTokens,
-                partitionKey: partitionKey,
-                reason: reason
-            )
+                UnkeyedRequest(facts: facts(checkedAgainst: fullTokens), reason: reason),
+                input: fullInput)
         }
         // Grid instrumentation (ADR-0007 phase 2): the processed image grid
         // is the ground truth for the M-RoPE span and the pad-run length the
@@ -238,17 +352,13 @@ nonisolated enum RequestKeyingPhase {
             }
         }
 
+        // 4. The keyed request. Its Generation Prompt is checked against the
+        // key path it feeds, whose tail is text in every key space.
         return .keyed(
-            Keyed(
-                fullInput: fullInput,
-                fullTokens: fullTokens,
-                fullTokenCount: fullTokenCount,
-                tokenNDim: tokenNDim,
-                partitionKey: partitionKey,
-                keySpace: keySpace,
-                render: render,
-                seedsPositionAnchor: effectiveImageKeying != nil
-            ))
+            KeyedRequest(
+                facts: facts(checkedAgainst: keySpace.keyPath), keySpace: keySpace,
+                render: render, seedsPositionAnchor: effectiveImageKeying != nil),
+            input: fullInput)
     }
 
     /// The image-bearing request's model input.

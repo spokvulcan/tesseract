@@ -70,13 +70,18 @@ nonisolated struct HTTPServerRawGenerationStart: Sendable {
     let stream: AsyncStream<RawGeneration>
     let cancel: @Sendable () -> Void
     let waitForCompletion: @Sendable () async -> Void
+    /// The **Generation Prompt** of the prompt this start tokenized
+    /// (ADR-0070): the stream loop's parser reads it.
+    let generationPrompt: GenerationPrompt
 
     init(
         stream: AsyncStream<RawGeneration>,
+        generationPrompt: GenerationPrompt,
         cancel: @escaping @Sendable () -> Void = {},
         waitForCompletion: @escaping @Sendable () async -> Void = {}
     ) {
         self.stream = stream
+        self.generationPrompt = generationPrompt
         self.cancel = cancel
         self.waitForCompletion = waitForCompletion
     }

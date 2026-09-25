@@ -153,15 +153,18 @@ struct EmittedPathSynthesizedReplayTests {
         #expect(turn.leafStore["emittedPath"] == "registered")
     }
 
-    @Test func imageBearingRequestKeepsCopyEvenWhenTheTextProcessorDropsImages() async throws {
+    /// A text processor drops the request's image, so no image reached the
+    /// model: the request is text-only by instance truth (ADR-0070) and its
+    /// leaf captures by move, as any text request's does.
+    @Test func imageBearingRequestCapturesByMoveWhenTheTextProcessorDropsImages() async throws {
         let session = Session()
         let image = HTTPPrefixCacheImage(data: try Self.tinyPNG())
         let turn = try await session.turn(
             Self.conversation([
                 HTTPPrefixCacheMessage(role: .user, content: "hi", images: [image])
             ]))
-        #expect(turn.leafStore["source"] == "live")
-        #expect(turn.leafStore["copyReason"] == "imageKeySpace")
+        #expect(turn.leafStore["source"] == "handoff", turn.account)
+        #expect(turn.leafStore["copyReason"] == nil, turn.account)
     }
 
     /// The **Active-Inference Reserve** observes what the leaf-store
@@ -935,6 +938,7 @@ struct EmittedPathSynthesizedReplayTests {
             ssdConfig: SSDPrefixCacheConfig? = nil,
             hasMTPDrafter: Bool = false,
             prefillFault: ToyPrefillFault? = nil,
+            recurrentElements: Int = 0,
             onForward: (@Sendable (Int) -> Void)? = nil
         ) {
             let uuid = UUID().uuidString
@@ -946,7 +950,8 @@ struct EmittedPathSynthesizedReplayTests {
             configuration.eosTokenIds = [tokenizer.endOfTurnID]
             let streamTokenizer: any Tokenizer = fault.map { $0(tokenizer) } ?? tokenizer
             let provider = ToyModelSessionProvider(
-                model: ToyLanguageModel(completions: queue, onForward: onForward),
+                model: ToyLanguageModel(
+                    completions: queue, recurrentElements: recurrentElements, onForward: onForward),
                 tokenizer: streamTokenizer,
                 configuration: configuration,
                 vision: vision,
@@ -983,7 +988,7 @@ struct EmittedPathSynthesizedReplayTests {
         ) -> ServerCompletionFixture {
             ServerCompletionFixture(
                 provider: provider, fingerprint: fingerprint, ssdConfig: ssdConfig,
-                identity: identity, promptStartsThinking: true, emittedPathIndex: index,
+                identity: identity, emittedPathIndex: index,
                 modelID: modelID)
         }
 

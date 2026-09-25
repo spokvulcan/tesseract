@@ -323,6 +323,27 @@ struct StablePrefixDetectorTests {
         #expect(result == nil)
     }
 
+    /// A memo entry can cover tokens outside the 32-bit range: an image's
+    /// pseudo-token in a key path, under a boundary another template's probe
+    /// left behind. Verifying the hit must fall through, not trap.
+    @Test func memoVerificationOverOutOfRangeTokensFallsThrough() throws {
+        let seed = try tokenizer.applyChatTemplate(
+            messages: [
+                ["role": "system", "content": "sys"],
+                ["role": "user", "content": "hello"],
+            ], tools: nil, additionalContext: nil)
+        let boundary = try StablePrefixDetector.detect(
+            systemPrompt: "sys", toolSpecs: nil, fullTokens: seed, tokenizer: tokenizer)
+        #expect(boundary != nil)
+
+        let pseudoToken = Int(Int32.max) + 1
+        let fullTokens = [pseudoToken] + Array(seed.dropFirst())
+        #expect(
+            try StablePrefixDetector.detect(
+                systemPrompt: "sys", toolSpecs: nil, fullTokens: fullTokens, tokenizer: tokenizer)
+                == nil)
+    }
+
     @Test func fullTokensShorterThanBoundaryReturnsNil() throws {
         // Provide truncated fullTokens shorter than what the boundary would be
         let result = try StablePrefixDetector.detect(

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import MLX
 import MLXLMCommon
 import Testing
@@ -100,10 +101,37 @@ struct RawGenerationStartTests {
             vision: batched ? .init(padTokenId: 0, padRunLength: 1, frame: THW(1, 1, 1)) : nil)
         #expect(
             try await Self.run(
-                provider: provider, prompt: .fresh(UserInput(messages: messages)),
+                provider: provider,
+                prompt: .fresh(UserInput(messages: messages), renderContext: .canonical),
                 parameters: Self.parameters(prefillStepSize: 64)) == "b")
         #expect(!records.values.isEmpty)
         #expect(records.values.allSatisfy { $0.capacity == 1024 })
+    }
+
+    // MARK: - The Generation Prompt
+
+    /// Whoever tokenized the prompt reports its Generation Prompt
+    /// (ADR-0070): the start's handle follows the input's `enable_thinking`,
+    /// measured from the Qwen3.8-shaped toy template, with no flag anywhere.
+    @Test(arguments: [true, false])
+    func startReportsTheGenerationPromptItsInputRendered(enableThinking: Bool) async throws {
+        let tokenizer = EmittedPathToyTokenizer()
+        let context =
+            enableThinking
+            ? TemplateRenderContext.canonical
+            : TemplateRenderContext(kwargs: [.enableThinking: false], preservesThinking: false)
+        let rendered = try tokenizer.applyChatTemplate(
+            messages: Self.messages, tools: nil, additionalContext: context.additionalContext())
+        let provider = Self.toy(script: rendered + [tokenizer.endOfTurnID], tokenizer: tokenizer)
+        let reported = OSAllocatedUnfairLock<GenerationPrompt?>(initialState: nil)
+        _ = try await Self.run(
+            provider: provider,
+            prompt: .fresh(
+                UserInput(messages: Self.messages, additionalContext: context.additionalContext()),
+                renderContext: context),
+            parameters: Self.parameters(),
+            onStarted: { start in reported.withLock { $0 = start.generationPrompt } })
+        #expect(reported.withLock { $0 }?.thinkBlock == (enableThinking ? .opens : .closed))
     }
 
     // MARK: - Fresh turn
@@ -119,7 +147,7 @@ struct RawGenerationStartTests {
 
         let text = try await Self.run(
             provider: provider,
-            prompt: .fresh(UserInput(messages: Self.messages)),
+            prompt: .fresh(UserInput(messages: Self.messages), renderContext: .canonical),
             parameters: Self.parameters(),
             log: log
         )
@@ -159,7 +187,7 @@ struct RawGenerationStartTests {
 
         let text = try await Self.run(
             provider: provider,
-            prompt: .fresh(UserInput(messages: Self.messages)),
+            prompt: .fresh(UserInput(messages: Self.messages), renderContext: .canonical),
             parameters: Self.parameters()
         ) { start in
             await gate.reached()
@@ -186,7 +214,7 @@ struct RawGenerationStartTests {
             script: truth, tokenizer: tokenizer, reportsFlatTextTokens: true)
         _ = try await Self.run(
             provider: cachedProvider,
-            prompt: .fresh(UserInput(messages: Self.messages)),
+            prompt: .fresh(UserInput(messages: Self.messages), renderContext: .canonical),
             parameters: Self.parameters(),
             modelFingerprint: "raw-start-\(UUID().uuidString)",
             log: cachedLog
@@ -202,7 +230,7 @@ struct RawGenerationStartTests {
             script: truth, tokenizer: tokenizer, reportsFlatTextTokens: true)
         _ = try await Self.run(
             provider: uncachedProvider,
-            prompt: .fresh(UserInput(messages: Self.messages)),
+            prompt: .fresh(UserInput(messages: Self.messages), renderContext: .canonical),
             parameters: Self.parameters(),
             modelFingerprint: nil
         )

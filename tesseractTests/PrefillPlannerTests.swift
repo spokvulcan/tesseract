@@ -29,12 +29,31 @@ import MLXLMCommon
 
     private func fullTokens(
         _ conversation: HTTPPrefixCacheConversation,
-        tokenizer: FakeChatMLTokenizer
+        tokenizer: any MLXLMCommon.Tokenizer
     ) throws -> [Int] {
         try tokenizer.applyChatTemplate(
             messages: conversation.promptMessages,
             tools: nil,
             additionalContext: nil
+        )
+    }
+
+    /// The boundaries as a request finds them: Request Keying checks the
+    /// render's **Generation Prompt** against the key path, then the planner
+    /// detects against the same path.
+    private func detect(
+        _ conversation: HTTPPrefixCacheConversation,
+        keySpace: CacheKeySpace,
+        tokenizer: any MLXLMCommon.Tokenizer,
+        renderContext: TemplateRenderContext = .canonical
+    ) throws -> PrefillBoundaries {
+        let render = makeRender(tokenizer, renderContext: renderContext)
+        return try PrefillPlanner.detectBoundaries(
+            conversation: conversation,
+            generationPrompt: render.checkedGenerationPrompt(
+                fed: keySpace.keyPath, diagnostics: nil),
+            keySpace: keySpace,
+            render: render
         )
     }
 
@@ -315,12 +334,8 @@ import MLXLMCommon
         ])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: tokenizer)
 
         // The two probes diverge at the user content, so the boundary is the
         // byte length of the rendered system block plus the user envelope head.
@@ -334,96 +349,97 @@ import MLXLMCommon
             systemPrompt: "", messages: [HTTPPrefixCacheMessage(role: .user, content: "hi")])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: tokenizer)
         #expect(boundaries.stablePrefixOffset == nil)
     }
 
-    // MARK: - detectBoundaries(): last-message (generation-prompt subtraction)
+    // MARK: - detectBoundaries(): last-message (the measured Generation Prompt)
 
-    @Test func lastMessageOffsetSubtractsTheThinkingGenerationPrompt() throws {
-        var tokenizer = FakeChatMLTokenizer()
-        tokenizer.promptStartsThinking = true
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
-        )
-        let tokens = try fullTokens(conv, tokenizer: tokenizer)
-
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
-
-        let genPromptBytes = FakeChatMLTokenizer.generationPrompt(thinking: true).utf8.count
-        #expect(boundaries.lastMessageOffset == tokens.count - genPromptBytes)
+    /// One template shape under one render context, and the generation
+    /// prompt its renders end in.
+    struct LastMessageCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let tokenizer: any MLXLMCommon.Tokenizer
+        var renderContext: TemplateRenderContext = .canonical
+        let prompt: String
+        var testDescription: String { name }
     }
 
-    @Test func lastMessageOffsetUsesTheNonThinkingPromptWhenNotThinking() throws {
-        var tokenizer = FakeChatMLTokenizer()
-        tokenizer.promptStartsThinking = false
+    static let thinkingOff = TemplateRenderContext(
+        kwargs: [.enableThinking: false], preservesThinking: false)
+
+    static let lastMessageCases: [LastMessageCase] = [
+        LastMessageCase(
+            name: "thinking template", tokenizer: FakeChatMLTokenizer(),
+            prompt: "<|im_start|>assistant\n<think>\n"),
+        LastMessageCase(
+            name: "thinking template, thinking off", tokenizer: FakeChatMLTokenizer(),
+            renderContext: thinkingOff,
+            prompt: "<|im_start|>assistant\n<think>\n\n</think>\n\n"),
+        LastMessageCase(
+            name: "non-thinking template",
+            tokenizer: FakeChatMLTokenizer(thinkingTemplate: false),
+            prompt: "<|im_start|>assistant\n"),
+        // The Qwen3.5-0.8B shape. Before the prompt was measured, the planner
+        // spelled the open block from the load-time guess, which reads this
+        // template as thinking, and found no boundary.
+        LastMessageCase(
+            name: "template that thinks only when asked",
+            tokenizer: TemplateShapeTokenizer(.thinkingWhenAsked),
+            prompt: "<|im_start|>assistant\n<think>\n\n</think>\n\n"),
+        // No string was ever spelled for a template that is not ChatML-shaped.
+        LastMessageCase(
+            name: "template that is not ChatML-shaped", tokenizer: TemplateShapeTokenizer(.gemma),
+            prompt: "<start_of_turn>model\n"),
+    ]
+
+    @Test(arguments: lastMessageCases)
+    func lastMessageOffsetSubtractsTheMeasuredGenerationPrompt(_ testCase: LastMessageCase) throws {
         let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
         )
-        let tokens = try fullTokens(conv, tokenizer: tokenizer)
-
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: false,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
-
-        let genPromptBytes = FakeChatMLTokenizer.generationPrompt(thinking: false).utf8.count
-        #expect(boundaries.lastMessageOffset == tokens.count - genPromptBytes)
-    }
-
-    @Test func lastMessageOffsetSubtractsTheClosedThinkPromptWhenTheRequestDisablesThinking()
-        throws
-    {
-        // A thinking-default template under an emitted `enable_thinking:
-        // false` ends the prompt in the closed, empty think block.
-        let tokenizer = FakeChatMLTokenizer()
-        let noThinking = TemplateRenderContext(
-            kwargs: [.enableThinking: false], preservesThinking: false)
-        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
-        )
-        let tokens = try tokenizer.applyChatTemplate(
+        let tokens = try testCase.tokenizer.applyChatTemplate(
             messages: conv.promptMessages, tools: nil,
-            additionalContext: noThinking.additionalContext())
+            additionalContext: testCase.renderContext.additionalContext())
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer, renderContext: noThinking)
-        )
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: testCase.tokenizer,
+            renderContext: testCase.renderContext)
 
-        let genPromptBytes = FakeChatMLTokenizer.generationPrompt(
-            thinking: true, thinkingDisabled: true
-        ).utf8.count
-        #expect(boundaries.lastMessageOffset == tokens.count - genPromptBytes)
+        let promptTokens = testCase.tokenizer.encode(text: testCase.prompt, addSpecialTokens: false)
+        #expect(Array(tokens.suffix(promptTokens.count)) == promptTokens)
+        #expect(boundaries.lastMessageOffset == tokens.count - promptTokens.count)
+        #expect(boundaries.generationPromptUnknown == nil)
     }
 
-    @Test func lastMessageOffsetIsNilWhenTheGenerationPromptSuffixDoesNotMatch() throws {
-        // Tokens rendered with the thinking prompt, but detection told the turn
-        // is non-thinking ⇒ the suffix won't match ⇒ no last-message boundary.
-        var tokenizer = FakeChatMLTokenizer()
-        tokenizer.promptStartsThinking = true
+    /// A template that appends nothing leaves nothing to subtract: the last
+    /// message ends where the key path does, which is no boundary to capture.
+    @Test func emptyGenerationPromptPlacesNoLastMessageBoundary() throws {
+        let tokenizer = TemplateShapeTokenizer(.appendsNothing)
         let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
         )
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: false,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: tokenizer)
         #expect(boundaries.lastMessageOffset == nil)
+        #expect(boundaries.generationPromptUnknown == nil)
+    }
+
+    /// An unknown prompt places no last-message boundary and carries the
+    /// reason for the caller to log; the other boundaries keep working.
+    @Test func unknownGenerationPromptPlacesNoLastMessageBoundary() throws {
+        let tokenizer = TemplateShapeTokenizer(.conversationDependent)
+        let conv = conversation(messages: [HTTPPrefixCacheMessage(role: .user, content: "question")]
+        )
+        let tokens = try fullTokens(conv, tokenizer: tokenizer)
+
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: tokenizer)
+        #expect(boundaries.lastMessageOffset == nil)
+        #expect(boundaries.generationPromptUnknown == .notFed)
+        #expect(boundaries.stablePrefixOffset != nil)
+        #expect(boundaries.lastUserOffset != nil)
     }
 
     // MARK: - detectBoundaries(): last-user re-render
@@ -436,12 +452,8 @@ import MLXLMCommon
         ])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: tokenizer)
 
         // The re-render stops after the user turn — it excludes the trailing
         // assistant message that the full tokenization includes.
@@ -460,12 +472,8 @@ import MLXLMCommon
         ])
         let tokens = try fullTokens(conv, tokenizer: tokenizer)
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: .identity(keyPath: tokens),
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(
+            conv, keySpace: .identity(keyPath: tokens), tokenizer: tokenizer)
         #expect(boundaries.lastUserOffset == nil)
     }
 
@@ -484,12 +492,7 @@ import MLXLMCommon
         ])
         let keySpace = try FakeChatMLTokenizer.keySpace(for: conv, runLengths: [4])
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: keySpace,
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(conv, keySpace: keySpace, tokenizer: tokenizer)
 
         // The re-render up to the user turn carries one single-pad placeholder;
         // in key space that pad becomes the image's 4-token pseudo-expansion,
@@ -541,12 +544,7 @@ import MLXLMCommon
             )
         ).get()
 
-        let boundaries = try PrefillPlanner.detectBoundaries(
-            conversation: conv,
-            promptStartsThinking: true,
-            keySpace: keySpace,
-            render: makeRender(tokenizer)
-        )
+        let boundaries = try detect(conv, keySpace: keySpace, tokenizer: tokenizer)
 
         #expect(boundaries.lastUserOffset == nil)
         #expect(

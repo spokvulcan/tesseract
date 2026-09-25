@@ -57,11 +57,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
     /// the canonical leaf was admitted — that leaf is the restore base this
     /// pass extends.
     struct Seed: Sendable {
-        let keySpace: CacheKeySpace
-        let partitionKey: CachePartitionKey
-        let prefillStepSize: Int
-        let ssdEnabled: Bool
-        let seedsPositionAnchor: Bool
+        /// The originating request, whole: its key space, partition, step
+        /// size, SSD gate and anchor flag are the pass's (ADR-0070).
+        let request: KeyedRequest
         /// Offset of the canonical leaf this pass extends. Drives the
         /// worth-it threshold and the diagnostics' rewind-span field; the
         /// actual restore boundary is re-resolved against the live tree.
@@ -99,42 +97,32 @@ nonisolated enum SpeculativeCanonicalPrefill {
         }
     }
 
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable function_parameter_count
     /// Build a seed for the turn that just planned a canonical leaf,
     /// spawning the future-shared-path probe immediately. Call *before* the
     /// GPU-side leaf store begins so the CPU render+tokenize overlaps it
     /// (#76's earlier start) — the pass then spends none of its human-paced
     /// window on its own stage 1. A seed that will never be scheduled should
     /// be `discard()`ed so the probe stops at its next cooperative check.
+    /// The request is the originating **Keyed Request**, whole; the seed
+    /// adds only its own offsets and timing.
     static func makeSeed(
         storedConversation: HTTPPrefixCacheConversation,
-        render: ConversationRender,
-        keySpace: CacheKeySpace,
-        partitionKey: CachePartitionKey,
-        prefillStepSize: Int,
-        ssdEnabled: Bool,
-        seedsPositionAnchor: Bool,
+        request: KeyedRequest,
         canonicalLeafOffset: Int,
         transientBoundary: HybridCacheSnapshot? = nil,
         idleDelay: Duration = .zero,
         ramOnlySpine: Bool = false,
         diagnostics: PrefixCacheDiagnostics.Context
     ) -> Seed {
-        // swiftlint:enable function_parameter_count
         let probe = Task.detached {
             try LeafAdmissionBuilder.futureSharedPrefix(
                 storedConversation: storedConversation,
-                keySpace: keySpace,
-                render: render
+                keySpace: request.keySpace,
+                render: request.render
             )
         }
         return Seed(
-            keySpace: keySpace,
-            partitionKey: partitionKey,
-            prefillStepSize: prefillStepSize,
-            ssdEnabled: ssdEnabled,
-            seedsPositionAnchor: seedsPositionAnchor,
+            request: request,
             canonicalLeafOffset: canonicalLeafOffset,
             transientBoundary: transientBoundary,
             idleDelay: idleDelay,
@@ -273,9 +261,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let transientBoundary = seed.transientBoundary.flatMap { view in
             // The whole-state checkpoint belongs to its original key path.
             // A rewritten future path may use it only through that prefix.
-            guard view.isPrefixView, view.tokenOffset >= seed.keySpace.minimumWarmOffset,
-                seed.keySpace.keyPath.count >= view.tokenOffset,
-                admitPath.starts(with: seed.keySpace.keyPath.prefix(view.tokenOffset))
+            guard view.isPrefixView, view.tokenOffset >= seed.request.keySpace.minimumWarmOffset,
+                seed.request.keySpace.keyPath.count >= view.tokenOffset,
+                admitPath.starts(with: seed.request.keySpace.keyPath.prefix(view.tokenOffset))
             else { return Optional<HybridCacheSnapshot>.none }
             return view
         }
@@ -283,8 +271,8 @@ nonisolated enum SpeculativeCanonicalPrefill {
             await prefixCache.resolve(
                 tokens: admitPath,
                 promptTokenCount: admitPath.count,
-                partitionKey: seed.partitionKey,
-                modelFingerprint: seed.partitionKey.modelFingerprint,
+                partitionKey: seed.request.facts.partitionKey,
+                modelFingerprint: seed.request.facts.partitionKey.modelFingerprint,
                 diagnostics: diagnostics,
                 transientBoundary: transientBoundary,
                 for: claim,
@@ -301,7 +289,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
         guard let boundary = resolved.snapshot,
             boundary.tokenOffset > 0,
             boundary.tokenOffset < admitPath.count,
-            boundary.tokenOffset >= seed.keySpace.minimumWarmOffset
+            boundary.tokenOffset >= seed.request.keySpace.minimumWarmOffset
         else {
             diagnostics.logSkip(
                 stage: "speculativePrefill",
@@ -311,8 +299,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
             return
         }
         let anchorDelta: Int?
-        if seed.seedsPositionAnchor {
-            guard let delta = seed.keySpace.positionAnchorDelta(upTo: boundary.tokenOffset) else {
+        if seed.request.seedsPositionAnchor {
+            guard let delta = seed.request.keySpace.positionAnchorDelta(upTo: boundary.tokenOffset)
+            else {
                 diagnostics.logSkip(
                     stage: "speculativePrefill",
                     reason: "boundary-splits-image-run",
@@ -355,7 +344,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             return
         }
 
-        let stepSize = max(seed.prefillStepSize, 1)
+        let stepSize = max(seed.request.facts.prefillStepSize, 1)
         while warm.consumed < residual.count, !Task.isCancelled {
             let range = warm.consumed..<min(warm.consumed + stepSize, residual.count)
             await container.perform { context in
@@ -484,9 +473,9 @@ nonisolated enum SpeculativeCanonicalPrefill {
         // Preempted partial leaves and abandonment spines are RAM-only
         // and never consult the extension base.
         let extensionBase = await ServerCompletion.resolveExtensionBase(
-            ssdEnabled: seed.ssdEnabled && !preempted && !seed.ramOnlySpine,
+            ssdEnabled: seed.request.facts.ssdEnabled && !preempted && !seed.ramOnlySpine,
             tokens: storedTokens,
-            partitionKey: seed.partitionKey,
+            partitionKey: seed.request.facts.partitionKey,
             prefixCache: prefixCache
         )
         await container.perform { _ in
@@ -512,14 +501,14 @@ nonisolated enum SpeculativeCanonicalPrefill {
                 ? .ramOnly
                 : ServerCompletion.snapshotAdmissionStorage(
                     for: leaf,
-                    ssdEnabled: seed.ssdEnabled,
+                    ssdEnabled: seed.request.facts.ssdEnabled,
                     extending: extensionBase
                 )
             let admission = await ServerCompletion.admitStructuredLeaf(
                 leaf,
                 storedTokens: storedTokens,
                 storage: storage,
-                partitionKey: seed.partitionKey,
+                partitionKey: seed.request.facts.partitionKey,
                 requestID: diagnostics.requestID,
                 prefixCache: prefixCache,
                 diagnostics: diagnostics,

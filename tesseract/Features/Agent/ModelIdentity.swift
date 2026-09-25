@@ -84,10 +84,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
     /// the full-precision target do not pair (`DFlash2Support`).
     let isRotatedTernaryCheckpoint: Bool
 
-    /// `true` when the chat template opens a `<think>` block in its
-    /// generation-prompt section.
-    let promptStartsThinking: Bool
-
     /// The opt-in render flags the chat template natively declares — the
     /// subset of `TemplateRenderContext`'s known flags the template text
     /// actually references (issue #98). The capability gate for the
@@ -167,7 +163,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
         self.isMoE = architecture == "qwen3_5_moe"
         self.isRotatedTernaryCheckpoint = Self.interpretRotatedTernaryCheckpoint(
             configJSON: configJSON)
-        self.promptStartsThinking = Self.interpretPromptStartsThinking(chatTemplate: chatTemplate)
         // Comment-strip once; every declaration/default interpreter scans the
         // same stripped text (a flag named only in `{# … #}` never counts).
         let scannableTemplate = chatTemplate.map(Self.stripJinjaComments)
@@ -206,16 +201,6 @@ nonisolated struct ModelIdentity: Sendable, Equatable {
             let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
-    }
-
-    /// All known thinking templates put `<think>` right after
-    /// `<|im_start|>assistant` in the `add_generation_prompt` block at the end
-    /// of the template.
-    private static func interpretPromptStartsThinking(chatTemplate: String?) -> Bool {
-        guard let chatTemplate,
-            let genPromptRange = chatTemplate.range(of: "add_generation_prompt")
-        else { return false }
-        return chatTemplate[genPromptRange.upperBound...].contains("<think>")
     }
 
     /// A flag is "declared" when the template text references it — Jinja

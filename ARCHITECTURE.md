@@ -149,7 +149,8 @@ tesseract/
 │   │   ├── SSDSnapshotStore.swift     # SSD tier: writer queue + body I/O
 │   │   ├── SnapshotLedger.swift       # SSD tier: manifest/budget/LRU authority
 │   │   ├── PrefillPlanner.swift       # Tokenizer-affine pre-prefill decisions
-│   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application + Emitted Path Resolve
+│   │   ├── RequestKeyingPhase.swift   # Request Keying: a request's keys and facts, derived once (Keyed Request, ADR-0070)
+│   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application, Emitted Path Resolve, Generation Prompt probe
 │   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
 │   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
@@ -430,7 +431,12 @@ actor-confined module stored in `LLMActor`; ADR-0015) and the agent engine's
 managed fallback.
 Both paths use `ManagedGenerationDriver` and `GenerationStreamLoop` to parse
 raw model output, forward reasoning and tool calls, honor cancellation, and
-publish terminal metrics. Reasoning stays as emitted by the model: native
+publish terminal metrics. The parser starts where the request's **Generation
+Prompt** left the model, inside a think block or outside it: Conversation
+Render measures what the template appends to open the assistant turn, and
+each request checks that measurement against the tokens it fed (ADR-0070).
+On the cache-aware arm, Request Keying derives each request's facts once,
+into a Keyed Request (or an unkeyed one) that every later phase reads. Reasoning stays as emitted by the model: native
 `reasoning_effort` shapes the prompt, while the ordinary generation-token limit
 bounds output. There is no thinking-length or repetition intervention, forced
 think closure, or continuation restart (ADR-0060 amendment).

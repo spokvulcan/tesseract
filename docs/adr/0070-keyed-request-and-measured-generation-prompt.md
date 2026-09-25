@@ -1,7 +1,7 @@
 # ADR-0070: Request Keying derives every per-request fact once; the Generation Prompt is measured from the template
 
-- Status: Proposed (spec: #562)
-- Date: 2026-09-24
+- Status: Accepted (spec: #562)
+- Date: 2026-09-24; accepted 2026-09-25, with the amendment below
 - Relates to: ADR-0033 (phases return values; "extend a value, not thread a
   parameter"), ADR-0060 (template capability by introspection, never model
   name), ADR-0063 (the Conversation Render module and its probe-measured
@@ -136,3 +136,24 @@ fed them, inside an 860-line closure no test isolates.
 - Tests build facts by measuring through a fake tokenizer or by running
   Request Keying on the toy Model Session; a test can no longer configure a
   template and a flag that disagree.
+
+## Amendment (2026-09-25): as built
+
+- The probe memo keys on the tokenizer's type as well as the fingerprint,
+  so two kinds of tokenizer handed one fingerprint (test doubles) never
+  share a probe. Without a fingerprint a value-type tokenizer has no
+  instance to key on and is measured on every ask; production always has
+  a fingerprint.
+- The facts also record whether the request defined tools, which the MTP
+  prediction reads.
+- The planner takes the Keyed Request. Its arithmetic stays callable from
+  a Generation Prompt, key space and render, as an internal seam for the
+  tokenizer-only planner tests and the CPU bench.
+- An unknown Generation Prompt is logged on the request as a
+  `generationPrompt` skip with its reason, and warned about once per
+  model, render context and reason. The `leafStore` event reports the
+  prompt's state on every request (`opens`, `closed`, `none` or
+  `unknown(<reason>)`).
+- The chat view's spinner reads the canonical context's Generation
+  Prompt, measured when the model loads, which also warms the probe for
+  that context.

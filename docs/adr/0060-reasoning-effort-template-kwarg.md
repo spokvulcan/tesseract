@@ -1,6 +1,7 @@
 # ADR-0060: Reasoning effort as a template kwarg; thinking-safeguard budget split
 
-- Status: Accepted; thinking-safeguard policy superseded on 2026-09-07
+- Status: Accepted; thinking-safeguard policy superseded on 2026-09-07;
+  thinking-start derivation superseded by ADR-0070 on 2026-09-25
 - Date: 2026-08-24
 - Relates to: issue #98 / PRD #94 (template render kwargs, Preserve-Thinking
   Render), ADR-0033 (completion phase map), the thinking-loop safeguard
@@ -154,3 +155,12 @@ Old persisted cutoff keys are no longer read. Old `thinking_safeguard` request
 fields are ignored as unknown JSON fields and cannot re-enable intervention.
 Tests preserve long and repetitive reasoning through its natural closing tag,
 final answer, and terminal usage; existing cancellation tests remain in place.
+
+## Amendment (2026-09-25): thinking start is measured
+
+Decision 3's derivation, `promptStartsThinking && !renderContext.disablesThinking`,
+is gone. Whether generation starts inside a think block is read from the
+request's Generation Prompt, measured from the template under the
+request's render context (ADR-0070), so `enable_thinking` in either
+direction is handled by what the template actually emits. The emission rule
+for the kwarg is unchanged.

@@ -21,16 +21,24 @@ struct EmittedPathFidelityTests {
         tokenizer.encode(text: text, addSpecialTokens: false)
     }
 
+    /// The prompts the replay starts from, measured from the Qwen3.8-shaped
+    /// toy template: a thinking request's opens a think block, and one that
+    /// turned thinking off closes an empty one.
+    private static let opens = measuredGenerationPrompt()
+    private static let closed = measuredGenerationPrompt(
+        renderContext: TemplateRenderContext(
+            kwargs: [.enableThinking: false], preservesThinking: false))
+
     private func check(
         _ emitted: String,
         format: ToolCallFormat = .xmlFunction,
         tools: [ToolSpec]? = nil,
-        startsInsideThinkBlock: Bool = true,
+        generationPrompt: GenerationPrompt = Self.opens,
         stored: HTTPPrefixCacheMessage
     ) -> EmittedPathFidelity.Verdict {
         EmittedPathFidelity.check(
             contentIDs: ids(emitted), tokenizer: tokenizer, toolCallFormat: format,
-            tools: tools, startsInsideThinkBlock: startsInsideThinkBlock, stored: stored)
+            tools: tools, generationPrompt: generationPrompt, stored: stored)
     }
 
     /// A `read` tool whose `limit` is an integer, so the XML parser converts
@@ -100,7 +108,7 @@ struct EmittedPathFidelityTests {
 
     @Test func aRequestOutsideAThinkBlockIsPlainContent() {
         let verdict = check(
-            "Hello", startsInsideThinkBlock: false,
+            "Hello", generationPrompt: Self.closed,
             stored: .assistant(content: "Hello"))
         #expect(verdict == .match)
     }
@@ -112,7 +120,7 @@ struct EmittedPathFidelityTests {
         // stray tag), so the server stored it as content — and so does the
         // replay, which runs the same chunks.
         let verdict = check(
-            "hmm</think>answer", startsInsideThinkBlock: false,
+            "hmm</think>answer", generationPrompt: Self.closed,
             stored: .assistant(content: "hmmanswer"))
         #expect(verdict == .match)
     }
@@ -215,7 +223,7 @@ struct EmittedPathFidelityTests {
     @Test func aStringParameterKeepsItsSpacingAndTheIntegerConvertsBySchema() {
         let replayed = EmittedPathFidelity.replay(
             contentIDs: ids(toolCallTurn), tokenizer: tokenizer, toolCallFormat: .xmlFunction,
-            tools: [Self.readTool], startsInsideThinkBlock: true)
+            tools: [Self.readTool], generationPrompt: Self.opens)
         #expect(
             replayed.toolCalls == [
                 HTTPPrefixCacheToolCall(
