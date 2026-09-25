@@ -2,11 +2,19 @@ import Foundation
 import MLX
 import MLXLMCommon
 
-/// A whole prompt tokenized from zero for a raw generation.
+/// A whole prompt tokenized from zero for a raw generation, and the render
+/// context its template renders under: the input's `additionalContext`, as
+/// the typed value the **Generation Prompt** probe is remembered by.
 nonisolated enum RawGenerationPrompt {
-    case fresh(UserInput)
+    case fresh(UserInput, renderContext: TemplateRenderContext)
 
     var lookupReason: String { "standardGenerationNoPrefixCache" }
+
+    var renderContext: TemplateRenderContext {
+        switch self {
+        case .fresh(_, let renderContext): renderContext
+        }
+    }
 }
 
 /// **Raw Generation Start** (CONTEXT.md → Server completion; ADR-0016
@@ -36,6 +44,13 @@ nonisolated enum RawGenerationStart {
         let lookupStarted = Date.timeIntervalSinceReferenceDate
         let prepared = try await tokenize(
             prompt, session: session, modelFingerprint: modelFingerprint)
+        // The start that tokenized the prompt reports its Generation Prompt
+        // (ADR-0070): the template's probe for this render context, checked
+        // against the tokens this prompt fed.
+        let generationPrompt = ConversationRender.checkedGenerationPrompt(
+            tokenizer: session.tokenizer, renderContext: prompt.renderContext,
+            modelFingerprint: modelFingerprint,
+            fed: LLMActor.extractTokenSequence(prepared.text.tokens), diagnostics: nil)
         let lookupMs = (Date.timeIntervalSinceReferenceDate - lookupStarted) * 1000
         // Sequence length is always the LAST dim: `[seq]` on the LLM
         // families, `[batch, seq]` on the vision containers.
@@ -107,6 +122,7 @@ nonisolated enum RawGenerationStart {
         let (stream, completion) = loop
         return HTTPServerRawGenerationStart(
             stream: stream,
+            generationPrompt: generationPrompt,
             cancel: { completion.cancel() },
             waitForCompletion: { await completion.value }
         )
@@ -119,7 +135,7 @@ nonisolated enum RawGenerationStart {
         modelFingerprint: String?
     ) async throws -> LMInput {
         switch prompt {
-        case .fresh(let input):
+        case .fresh(let input, _):
             return try await session.prepareText(input, modelFingerprint: modelFingerprint)
         }
     }

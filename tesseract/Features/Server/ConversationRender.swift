@@ -763,6 +763,26 @@ nonisolated extension ConversationRender {
         return prompt
     }
 
+    /// The Generation Prompt a one-message request gets under the canonical
+    /// render context: the load-time measure the chat view's thinking
+    /// spinner reads before any turn has tokenized (display only). Warms the
+    /// probe memo for the canonical context as it goes.
+    static func canonicalGenerationPrompt(
+        tokenizer: any Tokenizer, modelFingerprint: String?, cache: RenderTokenCache = .shared
+    ) -> GenerationPrompt {
+        let request: [[String: any Sendable]] = [
+            ["role": "user", "content": GenerationPrompt.probeContent]
+        ]
+        let fed =
+            (try? applyTemplate(
+                tokenizer: tokenizer, messages: request, tools: nil, additionalContext: nil))?
+            .tokens ?? []
+        return generationPromptProbe(
+            tokenizer: tokenizer, renderContext: .canonical, modelFingerprint: modelFingerprint,
+            cache: cache
+        ).checked(against: fed)
+    }
+
     /// Stage one of the measurement: one user message rendered with and
     /// without the generation prompt under `renderContext`, through the
     /// module's one template application. The prompt measures only when the

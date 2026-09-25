@@ -28,7 +28,8 @@ private func cannedHandle(
     for event in events { continuation.yield(event) }
     continuation.finish()
     return GenerationStreamLoop.RawGenerationHandle(
-        stream: stream, cancel: cancel, waitForCompletion: {})
+        stream: stream, cancel: cancel, waitForCompletion: {},
+        generationPrompt: measuredGenerationPrompt(FakeChatMLTokenizer(thinkingTemplate: false)))
 }
 
 private func infoEvent(generated: Int = 3) -> RawGeneration {
@@ -44,10 +45,7 @@ private func infoEvent(generated: Int = 3) -> RawGeneration {
 
 @MainActor
 private func makeDriver() -> ManagedGenerationDriver {
-    ManagedGenerationDriver(
-        startsInsideThinkBlock: false,
-        logContext: "test_driver=1"
-    )
+    ManagedGenerationDriver(logContext: "test_driver=1")
 }
 
 @MainActor
@@ -88,7 +86,8 @@ struct ManagedGenerationDriverTests {
         let handle = GenerationStreamLoop.RawGenerationHandle(
             stream: stream,
             cancel: { continuation.finish() },
-            waitForCompletion: {}
+            waitForCompletion: {},
+            generationPrompt: measuredGenerationPrompt(FakeChatMLTokenizer(thinkingTemplate: false))
         )
 
         let runTask = Task {

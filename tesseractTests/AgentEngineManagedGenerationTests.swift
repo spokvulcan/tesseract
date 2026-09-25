@@ -53,7 +53,10 @@ struct AgentEngineManagedGenerationTests {
         rawContinuation.finish()
 
         let start = engine.wrapManagedGeneration {
-            HTTPServerRawGenerationStart(stream: rawStream)
+            HTTPServerRawGenerationStart(
+                stream: rawStream,
+                generationPrompt: measuredGenerationPrompt(
+                    FakeChatMLTokenizer(thinkingTemplate: false)))
         }
 
         var events: [AgentGeneration] = []
@@ -87,6 +90,8 @@ private actor RawGenerationProbe {
         streamContinuation = continuation
         return HTTPServerRawGenerationStart(
             stream: stream,
+            generationPrompt: measuredGenerationPrompt(
+                FakeChatMLTokenizer(thinkingTemplate: false)),
             cancel: { Task { await self.cancel() } },
             waitForCompletion: { await self.waitForCompletion() }
         )

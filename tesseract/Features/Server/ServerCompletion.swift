@@ -169,11 +169,13 @@ nonisolated final class FinalGenerationCache: @unchecked Sendable {
 }
 
 extension GenerationStreamLoop.RawGenerationHandle {
-    /// The server's rich prefill handle collapses to `{ stream, cancel, wait }`;
-    /// the prefill/cache metadata stays with the **Server Completion** module
-    /// and never crosses the seam.
+    /// The server's rich prefill handle collapses to `{ stream, cancel, wait }`
+    /// plus the request's Generation Prompt; the prefill/cache metadata stays
+    /// with the **Server Completion** module and never crosses the seam.
     fileprivate nonisolated init(_ generation: HTTPPrefixCacheGeneration) {
-        self.init(stream: generation.stream, completion: generation.completion)
+        self.init(
+            stream: generation.stream, completion: generation.completion,
+            generationPrompt: generation.facts.generationPrompt)
     }
 }
 
@@ -753,10 +755,7 @@ nonisolated final class ServerCompletion {
         let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
         let loadedModelWeightBytes = modelWeightBytes
 
-        let driver = ManagedGenerationDriver(
-            startsInsideThinkBlock: mlxStart.facts.generationPrompt.startsInsideThinkBlock,
-            logContext: "request_id=\(requestID.uuidString)"
-        )
+        let driver = ManagedGenerationDriver(logContext: "request_id=\(requestID.uuidString)")
         let actorRef = actor
 
         // The loop owns raw-handle cancellation. Its `cancelCurrent` must be wired into

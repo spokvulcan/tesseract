@@ -77,22 +77,20 @@ nonisolated final class ToolCallParser {
     /// `<tool_call>` block's body. Reset on every `</tool_call>` close.
     private var toolCallCurrentName: String?
 
-    /// - Parameter startsInsideThinkBlock: When `true`, the parser assumes the generation
-    ///   begins inside a `<think>` block (e.g. Qwen3.5 chat template appends `<think>\n`
-    ///   to the prompt). Initial chunks are emitted as `.thinking` events.
-    nonisolated init(startsInsideThinkBlock: Bool = false) {
-        if startsInsideThinkBlock {
+    /// A parser for a stream that starts outside any think block.
+    nonisolated init() {}
+
+    /// A parser for a generation whose prompt is `generationPrompt`: inside a
+    /// think block exactly when the prompt opens one (the Qwen3.5 and
+    /// Qwen3.8 templates append `<think>\n` by default), so the first chunks
+    /// are emitted as `.thinking` events. An unknown prompt starts outside,
+    /// where text streams as content until a stray `</think>` reclassifies
+    /// what is still buffered (ADR-0070).
+    nonisolated init(generationPrompt: GenerationPrompt) {
+        if generationPrompt.startsInsideThinkBlock {
             self.insideThinkBlock = true
             self.pendingThinkStart = true
         }
-    }
-
-    /// A parser for a generation whose prompt is `generationPrompt`: inside a
-    /// think block exactly when the prompt opens one. An unknown prompt
-    /// starts outside, where text streams as content until a stray
-    /// `</think>` reclassifies what is still buffered (ADR-0070).
-    nonisolated convenience init(generationPrompt: GenerationPrompt) {
-        self.init(startsInsideThinkBlock: generationPrompt.startsInsideThinkBlock)
     }
 
     /// Process a chunk of streaming text and return any events.

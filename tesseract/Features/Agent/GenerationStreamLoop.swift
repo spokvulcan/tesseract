@@ -16,15 +16,21 @@ nonisolated struct GenerationStreamLoop {
         let stream: AsyncStream<RawGeneration>
         let cancel: @Sendable () -> Void
         let waitForCompletion: @Sendable () async -> Void
+        /// The generation's **Generation Prompt**, reported by whoever
+        /// tokenized its prompt (ADR-0070): the loop's parser starts inside a
+        /// think block exactly when it opens one.
+        let generationPrompt: GenerationPrompt
 
         init(
             stream: AsyncStream<RawGeneration>,
             cancel: @escaping @Sendable () -> Void,
-            waitForCompletion: @escaping @Sendable () async -> Void
+            waitForCompletion: @escaping @Sendable () async -> Void,
+            generationPrompt: GenerationPrompt
         ) {
             self.stream = stream
             self.cancel = cancel
             self.waitForCompletion = waitForCompletion
+            self.generationPrompt = generationPrompt
         }
     }
 
@@ -74,7 +80,7 @@ nonisolated struct GenerationStreamLoop {
     }
 
     private let box: OSAllocatedUnfairLock<HandleBox>
-    private let startsInsideThinkBlock: Bool
+    private let generationPrompt: GenerationPrompt
 
     /// Pre-formatted `key=value` correlation token (e.g. `request_id=…` /
     /// `generation_id=…`) appended to the loop's own diagnostic warnings. The
@@ -87,11 +93,10 @@ nonisolated struct GenerationStreamLoop {
 
     init(
         initial: RawGenerationHandle,
-        startsInsideThinkBlock: Bool,
         logContext: String = ""
     ) {
         self.box = OSAllocatedUnfairLock(initialState: HandleBox(handle: initial))
-        self.startsInsideThinkBlock = startsInsideThinkBlock
+        self.generationPrompt = initial.generationPrompt
         self.logContext = logContext
     }
 
@@ -112,7 +117,7 @@ nonisolated struct GenerationStreamLoop {
     }
 
     func run(sink: Sink) async throws -> Outcome {
-        let parser = ToolCallParser(startsInsideThinkBlock: startsInsideThinkBlock)
+        let parser = ToolCallParser(generationPrompt: generationPrompt)
         var rawChunkParts: [String] = []
         var libraryParsedToolCalls = false
         // The ToolCallProcessor drops its in-flight buffer at EOS if it can't
@@ -279,11 +284,15 @@ nonisolated struct GenerationStreamLoop {
 extension GenerationStreamLoop.RawGenerationHandle {
     /// Collapse a `{ stream, completion }` pair from ``TokenGenerationLoop``:
     /// `cancel` and `waitForCompletion` drive the underlying generation `Task`.
-    nonisolated init(stream: AsyncStream<RawGeneration>, completion: Task<Void, Never>) {
+    nonisolated init(
+        stream: AsyncStream<RawGeneration>, completion: Task<Void, Never>,
+        generationPrompt: GenerationPrompt
+    ) {
         self.init(
             stream: stream,
             cancel: { completion.cancel() },
-            waitForCompletion: { await completion.value }
+            waitForCompletion: { await completion.value },
+            generationPrompt: generationPrompt
         )
     }
 
@@ -293,7 +302,8 @@ extension GenerationStreamLoop.RawGenerationHandle {
         self.init(
             stream: start.stream,
             cancel: start.cancel,
-            waitForCompletion: start.waitForCompletion
+            waitForCompletion: start.waitForCompletion,
+            generationPrompt: start.generationPrompt
         )
     }
 

@@ -107,7 +107,8 @@ final class ChatSession {
     /// prefill (first turn and after every tool batch). Deliberately *not*
     /// shown between parts mid-stream (the live message already has content —
     /// a row there would flicker) or during tool execution (tool rows own
-    /// their spinners). The view layer adds the `promptStartsThinking` gate.
+    /// their spinners). The view layer adds the thinking gate (the loaded
+    /// template's canonical Generation Prompt).
     var showsWaitingRow: Bool {
         guard isGenerating, livePart == nil else { return false }
         guard liveMessage?.content.isEmpty ?? true else { return false }

@@ -235,31 +235,6 @@ struct ModelIdentityTests {
         #expect(ModelIdentity(directory: dir) == ModelIdentity(configJSON: nil, chatTemplate: nil))
     }
 
-    // MARK: - promptStartsThinking (directory surface — chat_template.jinja read)
-
-    /// A chat template that opens `<think>` in its generation-prompt block reads
-    /// `promptStartsThinking == true` through the directory init.
-    @Test func promptStartsThinkingTrueWhenTemplateOpensThink() throws {
-        let dir = try makeModelDir(
-            config: #"{ "model_type": "qwen3_5" }"#,
-            template: "{% if add_generation_prompt %}<|im_start|>assistant\n<think>\n{% endif %}"
-        )
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        #expect(ModelIdentity(directory: dir).promptStartsThinking == true)
-    }
-
-    /// A generation-prompt block without `<think>` reads `false`.
-    @Test func promptStartsThinkingFalseWhenTemplateOmitsThink() throws {
-        let dir = try makeModelDir(
-            config: #"{ "model_type": "qwen3_5" }"#,
-            template: "{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}"
-        )
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        #expect(ModelIdentity(directory: dir).promptStartsThinking == false)
-    }
-
     // MARK: - No-disk interpretation seam
 
     /// The seam interprets config + template together with no disk access.
@@ -270,7 +245,6 @@ struct ModelIdentityTests {
         )
         #expect(identity.isQwen35 == true)
         #expect(identity.isMoE == true)
-        #expect(identity.promptStartsThinking == true)
     }
 
     /// `nil` inputs through the seam yield the same Total defaults as a bare
@@ -279,7 +253,6 @@ struct ModelIdentityTests {
         let identity = ModelIdentity(configJSON: nil, chatTemplate: nil)
         #expect(identity.isQwen35 == false)
         #expect(identity.isMoE == false)
-        #expect(identity.promptStartsThinking == false)
         #expect(identity.flopProfile == .qwen35_4B_PARO)
         #expect(identity.fullAttentionScratchProfile == nil)
     }
@@ -465,21 +438,14 @@ struct ModelIdentityTests {
 
     // MARK: - Fixtures
 
-    /// Write `config.json` and/or `chat_template.jinja` (when non-nil) into a
-    /// fresh temp directory.
-    private func makeModelDir(config: String?, template: String? = nil) throws -> URL {
+    /// Write `config.json` (when non-nil) into a fresh temp directory.
+    private func makeModelDir(config: String?) throws -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("modelidentity-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let config {
             try config.write(
                 to: dir.appendingPathComponent("config.json"),
-                atomically: true, encoding: .utf8
-            )
-        }
-        if let template {
-            try template.write(
-                to: dir.appendingPathComponent("chat_template.jinja"),
                 atomically: true, encoding: .utf8
             )
         }
