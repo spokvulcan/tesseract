@@ -40,9 +40,30 @@ struct RequestFactsTests {
         #expect(facts.ssdEnabled)
         #expect(facts.toolsDefined)
         #expect(facts.toolCallFormat == .json)
+        #expect(facts.isTextOnly)
         // Defined tools predict a tool call; a stop turn reads the think block.
         #expect(facts.predictedLeafStoreMode == .directToolLeaf)
         #expect(facts.leafStoreMode(emittedToolCalls: false) == .canonicalUserLeaf)
+    }
+
+    /// Text-only means no image reached the model: a text-class instance
+    /// drops the request's images, so its request is text-only however many
+    /// it carried, and keys into an identity key space.
+    @Test func textClassInstanceGivenImagesIsTextOnly() async throws {
+        let provider = ToyModelSessionProvider(
+            model: ToyLanguageModel(script: [0]), tokenizer: ToySequencingTokenizer(),
+            reportsFlatTextTokens: true)
+        let conversation = HTTPPrefixCacheConversation(
+            systemPrompt: nil,
+            messages: [
+                HTTPPrefixCacheMessage(
+                    role: .user, content: "Hi",
+                    images: [HTTPPrefixCacheImage(data: ImageTestFixtures.tinyPNGData)])
+            ])
+        let request = try await ToyRequestKeying.keyedRequest(
+            provider: provider, conversation: conversation)
+        #expect(request.facts.isTextOnly)
+        #expect(request.keySpace.isIdentity)
     }
 
     @Test func unkeyedRequestCarriesTheSameFacts() async throws {
@@ -57,5 +78,7 @@ struct RequestFactsTests {
         #expect(facts.prefillStepSize == 512)
         #expect(!facts.toolsDefined)
         #expect(!facts.ssdEnabled)
+        // The image reached the vision container's processor.
+        #expect(!facts.isTextOnly)
     }
 }

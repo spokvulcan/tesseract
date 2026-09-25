@@ -46,6 +46,13 @@ nonisolated struct RequestFacts: Sendable {
     /// Whether the request defined tools: MTP engagement predicts they will
     /// be called, since emission is unknowable before decode.
     let toolsDefined: Bool
+    /// Whether the request is text-only by instance truth: no image reached
+    /// the model. A text-class instance drops a request's images (#439), so
+    /// such a request is text-only by construction, however many images it
+    /// carried. The Cache Claim check-out, the leaf capture, speculative-arm
+    /// engagement and transient-boundary gating all read this one fact. For
+    /// a keyed request it is exactly an identity **Cache Key Space**.
+    let isTextOnly: Bool
     /// The chunked prefill step, for the request's own prefill and every
     /// re-prefill after it (the boundary residual, the speculative pass).
     let prefillStepSize: Int
@@ -78,7 +85,7 @@ nonisolated struct RequestFacts: Sendable {
     fileprivate init(
         promptTokens: [Int], tokenNDim: Int, partitionKey: CachePartitionKey,
         renderContext: TemplateRenderContext, generationPrompt: GenerationPrompt,
-        toolsDefined: Bool, parameters: GenerateParameters, ssdEnabled: Bool,
+        toolsDefined: Bool, isTextOnly: Bool, parameters: GenerateParameters, ssdEnabled: Bool,
         toolCallFormat: ToolCallFormat
     ) {
         self.promptTokens = promptTokens
@@ -87,6 +94,7 @@ nonisolated struct RequestFacts: Sendable {
         self.renderContext = renderContext
         self.generationPrompt = generationPrompt
         self.toolsDefined = toolsDefined
+        self.isTextOnly = isTextOnly
         self.prefillStepSize = parameters.prefill.stepSize ?? 512
         var decodeParameters = parameters
         decodeParameters.kvBits = nil
@@ -298,7 +306,8 @@ nonisolated enum RequestKeyingPhase {
                 renderContext: renderContext,
                 generationPrompt: render.checkedGenerationPrompt(
                     fed: fed, diagnostics: diagnostics),
-                toolsDefined: canonicalTools?.isEmpty == false, parameters: parameters,
+                toolsDefined: canonicalTools?.isEmpty == false, isTextOnly: keyedImages.isEmpty,
+                parameters: parameters,
                 ssdEnabled: ssdEnabled, toolCallFormat: toolCallFormat)
         }
 

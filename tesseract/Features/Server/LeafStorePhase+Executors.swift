@@ -73,7 +73,7 @@ nonisolated extension LeafStorePhase {
             restoreMode = mlxStart.restoreMode
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
-                inputs.containsImages || !inputs.request.keySpace.isIdentity
+                !inputs.request.facts.isTextOnly
                 ? .imageKeySpace
                 : inputs.request.facts.partitionKey.kvBits != nil ? .quantized : nil
         }

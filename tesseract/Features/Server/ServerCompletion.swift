@@ -1521,12 +1521,9 @@ nonisolated final class ServerCompletion {
             // deeper blocks (8 vs 2 effective), it engages under sampling
             // presets, and it decodes over restored caches. The policy lives
             // on `DFlash2Support.shouldEngage`.
-            let textOnlyIdentityKeySpace =
-                keySpace.isIdentity
-                && !conversation.messages.contains { !$0.images.isEmpty }
             let dflash2Engages = DFlash2Support.shouldEngage(
                 hasDrafter: session.dflash2Drafter != nil,
-                textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
+                textOnlyIdentityKeySpace: facts.isTextOnly,
                 kvBits: parameters.kvBits
             )
             memory.mark(
@@ -1568,7 +1565,7 @@ nonisolated final class ServerCompletion {
                 let restoredCache: [any KVCache]?
                 switch await claim.checkOut(
                     resolved, tokens: keySpace.keyPath, maximumAdvance: maximumAdvance,
-                    identityKeySpace: textOnlyIdentityKeySpace, in: session)
+                    identityKeySpace: facts.isTextOnly, in: session)
                 {
                 case .handoff(let taken):
                     handoff = taken
@@ -1660,7 +1657,7 @@ nonisolated final class ServerCompletion {
                     MTPDrafterSupport.shouldEngage(
                         hasDrafter: session.mtpDrafter != nil,
                         temperature: parameters.temperature,
-                        textOnlyIdentityKeySpace: keySpace.isIdentity && fullInput.image == nil,
+                        textOnlyIdentityKeySpace: facts.isTextOnly,
                         // Tool emission is unknowable at engagement time, so
                         // defined tools predict as if they will be called.
                         predictedLeafStoreMode: facts.predictedLeafStoreMode,
@@ -1736,7 +1733,7 @@ nonisolated final class ServerCompletion {
             // Preserve-thinking turns never synthesize boundary leaves or
             // abandonment seeds. Their boundary helpers serve no consumer.
             let transientOffsets =
-                renderContext.preservesThinking && textOnlyIdentityKeySpace
+                renderContext.preservesThinking && facts.isTextOnly
                 ? Set<Int>() : prefillPlan.transientCheckpointOffsets
             let helperCheckpoints = Dictionary(
                 uniqueKeysWithValues: transientOffsets.map {

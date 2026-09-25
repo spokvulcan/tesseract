@@ -345,7 +345,10 @@ import Testing
     /// The end-to-end promise the incident broke: an image-bearing
     /// conversation on a text-only instance runs the KEYED spine and the
     /// second round restores the admitted leaf warm — the prompt cache works
-    /// across a whole image-bearing session, not 0% forever.
+    /// across a whole image-bearing session, not 0% forever. The request is
+    /// text-only by instance truth (ADR-0070): no image reached the model,
+    /// so its leaf captures by move and the next round takes it by handoff,
+    /// as any text conversation's does, never by copy.
     @Test func imageBearingConversationHitsCacheOnTextOnlyInstance() async throws {
         let tokenizer = ToySequencingTokenizer()
         let image = HTTPPrefixCacheImage(data: Data("opaque screenshot bytes".utf8))
@@ -381,13 +384,17 @@ import Testing
             ],
             chatTemplate: nil
         )
+        let modelID = "dropped-image-\(UUID())"
+        let telemetry = TelemetryCapture(modelID: modelID)
+        defer { telemetry.stop() }
         let fixture = ServerCompletionFixture(
             provider: ToyModelSessionProvider(
                 model: ToyLanguageModel(script: script),
                 tokenizer: tokenizer,
                 reportsFlatTextTokens: true
             ),
-            identity: identity
+            identity: identity,
+            modelID: modelID
         )
 
         // -- Round 1: cold, but KEYED — the unkeyed arm's signature verb
@@ -400,12 +407,13 @@ import Testing
         let (text1, _) = try await collectServerText(handle1)
         #expect(text1 == "Hello!")
         let round1Verbs = fixture.provider.recorder.verbs
+        // The leaf takes the finished cache itself: no capture copy.
         #expect(
-            round1Verbs == [
-                .prepare, .newCache, .prefill, .quantizeKVCache, .makeDecodeIterator,
-                .captureSnapshot,
-            ]
+            round1Verbs == [.prepare, .newCache, .prefill, .quantizeKVCache, .makeDecodeIterator]
         )
+        let leafStore1 = try #require(telemetry.drain().last { $0.eventName == "leafStore" })
+        #expect(leafStore1.field("source") == "handoff")
+        #expect(leafStore1.field("copyReason") == nil)
 
         // -- Round 2: warm. The admitted leaf restores and only the suffix
         // prefills — the incident's sessions never got here.
@@ -421,13 +429,14 @@ import Testing
         #expect(handle2.cachedTokenCount == storedTokens1.count)
         let (text2, _) = try await collectServerText(handle2)
         #expect(text2 == "Sure.")
+        // The check-out hands the leaf's own cache over: no restore verb.
         let round2Verbs = Array(fixture.provider.recorder.verbs.dropFirst(round1Verbs.count))
-        #expect(
-            round2Verbs == [
-                .prepare, .restore, .prefill, .quantizeKVCache, .makeDecodeIterator,
-                .captureSnapshot,
-            ]
-        )
+        #expect(round2Verbs == [.prepare, .prefill, .quantizeKVCache, .makeDecodeIterator])
+        let events2 = telemetry.drain()
+        #expect(events2.first { $0.eventName == "lookup" }?.field("restoreMode") == "handoff")
+        let leafStore2 = try #require(events2.last { $0.eventName == "leafStore" })
+        #expect(leafStore2.field("restoreMode") == "handoff")
+        #expect(leafStore2.field("source") == "handoff")
 
         await fixture.drain()
     }

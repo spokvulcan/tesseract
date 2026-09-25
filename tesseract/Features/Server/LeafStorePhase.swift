@@ -62,7 +62,6 @@ nonisolated enum LeafStorePhase {
         let requestID: UUID
         let prefixCache: PrefixCacheManager
         let diagnosticsContext: PrefixCacheDiagnostics.Context
-        let containsImages: Bool
         let memory: RequestMemoryTelemetry?
         var mlxStart: HTTPPrefixCacheGeneration { mlxStartBox.value }
     }
@@ -125,7 +124,7 @@ nonisolated enum LeafStorePhase {
         let inputs = Inputs(
             mlxStartBox: mlxStartBox, request: request, claim: claim, sessions: sessions,
             requestID: requestID, prefixCache: prefixCache, diagnosticsContext: diagnosticsContext,
-            containsImages: conversation.messages.contains { !$0.images.isEmpty }, memory: memory)
+            memory: memory)
         let render = request.render
 
         // 1. Build the stored conversation (prompt + generated assistant turn).
