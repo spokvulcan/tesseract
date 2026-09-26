@@ -871,6 +871,21 @@ approval requirement in the capture baseline still applies to #480.
   plus `ModelAvailabilityTests`: a missing checkpoint fails before the GPU
   lease) and `Qwen3CheckpointTests` (the Voice Engine completeness rule, and
   `Qwen3Synthesizer` refusing to fetch or delete anything).
+- Qwen3-TTS sampler pin (patch 13 in `Vendor/mlx-audio-swift/TESSERACT-PATCHES.md`,
+  EOS filtered like every other token): the vendor's own `Qwen3TTSTests`, on a
+  tiny random-weight model and fixed logits, no checkpoint. From
+  `Vendor/mlx-audio-swift`:
+
+  ```bash
+  xcodebuild test -scheme MLXAudio-Package -destination 'platform=macOS' \
+    -skipPackagePluginValidation -skipMacroValidation -parallel-testing-enabled NO \
+    -only-testing:MLXAudioTests/Qwen3TTSTests CODE_SIGNING_ALLOWED=NO
+  ```
+
+  On Xcode 27 the vendor test target does not build as checked in:
+  `MLXAudioSTT` fails four Swift 6 Sendable checks in its Parakeet model. Until
+  that is fixed, run the suite from a local copy that gives the `MLXAudioSTT`
+  target `swiftSettings: [.swiftLanguageMode(.v5)]`.
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits

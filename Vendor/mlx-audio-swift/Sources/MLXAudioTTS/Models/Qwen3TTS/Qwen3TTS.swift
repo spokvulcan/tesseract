@@ -693,7 +693,6 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
                 repetitionPenalty: repetitionPenalty,
                 generatedTokens: generatedCodebookTokens,
                 suppressTokens: suppressTokens,
-                eosTokenId: eosTokenId,
                 minP: minP
             )
 
@@ -1289,7 +1288,6 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
         repetitionPenalty: Float = 1.0,
         generatedTokens: [Int]? = nil,
         suppressTokens: [Int]? = nil,
-        eosTokenId: Int? = nil,
         minP: Float = 0.0
     ) -> MLXArray {
         var logitsSlice = logits[0..., (-1)..., 0...].squeezed(axis: 1) // [batch, vocab_size]
@@ -1321,13 +1319,19 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
             return argMax(logitsSlice, axis: -1, keepDims: true)
         }
 
-        // Preserve EOS logit so top-k/top-p/min-p do not permanently suppress it.
-        let eosLogit: MLXArray? = if let eosTokenId, eosTokenId >= 0, eosTokenId < logitsSlice.dim(-1) {
-            logitsSlice[0..., eosTokenId ..< (eosTokenId + 1)]
-        } else {
-            nil
-        }
+        let filteredLogits = Self.filterLogits(logitsSlice, topK: topK, topP: topP, minP: minP)
 
+        // Sample with temperature
+        let token = categorical(filteredLogits / temperature)
+        return token.reshaped(1, 1)
+    }
+
+    /// Top-k, then top-p, then min-p over `[batch, vocab_size]` logits. A token
+    /// a filter drops gets -inf; the rest keep their logits. These are the
+    /// logits `sampleToken` draws from. EOS gets no exemption (Tesseract
+    /// patch #13): upstream wrote its pre-filter logit back afterwards, which
+    /// could end a long generation early, mid-syllable.
+    static func filterLogits(_ logitsSlice: MLXArray, topK: Int, topP: Float, minP: Float) -> MLXArray {
         // Apply top-k filtering (match mlx_lm.apply_top_k ordering and masking semantics)
         var filteredLogits = logitsSlice
         let vocabSize = logitsSlice.dim(-1)
@@ -1388,14 +1392,7 @@ public final class Qwen3TTSModel: Module, SpeechGenerationModel, @unchecked Send
             filteredLogits = takeAlong(filteredSortedLogits, inverseIndices, axis: -1)
         }
 
-        if let eosLogit, let eosTokenId {
-            let eosIdx = MLXArray([Int32(eosTokenId)]).reshaped(1, 1)
-            filteredLogits = putAlong(filteredLogits, eosIdx, values: eosLogit, axis: -1)
-        }
-
-        // Sample with temperature
-        let token = categorical(filteredLogits / temperature)
-        return token.reshaped(1, 1)
+        return filteredLogits
     }
 
     // MARK: - fromPretrained
