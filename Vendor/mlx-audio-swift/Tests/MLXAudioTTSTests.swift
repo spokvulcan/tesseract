@@ -1081,6 +1081,65 @@ struct Qwen3TTSTests {
             )
         }
     }
+
+    // Tesseract patch #13: EOS is filtered like every other token. Upstream
+    // wrote EOS's pre-filter logit back after top-k/top-p/min-p, so EOS kept a
+    // chance on every talker step and could end long-form audio mid-syllable.
+    // Python mlx-audio made the same fix:
+    // https://github.com/Blaizzy/mlx-audio/commit/d2d02bf36148d68198fb3d314d65c4d4f5340752
+    // In this row EOS holds 18% of the mass but sits outside the 0.8 nucleus,
+    // which tokens 7 (49%) and 8 (33%) close.
+    private static let eosTokenID = 3050
+
+    private static func eosJustOutsideTheNucleus() -> [Float] {
+        var row = [Float](repeating: -20, count: 3072)
+        row[7] = 3.0
+        row[8] = 2.6
+        row[eosTokenID] = 2.0
+        return row
+    }
+
+    @Test func eosOutsideTheTopPNucleusIsFilteredToNegativeInfinity() {
+        let row = Self.eosJustOutsideTheNucleus()
+        let filtered = Qwen3TTSModel.filterLogits(
+            MLXArray(row).reshaped(1, row.count), topK: 0, topP: 0.8, minP: 0
+        ).asArray(Float.self)
+
+        #expect(filtered[Self.eosTokenID] == -Float.infinity)
+        #expect(filtered.indices.filter { filtered[$0].isFinite } == [7, 8])
+    }
+
+    @Test func eosOutsideTheTopPNucleusIsNeverSampled() async throws {
+        let fixture = try await makeTinyQwen3TTSModel(
+            ttsModelType: "voice_design",
+            includeSpeechEncoder: false
+        )
+        defer { cleanupTemporaryArtifactDirectory(fixture.tokenizerDirectory) }
+
+        // The talker's call with the Voice Engine's settings: t=0.6, top-p 0.8,
+        // top-k off, penalty 1.3, the special tokens other than EOS suppressed.
+        let row = Self.eosJustOutsideTheNucleus()
+        let logits = MLXArray(row).reshaped(1, 1, row.count)
+        let suppressTokens = (2048 ..< row.count).filter { $0 != Self.eosTokenID }
+        MLXRandom.seed(0)
+        var draws: [Int: Int] = [:]
+        for _ in 0 ..< 200 {
+            let token = fixture.model.sampleToken(
+                logits,
+                temperature: 0.6,
+                topP: 0.8,
+                topK: 0,
+                repetitionPenalty: 1.3,
+                generatedTokens: [],
+                suppressTokens: suppressTokens,
+                minP: 0
+            )
+            draws[Int(token[0, 0].item(Int32.self)), default: 0] += 1
+        }
+
+        #expect(draws[Self.eosTokenID] == nil)
+        #expect(Set(draws.keys) == [7, 8])
+    }
 }
 
 struct SopranoTextCleaningTests {
