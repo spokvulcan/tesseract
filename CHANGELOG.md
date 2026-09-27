@@ -2,6 +2,24 @@
 
 ## [1.17.0](https://github.com/spokvulcan/tesseract/compare/v1.16.0...v1.17.0) (2026-09-27)
 
+### Highlights
+
+The Speech page is now a Reader. Paste any text, a whole book included, press Read, and the page highlights each word as you hear it and scrolls along. The timing comes from the voice model itself: one of Qwen3-TTS's attention heads follows the text as it speaks, and the engine reads that head while it generates, at no measurable cost. Checked against Whisper's word timestamps, 97% of words start within 200 ms of where Whisper puts them, against 30% when the words were spread evenly over the audio ([measurements](https://github.com/spokvulcan/tesseract/blob/v1.17.0/docs/research/2026-09-27-word-timing-from-attention.md)). The notch is gone. The new Speech Overlay, an island at the top of the screen or captions at the bottom, follows the same clock, so the words on screen no longer run up to 8 seconds ahead of the voice. Reading resumes where it stopped, and an 80,000-word text opens without a pause.
+
+A designed voice now stays the same person. VoiceDesign drew a new speaker for every passage, so each passage could sound like someone else. Now the first passage a voice renders becomes its reference take, and every later passage continues it. The take is saved with the voice, so it survives a relaunch, and "Try another take" rolls a new one. The voice designer builds descriptions from trait chips in the form Qwen's own examples use, renders each new voice reading a line in its language, and lets you compare renders side by side and keep the one you like.
+
+The app now owns its Qwen3-TTS code instead of running a vendored copy of mlx-audio-swift. Checked against Qwen's reference implementation, the codec decoder's waveform was 3 to 7% off, from two bugs shared with the Python MLX port: it attended over the whole passage instead of Qwen's 72-frame window, and when streaming it added a bias twice at every chunk boundary, so the audio changed with the chunk size. The decoder now matches Qwen's, and with a rewritten frame loop the engine is faster and needs about half the memory. On an M3 Max with the 6-bit checkpoint, a minute of speech renders in about 9 seconds instead of 16, the first audio of a reading arrives after 60 ms instead of 251 ms, and a long reading peaks at 2.66 GB of memory instead of 5.57 GB. Where Core ML can place all of it on the Neural Engine, which rules out M1 and M2, the codec's convolutions run there. The [decision record](https://github.com/spokvulcan/tesseract/blob/v1.17.0/docs/adr/0074-qwen3-tts-exact-decoder-pipelined-frames.md) has every measurement.
+
+Onboarding and the Models page now download the Voice Engine checkpoint that speech actually loads, the 6-bit one at 2.7 GB. Before, they fetched a 4.5 GB bf16 copy it never read, and the engine then downloaded the 6-bit one by itself on the first spoken reply, with no progress shown and while holding the GPU, so chats waited behind it. The unused bf16 copy is deleted once at launch, which frees its 4.5 GB, and the engine no longer downloads anything on its own.
+
+On the local server, a request that turned thinking off (`enable_thinking: false`) on Qwen3.5 or later stored its answer in the prompt cache under a path the next user turn could never match, so that turn processed the whole prompt again. The server now measures what each chat template appends to open the assistant turn instead of assuming it. In the prefix cache benchmark on Qwen3.5-4B, the next turn's time to first token went from 315 ms to 123 ms.
+
+A few things change when you update:
+
+- If you skipped the Voice Engine in onboarding, download it from the Models page before using speech. When it's missing, the hotkey and the Speak button open that page.
+- Voices designed in an earlier version keep their descriptions, but their saved takes can't be carried over. The first reading with each one renders a new take, so it may sound different from before.
+- The speech sampler settings moved to Settings > Speech. Values tuned for the old sampler aren't carried over, so the new defaults apply.
+
 
 ### Features
 
