@@ -193,9 +193,10 @@ an unkeyed thinking stream; `RequestFactsTests` checks what Request Keying
 derives. `GenerationPromptCatalogRealTests` is the catalog gate. It loads the
 tokenizer of every catalog chat model downloaded under
 `~/Library/Application Support/models` (override with
-`TEST_RUNNER_TESSERACT_MODELS_ROOT`), requires each to measure by default and with
-thinking off, and fails when it checked none. It is skipped where that directory
-does not exist, and a skip must be reported as one.
+`TEST_RUNNER_TESSERACT_MODELS_ROOT`), and requires each to measure by default and
+with thinking off. It is skipped where no catalog chat model is downloaded, which
+includes CI: the app creates that directory at launch, so a runner has it empty.
+A skip must be reported as one.
 
 The planned Prefix-View Checkpoint slice (#524, ADR-0068) is covered at the
 existing seams. `CheckpointCaptureTests` checks synchronized whole-state-only
