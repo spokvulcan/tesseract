@@ -1,5 +1,5 @@
 // TesseractSpeech — the production Speech Synthesizer adapter over the
-// re-vendored mlx-audio-swift Qwen3-TTS model (ADR-0036/0038).
+// Qwen3-TTS model (ADR-0038, ADR-0071).
 //
 // Value semantics at the port, vendor state inside: the vendor keeps one
 // anchor slot and one prefix cache as mutable model fields; this actor
@@ -8,9 +8,8 @@
 
 import Foundation
 import MLX
-import MLXAudioCore
-import MLXAudioTTS
 import MLXLMCommon
+import Qwen3TTS
 
 public actor Qwen3Synthesizer: SpeechSynthesizing {
     private let checkpointDirectory: @Sendable (TTSModelSpec) -> URL
@@ -64,8 +63,7 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         let params = GenerateParameters(
             maxTokens: 3, temperature: 0.9, topP: 1.0, repetitionPenalty: 1.05)
         _ = try? await model.generate(
-            text: ".", voice: nil, refAudio: nil, refText: nil,
-            language: "English", generationParameters: params)
+            text: ".", voice: nil, language: "English", generationParameters: params)
         warmed = true
     }
 
@@ -77,8 +75,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         let params = GenerateParameters(
             maxTokens: 2, temperature: 0.9, topP: 1.0, repetitionPenalty: 1.05)
         _ = try? await model.generate(
-            text: ".", voice: description, refAudio: nil, refText: nil,
-            language: language ?? "English", generationParameters: params)
+            text: ".", voice: description, language: language ?? "English",
+            generationParameters: params)
     }
 
     public func unload() async {
@@ -128,8 +126,6 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                     let vendorStream = model.generateStream(
                         text: request.text,
                         voice: request.voiceDescription,
-                        refAudio: nil,
-                        refText: nil,
                         language: request.language,
                         generationParameters: params,
                         // 0.4s chunks: pacing/cancel granularity. Not a perf

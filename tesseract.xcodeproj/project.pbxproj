@@ -19,7 +19,7 @@
 		E0A111082F41A000003C1B55 /* MLXEmbedders in Frameworks */ = {isa = PBXBuildFile; productRef = E0A111092F41A000003C1B55 /* MLXEmbedders */; };
 		E0A5AC022F50B000003C1B55 /* AgentPackages in Resources */ = {isa = PBXBuildFile; fileRef = E0A5AC012F50B000003C1B55 /* AgentPackages */; };
 		E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655412F2EA000003C1B55 /* WhisperKit */; };
-		E0C655502F3BA000003C1B55 /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* MLXAudioTTS */; };
+		E0C655502F3BA000003C1B55 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = E0C655512F3BA000003C1B55 /* HuggingFace */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -83,7 +83,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E0C655422F2EA000003C1B55 /* WhisperKit in Frameworks */,
-				E0C655502F3BA000003C1B55 /* MLXAudioTTS in Frameworks */,
+				E0C655502F3BA000003C1B55 /* HuggingFace in Frameworks */,
 				E0A111002F41A000003C1B55 /* MLXLLM in Frameworks */,
 				E0A111022F41A000003C1B55 /* MLXLMCommon in Frameworks */,
 				E0A111042F41A000003C1B55 /* MLXVLM in Frameworks */,
@@ -156,7 +156,7 @@
 			name = tesseract;
 			packageProductDependencies = (
 				E0C655412F2EA000003C1B55 /* WhisperKit */,
-				E0C655512F3BA000003C1B55 /* MLXAudioTTS */,
+				E0C655512F3BA000003C1B55 /* HuggingFace */,
 				E0A111012F41A000003C1B55 /* MLXLLM */,
 				E0A111032F41A000003C1B55 /* MLXLMCommon */,
 				E0A111052F41A000003C1B55 /* MLXVLM */,
@@ -248,7 +248,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
-				E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */,
+				E0C655522F3BA000003C1B55 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
 				E0A111062F41A000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-swift-lm" */,
 				E0B999882F59F4DA00F80663 /* XCRemoteSwiftPackageReference "textual" */,
 				2EE88EC58D52DCCACA5960B0 /* XCRemoteSwiftPackageReference "textual" */,
@@ -710,10 +710,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "Vendor/mlx-swift-lm";
 		};
-		E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = "Vendor/mlx-audio-swift";
-		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
@@ -755,6 +751,14 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 1.0.0;
+			};
+		};
+		E0C655522F3BA000003C1B55 /* XCRemoteSwiftPackageReference "swift-huggingface" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-huggingface";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.8.1;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -815,10 +819,10 @@
 			package = E0C655402F2EA000003C1B55 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
 			productName = WhisperKit;
 		};
-		E0C655512F3BA000003C1B55 /* MLXAudioTTS */ = {
+		E0C655512F3BA000003C1B55 /* HuggingFace */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = E0C655522F3BA000003C1B55 /* XCLocalSwiftPackageReference "Vendor/mlx-audio-swift" */;
-			productName = MLXAudioTTS;
+			package = E0C655522F3BA000003C1B55 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
+			productName = HuggingFace;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

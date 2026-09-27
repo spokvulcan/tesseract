@@ -6,7 +6,6 @@
 import Foundation
 import Combine
 import os
-import MLXAudioCore
 import TesseractSpeech
 
 enum ModelStatus: Equatable, Sendable {
@@ -36,7 +35,7 @@ final class ModelDownloadManager: ObservableObject {
 
     static let modelStorageURL: URL = {
         let url = URL.applicationSupportDirectory.appendingPathComponent(
-            ModelUtils.storageDirectoryName)
+            ModelDefinition.storageDirectoryName)
         // Ensure directory exists and is excluded from Time Machine / iCloud backup
         // (re-downloadable content per Apple guidelines). Setting on the parent
         // directory excludes all contents.

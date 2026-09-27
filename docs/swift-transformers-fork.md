@@ -10,9 +10,10 @@ general and upstreamable, exact-revision pins keep history reproducible.
 
 ```
 tesseract.xcodeproj
-  └─ Vendor/mlx-audio-swift/Package.swift — the package's ONLY declarer
-     in the app graph (MLXLMCommon's `import Tokenizers` resolves through
-     the Xcode workspace module leak, same as MLXFast):
+  └─ Vendor/tesseract-speech/Package.swift: the package's ONLY declarer
+     in the app graph since ADR-0071 (before that, the retired
+     Vendor/mlx-audio-swift; MLXLMCommon's `import Tokenizers` and the
+     app's resolve through the Xcode workspace module leak, same as MLXFast):
        url: https://github.com/spokvulcan/swift-transformers
        revision: <exact commit on pin-tesseract>
   └─ spokvulcan/swift-transformers @ pin-tesseract-2026-09-15
@@ -64,7 +65,7 @@ so expect the question.
 
 ## Pin state
 
-`Vendor/mlx-audio-swift`'s `Package.swift` and `Package.resolved` pin
+`Vendor/tesseract-speech`'s `Package.swift` and `Package.resolved` pin
 `fe95f0ad9d13fdc8bf3b19848ae200e8550a875c` — the head of
 `pin-tesseract-2026-09-15`, so the app tree resolves and builds all four
 carries on the 1.3.4 base. Appending to the pin branch does
@@ -93,7 +94,7 @@ every previously divergent `write` turn stored live and zero duplicated grapheme
 Same shape as `docs/mlx-core-fork.md`: edit the DerivedData checkout
 (`chmod u+w` first) for the fast loop; on ACCEPT port the diff verbatim
 to `~/projects/swift-transformers` (`pin-tesseract`), commit
-(Conventional Commits), push, move the `Vendor/mlx-audio-swift`
+(Conventional Commits), push, move the `Vendor/tesseract-speech`
 Package.swift pin, commit in tesseract with the ledger entry, re-resolve
 and verify the checkout diff equals the accepted diff, then the
 mandatory clean-build confirmation. On REJECT: `git checkout -- .` in

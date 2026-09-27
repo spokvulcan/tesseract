@@ -1,6 +1,6 @@
 # ADR-0036: TTS v2 inference stands on a re-ported vendor of upstream mlx-audio-swift
 
-- Status: Accepted
+- Status: Superseded by ADR-0071 (2026-09-26: the Qwen3-TTS code is first-party; the vendored tree and its patch ledger are gone)
 - Date: 2026-07-13
 - Relates to: map #334 (Voice engine v2), tickets #335 (field survey), #336 (model family), #337 (re-port spike), #338 (budgets), #339 (benchmarks), #342 (v1 autopsy), #346 (speech-swift, out of scope); ADR-0003 (speech seams), ADR-0005 (vendor as frontier-experimentation surface), ADR-0006 (mlx-swift-lm fork migration)
 

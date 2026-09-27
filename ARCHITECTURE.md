@@ -291,7 +291,8 @@ playback**):
 - **TTS (engine v2)** — the TTS engine is the `SpeechEngine` **actor** in the
   `Vendor/tesseract-speech` package (ADR-0038/0039), consumed through its
   session/utterance API. Its own ports live in the package: `SpeechSynthesizing`
-  (model port; production adapter `Qwen3Synthesizer` → re-vendored MLXAudioTTS)
+  (model port; production adapter `Qwen3Synthesizer` over the package's own
+  `Qwen3TTS` target, first-party since ADR-0071)
   and `GPULeasing` (app adapter `ArbiterGPULease` over `InferenceArbiter`).
   `Qwen3Synthesizer` loads only the folder the app hands it (the Model Catalog's
   Voice Engine folder) and never downloads; the engine checks that folder before

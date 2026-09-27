@@ -1,6 +1,6 @@
 // v2-listen — engine v2 listening-artifact + measurement harness.
 // NOT part of the app. Drives the production stack (SpeechEngine actor →
-// Qwen3Synthesizer → re-vendored MLXAudioTTS) against real weights and writes:
+// Qwen3Synthesizer → Qwen3TTS) against real weights and writes:
 //   pinned    — 6 utterances in one pinned-voice session + a 7th from a
 //               serialized/restored PinnedVoice (anchored-consistency listen)
 //   longform  — one long read-aloud utterance (multi-segment); reports
@@ -8,12 +8,15 @@
 //   ab        — #339-matched settings (seed 42, t=0.9/p=1.0/rp=1.05) for
 //               same-seed A/B against research/model-bench-339/audio WAVs
 //
-// Usage: swift run -c release v2-listen --mode pinned|longform|ab \
-//          [--precision 8bit|6bit|bf16] [--out-dir DIR] [--text-file PATH] [--seed N]
+// Usage: v2-listen --mode pinned|longform|ab [--precision 8bit|6bit|bf16]
+//          [--checkpoint DIR] [--out-dir DIR] [--text-file PATH] [--seed N]
+//
+// Loads the checkpoint the app downloaded (Application Support/models) unless
+// --checkpoint names another directory; it never downloads. Build with
+// xcodebuild (scheme v2-listen) so MLX's metallib lands next to the binary.
 
+import AVFoundation
 import Foundation
-import HuggingFace
-import MLXAudioCore
 import TesseractSpeech
 
 // MARK: - Args
@@ -23,6 +26,7 @@ struct Args {
     var precision = "8bit"
     var outDir = "."
     var textFile: String?
+    var checkpoint: String?
     var seed: UInt64 = 42
     var timing = false
 }
@@ -40,6 +44,7 @@ func parseArgs() -> Args {
         case "--precision": a.precision = next(flag)
         case "--out-dir": a.outDir = next(flag)
         case "--text-file": a.textFile = next(flag)
+        case "--checkpoint": a.checkpoint = next(flag)
         case "--seed": a.seed = UInt64(next(flag))!
         case "--timing": a.timing = true
         default: fatalError("unknown flag \(flag)")
@@ -123,9 +128,29 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
     return capture
 }
 
+/// Mono float32 WAV through AVAudioFile.
+func writeWav(samples: [Float], sampleRate: Int, to url: URL) throws {
+    guard
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(sampleRate), channels: 1,
+            interleaved: false),
+        let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+    else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    buffer.frameLength = AVAudioFrameCount(samples.count)
+    samples.withUnsafeBufferPointer { source in
+        buffer.floatChannelData![0].update(from: source.baseAddress!, count: samples.count)
+    }
+    let file = try AVAudioFile(
+        forWriting: url, settings: format.settings, commonFormat: format.commonFormat,
+        interleaved: format.isInterleaved)
+    try file.write(from: buffer)
+}
+
 func write(_ capture: UtteranceCapture, to url: URL, label: String) throws {
-    try AudioUtils.writeWavFile(
-        samples: capture.samples, sampleRate: capture.sampleRate, fileURL: url)
+    try writeWav(samples: capture.samples, sampleRate: capture.sampleRate, to: url)
     let audioSec = Double(capture.samples.count) / Double(capture.sampleRate)
     let rtf = audioSec > 0 ? capture.wallSec / audioSec : -1
     let segTTFAs = capture.segmentTTFAsMs.map { String(format: "%.0f", $0) }
@@ -146,15 +171,13 @@ let args = parseArgs()
 let outDir = URL(fileURLWithPath: args.outDir, isDirectory: true)
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
-// The engine only loads from disk, so the harness fetches the checkpoint
-// first: the vendored resolver, into the Application Support store the app
-// also uses (a checkpoint the app downloaded is reused as-is).
+// The engine only loads from disk: the app's model store, or --checkpoint.
 let modelSpec = spec(for: args.precision)
-guard let repoID = Repo.ID(rawValue: modelSpec.repo) else {
-    fatalError("invalid repo id \(modelSpec.repo)")
-}
-let checkpoint = try await ModelUtils.resolveOrDownloadModel(
-    repoID: repoID, requiredExtension: "safetensors")
+let checkpoint =
+    args.checkpoint.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? URL.applicationSupportDirectory
+    .appendingPathComponent("models")
+    .appendingPathComponent(modelSpec.repo.replacingOccurrences(of: "/", with: "_"))
 
 let engine = SpeechEngine(
     model: modelSpec,
