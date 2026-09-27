@@ -22,6 +22,16 @@ struct SpeechContentView: View {
     @State private var inputText: String = ""
 
     var body: some View {
+        // PROTOTYPE (Speech page redesign, never merge): the variants.
+        if PrototypeGate.isDevelopmentBuild {
+            SpeechPrototypeHost { currentPage }
+        } else {
+            currentPage
+        }
+    }
+
+    @ViewBuilder
+    private var currentPage: some View {
         @Bindable var settings = settings
         SpeechComposerView(
             text: $inputText,

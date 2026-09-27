@@ -176,6 +176,17 @@ final class SpeechCoordinator {
         "Here is how I sound when I read to you. "
         + "A story, an article, a long email: every line keeps this same voice, from the first word to the last."
 
+    /// PROTOTYPE (Speech page redesign, never merge): keep `voice`, an
+    /// earlier take of its designed voice, from now on — store it and drop
+    /// the open session, so the next utterance opens pinned to it.
+    func keep(_ voice: PinnedVoice) async {
+        stop()
+        pinnedVoices.save(voice)
+        await session?.close()
+        session = nil
+        sessionVoiceKey = nil
+    }
+
     /// Cancelling the consuming task is the engine-side cancellation token
     /// (ADR-0038): generation stops within one decoder step.
     func stop() {

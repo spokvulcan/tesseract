@@ -21,6 +21,11 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
     // Streaming format for buffer creation — the engine owns the connection.
     private var streamingFormat: AVAudioFormat?
 
+    // PROTOTYPE (Speech page redesign, never merge): a time-stretch stage so
+    // live speech can play faster or slower without changing pitch.
+    private var timePitch: AVAudioUnitTimePitch?
+    private var playbackRate: Float = 1.0
+
     // The push scheduler's counters, start gate, finish detection, and stream
     // epoch (StreamingScheduler / ADR-0054). Every counter mutation and gate
     // decision is a verdict from here; this adapter performs only the
@@ -121,9 +126,14 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
+        let stretch = AVAudioUnitTimePitch()
 
         engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+        engine.attach(stretch)
+        engine.connect(player, to: stretch, format: format)
+        engine.connect(stretch, to: engine.mainMixerNode, format: format)
+        stretch.rate = playbackRate
+        stretch.bypass = playbackRate == 1.0
 
         do {
             try engine.start()
@@ -134,6 +144,7 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
 
         audioEngine = engine
         playerNode = player
+        timePitch = stretch
         player.volume = 1.0
         streamingFormat = format
         scheduler.beginStream(sampleRate: sampleRate)
@@ -185,6 +196,16 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         }
     }
 
+    // MARK: - Speed (PROTOTYPE)
+
+    /// Plays the stream faster or slower, keeping pitch. The player node's
+    /// clock stays in source time, so the read-along keeps its place.
+    func setPlaybackRate(_ rate: Float) {
+        playbackRate = min(max(rate, 0.5), 2.5)
+        timePitch?.rate = playbackRate
+        timePitch?.bypass = playbackRate == 1.0
+    }
+
     // MARK: - Pause / resume
 
     func pause() {
@@ -211,6 +232,7 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         audioEngine?.stop()
         playerNode = nil
         audioEngine = nil
+        timePitch = nil
         streamingFormat = nil
         scheduler.stop()
         pausedTime = nil

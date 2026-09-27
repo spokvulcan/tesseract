@@ -222,6 +222,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showMainWindow()
     }
 
+    /// PROTOTYPE (Speech page redesign, never merge): the overlay's "open".
+    func navigateToSpeech() {
+        navigationSelection?.wrappedValue = .speech
+        showMainWindow()
+    }
+
     /// Summon the main window onto the Dictation page — the overlay "edit"
     /// affordance's target (the history entry focus rides separately on
     /// `TranscriptionHistory.focusEntryID`).

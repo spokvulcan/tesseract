@@ -853,6 +853,10 @@ final class DependencyContainer: ObservableObject {
         // Dual-Path Playback (ADR-0041): the voice-session sink renders
         // session replies through the VPIO capture engine under its voice
         // hold; every other TTS surface keeps the dedicated engine.
+        // PROTOTYPE (Speech page redesign, never merge): in a development
+        // build the Speech Lab wraps playback and the overlay to record takes
+        // and feed the read-along; both decorators forward everything.
+        let lab = PrototypeGate.isDevelopmentBuild ? SpeechLab.shared : nil
         let coordinator = SpeechCoordinator(
             textExtractor: textExtractor,
             engine: speechEnginePresenter,
@@ -863,9 +867,18 @@ final class DependencyContainer: ObservableObject {
                 modelDownloadManager.refreshStatus(for: id)
                 return modelDownloadManager.status(for: id)
             },
+            playback: lab.map {
+                SpeechLabRecordingPlayback(wrapping: AudioPlaybackManager(), lab: $0)
+            }
+                ?? AudioPlaybackManager(),
             settings: settingsManager,
-            notchOverlay: ttsNotchPanelController
+            notchOverlay: lab.map {
+                SpeechLabHighlightFanOut(classic: ttsNotchPanelController, lab: $0)
+            }
+                ?? ttsNotchPanelController
         )
+        lab?.attach(
+            settings: settingsManager, coordinator: coordinator, engine: speechEnginePresenter)
         coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
         coordinator.onVoiceEngineMissing = {
             (NSApp.delegate as? AppDelegate)?.navigateToModels()
