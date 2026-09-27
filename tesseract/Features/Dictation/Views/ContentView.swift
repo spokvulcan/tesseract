@@ -53,6 +53,7 @@ struct ContentView: View {
         case .speech:
             SpeechContentView()
                 .injectSpeechDependencies(from: container)
+                .environmentObject(container.modelDownloadManager)
         case .agent:
             AgentContentView()
                 .injectAgentDependencies(from: container)
