@@ -11,31 +11,28 @@
 //  Same `@MainActor`-sibling shape as `AudioPlayback` (ADR-0003): class-bound,
 //  main-actor-isolated, and called *synchronously* on the hot path — deliberately not
 //  an actor, since the calls are already main-actor-bound. The production adapter is
-//  `TTSNotchPanelController` (the `NSPanel` plus the `TTSWordTracker` it hosts); the
-//  test peer `RecordingHighlightSurface` records the call sequence, which is what makes
-//  the segment-boundary switch assertable (ADR-0004).
+//  `SpeechReadAlong`, the one clock the Reader and the Speech Overlay follow
+//  (ADR-0076); the test peer `RecordingHighlightSurface` records the call sequence,
+//  which is what makes the segment-boundary switch assertable (ADR-0004).
 //
 
 import Foundation
 
 @MainActor
 protocol WordHighlightSurface: AnyObject {
-    /// Show a fresh segment and begin tracking. `playbackTimeProvider` is the clock
-    /// the surface samples to pace the highlight.
-    func show(
-        text: String, tokenCharOffsets: [Int], playbackTimeProvider: @escaping () -> TimeInterval)
+    /// Show a new utterance's first segment and begin tracking. `playbackTimeProvider`
+    /// is the clock the surface samples to pace the highlight.
+    func show(text: String, playbackTimeProvider: @escaping () -> TimeInterval)
 
-    /// Switch to the next segment's text once the playback head crosses the
-    /// **Segment Window** (`segmentBase`: the previous segment's cumulative scheduled
-    /// duration). Collapses the old `updateText(segmentTimeBase:segmentDurationBase:)`,
-    /// which was always passed the same value twice, into one base.
-    func switchText(_ text: String, tokenCharOffsets: [Int], segmentBase: TimeInterval)
+    /// The next segment's text, arriving ahead of its audio: the surface switches to
+    /// it once the playback head crosses its **Segment Window** (`segmentBase`: the
+    /// cumulative scheduled duration before it).
+    func switchText(_ text: String, segmentBase: TimeInterval)
 
-    /// Push the running cumulative scheduled duration for the segment currently shown.
+    /// Everything generated so far: the latest segment's audio ends here.
     func updateTotalDuration(_ duration: TimeInterval)
 
-    /// One segment's generation finished (more remain): align its duration estimate so
-    /// the highlight converges to 100% without triggering auto-dismiss.
+    /// One segment's generation finished and more remain.
     func markSegmentComplete()
 
     /// The whole generation finished: let the highlight run to the end and auto-dismiss.

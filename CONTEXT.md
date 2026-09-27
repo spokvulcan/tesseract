@@ -1070,24 +1070,29 @@ debug recording.
 ### Speech word timeline
 
 **Word Timeline**:
-The pure, immutable per-segment projection of spoken text plus playback position
-into a highlighted character count and active word — the single home for the
-token→char→word model and the pacing fold. Holds no timer, clock, observable state,
-or UI; the **TTS Word Tracker** supplies all of those and drives it.
-_Avoid_: WordPacing (names the operation; this names the value), TTSWordTracker (the
-driver above it, not the value), word highlighter, pacing model, overlay panel (a
-different, dictation surface unrelated to the TTS timeline).
+The pure, immutable words of one spoken segment on a character line: where each
+word starts and ends when the words are joined by single spaces, and which word a
+character count falls in. The **Read-Along** places the heard character; the
+timeline names the word. Words split the way the engine and the **Reader** split
+them.
+_Avoid_: WordPacing, pacing model (the retired fold the notch drove), word
+highlighter, overlay panel (a different, dictation surface).
 
-**TTS Word Tracker**:
-The observable, main-actor stateful driver of the pure **Word Timeline** — owns the
-frame timer, the playback-clock seam, the cross-segment estimate, and the published
-state the notch overlay reads. It decides *when* to re-fold; the timeline decides
-*what* the fold yields.
-_Avoid_: word timeline (the pure value it drives), word state machine.
+**Read-Along**:
+The one clock that says which word of the speech now playing is being heard,
+followed by both the **Reader** and the **Speech Overlay** (ADR-0076). It is the
+production **Word Highlight Surface**: segment scripts arrive seconds ahead under
+lookahead pacing, but a segment starts only when the playback head reaches its
+**Segment Window**. Inside a segment, words are placed in proportion to their
+characters over its audio; the word never moves back within an utterance. It
+samples the head 30 times a second and publishes only when the heard word
+changes.
+_Avoid_: TTS Word Tracker (retired with the notch: it switched text on arrival
+and ran ahead of the voice), karaoke, word state machine.
 
 **Segment Window**:
-The single playback-time base a **TTS Word Tracker** measures one long-form
-segment's pacing against — one value, so a time-base/duration-base disagreement is
+The single playback-time base a **Read-Along** places one long-form segment
+against — one value, so a time-base/duration-base disagreement is
 unrepresentable.
 _Avoid_: segmentTimeBase / segmentDurationBase (the old coupled pair this replaced),
 segment offset, time base.
@@ -1102,11 +1107,41 @@ _Avoid_: chunk loop, stream pump, playback driver, a config-flag loop.
 **Word Highlight Surface**:
 The main-actor port that `SpeechCoordinator` drives to render spoken-word
 highlighting (show, switch, mark complete, dismiss). The production adapter is
-the notch panel; a recording test peer makes the segment-boundary switch
+the **Read-Along**; a recording test peer makes the segment-boundary switch
 assertable. In engine v2 its switch timing comes from **Segment Script**
 ground truth, not playback bookkeeping.
-_Avoid_: notch overlay / TTSNotchPanelController (one adapter, not the seam),
+_Avoid_: notch overlay / TTSNotchPanelController (retired adapter, not the seam),
 highlight view, **Overlay Panel** (the separate dictation HUD surface).
+
+### Speech page (ADR-0076)
+
+**Reader**:
+The Speech page: the owner's text of any length, its **Bookmark**, and the
+reading in progress. It starts speech from the bookmark or a selection, follows
+the **Read-Along**, and maps each heard word to a range of the text by counting
+words forward from where the previous segment ended. Nothing walks the whole
+document, so a book costs what a page costs.
+_Avoid_: composer (retired with the old page), player, speech editor.
+
+**Bookmark**:
+Where reading resumes: an offset into the **Reader**'s text, saved beside it.
+It follows the sentence being heard, moves with edits before it, and returns to
+the start once the text has been read to the end.
+_Avoid_: cursor (the text view's insertion point), playhead (audio time),
+progress.
+
+**Speech Overlay**:
+The floating panel that shows the words being read over every app, as an island
+at the top of the screen or captions at the bottom, following the **Read-Along**.
+In its automatic scope it hides while the Speech page is in front. Replaced the
+TTS notch.
+_Avoid_: notch, TTS notch panel (retired), **Overlay Panel** (the dictation HUD).
+
+**Voice Source**:
+Which voices the speech checkpoint offers: designed from a description
+(VoiceDesign) or a fixed list of **Preset Voices** (CustomVoice). The Speech
+page offers designing a voice only for a designed source.
+_Avoid_: voice mode, voice type, voice provider.
 
 ### Speech engine v2 (ADR-0038)
 
@@ -2425,11 +2460,11 @@ hosts the live **Overlay Variant**'s view — a dumb, fixed-frame canvas that is
 created once, stays permanently ordered front, and never resizes, fades, or
 reacts to dictation state itself: all visibility and motion belong to the
 hosted SwiftUI content. Takes its **Overlay Placement** at construction and
-swaps hosted content on demand; the interactive TTS notch is a separate panel,
+swaps hosted content on demand; the **Speech Overlay** is a separate panel,
 not an Overlay Panel.
 _Avoid_: overlay controller / manager, HUD window, generic NSPanel wrapper,
 show/hide or animated-frame panel APIs (retired — SwiftUI owns all motion),
-config-flag panel, the TTS notch panel (a separate, interactive surface), the
+config-flag panel, the **Speech Overlay** (a separate, interactive surface), the
 full-screen border overlay (retired — a legacy MVP exploration).
 
 **Overlay Placement**:

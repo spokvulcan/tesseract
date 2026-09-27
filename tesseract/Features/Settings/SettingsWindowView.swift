@@ -32,6 +32,10 @@ struct SettingsWindowView: View {
                 DictationSettingsPane()
                     .frame(width: 620, height: 660)
             }
+            Tab("Speech", systemImage: "speaker.wave.2") {
+                SpeechSettingsPane()
+                    .frame(width: 620, height: 560)
+            }
             Tab("Server", systemImage: "server.rack") {
                 ServerConfigurationView()
                     .frame(width: 620, height: 700)

@@ -40,6 +40,7 @@ final class InMemoryAudioPlayback: AudioPlayback {
     private(set) var stopCount = 0
     private(set) var isPaused = false
     private(set) var setVolumeCalls: [Float] = []
+    private(set) var playbackRates: [Float] = []
     private(set) var volume: Float = 1.0
 
     /// Scripted envelope reading — tests set this to simulate the reply's
@@ -97,6 +98,10 @@ final class InMemoryAudioPlayback: AudioPlayback {
     func setVolume(_ volume: Float) {
         setVolumeCalls.append(volume)
         self.volume = volume
+    }
+
+    func setPlaybackRate(_ rate: Float) {
+        playbackRates.append(rate)
     }
 
     /// Stands in for the audio layer reporting that scheduled audio has drained —

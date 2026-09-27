@@ -254,8 +254,79 @@ final class SettingsManager {
         didSet { SettingsCatalogue.ttsLanguage.write(ttsLanguage, to: store) }
     }
 
-    var ttsStreamingEnabled: Bool {
-        didSet { SettingsCatalogue.ttsStreamingEnabled.write(ttsStreamingEnabled, to: store) }
+    var ttsPlaybackRate: Double {
+        didSet { SettingsCatalogue.ttsPlaybackRate.write(ttsPlaybackRate, to: store) }
+    }
+
+    var savedVoices: [SavedVoice] {
+        didSet { SettingsCatalogue.savedVoices.write(savedVoices, to: store) }
+    }
+
+    // MARK: - Speech Page Settings
+
+    var readerTextSize: Double {
+        didSet { SettingsCatalogue.readerTextSize.write(readerTextSize, to: store) }
+    }
+
+    var readerTypefaceRaw: String {
+        didSet { SettingsCatalogue.readerTypefaceRaw.write(readerTypefaceRaw, to: store) }
+    }
+
+    var readerTypeface: ReaderTypeface {
+        get { ReaderTypeface(rawValue: readerTypefaceRaw) ?? .serif }
+        set { readerTypefaceRaw = newValue.rawValue }
+    }
+
+    var readerHighlightRaw: String {
+        didSet { SettingsCatalogue.readerHighlightRaw.write(readerHighlightRaw, to: store) }
+    }
+
+    var readerHighlight: ReadAlongHighlight {
+        get { ReadAlongHighlight(rawValue: readerHighlightRaw) ?? .both }
+        set { readerHighlightRaw = newValue.rawValue }
+    }
+
+    var speechOverlayStyleRaw: String {
+        didSet { SettingsCatalogue.speechOverlayStyleRaw.write(speechOverlayStyleRaw, to: store) }
+    }
+
+    var speechOverlayStyle: SpeechOverlayStyle {
+        get { SpeechOverlayStyle(rawValue: speechOverlayStyleRaw) ?? .island }
+        set { speechOverlayStyleRaw = newValue.rawValue }
+    }
+
+    var speechOverlaySizeRaw: String {
+        didSet { SettingsCatalogue.speechOverlaySizeRaw.write(speechOverlaySizeRaw, to: store) }
+    }
+
+    var speechOverlaySize: SpeechOverlaySize {
+        get { SpeechOverlaySize(rawValue: speechOverlaySizeRaw) ?? .medium }
+        set { speechOverlaySizeRaw = newValue.rawValue }
+    }
+
+    var speechOverlayTintRaw: String {
+        didSet { SettingsCatalogue.speechOverlayTintRaw.write(speechOverlayTintRaw, to: store) }
+    }
+
+    var speechOverlayTint: SpeechOverlayTint {
+        get { SpeechOverlayTint(rawValue: speechOverlayTintRaw) ?? .accent }
+        set { speechOverlayTintRaw = newValue.rawValue }
+    }
+
+    var speechOverlayShowsControls: Bool {
+        didSet {
+            SettingsCatalogue.speechOverlayShowsControls.write(
+                speechOverlayShowsControls, to: store)
+        }
+    }
+
+    var speechOverlayScopeRaw: String {
+        didSet { SettingsCatalogue.speechOverlayScopeRaw.write(speechOverlayScopeRaw, to: store) }
+    }
+
+    var speechOverlayScope: SpeechOverlayScope {
+        get { SpeechOverlayScope(rawValue: speechOverlayScopeRaw) ?? .automatic }
+        set { speechOverlayScopeRaw = newValue.rawValue }
     }
 
     var agentAutoSpeak: Bool {
@@ -619,7 +690,17 @@ final class SettingsManager {
         self.ttsSeed = SettingsCatalogue.ttsSeed.load(from: store)
         self.ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.load(from: store)
         self.ttsLanguage = SettingsCatalogue.ttsLanguage.load(from: store)
-        self.ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.load(from: store)
+        self.ttsPlaybackRate = SettingsCatalogue.ttsPlaybackRate.load(from: store)
+        self.savedVoices = SettingsCatalogue.savedVoices.load(from: store)
+        self.readerTextSize = SettingsCatalogue.readerTextSize.load(from: store)
+        self.readerTypefaceRaw = SettingsCatalogue.readerTypefaceRaw.load(from: store)
+        self.readerHighlightRaw = SettingsCatalogue.readerHighlightRaw.load(from: store)
+        self.speechOverlayStyleRaw = SettingsCatalogue.speechOverlayStyleRaw.load(from: store)
+        self.speechOverlaySizeRaw = SettingsCatalogue.speechOverlaySizeRaw.load(from: store)
+        self.speechOverlayTintRaw = SettingsCatalogue.speechOverlayTintRaw.load(from: store)
+        self.speechOverlayShowsControls = SettingsCatalogue.speechOverlayShowsControls.load(
+            from: store)
+        self.speechOverlayScopeRaw = SettingsCatalogue.speechOverlayScopeRaw.load(from: store)
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
         self.companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.load(
             from: store)
@@ -770,7 +851,15 @@ final class SettingsManager {
         ttsSeed = SettingsCatalogue.ttsSeed.default
         ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.default
         ttsLanguage = SettingsCatalogue.ttsLanguage.default
-        ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.default
+        ttsPlaybackRate = SettingsCatalogue.ttsPlaybackRate.default
+        readerTextSize = SettingsCatalogue.readerTextSize.default
+        readerTypefaceRaw = SettingsCatalogue.readerTypefaceRaw.default
+        readerHighlightRaw = SettingsCatalogue.readerHighlightRaw.default
+        speechOverlayStyleRaw = SettingsCatalogue.speechOverlayStyleRaw.default
+        speechOverlaySizeRaw = SettingsCatalogue.speechOverlaySizeRaw.default
+        speechOverlayTintRaw = SettingsCatalogue.speechOverlayTintRaw.default
+        speechOverlayShowsControls = SettingsCatalogue.speechOverlayShowsControls.default
+        speechOverlayScopeRaw = SettingsCatalogue.speechOverlayScopeRaw.default
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
         companionModelID = SettingsCatalogue.companionModelID.default

@@ -35,14 +35,14 @@ struct SettingsCatalogueTests {
     func freshStoreYieldsCorrectTrueDefaults() {
         // Removing `register(defaults:)` must not silently flip these unset
         // true-defaults to `false` (a fresh install keeps dock visible, SSD
-        // cache on, web access on, TTS streaming on, …). Each reads its
+        // cache on, web access on, overlay controls on, …). Each reads its
         // catalogue default through default-on-read.
         let store = InMemorySettingsStore()
         #expect(SettingsCatalogue.showInDock.load(from: store) == true)
         #expect(SettingsCatalogue.showInMenuBar.load(from: store) == true)
         #expect(SettingsCatalogue.autoInsertText.load(from: store) == true)
         #expect(SettingsCatalogue.restoreClipboard.load(from: store) == true)
-        #expect(SettingsCatalogue.ttsStreamingEnabled.load(from: store) == true)
+        #expect(SettingsCatalogue.speechOverlayShowsControls.load(from: store) == true)
         #expect(SettingsCatalogue.playSounds.load(from: store) == true)
         #expect(SettingsCatalogue.webAccessEnabled.load(from: store) == true)
         #expect(SettingsCatalogue.prefixCacheSSDEnabled.load(from: store) == true)

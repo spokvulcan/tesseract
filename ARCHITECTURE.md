@@ -96,7 +96,7 @@ tesseract/
 │   ├── OverlayPlacement.swift         # Overlay canvas frame math (pure value, unit-tested)
 │   ├── PillMetrics.swift              # Pill canvas + per-phase sizes (placement + variants)
 │   ├── OverlayScreenLocator.swift     # Screen detection for overlays
-│   └── TTSNotchPanelController.swift  # TTS notch overlay (separate; not unified)
+│   └── SpeechOverlayPanel.swift       # Speech Overlay: read-along words over every app
 │
 ├── Features/                    # Feature modules
 │   ├── Dictation/
@@ -113,7 +113,11 @@ tesseract/
 │   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
 │   │   ├── AudioPlaybackManager.swift # AVFoundation adapter (real pause/resume)
 │   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
-│   │   └── Views/ + NotchOverlay/     # TTS UI; WordTimeline + TTSWordTracker
+│   │   ├── ReadAlong/                 # Read-Along: the one heard-word clock (ADR-0076)
+│   │   ├── Reader/                    # Reader: TextKit 2 text view, bookmark, document store
+│   │   ├── Overlay/                   # Speech Overlay views (island, captions)
+│   │   ├── Voices/                    # Voice library and designer (VoiceDesign checkpoints)
+│   │   └── Views/                     # Speech page: control bar, display settings
 │   ├── Transcription/
 │   │   ├── TranscriptionEngine.swift  # @Observable facade over SpeechRecognizer
 │   │   ├── SpeechRecognizer.swift     # Model port (seam) for ASR
@@ -480,7 +484,7 @@ All AppKit bridging lives in `Platform/`. These are the features that SwiftUI ca
 - Clipboard text injection (CGEvent Cmd+V simulation)
 - Always-on-top overlay panels (NSPanel)
 - Menu bar status item (NSStatusItem)
-- Notch overlay for TTS
+- The Speech Overlay: the words being read, over every app (a separate panel)
 
 The Overlay Panel is a dumb, fixed-frame host: created once at launch, permanently ordered front, never resizing or fading. The hosted Overlay Variant view observes the Overlay Feed directly and owns all visibility and motion in SwiftUI; the panel's only runtime inputs are `setContent` (variant switch), `setPlacement`, and `reassertFront` (z-order hygiene, driven by an App Bindings rule on non-idle phases).
 

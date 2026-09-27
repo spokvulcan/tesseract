@@ -103,6 +103,22 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/PlaybackEnvelopeTests
 
+# Speech page (ADR-0076): the Reader over the real coordinator and engine,
+# the Read-Along clock, text geometry, captions, and voice design:
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/SpeechReaderTests \
+  -only-testing:tesseractTests/ReadAlongTimelineTests \
+  -only-testing:tesseractTests/SpeechReadAlongTests \
+  -only-testing:tesseractTests/WordTimelineTests \
+  -only-testing:tesseractTests/ReaderTextTests \
+  -only-testing:tesseractTests/ReaderDocumentStoreTests \
+  -only-testing:tesseractTests/CaptionLayoutTests \
+  -only-testing:tesseractTests/VoiceDesignTests \
+  -only-testing:tesseractTests/VoiceLibraryTests \
+  -only-testing:tesseractTests/SpeechCoordinatorTests \
+  -only-testing:tesseractTests/MainWindowPageTests
+
 # Dictation overlay freeze (no unit-test seam: the hang lives in SwiftUI's
 # key-view loop on macOS 27.0; tools/overlay-focus-hang-lab is the regression
 # loop — no flags must exit 2 while the OS still hangs, --unfocusable must exit 0):

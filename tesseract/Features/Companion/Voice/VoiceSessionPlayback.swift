@@ -196,6 +196,10 @@ final class VoiceSessionPlayback: AudioPlayback {
         }
     }
 
+    /// Voice-session replies always play at 1×: the capture engine's echo
+    /// cancellation hears them as its far-end reference.
+    func setPlaybackRate(_ rate: Float) {}
+
     var volume: Float {
         usingFallback ? fallback.volume : requestedVolume
     }

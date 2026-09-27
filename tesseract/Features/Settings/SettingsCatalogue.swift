@@ -20,8 +20,8 @@ import TesseractSpeech
 /// Deliberately *not* catalogued — the blessed UI-local `@AppStorage` keys
 /// (Settings IA, issue #213): pure view state (panel visibility, disclosure)
 /// that belongs to its surface, is never shown in the Settings window, and is
-/// never swept by Reset to Defaults: `ttsParametersPanelVisible`,
-/// `toolPanelPageShowsRaw`, and `server.cache.mode`/`.window`/`.events.open`.
+/// never swept by Reset to Defaults: `toolPanelPageShowsRaw`, and
+/// `server.cache.mode`/`.window`/`.events.open`.
 enum SettingsCatalogue {
 
     // MARK: - General
@@ -101,7 +101,30 @@ enum SettingsCatalogue {
     static let ttsSeed = Setting.int("ttsSeed", default: 0)
     static let ttsVoiceDescription = Setting.string("ttsVoiceDescription", default: "")
     static let ttsLanguage = Setting.string("ttsLanguage", default: "English")
-    static let ttsStreamingEnabled = Setting.bool("ttsStreamingEnabled", default: true)
+    /// Read-aloud speed, time-stretched so the pitch stays. Voice-session
+    /// replies always play at 1×.
+    static let ttsPlaybackRate = Setting.double("ttsPlaybackRate", default: 1.0)
+    /// Designed voices the owner named and saved. User content, so Reset to
+    /// Defaults leaves it alone.
+    static let savedVoices = Setting.json("speechSavedVoices", default: [SavedVoice]())
+
+    // MARK: - Speech page (the Reader) and the Speech Overlay
+
+    static let readerTextSize = Setting.double("speechReaderTextSize", default: 18)
+    static let readerTypefaceRaw = Setting.string(
+        "speechReaderTypeface", default: ReaderTypeface.serif.rawValue)
+    static let readerHighlightRaw = Setting.string(
+        "speechReaderHighlight", default: ReadAlongHighlight.both.rawValue)
+    static let speechOverlayStyleRaw = Setting.string(
+        "speechOverlayStyle", default: SpeechOverlayStyle.island.rawValue)
+    static let speechOverlaySizeRaw = Setting.string(
+        "speechOverlaySize", default: SpeechOverlaySize.medium.rawValue)
+    static let speechOverlayTintRaw = Setting.string(
+        "speechOverlayTint", default: SpeechOverlayTint.accent.rawValue)
+    static let speechOverlayShowsControls = Setting.bool(
+        "speechOverlayShowsControls", default: true)
+    static let speechOverlayScopeRaw = Setting.string(
+        "speechOverlayScope", default: SpeechOverlayScope.automatic.rawValue)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
     /// The Companion master switch (ADR-0040). The key keeps its skeleton-era
     /// name so the owner's existing opt-in survives the cutover to the loop.

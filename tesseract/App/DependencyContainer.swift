@@ -849,7 +849,21 @@ final class DependencyContainer: ObservableObject {
             )
         )
     }()
-    lazy var ttsNotchPanelController = TTSNotchPanelController()
+    /// The **Read-Along** (ADR-0076): the one clock of which word is being
+    /// heard. It is the coordinator's Word Highlight Surface; the Reader and
+    /// the Speech Overlay follow it.
+    lazy var speechReadAlong = SpeechReadAlong()
+    /// Each designed voice's Reference Take (ADR-0072), shared by the
+    /// coordinator, which speaks with it, and the voice library, which lists
+    /// and forgets voices.
+    lazy var pinnedVoiceStore = PinnedVoiceStore()
+    lazy var speechReader = SpeechReader(
+        coordinator: speechCoordinator, readAlong: speechReadAlong, settings: settingsManager)
+    lazy var voiceLibrary = VoiceLibrary(settings: settingsManager, pinnedVoices: pinnedVoiceStore)
+    lazy var speechOverlayPanel = SpeechOverlayPanel(
+        readAlong: speechReadAlong, settings: settingsManager, coordinator: speechCoordinator,
+        isSpeechPageInFront: { [unowned self] in self.speechReader.isInFront },
+        openSpeechPage: { (NSApp.delegate as? AppDelegate)?.navigateToSpeech() })
     lazy var speechCoordinator: SpeechCoordinator = {
         // `playback` is left to the coordinator's production default
         // (`AudioPlaybackManager()`) — the AVFoundation adapter is needed by
@@ -869,7 +883,8 @@ final class DependencyContainer: ObservableObject {
                 return modelDownloadManager.status(for: id)
             },
             settings: settingsManager,
-            notchOverlay: ttsNotchPanelController
+            notchOverlay: speechReadAlong,
+            pinnedVoices: pinnedVoiceStore
         )
         coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
         coordinator.onVoiceEngineMissing = {
@@ -1301,6 +1316,10 @@ final class DependencyContainer: ObservableObject {
                 },
                 pushCompanionAsleep: { [companionPresence] in
                     companionPresence.setAsleep($0)
+                },
+                startSpeechSurfaces: { [unowned self] in
+                    self.speechReader.start()
+                    self.speechOverlayPanel.start()
                 }
             )
         )
