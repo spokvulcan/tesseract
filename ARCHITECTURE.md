@@ -9,7 +9,7 @@ For domain vocabulary, see [CONTEXT.md](./CONTEXT.md); for decision records, see
 
 ## Overview
 
-Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, an LLM-powered agent with tool-calling capabilities, and a local OpenAI-compatible HTTP server accelerated by a tiered KV prefix cache. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS.
+Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation (speech-to-text), text-to-speech, an LLM-powered agent with tool-calling capabilities, and a local OpenAI-compatible HTTP server accelerated by a tiered KV prefix cache. All inference uses local models: WhisperKit (CoreML) for ASR, MLX for LLM and TTS, with the TTS codec's conv stack on the Neural Engine through Core ML where the chip allows (ADR-0075).
 
 **Key Principles:**
 - Privacy-first: No audio or text data leaves the device
@@ -46,7 +46,7 @@ Tesseract Agent runs entirely on-device on Apple Silicon. It provides dictation 
 │  Model adapters behind ports (actor-isolated inference)              │
 │  ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────┐  │
 │  │ SpeechRecognizer     │ │ SpeechEngine (pkg)   │ │ LLMActor     │  │
-│  │ WhisperKit (ASR)     │ │ Qwen3 TTS (MLX)      │ │ MLX LLM      │  │
+│  │ WhisperKit (ASR)     │ │ Qwen3 TTS (MLX, ANE) │ │ MLX LLM      │  │
 │  └──────────────────────┘ └──────────────────────┘ └──────────────┘  │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Platform Adapters (AppKit)                                          │
@@ -298,7 +298,11 @@ playback**):
   and `GPULeasing` (app adapter `ArbiterGPULease` over `InferenceArbiter`).
   `Qwen3Synthesizer` loads only the folder the app hands it (the Model Catalog's
   Voice Engine folder) and never downloads; the engine checks that folder before
-  taking the GPU lease and throws `modelUnavailable` when it's incomplete. The
+  taking the GPU lease and throws `modelUnavailable` when it's incomplete.
+  After warm-up it moves the codec's conv stack to the Neural Engine: a Core ML
+  model the package builds from the checkpoint and keeps in the cache directory
+  the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
+  Neural Engine can't run it all (ADR-0074/0075). The
   app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
   mirror for views and the arbiter — a presenter, not a facade: orchestration
   lives in the package engine.

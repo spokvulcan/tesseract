@@ -897,10 +897,26 @@ approval requirement in the capture baseline still applies to #480.
     `swift test --package-path Vendor/tesseract-speech --filter TesseractSpeechTests`
     runs them.
   - `Qwen3TTSTests`: the model itself on tiny random-weight checkpoints and
-    fixed logits (EOS filtered like every other token, temperature before
-    top-p, the windowed repetition penalty, the reference-take prompt, the
-    codec encoder dropped at load, Base checkpoints refused). MLX needs
-    Metal, so run both suites through xcodebuild, from
+    fixed logits.
+    - Sampling: EOS filtered like every other token, temperature before
+      top-p, top-k keeping ties, EOS held back for two frames, the windowed
+      repetition penalty.
+    - Prompts: the reference-take prompt, both text layouts, the dialect rule,
+      the text table read from disk.
+    - Loading: the codec encoder dropped, Base checkpoints refused, stacked
+      projections equal to separate ones.
+    - The decoder (ADR-0074): the streamed audio equals the one-pass decode
+      at every chunk size, and the sliding window and its mask hold.
+    - The fused Metal kernels equal the MLX ops they replace, bit for bit:
+      the sampler's draw, q/k norm + RoPE over some 4 million values, add +
+      norm, an attention step, a layer stack. Also bit for bit: a prompt
+      evaluated a layer at a time equals the one graph.
+    - The fork's causal SDPA matches attention written out in float32, and
+      overlapping generations render as if alone.
+    - The Core ML conv stack (ADR-0075) matches MLX's. It is compiled for
+      the CPU, so no Neural Engine is needed.
+
+    MLX needs Metal, so run both suites through xcodebuild, from
     `Vendor/tesseract-speech`:
 
     ```bash
@@ -915,6 +931,24 @@ approval requirement in the capture baseline still applies to #480.
   whole reading plus one WAV per segment and prints per-segment time to
   first audio, RTF and peak RSS. `--reference none` renders every segment
   from the description alone, the control for voice-consistency listens.
+  `--neural-engine off` keeps the codec's conv stack on MLX. On is the
+  default, with the Core ML model cached in
+  `~/Library/Caches/tesseract-speech/neural-codec`; the app keeps its own under
+  its storage root.
+- Qwen3-TTS model measurements and numerical checks (`qwen3-tts-bench`, real
+  weights, below the engine): build the `qwen3-tts-bench` scheme with
+  xcodebuild, as for `v2-listen`. The usage comment in
+  `Vendor/tesseract-speech/Sources/Tools/qwen3-tts-bench/main.swift` lists
+  every mode. Useful modes:
+  - `--mode profile`: times the talker step, the code-predictor frame and the
+    decoder.
+  - `--mode generate --out FILE.json`: records golden frames at a seed.
+  - `--mode trace --golden FILE.json --out DIR`: writes teacher-forced logits
+    on those frames, for comparing against Qwen's PyTorch model.
+  - `--mode kernels` and `--mode audit`: check each fused Metal kernel against
+    the MLX ops on real data. A kernel change must still show identical codes
+    and 0 mismatching calls.
+  - `--mode neural`: builds and times the Neural Engine codec.
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits

@@ -12,7 +12,7 @@
 // Usage: v2-listen --mode pinned|longform|ab [--precision 8bit|6bit|bf16]
 //          [--checkpoint DIR] [--out-dir DIR] [--text-file PATH] [--seed N]
 //          [--temperature T] [--detail-temperature T] [--voice DESCRIPTION]
-//          [--reference pinned|none]
+//          [--reference pinned|none] [--neural-engine on|off]
 //
 // Loads the checkpoint the app downloaded (Application Support/models) unless
 // --checkpoint names another directory; it never downloads. Build with
@@ -36,6 +36,7 @@ struct Args {
     var voice: String?
     var reference = "pinned"
     var timing = false
+    var neuralEngine = true
 }
 
 func parseArgs() -> Args {
@@ -58,6 +59,7 @@ func parseArgs() -> Args {
         case "--reference": a.reference = next(flag)
         case "--seed": a.seed = UInt64(next(flag))!
         case "--timing": a.timing = true
+        case "--neural-engine": a.neuralEngine = next(flag) != "off"
         default: fatalError("unknown flag \(flag)")
         }
     }
@@ -206,12 +208,19 @@ let checkpoint =
     .appendingPathComponent("models")
     .appendingPathComponent(modelSpec.repo.replacingOccurrences(of: "/", with: "_"))
 
+let synthesizer = Qwen3Synthesizer(
+    checkpointDirectory: { [checkpoint] _ in checkpoint },
+    neuralEngineCache: args.neuralEngine ? Qwen3Synthesizer.defaultNeuralEngineCache : nil)
 let engine = SpeechEngine(
     model: modelSpec,
-    synthesizer: Qwen3Synthesizer(checkpointDirectory: { [checkpoint] _ in checkpoint }),
+    synthesizer: synthesizer,
     gpu: ImmediateLease(),
     diagnostics: args.timing ? StderrTimingTap() : nil
 )
+// Load and warm up, then wait for the Neural Engine codec (built in the
+// background on first use), so every rendering below uses one decoder.
+try await engine.prepare(.warm)
+print("decoder: \(await synthesizer.neuralEngineReady() ?? "MLX")")
 
 let narrator = args.voice ?? "A calm, warm female narrator with a clear, steady tone."
 

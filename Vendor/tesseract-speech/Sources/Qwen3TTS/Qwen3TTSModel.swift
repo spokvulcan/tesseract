@@ -1,65 +1,230 @@
 import Foundation
 @preconcurrency import MLX
 @preconcurrency import MLXLMCommon
-import MLXNN
 import Tokenizers
 
-// MARK: - Qwen3TTS Model
-
-public final class Qwen3TTSModel: Module, @unchecked Sendable {
+/// Qwen3-TTS (VoiceDesign and CustomVoice checkpoints): text and a voice in,
+/// 24 kHz audio out.
+///
+/// Three models run per 80 ms frame: the talker picks the frame's first
+/// codebook, the code predictor fills in the other fifteen, and the codec
+/// decoder turns frames into audio as they accumulate. Generation is
+/// pipelined: while the GPU runs one frame, the next frame's graph is built,
+/// and the end-of-speech check reads the frame before.
+public final class Qwen3TTSModel: @unchecked Sendable {
     let config: Qwen3TTSModelConfig
-    let talker: Qwen3TTSTalkerForConditionalGeneration
-    var speechTokenizer: Qwen3TTSSpeechTokenizer?
-    var tokenizer: Tokenizers.Tokenizer?
+    let talkerConfig: Qwen3TTSTalkerConfig
+    let talker: Qwen3TTSTalker
+    let textEmbedding: Qwen3TTSTextEmbedding
+    let codecDecoder: Qwen3TTSCodecDecoder
+    let tokenizer: Tokenizers.Tokenizer
+    let prompts: Qwen3TTSPromptBuilder
+    /// The speech tokenizer directory, whose files key the Neural Engine
+    /// codec's cache.
+    var speechTokenizerDirectory: URL?
 
-    // Voice prefix KV cache: the description's user turn leads both prompt layouts
-    // and, under causal attention, does not depend on what follows, so we cache it
-    // once per voice description and restore it for each new text.
-    private var voicePrefixKVState: [[MLXArray]]?
-    private var cachedVoiceDescription: String?
+    /// The conv stack on the Neural Engine, once prepared; nil runs it in MLX.
+    private var neuralCodec: Qwen3TTSNeuralCodec?
+    var neuralCodecForBench: Qwen3TTSNeuralCodec? { lock.withLock { neuralCodec } }
+    private let neuralQueue = DispatchQueue(label: "qwen3tts.neural-codec", qos: .userInitiated)
+
+    /// The instruct turn's KV for the last description used: every prompt
+    /// opens with it, and under causal attention it reads the same whatever
+    /// follows.
+    private var voicePrefix: (description: String, state: [[MLXArray]])?
+    private let lock = NSLock()
+    /// Held for as long as a generation or a priming uses the kept KV
+    /// caches. A cancelled stream's generation runs on to the end of its
+    /// frame after its consumer has gone and the engine's GPU lease has
+    /// passed on; the next one waits for it here instead of rewinding
+    /// caches it is still writing.
+    private let generationLock = NSLock()
+
+    /// Working memory kept across the segments of an utterance: the talker's
+    /// and the code predictor's KV caches, rewound for each generation
+    /// instead of allocated anew. MLX reuses a freed buffer only for a
+    /// request of nearly its size, so a fresh cache per segment (each a
+    /// different length) would pile up in the buffer pool.
+    private var talkerCache: (caches: [KVCache], capacity: Int)?
+    private var codeCache: [KVCache]?
+
+    /// Talker KV positions are reserved in steps of this many.
+    static let cacheStep = 256
+    /// Prompts longer than this prefill in pieces, which bounds the
+    /// prefill's working memory; shorter ones (nearly all) in one pass.
+    static let prefillChunk = 512
 
     public var sampleRate: Int { config.sampleRate }
 
-    /// Audio samples per codec frame, the speech tokenizer's upsampling: 1,920
-    /// at 24 kHz, 12.5 frames a second. Nil until the speech tokenizer loads.
-    public var samplesPerFrame: Int? { speechTokenizer?.decodeUpsampleRate }
+    /// Audio samples per codec frame, the decoder's upsampling: 1,920 at
+    /// 24 kHz, 12.5 frames a second.
+    public var samplesPerFrame: Int { codecDecoder.samplesPerFrame }
 
-    init(config: Qwen3TTSModelConfig) {
-        let talkerConfig = config.talkerConfig ?? {
-            let json = "{}".data(using: .utf8)!
-            return try! JSONDecoder().decode(Qwen3TTSTalkerConfig.self, from: json)
-        }()
+    init(
+        config: Qwen3TTSModelConfig, talker: Qwen3TTSTalker, textEmbedding: Qwen3TTSTextEmbedding,
+        codecDecoder: Qwen3TTSCodecDecoder, tokenizer: Tokenizers.Tokenizer
+    ) throws {
         self.config = config
-        self.talker = Qwen3TTSTalkerForConditionalGeneration(config: talkerConfig)
+        self.talkerConfig = config.talkerConfig ?? .defaults
+        self.talker = talker
+        self.textEmbedding = textEmbedding
+        self.codecDecoder = codecDecoder
+        self.tokenizer = tokenizer
+        self.prompts = try Qwen3TTSPromptBuilder(
+            config: config, tokenizer: tokenizer, talker: talker, textEmbedding: textEmbedding)
     }
 
-    // MARK: - Voice prefix cache
+    // MARK: - Loading
 
-    private func saveVoicePrefixCache(_ cache: [any KVCache]) {
-        voicePrefixKVState = cache.map { $0.state }
-        eval(voicePrefixKVState!.flatMap { $0 })  // Materialize, detach from lazy graph
-    }
-
-    private func restoreVoicePrefixCache(into cache: [any KVCache]) {
-        guard let saved = voicePrefixKVState else { return }
-        for (i, layerState) in saved.enumerated() {
-            // KVCache implementations are classes (reference semantics); the var copy
-            // only copies the existential box. KVCacheSimple's state setter auto-sets
-            // offset from keys.dim(2).
-            var layerCache = cache[i]
-            layerCache.state = layerState
+    /// Loads a VoiceDesign or CustomVoice checkpoint directory: its config,
+    /// the talker's safetensors, the text tokenizer and `speech_tokenizer/`.
+    /// `decoderPrecision` is the codec decoder's dtype (fp16 by default).
+    public static func fromModelDirectory(
+        _ directory: URL, decoderPrecision: DType = .float16
+    ) async throws -> Qwen3TTSModel {
+        let config = try JSONDecoder().decode(
+            Qwen3TTSModelConfig.self,
+            from: Data(contentsOf: directory.appendingPathComponent("config.json")))
+        guard ["voice_design", "custom_voice"].contains(config.ttsModelType) else {
+            throw AudioGenerationError.invalidInput(
+                "Qwen3-TTS \(config.ttsModelType) checkpoints are not supported: "
+                    + "the engine runs VoiceDesign and CustomVoice only.")
         }
+
+        let speechTokenizer = directory.appendingPathComponent("speech_tokenizer")
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: speechTokenizer.path, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        else {
+            // A file where the directory should be is a broken download; the
+            // engine never deletes checkpoints, the model catalog repairs them.
+            throw AudioGenerationError.modelNotInitialized(
+                "\(speechTokenizer.path) is not the speech tokenizer directory.")
+        }
+
+        Qwen3TTSWeights.generateTokenizerJSONIfMissing(in: directory)
+        let tokenizer = try await AutoTokenizer.from(modelFolder: directory)
+        let (talker, textEmbedding) = try Qwen3TTSWeights.loadTalker(
+            config: config, directory: directory)
+        let decoder = try Qwen3TTSCodecDecoder(
+            directory: speechTokenizer, dtype: decoderPrecision)
+        let model = try Qwen3TTSModel(
+            config: config, talker: talker, textEmbedding: textEmbedding, codecDecoder: decoder,
+            tokenizer: tokenizer)
+        model.speechTokenizerDirectory = speechTokenizer
+        // What loading freed (the files' fp32 and unstacked originals) sits
+        // in MLX's buffer pool; hand it back.
+        Memory.clearCache()
+        return model
+    }
+
+    // MARK: - Neural Engine
+
+    /// Whether the codec's conv stack runs on the Neural Engine.
+    public var usesNeuralEngine: Bool {
+        lock.withLock { neuralCodec != nil }
+    }
+
+    /// Moves the codec's conv stack to the Neural Engine: builds the Core ML
+    /// model from this checkpoint's weights (or loads the one built before
+    /// from `cacheDirectory`), checks that every op lands on the Neural
+    /// Engine, and checks its audio against the MLX conv stack. Until it
+    /// returns, and whenever it throws, generation uses MLX. Returns what
+    /// the compute plan and the check found. `frames` is the chunk the
+    /// Neural Engine decodes per call (at most 8: its width limit on M1–M3).
+    @discardableResult
+    public func prepareNeuralEngine(cacheDirectory: URL, frames: Int = 3) async throws -> String {
+        precondition(frames >= 1 && frames <= 8)
+        let probe = try lock.withLock { neuralProbe } ?? makeNeuralProbe()
+        let (codec, placement) = try await Qwen3TTSNeuralCodec.load(
+            decoder: codecDecoder, frames: frames, cacheDirectory: cacheDirectory,
+            sourceKey: sourceKey())
+        let snr = try agreement(codec, probe)
+        guard snr >= 35 else {
+            throw AudioGenerationError.modelNotInitialized(
+                "The Neural Engine codec's audio differs from MLX's (\(String(format: "%.1f", snr)) dB).")
+        }
+        lock.withLock { neuralCodec = codec }
+        return "\(placement); \(String(format: "%.1f", snr)) dB against MLX"
+    }
+
+    /// Back to the MLX conv stack.
+    public func disableNeuralEngine() {
+        lock.withLock { neuralCodec = nil }
+    }
+
+    /// The speech tokenizer weights' identity: names, sizes and dates.
+    private func sourceKey() -> String {
+        guard let directory = speechTokenizerDirectory else { return "memory" }
+        let files =
+            ((try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]))
+            ?? []).filter { $0.pathExtension == "safetensors" }.sorted { $0.path < $1.path }
+        return files.map { file in
+            let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            return "\(file.lastPathComponent):\(values?.fileSize ?? 0):"
+                + "\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        }.joined(separator: ",")
+    }
+
+    /// A latent and MLX's audio for it, to check a Neural Engine codec
+    /// against: six frames of random codes, several calls' worth, so the
+    /// carried state is checked too. Runs on the GPU; `warmUp` makes it
+    /// under the engine's GPU lease.
+    struct NeuralProbe {
+        let latent: [Float16]
+        let frames: Int
+        let expected: [Float]
+    }
+
+    private var neuralProbe: NeuralProbe?
+
+    private func makeNeuralProbe() throws -> NeuralProbe {
+        let frames = 6
+        let codes = MLXRandom.randInt(
+            Int32(0) ..< Int32(codecDecoder.config.codebookSize),
+            [1, frames, codecDecoder.config.numQuantizers], key: MLXRandom.RandomState(seed: 1))
+        var stream = codecDecoder.makeStream()
+        let latent = codecDecoder.latent(codes, stream: &stream)
+        let expected = try codecDecoder.synthesize(latent, stream: &stream).asArray(Float.self)
+        return NeuralProbe(
+            latent: latent.asType(.float16).asArray(Float16.self), frames: frames,
+            expected: expected)
+    }
+
+    /// SNR of the Neural Engine conv stack against MLX's on the probe.
+    private func agreement(_ codec: Qwen3TTSNeuralCodec, _ probe: NeuralProbe) throws -> Double {
+        let dim = codecDecoder.config.latentDim
+        codec.reset()
+        defer { codec.reset() }
+        var actual: [Float] = []
+        var start = 0
+        while start < probe.frames {
+            let valid = min(codec.frames, probe.frames - start)
+            var values = Array(probe.latent[(start * dim) ..< ((start + valid) * dim)])
+            values += [Float16](repeating: 0, count: (codec.frames - valid) * dim)
+            actual += try codec.decode(latent: values, valid: valid)
+            start += valid
+        }
+        var signal = 0.0
+        var noise = 0.0
+        for (a, e) in zip(actual, probe.expected) {
+            signal += Double(e * e)
+            noise += Double((a - e) * (a - e))
+        }
+        return 10 * log10(signal / max(noise, 1e-20))
     }
 
     // MARK: - Token alignment
 
+    /// The character offset where each of `text`'s tokens starts.
     public func tokenizeForAlignment(text: String) -> [Int] {
-        guard let tokenizer else { return [] }
         let tokens = tokenizer.encode(text: text)
         guard !tokens.isEmpty else { return [] }
-
-        // Decode increasing prefixes to find the character boundary of each token
+        // Decoded prefixes, not single tokens: a byte-level token can end
+        // mid-character.
         var offsets: [Int] = [0]
+        offsets.reserveCapacity(tokens.count)
         for i in 1 ..< tokens.count {
             let prefix = tokenizer.decode(tokens: Array(tokens[0 ..< i]))
             offsets.append(min(prefix.count, text.count))
@@ -69,7 +234,7 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
 
     // MARK: - Generation
 
-    /// Renders the whole utterance, then decodes it. `voice` is the
+    /// Renders the whole utterance, then returns its audio. `voice` is the
     /// VoiceDesign description, or CustomVoice's "speaker, instruction".
     /// `seed` makes a render reproducible.
     public func generate(
@@ -77,21 +242,33 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         voice: String?,
         language: String?,
         sampling: Qwen3TTSSampling,
-        seed: UInt64 = 0
+        seed: UInt64 = 0,
+        layout: Qwen3TTSTextLayout = .interleaved
     ) async throws -> MLXArray {
-        try generateVoiceDesign(
-            text: text,
-            instruct: voice,
-            language: language ?? "auto",
-            sampling: sampling,
-            seed: seed
-        )
+        let frames = try run(
+            prompt: prompt(text: text, voice: voice, language: language, reference: nil, layout: layout),
+            voice: voice, sampling: sampling, seed: seed, chunkFrames: nil, onAudio: nil)
+        guard !frames.isEmpty else { return MLXArray.zeros([1]) }
+        // In pieces: the stream's state makes that exact, and it bounds the
+        // decoder's working memory.
+        let codes = MLXArray(frames.flatMap { $0 }).reshaped(1, frames.count, frames[0].count)
+        var stream = codecDecoder.makeStream()
+        var pieces: [MLXArray] = []
+        var start = 0
+        while start < frames.count {
+            let end = min(start + 50, frames.count)
+            let audio = try codecDecoder.decode(codes[0..., start ..< end, 0...], stream: &stream)
+            eval([audio] + stream.arrays)
+            pieces.append(audio)
+            start = end
+        }
+        return concatenated(pieces, axis: 0)
     }
 
     /// Streams decoded audio as it renders, then the code frames it rendered.
     /// With a `reference`, the voice continues that take: same person, new
-    /// words. The first chunks come every 5 frames until 48 frames exist,
-    /// then every `streamingInterval` seconds.
+    /// words. Audio comes every `streamingInterval` seconds of frames (the
+    /// first chunk sooner); the samples never depend on the chunking.
     public func generateStream(
         text: String,
         voice: String?,
@@ -99,22 +276,22 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         reference: Qwen3TTSReference? = nil,
         sampling: Qwen3TTSSampling,
         seed: UInt64 = 0,
-        streamingInterval: Double = 2.0
+        streamingInterval: Double = 2.0,
+        layout: Qwen3TTSTextLayout = .interleaved
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
+        let chunkFrames = max(
+            1, Int((streamingInterval * Double(sampleRate) / Double(samplesPerFrame)).rounded()))
         let task = Task { @Sendable [weak self] in
             guard let self else { return }
             do {
-                _ = try generateVoiceDesign(
-                    text: text,
-                    instruct: voice,
-                    language: language ?? "auto",
-                    conditioning: try reference.map { try referenceConditioning($0, language: language) },
-                    sampling: sampling,
-                    seed: seed,
-                    streamingInterval: streamingInterval,
-                    onEvent: { continuation.yield($0) }
-                )
+                let frames = try run(
+                    prompt: prompt(
+                        text: text, voice: voice, language: language, reference: reference,
+                        layout: layout),
+                    voice: voice, sampling: sampling, seed: seed, chunkFrames: chunkFrames,
+                    onAudio: { continuation.yield(.audio($0)) })
+                continuation.yield(.codeFrames(frames))
                 continuation.finish()
             } catch {
                 continuation.finish(throwing: error)
@@ -124,884 +301,348 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         return stream
     }
 
-    // MARK: - Decode chunk helper
-
-    /// Decode a chunk of codec codes to audio waveform.
-    /// - Parameters:
-    ///   - codes: Codec codes [1, time, numCodeGroups]
-    ///   - chunkTokens: Tokens per decode chunk (controls decode granularity)
-    /// - Returns: Decoded audio waveform (1D)
-    private func decodeChunk(_ codes: MLXArray, chunkTokens: Int = 300) -> MLXArray {
-        guard let speechTokenizer else { return MLXArray.zeros([1]) }
-
-        var audioChunks = [MLXArray]()
-        for chunk in speechTokenizer.streamingDecode(codes, chunkTokens: chunkTokens) {
-            audioChunks.append(chunk)
-        }
-        var audio = concatenated(audioChunks, axis: -1)[0]
-
-        let validLen = Int((codes[0..., 0..., 0] .> 0).sum().item(Int32.self))
-            * speechTokenizer.decodeUpsampleRate
-        if validLen > 0, validLen < audio.dim(0) {
-            audio = audio[..<validLen]
-        }
-
-        eval(audio)
-        return audio
+    /// Builds and caches `description`'s instruct-turn KV, so the next
+    /// generation in that voice starts after it.
+    public func primeVoice(_ description: String?) throws {
+        let instruct = isCustomVoice ? Self.parseCustomVoicePrompt(description)?.instruction : description
+        guard let embed = try prompts.instruct(instruct), let description else { return }
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        let cache = acquireTalkerCache(capacity: embed.dim(1))
+        restoreOrBuildPrefix(description: description, embed: embed, cache: cache)
     }
 
-    private func codecEmbedIcl(from refCodes: MLXArray, talkerConfig: Qwen3TTSTalkerConfig) -> MLXArray {
-        let firstCbCodes = refCodes[0..., 0, 0...]
-        var refCodecEmbed = talker.getInputEmbeddings()(firstCbCodes)
-        if talkerConfig.numCodeGroups > 1 {
-            for i in 0 ..< (talkerConfig.numCodeGroups - 1) {
-                let codeIdx = i + 1
-                if codeIdx >= refCodes.dim(1) { break }
-                let cbCodes = refCodes[0..., codeIdx, 0...]
-                refCodecEmbed = refCodecEmbed + talker.codePredictor.codecEmbedding[i](cbCodes)
-            }
-        }
-
-        let codecBosEmbed = talker.getInputEmbeddings()(
-            MLXArray([Int32(talkerConfig.codecBosId)]).reshaped(1, 1)
-        )
-        return concatenated([codecBosEmbed, refCodecEmbed], axis: 1)
+    /// Releases the working memory kept between generations (the KV
+    /// caches), for the end of an utterance. The weights and the voice
+    /// prefix stay.
+    public func releaseWorkingMemory() {
+        lock.lock()
+        talkerCache = nil
+        codeCache = nil
+        lock.unlock()
     }
 
-    // MARK: - VoiceDesign generation
-
-    func generateVoiceDesign(
-        text: String,
-        instruct: String?,
-        language: String,
-        conditioning: Qwen3TTSReferenceConditioning? = nil,
-        sampling: Qwen3TTSSampling,
-        seed: UInt64,
-        streamingInterval: Double = 2.0,
-        onEvent: ((AudioGeneration) -> Void)? = nil
-    ) throws -> MLXArray {
-        guard let speechTokenizer, let tokenizer else {
-            throw AudioGenerationError.modelNotInitialized(
-                "Qwen3TTS generateVoiceDesign requires both the speech tokenizer and the text tokenizer to be loaded."
-            )
+    /// The talker's KV caches, rewound, with room for `capacity` positions.
+    private func acquireTalkerCache(capacity: Int) -> [KVCache] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let kept = talkerCache, kept.capacity >= capacity {
+            for cache in kept.caches { cache.trim(cache.offset) }
+            return kept.caches
         }
+        let rounded = (capacity + Self.cacheStep - 1) / Self.cacheStep * Self.cacheStep
+        let caches = talker.makeCache(capacity: rounded)
+        talkerCache = (caches, rounded)
+        return caches
+    }
 
-        let talkerConfig = config.talkerConfig!
+    private func acquireCodeCache() -> [KVCache] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let kept = codeCache { return kept }
+        let caches = talker.codePredictor.makeCache()
+        codeCache = caches
+        return caches
+    }
 
-        // CustomVoice accepts `voice` as "speaker, instruction"; VoiceDesign's
+    /// Runs `embeds` through the talker in pieces of `prefillChunk`, each a
+    /// layer at a time (`Qwen3TTSTalker.prefill`).
+    private func prefill(_ embeds: MLXArray, cache: [KVCache]) -> (logits: MLXArray, hidden: MLXArray) {
+        let length = embeds.dim(1)
+        var start = 0
+        var result: (logits: MLXArray, hidden: MLXArray)?
+        while start < length {
+            let end = min(start + Self.prefillChunk, length)
+            result = talker.prefill(embeds[0..., start ..< end, 0...], cache: cache)
+            start = end
+            if start < length, let result { eval(result.hidden) }
+        }
+        return result!
+    }
+
+    /// A tiny end-to-end generation: compiles the kernels of the talker, the
+    /// code predictor and the decoder, so the first real request pays
+    /// generation only.
+    public func warmUp() throws {
+        let prompt = try prompts.plain(
+            text: ".", instruct: nil, language: "English", speaker: nil, layout: .interleaved)
+        _ = try run(
+            prompt: prompt, voice: nil, sampling: Qwen3TTSSampling(maxTokens: 3), seed: 0,
+            chunkFrames: 1, onAudio: { _ in })
+        // What a Neural Engine codec is checked against, made here on the GPU.
+        let probe = try makeNeuralProbe()
+        lock.withLock { neuralProbe = probe }
+    }
+
+    private var isCustomVoice: Bool { config.ttsModelType == "custom_voice" }
+
+    func prompt(
+        text: String, voice: String?, language: String?, reference: Qwen3TTSReference?,
+        layout: Qwen3TTSTextLayout
+    ) throws -> Qwen3TTSPrompt {
+        // CustomVoice reads `voice` as "speaker, instruction"; VoiceDesign's
         // is all description.
-        let isCVModel = config.ttsModelType == "custom_voice"
-        let customVoicePrompt = isCVModel ? Self.parseCustomVoicePrompt(instruct) : nil
-        let effectiveInstruct = isCVModel ? customVoicePrompt?.instruction : instruct
-
-        // Both layouts return the instruct prefix embed, for the voice prefix KV cache.
-        let prepared: (MLXArray, MLXArray, MLXArray, MLXArray?)
-        if let conditioning {
-            // The reference take conditions this generation in Qwen's
-            // in-context layout.
-            prepared = try prepareICLGenerationInputs(
-                text: text,
-                conditioning: conditioning,
-                instruct: effectiveInstruct
-            )
-        } else {
-            prepared = prepareGenerationInputs(
-                text: text,
-                language: language,
-                instruct: effectiveInstruct,
-                speaker: customVoicePrompt?.speaker
-            )
+        let customVoice = isCustomVoice ? Self.parseCustomVoicePrompt(voice) : nil
+        let instruct = isCustomVoice ? customVoice?.instruction : voice
+        if let reference {
+            return try prompts.reference(
+                text: text, take: reference, instruct: instruct, language: language)
         }
-        let (inputEmbedsInit, trailingTextHidden, ttsPadEmbed, instructEmbed) = prepared
-
-        // Cap max tokens based on text length
-        let targetTokenCount = tokenizer.encode(text: text).count
-        let effectiveMaxTokens = min(sampling.maxTokens, max(75, targetTokenCount * 6))
-
-        let cache = talker.makeCache()
-        var generatedCodes = [MLXArray]()
-        var generatedCodebookTokens = [Int]()
-        let eosTokenId = talkerConfig.codecEosTokenId
-
-        // Suppress special tokens
-        let suppressTokens = (talkerConfig.vocabSize - 1024 ..< talkerConfig.vocabSize)
-            .filter { $0 != eosTokenId }
-
-        // Streaming decode state.
-        // Two-phase cadence for low first-chunk latency: until `firstChunkFrames` codec
-        // tokens exist, emit every `firstChunkEmitEvery` tokens; then use the
-        // caller-requested `streamingInterval` cadence. The stateful streaming decoder
-        // makes small chunks cheap (it only decodes new tokens).
-        let codecTokenRateHz = Double(sampleRate) / Double(speechTokenizer.decodeUpsampleRate)
-        let streamingChunkSize = max(1, Int(streamingInterval * codecTokenRateHz))
-        let firstChunkEmitEvery = min(5, streamingChunkSize)
-        let firstChunkFrames = 48
-        var decodedTokens = 0
-
-        var trailingIdx = 0
-        var inputEmbeds = inputEmbedsInit
-
-        // Voice prefix KV restore: the restored KV already covers the instruct
-        // prefix, so the first forward pass starts after the instruct tokens.
-        if let instructEmbed {
-            if cachedVoiceDescription == instruct, voicePrefixKVState != nil {
-                restoreVoicePrefixCache(into: cache)
-            } else {
-                _ = talker(instructEmbed, cache: cache)
-                saveVoicePrefixCache(cache)
-                cachedVoiceDescription = instruct
-            }
-            inputEmbeds = inputEmbedsInit[0..., instructEmbed.dim(1)..., 0...]
-        }
-        let eosTokenArray = MLXArray([Int32(eosTokenId)]).reshaped(1, 1)
-        let codeCache = talker.codePredictor.makeCache()
-
-        if onEvent != nil {
-            speechTokenizer.decoder.resetStreamingState()
-        }
-        defer {
-            if onEvent != nil {
-                speechTokenizer.decoder.resetStreamingState()
-            }
-        }
-
-        // Seed random state right before the generation loop for deterministic sampling.
-        // (Unstructured Tasks do not inherit the caller's global random state.)
-        MLXRandom.seed(seed)
-
-        for _ in 0 ..< effectiveMaxTokens {
-            try Task.checkCancellation()
-            // Forward pass through talker
-            let (logits, hidden) = talker(inputEmbeds, cache: cache)
-
-            // Sample first codebook token
-            let nextToken = sampleToken(
-                logits,
-                temperature: sampling.temperature,
-                topP: sampling.topP,
-                topK: Qwen3TTSSampling.topK,
-                repetitionPenalty: sampling.repetitionPenalty,
-                recentTokens: generatedCodebookTokens.suffix(Qwen3TTSSampling.repetitionWindow),
-                suppressTokens: suppressTokens
-            )
-
-            // Defer sync to the eval boundary with inputEmbeds.
-            let isEOS = nextToken .== eosTokenArray
-
-            // Generate remaining codebook tokens with code predictor
-            var codeTokens = [nextToken]
-            let codeHidden = hidden[0..., (-1)..., 0...]
-            for layerCache in codeCache {
-                _ = layerCache.trim(layerCache.offset)
-            }
-
-            for codeIdx in 0 ..< talkerConfig.numCodeGroups - 1 {
-                let codeInput: MLXArray
-                if codeIdx == 0 {
-                    let code0Embed = talker.getInputEmbeddings()(nextToken)
-                    codeInput = concatenated([codeHidden, code0Embed], axis: 1)
-                } else {
-                    codeInput = talker.codePredictor.codecEmbedding[codeIdx - 1](codeTokens.last!)
-                }
-
-                let (codeLogits, _, _) = talker.codePredictor(
-                    codeInput, cache: codeCache, generationStep: codeIdx
-                )
-
-                let nextCode = sampleToken(
-                    codeLogits,
-                    temperature: sampling.detailTemperature,
-                    topP: Qwen3TTSSampling.detailTopP,
-                    topK: Qwen3TTSSampling.topK
-                )
-                codeTokens.append(nextCode)
-            }
-
-            let allCodes = concatenated(codeTokens, axis: 1) // [1, num_code_groups]
-
-            // Prepare next input
-            let textEmbed: MLXArray
-            if trailingIdx < trailingTextHidden.dim(1) {
-                textEmbed = trailingTextHidden[0..., trailingIdx ..< (trailingIdx + 1), 0...]
-                trailingIdx += 1
-            } else {
-                textEmbed = ttsPadEmbed
-            }
-
-            // Sum all code embeddings for next step
-            var codecEmbed = talker.getInputEmbeddings()(nextToken)
-            for (i, code) in codeTokens.dropFirst().enumerated() {
-                codecEmbed = codecEmbed + talker.codePredictor.codecEmbedding[i](code)
-            }
-
-            inputEmbeds = textEmbed + codecEmbed
-            eval(inputEmbeds, isEOS)
-
-            let tokenId = Int(nextToken[0, 0].item(Int32.self))
-            if isEOS.item(Bool.self) {
-                break
-            }
-            generatedCodebookTokens.append(tokenId)
-            generatedCodes.append(allCodes)
-
-            // Streaming: decode and yield audio chunks during generation
-            if let onEvent {
-                let newTokens = generatedCodes.count - decodedTokens
-                let currentChunkSize = generatedCodes.count < firstChunkFrames
-                    ? firstChunkEmitEvery : streamingChunkSize
-                if newTokens >= currentChunkSize {
-                    let codesChunk = stacked(Array(generatedCodes[decodedTokens...]), axis: 1)
-                    let codesForDecoder = codesChunk.transposed(0, 2, 1)
-                    eval(codesForDecoder)
-                    let decoded = speechTokenizer.decoder.streamingStep(codesForDecoder).squeezed(axis: 1)
-                    let audioChunk = decoded[0]
-                    eval(audioChunk)
-
-                    decodedTokens = generatedCodes.count
-                    onEvent(.audio(audioChunk))
-                }
-            }
-
-            // No in-loop Memory.clearCache(): dropping the buffer pool
-            // mid-generation costs throughput (allocator churn, degrading over
-            // long runs) for no residency benefit — peak RSS is flat either
-            // way. Callers trim once per utterance end (patch #12).
-        }
-
-        try Task.checkCancellation()
-
-        // Streaming path: yield the remaining audio, then the frames (a
-        // reference take keeps them), and return early.
-        if let onEvent {
-            if generatedCodes.count > decodedTokens {
-                let codesChunk = stacked(Array(generatedCodes[decodedTokens...]), axis: 1)
-                let codesForDecoder = codesChunk.transposed(0, 2, 1)
-                eval(codesForDecoder)
-                let decoded = speechTokenizer.decoder.streamingStep(codesForDecoder).squeezed(axis: 1)
-                let audioChunk = decoded[0]
-                eval(audioChunk)
-                onEvent(.audio(audioChunk))
-            }
-            onEvent(.codeFrames(generatedCodes.map { $0.asArray(Int32.self) }))
-            // Streaming chunks already yielded; return empty (caller uses chunks)
-            return MLXArray.zeros([1])
-        }
-
-        guard !generatedCodes.isEmpty else {
-            return MLXArray.zeros([1])
-        }
-
-        // Non-streaming path: one decode of [1, seq_len, num_code_groups]
-        return decodeChunk(stacked(generatedCodes, axis: 1))
+        return try prompts.plain(
+            text: text, instruct: instruct, language: language, speaker: customVoice?.speaker,
+            layout: layout)
     }
 
     static func parseCustomVoicePrompt(_ voice: String?) -> (speaker: String, instruction: String?)? {
-        guard let voice = voice?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !voice.isEmpty else {
-            return nil
-        }
-
-        guard let commaIndex = voice.firstIndex(of: ",") else {
-            return (speaker: voice, instruction: nil)
-        }
-
-        let speaker = voice[..<commaIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-        let instructionStart = voice.index(after: commaIndex)
-        let instruction = voice[instructionStart...].trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !speaker.isEmpty else {
-            return (speaker: voice, instruction: nil)
-        }
-
-        return (
-            speaker: String(speaker),
-            instruction: instruction.isEmpty ? nil : String(instruction)
-        )
+        guard let voice = voice?.trimmingCharacters(in: .whitespacesAndNewlines), !voice.isEmpty
+        else { return nil }
+        guard let comma = voice.firstIndex(of: ",") else { return (voice, nil) }
+        let speaker = voice[..<comma].trimmingCharacters(in: .whitespacesAndNewlines)
+        let instruction = voice[voice.index(after: comma)...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !speaker.isEmpty else { return (voice, nil) }
+        return (speaker, instruction.isEmpty ? nil : instruction)
     }
 
-    // MARK: - Reference conditioning
+    // MARK: - Voice prefix cache
 
-    /// A reference take as the in-context layout reads it.
-    struct Qwen3TTSReferenceConditioning {
-        let referenceSpeechCodes: MLXArray
-        let referenceTextTokenIDs: MLXArray
-        let codecLanguageID: Int?
+    /// Leaves `cache` holding the instruct turn: restored when `description`
+    /// is the cached one, else computed and cached.
+    private func restoreOrBuildPrefix(description: String, embed: MLXArray, cache: [KVCache]) {
+        lock.lock()
+        let cached = voicePrefix?.description == description ? voicePrefix?.state : nil
+        lock.unlock()
+        if let cached {
+            // Written into the cache's own buffer, which stays the one the
+            // rest of the generation appends to.
+            for (layerCache, state) in zip(cache, cached) {
+                _ = layerCache.update(keys: state[0], values: state[1])
+            }
+            return
+        }
+        _ = prefill(embed, cache: cache)
+        // Compact copies: the cache's state is a view into its preallocated
+        // buffer, which would otherwise stay alive with the prefix.
+        let state = cache.map { $0.state.map { contiguous($0) } }
+        eval(state.flatMap { $0 })
+        lock.lock()
+        voicePrefix = (description, state)
+        lock.unlock()
     }
 
-    /// Qwen's in-context layout: the assistant turn holds the reference text
-    /// followed by the new text, then the reference codes, and generation
-    /// continues from there. A VoiceDesign description goes in front as the
-    /// user turn, as in the plain prompt, and its embed also comes back on its
-    /// own for the voice prefix cache.
-    func prepareICLGenerationInputs(
-        text: String,
-        conditioning: Qwen3TTSReferenceConditioning,
-        instruct: String? = nil
-    ) throws -> (MLXArray, MLXArray, MLXArray, MLXArray?) {
-        guard let tokenizer, let talkerConfig = config.talkerConfig else {
-            throw AudioGenerationError.modelNotInitialized(
-                "Qwen3TTS request assembly requires the text tokenizer and talker config to be loaded."
-            )
+    // MARK: - The frame loop
+
+    /// Runs the talker and the code predictor from `prompt` until EOS or the
+    /// frame cap, and returns the frames (EOS excluded), one row of
+    /// `numCodeGroups` codes each. With `chunkFrames`, the frames are also
+    /// decoded as they arrive and handed to `onAudio`, in order; with the
+    /// Neural Engine, from its queue.
+    private func run(
+        prompt: Qwen3TTSPrompt, voice: String?, sampling: Qwen3TTSSampling, seed: UInt64,
+        chunkFrames: Int?, onAudio: (@Sendable ([Float]) -> Void)?
+    ) throws -> [[Int32]] {
+        generationLock.lock()
+        defer { generationLock.unlock() }
+        let maxFrames = min(sampling.maxTokens, max(75, prompt.textTokenCount * 6))
+        let promptLength = (prompt.instruct?.dim(1) ?? 0) + prompt.body.dim(1)
+        // Room for the expected frames (about four per text token); a longer
+        // render grows the cache as it goes.
+        let cache = acquireTalkerCache(
+            capacity: promptLength + min(maxFrames, prompt.textTokenCount * 4 + 32) + 1)
+        if let instruct = prompt.instruct, let voice {
+            restoreOrBuildPrefix(description: voice, embed: instruct, cache: cache)
+        } else if let instruct = prompt.instruct {
+            _ = prefill(instruct, cache: cache)
         }
 
-        let targetChatText = "<|im_start|>assistant\n\(text)<|im_end|>\n<|im_start|>assistant\n"
-        let targetIds = MLXArray(tokenizer.encode(text: targetChatText).map { Int32($0) }).reshaped(1, -1)
-        let targetCount = targetIds.dim(1)
-        let targetStart = min(3, targetCount)
-        let targetEnd = max(targetStart, targetCount - 5)
-        let targetTextIds = targetIds[0..., targetStart ..< targetEnd]
+        let random = MLXRandom.RandomState(seed: seed)
+        var talkerSampler = Qwen3TTSTalkerSampler(
+            sampling: sampling, vocabSize: talkerConfig.vocabSize,
+            eosTokenID: talkerConfig.codecEosTokenId, dtype: prompt.body.dtype)
+        let detailSampler = Qwen3TTSSampler(
+            temperature: sampling.detailTemperature, topK: Qwen3TTSSampling.topK,
+            topP: Qwen3TTSSampling.detailTopP)
+        let codeCache = acquireCodeCache()
+        let eos = MLXArray(Int32(talkerConfig.codecEosTokenId))
 
-        let ttsTokens = MLXArray(
-            [Int32(config.ttsBosTokenId), Int32(config.ttsEosTokenId), Int32(config.ttsPadTokenId)]
-        ).reshaped(1, 3)
-        let ttsEmbeds = talker.textProjection(talker.getTextEmbeddings()(ttsTokens))
-        let ttsBosEmbed = ttsEmbeds[0..., 0 ..< 1, 0...]
-        let ttsEosEmbed = ttsEmbeds[0..., 1 ..< 2, 0...]
-        let ttsPadEmbed = ttsEmbeds[0..., 2 ..< 3, 0...]
+        // The talker's step from the prompt; each frame then runs in two
+        // dispatches. A: sample the first code from the talker's last step
+        // and run the code predictor. B: the talker's next step, which
+        // appends to its KV cache. B is encoded only once the previous B has
+        // finished, so the cache is updated in place: MLX copies a buffer an
+        // unfinished command buffer still reads. A keeps the GPU busy while
+        // that wait and B's encoding happen.
+        var (logits, hidden) = prefill(prompt.body, cache: cache)
+        asyncEval(logits, hidden)
 
-        let combinedTextIds = concatenated([conditioning.referenceTextTokenIDs, targetTextIds], axis: 1)
-        var textEmbed = talker.textProjection(talker.getTextEmbeddings()(combinedTextIds))
-        textEmbed = concatenated([textEmbed, ttsEosEmbed], axis: 1)
-        let textLen = textEmbed.dim(1)
+        var accepted: [MLXArray] = []
+        accepted.reserveCapacity(maxFrames)
+        var pending: (codes: MLXArray, isEOS: MLXArray)?
+        var ended = false
 
-        let codecEmbedIcl = codecEmbedIcl(
-            from: conditioning.referenceSpeechCodes, talkerConfig: talkerConfig)
+        var decoder = codecDecoder.makeStream()
+        var decoded = 0
+        // A decoded chunk not yet handed over: MLX samples, or a latent for
+        // the Neural Engine.
+        enum InFlight {
+            case audio(MLXArray)
+            case latent(MLXArray, valid: Int)
+        }
+        var inFlight: InFlight?
+        let neural = chunkFrames != nil ? lock.withLock { neuralCodec } : nil
+        if let neural {
+            neural.reset()
+            // The Neural Engine has its own copy of the conv stack; MLX's
+            // comes back from the checkpoint if it is ever needed again.
+            // Released here, where no MLX synthesis can be running.
+            codecDecoder.releaseConvStack()
+        }
+        let neuralFailure = NeuralFailure()
+        // A cancelled stream still lets its queued chunks finish before the
+        // next stream resets the codec's state.
+        defer { if neural != nil { neuralQueue.sync {} } }
+        let latentDim = codecDecoder.config.latentDim
+        // The Neural Engine decodes a fixed chunk; MLX's first chunk is short,
+        // for time to first audio.
+        let firstChunk = neural.map { $0.frames } ?? chunkFrames.map { min(3, $0) }
+        let steadyChunk = neural.map { $0.frames } ?? chunkFrames
 
-        let codecPadEmbed = talker.getInputEmbeddings()(
-            MLXArray([Int32(talkerConfig.codecPadId)]).reshaped(1, 1)
-        )
-        let textWithCodecPad = textEmbed + broadcast(
-            codecPadEmbed,
-            to: [1, textLen, codecPadEmbed.dim(-1)]
-        )
-        let codecWithTextPad = codecEmbedIcl + broadcast(
-            ttsPadEmbed,
-            to: [1, codecEmbedIcl.dim(1), ttsPadEmbed.dim(-1)]
-        )
-
-        let iclInputEmbed = concatenated([textWithCodecPad, codecWithTextPad], axis: 1)
-        let trailingTextHidden = ttsPadEmbed
-
-        let codecPrefill: [Int32] = if let langId = conditioning.codecLanguageID {
-            [
-                Int32(talkerConfig.codecThinkId),
-                Int32(talkerConfig.codecThinkBosId),
-                Int32(langId),
-                Int32(talkerConfig.codecThinkEosId)
-            ]
-        } else {
-            [
-                Int32(talkerConfig.codecNothinkId),
-                Int32(talkerConfig.codecThinkBosId),
-                Int32(talkerConfig.codecThinkEosId)
-            ]
+        func deliverAudio() {
+            switch inFlight {
+            case .audio(let audio):
+                onAudio?(audio.asArray(Float.self))
+            case .latent(let latent, let valid):
+                guard let neural else { break }
+                var values = latent.asType(.float16).asArray(Float16.self)
+                // The stream's last chunk, padded to the codec's size.
+                values += [Float16](repeating: 0, count: (neural.frames - valid) * latentDim)
+                neuralQueue.async { [onAudio, values] in
+                    guard !neuralFailure.happened else { return }
+                    do {
+                        onAudio?(try neural.decode(latent: values, valid: valid))
+                    } catch {
+                        neuralFailure.record(error)
+                    }
+                }
+            case nil:
+                break
+            }
+            inFlight = nil
         }
 
-        var codecPrefixEmbed = talker.getInputEmbeddings()(MLXArray(codecPrefill).reshaped(1, -1))
-        let codecPrefixSuffix = talker.getInputEmbeddings()(
-            MLXArray([Int32(talkerConfig.codecPadId), Int32(talkerConfig.codecBosId)]).reshaped(1, 2)
-        )
-        codecPrefixEmbed = concatenated([codecPrefixEmbed, codecPrefixSuffix], axis: 1)
-
-        let roleEmbed = talker.textProjection(talker.getTextEmbeddings()(targetIds[0..., 0 ..< 3]))
-
-        let padCount = codecPrefixEmbed.dim(1) - 2
-        let padEmbeds = broadcast(ttsPadEmbed, to: [1, padCount, ttsPadEmbed.dim(-1)])
-        var combinedPrefix = concatenated([padEmbeds, ttsBosEmbed], axis: 1)
-        combinedPrefix = combinedPrefix + codecPrefixEmbed[0..., 0 ..< (codecPrefixEmbed.dim(1) - 1), 0...]
-
-        var inputEmbeds = concatenated([roleEmbed, combinedPrefix, iclInputEmbed], axis: 1)
-        let instructEmbed = instructEmbedding(instruct, tokenizer: tokenizer)
-        if let instructEmbed {
-            inputEmbeds = concatenated([instructEmbed, inputEmbeds], axis: 1)
+        func decodeReady(final: Bool) throws {
+            guard let steadyChunk, let firstChunk else { return }
+            // At most one chunk in flight: hand over the last before the next.
+            deliverAudio()
+            let ready = accepted.count - decoded
+            let due = decoded == 0 ? firstChunk : steadyChunk
+            guard ready > 0, final || ready >= due else { return }
+            let take = neural.map { min(ready, $0.frames) } ?? ready
+            let codes = concatenated(Array(accepted[decoded ..< (decoded + take)]), axis: 0)
+                .reshaped(1, take, -1)
+            let latent = codecDecoder.latent(codes, stream: &decoder)
+            if neural != nil {
+                asyncEval([latent] + decoder.arrays)
+                inFlight = .latent(latent, valid: take)
+            } else {
+                let audio = try codecDecoder.synthesize(latent, stream: &decoder)
+                asyncEval([audio] + decoder.arrays)
+                inFlight = .audio(audio)
+            }
+            let isFirst = decoded == 0
+            decoded += take
+            // The first chunk is handed over at once: time to first audio.
+            // Later ones wait for the next frame's settle, where the loop
+            // waits on the GPU anyway.
+            if isFirst { deliverAudio() }
+            // A flush can leave more than one Neural Engine chunk.
+            if final, decoded < accepted.count { try decodeReady(final: true) }
         }
 
-        return (inputEmbeds, trailingTextHidden, ttsPadEmbed, instructEmbed)
-    }
-
-    /// The description as the prompt's user turn, embedded; nil without one.
-    /// Both prompt layouts open with it.
-    private func instructEmbedding(_ instruct: String?, tokenizer: Tokenizers.Tokenizer) -> MLXArray? {
-        guard let instruct, !instruct.isEmpty else { return nil }
-        let instructText = "<|im_start|>user\n\(instruct)<|im_end|>\n"
-        let instructIds = MLXArray(tokenizer.encode(text: instructText).map { Int32($0) }).reshaped(1, -1)
-        return talker.textProjection(talker.getTextEmbeddings()(instructIds))
-    }
-
-    /// The codec token for `language`; nil for "auto" or a language the
-    /// checkpoint doesn't list.
-    private func codecLanguageID(_ language: String?) -> Int? {
-        let name = (language ?? "auto").lowercased()
-        guard name != "auto" else { return nil }
-        return config.talkerConfig?.codecLanguageId?[name]
-    }
-
-    /// A reference take as in-context conditioning: its codes as
-    /// `[1, numCodeGroups, frames]` and its text as token ids.
-    func referenceConditioning(
-        _ reference: Qwen3TTSReference, language: String?
-    ) throws -> Qwen3TTSReferenceConditioning {
-        guard let tokenizer, let talkerConfig = config.talkerConfig else {
-            throw AudioGenerationError.modelNotInitialized(
-                "Qwen3TTS reference conditioning requires the text tokenizer and talker config to be loaded."
-            )
+        /// Frame `previous` is done (its B followed its A); keeps it unless
+        /// it is EOS.
+        func settle(_ previous: (codes: MLXArray, isEOS: MLXArray)) throws -> Bool {
+            if previous.isEOS.item(Bool.self) { return false }
+            accepted.append(previous.codes)
+            try decodeReady(final: false)
+            return true
         }
+
+        for frame in 0 ..< maxFrames {
+            try Task.checkCancellation()
+
+            // A: the frame's sixteen codes and the sum of their embeddings.
+            let first = talkerSampler(logits, frame: frame, random: random)
+            let (rest, embeddingSum) = talker.codePredictor.predict(
+                hidden: hidden, firstEmbedding: talker.embedCodec(first), cache: codeCache
+            ) { _, logits in detailSampler(logits, random: random) }
+            let codes = concatenated([first] + rest, axis: 1)
+            let isEOS = first .== eos
+            asyncEval(codes, isEOS, embeddingSum, talkerSampler.recent)
+
+            // The previous B is done, and with it the previous frame and
+            // any chunk decoded before it.
+            eval(logits)
+            deliverAudio()
+            if let previous = pending, try !settle(previous) {
+                ended = true
+                break
+            }
+            pending = (codes, isEOS)
+
+            // B: the talker's step for this frame.
+            let text =
+                frame < prompt.trailingCount
+                ? prompt.trailingText![0..., frame ..< (frame + 1), 0...] : prompt.pad
+            (logits, hidden) = talker(embeddingSum + text, cache: cache)
+            asyncEval(logits, hidden)
+        }
+        if !ended, let last = pending {
+            eval(last.codes, last.isEOS)
+            _ = try settle(last)
+        }
+        // The last B ran ahead for a frame that won't come; let it finish so
+        // the next generation rewinds an idle cache (in place, no copy).
+        eval(logits)
+        try Task.checkCancellation()
+
+        deliverAudio()
+        try decodeReady(final: true)
+        deliverAudio()
+        if neural != nil {
+            neuralQueue.sync {}
+            if let error = neuralFailure.error {
+                // Back to MLX from the next generation on.
+                disableNeuralEngine()
+                throw error
+            }
+        }
+
+        guard !accepted.isEmpty else { return [] }
+        let all = concatenated(accepted, axis: 0)
+        eval(all)
+        let flat = all.asArray(Int32.self)
         let groups = talkerConfig.numCodeGroups
-        guard !reference.codeFrames.isEmpty,
-            reference.codeFrames.allSatisfy({ $0.count == groups })
-        else {
-            throw AudioGenerationError.invalidInput(
-                "A reference take needs at least one frame of \(groups) codes per frame."
-            )
-        }
-        let codes = MLXArray(reference.codeFrames.flatMap { $0 })
-            .reshaped(1, reference.codeFrames.count, groups)
-            .transposed(0, 2, 1)
+        return (0 ..< accepted.count).map { Array(flat[($0 * groups) ..< (($0 + 1) * groups)]) }
+    }
+}
 
-        let refChatText = "<|im_start|>assistant\n\(reference.text)<|im_end|>\n"
-        let refIds = tokenizer.encode(text: refChatText).map { Int32($0) }
-        let refStart = min(3, refIds.count)
-        let refEnd = max(refStart, refIds.count - 2)
-        let refTextIds = MLXArray(Array(refIds[refStart ..< refEnd])).reshaped(1, -1)
+/// The first error of a stream's Neural Engine jobs.
+private final class NeuralFailure: @unchecked Sendable {
+    private let lock = NSLock()
+    private var first: Error?
 
-        return Qwen3TTSReferenceConditioning(
-            referenceSpeechCodes: codes,
-            referenceTextTokenIDs: refTextIds,
-            codecLanguageID: codecLanguageID(language)
-        )
+    var happened: Bool { error != nil }
+
+    var error: Error? {
+        lock.lock()
+        defer { lock.unlock() }
+        return first
     }
 
-    func prepareGenerationInputs(
-        text: String,
-        language: String,
-        instruct: String?,
-        speaker: String? = nil
-    ) -> (MLXArray, MLXArray, MLXArray, MLXArray?) {
-        guard let tokenizer, let talkerConfig = config.talkerConfig else {
-            fatalError("Tokenizer/config not loaded")
-        }
-
-        // Tokenize text with ChatML template
-        let chatText = "<|im_start|>assistant\n\(text)<|im_end|>\n<|im_start|>assistant\n"
-        let inputIds = MLXArray(tokenizer.encode(text: chatText).map { Int32($0) }).reshaped(1, -1)
-
-        // Get text embeddings
-        let textEmbed = talker.textProjection(talker.getTextEmbeddings()(inputIds))
-
-        // TTS special tokens
-        let ttsTokens = MLXArray(
-            [Int32(config.ttsBosTokenId), Int32(config.ttsEosTokenId), Int32(config.ttsPadTokenId)]
-        ).reshaped(1, 3)
-        let ttsEmbeds = talker.textProjection(talker.getTextEmbeddings()(ttsTokens))
-        let ttsBosEmbed = ttsEmbeds[0..., 0 ..< 1, 0...]
-        let ttsEosEmbed = ttsEmbeds[0..., 1 ..< 2, 0...]
-        let ttsPadEmbed = ttsEmbeds[0..., 2 ..< 3, 0...]
-
-        // Language ID — may be overridden by speaker dialect below
-        var languageId = codecLanguageID(language)
-
-        // Speaker embedding (CustomVoice models only)
-        var speakerEmbed: MLXArray?
-        if let speaker = speaker {
-            if let spkIdMap = talkerConfig.spkId,
-               let spkIdValue = spkIdMap[speaker.lowercased()] {
-                let spkIdArray = MLXArray([Int32(spkIdValue.intValue)]).reshaped(1, 1)
-                speakerEmbed = talker.getInputEmbeddings()(spkIdArray)
-                print("[Qwen3TTS] CustomVoice: speaker '\(speaker)' → spkId=\(spkIdValue.intValue)")
-            } else {
-                print("[Qwen3TTS] CustomVoice: WARNING - speaker '\(speaker)' not found in spkId map")
-            }
-            if let dialectMap = talkerConfig.spkIsDialect,
-               let dialectVal = dialectMap[speaker.lowercased()],
-               dialectVal.isDialect,
-               let dialectName = dialectVal.dialectName,
-               let langMap = talkerConfig.codecLanguageId,
-               let dialectLangId = langMap[dialectName] {
-                print("[Qwen3TTS] CustomVoice: dialect override '\(dialectName)' langId=\(dialectLangId)")
-                languageId = dialectLangId
-            }
-        }
-
-        // Build codec prefix
-        let codecPrefill: [Int32] = if let langId = languageId {
-            [
-                Int32(talkerConfig.codecThinkId),
-                Int32(talkerConfig.codecThinkBosId),
-                Int32(langId),
-                Int32(talkerConfig.codecThinkEosId)
-            ]
-        } else {
-            [
-                Int32(talkerConfig.codecNothinkId),
-                Int32(talkerConfig.codecThinkBosId),
-                Int32(talkerConfig.codecThinkEosId)
-            ]
-        }
-
-        var codecEmbed = talker.getInputEmbeddings()(MLXArray(codecPrefill).reshaped(1, -1))
-        let codecEmbedSuffix = talker.getInputEmbeddings()(
-            MLXArray([Int32(talkerConfig.codecPadId), Int32(talkerConfig.codecBosId)]).reshaped(1, 2)
-        )
-        if let spkEmbed = speakerEmbed {
-            codecEmbed = concatenated([codecEmbed, spkEmbed.reshaped([1, 1, -1]), codecEmbedSuffix], axis: 1)
-            print("[Qwen3TTS] CustomVoice: codec prefix length = \(codecEmbed.dim(1))")
-        } else {
-            codecEmbed = concatenated([codecEmbed, codecEmbedSuffix], axis: 1)
-        }
-
-        // Instruct embedding: the description, or CustomVoice's instruction
-        let instructEmbed = instructEmbedding(instruct, tokenizer: tokenizer)
-
-        // Role embedding (first 3 tokens: <|im_start|>assistant\n)
-        let roleEmbed = textEmbed[0..., ..<3, 0...]
-
-        // Build pad/bos prefix
-        let padCount = codecEmbed.dim(1) - 2
-        let padEmbeds = broadcast(ttsPadEmbed, to: [1, padCount, ttsPadEmbed.dim(-1)])
-        var combinedEmbed = concatenated([padEmbeds, ttsBosEmbed], axis: 1)
-        combinedEmbed = combinedEmbed + codecEmbed[0..., ..<(-1), 0...]
-
-        // Full input embedding
-        var inputEmbeds: MLXArray = if let instructEmbed {
-            concatenated([instructEmbed, roleEmbed, combinedEmbed], axis: 1)
-        } else {
-            concatenated([roleEmbed, combinedEmbed], axis: 1)
-        }
-
-        // Add first text token (index 3) + last codec embed
-        let firstTextEmbed = textEmbed[0..., 3 ..< 4, 0...] + codecEmbed[0..., (-1)..., 0...]
-        inputEmbeds = concatenated([inputEmbeds, firstTextEmbed], axis: 1)
-
-        // Trailing text (tokens 4 to -5, plus EOS)
-        let trailingTextHidden = concatenated(
-            [textEmbed[0..., 4 ..< (textEmbed.dim(1) - 5), 0...], ttsEosEmbed],
-            axis: 1
-        )
-
-        // instructEmbed is also returned separately so callers can cache/restore the
-        // instruct-prefix KV state (voice prefix cache) and slice the
-        // instruct tokens off the fused prompt.
-        return (inputEmbeds, trailingTextHidden, ttsPadEmbed, instructEmbed)
-    }
-
-    // MARK: - Token sampling
-
-    /// Suppression, then the repetition penalty over `recentTokens`, then
-    /// temperature, then top-k and top-p: Qwen's reference order, so the
-    /// nucleus is taken from the tempered distribution.
-    func sampleToken(
-        _ logits: MLXArray,
-        temperature: Float = 0.9,
-        topP: Float = 1.0,
-        topK: Int = 50,
-        repetitionPenalty: Float = 1.0,
-        recentTokens: ArraySlice<Int> = [],
-        suppressTokens: [Int]? = nil
-    ) -> MLXArray {
-        var logitsSlice = logits[0..., (-1)..., 0...].squeezed(axis: 1) // [batch, vocab_size]
-
-        // Suppress tokens by setting to -inf
-        if let suppress = suppressTokens, !suppress.isEmpty {
-            let suppressArr = MLXArray(suppress.map { Int32($0) }).reshaped(1, -1)
-            let negInf = MLXArray.full([1, suppress.count], values: MLXArray(-Float.infinity), dtype: logitsSlice.dtype)
-            logitsSlice = putAlong(logitsSlice, suppressArr, values: negInf, axis: -1)
-        }
-
-        // Repetition penalty
-        if !recentTokens.isEmpty, repetitionPenalty != 1.0 {
-            let unique = Array(Set(recentTokens)).filter { $0 < logitsSlice.dim(-1) }
-            if !unique.isEmpty {
-                let tokenIds = MLXArray(unique.map { Int32($0) }).reshaped(1, -1)
-                let selected = takeAlong(logitsSlice, tokenIds, axis: -1)
-                let penalized = which(
-                    selected .< 0,
-                    selected * repetitionPenalty,
-                    selected / repetitionPenalty
-                )
-                logitsSlice = putAlong(logitsSlice, tokenIds, values: penalized, axis: -1)
-            }
-        }
-
-        // Greedy if temperature 0
-        if temperature <= 0 {
-            return argMax(logitsSlice, axis: -1, keepDims: true)
-        }
-
-        let filteredLogits = Self.filterLogits(logitsSlice / temperature, topK: topK, topP: topP)
-        let token = categorical(filteredLogits)
-        return token.reshaped(1, 1)
-    }
-
-    /// Top-k, then top-p over `[batch, vocab_size]` logits. A token a filter
-    /// drops gets -inf; the rest keep their logits. These are the logits
-    /// `sampleToken` draws from. EOS gets no exemption (Tesseract patch #13):
-    /// upstream wrote its pre-filter logit back afterwards, which could end a
-    /// long generation early, mid-syllable.
-    static func filterLogits(_ logitsSlice: MLXArray, topK: Int, topP: Float) -> MLXArray {
-        // Apply top-k filtering (match mlx_lm.apply_top_k ordering and masking semantics)
-        var filteredLogits = logitsSlice
-        let vocabSize = logitsSlice.dim(-1)
-        if topK > 0, topK < vocabSize {
-            let kth = min(topK - 1, max(vocabSize - 1, 0))
-            if kth >= 0 {
-                let maskIdx = argPartition(-logitsSlice, kth: kth, axis: -1)[0..., topK...]
-                let negInf = MLXArray.full(maskIdx.shape, values: MLXArray(-Float.infinity), dtype: logitsSlice.dtype)
-                filteredLogits = putAlong(filteredLogits, maskIdx, values: negInf, axis: -1)
-            }
-        }
-
-        // Apply top-p (nucleus) sampling
-        if topP > 0, topP < 1.0 {
-            let probs = softmax(filteredLogits, axis: -1)
-
-            // Sort in ASCENDING order (like Python)
-            let sortedIndices = argSort(filteredLogits, axis: -1)
-            let sortedProbs = takeAlong(probs, sortedIndices, axis: -1)
-
-            // Cumulative probabilities
-            let cumProbs = cumsum(sortedProbs, axis: -1)
-
-            // Rearrange cumulative probs back to original order
-            // Create inverse index mapping using putAlong
-            let vocabSize = sortedIndices.dim(-1)
-            let arangeIndices = MLXArray(0 ..< vocabSize).reshaped(1, -1).asType(Int32.self)
-            let zeros = MLXArray.zeros(sortedIndices.shape, type: Int32.self)
-            let inverseIndices = putAlong(zeros, sortedIndices, values: arangeIndices, axis: -1)
-            let cumProbsOrigOrder = takeAlong(cumProbs, inverseIndices, axis: -1)
-
-            // Mask tokens where cumulative prob > (1 - top_p)
-            // Keep tokens that are in the top_p nucleus
-            let threshold = 1.0 - topP
-            let mask = cumProbsOrigOrder .> threshold
-            let negInf = MLXArray.full(filteredLogits.shape, values: MLXArray(-Float.infinity), dtype: filteredLogits.dtype)
-            filteredLogits = which(mask, filteredLogits, negInf)
-        }
-
-        return filteredLogits
-    }
-
-    // MARK: - Loading
-
-    public static func fromModelDirectory(_ modelDir: URL) async throws -> Qwen3TTSModel {
-        // Load main config
-        let configData = try Data(contentsOf: modelDir.appendingPathComponent("config.json"))
-        let config = try JSONDecoder().decode(Qwen3TTSModelConfig.self, from: configData)
-        guard ["voice_design", "custom_voice"].contains(config.ttsModelType) else {
-            throw AudioGenerationError.invalidInput(
-                "Qwen3-TTS \(config.ttsModelType) checkpoints are not supported: "
-                    + "the engine runs VoiceDesign and CustomVoice only."
-            )
-        }
-
-        let model = Qwen3TTSModel(config: config)
-
-        // Load talker weights
-        var allWeights = [String: MLXArray]()
-        let fm = FileManager.default
-        let modelFiles = try fm.contentsOfDirectory(at: modelDir, includingPropertiesForKeys: nil)
-        for file in modelFiles where file.pathExtension == "safetensors" {
-            let weights = try MLX.loadArrays(url: file)
-            allWeights.merge(weights) { _, new in new }
-        }
-
-        // Sanitize and load talker weights
-        let talkerWeights = Qwen3TTSTalkerForConditionalGeneration.sanitize(weights: allWeights)
-        let talkerPairs = talkerWeights.map { ($0.key, $0.value) }
-
-        // Quantized checkpoints store packed weights and companion .scales tensors.
-        // Convert talker Linear layers before loading those tensors.
-        if config.quantization != nil || config.perLayerQuantization != nil {
-            quantize(model: model.talker) { path, _ in
-                guard talkerWeights["\(path).scales"] != nil else {
-                    return nil
-                }
-
-                if let perLayerQuant = config.perLayerQuantization,
-                   let layerQuant = perLayerQuant.quantization(layer: path) {
-                    return layerQuant.asTuple
-                }
-
-                return config.quantization?.asTuple
-            }
-        }
-
-        try model.talker.update(parameters: ModuleParameters.unflattened(talkerPairs), verify: .all)
-        eval(model.talker.parameters())
-
-        // Generate tokenizer.json if missing (Qwen3-TTS ships without it)
-        let tokenizerJsonPath = modelDir.appendingPathComponent("tokenizer.json")
-        if !fm.fileExists(atPath: tokenizerJsonPath.path) {
-            let vocabPath = modelDir.appendingPathComponent("vocab.json")
-            let mergesPath = modelDir.appendingPathComponent("merges.txt")
-            let hasVocab = fm.fileExists(atPath: vocabPath.path)
-            let hasMerges = fm.fileExists(atPath: mergesPath.path)
-            if hasVocab, hasMerges {
-                do {
-                    try generateTokenizerJson(
-                        vocabPath: vocabPath,
-                        mergesPath: mergesPath,
-                        tokenizerConfigPath: modelDir.appendingPathComponent("tokenizer_config.json"),
-                        outputPath: tokenizerJsonPath
-                    )
-                    print("Generated tokenizer.json from vocab.json + merges.txt")
-                } catch {
-                    print("Warning: Failed to generate tokenizer.json: \(error)")
-                }
-            } else {
-                print("Warning: Cannot generate tokenizer.json — vocab.json: \(hasVocab), merges.txt: \(hasMerges)")
-            }
-        }
-
-        // Load tokenizer
-        do {
-            model.tokenizer = try await AutoTokenizer.from(modelFolder: modelDir)
-        } catch {
-            print("Warning: Could not load tokenizer: \(error)")
-        }
-
-        // Load speech tokenizer — check that it's a directory, not a stale file
-        let speechTokenizerPath = modelDir.appendingPathComponent("speech_tokenizer")
-        var isDir: ObjCBool = false
-        if fm.fileExists(atPath: speechTokenizerPath.path, isDirectory: &isDir), isDir.boolValue {
-            try loadSpeechTokenizer(model: model, path: speechTokenizerPath)
-        } else if fm.fileExists(atPath: speechTokenizerPath.path) {
-            // A file where the directory should be: a broken download. The
-            // engine never deletes checkpoints; the model catalog repairs it.
-            throw AudioGenerationError.modelNotInitialized(
-                "\(speechTokenizerPath.path) is a file, not the speech tokenizer directory."
-            )
-        } else {
-            print("Warning: speech_tokenizer directory not found, speech decoding unavailable")
-        }
-
-        print("Loaded Qwen3-TTS model (\(config.ttsModelType))")
-        return model
-    }
-
-    private static func loadSpeechTokenizer(model: Qwen3TTSModel, path: URL) throws {
-        // Load config — fall back to defaults if config.json is missing
-        let tokenizerConfig: Qwen3TTSTokenizerConfig
-        let configPath = path.appendingPathComponent("config.json")
-        if let configData = try? Data(contentsOf: configPath) {
-            tokenizerConfig = try JSONDecoder().decode(Qwen3TTSTokenizerConfig.self, from: configData)
-        } else {
-            print("Warning: speech_tokenizer/config.json not found, using defaults")
-            let defaultJson = "{}".data(using: .utf8)!
-            tokenizerConfig = try JSONDecoder().decode(Qwen3TTSTokenizerConfig.self, from: defaultJson)
-        }
-
-        let speechTokenizer = Qwen3TTSSpeechTokenizer(config: tokenizerConfig)
-
-        // Load weights
-        var tokenizerWeights = [String: MLXArray]()
-        let files = try FileManager.default.contentsOfDirectory(at: path, includingPropertiesForKeys: nil)
-        for file in files where file.pathExtension == "safetensors" {
-            let weights = try MLX.loadArrays(url: file)
-            tokenizerWeights.merge(weights) { _, new in new }
-        }
-
-        if !tokenizerWeights.isEmpty {
-            let sanitized = Qwen3TTSSpeechTokenizer.sanitize(weights: tokenizerWeights)
-            let pairs = sanitized.map { ($0.key, $0.value) }
-            try speechTokenizer.update(parameters: ModuleParameters.unflattened(pairs), verify: .all)
-            eval(speechTokenizer.parameters())
-        }
-
-        model.speechTokenizer = speechTokenizer
-        print("Loaded speech tokenizer decoder")
-    }
-
-    // MARK: - Generate tokenizer.json from vocab.json + merges.txt
-
-    /// Qwen3-TTS repos ship with a slow tokenizer (vocab.json + merges.txt) but
-    /// swift-transformers requires tokenizer.json (fast tokenizer format). This
-    /// generates the fast tokenizer JSON from the available files.
-    private static func generateTokenizerJson(
-        vocabPath: URL,
-        mergesPath: URL,
-        tokenizerConfigPath: URL,
-        outputPath: URL
-    ) throws {
-        // Read vocab
-        let vocabData = try Data(contentsOf: vocabPath)
-        let vocabDict = try JSONSerialization.jsonObject(with: vocabData) as? [String: Int] ?? [:]
-
-        // Read merges (skip header line "#version: ...")
-        let mergesText = try String(contentsOf: mergesPath, encoding: .utf8)
-        let mergeLines = mergesText.components(separatedBy: .newlines)
-            .filter { !$0.isEmpty && !$0.hasPrefix("#") }
-
-        // Read added_tokens from tokenizer_config.json
-        var addedTokens = [[String: Any]]()
-        if let configData = try? Data(contentsOf: tokenizerConfigPath),
-           let configDict = try? JSONSerialization.jsonObject(with: configData) as? [String: Any],
-           let addedTokensDecoder = configDict["added_tokens_decoder"] as? [String: [String: Any]] {
-            for (idStr, tokenInfo) in addedTokensDecoder {
-                guard let tokenId = Int(idStr),
-                      let content = tokenInfo["content"] as? String else { continue }
-                let entry: [String: Any] = [
-                    "id": tokenId,
-                    "content": content,
-                    "single_word": tokenInfo["single_word"] as? Bool ?? false,
-                    "lstrip": tokenInfo["lstrip"] as? Bool ?? false,
-                    "rstrip": tokenInfo["rstrip"] as? Bool ?? false,
-                    "normalized": tokenInfo["normalized"] as? Bool ?? false,
-                    "special": tokenInfo["special"] as? Bool ?? true
-                ]
-                addedTokens.append(entry)
-            }
-            addedTokens.sort { ($0["id"] as? Int ?? 0) < ($1["id"] as? Int ?? 0) }
-        }
-
-        // Build tokenizer.json
-        // Qwen2 uses ByteLevel BPE with a GPT-2-style regex pre-tokenizer
-        let tokenizerJson: [String: Any] = [
-            "version": "1.0",
-            "truncation": NSNull(),
-            "padding": NSNull(),
-            "added_tokens": addedTokens,
-            "normalizer": NSNull(),
-            "pre_tokenizer": [
-                "type": "Sequence",
-                "pretokenizers": [
-                    [
-                        "type": "Split",
-                        "pattern": [
-                            "Regex": "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
-                        ],
-                        "behavior": "Isolated",
-                        "invert": false
-                    ] as [String: Any],
-                    [
-                        "type": "ByteLevel",
-                        "add_prefix_space": false,
-                        "trim_offsets": true,
-                        "use_regex": false
-                    ] as [String: Any]
-                ] as [[String: Any]]
-            ] as [String: Any],
-            "post_processor": NSNull(),
-            "decoder": [
-                "type": "ByteLevel",
-                "add_prefix_space": true,
-                "trim_offsets": true,
-                "use_regex": true
-            ] as [String: Any],
-            "model": [
-                "type": "BPE",
-                "dropout": NSNull(),
-                "unk_token": NSNull(),
-                "continuing_subword_prefix": "",
-                "end_of_word_suffix": "",
-                "fuse_unk": false,
-                "byte_fallback": false,
-                "ignore_merges": false,
-                "vocab": vocabDict,
-                "merges": mergeLines
-            ] as [String: Any]
-        ]
-
-        let jsonData = try JSONSerialization.data(withJSONObject: tokenizerJson, options: [.sortedKeys])
-        try jsonData.write(to: outputPath)
+    func record(_ error: Error) {
+        lock.lock()
+        if first == nil { first = error }
+        lock.unlock()
     }
 }

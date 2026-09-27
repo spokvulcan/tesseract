@@ -3,215 +3,39 @@ import Foundation
 @preconcurrency import MLXLMCommon
 import MLXNN
 
-// MARK: - RoPE helpers
+// MARK: - Talker transformer
 
-private func rotateHalf(_ x: MLXArray) -> MLXArray {
-    let half = x.dim(-1) / 2
-    let x1 = x[.ellipsis, ..<half]
-    let x2 = x[.ellipsis, half...]
-    return concatenated([-x2, x1], axis: -1)
-}
+/// The talker's 28-layer transformer. Its input embeds sum a text track and
+/// a codec track; the text embedding table lives outside the module
+/// (`Qwen3TTSTextEmbedding`), so only the codec table is a parameter here.
+final class Qwen3TTSTalkerModel: Module {
+    @ModuleInfo(key: "codec_embedding") var codecEmbedding: Embedding
+    let layers: [Qwen3TTSDecoderLayer]
+    @ModuleInfo var norm: RMSNorm
 
-private func applyRotaryPosEmb(
-    _ q: MLXArray, _ k: MLXArray, cos cosVal: MLXArray, sin sinVal: MLXArray
-) -> (MLXArray, MLXArray) {
-    let cosE = expandedDimensions(cosVal, axis: 1)
-    let sinE = expandedDimensions(sinVal, axis: 1)
-    let qEmbed = q * cosE + rotateHalf(q) * sinE
-    let kEmbed = k * cosE + rotateHalf(k) * sinE
-    return (qEmbed, kEmbed)
-}
-
-// MARK: - Compute inv_freq for RoPE
-
-private func computeInvFreq(dim: Int, base: Float) -> MLXArray {
-    let arange = MLXArray(stride(from: 0, to: dim, by: 2)).asType(.float32)
-    let exponent = arange / Float(dim)
-    return 1.0 / MLXArray(base).pow(exponent)
-}
-
-private let compiledTalkerSwiGLU: @Sendable (MLXArray, MLXArray) -> MLXArray = {
-    compile(shapeless: true) { gate, up in
-        silu(gate) * up
-    }
-}()
-
-// MARK: - Multimodal Rotary Embedding (3D MRoPE)
-
-final class TalkerRotaryEmbedding: Module {
-    let dim: Int
-    let maxPositionEmbeddings: Int
-    let base: Float
-    let mropeSection: [Int]
-    let _invFreq: MLXArray
-
-    init(dim: Int, maxPositionEmbeddings: Int = 32768, base: Float = 10000.0, mropeSection: [Int]? = nil) {
-        self.dim = dim
-        self.maxPositionEmbeddings = maxPositionEmbeddings
-        self.base = base
-        self.mropeSection = mropeSection ?? [24, 20, 20]
-        self._invFreq = computeInvFreq(dim: dim, base: base)
-    }
-
-    func applyInterleavedMrope(_ freqs: MLXArray, mropeSection sec: [Int]) -> MLXArray {
-        let headDimHalf = freqs.dim(-1)
-        let freqsT = freqs[0]
-        let freqsH = freqs[1]
-        let freqsW = freqs[2]
-
-        let indices = MLXArray(0 ..< headDimHalf)
-        let hLength = sec[1] * 3
-        let wLength = sec[2] * 3
-
-        let mod3 = indices % 3
-        let isH: MLXArray = mod3 .== 1
-        let isW: MLXArray = mod3 .== 2
-        let ltH: MLXArray = indices .< MLXArray(hLength)
-        let ltW: MLXArray = indices .< MLXArray(wLength)
-        let hMask = isH .&& ltH
-        let wMask = isW .&& ltW
-
-        let hMaskR = hMask.reshaped(1, 1, headDimHalf)
-        let wMaskR = wMask.reshaped(1, 1, headDimHalf)
-
-        var combined = which(hMaskR, freqsH, freqsT)
-        combined = which(wMaskR, freqsW, combined)
-        return combined
-    }
-
-    func callAsFunction(_ x: MLXArray, positionIds: MLXArray) -> (MLXArray, MLXArray) {
-        var posIds = positionIds
-        if posIds.ndim == 2 {
-            posIds = broadcast(expandedDimensions(posIds, axis: 0), to: [3, posIds.dim(0), posIds.dim(1)])
+    init(config: Qwen3TTSTalkerConfig, fusion: Qwen3TTSFusion) {
+        _codecEmbedding.wrappedValue = Embedding(
+            embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
+        layers = (0 ..< config.numHiddenLayers).map { _ in
+            Qwen3TTSDecoderLayer(
+                hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize,
+                heads: config.numAttentionHeads, kvHeads: config.numKeyValueHeads,
+                headDim: config.headDim, ropeBase: config.ropeTheta,
+                rmsNormEps: config.rmsNormEps, attentionBias: config.attentionBias,
+                fusion: fusion)
         }
-
-        let invFreqExpanded = broadcast(
-            _invFreq.reshaped(1, 1, _invFreq.dim(0), 1).asType(.float32),
-            to: [3, posIds.dim(1), _invFreq.dim(0), 1]
-        )
-        let pos = expandedDimensions(posIds.asType(.float32), axis: 2)
-
-        let freqsRaw = matmul(invFreqExpanded, pos)
-        let freqs = swappedAxes(freqsRaw, 2, 3)
-
-        let combined = applyInterleavedMrope(freqs, mropeSection: mropeSection)
-        let emb = concatenated([combined, combined], axis: -1)
-        let cosVal = MLX.cos(emb).asType(x.dtype)
-        let sinVal = MLX.sin(emb).asType(x.dtype)
-        return (cosVal, sinVal)
+        _norm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
     }
 }
 
-// MARK: - Standard Rotary Embedding (for Code Predictor)
-
-final class Qwen3TTSRotaryEmbedding: Module {
-    let dim: Int
-    let _invFreq: MLXArray
-
-    init(dim: Int, maxPositionEmbeddings: Int = 32768, base: Float = 10000.0) {
-        self.dim = dim
-        self._invFreq = computeInvFreq(dim: dim, base: base)
-    }
-
-    func callAsFunction(_ x: MLXArray, positionIds: MLXArray) -> (MLXArray, MLXArray) {
-        let inv = expandedDimensions(_invFreq, axes: [0, 2])
-        let pos = expandedDimensions(positionIds.asType(.float32), axis: 1)
-        let freqs = swappedAxes(matmul(inv, pos), 1, 2)
-        let emb = concatenated([freqs, freqs], axis: -1)
-        return (MLX.cos(emb).asType(x.dtype), MLX.sin(emb).asType(x.dtype))
-    }
-}
-
-// MARK: - Talker Attention
-
-final class TalkerAttention: Module {
-    let numHeads: Int
-    let numKvHeads: Int
-    let headDim: Int
-    let scale: Float
-
-    @ModuleInfo(key: "q_proj") var qProj: Linear
-    @ModuleInfo(key: "k_proj") var kProj: Linear
-    @ModuleInfo(key: "v_proj") var vProj: Linear
-    @ModuleInfo(key: "o_proj") var oProj: Linear
-    @ModuleInfo(key: "q_norm") var qNorm: RMSNorm
-    @ModuleInfo(key: "k_norm") var kNorm: RMSNorm
-
-    init(config: Qwen3TTSTalkerConfig, layerIdx: Int) {
-        self.numHeads = config.numAttentionHeads
-        self.numKvHeads = config.numKeyValueHeads
-        self.headDim = config.headDim
-        self.scale = 1.0 / Foundation.sqrt(Float(headDim))
-
-        _qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: config.attentionBias)
-        _kProj.wrappedValue = Linear(config.hiddenSize, numKvHeads * headDim, bias: config.attentionBias)
-        _vProj.wrappedValue = Linear(config.hiddenSize, numKvHeads * headDim, bias: config.attentionBias)
-        _oProj.wrappedValue = Linear(numHeads * headDim, config.hiddenSize, bias: config.attentionBias)
-        _qNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
-        _kNorm.wrappedValue = RMSNorm(dimensions: headDim, eps: config.rmsNormEps)
-    }
-
-    func callAsFunction(
-        _ x: MLXArray,
-        positionEmbeddings: (MLXArray, MLXArray),
-        mask: MLXArray? = nil,
-        cache: (any KVCache)? = nil
-    ) -> MLXArray {
-        let (batch, seqLen, _) = (x.dim(0), x.dim(1), x.dim(2))
-
-        var q = qProj(x).reshaped(batch, seqLen, numHeads, headDim)
-        var k = kProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
-        var v = vProj(x).reshaped(batch, seqLen, numKvHeads, headDim)
-
-        q = qNorm(q)
-        k = kNorm(k)
-
-        q = q.transposed(0, 2, 1, 3)
-        k = k.transposed(0, 2, 1, 3)
-        v = v.transposed(0, 2, 1, 3)
-
-        let (cosVal, sinVal) = positionEmbeddings
-        (q, k) = applyRotaryPosEmb(q, k, cos: cosVal, sin: sinVal)
-
-        if let cache {
-            (k, v) = cache.update(keys: k, values: v)
-        }
-
-        let output = MLXFast.scaledDotProductAttention(
-            queries: q, keys: k, values: v, scale: scale, mask: mask
-        )
-
-        return oProj(output.transposed(0, 2, 1, 3).reshaped(batch, seqLen, -1))
-    }
-}
-
-// MARK: - Talker MLP (SwiGLU)
-
-final class TalkerMLP: Module {
-    @ModuleInfo(key: "gate_proj") var gateProj: Linear
-    @ModuleInfo(key: "up_proj") var upProj: Linear
-    @ModuleInfo(key: "down_proj") var downProj: Linear
-
-    init(config: Qwen3TTSTalkerConfig) {
-        _gateProj.wrappedValue = Linear(config.hiddenSize, config.intermediateSize, bias: false)
-        _upProj.wrappedValue = Linear(config.hiddenSize, config.intermediateSize, bias: false)
-        _downProj.wrappedValue = Linear(config.intermediateSize, config.hiddenSize, bias: false)
-    }
-
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        downProj(compiledTalkerSwiGLU(gateProj(x), upProj(x)))
-    }
-}
-
-// MARK: - ResizeMLP (text projection)
-
-final class ResizeMLP: Module {
+/// Text embeddings to the talker's width: two linears with SiLU between.
+final class Qwen3TTSTextProjection: Module {
     @ModuleInfo(key: "linear_fc1") var fc1: Linear
     @ModuleInfo(key: "linear_fc2") var fc2: Linear
 
-    init(inputSize: Int, intermediateSize: Int, outputSize: Int, bias: Bool = false) {
-        _fc1.wrappedValue = Linear(inputSize, intermediateSize, bias: bias)
-        _fc2.wrappedValue = Linear(intermediateSize, outputSize, bias: bias)
+    init(inputSize: Int, outputSize: Int) {
+        _fc1.wrappedValue = Linear(inputSize, inputSize, bias: true)
+        _fc2.wrappedValue = Linear(inputSize, outputSize, bias: true)
     }
 
     func callAsFunction(_ x: MLXArray) -> MLXArray {
@@ -219,153 +43,150 @@ final class ResizeMLP: Module {
     }
 }
 
-// MARK: - Talker Decoder Layer
-
-final class TalkerDecoderLayer: Module {
-    @ModuleInfo(key: "self_attn") var selfAttn: TalkerAttention
-    @ModuleInfo var mlp: TalkerMLP
-    @ModuleInfo(key: "input_layernorm") var inputLayernorm: RMSNorm
-    @ModuleInfo(key: "post_attention_layernorm") var postAttentionLayernorm: RMSNorm
-
-    init(config: Qwen3TTSTalkerConfig, layerIdx: Int) {
-        _selfAttn.wrappedValue = TalkerAttention(config: config, layerIdx: layerIdx)
-        _mlp.wrappedValue = TalkerMLP(config: config)
-        _inputLayernorm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        _postAttentionLayernorm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-    }
-
-    func callAsFunction(
-        _ x: MLXArray,
-        positionEmbeddings: (MLXArray, MLXArray),
-        mask: MLXArray? = nil,
-        cache: (any KVCache)? = nil
-    ) -> MLXArray {
-        var out = x + selfAttn(inputLayernorm(x), positionEmbeddings: positionEmbeddings, mask: mask, cache: cache)
-        out = out + mlp(postAttentionLayernorm(out))
-        return out
-    }
-}
-
-// MARK: - Talker Model (inner)
-
-final class Qwen3TTSTalkerModel: Module {
+/// The talker: picks each frame's first codebook (the words and the
+/// prosody), and owns the code predictor that fills in the other fifteen.
+final class Qwen3TTSTalker: Module {
     let config: Qwen3TTSTalkerConfig
 
-    @ModuleInfo(key: "codec_embedding") var codecEmbedding: Embedding
-    @ModuleInfo(key: "text_embedding") var textEmbedding: Embedding
-    let layers: [TalkerDecoderLayer]
-    @ModuleInfo var norm: RMSNorm
-    let rotaryEmb: TalkerRotaryEmbedding
-
-    init(config: Qwen3TTSTalkerConfig) {
-        self.config = config
-        _codecEmbedding.wrappedValue = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
-        _textEmbedding.wrappedValue = Embedding(embeddingCount: config.textVocabSize, dimensions: config.textHiddenSize)
-        self.layers = (0 ..< config.numHiddenLayers).map { TalkerDecoderLayer(config: config, layerIdx: $0) }
-        _norm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.rotaryEmb = TalkerRotaryEmbedding(
-            dim: config.headDim,
-            maxPositionEmbeddings: config.maxPositionEmbeddings,
-            base: config.ropeTheta,
-            mropeSection: config.mropeSection
-        )
-    }
-
-    func callAsFunction(
-        _ inputsEmbeds: MLXArray,
-        positionIds: MLXArray? = nil,
-        mask: MLXArray? = nil,
-        cache: [any KVCache]? = nil
-    ) -> MLXArray {
-        let (batch, seqLen, _) = (inputsEmbeds.dim(0), inputsEmbeds.dim(1), inputsEmbeds.dim(2))
-
-        let offset: Int = cache?.first?.offset ?? 0
-
-        let posIds: MLXArray
-        if let positionIds {
-            posIds = positionIds
-        } else {
-            let pos = MLXArray(Int32(offset) ..< Int32(offset + seqLen)).reshaped(1, seqLen)
-            let bpos = broadcast(pos, to: [batch, seqLen])
-            posIds = stacked([bpos, bpos, bpos], axis: 0)
-        }
-
-        let posEmbeddings = rotaryEmb(inputsEmbeds, positionIds: posIds)
-
-        var causalMask = mask
-        if causalMask == nil, seqLen > 1 {
-            // Multi-token forward on a warm cache (voice prefix / voice anchor restore)
-            // needs an offset-aware mask of shape [seqLen, offset + seqLen]; the
-            // offset-free additive mask is kept for the cold-start path.
-            causalMask = offset > 0
-                ? createCausalMask(n: seqLen, offset: offset)
-                : MultiHeadAttention.createAdditiveCausalMask(seqLen).asType(inputsEmbeds.dtype)
-        }
-
-        var x = inputsEmbeds
-        for (i, layer) in layers.enumerated() {
-            x = layer(x, positionEmbeddings: posEmbeddings, mask: causalMask, cache: cache?[i])
-        }
-        return norm(x)
-    }
-
-    func makeCache() -> [any KVCache] {
-        layers.map { _ in KVCacheSimple() }
-    }
-}
-
-// MARK: - Talker for Conditional Generation (full model)
-
-final class Qwen3TTSTalkerForConditionalGeneration: Module {
-    let config: Qwen3TTSTalkerConfig
     @ModuleInfo var model: Qwen3TTSTalkerModel
-    @ModuleInfo(key: "text_projection") var textProjection: ResizeMLP
+    @ModuleInfo(key: "text_projection") var textProjection: Qwen3TTSTextProjection
     @ModuleInfo(key: "codec_head") var codecHead: Linear
     @ModuleInfo(key: "code_predictor") var codePredictor: Qwen3TTSCodePredictor
 
-    init(config: Qwen3TTSTalkerConfig) {
+    init(config: Qwen3TTSTalkerConfig, fusion: Qwen3TTSFusion = .init()) {
         self.config = config
-        _model.wrappedValue = Qwen3TTSTalkerModel(config: config)
-        _textProjection.wrappedValue = ResizeMLP(
-            inputSize: config.textHiddenSize,
-            intermediateSize: config.textHiddenSize,
-            outputSize: config.hiddenSize,
-            bias: true
-        )
+        _model.wrappedValue = Qwen3TTSTalkerModel(config: config, fusion: fusion)
+        _textProjection.wrappedValue = Qwen3TTSTextProjection(
+            inputSize: config.textHiddenSize, outputSize: config.hiddenSize)
         _codecHead.wrappedValue = Linear(config.hiddenSize, config.vocabSize, bias: false)
-
-        let cpConfig = config.codePredictorConfig ?? {
-            let json = "{}".data(using: .utf8)!
-            return try! JSONDecoder().decode(Qwen3TTSTalkerCodePredictorConfig.self, from: json)
-        }()
-        _codePredictor.wrappedValue = Qwen3TTSCodePredictor(config: cpConfig, talkerHiddenSize: config.hiddenSize)
+        _codePredictor.wrappedValue = Qwen3TTSCodePredictor(
+            config: config.codePredictorConfig ?? .defaults, talkerHiddenSize: config.hiddenSize,
+            fusion: fusion)
     }
 
-    func getInputEmbeddings() -> Embedding { model.codecEmbedding }
-    func getTextEmbeddings() -> Embedding { model.textEmbedding }
-
-    func callAsFunction(
-        _ inputsEmbeds: MLXArray,
-        positionIds: MLXArray? = nil,
-        mask: MLXArray? = nil,
-        cache: [any KVCache]? = nil
-    ) -> (MLXArray, MLXArray) {
-        let hiddenStates = model(inputsEmbeds, positionIds: positionIds, mask: mask, cache: cache)
-        let logits = codecHead(hiddenStates)
-        return (logits, hiddenStates)
+    /// The codec embedding of `codes`, `[1, n]` int32.
+    func embedCodec(_ codes: MLXArray) -> MLXArray {
+        model.codecEmbedding(codes)
     }
 
-    func makeCache() -> [any KVCache] {
-        model.makeCache()
+    /// Runs `embeds` `[1, n, hidden]` through the transformer, appending to
+    /// `cache`. Returns the first codebook's logits `[1, vocab]` and the
+    /// final hidden state `[1, 1, hidden]`, both for the last position only.
+    func callAsFunction(_ embeds: MLXArray, cache: [KVCache]) -> (logits: MLXArray, hidden: MLXArray) {
+        let hidden = runQwen3TTSLayers(
+            embeds, layers: model.layers, cache: cache, finalNorm: model.norm)
+        return (codecHead(hidden).squeezed(axis: 1), hidden)
     }
 
-    static func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
-        var sanitized = [String: MLXArray]()
-        for (k, v) in weights {
-            guard k.hasPrefix("talker.") else { continue }
-            let newKey = String(k.dropFirst("talker.".count))
-            sanitized[newKey] = v
+    /// `callAsFunction` for a prompt. From `layerByLayerLength` positions it
+    /// is evaluated a layer at a time as it is built, so its activations
+    /// don't pile up in MLX's pool; a shorter prompt's are small, and the
+    /// waits would cost first-audio time. Returns before the last layer has
+    /// run.
+    func prefill(_ embeds: MLXArray, cache: [KVCache]) -> (logits: MLXArray, hidden: MLXArray) {
+        let hidden = runQwen3TTSLayers(
+            embeds, layers: model.layers, cache: cache, finalNorm: model.norm,
+            layerByLayer: embeds.dim(1) >= Self.layerByLayerLength)
+        return (codecHead(hidden).squeezed(axis: 1), hidden)
+    }
+
+    static let layerByLayerLength = 32
+
+    /// A KV cache per layer, preallocated for `capacity` positions.
+    func makeCache(capacity: Int) -> [KVCache] {
+        model.layers.map { _ in
+            let cache = KVCacheSimple()
+            cache.reserveCapacity(capacity)
+            return cache
         }
-        return sanitized
+    }
+}
+
+// MARK: - Code predictor
+
+final class Qwen3TTSCodePredictorModel: Module {
+    @ModuleInfo(key: "codec_embedding") var codecEmbedding: [Embedding]
+    let layers: [Qwen3TTSDecoderLayer]
+    @ModuleInfo var norm: RMSNorm
+
+    init(
+        config: Qwen3TTSTalkerCodePredictorConfig, talkerHiddenSize: Int, fusion: Qwen3TTSFusion
+    ) {
+        _codecEmbedding.wrappedValue = (0 ..< config.numCodeGroups - 1).map { _ in
+            Embedding(embeddingCount: config.vocabSize, dimensions: talkerHiddenSize)
+        }
+        layers = (0 ..< config.numHiddenLayers).map { _ in
+            Qwen3TTSDecoderLayer(
+                hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize,
+                heads: config.numAttentionHeads, kvHeads: config.numKeyValueHeads,
+                headDim: config.headDim, ropeBase: config.ropeTheta,
+                rmsNormEps: config.rmsNormEps, attentionBias: config.attentionBias,
+                fusion: fusion)
+        }
+        _norm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+    }
+}
+
+/// Fills in codebooks 1...15 of a frame, one at a time, each conditioned on
+/// the talker's hidden state and the codes before it: 15 short sequential
+/// passes of a 5-layer transformer per frame.
+final class Qwen3TTSCodePredictor: Module {
+    let numCodeGroups: Int
+
+    @ModuleInfo(key: "small_to_mtp_projection") var projection: Linear?
+    @ModuleInfo var model: Qwen3TTSCodePredictorModel
+    @ModuleInfo(key: "lm_head") var lmHead: [Linear]
+
+    init(
+        config: Qwen3TTSTalkerCodePredictorConfig, talkerHiddenSize: Int, fusion: Qwen3TTSFusion
+    ) {
+        numCodeGroups = config.numCodeGroups
+        _projection.wrappedValue =
+            config.hiddenSize != talkerHiddenSize
+            ? Linear(talkerHiddenSize, config.hiddenSize, bias: true) : nil
+        _model.wrappedValue = Qwen3TTSCodePredictorModel(
+            config: config, talkerHiddenSize: talkerHiddenSize, fusion: fusion)
+        _lmHead.wrappedValue = (0 ..< config.numCodeGroups - 1).map { _ in
+            Linear(config.hiddenSize, config.vocabSize, bias: false)
+        }
+    }
+
+    var codecEmbedding: [Embedding] { model.codecEmbedding }
+
+    /// A cache per layer for one frame's passes (positions 0...numCodeGroups).
+    func makeCache() -> [KVCache] {
+        model.layers.map { _ in
+            let cache = KVCacheSimple()
+            cache.reserveCapacity(numCodeGroups + 1)
+            return cache
+        }
+    }
+
+    /// One frame: `hidden` is the talker's last hidden state `[1, 1, D]`,
+    /// `firstEmbedding` the talker-side embedding of the frame's first code.
+    /// `sample` turns `[1, vocab]` logits into a `[1, 1]` code. Returns the
+    /// fifteen codes and the sum of all sixteen codes' embeddings, which is
+    /// the codec half of the talker's next input. Lazy: nothing is evaluated.
+    func predict(
+        hidden: MLXArray, firstEmbedding: MLXArray, cache: [KVCache],
+        sample: (_ group: Int, _ logits: MLXArray) -> MLXArray
+    ) -> (codes: [MLXArray], embeddingSum: MLXArray) {
+        for layerCache in cache { layerCache.trim(layerCache.offset) }
+        var input = concatenated([hidden, firstEmbedding], axis: 1)
+        var embeddingSum = firstEmbedding
+        var codes: [MLXArray] = []
+        codes.reserveCapacity(numCodeGroups - 1)
+        for group in 0 ..< numCodeGroups - 1 {
+            let x = projection.map { $0(input) } ?? input
+            let last = runQwen3TTSLayers(
+                x, layers: model.layers, cache: cache, finalNorm: model.norm)
+            let logits = lmHead[group](last).squeezed(axis: 1)
+            let code = sample(group, logits)
+            codes.append(code)
+            let embedding = model.codecEmbedding[group](code)
+            embeddingSum = embeddingSum + embedding
+            input = embedding
+        }
+        return (codes, embeddingSum)
     }
 }
