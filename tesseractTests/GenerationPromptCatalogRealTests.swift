@@ -8,10 +8,11 @@ import Testing
 /// measure its **Generation Prompt**, by default and with thinking off, so
 /// no shipped model reaches the unknown state. Runs against the models
 /// downloaded under `~/Library/Application Support/models` (override with
-/// `TESSERACT_MODELS_ROOT`), loaded through the production tokenizer loader;
-/// the suite is skipped where that directory does not exist. It prints which
-/// models it checked and which it skipped, and a run that checked none
-/// fails: a gate that measured nothing has not passed.
+/// `TESSERACT_MODELS_ROOT`), loaded through the production tokenizer loader.
+/// A gate that measured nothing has not passed, so the suite is skipped
+/// where no catalog chat model is downloaded. The directory alone doesn't
+/// count: the app creates it at launch, so a CI runner has one with nothing
+/// in it. It prints which models it checked and which it skipped.
 struct GenerationPromptCatalogRealTests {
 
     nonisolated static var modelsRoot: URL {
@@ -22,8 +23,23 @@ struct GenerationPromptCatalogRealTests {
             ).expandingTildeInPath)
     }
 
-    nonisolated static var modelsRootExists: Bool {
-        FileManager.default.fileExists(atPath: modelsRoot.path)
+    /// The catalog entries a chat template drives.
+    @MainActor
+    static var chatModels: [ModelDefinition] {
+        ModelDefinition.all.filter { $0.category == .agent || $0.category == .proofread }
+    }
+
+    nonisolated static func hasTokenizer(_ directory: URL) -> Bool {
+        FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("tokenizer_config.json").path)
+    }
+
+    @MainActor
+    static var anyChatModelDownloaded: Bool {
+        chatModels.contains { model in
+            model.cacheSubdirectory.map { hasTokenizer(modelsRoot.appendingPathComponent($0)) }
+                ?? false
+        }
     }
 
     /// The request context for `enable_thinking`, resolved as the completion
@@ -70,21 +86,14 @@ struct GenerationPromptCatalogRealTests {
     }
 
     @MainActor
-    @Test(.enabled(if: modelsRootExists))
+    @Test(.enabled("no catalog chat model is downloaded") { await anyChatModelDownloaded })
     func everyDownloadedCatalogModelMeasures() async throws {
         var checked: [String] = []
         var skipped: [String] = []
-        // The catalog entries a chat template drives.
-        let chatModels = ModelDefinition.all.filter {
-            $0.category == .agent || $0.category == .proofread
-        }
-        for model in chatModels {
+        for model in Self.chatModels {
             guard let subdirectory = model.cacheSubdirectory else { continue }
             let directory = Self.modelsRoot.appendingPathComponent(subdirectory)
-            guard
-                FileManager.default.fileExists(
-                    atPath: directory.appendingPathComponent("tokenizer_config.json").path)
-            else {
+            guard Self.hasTokenizer(directory) else {
                 skipped.append(model.id)
                 continue
             }
