@@ -45,12 +45,24 @@ private struct Harness {
     let overlay: RecordingHighlightSurface
     let settings: SettingsManager
     let presenter: SpeechEnginePresenter
+    let pinnedVoices: PinnedVoiceStore
     let textExtractor = InMemoryTextExtractor()
     let voiceEngine = VoiceEngineStatusStub()
     /// Fires when the coordinator sends the user to the Models page.
     let modelsPage = CallbackProbe()
 
-    init(script: ScriptedSpeechSynthesizer.Script = .init()) async {
+    /// `pinnedVoices`: pass an earlier harness's store to act as a relaunch.
+    /// The default is a fresh temporary one, never the real app-support file.
+    init(
+        script: ScriptedSpeechSynthesizer.Script = .init(),
+        pinnedVoices: PinnedVoiceStore? = nil
+    ) async {
+        self.pinnedVoices =
+            pinnedVoices
+            ?? PinnedVoiceStore(
+                directory: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("pinned-voices-\(UUID().uuidString)", isDirectory: true)
+            )
         synthesizer = ScriptedSpeechSynthesizer()
         await synthesizer.configure(script)
         let engine = SpeechEngine(
@@ -65,7 +77,8 @@ private struct Harness {
             voiceEngineStatus: { [voiceEngine] in voiceEngine.status },
             playback: playback,
             settings: settings,
-            notchOverlay: overlay
+            notchOverlay: overlay,
+            pinnedVoices: self.pinnedVoices
         )
         coordinator.onVoiceEngineMissing = { [modelsPage] in modelsPage.fire() }
     }
@@ -193,6 +206,62 @@ struct SpeechCoordinatorTests {
         let requests = await harness.synthesizer.requests
         #expect(requests.allSatisfy { $0.seed == 42 })
         #expect(requests.last?.voiceDescription == "warm narrator")
+    }
+
+    /// ADR-0072: the first take of a designed voice is kept, and the next
+    /// launch opens the voice pinned to it instead of rolling a new one.
+    @Test
+    func theFirstTakeIsRememberedAndARelaunchOpensWithIt() async throws {
+        let harness = await Harness()
+        harness.settings.ttsVoiceDescription = "warm narrator"
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        harness.playback.firePlaybackFinished()
+
+        let stored = try #require(
+            harness.pinnedVoices.voice(
+                description: "warm narrator", language: harness.settings.ttsLanguage,
+                model: ModelDefinition.textToSpeechModelSpec))
+        #expect(stored.referenceText == "Hello world.")
+
+        let relaunched = await Harness(pinnedVoices: harness.pinnedVoices)
+        relaunched.settings.ttsVoiceDescription = "warm narrator"
+        relaunched.coordinator.speakText("And again.")
+        #expect(await waitUntil { relaunched.playback.finishStreamingCount == 1 })
+        let first = try #require(await relaunched.synthesizer.requests.first)
+        #expect(first.reference?.codeFrames == stored.codeFrames)
+        #expect(!first.capturesReference, "a remembered voice needs no new take")
+    }
+
+    /// "Try another take" renders only the opening of the text, from the
+    /// description alone and with a fresh seed, then replaces the stored voice.
+    @Test
+    func tryAnotherTakeRendersTheOpeningAndReplacesTheStoredVoice() async throws {
+        let harness = await Harness()
+        harness.settings.ttsVoiceDescription = "warm narrator"
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        harness.playback.firePlaybackFinished()
+        let model = ModelDefinition.textToSpeechModelSpec
+        let language = harness.settings.ttsLanguage
+        let before = harness.pinnedVoices.voice(
+            description: "warm narrator", language: language, model: model)
+
+        let longText =
+            "The rain had stopped by the time she reached the harbor. "
+            + String(repeating: "The boats rocked quietly against the old stone pier. ", count: 20)
+        harness.coordinator.tryAnotherTake(sampleFrom: longText)
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 2 })
+
+        let take = try #require(await harness.synthesizer.requests.last)
+        #expect(take.capturesReference)
+        #expect(take.reference == nil)
+        #expect(take.text.split(separator: " ").count <= 40, "only the opening is spoken")
+        #expect(take.seed != UInt64(harness.settings.ttsSeed), "a retake rolls a fresh seed")
+        let after = harness.pinnedVoices.voice(
+            description: "warm narrator", language: language, model: model)
+        #expect(after != before)
+        #expect(after?.referenceText == take.text)
     }
 
     @Test

@@ -17,9 +17,17 @@ struct TTSParametersInspector: View {
                     title: "Temperature",
                     value: $settings.ttsTemperature,
                     range: 0.0...2.0,
-                    summary: "Higher is more varied, less stable.",
+                    summary: "Higher is more expressive.",
                     helpText:
-                        "Controls randomness. 0 always picks the most likely token; higher values produce more varied but less stable speech."
+                        "How freely the delivery varies: pacing, emphasis, intonation. Around 0.9 reads expressively; lower is flatter."
+                )
+                ParameterSliderRow(
+                    title: "Detail Temperature",
+                    value: $settings.ttsDetailTemperature,
+                    range: 0.0...1.5,
+                    summary: "Lower keeps the voice steadier.",
+                    helpText:
+                        "How freely the fine acoustic detail varies, which carries most of the timbre. Around 0.5 keeps the voice the same person between passages."
                 )
                 ParameterSliderRow(
                     title: "Top-P",
@@ -77,6 +85,7 @@ struct TTSParametersInspector: View {
                     settings.ttsTemperature = SettingsCatalogue.ttsTemperature.default
                     settings.ttsTopP = SettingsCatalogue.ttsTopP.default
                     settings.ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.default
+                    settings.ttsDetailTemperature = SettingsCatalogue.ttsDetailTemperature.default
                     settings.ttsMaxTokens = SettingsCatalogue.ttsMaxTokens.default
                     settings.ttsSeed = SettingsCatalogue.ttsSeed.default
                     settings.ttsStreamingEnabled = SettingsCatalogue.ttsStreamingEnabled.default

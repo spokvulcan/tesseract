@@ -2,6 +2,7 @@
 
 - Status: Accepted (under overnight delegation, 2026-07-13 — owner review pending; two written contingencies below)
 - Date: 2026-07-13
+- Amended by: ADR-0072 (2026-09-27: a pinned Reference Take replaces the 48-step voice anchor)
 - Relates to: map #334, tickets #336 (model family), #338 (budgets), #339 (benchmarks + ear verdicts), #341 (this decision); ADR-0036 (inference substrate)
 
 ## Context

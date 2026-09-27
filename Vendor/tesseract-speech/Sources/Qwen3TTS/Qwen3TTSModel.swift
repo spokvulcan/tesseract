@@ -17,12 +17,8 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
     private var voicePrefixKVState: [[MLXArray]]?
     private var cachedVoiceDescription: String?
 
-    // Voice anchor KV cache: extends instruct cache with codec-level voice examples
-    // from a previously generated segment, anchoring subsequent segments to the same voice.
-    private var voiceAnchorKVState: [[MLXArray]]?
-    private var voiceAnchorCodecCount: Int = 0
-
-    /// Codec codes from the most recent generation, used to build voice anchor.
+    /// Codec codes from the most recent generation: a reference take is
+    /// captured from them.
     public private(set) var lastGeneratedCodes: [MLXArray]?
 
     /// Random seed for deterministic generation. Set by caller before generate/generateStream.
@@ -39,7 +35,7 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         self.talker = Qwen3TTSTalkerForConditionalGeneration(config: talkerConfig)
     }
 
-    // MARK: - Voice prefix / voice anchor cache helpers
+    // MARK: - Voice prefix cache
 
     private func saveVoicePrefixCache(_ cache: [any KVCache]) {
         voicePrefixKVState = cache.map { $0.state }
@@ -57,111 +53,12 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         }
     }
 
-    private func saveVoiceAnchorCache(_ cache: [any KVCache]) {
-        voiceAnchorKVState = cache.map { $0.state }
-        eval(voiceAnchorKVState!.flatMap { $0 })
-    }
-
-    private func restoreVoiceAnchorCache(into cache: [any KVCache]) {
-        guard let saved = voiceAnchorKVState else { return }
-        for (i, layerState) in saved.enumerated() {
-            var layerCache = cache[i]
-            layerCache.state = layerState
-        }
-    }
-
-    public func buildVoiceAnchor(
-        referenceCount: Int,
-        instruct: String?,
-        language: String?
-    ) {
-        guard let codes = lastGeneratedCodes, !codes.isEmpty else { return }
-
-        let refCount = min(referenceCount, codes.count)
-        guard refCount > 0 else { return }
-        guard let talkerConfig = config.talkerConfig else { return }
-
-        let inputEmbedding = talker.getInputEmbeddings()
-        let codeEmbeddings = talker.codePredictor.codecEmbedding
-
-        // Start from instruct-only KV cache
-        let cache = talker.makeCache()
-
-        // Ensure instruct prefix is cached
-        if cachedVoiceDescription != instruct || voicePrefixKVState == nil {
-            let prepared = prepareGenerationInputs(
-                text: ".", language: language ?? "auto", instruct: instruct
-            )
-            if let instructEmbed = prepared.3 {
-                _ = talker(instructEmbed, cache: cache)
-                saveVoicePrefixCache(cache)
-                cachedVoiceDescription = instruct
-            }
-        } else {
-            restoreVoicePrefixCache(into: cache)
-        }
-
-        // Build codec prompt embeddings from reference codes.
-        // Each code step has shape [1, numCodeGroups]; embed all codebooks and sum.
-        let refCodes = Array(codes.prefix(refCount))
-        let ttsPadEmbed: MLXArray = {
-            let padTokens = MLXArray([Int32(config.ttsPadTokenId)]).reshaped(1, 1)
-            return talker.textProjection(talker.getTextEmbeddings()(padTokens))
-        }()
-
-        var codecPromptEmbeds = [MLXArray]()
-        codecPromptEmbeds.reserveCapacity(refCount)
-
-        for stepCodes in refCodes {
-            // stepCodes: [1, numCodeGroups]
-            // Embed code0 with talker input embedding, remaining with code predictor embeddings
-            var embed = inputEmbedding(stepCodes[0..., 0 ..< 1])  // code0
-            for codeIdx in 0 ..< (talkerConfig.numCodeGroups - 1) {
-                let codeToken = stepCodes[0..., (codeIdx + 1) ..< (codeIdx + 2)]
-                embed = embed + codeEmbeddings[codeIdx](codeToken)
-            }
-            // Add ttsPadEmbed (same as during generation when text is exhausted)
-            embed = embed + ttsPadEmbed
-            codecPromptEmbeds.append(embed)
-        }
-
-        // Concatenate all codec prompt steps and forward through talker
-        let codecPrompt = concatenated(codecPromptEmbeds, axis: 1)  // [1, refCount, hidden]
-        _ = talker(codecPrompt, cache: cache)
-
-        // Save the extended KV state (instruct + codec prompt)
-        saveVoiceAnchorCache(cache)
-        voiceAnchorCodecCount = refCount
-    }
-
-    public func clearVoiceAnchor() {
-        voiceAnchorKVState = nil
-        voiceAnchorCodecCount = 0
-        lastGeneratedCodes = nil
-    }
-
-    // Tesseract patch #10 (TESSERACT-PATCHES.md): anchor code frames as plain
-    // values, so voice identity can leave the process (PinnedVoice) and an
-    // anchor can be rebuilt without re-generating its source audio.
-
     /// The last generation's code frames as plain integers, one `[Int32]` of
-    /// `numCodeGroups` entries per codec step. Empty when nothing generated.
+    /// `numCodeGroups` entries per codec step: what a reference take keeps.
+    /// Empty when nothing generated.
     public var lastGeneratedCodeFrames: [[Int32]] {
         guard let codes = lastGeneratedCodes else { return [] }
         return codes.map { $0.asArray(Int32.self) }
-    }
-
-    /// Rebuild the voice anchor from previously exported code frames instead
-    /// of `lastGeneratedCodes` — same anchor construction, value-driven input.
-    public func buildVoiceAnchor(
-        fromCodeFrames frames: [[Int32]],
-        referenceCount: Int,
-        instruct: String?,
-        language: String?
-    ) {
-        guard !frames.isEmpty else { return }
-        lastGeneratedCodes = frames.map { MLXArray($0).reshaped(1, $0.count) }
-        buildVoiceAnchor(referenceCount: referenceCount, instruct: instruct, language: language)
     }
 
     // MARK: - Token alignment
@@ -182,127 +79,47 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
 
     // MARK: - Generation
 
-    /// Generates the whole utterance, then decodes it. `voice` is the
+    /// Renders the whole utterance, then decodes it. `voice` is the
     /// VoiceDesign description, or CustomVoice's "speaker, instruction".
+    /// With a `reference`, the voice continues that take: same person, new
+    /// words.
     public func generate(
         text: String,
         voice: String?,
         language: String?,
-        generationParameters: GenerateParameters
+        reference: Qwen3TTSReference? = nil,
+        sampling: Qwen3TTSSampling
     ) async throws -> MLXArray {
         try requireGenerationComponents()
-        let settings = resolveVoiceDesignGenerationSettings(
-            language: language,
-            generationParameters: generationParameters
-        )
-
         return try generateVoiceDesign(
             text: text,
             instruct: voice,
-            language: settings.language,
-            temperature: settings.temperature,
-            topK: settings.topK,
-            topP: settings.topP,
-            repetitionPenalty: settings.repetitionPenalty,
-            minP: settings.minP,
-            maxTokens: settings.maxTokens
+            language: language ?? "auto",
+            conditioning: try reference.map { try referenceConditioning($0, language: language) },
+            sampling: sampling
         )
     }
 
-    /// Streams decoded audio as it is generated. With `useVoiceAnchor`, the
-    /// installed voice anchor conditions the generation.
+    /// Streams decoded audio as it renders; otherwise the same as
+    /// `generate`. The first chunks come every 5 frames until 48 frames
+    /// exist, then every `streamingInterval` seconds.
     public func generateStream(
         text: String,
         voice: String?,
         language: String?,
-        generationParameters: GenerateParameters,
-        streamingInterval: Double = 2.0,
-        useVoiceAnchor: Bool = false
+        reference: Qwen3TTSReference? = nil,
+        sampling: Qwen3TTSSampling,
+        streamingInterval: Double = 2.0
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
-        let settings = resolveVoiceDesignGenerationSettings(
-            language: language,
-            generationParameters: generationParameters
-        )
-        return makeGenerationStream { model, onToken, onInfo, onAudioChunk in
+        makeGenerationStream { model, onToken, onInfo, onAudioChunk in
             _ = try model.generateVoiceDesign(
                 text: text,
                 instruct: voice,
-                language: settings.language,
-                temperature: settings.temperature,
-                topK: settings.topK,
-                topP: settings.topP,
-                repetitionPenalty: settings.repetitionPenalty,
-                minP: settings.minP,
-                maxTokens: settings.maxTokens,
-                streamingInterval: streamingInterval,
-                useVoiceAnchor: useVoiceAnchor,
-                onToken: onToken,
-                onInfo: onInfo,
-                onAudioChunk: onAudioChunk
-            )
-        }
-    }
-
-    public func generate(
-        text: String,
-        conditioning: Qwen3TTSReferenceConditioning,
-        generationParameters: GenerateParameters
-    ) async throws -> MLXArray {
-        try requireGenerationComponents()
-        let settings = resolveVoiceDesignGenerationSettings(
-            language: conditioning.resolvedLanguage,
-            generationParameters: generationParameters
-        )
-
-        return try generateVoiceDesign(
-            text: text,
-            instruct: nil,
-            language: settings.language,
-            conditioning: conditioning,
-            temperature: settings.temperature,
-            topK: settings.topK,
-            topP: settings.topP,
-            repetitionPenalty: settings.repetitionPenalty,
-            minP: settings.minP,
-            maxTokens: settings.maxTokens
-        )
-    }
-
-    public func generateStream(
-        text: String,
-        conditioning: Qwen3TTSReferenceConditioning,
-        generationParameters: GenerateParameters
-    ) -> AsyncThrowingStream<AudioGeneration, Error> {
-        generateStream(
-            text: text,
-            conditioning: conditioning,
-            generationParameters: generationParameters,
-            streamingInterval: 2.0
-        )
-    }
-
-    public func generateStream(
-        text: String,
-        conditioning: Qwen3TTSReferenceConditioning,
-        generationParameters: GenerateParameters,
-        streamingInterval: Double
-    ) -> AsyncThrowingStream<AudioGeneration, Error> {
-        let settings = resolveVoiceDesignGenerationSettings(
-            language: conditioning.resolvedLanguage,
-            generationParameters: generationParameters
-        )
-        return makeGenerationStream { model, onToken, onInfo, onAudioChunk in
-            _ = try model.generateVoiceDesign(
-                text: text,
-                instruct: nil,
-                language: settings.language,
-                conditioning: conditioning,
-                temperature: settings.temperature,
-                topK: settings.topK,
-                topP: settings.topP,
-                repetitionPenalty: settings.repetitionPenalty,
-                minP: settings.minP,
-                maxTokens: settings.maxTokens,
+                language: language ?? "auto",
+                conditioning: try reference.map {
+                    try model.referenceConditioning($0, language: language)
+                },
+                sampling: sampling,
                 streamingInterval: streamingInterval,
                 onToken: onToken,
                 onInfo: onInfo,
@@ -362,14 +179,8 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         instruct: String?,
         language: String,
         conditioning: Qwen3TTSReferenceConditioning? = nil,
-        temperature: Float,
-        topK: Int,
-        topP: Float,
-        repetitionPenalty: Float,
-        minP: Float,
-        maxTokens: Int,
+        sampling: Qwen3TTSSampling,
         streamingInterval: Double = 2.0,
-        useVoiceAnchor: Bool = false,
         onToken: ((Int) -> Void)? = nil,
         onInfo: ((AudioGenerationInfo) -> Void)? = nil,
         onAudioChunk: ((MLXArray) -> Void)? = nil
@@ -387,13 +198,19 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         let trailingTextHidden: MLXArray
         let ttsPadEmbed: MLXArray
         let refCodes: MLXArray?
-        // Instruct prefix embed (VoiceDesign non-ICL path only) for voice prefix/anchor KV caching.
+        // Instruct prefix embed (VoiceDesign path without a reference) for the voice prefix KV cache.
         var instructEmbed: MLXArray?
 
         if let conditioning {
+            // The reference take conditions this generation in Qwen's
+            // in-context layout, with the VoiceDesign description in front.
+            let isCVModel = config.ttsModelType == "custom_voice"
+            let referenceInstruct =
+                isCVModel ? Self.parseCustomVoicePrompt(instruct)?.instruction : instruct
             let prepared = try prepareICLGenerationInputs(
                 text: text,
-                conditioning: conditioning
+                conditioning: conditioning,
+                instruct: referenceInstruct
             )
             inputEmbedsInit = prepared.0
             trailingTextHidden = prepared.1
@@ -420,7 +237,7 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
 
         // Cap max tokens based on text length
         let targetTokenCount = tokenizer.encode(text: text).count
-        let effectiveMaxTokens = min(maxTokens, max(75, targetTokenCount * 6))
+        let effectiveMaxTokens = min(sampling.maxTokens, max(75, targetTokenCount * 6))
 
         // Initialize cache and timing
         let startTime = Date()
@@ -447,16 +264,10 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         var trailingIdx = 0
         var inputEmbeds = inputEmbedsInit
 
-        // Voice anchor / voice prefix KV restore (VoiceDesign non-ICL path).
-        // The restored KV already covers the instruct prefix (and, for the anchor,
-        // codec voice examples from a previous segment), so the initial forward pass
-        // starts after the instruct tokens.
-        if useVoiceAnchor, voiceAnchorKVState != nil {
-            restoreVoiceAnchorCache(into: cache)
-            if let instructEmbed {
-                inputEmbeds = inputEmbedsInit[0..., instructEmbed.dim(1)..., 0...]
-            }
-        } else if let instructEmbed {
+        // Voice prefix KV restore (VoiceDesign path without a reference): the
+        // restored KV already covers the instruct prefix, so the first forward
+        // pass starts after the instruct tokens.
+        if let instructEmbed {
             if cachedVoiceDescription == instruct, voicePrefixKVState != nil {
                 restoreVoicePrefixCache(into: cache)
             } else {
@@ -482,7 +293,7 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         // (Unstructured Tasks do not inherit the caller's global random state.)
         MLXRandom.seed(self.seed)
 
-        for step in 0 ..< effectiveMaxTokens {
+        for _ in 0 ..< effectiveMaxTokens {
             try Task.checkCancellation()
             // Forward pass through talker
             let (logits, hidden) = talker(inputEmbeds, cache: cache)
@@ -490,13 +301,13 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
             // Sample first codebook token
             let nextToken = sampleToken(
                 logits,
-                temperature: temperature,
-                topP: topP,
-                topK: topK,
-                repetitionPenalty: repetitionPenalty,
-                generatedTokens: generatedCodebookTokens,
+                temperature: sampling.temperature,
+                topP: sampling.topP,
+                topK: sampling.topK,
+                repetitionPenalty: sampling.repetitionPenalty,
+                recentTokens: generatedCodebookTokens.suffix(sampling.repetitionWindow),
                 suppressTokens: suppressTokens,
-                minP: minP
+                minP: sampling.minP
             )
 
             // Defer sync to the eval boundary with inputEmbeds.
@@ -524,10 +335,9 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
 
                 let nextCode = sampleToken(
                     codeLogits,
-                    temperature: temperature,
-                    topP: topP,
-                    topK: topK,
-                    minP: minP
+                    temperature: sampling.detailTemperature,
+                    topP: sampling.detailTopP,
+                    topK: sampling.detailTopK
                 )
                 codeTokens.append(nextCode)
             }
@@ -586,7 +396,7 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
 
         try Task.checkCancellation()
 
-        // Save generated codes for voice anchor building
+        // Keep the generated codes: a reference take is captured from them.
         lastGeneratedCodes = generatedCodes.isEmpty ? nil : generatedCodes
 
         guard !generatedCodes.isEmpty else {
@@ -672,16 +482,6 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
 
     // MARK: - Reference conditioning
 
-    private struct VoiceDesignGenerationSettings {
-        let language: String
-        let temperature: Float
-        let topK: Int
-        let topP: Float
-        let repetitionPenalty: Float
-        let minP: Float
-        let maxTokens: Int
-    }
-
     public struct Qwen3TTSReferenceConditioning: @unchecked Sendable {
         public let referenceSpeechCodes: MLXArray
         public let referenceTextTokenIDs: MLXArray
@@ -708,21 +508,6 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         guard tokenizer != nil else {
             throw AudioGenerationError.modelNotInitialized("Text tokenizer not loaded")
         }
-    }
-
-    private func resolveVoiceDesignGenerationSettings(
-        language: String?,
-        generationParameters: GenerateParameters
-    ) -> VoiceDesignGenerationSettings {
-        VoiceDesignGenerationSettings(
-            language: language ?? "auto",
-            temperature: generationParameters.temperature,
-            topK: generationParameters.topK,
-            topP: generationParameters.topP,
-            repetitionPenalty: generationParameters.repetitionPenalty ?? 1.05,
-            minP: generationParameters.minP,
-            maxTokens: generationParameters.maxTokens ?? 4096
-        )
     }
 
     private func makeGenerationStream(
@@ -753,9 +538,14 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         return stream
     }
 
+    /// Qwen's in-context layout: the assistant turn holds the reference text
+    /// followed by the new text, then the reference codes, and generation
+    /// continues from there. A VoiceDesign description goes in front as the
+    /// user turn, as in the plain prompt.
     func prepareICLGenerationInputs(
         text: String,
-        conditioning: Qwen3TTSReferenceConditioning
+        conditioning: Qwen3TTSReferenceConditioning,
+        instruct: String? = nil
     ) throws -> (MLXArray, MLXArray, MLXArray, MLXArray) {
         guard let tokenizer, let talkerConfig = config.talkerConfig else {
             throw AudioGenerationError.modelNotInitialized(
@@ -829,9 +619,55 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         var combinedPrefix = concatenated([padEmbeds, ttsBosEmbed], axis: 1)
         combinedPrefix = combinedPrefix + codecPrefixEmbed[0..., 0 ..< (codecPrefixEmbed.dim(1) - 1), 0...]
 
-        let inputEmbeds = concatenated([roleEmbed, combinedPrefix, iclInputEmbed], axis: 1)
+        var inputEmbeds = concatenated([roleEmbed, combinedPrefix, iclInputEmbed], axis: 1)
+        if let instruct, !instruct.isEmpty {
+            let instructText = "<|im_start|>user\n\(instruct)<|im_end|>\n"
+            let instructIds = MLXArray(tokenizer.encode(text: instructText).map { Int32($0) })
+                .reshaped(1, -1)
+            let instructEmbed = talker.textProjection(talker.getTextEmbeddings()(instructIds))
+            inputEmbeds = concatenated([instructEmbed, inputEmbeds], axis: 1)
+        }
 
         return (inputEmbeds, trailingTextHidden, ttsPadEmbed, refCodes)
+    }
+
+    /// A reference take as in-context conditioning: its codes as
+    /// `[1, numCodeGroups, frames]` and its text as token ids.
+    func referenceConditioning(
+        _ reference: Qwen3TTSReference, language: String?
+    ) throws -> Qwen3TTSReferenceConditioning {
+        guard let tokenizer, let talkerConfig = config.talkerConfig else {
+            throw AudioGenerationError.modelNotInitialized(
+                "Qwen3TTS reference conditioning requires the text tokenizer and talker config to be loaded."
+            )
+        }
+        let groups = talkerConfig.numCodeGroups
+        guard !reference.codeFrames.isEmpty,
+            reference.codeFrames.allSatisfy({ $0.count == groups })
+        else {
+            throw AudioGenerationError.invalidInput(
+                "A reference take needs at least one frame of \(groups) codes per frame."
+            )
+        }
+        let codes = MLXArray(reference.codeFrames.flatMap { $0 })
+            .reshaped(1, reference.codeFrames.count, groups)
+            .transposed(0, 2, 1)
+
+        let refChatText = "<|im_start|>assistant\n\(reference.text)<|im_end|>\n"
+        let refIds = tokenizer.encode(text: refChatText).map { Int32($0) }
+        let refStart = min(3, refIds.count)
+        let refEnd = max(refStart, refIds.count - 2)
+        let refTextIds = MLXArray(Array(refIds[refStart ..< refEnd])).reshaped(1, -1)
+
+        let resolvedLanguage = (language ?? "auto").lowercased()
+        let languageId =
+            resolvedLanguage == "auto" ? nil : talkerConfig.codecLanguageId?[resolvedLanguage]
+        return Qwen3TTSReferenceConditioning(
+            referenceSpeechCodes: codes,
+            referenceTextTokenIDs: refTextIds,
+            resolvedLanguage: resolvedLanguage,
+            codecLanguageID: languageId
+        )
     }
 
     func prepareGenerationInputs(
@@ -950,20 +786,23 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         )
 
         // instructEmbed is also returned separately so callers can cache/restore the
-        // instruct-prefix KV state (voice prefix cache, voice anchor) and slice the
+        // instruct-prefix KV state (voice prefix cache) and slice the
         // instruct tokens off the fused prompt.
         return (inputEmbeds, trailingTextHidden, ttsPadEmbed, instructEmbed)
     }
 
     // MARK: - Token sampling
 
+    /// Suppression, then the repetition penalty over `recentTokens`, then
+    /// temperature, then top-k, top-p and min-p: Qwen's reference order, so
+    /// the nucleus is taken from the tempered distribution.
     func sampleToken(
         _ logits: MLXArray,
         temperature: Float = 0.9,
         topP: Float = 1.0,
         topK: Int = 50,
         repetitionPenalty: Float = 1.0,
-        generatedTokens: [Int]? = nil,
+        recentTokens: ArraySlice<Int> = [],
         suppressTokens: [Int]? = nil,
         minP: Float = 0.0
     ) -> MLXArray {
@@ -977,8 +816,8 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
         }
 
         // Repetition penalty
-        if let tokens = generatedTokens, !tokens.isEmpty, repetitionPenalty != 1.0 {
-            let unique = Array(Set(tokens)).filter { $0 < logitsSlice.dim(-1) }
+        if !recentTokens.isEmpty, repetitionPenalty != 1.0 {
+            let unique = Array(Set(recentTokens)).filter { $0 < logitsSlice.dim(-1) }
             if !unique.isEmpty {
                 let tokenIds = MLXArray(unique.map { Int32($0) }).reshaped(1, -1)
                 let selected = takeAlong(logitsSlice, tokenIds, axis: -1)
@@ -996,10 +835,9 @@ public final class Qwen3TTSModel: Module, @unchecked Sendable {
             return argMax(logitsSlice, axis: -1, keepDims: true)
         }
 
-        let filteredLogits = Self.filterLogits(logitsSlice, topK: topK, topP: topP, minP: minP)
-
-        // Sample with temperature
-        let token = categorical(filteredLogits / temperature)
+        let filteredLogits = Self.filterLogits(
+            logitsSlice / temperature, topK: topK, topP: topP, minP: minP)
+        let token = categorical(filteredLogits)
         return token.reshaped(1, 1)
     }
 

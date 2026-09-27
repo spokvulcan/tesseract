@@ -868,22 +868,34 @@ approval requirement in the capture baseline still applies to #480.
 - Speech package tests (`Vendor/tesseract-speech`, needs the
   `Vendor/mlx-swift-lm` submodule checked out). Two suites, no weights:
   - `TesseractSpeechTests`: scripted adapters, no GPU. `EngineContractTests`
-    (the ADR-0038 contracts, plus `ModelAvailabilityTests`: a missing
-    checkpoint fails before the GPU lease) and `Qwen3CheckpointTests` (the
-    Voice Engine completeness rule, and `Qwen3Synthesizer` refusing to fetch
-    or delete anything).
+    (the ADR-0038 contracts, the ADR-0072 Reference Take rules: the lead
+    segment becomes the take, later segments and utterances continue it,
+    a pinned voice round-trips, a cancelled retake keeps the old take,
+    schema-1 voices are rejected; `SegmenterTests` for the short lead
+    segment; `ModelAvailabilityTests`: a missing checkpoint fails before the
+    GPU lease) and `Qwen3CheckpointTests` (the Voice Engine completeness
+    rule, and `Qwen3Synthesizer` refusing to fetch or delete anything).
     `swift test --package-path Vendor/tesseract-speech --filter TesseractSpeechTests`
     runs them.
   - `Qwen3TTSTests`: the model itself on tiny random-weight checkpoints and
-    fixed logits (EOS filtered like every other token, the codec encoder
-    dropped at load, Base checkpoints refused). MLX needs Metal, so run both
-    suites through xcodebuild, from `Vendor/tesseract-speech`:
+    fixed logits (EOS filtered like every other token, temperature before
+    top-p, the windowed repetition penalty, the reference-take prompt, the
+    codec encoder dropped at load, Base checkpoints refused). MLX needs
+    Metal, so run both suites through xcodebuild, from
+    `Vendor/tesseract-speech`:
 
     ```bash
     xcodebuild test -scheme tesseract-speech-Package -destination 'platform=macOS' \
       -skipPackagePluginValidation -skipMacroValidation -parallel-testing-enabled NO \
       CODE_SIGNING_ALLOWED=NO
     ```
+- Voice Engine listening and timing (`v2-listen`, real weights, the
+  checkpoint the app downloaded): build the `v2-listen` scheme with
+  xcodebuild (it needs MLX's metallib next to the binary), then
+  `v2-listen --mode longform --text-file <passage> --seed <n>` writes the
+  whole reading plus one WAV per segment and prints per-segment time to
+  first audio, RTF and peak RSS. `--reference none` renders every segment
+  from the description alone, the control for voice-consistency listens.
 - Vendor DFlash2 tests (`swift test --filter DFlash2` in `Vendor/mlx-swift-lm`):
   run with `--no-parallel`. Two of the parity tests load the 27B target each;
   in parallel they contend the single GPU until a Metal command buffer hits

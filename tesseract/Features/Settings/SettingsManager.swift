@@ -234,6 +234,10 @@ final class SettingsManager {
         didSet { SettingsCatalogue.ttsRepetitionPenalty.write(ttsRepetitionPenalty, to: store) }
     }
 
+    var ttsDetailTemperature: Double {
+        didSet { SettingsCatalogue.ttsDetailTemperature.write(ttsDetailTemperature, to: store) }
+    }
+
     var ttsMaxTokens: Int {
         didSet { SettingsCatalogue.ttsMaxTokens.write(ttsMaxTokens, to: store) }
     }
@@ -354,6 +358,7 @@ final class SettingsManager {
                 temperature: Float(ttsTemperature),
                 topP: Float(ttsTopP),
                 repetitionPenalty: Float(ttsRepetitionPenalty),
+                detailTemperature: Float(ttsDetailTemperature),
                 maxTokens: ttsMaxTokens
             )
         }
@@ -361,6 +366,7 @@ final class SettingsManager {
             ttsTemperature = Double(newValue.temperature)
             ttsTopP = Double(newValue.topP)
             ttsRepetitionPenalty = Double(newValue.repetitionPenalty)
+            ttsDetailTemperature = Double(newValue.detailTemperature)
             ttsMaxTokens = newValue.maxTokens
         }
     }
@@ -608,6 +614,7 @@ final class SettingsManager {
         self.ttsTemperature = SettingsCatalogue.ttsTemperature.load(from: store)
         self.ttsTopP = SettingsCatalogue.ttsTopP.load(from: store)
         self.ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.load(from: store)
+        self.ttsDetailTemperature = SettingsCatalogue.ttsDetailTemperature.load(from: store)
         self.ttsMaxTokens = SettingsCatalogue.ttsMaxTokens.load(from: store)
         self.ttsSeed = SettingsCatalogue.ttsSeed.load(from: store)
         self.ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.load(from: store)
@@ -760,6 +767,7 @@ final class SettingsManager {
         ttsTemperature = SettingsCatalogue.ttsTemperature.default
         ttsTopP = SettingsCatalogue.ttsTopP.default
         ttsRepetitionPenalty = SettingsCatalogue.ttsRepetitionPenalty.default
+        ttsDetailTemperature = SettingsCatalogue.ttsDetailTemperature.default
         ttsMaxTokens = SettingsCatalogue.ttsMaxTokens.default
         ttsSeed = SettingsCatalogue.ttsSeed.default
         ttsVoiceDescription = SettingsCatalogue.ttsVoiceDescription.default

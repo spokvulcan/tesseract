@@ -2,7 +2,7 @@
 // NOT part of the app. Drives the production stack (SpeechEngine actor →
 // Qwen3Synthesizer → Qwen3TTS) against real weights and writes:
 //   pinned    — 6 utterances in one pinned-voice session + a 7th from a
-//               serialized/restored PinnedVoice (anchored-consistency listen)
+//               serialized/restored PinnedVoice (voice-consistency listen)
 //   longform  — one long read-aloud utterance (multi-segment); reports
 //               per-segment TTFA, wall, RTF, and peak RSS (the ADR-0037 gate)
 //   ab        — #339-matched settings (seed 42, t=0.9/p=1.0/rp=1.05) for
@@ -10,6 +10,8 @@
 //
 // Usage: v2-listen --mode pinned|longform|ab [--precision 8bit|6bit|bf16]
 //          [--checkpoint DIR] [--out-dir DIR] [--text-file PATH] [--seed N]
+//          [--temperature T] [--detail-temperature T] [--voice DESCRIPTION]
+//          [--reference pinned|none]
 //
 // Loads the checkpoint the app downloaded (Application Support/models) unless
 // --checkpoint names another directory; it never downloads. Build with
@@ -28,6 +30,10 @@ struct Args {
     var textFile: String?
     var checkpoint: String?
     var seed: UInt64 = 42
+    var temperature: Float?
+    var detailTemperature: Float?
+    var voice: String?
+    var reference = "pinned"
     var timing = false
 }
 
@@ -45,6 +51,10 @@ func parseArgs() -> Args {
         case "--out-dir": a.outDir = next(flag)
         case "--text-file": a.textFile = next(flag)
         case "--checkpoint": a.checkpoint = next(flag)
+        case "--temperature": a.temperature = Float(next(flag))!
+        case "--detail-temperature": a.detailTemperature = Float(next(flag))!
+        case "--voice": a.voice = next(flag)
+        case "--reference": a.reference = next(flag)
         case "--seed": a.seed = UInt64(next(flag))!
         case "--timing": a.timing = true
         default: fatalError("unknown flag \(flag)")
@@ -93,6 +103,8 @@ struct UtteranceCapture {
     var wallSec: Double = 0
     var segmentTTFAsMs: [Double] = []
     var segmentCount = 0
+    /// Each segment's samples, for per-segment listening and scoring.
+    var segmentSamples: [[Float]] = []
 }
 
 func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
@@ -119,6 +131,10 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
                 sawAudioForSegment = true
             }
             capture.samples.append(contentsOf: chunk.samples)
+            while capture.segmentSamples.count <= chunk.segmentIndex {
+                capture.segmentSamples.append([])
+            }
+            capture.segmentSamples[chunk.segmentIndex].append(contentsOf: chunk.samples)
         case .segmentDone, .finished:
             break
         }
@@ -151,6 +167,15 @@ func writeWav(samples: [Float], sampleRate: Int, to url: URL) throws {
 
 func write(_ capture: UtteranceCapture, to url: URL, label: String) throws {
     try writeWav(samples: capture.samples, sampleRate: capture.sampleRate, to: url)
+    if capture.segmentSamples.count > 1 {
+        let stem = url.deletingPathExtension().lastPathComponent
+        for (index, samples) in capture.segmentSamples.enumerated() {
+            try writeWav(
+                samples: samples, sampleRate: capture.sampleRate,
+                to: url.deletingLastPathComponent().appendingPathComponent(
+                    String(format: "%@_seg%02d.wav", stem, index + 1)))
+        }
+    }
     let audioSec = Double(capture.samples.count) / Double(capture.sampleRate)
     let rtf = audioSec > 0 ? capture.wallSec / audioSec : -1
     let segTTFAs = capture.segmentTTFAsMs.map { String(format: "%.0f", $0) }
@@ -186,12 +211,21 @@ let engine = SpeechEngine(
     diagnostics: args.timing ? StderrTimingTap() : nil
 )
 
-let narrator = "A calm, warm female narrator with a clear, steady tone."
+let narrator = args.voice ?? "A calm, warm female narrator with a clear, steady tone."
+
+/// The engine defaults, with any sampler overrides from the command line.
+var listenParameters: TTSParameters {
+    var parameters = TTSParameters()
+    if let t = args.temperature { parameters.temperature = t }
+    if let t = args.detailTemperature { parameters.detailTemperature = t }
+    return parameters
+}
+let referencePolicy: ReferencePolicy = args.reference == "none" ? .none : .pinned
 
 do {
     switch args.mode {
     case "pinned":
-        // Six lines, one pinned session: the anchored-consistency listen.
+        // Six lines, one pinned session: the voice-consistency listen.
         let lines = [
             "Good morning. Here is the first thing worth knowing today.",
             "The build finished overnight, and every test came back green.",
@@ -201,10 +235,11 @@ do {
             "That is everything for now; I will speak up if anything changes.",
         ]
         let session = try await engine.session(
-            .companion, voice: .designed(description: narrator, language: nil))
+            SessionProfile(reference: referencePolicy, pacing: .eager),
+            voice: .designed(description: narrator, language: nil))
         for (index, line) in lines.enumerated() {
             let utterance = try await session.speak(
-                line, options: SpeechOptions(seed: .fixed(args.seed)))
+                line, options: SpeechOptions(seed: .fixed(args.seed), parameters: listenParameters))
             let capture = try await drain(utterance)
             try write(
                 capture,
@@ -225,7 +260,7 @@ do {
         let restoredSession = try await engine.session(.companion, voice: .pinned(restored))
         let utterance = try await restoredSession.speak(
             "And this line comes from the restored voice, after a relaunch.",
-            options: SpeechOptions(seed: .fixed(args.seed)))
+            options: SpeechOptions(seed: .fixed(args.seed), parameters: listenParameters))
         let capture = try await drain(utterance)
         try write(
             capture,
@@ -240,9 +275,10 @@ do {
         let text = try String(contentsOfFile: textFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let session = try await engine.session(
-            .readAloud, voice: .designed(description: narrator, language: nil))
+            SessionProfile(reference: referencePolicy, pacing: .lookahead(segments: 1)),
+            voice: .designed(description: narrator, language: nil))
         let utterance = try await session.speak(
-            text, options: SpeechOptions(seed: .fixed(args.seed)))
+            text, options: SpeechOptions(seed: .fixed(args.seed), parameters: listenParameters))
         let capture = try await drain(utterance)
         try write(
             capture,
@@ -261,7 +297,7 @@ do {
         let benchParams = TTSParameters(
             temperature: 0.9, topP: 1.0, repetitionPenalty: 1.05, maxTokens: 4096)
         let session = try await engine.session(
-            SessionProfile(anchor: .perUtterance(), pacing: .eager),
+            SessionProfile(reference: referencePolicy, pacing: .eager),
             voice: .designed(description: narrator, language: nil))
         let utterance = try await session.speak(
             text,

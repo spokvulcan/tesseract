@@ -29,12 +29,10 @@ struct Qwen3TTSTests {
     @Test func voiceDesignGeneratesAndStreams() async throws {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }
-        let parameters = GenerateParameters(
-            maxTokens: 2, temperature: 0.7, topP: 0.95, repetitionPenalty: 1.0)
 
         let audio = try await fixture.model.generate(
             text: "target voice prompt one two three four five",
-            voice: "sample voice", language: "English", generationParameters: parameters)
+            voice: "sample voice", language: "English", sampling: TinyModel.sampling)
         #expect(audio.ndim == 1)
         #expect(audio.shape[0] > 0)
 
@@ -42,7 +40,7 @@ struct Qwen3TTSTests {
             fixture.model.generateStream(
                 text: "target voice prompt one two three four five",
                 voice: "sample voice", language: "English",
-                generationParameters: parameters, streamingInterval: 0.05))
+                sampling: TinyModel.sampling, streamingInterval: 0.05))
         #expect(streamed.tokenCount > 0)
         #expect(streamed.infoCount == 1)
         #expect(streamed.lastAudio?.ndim == 1)
@@ -57,11 +55,103 @@ struct Qwen3TTSTests {
 
         let audio = try await fixture.model.generate(
             text: "target voice prompt one two three four five",
-            voice: "ryan", language: "English",
-            generationParameters: GenerateParameters(
-                maxTokens: 2, temperature: 0.7, topP: 0.95, repetitionPenalty: 1.0))
+            voice: "ryan", language: "English", sampling: TinyModel.sampling)
         #expect(audio.ndim == 1)
         #expect(audio.shape[0] > 0)
+    }
+
+    /// A Reference Take is the frames a generation rendered plus the text it
+    /// spoke; conditioning on it renders the next words in that voice.
+    @Test func aReferenceTakeConditionsTheNextGeneration() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+
+        _ = try await fixture.model.generate(
+            text: "one two three", voice: "sample voice", language: "English",
+            sampling: TinyModel.sampling)
+        let frames = fixture.model.lastGeneratedCodeFrames
+        #expect(!frames.isEmpty)
+        #expect(frames.allSatisfy { $0.count == 2 }, "one code per group per frame")
+
+        let streamed = try await collect(
+            fixture.model.generateStream(
+                text: "four five", voice: "sample voice", language: "English",
+                reference: Qwen3TTSReference(codeFrames: frames, text: "one two three"),
+                sampling: TinyModel.sampling, streamingInterval: 0.05))
+        #expect(streamed.tokenCount > 0)
+        #expect(streamed.lastAudio?.ndim == 1)
+    }
+
+    /// The description leads the in-context prompt as the user turn, the same
+    /// tokens the plain VoiceDesign prompt starts with.
+    @Test func theReferencePromptLeadsWithTheDescription() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        let conditioning = try fixture.model.referenceConditioning(
+            Qwen3TTSReference(codeFrames: [[1, 2], [3, 4], [5, 6]], text: "one two"),
+            language: "English")
+        #expect(conditioning.referenceSpeechCodes.shape == [1, 2, 3])
+        #expect(conditioning.codecLanguageID == 3057)
+
+        let bare = try fixture.model.prepareICLGenerationInputs(
+            text: "three four", conditioning: conditioning)
+        let described = try fixture.model.prepareICLGenerationInputs(
+            text: "three four", conditioning: conditioning, instruct: "sample voice")
+        let instructTokens = try #require(fixture.model.tokenizer)
+            .encode(text: "<|im_start|>user\nsample voice<|im_end|>\n").count
+        #expect(described.0.dim(1) == bare.0.dim(1) + instructTokens)
+    }
+
+    @Test func aTakeWithTheWrongCodebookCountIsRejected() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        #expect(throws: AudioGenerationError.self) {
+            _ = try fixture.model.referenceConditioning(
+                Qwen3TTSReference(codeFrames: [[1, 2, 3]], text: "one"), language: "English")
+        }
+    }
+
+    /// Temperature applies before top-p, as in Qwen's sampler. In this row the
+    /// raw 0.8 nucleus holds tokens 7 and 8, but at temperature 0.5 token 7
+    /// alone carries 88% of the mass, so 8 must never be drawn. Scaling after
+    /// the nucleus (the old order) drew it about one time in eight.
+    @Test func temperatureTightensTheNucleusBeforeSampling() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        var row = [Float](repeating: -20, count: 3072)
+        row[7] = 2.0
+        row[8] = 1.0
+        let raw = Qwen3TTSModel.filterLogits(
+            MLXArray(row).reshaped(1, row.count), topK: 0, topP: 0.8, minP: 0
+        ).asArray(Float.self)
+        #expect(raw.indices.filter { raw[$0].isFinite } == [7, 8])
+
+        let logits = MLXArray(row).reshaped(1, 1, row.count)
+        MLXRandom.seed(0)
+        var draws: Set<Int> = []
+        for _ in 0 ..< 200 {
+            let token = fixture.model.sampleToken(logits, temperature: 0.5, topP: 0.8, topK: 0)
+            draws.insert(Int(token[0, 0].item(Int32.self)))
+        }
+        #expect(draws == [7])
+    }
+
+    /// The repetition penalty reads only the tokens it is handed: the
+    /// generation loop passes the last `repetitionWindow` talker tokens.
+    @Test func theRepetitionPenaltyOnlyCountsRecentTokens() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        var row = [Float](repeating: -20, count: 3072)
+        row[7] = 2.0
+        row[8] = 1.9
+        let logits = MLXArray(row).reshaped(1, 1, row.count)
+
+        let unpenalized = fixture.model.sampleToken(
+            logits, temperature: 0, repetitionPenalty: 1.5, recentTokens: [])
+        let penalized = fixture.model.sampleToken(
+            logits, temperature: 0, repetitionPenalty: 1.5, recentTokens: [7])
+        #expect(unpenalized[0, 0].item(Int32.self) == 7)
+        #expect(penalized[0, 0].item(Int32.self) == 8)
     }
 
     /// The engine loads VoiceDesign and CustomVoice checkpoints only; a Base
@@ -135,7 +225,7 @@ struct Qwen3TTSTests {
                 topP: 0.8,
                 topK: 0,
                 repetitionPenalty: 1.3,
-                generatedTokens: [],
+                recentTokens: [],
                 suppressTokens: suppressTokens,
                 minP: 0
             )
@@ -152,6 +242,9 @@ struct Qwen3TTSTests {
 struct TinyModel {
     let model: Qwen3TTSModel
     let tokenizerDirectory: URL
+
+    static let sampling = Qwen3TTSSampling(
+        temperature: 0.7, topP: 0.95, repetitionPenalty: 1.0, maxTokens: 2)
 
     func cleanUp() {
         try? FileManager.default.removeItem(at: tokenizerDirectory)

@@ -36,6 +36,9 @@ final class SpeechCoordinator {
     private let playback: any AudioPlayback
     private let settings: SettingsManager
     private let notchOverlay: (any WordHighlightSurface)?
+    /// Each designed voice's Reference Take, kept across relaunches so the
+    /// voice stays the same person (ADR-0072).
+    private let pinnedVoices: PinnedVoiceStore
 
     private enum Pacing {
         /// Pull the next segment once less than this much scheduled audio
@@ -83,7 +86,8 @@ final class SpeechCoordinator {
         voiceEngineStatus: @escaping @MainActor () -> ModelStatus,
         playback: any AudioPlayback = AudioPlaybackManager(),
         settings: SettingsManager,
-        notchOverlay: (any WordHighlightSurface)? = nil
+        notchOverlay: (any WordHighlightSurface)? = nil,
+        pinnedVoices: PinnedVoiceStore = PinnedVoiceStore()
     ) {
         self.textExtractor = textExtractor
         self.engine = engine
@@ -91,6 +95,7 @@ final class SpeechCoordinator {
         self.playback = playback
         self.settings = settings
         self.notchOverlay = notchOverlay
+        self.pinnedVoices = pinnedVoices
         self.activeSink = playback
 
         wireFinished(playback)
@@ -150,6 +155,30 @@ final class SpeechCoordinator {
                 text: text, showsOverlay: showsOverlay, userInitiated: userInitiated)
         }
     }
+
+    /// "Try another take": render the settings voice again from the opening
+    /// of `text` (its first sentence or two, or a built-in sample when
+    /// empty) with a fresh seed, play it, and keep it as the voice from now
+    /// on (ADR-0072). Stopping it early keeps the previous take.
+    func tryAnotherTake(sampleFrom text: String) {
+        let sample =
+            text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? Self.takeSample : text
+
+        stop()
+        activeSink = playback
+        state = .generating(progress: "")
+        activeTask = Task {
+            guard await voiceEngineReady(userInitiated: true) else { return }
+            await generateAndPlay(text: sample, userInitiated: true, retake: true)
+        }
+    }
+
+    /// What a new take reads when the composer is empty: two sentences with
+    /// some range, long enough to carry the voice.
+    private static let takeSample =
+        "Here is how I sound when I read to you. "
+        + "A story, an article, a long email: every line keeps this same voice, from the first word to the last."
 
     /// Cancelling the consuming task is the engine-side cancellation token
     /// (ADR-0038): generation stops within one decoder step.
@@ -300,6 +329,8 @@ final class SpeechCoordinator {
 
     /// A session binds the settings voice to cached model state; reopen only
     /// when the voice changes (the instruct prefix re-primes off the hot path).
+    /// A voice with a stored Reference Take opens pinned to it; otherwise the
+    /// session's first segment becomes its take.
     private func openOrReuseSession() async throws -> SpeechSession {
         let (voiceDescription, language) = ttsVoiceContext
         let key = "\(voiceDescription ?? "")|\(language)"
@@ -313,8 +344,12 @@ final class SpeechCoordinator {
             engine.noteLoading("Loading voice model…")
         }
         do {
+            let pinned = pinnedVoices.voice(
+                description: voiceDescription, language: language,
+                model: ModelDefinition.textToSpeechModelSpec)
             let voice: Voice =
-                voiceDescription.map { .designed(description: $0, language: language) }
+                pinned.map { .pinned($0) }
+                ?? voiceDescription.map { .designed(description: $0, language: language) }
                 ?? .standard(language: language)
             let opened = try await engine.engine.session(.readAloud, voice: voice)
             engine.noteReady()
@@ -328,7 +363,7 @@ final class SpeechCoordinator {
     }
 
     private func generateAndPlay(
-        text: String, showsOverlay: Bool = true, userInitiated: Bool
+        text: String, showsOverlay: Bool = true, userInitiated: Bool, retake: Bool = false
     ) async {
         // One resolution for the whole utterance: nil means audio-only, and
         // every overlay touch below no-ops.
@@ -337,11 +372,18 @@ final class SpeechCoordinator {
             let session = try await openOrReuseSession()
             state = .generating(progress: "")
 
-            let seed = UInt64(clamping: settings.ttsSeed)
-            let utterance = try await session.speak(
-                text,
-                options: SpeechOptions(seed: .fixed(seed), parameters: settings.ttsParameters)
-            )
+            // A retake needs a fresh seed: the settings seed would render the
+            // same take again.
+            let utterance =
+                retake
+                ? try await session.retake(
+                    text,
+                    options: SpeechOptions(seed: .entropy, parameters: settings.ttsParameters))
+                : try await session.speak(
+                    text,
+                    options: SpeechOptions(
+                        seed: .fixed(UInt64(clamping: settings.ttsSeed)),
+                        parameters: settings.ttsParameters))
             totalSegments = utterance.segmentCount
             activeSink.startStreaming(sampleRate: utterance.sampleRate)
 
@@ -363,6 +405,7 @@ final class SpeechCoordinator {
                     activeSink.appendChunk(samples: chunk.samples)
 
                 case .segmentDone(let index):
+                    if index == 0 { await rememberVoice(of: session) }
                     overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
                     Log.speech.info("Segment \(index + 1)/\(self.totalSegments) complete")
                     if index + 1 < utterance.segmentCount {
@@ -423,6 +466,23 @@ final class SpeechCoordinator {
             )
             overlayShown = true
         }
+    }
+
+    /// Stores the session's Reference Take once its first segment has made
+    /// one, so the next launch opens the same voice.
+    private func rememberVoice(of session: SpeechSession) async {
+        guard let pinned = await session.exportPinnedVoice() else { return }
+        // Keyed by the voice the take belongs to, not the settings now: the
+        // description may have changed while this utterance played.
+        let language = pinned.language ?? settings.ttsLanguage
+        let model = ModelDefinition.textToSpeechModelSpec
+        guard
+            pinnedVoices.voice(
+                description: pinned.voiceDescription, language: language, model: model)
+                != pinned
+        else { return }
+        pinnedVoices.save(
+            pinned, description: pinned.voiceDescription, language: language, model: model)
     }
 
     private func waitForPlaybackDemand() async throws {

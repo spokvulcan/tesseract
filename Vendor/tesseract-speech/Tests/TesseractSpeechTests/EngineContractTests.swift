@@ -202,7 +202,7 @@ private let shortText = "Hello there, this is a short utterance."
     @Test func eagerPacingRunsAhead() async throws {
         let (engine, synth, _) = await makeEngine()
         let session = try await engine.session(
-            SessionProfile(anchor: .none, pacing: .eager), voice: .standard(language: "en"))
+            SessionProfile(reference: .none, pacing: .eager), voice: .standard(language: "en"))
         let utterance = try await session.speak(longText)
 
         // Without demand, eager production still completes every segment.
@@ -219,7 +219,7 @@ private let shortText = "Hello there, this is a short utterance."
 
 @Suite struct VoiceIdentityTests {
 
-    @Test func perUtteranceAnchorCapturedOnSegmentZeroAndUsedAfter() async throws {
+    @Test func leadSegmentBecomesTheTakeAndEveryLaterSegmentContinuesIt() async throws {
         let (engine, synth, _) = await makeEngine()
         let session = try await engine.session(
             .readAloud, voice: .designed(description: "warm narrator", language: "en"))
@@ -228,65 +228,137 @@ private let shortText = "Hello there, this is a short utterance."
 
         let requests = await synth.requests
         #expect(requests.count == utterance.segmentCount)
-        #expect(requests[0].captureAnchorSteps == 48)
-        #expect(requests[0].anchor == nil)
+        #expect(requests[0].capturesReference)
+        #expect(requests[0].reference == nil, "the take renders from the description alone")
+        #expect(
+            requests[0].text.split(separator: " ").count <= 40,
+            "a take is short, so later segments re-read little")
         for later in requests.dropFirst() {
-            #expect(later.anchor != nil, "later segments conditioned on the captured anchor")
-            #expect(later.captureAnchorSteps == nil)
+            #expect(later.reference?.text == requests[0].text)
+            #expect(!later.capturesReference)
         }
-
-        // Per-utterance anchor dies with the utterance — and a single-segment
-        // utterance skips capture entirely (nothing later to condition).
-        let second = try await session.speak(shortText)
-        for try await _ in second.events {}
-        let secondFirst = await synth.requests[utterance.segmentCount]
-        #expect(secondFirst.captureAnchorSteps == nil)
-        #expect(secondFirst.anchor == nil)
     }
 
-    @Test func pinnedAnchorPersistsAcrossUtterancesAndExports() async throws {
+    @Test func theTakeOutlivesTheUtterance() async throws {
         let (engine, synth, _) = await makeEngine()
         let session = try await engine.session(
-            .companion, voice: .designed(description: "product voice", language: "en"))
+            .readAloud, voice: .designed(description: "warm narrator", language: "en"))
+        for try await _ in try await session.speak(shortText).events {}
+        for try await _ in try await session.speak(longText).events {}
 
-        let first = try await session.speak(shortText)
-        for try await _ in first.events {}
-        let exported = await session.exportPinnedVoice()
-        #expect(exported != nil, "anchor formed on first utterance is exportable")
-
-        let second = try await session.speak(shortText)
-        for try await _ in second.events {}
         let requests = await synth.requests
-        #expect(requests[1].anchor != nil, "pinned session reuses the anchor")
-        #expect(requests[1].captureAnchorSteps == nil)
+        #expect(requests[0].capturesReference)
+        for later in requests.dropFirst() {
+            #expect(later.reference?.text == shortText, "the next utterance keeps the voice")
+            #expect(!later.capturesReference)
+        }
+    }
 
-        // Round-trip: restore into a fresh engine.
-        let data = try exported!.serialized()
-        let restored = try PinnedVoice(validating: data)
+    @Test func pinnedVoiceRoundTripsIntoAFreshEngine() async throws {
+        let (engine, _, _) = await makeEngine()
+        let session = try await engine.session(
+            .companion, voice: .designed(description: "product voice", language: "en"))
+        #expect(await session.exportPinnedVoice() == nil, "no take before the first segment")
+        for try await _ in try await session.speak(shortText).events {}
+        let exported = try #require(await session.exportPinnedVoice())
+        #expect(exported.referenceText == shortText)
+        #expect(exported.voiceDescription == "product voice")
+
+        let restored = try PinnedVoice(validating: try exported.serialized())
         let (engine2, synth2, _) = await makeEngine()
         let session2 = try await engine2.session(.companion, voice: .pinned(restored))
-        let third = try await session2.speak(shortText)
-        for try await _ in third.events {}
-        let firstRequest = await synth2.requests[0]
-        #expect(firstRequest.anchor?.codeFrames == restored.codeFrames)
-        #expect(firstRequest.captureAnchorSteps == nil, "restored voice needs no capture")
+        for try await _ in try await session2.speak(longText).events {}
+        let requests = await synth2.requests
+        for request in requests {
+            #expect(request.reference?.codeFrames == restored.codeFrames)
+            #expect(request.reference?.text == restored.referenceText)
+            #expect(!request.capturesReference, "a pinned voice needs no new take")
+        }
+    }
+
+    @Test func retakeReplacesTheTakeOnlyWhenItFinishes() async throws {
+        let (engine, synth, _) = await makeEngine(
+            script: .init(chunksPerSegment: 3, chunkDelayNanos: 20_000_000))
+        let session = try await engine.session(
+            .readAloud, voice: .designed(description: "warm narrator", language: "en"))
+        for try await _ in try await session.speak(shortText, options: .init(seed: .fixed(1))).events {}
+        let original = try #require(await session.exportPinnedVoice())
+
+        // Cancelled mid-render: the old take stays.
+        let abandoned = try await session.retake(shortText, options: .init(seed: .fixed(2)))
+        let consumer = Task {
+            var count = 0
+            for try await _ in abandoned.events {
+                count += 1
+                if count == 2 { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        _ = await consumer.result
+        #expect(await session.exportPinnedVoice() == original)
+
+        // Finished: rendered from the description alone, and it replaces the take.
+        for try await _ in try await session.retake(shortText, options: .init(seed: .fixed(3))).events {}
+        let last = try #require(await synth.requests.last)
+        #expect(last.reference == nil)
+        #expect(last.capturesReference)
+        let replaced = try #require(await session.exportPinnedVoice())
+        #expect(replaced != original)
+        #expect(replaced.codeFrames.first?.first == 3, "the scripted take encodes its seed")
+
+        // And the next utterance continues the new take.
+        for try await _ in try await session.speak(shortText).events {}
+        #expect(await synth.requests.last?.reference?.codeFrames == replaced.codeFrames)
+    }
+
+    @Test func aRetakeSpeaksOnlyTheOpening() async throws {
+        let (engine, synth, _) = await makeEngine()
+        let session = try await engine.session(
+            .readAloud, voice: .designed(description: "warm narrator", language: "en"))
+        let retake = try await session.retake(longText, options: .init(seed: .fixed(5)))
+        #expect(retake.segmentCount == 1)
+        for try await _ in retake.events {}
+        let requests = await synth.requests
+        #expect(requests.count == 1)
+        #expect(requests[0].text.split(separator: " ").count <= 40)
+        #expect(await session.exportPinnedVoice()?.referenceText == requests[0].text)
+    }
+
+    @Test func withoutAReferencePolicyEverySegmentStandsAlone() async throws {
+        let (engine, synth, _) = await makeEngine()
+        let session = try await engine.session(
+            SessionProfile(reference: .none, pacing: .eager),
+            voice: .designed(description: "warm narrator", language: "en"))
+        for try await _ in try await session.speak(longText).events {}
+
+        let requests = await synth.requests
+        #expect(requests.allSatisfy { $0.reference == nil && !$0.capturesReference })
+        #expect(await session.exportPinnedVoice() == nil)
     }
 
     @Test func mismatchedFingerprintIsRejected() async throws {
         let (engine, _, _) = await makeEngine()  // q8 engine
         let foreign = PinnedVoice(
             modelFingerprint: TTSModelSpec.voiceDesign17B(.q6).fingerprint,
-            voiceDescription: "v", language: "en",
+            voiceDescription: "v", language: "en", referenceText: "v",
             codeFrames: [[1, 2, 3]])
         await #expect(throws: SpeechEngineError.self) {
             _ = try await engine.session(.companion, voice: .pinned(foreign))
         }
     }
 
+    /// Schema 1 held a 48-frame anchor with no text; it cannot condition the
+    /// in-context layout, so restoring one fails instead of re-rolling.
+    @Test func schemaOneVoicesAreRejected() {
+        let legacy = #"{"schema":1,"modelFingerprint":"m#q8","voiceDescription":"v","language":"en","codeFrames":[[1,2,3]]}"#
+        #expect(throws: SpeechEngineError.self) {
+            _ = try PinnedVoice(validating: Data(legacy.utf8))
+        }
+    }
+
     @Test func seedResolvedEntropyVariesFixedRepeats() async throws {
         let (engine, synth, _) = await makeEngine()
         let session = try await engine.session(
-            SessionProfile(anchor: .none, pacing: .eager), voice: .standard(language: "en"))
+            SessionProfile(reference: .none, pacing: .eager), voice: .standard(language: "en"))
 
         for try await _ in try await session.speak(shortText, options: .init(seed: .fixed(42))).events {}
         for try await _ in try await session.speak(shortText, options: .init(seed: .fixed(42))).events {}
@@ -383,5 +455,71 @@ private let shortText = "Hello there, this is a short utterance."
         for try await _ in try await session.speak(shortText).events {}
         try await Task.sleep(nanoseconds: 50_000_000)
         #expect(await synth.trimCount >= 1, "one cache trim per utterance end (ADR-0039)")
+    }
+}
+
+@Suite struct SegmenterTests {
+
+    @Test func aCapturingUtteranceLeadsWithAShortSegment() {
+        let plain = Segmenter.segment(longText)
+        let led = Segmenter.segment(longText, leadTokens: Segmenter.referenceLeadTokens)
+        #expect(led[0].text.split(separator: " ").count <= 40)
+        #expect(led[0].text.count < plain[0].text.count)
+        #expect(
+            led.map(\.text).joined() == plain.map(\.text).joined(),
+            "no text is lost or reordered")
+    }
+
+    @Test func aTitleNeverBecomesTheWholeTake() {
+        let text =
+            "Chapter One. "
+            + String(
+                repeating: "The rain had stopped by the time she reached the quiet harbor. ",
+                count: 6)
+        let led = Segmenter.segment(text, leadTokens: Segmenter.referenceLeadTokens)
+        #expect(led[0].text.hasPrefix("Chapter One."))
+        #expect(led[0].text.split(separator: " ").count > 10)
+    }
+
+    @Test func withoutALeadTheSegmentsAreUnchanged() {
+        #expect(Segmenter.segment(longText, leadTokens: nil) == Segmenter.segment(longText))
+    }
+}
+
+@Suite struct SilenceCapTests {
+    private static let frame = 1920
+
+    private static func frames(_ count: Int, level: Float) -> [Float] {
+        [Float](repeating: level, count: count * frame)
+    }
+
+    private static let speech: Float = 0.05
+    private static let silence: Float = 0.0001
+
+    @Test func speechAndReadersPausesPassUnchanged() {
+        var cap = SilenceCap(samplesPerFrame: Self.frame)
+        let input =
+            Self.frames(3, level: Self.speech) + Self.frames(10, level: Self.silence)
+            + Self.frames(2, level: Self.speech)
+        #expect(cap.apply(input) == input)
+    }
+
+    @Test func aStallIsCutToTheCapAndNoSpeechIsLost() {
+        var cap = SilenceCap(samplesPerFrame: Self.frame, maxFrames: 15)
+        let input =
+            Self.frames(2, level: Self.speech) + Self.frames(150, level: Self.silence)
+            + Self.frames(4, level: Self.speech)
+        let kept = cap.apply(input)
+        #expect(kept.count == (2 + 15 + 4) * Self.frame)
+        #expect(kept.filter { $0 == Self.speech }.count == 6 * Self.frame)
+    }
+
+    @Test func theRunCarriesAcrossChunks() {
+        var cap = SilenceCap(samplesPerFrame: Self.frame, maxFrames: 15)
+        let first = cap.apply(Self.frames(10, level: Self.silence))
+        let second = cap.apply(Self.frames(10, level: Self.silence))
+        let resumed = cap.apply(Self.frames(1, level: Self.speech) + Self.frames(3, level: Self.silence))
+        #expect(first.count + second.count == 15 * Self.frame)
+        #expect(resumed.count == 4 * Self.frame, "sound resets the run")
     }
 }

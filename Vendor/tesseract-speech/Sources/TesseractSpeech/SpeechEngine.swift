@@ -17,7 +17,7 @@ public actor SpeechEngine {
     private struct SessionState {
         var profile: SessionProfile
         var voice: Voice
-        var anchor: AnchorHandle?
+        var reference: ReferenceTake?
         var closed = false
     }
 
@@ -125,10 +125,7 @@ public actor SpeechEngine {
         let id = UUID()
         var state = SessionState(profile: profile, voice: voice)
         if case .pinned(let pinned) = voice, !pinned.codeFrames.isEmpty {
-            state.anchor = AnchorHandle(
-                codeFrames: pinned.codeFrames,
-                voiceDescription: pinned.voiceDescription,
-                language: pinned.language)
+            state.reference = pinned.referenceTake
         }
         sessions[id] = state
         return SpeechSession(engine: self, id: id, voice: voice)
@@ -143,17 +140,23 @@ public actor SpeechEngine {
     }
 
     func exportPinnedVoice(_ id: UUID) -> PinnedVoice? {
-        guard let state = sessions[id], let anchor = state.anchor else { return nil }
+        guard let state = sessions[id], let take = state.reference else { return nil }
         return PinnedVoice(
             modelFingerprint: model.fingerprint,
-            voiceDescription: anchor.voiceDescription,
-            language: anchor.language,
-            codeFrames: anchor.codeFrames)
+            voiceDescription: take.voiceDescription,
+            language: take.language,
+            referenceText: take.text,
+            codeFrames: take.codeFrames)
     }
 
     // MARK: - Admission (deterministic supersession, ADR-0038)
 
-    func admit(sessionID: UUID, text: String, options: SpeechOptions) async throws -> Utterance {
+    /// `retake`: speak only the lead segment, rendered from the description
+    /// alone, and make it the session's new Reference Take once it finishes
+    /// (a cancelled retake keeps the old one).
+    func admit(
+        sessionID: UUID, text: String, options: SpeechOptions, retake: Bool = false
+    ) async throws -> Utterance {
         guard let state = sessions[sessionID], !state.closed else {
             throw SpeechEngineError.sessionClosed
         }
@@ -165,7 +168,13 @@ public actor SpeechEngine {
         // Supersede: the previous utterance's stream has terminated before we return.
         await cancelActiveAndWait()
 
-        let segments = Segmenter.segment(text)
+        // A session that has no take yet (or is retaking) keeps this
+        // utterance's first segment short: it becomes the Reference Take.
+        let capturesReference =
+            state.profile.reference == .pinned && (retake || state.reference == nil)
+        var segments = Segmenter.segment(
+            text, leadTokens: capturesReference ? Segmenter.referenceLeadTokens : nil)
+        if retake { segments = Array(segments.prefix(1)) }
         let parameters = options.parameters ?? state.profile.defaults
         let seed: UInt64
         switch options.seed {
@@ -179,8 +188,10 @@ public actor SpeechEngine {
             guard let self else { return }
             await self.runUtterance(
                 utteranceID: utteranceID, sessionID: sessionID, segments: segments,
-                profile: state.profile, voice: state.voice, parameters: parameters,
-                seed: seed, startingAnchor: state.anchor, format: format, channel: channel)
+                voice: state.voice, parameters: parameters, seed: seed,
+                pacing: state.profile.pacing,
+                startingReference: retake ? nil : state.reference,
+                capturesReference: capturesReference, format: format, channel: channel)
         }
         await channel.setOnConsumerGone { driver.cancel() }
         active = (utteranceID, driver, channel)
@@ -205,37 +216,38 @@ public actor SpeechEngine {
 
     private struct BurstOutcome: Sendable {
         var frameCount: Int
-        var captured: AnchorHandle?
+        var captured: ReferenceTake?
     }
 
     private func runUtterance(
         utteranceID: UUID, sessionID: UUID, segments: [TextSegment],
-        profile: SessionProfile, voice: Voice, parameters: TTSParameters,
-        seed: UInt64, startingAnchor: AnchorHandle?, format: AudioFormat,
-        channel: UtteranceChannel
+        voice: Voice, parameters: TTSParameters, seed: UInt64, pacing: PacingPolicy,
+        startingReference: ReferenceTake?, capturesReference: Bool,
+        format: AudioFormat, channel: UtteranceChannel
     ) async {
         var cumulativeFrames = 0
         var segmentFrameCounts: [Int] = []
-        var utteranceAnchor = startingAnchor
+        var reference = startingReference
 
         do {
             for segment in segments {
-                if case .lookahead(let limit) = profile.pacing {
+                if case .lookahead(let limit) = pacing {
                     await channel.waitForDemand(limit: limit)
                 }
                 try Task.checkCancellation()
 
-                let captureSteps = anchorCaptureSteps(
-                    profile: profile, segmentIndex: segment.index,
-                    segmentCount: segments.count, anchor: utteranceAnchor)
+                // The lead segment of a capturing utterance is rendered from
+                // the description alone and becomes the take; every other
+                // segment continues the take.
+                let captures = capturesReference && segment.index == 0
                 let request = SegmentRequest(
                     text: segment.text,
                     voiceDescription: voice.description,
                     language: voice.language,
                     parameters: parameters,
                     seed: seed,
-                    anchor: utteranceAnchor,
-                    captureAnchorSteps: captureSteps)
+                    reference: captures ? nil : reference,
+                    capturesReference: captures)
 
                 let startFrame = cumulativeFrames
                 let segmentIndex = segment.index
@@ -251,7 +263,7 @@ public actor SpeechEngine {
 
                     var segmentSamples = 0
                     var emittedFrames = 0
-                    var captured: AnchorHandle?
+                    var captured: ReferenceTake?
 
                     let stream = await synthesizer.synthesizeSegment(request)
                     for try await event in stream {
@@ -265,8 +277,8 @@ public actor SpeechEngine {
                             emittedFrames = totalFrames
                             await channel.send(.audio(AudioChunk(
                                 samples: samples, frames: range, segmentIndex: segmentIndex)))
-                        case .done(let anchor):
-                            captured = anchor
+                        case .done(let take):
+                            captured = take
                         }
                         try Task.checkCancellation()
                     }
@@ -277,11 +289,9 @@ public actor SpeechEngine {
 
                 cumulativeFrames += outcome.frameCount
                 segmentFrameCounts.append(outcome.frameCount)
-                if let captured = outcome.captured, utteranceAnchor == nil {
-                    utteranceAnchor = captured
-                    if case .pinned = profile.anchor {
-                        sessions[sessionID]?.anchor = captured
-                    }
+                if let captured = outcome.captured {
+                    reference = captured
+                    sessions[sessionID]?.reference = captured
                 }
                 await channel.send(.segmentDone(index: segmentIndex))
             }
@@ -301,19 +311,6 @@ public actor SpeechEngine {
         }
         if active?.utteranceID == utteranceID {
             active = nil
-        }
-    }
-
-    private func anchorCaptureSteps(
-        profile: SessionProfile, segmentIndex: Int, segmentCount: Int, anchor: AnchorHandle?
-    ) -> Int? {
-        guard anchor == nil, segmentIndex == 0 else { return nil }
-        switch profile.anchor {
-        case .none: return nil
-        // A single-segment utterance has nothing later to condition, and a
-        // per-utterance anchor dies with it — skip the capture cost.
-        case .perUtterance(let steps): return segmentCount > 1 ? steps : nil
-        case .pinned(let steps): return steps
         }
     }
 
@@ -359,8 +356,18 @@ public final class SpeechSession: Sendable {
         try await engine.admit(sessionID: id, text: text, options: options)
     }
 
-    /// The session's voice realization, exportable once an anchor has formed
-    /// (nil before). Survives relaunch via `PinnedVoice.serialized()`.
+    /// Re-roll the voice: speak the opening of `text` (its first sentence or
+    /// two) from the description alone, and keep it as the session's new
+    /// Reference Take once it finishes. Pass a fresh seed (`.entropy`), or
+    /// the same seed renders the same take again. A cancelled retake leaves
+    /// the old take in place.
+    public func retake(_ text: String, options: SpeechOptions) async throws -> Utterance {
+        try await engine.admit(sessionID: id, text: text, options: options, retake: true)
+    }
+
+    /// The session's voice with its Reference Take, once one exists (nil
+    /// before the first segment finishes). Survives relaunch via
+    /// `PinnedVoice.serialized()`.
     public func exportPinnedVoice() async -> PinnedVoice? {
         await engine.exportPinnedVoice(id)
     }

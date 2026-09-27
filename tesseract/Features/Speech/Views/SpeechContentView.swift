@@ -26,7 +26,8 @@ struct SpeechContentView: View {
         SpeechComposerView(
             text: $inputText,
             voiceDescription: $settings.ttsVoiceDescription,
-            language: $settings.ttsLanguage
+            language: $settings.ttsLanguage,
+            onTryAnotherTake: { speechCoordinator.tryAnotherTake(sampleFrom: inputText) }
         )
         .padding(.horizontal, Theme.Spacing.xxl)
         .padding(.top, SpeechPageStyle.rhythm)
