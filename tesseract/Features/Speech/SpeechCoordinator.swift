@@ -27,6 +27,11 @@ final class SpeechCoordinator {
     private(set) var currentSegmentIndex: Int = 0
     private(set) var totalSegments: Int = 0
 
+    /// The last "Try another take" that played to the end: its audio, to
+    /// replay beside earlier takes, and the voice it made, to bring back with
+    /// `keep(_:)`. A stopped retake leaves this alone, as it leaves the voice.
+    private(set) var latestTake: VoiceTake?
+
     private let textExtractor: any TextExtracting
     private let engine: SpeechEnginePresenter
     /// The Voice Engine's download status, read before each request. The
@@ -42,7 +47,7 @@ final class SpeechCoordinator {
 
     private enum Pacing {
         /// Pull the next segment once less than this much scheduled audio
-        /// remains unplayed — enough runway that generation (RTF ~0.27)
+        /// remains unplayed — enough runway that generation (RTF ~0.15)
         /// always wins the race, small enough that stop/pause discard little.
         static let bufferAheadSeconds: TimeInterval = 8
         static let pollInterval: Duration = .milliseconds(150)
@@ -176,6 +181,31 @@ final class SpeechCoordinator {
         "Here is how I sound when I read to you. "
         + "A story, an article, a long email: every line keeps this same voice, from the first word to the last."
 
+    /// Keeps `voice`, an earlier take of its designed voice, from now on:
+    /// stores it and drops the open session, so the next utterance opens
+    /// pinned to it (ADR-0072).
+    func keep(_ voice: PinnedVoice) async {
+        stop()
+        pinnedVoices.save(voice)
+        await session?.close()
+        session = nil
+        sessionVoiceKey = nil
+    }
+
+    /// The take a designed voice speaks with now, if it has one.
+    func pinnedVoice(description: String, language: String) -> PinnedVoice? {
+        pinnedVoices.voice(
+            description: description.isEmpty ? nil : description, language: language,
+            model: ModelDefinition.textToSpeechModelSpec)
+    }
+
+    /// Read-aloud speed (the setting), applied at once to speech on the
+    /// dedicated engine. Voice-session replies always play at 1×.
+    func setPlaybackRate(_ rate: Double) {
+        settings.ttsPlaybackRate = rate
+        if activeSink === playback { playback.setPlaybackRate(Float(rate)) }
+    }
+
     /// Cancelling the consuming task is the engine-side cancellation token
     /// (ADR-0038): generation stops within one decoder step.
     func stop() {
@@ -285,6 +315,8 @@ final class SpeechCoordinator {
             let text = try await textExtractor.extractSelectedText()
             currentText = text
             await generateAndPlay(text: text, userInitiated: true)
+        } catch  where Task.isCancelled {
+            // stop() set the state; a newer request may own it now.
         } catch is CancellationError {
             state = .idle
         } catch {
@@ -379,7 +411,12 @@ final class SpeechCoordinator {
                 : try await session.speak(text, options: options)
             totalSegments = utterance.segmentCount
             activeSink.startStreaming(sampleRate: utterance.sampleRate)
+            if activeSink === playback {
+                playback.setPlaybackRate(Float(settings.ttsPlaybackRate))
+            }
 
+            // A retake is one short segment: keep its audio for replay.
+            var takeSamples: [Float] = []
             var overlayShown = false
             for try await event in utterance.events {
                 switch event {
@@ -396,6 +433,7 @@ final class SpeechCoordinator {
 
                 case .audio(let chunk):
                     activeSink.appendChunk(samples: chunk.samples)
+                    if retake { takeSamples.append(contentsOf: chunk.samples) }
 
                 case .segmentDone(let index):
                     await rememberVoice(of: session)
@@ -412,12 +450,20 @@ final class SpeechCoordinator {
                     activeSink.finishStreaming()
                     overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
                     overlay?.markGenerationComplete()
+                    if retake, let voice = await session.exportPinnedVoice() {
+                        latestTake = VoiceTake(
+                            voice: voice, samples: takeSamples, sampleRate: utterance.sampleRate)
+                    }
                 // onPlaybackFinished advances state to .idle and fires
                 // the completion callback once audio drains.
                 }
             }
+        } catch  where Task.isCancelled {
+            // stop() cancelled this request and already tore playback and the
+            // overlay down. A newer request may own the state, callback,
+            // sink and overlay by now: resetting them here ended its reading.
         } catch is CancellationError {
-            // stop() already tore playback and overlay down.
+            // Cancelled inside the engine, with no stop().
             speechCompletionCallback = nil
             if state != .idle { state = .idle }
         } catch SpeechEngineError.modelUnavailable(let detail) {
@@ -445,14 +491,10 @@ final class SpeechCoordinator {
         guard let notchOverlay else { return }
         if overlayShown {
             notchOverlay.switchText(
-                script.text,
-                tokenCharOffsets: script.tokenCharOffsets,
-                segmentBase: Double(script.startFrame) / framesPerSecond
-            )
+                script.text, segmentBase: Double(script.startFrame) / framesPerSecond)
         } else {
             notchOverlay.show(
                 text: script.text,
-                tokenCharOffsets: script.tokenCharOffsets,
                 playbackTimeProvider: { [weak self] in
                     self?.activeSink.currentPlaybackTime() ?? 0
                 }
@@ -479,4 +521,15 @@ final class SpeechCoordinator {
             try await Task.sleep(for: Pacing.pollInterval)
         }
     }
+}
+
+/// One finished "Try another take": the voice it made and what it sounded
+/// like (a sentence or two, so its samples are small).
+struct VoiceTake: Identifiable, Sendable {
+    let id = UUID()
+    let voice: PinnedVoice
+    let samples: [Float]
+    let sampleRate: Int
+
+    var duration: TimeInterval { Double(samples.count) / Double(max(sampleRate, 1)) }
 }

@@ -124,6 +124,11 @@ extension ModelDefinition {
     /// envelope; q6 peaks at 2.88 GB. q6 is the shipped default.
     static let textToSpeechModelSpec: TTSModelSpec = .voiceDesign17B(.q6)
 
+    /// Where the Voice Engine's voices come from. Its checkpoint is
+    /// VoiceDesign, so a voice is a description the owner writes. The Speech
+    /// page offers the voice designer only for a designed source.
+    static let textToSpeechVoiceSource: TTSVoiceSource = .designed
+
     /// Hub download size of each VoiceDesign precision (the repo's file
     /// listing, 2026-09-24), so the entry's size follows the spec if the
     /// precision gate ever flips.
@@ -425,4 +430,17 @@ extension ModelDefinition {
             return models.isEmpty ? nil : (category, models)
         }
     }
+}
+
+/// How a text-to-speech checkpoint gets its voices (`CONTEXT.md` → **Voice
+/// Source**).
+nonisolated enum TTSVoiceSource: Equatable, Sendable {
+    /// VoiceDesign: a voice is made from a description the owner writes, and
+    /// kept as a **Pinned Voice**.
+    case designed
+    /// CustomVoice: the checkpoint's own named speakers, each a **Preset
+    /// Voice**; nothing to design.
+    case presets([String])
+
+    var supportsVoiceDesign: Bool { self == .designed }
 }

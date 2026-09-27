@@ -75,6 +75,11 @@ protocol AudioPlayback: AnyObject {
     /// The volume as currently applied (1.0 when no node is live) — the
     /// fade ramp's starting point.
     var volume: Float { get }
+
+    /// Plays faster or slower without changing pitch (0.5–2.5; 1 is
+    /// normal), from now until changed. `currentPlaybackTime()` stays in the
+    /// audio's own time, so a read-along keeps its place at any speed.
+    func setPlaybackRate(_ rate: Float)
 }
 
 /// The scheduled-audio loudness timeline behind `playbackLevel()` — shared by

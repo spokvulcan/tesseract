@@ -446,4 +446,70 @@ struct SpeechCoordinatorTests {
             })
         #expect(harness.overlay.calls.contains(.dismiss))
     }
+
+    /// A new request cancels one parked between segments. The cancelled one
+    /// wakes later: it once set the state idle and dropped the completion
+    /// callback, both by then the new request's (the Reader's jump).
+    @Test
+    func aSupersededRequestLeavesTheNewOneAlone() async throws {
+        let harness = await Harness()
+        let long = String(
+            repeating: "The boats rocked quietly against the old stone pier. ", count: 300)
+        harness.coordinator.speakText(long)
+        // Parked: 8 s of audio ahead of a head that doesn't move.
+        #expect(await waitUntil { harness.playback.totalScheduledDuration >= 8 })
+
+        let probe = CallbackProbe()
+        harness.coordinator.speakText("Hello again.") { probe.fire() }
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        try? await Task.sleep(for: .milliseconds(100))
+        #expect(harness.coordinator.state != .idle)
+
+        harness.playback.firePlaybackFinished()
+        #expect(probe.fireCount == 1)
+    }
+
+    @Test
+    func playbackSpeedAppliesAtTheStartAndWhenChanged() async throws {
+        let harness = await Harness(
+            script: .init(chunksPerSegment: 200, chunkDelayNanos: 2_000_000))
+        harness.settings.ttsPlaybackRate = 1.5
+
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.playbackRates == [1.5] })
+
+        harness.coordinator.setPlaybackRate(2)
+        #expect(harness.playback.playbackRates == [1.5, 2])
+        #expect(harness.settings.ttsPlaybackRate == 2)
+        harness.coordinator.stop()
+    }
+
+    /// Takes are compared side by side: each finished one is offered, and
+    /// keeping an earlier take makes it the voice again.
+    @Test
+    func finishedTakesAreOfferedAndKeepingOneMakesItTheVoice() async throws {
+        let harness = await Harness()
+        harness.settings.ttsVoiceDescription = "warm narrator"
+        let model = ModelDefinition.textToSpeechModelSpec
+        let language = harness.settings.ttsLanguage
+
+        harness.coordinator.tryAnotherTake(
+            sampleFrom: "Here is how I sound. Every line keeps this voice.")
+        #expect(await waitUntil { harness.coordinator.latestTake != nil })
+        let first = try #require(harness.coordinator.latestTake)
+        #expect(first.voice.voiceDescription == "warm narrator")
+        #expect(first.samples.count == 3 * 1920 * 2)
+        harness.playback.firePlaybackFinished()
+
+        harness.coordinator.tryAnotherTake(
+            sampleFrom: "Here is how I sound. Every line keeps this voice.")
+        #expect(await waitUntil { harness.coordinator.latestTake?.id != first.id })
+        harness.playback.firePlaybackFinished()
+
+        await harness.coordinator.keep(first.voice)
+        #expect(
+            harness.pinnedVoices.voice(
+                description: "warm narrator", language: language, model: model)
+                == first.voice)
+    }
 }

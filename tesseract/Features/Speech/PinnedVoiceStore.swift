@@ -65,6 +65,31 @@ final class PinnedVoiceStore {
         try? encoded.write(to: storageURL, options: .atomic)
     }
 
+    /// The designed voices stored for `model`, most recently saved first:
+    /// what the Voices sheet lists under "Your voices" even before the owner
+    /// names one.
+    func designedVoices(model: TTSModelSpec) -> [(description: String, language: String)] {
+        entries.reversed().compactMap { entry in
+            guard let voice = try? PinnedVoice(validating: Data(entry.voice.utf8)),
+                voice.modelFingerprint == model.fingerprint,
+                let description = voice.voiceDescription, !description.isEmpty
+            else { return nil }
+            return (description, voice.language ?? "")
+        }
+    }
+
+    /// Forgets `description`'s takes in every language: a deleted voice.
+    func remove(description: String, model: TTSModelSpec) {
+        let prefix = "\(model.fingerprint)|"
+        let suffix = "|\(description)"
+        let before = entries.count
+        entries.removeAll { $0.key.hasPrefix(prefix) && $0.key.hasSuffix(suffix) }
+        guard entries.count != before, let encoded = try? JSONEncoder().encode(entries) else {
+            return
+        }
+        try? encoded.write(to: storageURL, options: .atomic)
+    }
+
     private static func key(fingerprint: String, language: String, description: String?) -> String {
         "\(fingerprint)|\(language)|\(description ?? "")"
     }

@@ -3,9 +3,9 @@
 One page of ratified rules for every face-lifted surface. Cite this doc
 instead of re-deciding; changing a rule means amending this doc in the same
 PR. Ratified 2026-07-09 (map #211, ticket #214). Locked designs — agent chat
-(PR #184), Server Drawer, Skill Cluster (ADR-0030), speech transport bar,
-overlay HUD — are audited for consistency against this doc but never
-redesigned under it.
+(PR #184), Server Drawer, Skill Cluster (ADR-0030), Speech Reader control
+bar (ADR-0076), overlay HUD — are audited for consistency against this doc but
+never redesigned under it.
 
 ## 1. Liquid Glass
 
@@ -49,7 +49,7 @@ same PR:
 - Agent composer (`AgentComposerView`)
 - Slash-command popup (`SlashCommandPopupView`)
 - Skill Cluster (`SkillClusterView`, ADR-0030)
-- Speech transport bar (`SpeechTransportBar`)
+- Speech Reader control bar (`ReaderControlBar`, ADR-0076)
 - Global overlay HUD (`GlobalOverlayHUD`)
 - Dictation recording button (`RecordingButtonView`)
 - Models action bar (`ModelsActionBar`)

@@ -115,6 +115,10 @@ final class AppBindings {
         let loadWhisperModel: @MainActor (URL) async -> Void
         /// Mirrors the sleep pass into the Companion's presence (#327 §3).
         let pushCompanionAsleep: @MainActor (Bool) -> Void
+        /// Starts the Reader and the Speech Overlay following the Read-Along
+        /// (ADR-0076), so speech from the hotkey shows before the Speech page
+        /// is ever opened.
+        let startSpeechSurfaces: @MainActor () -> Void
 
         init(
             setUpOverlayPanel: @escaping @MainActor () -> Void,
@@ -135,7 +139,8 @@ final class AppBindings {
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
             reloadLLMIfNeeded: @escaping @MainActor () async throws -> Void,
             loadWhisperModel: @escaping @MainActor (URL) async -> Void,
-            pushCompanionAsleep: @escaping @MainActor (Bool) -> Void = { _ in }
+            pushCompanionAsleep: @escaping @MainActor (Bool) -> Void = { _ in },
+            startSpeechSurfaces: @escaping @MainActor () -> Void = {}
         ) {
             self.setUpOverlayPanel = setUpOverlayPanel
             self.setOverlayVariant = setOverlayVariant
@@ -156,6 +161,7 @@ final class AppBindings {
             self.reloadLLMIfNeeded = reloadLLMIfNeeded
             self.loadWhisperModel = loadWhisperModel
             self.pushCompanionAsleep = pushCompanionAsleep
+            self.startSpeechSurfaces = startSpeechSurfaces
         }
     }
 
@@ -182,6 +188,7 @@ final class AppBindings {
         hasStarted = true
 
         effects.setUpOverlayPanel()
+        effects.startSpeechSurfaces()
 
         installSubscriptions()
 

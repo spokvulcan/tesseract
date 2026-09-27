@@ -102,6 +102,8 @@ extension View {
         self
             .environment(container.speechCoordinator)
             .environment(container.speechEnginePresenter)
+            .environment(container.speechReader)
+            .environment(container.voiceLibrary)
     }
 
     /// Agent feature: the Chat Session, its leaf controllers, engine, store.

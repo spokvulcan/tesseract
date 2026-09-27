@@ -213,6 +213,30 @@ between families and modes, so it gets its own column.
 | `whisper-large-v3-turbo` / `-compact` | argmaxinc/whisperkit-coreml | CoreML; no generation_config |
 | `qwen3.5-0.8b-proofread` | mlx-community/Qwen3.5-0.8B-4bit | see Qwen3.5 above; non-thinking by default, 24 layers |
 
+### Qwen3-TTS VoiceDesign sampling
+
+Every Qwen3-TTS checkpoint ships the same `generation_config.json`, and
+Qwen gives no tuning advice beyond it
+([research](research/2026-09-27-qwen3-tts-voice-design.md)). App values are
+`TTSParameters` in `Vendor/tesseract-speech`, set in Settings > Speech
+("Reset to Recommended" restores them). Verified **2026-09-27**.
+
+| Parameter | Card (`generation_config.json`) | App | Settings > Speech |
+| --- | --- | --- | --- |
+| Talker temperature | 0.9 | 0.9 | Expressiveness |
+| Talker top_k | 50 | 50, fixed | — |
+| Talker top_p | 1.0 | 1.0 | Top-p |
+| Repetition penalty | 1.05, whole request | 1.05, last 64 frames (ADR-0072) | Repetition penalty |
+| Code predictor ("sub-talker") temperature | 0.9 | **0.5** (ADR-0072: keeps a voice the same person across passages) | Voice steadiness |
+| Code predictor top_k / top_p | 50 / 1.0 | 50 / 1.0, fixed | — |
+| `max_new_tokens` | 8192 (Qwen's evals and Space use 2048) | 4096, then at most 6 frames per text token | Longest passage |
+| Language | Auto when omitted; set it when known | always named (English by default) | Voices sheet |
+
+Codec frames are 80 ms: 4096 frames is about 5½ minutes of audio in one passage.
+Variety between designed voices comes from the description and from
+re-rolling takes, not from sampling: Qwen never suggests raising the
+temperature for it.
+
 ## Keeping this current
 
 Re-verify when a catalog entry is added or a base card changes. The cheap
