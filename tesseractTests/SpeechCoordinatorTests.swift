@@ -118,7 +118,7 @@ struct SpeechCoordinatorTests {
         #expect(harness.playback.startedSampleRates == [24_000])
         #expect(harness.playback.appendedChunks.count == 3)
 
-        // Overlay path: shown with alignment offsets, closed out as complete.
+        // Overlay path: shown, closed out as complete.
         #expect(
             harness.overlay.calls.contains { if case .show = $0 { true } else { false } })
         #expect(harness.overlay.calls.contains(.markGenerationComplete))
@@ -132,6 +132,22 @@ struct SpeechCoordinatorTests {
         harness.playback.firePlaybackFinished()
         #expect(probe.fireCount == 1)
         #expect(harness.coordinator.state == .idle)
+    }
+
+    /// The engine's word starts reach the Read-Along in the utterance's
+    /// seconds (ADR-0077).
+    @Test
+    func wordTimingReachesTheSurfaceInSeconds() async throws {
+        let harness = await Harness(
+            script: .init(wordStarts: [WordStart(word: 0, frame: 0), WordStart(word: 1, frame: 3)]))
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        // 3 frames at 12.5 a second.
+        #expect(
+            harness.overlay.calls.contains(
+                .timeWords(
+                    [TimedWord(word: 0, start: 0), TimedWord(word: 1, start: 0.24)], segment: 0)))
+        harness.coordinator.stop()
     }
 
     @Test

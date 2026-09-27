@@ -57,6 +57,11 @@ final class AudioPlaybackManager: ObservableObject, AudioPlayback {
         return Double(playerTime.sampleTime) / playerTime.sampleRate
     }
 
+    func heardPlaybackTime() -> TimeInterval {
+        if let pausedTime { return pausedTime }
+        return heardTime(head: currentPlaybackTime(), node: playerNode, rate: playbackRate)
+    }
+
     func playbackLevel() -> Float {
         guard isPlaying, pausedTime == nil else { return 0 }
         return envelope.level(at: currentPlaybackTime())

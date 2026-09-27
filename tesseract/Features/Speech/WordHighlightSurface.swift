@@ -4,9 +4,10 @@
 //
 //  The port (seam) the Segment Playback loop and `SpeechCoordinator`'s session-level
 //  calls drive to render spoken-word highlighting — `show` a fresh segment,
-//  `switchText` to the next segment at a crossed Segment Window, push the running
-//  `updateTotalDuration`, `markSegmentComplete` / `markGenerationComplete`, and
-//  `dismiss`. The methods are exactly the surface the real call sites use.
+//  `switchText` to the next segment at a crossed Segment Window, hand over the
+//  words' starts as the engine times them (`timeWords`, ADR-0077), push the
+//  running `updateTotalDuration`, `markSegmentComplete` / `markGenerationComplete`,
+//  and `dismiss`. The methods are exactly the surface the real call sites use.
 //
 //  Same `@MainActor`-sibling shape as `AudioPlayback` (ADR-0003): class-bound,
 //  main-actor-isolated, and called *synchronously* on the hot path — deliberately not
@@ -29,6 +30,11 @@ protocol WordHighlightSurface: AnyObject {
     /// cumulative scheduled duration before it).
     func switchText(_ text: String, segmentBase: TimeInterval)
 
+    /// When words of segment `segment` (0 is the utterance's first) start,
+    /// in the utterance's audio time, as the engine learns them: in word
+    /// order, from the segment's first word, ahead of their audio playing.
+    func timeWords(_ words: [TimedWord], segment: Int)
+
     /// Everything generated so far: the latest segment's audio ends here.
     func updateTotalDuration(_ duration: TimeInterval)
 
@@ -40,4 +46,11 @@ protocol WordHighlightSurface: AnyObject {
 
     /// Tear the surface down.
     func dismiss()
+}
+
+/// A word of a segment (its place among the segment's words, from 0) and
+/// when its sound starts in the utterance's audio (ADR-0077).
+nonisolated struct TimedWord: Equatable, Sendable {
+    let word: Int
+    let start: TimeInterval
 }

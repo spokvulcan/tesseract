@@ -17,6 +17,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
     private let neuralEngineCache: URL?
     private var model: Qwen3TTSModel?
     private var loadedSpec: TTSModelSpec?
+    /// The loaded checkpoint's alignment head, when its words can be timed.
+    private var alignmentHead: Qwen3TTSAlignmentHead?
     private var warmed = false
     private var neuralEngineTask: Task<Void, Never>?
 
@@ -81,6 +83,9 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         let qwen = try await Qwen3TTSModel.fromModelDirectory(checkpointDirectory(spec))
         model = qwen
         loadedSpec = spec
+        alignmentHead = spec.alignmentHead.map {
+            Qwen3TTSAlignmentHead(layer: $0.layer, head: $0.head)
+        }
         warmed = false
         onPhase?(.ready)
     }
@@ -127,21 +132,16 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         neuralEngineReport = nil
         model = nil
         loadedSpec = nil
+        alignmentHead = nil
         warmed = false
         Memory.clearCache()
         Stream.gpu.synchronize()
     }
 
     public func audioFormat() async -> AudioFormat? {
-        // One codec frame per alignment token (the K1 invariant): 1,920
-        // samples at 24 kHz for the 12Hz family.
+        // One codec frame: 1,920 samples at 24 kHz for the 12Hz family.
         guard let model else { return nil }
         return AudioFormat(sampleRate: model.sampleRate, samplesPerFrame: model.samplesPerFrame)
-    }
-
-    public func alignmentOffsets(for text: String) async throws -> [Int] {
-        guard let model else { throw SpeechEngineError.engineUnloaded }
-        return model.tokenizeForAlignment(text: text)
     }
 
     public func trimCaches() async {
@@ -161,6 +161,7 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                     guard let model = self.model, let format = await self.audioFormat() else {
                         throw SpeechEngineError.engineUnloaded
                     }
+                    let alignment = self.alignmentHead
 
                     let modelStream = model.generateStream(
                         text: request.text,
@@ -174,19 +175,38 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                         // 0.4 s chunks on MLX: how often audio is handed over.
                         // The samples don't depend on it (ADR-0074), and the
                         // Neural Engine decodes its own fixed chunk.
-                        streamingInterval: 0.4)
+                        streamingInterval: 0.4,
+                        alignment: alignment)
 
                     // A stall or a long trailing silence plays as a gap in the
                     // reading; the cap keeps pauses and drops the excess.
                     var silence = SilenceCap(format: format)
                     var captured: ReferenceTake?
+                    // Word timing (ADR-0077): the alignment head's rows come
+                    // ahead of their frames' audio; a word's start is sent once
+                    // the audio settles it.
+                    var timer: WordTimer?
+                    func sendStarts() {
+                        guard let starts = timer?.takeStarts(), !starts.isEmpty else { return }
+                        continuation.yield(.words(starts))
+                    }
                     for try await event in modelStream {
                         switch event {
                         case .audio(let audio):
-                            let samples = silence.apply(audio)
+                            var levels: [SilenceCap.Frame] = []
+                            let samples = silence.apply(audio, frames: &levels)
                             if !samples.isEmpty {
                                 continuation.yield(.chunk(samples))
                             }
+                            timer?.appendAudio(levels)
+                            sendStarts()
+                        case .textTrack(let track):
+                            timer = WordTimer(
+                                text: request.text, tokenOffsets: track.characterOffsets,
+                                referenceTokens: track.referenceTokenCount)
+                        case .alignment(let row):
+                            timer?.appendAttention(row)
+                            sendStarts()
                         case .codeFrames(let frames):
                             if request.capturesReference, !frames.isEmpty {
                                 captured = ReferenceTake(codeFrames: frames, text: request.text)
@@ -194,6 +214,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                         }
                         try Task.checkCancellation()
                     }
+                    timer?.finish()
+                    sendStarts()
                     continuation.yield(.done(capturedReference: captured))
                     continuation.finish()
                 } catch {

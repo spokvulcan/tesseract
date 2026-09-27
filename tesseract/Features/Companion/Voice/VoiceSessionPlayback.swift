@@ -182,6 +182,12 @@ final class VoiceSessionPlayback: AudioPlayback {
         return Double(playerTime.sampleTime) / playerTime.sampleRate
     }
 
+    func heardPlaybackTime() -> TimeInterval {
+        if usingFallback { return fallback.heardPlaybackTime() }
+        if let pausedTime { return pausedTime }
+        return heardTime(head: currentPlaybackTime(), node: node, rate: 1)
+    }
+
     func playbackLevel() -> Float {
         if usingFallback { return fallback.playbackLevel() }
         guard hostedPlaying, pausedTime == nil else { return 0 }

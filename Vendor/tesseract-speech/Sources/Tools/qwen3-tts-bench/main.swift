@@ -186,6 +186,8 @@ func render(
             samples.append(contentsOf: audio)
         case .codeFrames(let f):
             frames = f
+        case .textTrack, .alignment:
+            break
         }
     }
     let elapsed = seconds(since: t0)

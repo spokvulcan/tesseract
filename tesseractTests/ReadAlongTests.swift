@@ -85,6 +85,53 @@ struct ReadAlongTimelineTests {
         #expect(timeline.isFinished(at: 2))
     }
 
+    // MARK: Word timing (ADR-0077)
+
+    /// Timed words light as their sound starts, pauses and all, wherever
+    /// their characters sit.
+    @Test func timedWordsLightWhenTheirSoundStarts() {
+        var timeline = ReadAlongTimeline(charsPerSecond: 10)
+        timeline.append(text: "Wait, a very long pause here", start: 2)
+        timeline.setEnd(12, at: 0)
+        // "a" comes after a 3 s pause; evenly spread it would be at 3.8 s.
+        timeline.time(
+            [
+                TimedWord(word: 0, start: 2.5), TimedWord(word: 1, start: 6.0),
+                TimedWord(word: 2, start: 6.2),
+            ],
+            segment: 0)
+
+        #expect(timeline.position(at: 2.2)?.word == 0, "the first word before its sound")
+        #expect(timeline.position(at: 5.9)?.word == 0, "the pause keeps the last word")
+        #expect(timeline.position(at: 6.0)?.word == 1)
+        #expect(timeline.position(at: 7.5)?.word == 2, "the last timed word holds")
+    }
+
+    /// Starts come in word order; anything else is ignored.
+    @Test func wordStartsAreTakenInOrder() {
+        var timeline = ReadAlongTimeline(charsPerSecond: 10)
+        timeline.append(text: "one two three", start: 0)
+        timeline.time([TimedWord(word: 1, start: 0.5)], segment: 0)
+        #expect(timeline.segments[0].wordStarts.isEmpty)
+        timeline.time([TimedWord(word: 0, start: 0.1), TimedWord(word: 1, start: 0.5)], segment: 0)
+        timeline.time([TimedWord(word: 1, start: 0.9)], segment: 0)
+        #expect(timeline.segments[0].wordStarts == [0.1, 0.5])
+        timeline.time([TimedWord(word: 0, start: 0)], segment: 7)
+        #expect(timeline.segments.count == 1, "an unknown segment is ignored")
+    }
+
+    /// A segment the engine doesn't time keeps the even spread.
+    @Test func anUntimedSegmentSpreadsItsCharacters() {
+        var timeline = ReadAlongTimeline(charsPerSecond: 10)
+        timeline.append(text: "aaaa bbbb", start: 0)
+        timeline.setEnd(1, at: 0)
+        timeline.append(text: "cccc dddd", start: 1)
+        timeline.setEnd(2, at: 0)
+        timeline.time([TimedWord(word: 0, start: 1.1), TimedWord(word: 1, start: 1.2)], segment: 1)
+        #expect(timeline.position(at: 0.7)?.word == 1)
+        #expect(timeline.position(at: 1.3)?.word == 1)
+    }
+
     @Test func pruningKeepsTheSegmentBeforeTheOneHeard() {
         var timeline = ReadAlongTimeline(charsPerSecond: 10)
         for index in 0..<4 {
@@ -169,6 +216,49 @@ struct SpeechReadAlongTests {
         clock.now = 1
         readAlong.tick()
         #expect(readAlong.word == heard)
+        readAlong.dismiss()
+    }
+
+    @Test func timedWordsDriveTheHeardWord() {
+        let readAlong = SpeechReadAlong()
+        let clock = TestClock()
+        show(readAlong, "one two three four", clock: clock)
+        readAlong.timeWords(
+            [
+                TimedWord(word: 0, start: 0.6), TimedWord(word: 1, start: 0.9),
+                TimedWord(word: 2, start: 2.4), TimedWord(word: 3, start: 2.6),
+            ],
+            segment: 0)
+        readAlong.updateTotalDuration(3)
+
+        clock.now = 2.3
+        readAlong.tick()
+        #expect(readAlong.word == 1, "evenly spread this would be word 3")
+        clock.now = 2.5
+        readAlong.tick()
+        #expect(readAlong.word == 2)
+        readAlong.dismiss()
+    }
+
+    /// The overlay's feed gets each passage as it arrives, ahead of its
+    /// audio, and lets go of passages two behind the one heard.
+    @Test func passagesArriveAheadAndDropBehind() {
+        let readAlong = SpeechReadAlong()
+        let clock = TestClock()
+        show(readAlong, "one two\n\nthree four", clock: clock)
+        #expect(readAlong.passages.map(\.index) == [0])
+        #expect(readAlong.passages[0].paragraphEnds == [1])
+        readAlong.updateTotalDuration(1)
+        readAlong.switchText("five six", segmentBase: 1)
+        readAlong.updateTotalDuration(2)
+        readAlong.switchText("seven eight", segmentBase: 2)
+        #expect(readAlong.passages.map(\.index) == [0, 1, 2])
+        #expect(readAlong.passages.map(\.firstWord) == [0, 4, 6])
+
+        clock.now = 2.1
+        readAlong.tick()
+        #expect(readAlong.segment?.index == 2)
+        #expect(readAlong.passages.map(\.index) == [1, 2])
         readAlong.dismiss()
     }
 

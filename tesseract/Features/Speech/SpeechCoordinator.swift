@@ -435,6 +435,16 @@ final class SpeechCoordinator {
                     activeSink.appendChunk(samples: chunk.samples)
                     if retake { takeSamples.append(contentsOf: chunk.samples) }
 
+                case .words(let timing):
+                    // Frames over the utterance, as the Read-Along's clock counts.
+                    overlay?.timeWords(
+                        timing.starts.map {
+                            TimedWord(
+                                word: $0.word,
+                                start: Double($0.frame) / utterance.framesPerSecond)
+                        },
+                        segment: timing.segmentIndex)
+
                 case .segmentDone(let index):
                     await rememberVoice(of: session)
                     overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
@@ -495,8 +505,10 @@ final class SpeechCoordinator {
         } else {
             notchOverlay.show(
                 text: script.text,
+                // What is heard, not what is rendering: over Bluetooth the
+                // two are 150 ms or more apart (ADR-0077).
                 playbackTimeProvider: { [weak self] in
-                    self?.activeSink.currentPlaybackTime() ?? 0
+                    self?.activeSink.heardPlaybackTime() ?? 0
                 }
             )
             overlayShown = true

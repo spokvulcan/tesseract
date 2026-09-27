@@ -109,6 +109,10 @@ struct UtteranceCapture {
     /// Where each segment starts in `samples`, for per-segment listening and
     /// scoring.
     var segmentStarts: [Int] = []
+    /// Each segment's text and first frame, and its words' starts (ADR-0077),
+    /// for scoring the word timing against a transcript.
+    var scripts: [SegmentScript] = []
+    var wordStarts: [Int: [WordStart]] = [:]
 }
 
 func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
@@ -120,9 +124,12 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
     var sawAudioForSegment = false
     for try await event in utterance.events {
         switch event {
-        case .segment:
+        case .segment(let script):
             segmentStart = DispatchTime.now()
             sawAudioForSegment = false
+            capture.scripts.append(script)
+        case .words(let timing):
+            capture.wordStarts[timing.segmentIndex, default: []] += timing.starts
         case .audio(let chunk):
             let now = DispatchTime.now()
             if capture.ttfaMs < 0 {
@@ -179,6 +186,21 @@ func write(_ capture: UtteranceCapture, to url: URL, label: String) throws {
                 to: url.deletingLastPathComponent().appendingPathComponent(
                     String(format: "%@_seg%02d.wav", stem, index + 1)))
         }
+    }
+    if !capture.wordStarts.isEmpty {
+        // Per segment: its text, and each word's start in frames from the
+        // segment's own first frame (its WAV's time 0).
+        let segments: [[String: Any]] = capture.scripts.map { script in
+            [
+                "index": script.index, "text": script.text, "startFrame": script.startFrame,
+                "words": (capture.wordStarts[script.index] ?? []).map {
+                    ["word": $0.word, "frame": $0.frame - script.startFrame]
+                },
+            ]
+        }
+        let stem = url.deletingPathExtension().lastPathComponent
+        try JSONSerialization.data(withJSONObject: ["segments": segments], options: [.prettyPrinted])
+            .write(to: url.deletingLastPathComponent().appendingPathComponent("\(stem)_words.json"))
     }
     let audioSec = Double(capture.samples.count) / Double(capture.sampleRate)
     let rtf = audioSec > 0 ? capture.wallSec / audioSec : -1

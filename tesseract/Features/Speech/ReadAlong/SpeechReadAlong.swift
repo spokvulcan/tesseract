@@ -10,7 +10,12 @@
 //  pacing a script arrives up to 8 s before its audio plays; the old notch
 //  switched text on arrival and ran ahead of the voice.
 //
-//  The clock samples the playback head 30 times a second but publishes only
+//  Inside a segment, the engine's **Word Timing** says when each word starts
+//  (ADR-0077): it follows the voice model's own attention, pauses included.
+//  A segment the engine doesn't time falls back to spreading its characters
+//  evenly over its audio.
+//
+//  The clock samples the heard time 30 times a second but publishes only
 //  when the heard word changes, a few times a second, so a view that follows
 //  it redraws at word pace, not frame pace.
 //
@@ -38,6 +43,27 @@ nonisolated struct ReadAlongTimeline: Equatable, Sendable {
         /// When the end became known while the segment was already playing
         /// on the estimated pace, and the characters heard by then.
         var handover: Handover?
+        /// When each of the first words starts, from the engine's word
+        /// timing (ADR-0077). Empty when the engine doesn't time words.
+        var wordStarts: [TimeInterval] = []
+
+        /// The word heard at `time` by its timing: the last one started, or
+        /// the first before any has.
+        func timedWord(at time: TimeInterval) -> Int {
+            var low = 0
+            var high = wordStarts.count - 1
+            var found = 0
+            while low <= high {
+                let mid = (low + high) / 2
+                if wordStarts[mid] <= time {
+                    found = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+            return min(found, max(words.words.count - 1, 0))
+        }
 
         /// Characters heard by `time`: at the reading pace until the end is
         /// known, then evenly to the end, from wherever the pace had got to.
@@ -79,6 +105,15 @@ nonisolated struct ReadAlongTimeline: Equatable, Sendable {
                 end: nil, firstWord: firstWord))
     }
 
+    /// Word starts for segment `index`, in word order from the next one it
+    /// lacks. A segment already dropped from the window ignores them.
+    mutating func time(_ words: [TimedWord], segment index: Int) {
+        guard let position = segments.lastIndex(where: { $0.index == index }) else { return }
+        for word in words where word.word == segments[position].wordStarts.count {
+            segments[position].wordStarts.append(word.start)
+        }
+    }
+
     /// `cumulative` is everything generated so far: the latest segment ends
     /// there. `now` is the playback head, in case the segment is already
     /// playing (the first one always is: playback starts with its first
@@ -102,8 +137,9 @@ nonisolated struct ReadAlongTimeline: Equatable, Sendable {
 
     /// The segment (by position in `segments`) and the word within it heard
     /// at `time`. A segment starts when the playback head reaches its start,
-    /// never earlier; inside it, words are placed in proportion to their
-    /// characters over the segment's duration.
+    /// never earlier; inside it, the word is the last one timed to have
+    /// started, or, untimed, placed in proportion to its characters over the
+    /// segment's duration.
     func position(at time: TimeInterval) -> (segment: Int, word: Int)? {
         guard !segments.isEmpty else { return nil }
         // The last segment whose audio has started (binary search: starts ascend).
@@ -114,6 +150,7 @@ nonisolated struct ReadAlongTimeline: Equatable, Sendable {
             if segments[mid].start <= time + 0.02 { low = mid } else { high = mid - 1 }
         }
         let segment = segments[low]
+        if !segment.wordStarts.isEmpty { return (low, segment.timedWord(at: time)) }
         let chars = Double(segment.words.totalCharCount)
         guard chars > 0 else { return (low, 0) }
         let heard = min(
@@ -136,6 +173,46 @@ nonisolated struct ReadAlongTimeline: Equatable, Sendable {
     }
 }
 
+// MARK: - Passages
+
+/// A segment's words as the Speech Overlay's feed shows them: where they sit
+/// in the utterance, and which of them end a paragraph (a newline follows).
+nonisolated struct ReadAlongPassage: Equatable, Sendable {
+    /// The segment's position in the utterance, from 0.
+    let index: Int
+    /// Words before this segment in the utterance.
+    let firstWord: Int
+    let words: [String]
+    /// Words (counted within the segment) that a paragraph break follows.
+    let paragraphEnds: Set<Int>
+
+    init(_ segment: ReadAlongTimeline.Segment) {
+        self.init(index: segment.index, firstWord: segment.firstWord, text: segment.text)
+    }
+
+    init(index: Int, firstWord: Int, text: String) {
+        self.index = index
+        self.firstWord = firstWord
+        var words: [String] = []
+        var ends: Set<Int> = []
+        var current = ""
+        for character in text {
+            if character.isWhitespace || character.isNewline {
+                if !current.isEmpty {
+                    words.append(current)
+                    current = ""
+                }
+                if character.isNewline, !words.isEmpty { ends.insert(words.count - 1) }
+            } else {
+                current.append(character)
+            }
+        }
+        if !current.isEmpty { words.append(current) }
+        self.words = words
+        paragraphEnds = ends
+    }
+}
+
 // MARK: - The clock
 
 @Observable @MainActor
@@ -149,6 +226,10 @@ final class SpeechReadAlong: WordHighlightSurface {
     private(set) var segment: ReadAlongTimeline.Segment?
     /// The word being heard, counted within `segment`.
     private(set) var word = 0
+    /// The words of this utterance from the segment before the heard one
+    /// on, including those whose audio hasn't played yet: the Speech
+    /// Overlay lays its feed out from these as they arrive.
+    private(set) var passages: [ReadAlongPassage] = []
 
     @ObservationIgnored private var timeline = ReadAlongTimeline()
     @ObservationIgnored private var clock: (() -> TimeInterval)?
@@ -174,12 +255,18 @@ final class SpeechReadAlong: WordHighlightSurface {
         utteranceID = UUID()
         segment = timeline.segments.first
         word = 0
+        passages = timeline.segments.map(ReadAlongPassage.init)
         isActive = true
         startTimer()
     }
 
     func switchText(_ text: String, segmentBase: TimeInterval) {
         timeline.append(text: text, start: segmentBase)
+        if let added = timeline.segments.last { passages.append(ReadAlongPassage(added)) }
+    }
+
+    func timeWords(_ words: [TimedWord], segment: Int) {
+        timeline.time(words, segment: segment)
     }
 
     func updateTotalDuration(_ duration: TimeInterval) {
@@ -219,6 +306,10 @@ final class SpeechReadAlong: WordHighlightSurface {
             segment = heard
             word = position.word
             timeline.prune(keeping: position.segment)
+            // The feed keeps the segment before the heard one, to scroll it away.
+            if let first = passages.firstIndex(where: { $0.index >= heard.index - 1 }), first > 0 {
+                passages.removeFirst(first)
+            }
         } else if position.word > word {
             // Within a segment the word only moves on: the head never runs
             // backwards in one utterance (a jump starts a new one).

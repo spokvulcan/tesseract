@@ -46,13 +46,14 @@ private let shortText = "Hello there, this is a short utterance."
                 #expect(openSegment == nil, "segment announced while another is open")
                 #expect(script.index == lastSegmentAnnounced + 1, "segments in text order")
                 #expect(script.startFrame == nextFrame, "startFrame is cumulative ground truth")
-                #expect(!script.tokenCharOffsets.isEmpty)
                 openSegment = script.index
                 lastSegmentAnnounced = script.index
             case .audio(let chunk):
                 #expect(chunk.segmentIndex == openSegment, "audio follows its segment event")
                 #expect(chunk.frames.lowerBound == nextFrame, "frame ranges gapless")
                 nextFrame = chunk.frames.upperBound
+            case .words:
+                Issue.record("a synthesizer without timing sends no words")
             case .segmentDone(let index):
                 #expect(index == openSegment)
                 openSegment = nil
@@ -66,6 +67,37 @@ private let shortText = "Hello there, this is a short utterance."
 
         #expect(finishedCount == 1, "finished exactly once on full render")
         #expect(doneSegments == Array(0..<utterance.segmentCount))
+    }
+
+    /// A segment's word starts come after the audio they start in, their
+    /// frames moved from the segment's count to the utterance's, and never
+    /// past the audio delivered.
+    @Test func wordStartsFollowTheirAudioOnTheUtterancesFrames() async throws {
+        let starts = [
+            WordStart(word: 0, frame: 0), WordStart(word: 1, frame: 3),
+            WordStart(word: 2, frame: 99),
+        ]
+        let (engine, _, _) = await makeEngine(script: .init(wordStarts: starts))
+        let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
+        let utterance = try await session.speak(longText)
+
+        var segmentStart = 0
+        var delivered = 0
+        var timings: [WordTiming] = []
+        for try await event in utterance.events {
+            switch event {
+            case .segment(let script): segmentStart = script.startFrame
+            case .audio(let chunk): delivered = chunk.frames.upperBound
+            case .words(let timing):
+                timings.append(timing)
+                #expect(timing.starts.allSatisfy { $0.frame <= delivered })
+                // 3 chunks of 2 frames: the last start clamps to the end.
+                #expect(timing.starts.map(\.frame) == [segmentStart, segmentStart + 3, delivered])
+                #expect(timing.starts.map(\.word) == [0, 1, 2])
+            case .segmentDone, .finished: break
+            }
+        }
+        #expect(timings.map(\.segmentIndex) == Array(0..<utterance.segmentCount))
     }
 
     @Test func audioProjectionYieldsOnlyChunks() async throws {
@@ -515,6 +547,20 @@ private let shortText = "Hello there, this is a short utterance."
         let kept = cap.apply(input)
         #expect(kept.count == (2 + 15 + 4) * Self.frame)
         #expect(kept.filter { $0 == Self.speech }.count == 6 * Self.frame)
+    }
+
+    /// Each frame reports its level in dBFS and whether it was kept, for
+    /// the word timer.
+    @Test func eachFrameReportsItsLevelAndFate() {
+        var cap = SilenceCap(format: Self.format)
+        var frames: [SilenceCap.Frame] = []
+        _ = cap.apply(
+            Self.frames(1, level: Self.speech) + Self.frames(17, level: Self.silence),
+            frames: &frames)
+        #expect(frames.count == 18)
+        #expect(abs(frames[0].loudness - 20 * log10(Self.speech)) < 0.01)
+        #expect(abs(frames[1].loudness - 20 * log10(Self.silence)) < 0.01)
+        #expect(frames.map(\.kept) == [Bool](repeating: true, count: 16) + [false, false])
     }
 
     @Test func theRunCarriesAcrossChunks() {

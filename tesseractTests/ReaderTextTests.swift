@@ -112,11 +112,57 @@ struct CaptionLayoutTests {
         #expect(lines == [0..<1, 1..<2, 2..<3])
     }
 
-    @Test func thePageHoldsTheHeardWord() {
-        let lines: [Range<Int>] = [0..<3, 3..<6, 6..<9, 9..<10]
-        #expect(Array(CaptionLayout.page(for: 0, in: lines)) == [0..<3, 3..<6])
-        #expect(Array(CaptionLayout.page(for: 7, in: lines)) == [6..<9, 9..<10])
-        #expect(Array(CaptionLayout.page(for: -1, in: lines)) == [0..<3, 3..<6])
-        #expect(CaptionLayout.page(for: 0, in: []).isEmpty)
+    @Test func aParagraphStartsALine() {
+        let lines = CaptionLayout.lines(
+            wordWidths: [10, 10, 10, 10, 10], spaceWidth: 5, width: 100, breaksAfter: [1, 4])
+        #expect(lines == [0..<2, 2..<5], "a break after the last word adds no empty line")
+    }
+}
+
+/// The Speech Overlay's feed (ADR-0077): one reading's lines in order, grown
+/// passage by passage, each line keeping its number.
+struct CaptionFeedTests {
+
+    private static func passage(_ index: Int, first: Int, _ text: String) -> ReadAlongPassage {
+        ReadAlongPassage(index: index, firstWord: first, text: text)
+    }
+
+    private static func add(_ passage: ReadAlongPassage, to feed: inout CaptionFeed) {
+        // Every word 30 wide, a space 5, lines of 70: two words a line.
+        feed.append(
+            passage, wordWidths: passage.words.map { _ in 30 }, spaceWidth: 5, width: 70)
+    }
+
+    @Test func linesKeepTheirNumbersAsPassagesArriveAndLeave() {
+        var feed = CaptionFeed()
+        Self.add(Self.passage(0, first: 0, "a b c"), to: &feed)
+        Self.add(Self.passage(1, first: 3, "d e f g"), to: &feed)
+        #expect(feed.lines.map(\.id) == [0, 1, 2, 3])
+        #expect(feed.lines.map(\.wordRange) == [0..<2, 2..<3, 3..<5, 5..<7])
+
+        // The same passage again, or an older one, changes nothing.
+        Self.add(Self.passage(1, first: 3, "d e f g"), to: &feed)
+        #expect(feed.lines.count == 4)
+
+        feed.drop(passagesBefore: 1)
+        Self.add(Self.passage(2, first: 7, "h"), to: &feed)
+        #expect(feed.lines.map(\.id) == [2, 3, 4])
+        #expect(feed.lines.first?.words == ["d", "e"])
+    }
+
+    @Test func theHeardWordFindsItsLine() {
+        var feed = CaptionFeed()
+        #expect(feed.line(holding: 0) == nil)
+        Self.add(Self.passage(0, first: 0, "a b c d e"), to: &feed)
+        #expect(feed.line(holding: 0) == 0)
+        #expect(feed.line(holding: 3) == 1)
+        #expect(feed.line(holding: 4) == 2)
+        #expect(feed.line(holding: 99) == 2, "past the end: the last line")
+    }
+
+    @Test func paragraphsStartLines() {
+        var feed = CaptionFeed()
+        Self.add(Self.passage(0, first: 0, "a\n\nb c"), to: &feed)
+        #expect(feed.lines.map(\.words) == [["a"], ["b", "c"]])
     }
 }

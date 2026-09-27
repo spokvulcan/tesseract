@@ -8,14 +8,19 @@ import Foundation
 public struct TTSModelSpec: Sendable, Equatable, Codable {
     public var repo: String
     public var precision: Precision
+    /// The talker head whose attention follows the text, which times each
+    /// spoken word (ADR-0077); nil for a checkpoint nobody measured, whose
+    /// words then come untimed.
+    public var alignmentHead: AlignmentHead?
 
     public enum Precision: String, Sendable, Codable, Equatable {
         case q6, q8, bf16
     }
 
-    public init(repo: String, precision: Precision) {
+    public init(repo: String, precision: Precision, alignmentHead: AlignmentHead? = nil) {
         self.repo = repo
         self.precision = precision
+        self.alignmentHead = alignmentHead
     }
 
     /// The one shipping checkpoint family (ADR-0037): quantized 1.7B VoiceDesign.
@@ -30,12 +35,31 @@ public struct TTSModelSpec: Sendable, Equatable, Codable {
         }
         return TTSModelSpec(
             repo: "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-\(suffix)",
-            precision: precision)
+            precision: precision, alignmentHead: .qwen3TTS17B)
     }
 
     /// Fingerprint component for PinnedVoice compatibility checks: a take
     /// only conditions the checkpoint and precision that rendered it.
     public var fingerprint: String { "\(repo)#\(precision.rawValue)" }
+}
+
+/// A talker attention head that follows the text while the voice speaks it:
+/// its attention sits on the token being said, frame by frame (ADR-0077). A
+/// property of the network, found once per checkpoint family by measurement
+/// (docs/research/2026-09-27-word-timing-from-attention.md).
+public struct AlignmentHead: Sendable, Equatable, Codable {
+    public let layer: Int
+    public let head: Int
+
+    public init(layer: Int, head: Int) {
+        self.layer = layer
+        self.head = head
+    }
+
+    /// Qwen3-TTS 1.7B (VoiceDesign, at 6 and 8 bits; any voice or language).
+    public static let qwen3TTS17B = AlignmentHead(layer: 3, head: 0)
+    /// Qwen3-TTS 0.6B (CustomVoice).
+    public static let qwen3TTS06B = AlignmentHead(layer: 6, head: 5)
 }
 
 // MARK: - Voice
@@ -253,19 +277,38 @@ public struct MemoryPolicy: Sendable, Equatable {
 public struct SegmentScript: Sendable, Equatable {
     public let index: Int
     public let text: String
-    /// tokenCharOffsets[k] = character offset where alignment token k begins;
-    /// one alignment token per codec frame (the K1 invariant), so frame
-    /// (startFrame + k) lights text up to offsets[k+1].
-    public let tokenCharOffsets: [Int]
     /// First codec frame of this segment, cumulative over the utterance —
     /// the Segment Window as ground truth.
     public let startFrame: Int
 
-    public init(index: Int, text: String, tokenCharOffsets: [Int], startFrame: Int) {
+    public init(index: Int, text: String, startFrame: Int) {
         self.index = index
         self.text = text
-        self.tokenCharOffsets = tokenCharOffsets
         self.startFrame = startFrame
+    }
+}
+
+/// Where a spoken word starts: its place among the segment's words (split on
+/// whitespace and newlines, from 0) and the codec frame its sound starts in.
+public struct WordStart: Sendable, Equatable {
+    public let word: Int
+    public let frame: Int
+
+    public init(word: Int, frame: Int) {
+        self.word = word
+        self.frame = frame
+    }
+}
+
+/// Newly timed words of one segment, in order, with frames counted over the
+/// utterance (ADR-0077). Every frame is one of audio already delivered.
+public struct WordTiming: Sendable, Equatable {
+    public let segmentIndex: Int
+    public let starts: [WordStart]
+
+    public init(segmentIndex: Int, starts: [WordStart]) {
+        self.segmentIndex = segmentIndex
+        self.starts = starts
     }
 }
 
@@ -286,6 +329,9 @@ public enum SpeechEvent: Sendable, Equatable {
     /// Precedes every audio chunk of its segment.
     case segment(SegmentScript)
     case audio(AudioChunk)
+    /// Words of the open segment whose starts are now known, after the audio
+    /// they start in. Only a model with an alignment head times its words.
+    case words(WordTiming)
     /// Follows the last chunk of segment `index`.
     case segmentDone(index: Int)
     /// Exactly once, iff the full text rendered. Terminal.

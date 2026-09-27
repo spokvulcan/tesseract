@@ -256,10 +256,8 @@ public actor SpeechEngine {
 
                 diagnostics?.event("burst.begin", "segment \(segmentIndex)")
                 let outcome: BurstOutcome = try await gpu.withLease {
-                    let offsets = try await synthesizer.alignmentOffsets(for: segment.text)
                     await channel.send(.segment(SegmentScript(
-                        index: segmentIndex, text: segment.text,
-                        tokenCharOffsets: offsets, startFrame: startFrame)))
+                        index: segmentIndex, text: segment.text, startFrame: startFrame)))
 
                     var segmentSamples = 0
                     var emittedFrames = 0
@@ -277,6 +275,17 @@ public actor SpeechEngine {
                             emittedFrames = totalFrames
                             await channel.send(.audio(AudioChunk(
                                 samples: samples, frames: range, segmentIndex: segmentIndex)))
+                        case .words(let starts):
+                            // Frames the synthesizer counted from the segment's
+                            // first; clamped to the audio sent, as the port promises.
+                            guard !starts.isEmpty else { break }
+                            let shifted = starts.map {
+                                WordStart(
+                                    word: $0.word,
+                                    frame: startFrame + min(max($0.frame, 0), emittedFrames))
+                            }
+                            await channel.send(.words(WordTiming(
+                                segmentIndex: segmentIndex, starts: shifted)))
                         case .done(let take):
                             captured = take
                         }
