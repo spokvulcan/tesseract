@@ -29,10 +29,8 @@ final class PinnedVoiceStore {
     init(directory: URL? = nil) {
         let base =
             directory
-            ?? FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first?.appendingPathComponent("Tesseract Agent", isDirectory: true)
-            ?? FileManager.default.temporaryDirectory
+            ?? StorageEnvironment.applicationSupport.appendingPathComponent(
+                "Tesseract Agent", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.storageURL = base.appendingPathComponent("pinned_voices.json")
         self.entries =

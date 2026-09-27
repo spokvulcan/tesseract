@@ -4,8 +4,8 @@
 //
 //  Process-level launch facts shared across the app. The single "are we
 //  a test host?" definition — `AppDelegate` (skip app bootstrapping) and
-//  `TelemetryEnvironment` (divert durable telemetry, issue #159) must
-//  agree, and the extra keys cover runners that set only the
+//  `StorageEnvironment` (keep test runs off the owner's data, ADR-0073)
+//  must agree, and the extra keys cover runners that set only the
 //  session/bundle variants.
 //
 

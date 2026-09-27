@@ -81,6 +81,7 @@ tesseract/
 │   ├── Permissions/
 │   │   └── PermissionsManager.swift   # Mic & Accessibility checks
 │   ├── SettledWidth.swift       # Settled Width policy + modifier (pure value, unit-tested)
+│   ├── StorageEnvironment.swift # Storage roots: the owner's, or per-process scratch under tests (ADR-0073)
 │   ├── ViewModifiers.swift      # Scoped dependency injection
 │   └── Logging.swift            # Unified logging (Log enum)
 │
@@ -262,7 +263,8 @@ final class SettingsManager {
 
 Two adapters make the seam real: `UserDefaultsSettingsStore` (the only production
 Swift that calls `UserDefaults`; owns default-on-read via `object(forKey:) == nil`)
-and `InMemorySettingsStore` (tests — hermetic, parallel-safe). The two genuine side
+and `InMemorySettingsStore` (tests — hermetic, parallel-safe; also the test host's
+own container, per ADR-0073). The two genuine side
 effects (launch-at-login via `SMAppService`, dock visibility via `NSApp`) stay in
 the facade's `didSet`, above the store.
 
@@ -344,7 +346,11 @@ parameters (`ArbiterGPULease`, test leases).
 //   .injectServerDependencies(...)     — HTTP server, generation log, cache telemetry
 ```
 
+The main window's `ContentView` applies the core scope at its root and each page's scopes at that page, so `MainWindowPageTests` renders every page with the same wiring the app ships. The Settings window applies `injectDependencies` whole.
+
 AppKit consumers (MenuBarManager, panel controllers) receive dependencies via constructor injection — they cannot use `@Environment`.
+
+Under a test runner (the app is the unit-test host) the container keeps everything it stores in a scratch directory per test process, through `StorageEnvironment`, and its settings in memory, and the host opens no windows (ADR-0073). The model folder is the one location left in place.
 
 ---
 

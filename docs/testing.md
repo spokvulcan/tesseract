@@ -126,11 +126,30 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/VisionPrefixMemoryGuardTests \
   -only-testing:tesseractTests/Qwen3VLProcessorCapTests
 
+# Every main-window page opens with the app's own wiring, and test runs stay
+# off the owner's data (ADR-0073). A page missing an environment dependency
+# crashes the host: the result shows "Crash" on that page's case.
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/MainWindowPageTests \
+  -only-testing:tesseractTests/StorageEnvironmentTests \
+  -only-testing:tesseractTests/TelemetryEnvironmentTests
+
 # Run all tests:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests
 ```
+
+A test run never reaches the owner's data (ADR-0073). The app is the test
+host, and under a test runner it keeps everything it stores in
+`$TMPDIR/TesseractTestStorage-<pid>`, keeps its settings in memory, and opens
+no windows. The model folder stays in place, so suites that load installed
+models still find them. Suites that need the owner's data, like the memory
+evals, find it themselves and only read it; one that goes through an app
+default such as `PathSandbox.defaultRoot` gets the empty scratch copy and
+skips. `StorageEnvironmentTests` fails when app code finds Application Support
+or Caches without going through `StorageEnvironment`.
 
 For a validation run that must not load models, prefix the command with
 `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing

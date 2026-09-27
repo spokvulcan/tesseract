@@ -725,9 +725,7 @@ final class SettingsManager {
             }
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        return FileManager.default
-            .urls(for: .cachesDirectory, in: .userDomainMask)
-            .first!
+        return StorageEnvironment.caches
             .appendingPathComponent("prefix-cache", isDirectory: true)
     }
 

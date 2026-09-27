@@ -47,13 +47,8 @@ final class AgentConversationStore: ObservableObject, AgentConversationStoring {
         if let directory {
             conversationsDir = directory
         } else {
-            let appSupport =
-                FileManager.default.urls(
-                    for: .applicationSupportDirectory, in: .userDomainMask
-                ).first
-                ?? FileManager.default.temporaryDirectory
             conversationsDir =
-                appSupport
+                StorageEnvironment.applicationSupport
                 .appendingPathComponent("Tesseract Agent/agent/conversations", isDirectory: true)
         }
 

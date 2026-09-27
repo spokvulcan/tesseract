@@ -34,9 +34,14 @@ final class AgentProfile {
         self.dataStore = dataStore
     }
 
-    /// Production profile: the persistent, stable-identity store.
+    /// Production profile: the persistent, stable-identity store. Under a test
+    /// runner it is non-persistent, so no test run reaches the owner's
+    /// logins (ADR-0073).
     convenience init() {
-        self.init(dataStore: WKWebsiteDataStore(forIdentifier: Self.dataStoreIdentifier))
+        self.init(
+            dataStore: ProcessEnvironment.isRunningTests
+                ? .nonPersistent()
+                : WKWebsiteDataStore(forIdentifier: Self.dataStoreIdentifier))
     }
 
     /// A `WebPage.Configuration` bound to the persistent profile store — every

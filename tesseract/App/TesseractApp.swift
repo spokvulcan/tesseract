@@ -174,7 +174,6 @@ struct TesseractApp: App {
                 .background {
                     WindowOpenerView(appDelegate: appDelegate)
                 }
-                .injectCoreDependencies(from: container)
                 .focusedSceneValue(
                     \.dictationActions,
                     DictationActions(
@@ -202,7 +201,11 @@ struct TesseractApp: App {
         .defaultSize(width: 800, height: 700)
         // First launch belongs to the Welcome Window; the main window arrives
         // at the Handoff (or via the menu bar). Every later launch is normal.
-        .defaultLaunchBehavior(isFirstLaunch ? .suppressed : .automatic)
+        // The test host opens no window at all, restored or not (ADR-0073).
+        .defaultLaunchBehavior(
+            isFirstLaunch || ProcessEnvironment.isRunningTests ? .suppressed : .automatic
+        )
+        .restorationBehavior(ProcessEnvironment.isRunningTests ? .disabled : .automatic)
         .commands {
             DictationCommands()
         }
@@ -234,7 +237,11 @@ struct TesseractApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
-        .defaultLaunchBehavior(isFirstLaunch ? .presented : .suppressed)
+        // The test host's settings are in memory, so it always reads as a
+        // first launch; the tour would start model downloads (ADR-0073).
+        .defaultLaunchBehavior(
+            isFirstLaunch && !ProcessEnvironment.isRunningTests ? .presented : .suppressed
+        )
 
         // The Markdown Gallery: on-demand singleton, never presented at
         // launch; the system Window menu lists it automatically.

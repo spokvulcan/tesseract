@@ -76,20 +76,28 @@ struct RotatingJSONLWriterTests {
 
 /// Issue #159: durable telemetry homes divert away from the production
 /// Application Support directories when running under a test host — this
-/// suite *is* a test host, so the divert must be observable directly.
+/// suite *is* a test host, so the divert must be observable directly. Since
+/// ADR-0073 they land in the test process's scratch directory, with the rest
+/// of the app's storage.
 struct TelemetryEnvironmentTests {
 
     @Test func testProcessIsDetected() {
         #expect(ProcessEnvironment.isRunningTests)
     }
 
-    @Test func durableDirectoriesDivertAwayFromApplicationSupport() {
-        let diagnostics = PromptCacheDiagnosticsFileSink.defaultDirectory
-        let traces = CompletionTraceLog.defaultDirectory
+    @Test func durableDirectoriesDivertAwayFromApplicationSupport() throws {
+        let owners = try #require(
+            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+                .first)
+        let scratch = StorageEnvironment.scratchRoot.standardizedFileURL.path
 
-        #expect(diagnostics.path.contains("TesseractTestTelemetry"))
-        #expect(traces.path.contains("TesseractTestTelemetry"))
-        #expect(!diagnostics.path.contains("Application Support"))
-        #expect(!traces.path.contains("Application Support"))
+        for directory in [
+            PromptCacheDiagnosticsFileSink.defaultDirectory,
+            CompletionTraceLog.defaultDirectory,
+        ] {
+            let path = directory.standardizedFileURL.path
+            #expect(path.hasPrefix(scratch + "/"))
+            #expect(!path.hasPrefix(owners.standardizedFileURL.path + "/"))
+        }
     }
 }

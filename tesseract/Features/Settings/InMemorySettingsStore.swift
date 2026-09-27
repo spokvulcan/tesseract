@@ -1,11 +1,13 @@
 //
 //  InMemorySettingsStore.swift
-//  tesseractTests
+//  tesseract
 //
 //  A hermetic, in-memory Settings Store Adapter for tests — a dictionary, not a
 //  mock, and a *peer implementation* of `UserDefaultsSettingsStore`. Sharing no
 //  global state, it runs hermetically and in parallel. A never-written key
-//  returns the passed default; `setOptional(nil)` deletes the key.
+//  returns the passed default; `setOptional(nil)` deletes the key. It lives in
+//  the app, not the test target, because the test host's own container runs
+//  on it too, so no test run reads or changes the owner's settings (ADR-0073).
 //
 //  It also records the keys written via `set`/`setOptional`, so facade tests can
 //  pin the hydration≠mutation boundary: constructing from already-valid values
@@ -15,8 +17,6 @@
 //
 
 import Foundation
-
-@testable import Tesseract_Agent
 
 @MainActor
 final class InMemorySettingsStore: SettingsStore {

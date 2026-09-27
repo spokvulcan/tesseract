@@ -13,7 +13,11 @@ import os
 @MainActor
 final class DependencyContainer: ObservableObject {
     // Core Services
-    let settingsManager = SettingsManager()
+    /// Under a test runner the settings live in memory, so a test run never
+    /// reads or changes the owner's (ADR-0073).
+    let settingsManager = SettingsManager(
+        store: ProcessEnvironment.isRunningTests
+            ? InMemorySettingsStore() : UserDefaultsSettingsStore())
     lazy var permissionsManager = PermissionsManager()
     lazy var audioDeviceManager = AudioDeviceManager()
 
@@ -23,13 +27,9 @@ final class DependencyContainer: ObservableObject {
     /// The **Capture Dump** (PRD #175) — one shared ring buffer for every
     /// capture surface, so bounds are enforced across the whole app.
     lazy var captureDumpStore: CaptureDumpStore = {
-        let base =
-            FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first ?? FileManager.default.temporaryDirectory
-        return CaptureDumpStore(
+        CaptureDumpStore(
             directory:
-                base
+                StorageEnvironment.applicationSupport
                 .appendingPathComponent("Tesseract Agent", isDirectory: true)
                 .appendingPathComponent("CaptureDump", isDirectory: true),
             protectedFileNames: { [weak self] in
@@ -849,8 +849,7 @@ final class DependencyContainer: ObservableObject {
         // `playback` is left to the coordinator's production default
         // (`AudioPlaybackManager()`) — the AVFoundation adapter is needed by
         // nothing else in the graph, so there is no shared handle to wire here.
-        // Mirrors `SettingsManager()` above, which relies on its
-        // `UserDefaultsSettingsStore()` default. Tests inject `InMemoryAudioPlayback`.
+        // Tests inject `InMemoryAudioPlayback`.
         // Dual-Path Playback (ADR-0041): the voice-session sink renders
         // session replies through the VPIO capture engine under its voice
         // hold; every other TTS surface keeps the dedicated engine.

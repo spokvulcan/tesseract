@@ -41,6 +41,10 @@ struct ContentView: View {
         // Silently consume paste commands to prevent system alert sound
         // when text is injected while the app window is focused
         .onPasteCommand(of: [.plainText]) { _ in }
+        // Every page shares the core services, and each page adds its own
+        // scopes below. Injected here rather than by the window, so a test
+        // that hosts ContentView renders the wiring the app ships.
+        .injectCoreDependencies(from: container)
     }
 
     @MainActor

@@ -158,10 +158,11 @@ nonisolated struct RetrievalMetrics: Sendable {
 ///   • `createdAt` / `updatedAt` are ISO-8601 strings.
 nonisolated enum MemoryEvalCorpus: Sendable {
 
-    /// Application Support, resolved the way the app itself resolves it
-    /// (`AgentConversationStore.swift:47`, `DependencyContainer.swift:25`) —
-    /// always through `.applicationSupportDirectory`, never a literal `~`, so it
-    /// stays whatever the app would use.
+    /// The owner's Application Support, resolved the way the app resolves it
+    /// outside tests: through `.applicationSupportDirectory`, never a literal
+    /// `~`. Deliberately not `StorageEnvironment.applicationSupport`, which is
+    /// a scratch directory under a test runner (ADR-0073); these evals read the
+    /// owner's real corpus on purpose.
     ///
     /// Post-#381 the agent is non-sandboxed, so this resolves to the real
     /// `~/Library/Application Support`, not the retired per-app container. That

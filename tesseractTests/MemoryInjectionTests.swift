@@ -340,9 +340,9 @@ struct MemoryBackfillTests {
     /// quirk. A green suite over invented data is not evidence about real data.
     ///
     /// Skips where there is no corpus (CI), so it is a guard, not a dependency.
-    /// "No corpus" means no conversation files, not a missing directory — the
-    /// test host's app boot creates the directory empty, so an existence check
-    /// fails open on CI.
+    /// "No corpus" means no conversation files, not a missing directory: an
+    /// app boot creates the directory empty, so an existence check fails open
+    /// on CI.
     @Test(
         "The real corpus decodes — not a fixture of it",
         .enabled(if: MemoryEvalCorpus.hasEvalCorpus(at: MemoryBackfillTests.realCorpus)))
@@ -367,15 +367,15 @@ struct MemoryBackfillTests {
         #expect(Set(episodes.map(\.id)).count == episodes.count, "episode ids are unique")
     }
 
-    /// The production path, resolved the production way.
+    /// The owner's real corpus, found the way the memory evals find it.
     ///
-    /// Not `homeDirectoryForCurrentUser` + a literal container path: the test host
-    /// runs *inside* the sandbox, where the home directory already **is** the
-    /// container — so that spelling silently pointed at a directory that does not
-    /// exist, `.enabled(if:)` went false, and the test skipped instead of failing.
+    /// Not `PathSandbox.defaultRoot`: under a test runner that is a scratch
+    /// directory (ADR-0073), so the guard would find nothing and skip. Not
+    /// `homeDirectoryForCurrentUser` + a literal container path either: inside
+    /// the old sandbox that spelling pointed at a directory that did not exist,
+    /// `.enabled(if:)` went false, and the test skipped instead of failing.
     /// A guard that skips itself is not a guard.
-    static let realCorpus = PathSandbox.defaultRoot
-        .appendingPathComponent("conversations", isDirectory: true)
+    static let realCorpus = MemoryEvalCorpus.directory
 
     @Test("One unreadable conversation does not take the backfill down")
     func corruptFilesAreSkipped() throws {

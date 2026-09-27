@@ -102,18 +102,8 @@ final class TranscriptionHistory: TranscriptionStoring {
     init(maxEntries: Int = 100) {
         self.maxEntries = maxEntries
 
-        guard
-            let appSupport = FileManager.default.urls(
-                for: .applicationSupportDirectory, in: .userDomainMask
-            ).first
-        else {
-            // Use temp directory as fallback
-            self.storageURL = FileManager.default.temporaryDirectory.appendingPathComponent(
-                "transcription_history.json")
-            loadFromDisk()
-            return
-        }
-        let appDirectory = appSupport.appendingPathComponent("Tesseract Agent", isDirectory: true)
+        let appDirectory = StorageEnvironment.applicationSupport
+            .appendingPathComponent("Tesseract Agent", isDirectory: true)
 
         // Create directory if needed
         try? FileManager.default.createDirectory(
