@@ -103,8 +103,9 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/AudioPlaybackTests \
   -only-testing:tesseractTests/PlaybackEnvelopeTests
 
-# Speech page (ADR-0076): the Reader over the real coordinator and engine,
-# the Read-Along clock, text geometry, captions, and voice design:
+# Speech page (ADR-0076/0077): the Reader over the real coordinator and
+# engine, the Read-Along clock and its word timing, text geometry, the
+# overlay's feed, and voice design:
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/SpeechReaderTests \
@@ -114,6 +115,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ReaderTextTests \
   -only-testing:tesseractTests/ReaderDocumentStoreTests \
   -only-testing:tesseractTests/CaptionLayoutTests \
+  -only-testing:tesseractTests/CaptionFeedTests \
   -only-testing:tesseractTests/VoiceDesignTests \
   -only-testing:tesseractTests/VoiceLibraryTests \
   -only-testing:tesseractTests/SpeechCoordinatorTests \
@@ -908,8 +910,12 @@ approval requirement in the capture baseline still applies to #480.
     a pinned voice round-trips, a cancelled retake keeps the old take,
     schema-1 voices are rejected; `SegmenterTests` for the short lead
     segment; `ModelAvailabilityTests`: a missing checkpoint fails before the
-    GPU lease) and `Qwen3CheckpointTests` (the Voice Engine completeness
-    rule, and `Qwen3Synthesizer` refusing to fetch or delete anything).
+    GPU lease; word starts shifted to the utterance's frames) and
+    `Qwen3CheckpointTests` (the Voice Engine completeness rule, and
+    `Qwen3Synthesizer` refusing to fetch or delete anything). `WordTimerTests`
+    (ADR-0077) runs the word timer on synthetic attention rows and levels:
+    steps, pauses, a take's text ahead of the first word, frames the silence
+    cap dropped, and when starts are sent.
     `swift test --package-path Vendor/tesseract-speech --filter TesseractSpeechTests`
     runs them.
   - `Qwen3TTSTests`: the model itself on tiny random-weight checkpoints and
@@ -918,7 +924,11 @@ approval requirement in the capture baseline still applies to #480.
       top-p, top-k keeping ties, EOS held back for two frames, the windowed
       repetition penalty.
     - Prompts: the reference-take prompt, both text layouts, the dialect rule,
-      the text table read from disk.
+      the text table read from disk, where the text track sits.
+    - Word timing (ADR-0077): the alignment probe reads one head's logits over
+      its span through both attention paths; a render with a head streams
+      the text track and one row per frame, each ahead of its audio, with
+      the same samples as a render without one.
     - Loading: the codec encoder dropped, Base checkpoints refused, stacked
       projections equal to separate ones.
     - The decoder (ADR-0074): the streamed audio equals the one-pass decode
@@ -945,7 +955,12 @@ approval requirement in the capture baseline still applies to #480.
   xcodebuild (it needs MLX's metallib next to the binary), then
   `v2-listen --mode longform --text-file <passage> --seed <n>` writes the
   whole reading plus one WAV per segment and prints per-segment time to
-  first audio, RTF and peak RSS. `--reference none` renders every segment
+  first audio, RTF and peak RSS. It also writes `<stem>_words.json`: each
+  segment's text and its words' start frames (ADR-0077). To score them,
+  transcribe the segment WAVs with Whisper word timestamps (WhisperKit's
+  CLI with the app's `whisperkit-coreml` model) and compare starts; the method
+  and the 2026-09-27 numbers are in
+  `docs/research/2026-09-27-word-timing-from-attention.md`. `--reference none` renders every segment
   from the description alone, the control for voice-consistency listens.
   `--neural-engine off` keeps the codec's conv stack on MLX. On is the
   default, with the Core ML model cached in

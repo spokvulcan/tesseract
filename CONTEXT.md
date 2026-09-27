@@ -1072,9 +1072,10 @@ debug recording.
 **Word Timeline**:
 The pure, immutable words of one spoken segment on a character line: where each
 word starts and ends when the words are joined by single spaces, and which word a
-character count falls in. The **Read-Along** places the heard character; the
-timeline names the word. Words split the way the engine and the **Reader** split
-them.
+character count falls in. For a segment without **Word Timing** the
+**Read-Along** places the heard character and the timeline names the word.
+Words split the way the engine, the **Word Timer** and the **Reader** split
+them: on whitespace and newlines.
 _Avoid_: WordPacing, pacing model (the retired fold the notch drove), word
 highlighter, overlay panel (a different, dictation surface).
 
@@ -1082,13 +1083,39 @@ highlighter, overlay panel (a different, dictation surface).
 The one clock that says which word of the speech now playing is being heard,
 followed by both the **Reader** and the **Speech Overlay** (ADR-0076). It is the
 production **Word Highlight Surface**: segment scripts arrive seconds ahead under
-lookahead pacing, but a segment starts only when the playback head reaches its
-**Segment Window**. Inside a segment, words are placed in proportion to their
-characters over its audio; the word never moves back within an utterance. It
-samples the head 30 times a second and publishes only when the heard word
-changes.
+lookahead pacing, but a segment starts only when the heard time reaches its
+**Segment Window**. Inside a segment, the heard word is the last one whose
+**Word Timing** start has passed (ADR-0077); a segment without timing spreads
+its characters evenly over its audio. The word never moves back within an
+utterance. It samples the heard time (the playback head less the output's
+latency) 30 times a second and publishes only when the heard word changes.
 _Avoid_: TTS Word Tracker (retired with the notch: it switched text on arrival
 and ran ahead of the voice), karaoke, word state machine.
+
+**Word Timing**:
+When each spoken word's sound starts, found by the engine from the voice model's
+own attention (ADR-0077): the **Word Timer** follows the talker's **Alignment
+Head** through the segment's text and moves starts past the pauses the audio
+shows. It rides the **Utterance** stream as word starts, each after the audio
+it starts in. No transcription model runs.
+_Avoid_: forced alignment (a second model run on the audio), token offsets and
+the K1 invariant (the retired one-text-token-per-frame assumption), word
+tracker.
+
+**Alignment Head**:
+The talker attention head whose attention sits on the text token being
+spoken, frame by frame: layer 3, head 0 in the 1.7B checkpoints; layer 6,
+head 5 in the 0.6B. A property of a checkpoint family, measured once
+(`docs/research/2026-09-27-word-timing-from-attention.md`) and carried by the
+model spec.
+_Avoid_: alignment layer, the probe (the mechanism that reads the head).
+
+**Word Timer**:
+The engine's pure follower of the **Alignment Head** for one segment: a
+forward-only path over the text's tokens, decided 8 frames behind generation,
+with each start moved to where the sound resumes after a pause. It counts frames
+as the silence cap kept them.
+_Avoid_: aligner (suggests a separate model), DTW (it decides as it goes).
 
 **Segment Window**:
 The single playback-time base a **Read-Along** places one long-form segment
@@ -1106,7 +1133,7 @@ _Avoid_: chunk loop, stream pump, playback driver, a config-flag loop.
 
 **Word Highlight Surface**:
 The main-actor port that `SpeechCoordinator` drives to render spoken-word
-highlighting (show, switch, mark complete, dismiss). The production adapter is
+highlighting (show, switch, time words, mark complete, dismiss). The production adapter is
 the **Read-Along**; a recording test peer makes the segment-boundary switch
 assertable. In engine v2 its switch timing comes from **Segment Script**
 ground truth, not playback bookkeeping.
@@ -1133,9 +1160,12 @@ progress.
 **Speech Overlay**:
 The floating panel that shows the words being read over every app, as an island
 at the top of the screen or captions at the bottom, following the **Read-Along**.
-In its automatic scope it hides while the Speech page is in front. Replaced the
-TTS notch.
-_Avoid_: notch, TTS notch panel (retired), **Overlay Panel** (the dictation HUD).
+It shows one continuous feed of the reading: the heard line on top, the next
+below, the column moving up a line as the voice reaches it; text is never
+swapped in place (ADR-0077). In its automatic scope it hides while the Speech
+page is in front. Replaced the TTS notch.
+_Avoid_: notch, TTS notch panel (retired), **Overlay Panel** (the dictation HUD),
+pages (its retired two-line pages).
 
 **Voice Source**:
 Which voices the speech checkpoint offers: designed from a description
@@ -1161,10 +1191,11 @@ token. Dropping it stops generation; cancelling the consuming task surfaces
 _Avoid_: speech stream (one field of it), generation handle, request.
 
 **Segment Script**:
-The per-segment value announced on the stream before its audio: text slice,
-token→char offsets, and the utterance-global `startFrame` — the **Segment
-Window** as ground truth from the generation loop, ending the estimator era.
-_Avoid_: segment metadata, offsets payload.
+The per-segment value announced on the stream before its audio: text slice and
+the utterance-global `startFrame` — the **Segment Window** as ground truth from
+the generation loop, ending the estimator era. Its words' starts follow as
+**Word Timing** (ADR-0077).
+_Avoid_: segment metadata, offsets payload, token offsets (retired).
 
 **Reference Take**:
 One short rendering of a voice, kept as its codec frames plus the text they

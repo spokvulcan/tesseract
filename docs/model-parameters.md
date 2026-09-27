@@ -237,6 +237,23 @@ Variety between designed voices comes from the description and from
 re-rolling takes, not from sampling: Qwen never suggests raising the
 temperature for it.
 
+### Qwen3-TTS alignment heads
+
+The talker head whose attention follows the text, which times each spoken
+word (ADR-0077). A property of the network, found by scoring every head
+against Whisper's word timestamps
+([research](research/2026-09-27-word-timing-from-attention.md)). Verified
+**2026-09-27**.
+
+| Checkpoint family | Talker | Head (layer, head) | Where it is set |
+| --- | --- | --- | --- |
+| 1.7B (VoiceDesign, 6- and 8-bit) | 28 layers × 16 heads | 3, 0 | `AlignmentHead.qwen3TTS17B`, set by `TTSModelSpec.voiceDesign17B` |
+| 0.6B (CustomVoice, 8-bit) | 28 layers × 16 heads | 6, 5 | `AlignmentHead.qwen3TTS06B` (no spec ships it) |
+
+Voice, speaker, language and precision don't move the head; a different
+network does. A checkpoint family added later needs its head found before its
+words are timed; until then its segments fall back to spreading characters.
+
 ## Keeping this current
 
 Re-verify when a catalog entry is added or a base card changes. The cheap
