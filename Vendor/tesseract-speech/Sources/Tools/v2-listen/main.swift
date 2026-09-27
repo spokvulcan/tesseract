@@ -5,8 +5,9 @@
 //               serialized/restored PinnedVoice (voice-consistency listen)
 //   longform  — one long read-aloud utterance (multi-segment); reports
 //               per-segment TTFA, wall, RTF, and peak RSS (the ADR-0037 gate)
-//   ab        — #339-matched settings (seed 42, t=0.9/p=1.0/rp=1.05) for
-//               same-seed A/B against research/model-bench-339/audio WAVs
+//   ab        — #339-matched settings (seed 42, t=0.9 for both models,
+//               p=1.0, rp=1.05) for same-seed A/B against
+//               research/model-bench-339/audio WAVs
 //
 // Usage: v2-listen --mode pinned|longform|ab [--precision 8bit|6bit|bf16]
 //          [--checkpoint DIR] [--out-dir DIR] [--text-file PATH] [--seed N]
@@ -103,8 +104,9 @@ struct UtteranceCapture {
     var wallSec: Double = 0
     var segmentTTFAsMs: [Double] = []
     var segmentCount = 0
-    /// Each segment's samples, for per-segment listening and scoring.
-    var segmentSamples: [[Float]] = []
+    /// Where each segment starts in `samples`, for per-segment listening and
+    /// scoring.
+    var segmentStarts: [Int] = []
 }
 
 func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
@@ -130,11 +132,10 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
                     Double(now.uptimeNanoseconds - segmentStart.uptimeNanoseconds) / 1e6)
                 sawAudioForSegment = true
             }
-            capture.samples.append(contentsOf: chunk.samples)
-            while capture.segmentSamples.count <= chunk.segmentIndex {
-                capture.segmentSamples.append([])
+            while capture.segmentStarts.count <= chunk.segmentIndex {
+                capture.segmentStarts.append(capture.samples.count)
             }
-            capture.segmentSamples[chunk.segmentIndex].append(contentsOf: chunk.samples)
+            capture.samples.append(contentsOf: chunk.samples)
         case .segmentDone, .finished:
             break
         }
@@ -145,7 +146,7 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
 }
 
 /// Mono float32 WAV through AVAudioFile.
-func writeWav(samples: [Float], sampleRate: Int, to url: URL) throws {
+func writeWav(samples: ArraySlice<Float>, sampleRate: Int, to url: URL) throws {
     guard
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: Double(sampleRate), channels: 1,
@@ -166,12 +167,13 @@ func writeWav(samples: [Float], sampleRate: Int, to url: URL) throws {
 }
 
 func write(_ capture: UtteranceCapture, to url: URL, label: String) throws {
-    try writeWav(samples: capture.samples, sampleRate: capture.sampleRate, to: url)
-    if capture.segmentSamples.count > 1 {
+    try writeWav(samples: capture.samples[...], sampleRate: capture.sampleRate, to: url)
+    if capture.segmentStarts.count > 1 {
         let stem = url.deletingPathExtension().lastPathComponent
-        for (index, samples) in capture.segmentSamples.enumerated() {
+        let ends = capture.segmentStarts.dropFirst() + [capture.samples.count]
+        for (index, (start, end)) in zip(capture.segmentStarts, ends).enumerated() {
             try writeWav(
-                samples: samples, sampleRate: capture.sampleRate,
+                samples: capture.samples[start..<end], sampleRate: capture.sampleRate,
                 to: url.deletingLastPathComponent().appendingPathComponent(
                     String(format: "%@_seg%02d.wav", stem, index + 1)))
         }
@@ -294,8 +296,9 @@ do {
         }
         let text = try String(contentsOfFile: textFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let benchParams = TTSParameters(
-            temperature: 0.9, topP: 1.0, repetitionPenalty: 1.05, maxTokens: 4096)
+        // #339 ran both models at 0.9, before ADR-0072 split the temperature;
+        // the rest are the engine defaults.
+        let benchParams = TTSParameters(detailTemperature: 0.9)
         let session = try await engine.session(
             SessionProfile(reference: referencePolicy, pacing: .eager),
             voice: .designed(description: narrator, language: nil))

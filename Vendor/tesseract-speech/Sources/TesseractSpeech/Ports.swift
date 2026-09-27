@@ -38,20 +38,15 @@ public struct SegmentRequest: Sendable {
 }
 
 /// One rendered take of a voice, as a value: its codec frames and the text
-/// they speak, plus the description and language it was rendered with.
-/// Every later segment in the session continues it (ADR-0072); it serializes
-/// into a `PinnedVoice`.
+/// they speak. Every later segment in the session continues it (ADR-0072);
+/// with the session's voice it serializes into a `PinnedVoice`.
 public struct ReferenceTake: Sendable, Equatable {
     public let codeFrames: [[Int32]]
     public let text: String
-    public let voiceDescription: String?
-    public let language: String?
 
-    public init(codeFrames: [[Int32]], text: String, voiceDescription: String?, language: String?) {
+    public init(codeFrames: [[Int32]], text: String) {
         self.codeFrames = codeFrames
         self.text = text
-        self.voiceDescription = voiceDescription
-        self.language = language
     }
 }
 
@@ -87,8 +82,7 @@ public protocol SpeechSynthesizing: Sendable {
     func load(_ spec: TTSModelSpec, onPhase: (@Sendable (EnginePhase) -> Void)?) async throws
     /// Kernel/JIT + fused-weight + tokenizer warmup. Requires loaded.
     func warmUp() async throws
-    /// Precompute the instruct-prefix KV for a voice, off the hot path. It
-    /// speeds up segments rendered without a Reference Take.
+    /// Precompute the instruct-prefix KV for a voice, off the hot path.
     func primeVoice(description: String?, language: String?) async throws
     /// Deterministic release of weights, KV, caches; GPU-stream sync.
     func unload() async

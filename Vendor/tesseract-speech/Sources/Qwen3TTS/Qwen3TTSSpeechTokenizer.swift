@@ -12,28 +12,23 @@ final class EuclideanCodebook: Module {
     private let epsilon: Float = 1e-5
     private let dim: Int
 
-    var initialized: MLXArray
     var embedding_sum: MLXArray
     var cluster_usage: MLXArray
 
     private(set) var _embedding: MLXArray
-    private(set) var _c2: MLXArray
 
     init(dim: Int, codebookSize: Int) {
         self.dim = dim
-        self.initialized = MLXArray.zeros([1], dtype: .float32)
         self.embedding_sum = MLXArray.zeros([codebookSize, dim], dtype: .float32)
         self.cluster_usage = MLXArray.zeros([codebookSize], dtype: .float32)
 
         let cluster_usageSafe = maximum(cluster_usage, epsilon).reshaped([codebookSize, 1])
         self._embedding = embedding_sum / cluster_usageSafe
-        self._c2 = _embedding.square().sum(axis: -1) / 2
     }
 
     func updateInPlace() {
         let cluster_usageSafe = maximum(cluster_usage, epsilon).reshaped([cluster_usage.shape[0], 1])
         _embedding = embedding_sum / cluster_usageSafe
-        _c2 = _embedding.square().sum(axis: -1) / 2
     }
 
     override func update(
@@ -213,36 +208,6 @@ final class CausalConv1d: Module {
         }
     }
 
-    private func getExtraPadding(_ length: Int) -> Int {
-        let nFrames = Float(length - effectiveKernelSize + paddingAmount) / Float(stride) + 1
-        let idealLength = (Int(ceil(nFrames)) - 1) * stride + (effectiveKernelSize - paddingAmount)
-        return idealLength - length
-    }
-
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        // x: [batch, channels, time] (NCL format)
-        let extra = getExtraPadding(x.dim(-1))
-        var result = padded(x, widths: [.init(0), .init(0), .init((paddingAmount, extra))])
-
-        if groups == 1 {
-            // MLX Conv1d expects NLC
-            result = result.transposed(0, 2, 1)
-            result = (conv as! MLXNN.Conv1d)(result)
-            return result.transposed(0, 2, 1)
-        } else {
-            // Depthwise convolution
-            let dwConv = conv as! DepthwiseConvWeight
-            let (_, channels, time) = (result.dim(0), result.dim(1), result.dim(2))
-            let kSize = dwConv.weight.dim(1)
-            let outputTime = time - kSize + 1
-
-            let windows = stacked((0 ..< kSize).map { i in result[0..., 0..., i ..< (i + outputTime)] }, axis: -1)
-            let w = dwConv.weight.squeezed(axis: -1) // [channels, kernel]
-            let out = (windows * w.reshaped(1, channels, 1, kSize)).sum(axis: -1)
-            return out + dwConv.bias.reshaped(1, channels, 1)
-        }
-    }
-
     /// Incremental decode path that only consumes new time steps.
     func step(_ x: MLXArray) -> MLXArray {
         // x: [batch, channels, new_time] (NCL format)
@@ -315,17 +280,6 @@ final class ConvNeXtBlock: Module {
         _pwconv1.wrappedValue = Linear(dim, 4 * dim)
         _pwconv2.wrappedValue = Linear(4 * dim, dim)
         self.gamma = MLXArray.ones([dim]) * 1e-6
-    }
-
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let residual = x
-        var h = dwconv(x)
-        h = h.transposed(0, 2, 1) // [B, T, C]
-        h = norm(h)
-        h = gelu(pwconv1(h))
-        h = gamma * pwconv2(h)
-        h = h.transposed(0, 2, 1) // [B, C, T]
-        return residual + h
     }
 
     func step(_ x: MLXArray) -> MLXArray {
@@ -563,10 +517,6 @@ final class DecoderResidualUnit: Module {
         _conv2.wrappedValue = CausalConv1d(inChannels: dim, outChannels: dim, kernelSize: 1)
     }
 
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        x + conv2(act2(conv1(act1(x))))
-    }
-
     func step(_ x: MLXArray) -> MLXArray {
         x + conv2.step(act2(conv1.step(act1(x))))
     }
@@ -587,15 +537,6 @@ final class DecoderBlockUpsample: Module {
         let kernelSize = 2 * upsampleRate
         _conv.wrappedValue = ConvTransposed1d(inputChannels: inDim, outputChannels: outDim, kernelSize: kernelSize, stride: upsampleRate, padding: 0)
         self.trimRight = kernelSize - upsampleRate
-    }
-
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        // x: NCL → NLC for ConvTransposed1d
-        var h = conv(x.transposed(0, 2, 1)).transposed(0, 2, 1)
-        if trimRight > 0 {
-            h = h[0..., 0..., ..<(-trimRight)]
-        }
-        return h
     }
 
     func step(_ x: MLXArray) -> MLXArray {
@@ -645,16 +586,6 @@ final class DecoderBlock: Module {
         ]
     }
 
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        var h = x
-        for layer in block {
-            if let snake = layer as? SnakeBeta { h = snake(h) }
-            else if let upsample = layer as? DecoderBlockUpsample { h = upsample(h) }
-            else if let resUnit = layer as? DecoderResidualUnit { h = resUnit(h) }
-        }
-        return h
-    }
-
     func step(_ x: MLXArray) -> MLXArray {
         var h = x
         if let snake = block[0] as? SnakeBeta {
@@ -692,12 +623,6 @@ final class DecoderInitialConv: Module {
     init(latentDim: Int, decoderDim: Int, kernelSize: Int = 7) {
         _conv.wrappedValue = MLXNN.Conv1d(inputChannels: latentDim, outputChannels: decoderDim, kernelSize: kernelSize, padding: 0)
         self.kernelSize = kernelSize
-    }
-
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        // x: NCL, left-pad for causal
-        let h = padded(x, widths: [.init(0), .init(0), .init((kernelSize - 1, 0))])
-        return conv(h.transposed(0, 2, 1)).transposed(0, 2, 1)
     }
 
     func step(_ x: MLXArray) -> MLXArray {
@@ -748,11 +673,6 @@ final class DecoderOutputConv: Module {
     init(channels: Int, kernelSize: Int = 7) {
         _conv.wrappedValue = MLXNN.Conv1d(inputChannels: channels, outputChannels: 1, kernelSize: kernelSize, padding: 0)
         self.kernelSize = kernelSize
-    }
-
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        let h = padded(x, widths: [.init(0), .init(0), .init((kernelSize - 1, 0))])
-        return conv(h.transposed(0, 2, 1)).transposed(0, 2, 1)
     }
 
     func step(_ x: MLXArray) -> MLXArray {
@@ -808,15 +728,6 @@ final class UpsampleLayer: Module {
         ]
     }
 
-    func callAsFunction(_ x: MLXArray) -> MLXArray {
-        var h = x
-        for layer in layers {
-            if let ct = layer as? CausalTransposeConv1d { h = ct(h) }
-            else if let cn = layer as? ConvNeXtBlock { h = cn(h) }
-        }
-        return h
-    }
-
     func step(_ x: MLXArray) -> MLXArray {
         var h = x
         for layer in layers {
@@ -839,7 +750,6 @@ final class UpsampleLayer: Module {
 
 final class Qwen3TTSSpeechTokenizerDecoder: Module {
     let config: Qwen3TTSTokenizerDecoderConfig
-    let totalUpsample: Int
     var transformerCache: [any KVCache]?
 
     @ModuleInfo(key: "pre_transformer") var preTransformer: DecoderTransformer
@@ -850,7 +760,6 @@ final class Qwen3TTSSpeechTokenizerDecoder: Module {
 
     init(config: Qwen3TTSTokenizerDecoderConfig) {
         self.config = config
-        self.totalUpsample = (config.upsampleRates + config.upsamplingRatios).reduce(1, *)
 
         _preTransformer.wrappedValue = DecoderTransformer(config: config)
         _quantizer.wrappedValue = SplitResidualVectorQuantizer(
@@ -873,28 +782,6 @@ final class Qwen3TTSSpeechTokenizerDecoder: Module {
             DecoderOutputSnake(channels: outputDim),
             DecoderOutputConv(channels: outputDim, kernelSize: 7),
         ]
-    }
-
-    func callAsFunction(_ codes: MLXArray) -> MLXArray {
-        // codes: [batch, num_quantizers, time]
-        var hidden = quantizer.decode(codes) // [batch, codebook_dim, time]
-        hidden = preConv(hidden) // [batch, latent_dim, time]
-        hidden = hidden.transposed(0, 2, 1) // [batch, time, latent_dim]
-        hidden = preTransformer(hidden)
-        hidden = hidden.transposed(0, 2, 1) // [batch, latent_dim, time]
-
-        for layer in upsample {
-            hidden = layer(hidden)
-        }
-
-        var wav = hidden
-        for layer in decoder {
-            if let initConv = layer as? DecoderInitialConv { wav = initConv(wav) }
-            else if let block = layer as? DecoderBlock { wav = block(wav) }
-            else if let snake = layer as? DecoderOutputSnake { wav = snake(wav) }
-            else if let outConv = layer as? DecoderOutputConv { wav = outConv(wav) }
-        }
-        return clip(wav, min: -1, max: 1)
     }
 
     func resetStreamingState() {
@@ -956,22 +843,6 @@ final class Qwen3TTSSpeechTokenizerDecoder: Module {
 
         return clip(wav, min: -1, max: 1)
     }
-
-    func chunkedDecode(_ codes: MLXArray, chunkSize: Int = 300, leftContextSize: Int = 25) -> MLXArray {
-        var wavs = [MLXArray]()
-        var startIndex = 0
-        let totalTime = codes.dim(-1)
-
-        while startIndex < totalTime {
-            let endIndex = min(startIndex + chunkSize, totalTime)
-            let contextSize = startIndex - leftContextSize > 0 ? leftContextSize : startIndex
-            let chunk = codes[0..., 0..., (startIndex - contextSize) ..< endIndex]
-            let wavChunk = callAsFunction(chunk)
-            wavs.append(wavChunk[0..., 0..., (contextSize * totalUpsample)...])
-            startIndex = endIndex
-        }
-        return concatenated(wavs, axis: -1)
-    }
 }
 
 // MARK: - Speech Tokenizer (wrapper)
@@ -993,16 +864,6 @@ final class Qwen3TTSSpeechTokenizer: Module {
             return try! JSONDecoder().decode(Qwen3TTSTokenizerDecoderConfig.self, from: json)
         }()
         _decoder.wrappedValue = Qwen3TTSSpeechTokenizerDecoder(config: decoderConfig)
-    }
-
-    func decode(_ audioCodes: MLXArray) -> (MLXArray, MLXArray) {
-        // audioCodes: [batch, time, num_quantizers]
-        let codes = audioCodes.transposed(0, 2, 1) // [batch, num_quantizers, time]
-        let wav = decoder.chunkedDecode(codes).squeezed(axis: 1)
-
-        // Calculate valid lengths
-        let audioLengths = (audioCodes[0..., 0..., 0] .> 0).sum(axis: 1).asType(.int32) * Int32(decodeUpsampleRate)
-        return (wav, audioLengths)
     }
 
     func streamingDecode(_ audioCodes: MLXArray, chunkTokens: Int = 100) -> [MLXArray] {
@@ -1079,13 +940,8 @@ final class Qwen3TTSSpeechTokenizer: Module {
                 }
                 continue
             }
+            // The encoder's k-means flag; decoding never reads it.
             if k.contains("_codebook.initialized") || k.contains(".codebook.initialized") {
-                continue
-            }
-
-            // Existing decoder weight handling
-            if k.contains("_codebook.cluster_usage") || k.contains("_codebook.embedding_sum") {
-                // handled above
                 continue
             }
 
@@ -1125,7 +981,6 @@ final class Qwen3TTSSpeechTokenizer: Module {
         for (basePath, data) in codebookData {
             guard let clusterUsage = data["cluster_usage"],
                   let embeddingSum = data["embedding_sum"] else { continue }
-            sanitized["\(basePath).codebook.initialized"] = MLXArray.zeros([1], dtype: .float32)
             sanitized["\(basePath).codebook.cluster_usage"] = clusterUsage
             sanitized["\(basePath).codebook.embedding_sum"] = embeddingSum
         }

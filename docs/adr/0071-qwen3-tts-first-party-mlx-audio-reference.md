@@ -34,10 +34,11 @@ ADR-0036 named the exit for this case: absorb the code we already ship.
 
 The Qwen3-TTS model code is a first-party target, `Qwen3TTS`, in
 `Vendor/tesseract-speech` beside the engine. It keeps the talker, the code
-predictor, the configuration, the speech tokenizer's decoder, and the
-VoiceDesign and CustomVoice generation paths. The rest of mlx-audio-swift is
-deleted: the other model families, the codec encoder, the speaker encoder,
-voice cloning from reference audio, and the Hub download code.
+predictor, the configuration, the speech tokenizer's streaming decoder, and
+the VoiceDesign and CustomVoice generation paths. The rest of mlx-audio-swift
+is deleted: the other model families, the codec encoder, the batch decoder,
+the speaker encoder, voice cloning from reference audio, and the Hub download
+code.
 `THIRD_PARTY.md` records the provenance and the MIT license.
 
 - No fork and no submodule. A fork earns its keep when upstream keeps changing

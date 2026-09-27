@@ -487,7 +487,10 @@ private let shortText = "Hello there, this is a short utterance."
 }
 
 @Suite struct SilenceCapTests {
-    private static let frame = 1920
+    /// Qwen3-TTS's geometry: 1,920 samples per 80 ms frame, so the 1.2 s cap
+    /// is 15 frames.
+    private static let format = AudioFormat(sampleRate: 24_000, samplesPerFrame: 1920)
+    private static let frame = format.samplesPerFrame
 
     private static func frames(_ count: Int, level: Float) -> [Float] {
         [Float](repeating: level, count: count * frame)
@@ -497,7 +500,7 @@ private let shortText = "Hello there, this is a short utterance."
     private static let silence: Float = 0.0001
 
     @Test func speechAndReadersPausesPassUnchanged() {
-        var cap = SilenceCap(samplesPerFrame: Self.frame)
+        var cap = SilenceCap(format: Self.format)
         let input =
             Self.frames(3, level: Self.speech) + Self.frames(10, level: Self.silence)
             + Self.frames(2, level: Self.speech)
@@ -505,7 +508,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func aStallIsCutToTheCapAndNoSpeechIsLost() {
-        var cap = SilenceCap(samplesPerFrame: Self.frame, maxFrames: 15)
+        var cap = SilenceCap(format: Self.format)
         let input =
             Self.frames(2, level: Self.speech) + Self.frames(150, level: Self.silence)
             + Self.frames(4, level: Self.speech)
@@ -515,7 +518,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func theRunCarriesAcrossChunks() {
-        var cap = SilenceCap(samplesPerFrame: Self.frame, maxFrames: 15)
+        var cap = SilenceCap(format: Self.format)
         let first = cap.apply(Self.frames(10, level: Self.silence))
         let second = cap.apply(Self.frames(10, level: Self.silence))
         let resumed = cap.apply(Self.frames(1, level: Self.speech) + Self.frames(3, level: Self.silence))

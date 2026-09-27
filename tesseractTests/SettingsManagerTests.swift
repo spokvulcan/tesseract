@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import TesseractSpeech
 import Testing
 
 @testable import Tesseract_Agent
@@ -48,10 +49,7 @@ struct SettingsManagerTests {
         store.resetWriteRecording()
 
         let settings = SettingsManager(store: store)
-        #expect(settings.ttsTemperature == 0.9)
-        #expect(settings.ttsTopP == 1.0)
-        #expect(settings.ttsRepetitionPenalty == 1.05)
-        #expect(settings.ttsDetailTemperature == 0.5)
+        #expect(settings.ttsParameters == TTSParameters())
         #expect(store.writes.isEmpty)
 
         settings.ttsTemperature = 0.8

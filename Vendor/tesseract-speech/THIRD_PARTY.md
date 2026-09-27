@@ -10,9 +10,10 @@ Tesseract patches listed in the retired `Vendor/mlx-audio-swift/TESSERACT-PATCHE
 upstream is a reference, not a sync source.
 
 Kept from upstream, with changes: the talker, the code predictor, the model
-configuration, the speech tokenizer's decoder, and the VoiceDesign/CustomVoice
-generation path. Left out: every other model family, the speech tokenizer's
-encoder, the speaker encoder, and voice cloning from reference audio.
+configuration, the speech tokenizer's streaming decoder, and the
+VoiceDesign/CustomVoice generation path. Left out: every other model family,
+the speech tokenizer's encoder and batch decoder, the speaker encoder, and
+voice cloning from reference audio.
 
 The upstream license applies to the code derived from it:
 

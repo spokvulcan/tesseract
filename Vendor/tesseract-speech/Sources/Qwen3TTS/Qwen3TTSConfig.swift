@@ -11,15 +11,11 @@ public struct Qwen3TTSTalkerCodePredictorConfig: Codable, Sendable {
     var numAttentionHeads: Int
     var numKeyValueHeads: Int
     var headDim: Int
-    var hiddenAct: String
     var maxPositionEmbeddings: Int
     var rmsNormEps: Float
     var ropeTheta: Float
     var ropeScaling: [String: StringOrNumber]?
     var attentionBias: Bool
-    var slidingWindow: Int?
-    var layerTypes: [String]?
-    var attentionDropout: Float
     var numCodeGroups: Int
 
     enum CodingKeys: String, CodingKey {
@@ -30,15 +26,11 @@ public struct Qwen3TTSTalkerCodePredictorConfig: Codable, Sendable {
         case numAttentionHeads = "num_attention_heads"
         case numKeyValueHeads = "num_key_value_heads"
         case headDim = "head_dim"
-        case hiddenAct = "hidden_act"
         case maxPositionEmbeddings = "max_position_embeddings"
         case rmsNormEps = "rms_norm_eps"
         case ropeTheta = "rope_theta"
         case ropeScaling = "rope_scaling"
         case attentionBias = "attention_bias"
-        case slidingWindow = "sliding_window"
-        case layerTypes = "layer_types"
-        case attentionDropout = "attention_dropout"
         case numCodeGroups = "num_code_groups"
     }
 
@@ -51,15 +43,11 @@ public struct Qwen3TTSTalkerCodePredictorConfig: Codable, Sendable {
         numAttentionHeads = try c.decodeIfPresent(Int.self, forKey: .numAttentionHeads) ?? 16
         numKeyValueHeads = try c.decodeIfPresent(Int.self, forKey: .numKeyValueHeads) ?? 8
         headDim = try c.decodeIfPresent(Int.self, forKey: .headDim) ?? 128
-        hiddenAct = try c.decodeIfPresent(String.self, forKey: .hiddenAct) ?? "silu"
         maxPositionEmbeddings = try c.decodeIfPresent(Int.self, forKey: .maxPositionEmbeddings) ?? 65536
         rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-6
         ropeTheta = try c.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 1_000_000
         ropeScaling = try c.decodeIfPresent([String: StringOrNumber].self, forKey: .ropeScaling)
         attentionBias = try c.decodeIfPresent(Bool.self, forKey: .attentionBias) ?? false
-        slidingWindow = try c.decodeIfPresent(Int.self, forKey: .slidingWindow)
-        layerTypes = try c.decodeIfPresent([String].self, forKey: .layerTypes)
-        attentionDropout = try c.decodeIfPresent(Float.self, forKey: .attentionDropout) ?? 0
         numCodeGroups = try c.decodeIfPresent(Int.self, forKey: .numCodeGroups) ?? 16
     }
 }
@@ -155,14 +143,11 @@ public struct Qwen3TTSTalkerConfig: Codable, Sendable {
     var numAttentionHeads: Int
     var numKeyValueHeads: Int
     var headDim: Int
-    var hiddenAct: String
     var maxPositionEmbeddings: Int
     var rmsNormEps: Float
     var ropeTheta: Float
     var ropeScaling: [String: StringOrNumber]?
     var attentionBias: Bool
-    var slidingWindow: Int?
-    var attentionDropout: Float
     var numCodeGroups: Int
     var textHiddenSize: Int
     var textVocabSize: Int
@@ -188,14 +173,11 @@ public struct Qwen3TTSTalkerConfig: Codable, Sendable {
         case numAttentionHeads = "num_attention_heads"
         case numKeyValueHeads = "num_key_value_heads"
         case headDim = "head_dim"
-        case hiddenAct = "hidden_act"
         case maxPositionEmbeddings = "max_position_embeddings"
         case rmsNormEps = "rms_norm_eps"
         case ropeTheta = "rope_theta"
         case ropeScaling = "rope_scaling"
         case attentionBias = "attention_bias"
-        case slidingWindow = "sliding_window"
-        case attentionDropout = "attention_dropout"
         case numCodeGroups = "num_code_groups"
         case textHiddenSize = "text_hidden_size"
         case textVocabSize = "text_vocab_size"
@@ -221,14 +203,11 @@ public struct Qwen3TTSTalkerConfig: Codable, Sendable {
         numAttentionHeads = try c.decodeIfPresent(Int.self, forKey: .numAttentionHeads) ?? 16
         numKeyValueHeads = try c.decodeIfPresent(Int.self, forKey: .numKeyValueHeads) ?? 8
         headDim = try c.decodeIfPresent(Int.self, forKey: .headDim) ?? 128
-        hiddenAct = try c.decodeIfPresent(String.self, forKey: .hiddenAct) ?? "silu"
         maxPositionEmbeddings = try c.decodeIfPresent(Int.self, forKey: .maxPositionEmbeddings) ?? 32768
         rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-6
         ropeTheta = try c.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 1_000_000
         ropeScaling = try c.decodeIfPresent([String: StringOrNumber].self, forKey: .ropeScaling)
         attentionBias = try c.decodeIfPresent(Bool.self, forKey: .attentionBias) ?? false
-        slidingWindow = try c.decodeIfPresent(Int.self, forKey: .slidingWindow)
-        attentionDropout = try c.decodeIfPresent(Float.self, forKey: .attentionDropout) ?? 0
         numCodeGroups = try c.decodeIfPresent(Int.self, forKey: .numCodeGroups) ?? 16
         textHiddenSize = try c.decodeIfPresent(Int.self, forKey: .textHiddenSize) ?? 2048
         textVocabSize = try c.decodeIfPresent(Int.self, forKey: .textVocabSize) ?? 151936
@@ -255,12 +234,10 @@ public struct Qwen3TTSTalkerConfig: Codable, Sendable {
 
 public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
     var attentionBias: Bool
-    var attentionDropout: Float
     var latentDim: Int
     var codebookDim: Int
     var codebookSize: Int
     var decoderDim: Int
-    var hiddenAct: String
     var hiddenSize: Int
     var intermediateSize: Int
     var layerScaleInitialScale: Float
@@ -273,20 +250,15 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
     var numSemanticQuantizers: Int
     var rmsNormEps: Float
     var ropeTheta: Float
-    var semanticCodebookSize: Int
-    var slidingWindow: Int
     var upsampleRates: [Int]
     var upsamplingRatios: [Int]
-    var vectorQuantizationHiddenDimension: Int
 
     enum CodingKeys: String, CodingKey {
         case attentionBias = "attention_bias"
-        case attentionDropout = "attention_dropout"
         case latentDim = "latent_dim"
         case codebookDim = "codebook_dim"
         case codebookSize = "codebook_size"
         case decoderDim = "decoder_dim"
-        case hiddenAct = "hidden_act"
         case hiddenSize = "hidden_size"
         case intermediateSize = "intermediate_size"
         case layerScaleInitialScale = "layer_scale_initial_scale"
@@ -299,22 +271,17 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
         case numSemanticQuantizers = "num_semantic_quantizers"
         case rmsNormEps = "rms_norm_eps"
         case ropeTheta = "rope_theta"
-        case semanticCodebookSize = "semantic_codebook_size"
-        case slidingWindow = "sliding_window"
         case upsampleRates = "upsample_rates"
         case upsamplingRatios = "upsampling_ratios"
-        case vectorQuantizationHiddenDimension = "vector_quantization_hidden_dimension"
     }
 
     public init(from decoder: Swift.Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         attentionBias = try c.decodeIfPresent(Bool.self, forKey: .attentionBias) ?? false
-        attentionDropout = try c.decodeIfPresent(Float.self, forKey: .attentionDropout) ?? 0
         latentDim = try c.decodeIfPresent(Int.self, forKey: .latentDim) ?? 1024
         codebookDim = try c.decodeIfPresent(Int.self, forKey: .codebookDim) ?? 512
         codebookSize = try c.decodeIfPresent(Int.self, forKey: .codebookSize) ?? 2048
         decoderDim = try c.decodeIfPresent(Int.self, forKey: .decoderDim) ?? 1536
-        hiddenAct = try c.decodeIfPresent(String.self, forKey: .hiddenAct) ?? "silu"
         hiddenSize = try c.decodeIfPresent(Int.self, forKey: .hiddenSize) ?? 512
         intermediateSize = try c.decodeIfPresent(Int.self, forKey: .intermediateSize) ?? 1024
         layerScaleInitialScale = try c.decodeIfPresent(Float.self, forKey: .layerScaleInitialScale) ?? 0.01
@@ -327,11 +294,8 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
         numSemanticQuantizers = try c.decodeIfPresent(Int.self, forKey: .numSemanticQuantizers) ?? 1
         rmsNormEps = try c.decodeIfPresent(Float.self, forKey: .rmsNormEps) ?? 1e-5
         ropeTheta = try c.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 10000
-        semanticCodebookSize = try c.decodeIfPresent(Int.self, forKey: .semanticCodebookSize) ?? 4096
-        slidingWindow = try c.decodeIfPresent(Int.self, forKey: .slidingWindow) ?? 72
         upsampleRates = try c.decodeIfPresent([Int].self, forKey: .upsampleRates) ?? [8, 5, 4, 3]
         upsamplingRatios = try c.decodeIfPresent([Int].self, forKey: .upsamplingRatios) ?? [2, 2]
-        vectorQuantizationHiddenDimension = try c.decodeIfPresent(Int.self, forKey: .vectorQuantizationHiddenDimension) ?? 512
     }
 }
 
@@ -339,22 +303,16 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
 
 public struct Qwen3TTSTokenizerConfig: Codable, Sendable {
     var decoderConfig: Qwen3TTSTokenizerDecoderConfig?
-    var inputSampleRate: Int
-    var outputSampleRate: Int
     var decodeUpsampleRate: Int
 
     enum CodingKeys: String, CodingKey {
         case decoderConfig = "decoder_config"
-        case inputSampleRate = "input_sample_rate"
-        case outputSampleRate = "output_sample_rate"
         case decodeUpsampleRate = "decode_upsample_rate"
     }
 
     public init(from decoder: Swift.Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         decoderConfig = try c.decodeIfPresent(Qwen3TTSTokenizerDecoderConfig.self, forKey: .decoderConfig)
-        inputSampleRate = try c.decodeIfPresent(Int.self, forKey: .inputSampleRate) ?? 24000
-        outputSampleRate = try c.decodeIfPresent(Int.self, forKey: .outputSampleRate) ?? 24000
         decodeUpsampleRate = try c.decodeIfPresent(Int.self, forKey: .decodeUpsampleRate) ?? 1920
     }
 }
@@ -362,32 +320,22 @@ public struct Qwen3TTSTokenizerConfig: Codable, Sendable {
 // MARK: - Top-level Model Config
 
 public struct Qwen3TTSModelConfig: Decodable, Sendable {
-    var modelType: String
     var talkerConfig: Qwen3TTSTalkerConfig?
     var tokenizerConfig: Qwen3TTSTokenizerConfig?
     var quantization: BaseConfiguration.Quantization?
     var perLayerQuantization: BaseConfiguration.PerLayerQuantization?
-    var tokenizerType: String
-    var ttsModelSize: String
     var ttsModelType: String
-    var imStartTokenId: Int
-    var imEndTokenId: Int
     var ttsPadTokenId: Int
     var ttsBosTokenId: Int
     var ttsEosTokenId: Int
     var sampleRate: Int
 
     enum CodingKeys: String, CodingKey {
-        case modelType = "model_type"
         case talkerConfig = "talker_config"
         case tokenizerConfig = "tokenizer_config"
         case quantization
         case quantizationConfig = "quantization_config"
-        case tokenizerType = "tokenizer_type"
-        case ttsModelSize = "tts_model_size"
         case ttsModelType = "tts_model_type"
-        case imStartTokenId = "im_start_token_id"
-        case imEndTokenId = "im_end_token_id"
         case ttsPadTokenId = "tts_pad_token_id"
         case ttsBosTokenId = "tts_bos_token_id"
         case ttsEosTokenId = "tts_eos_token_id"
@@ -397,18 +345,13 @@ public struct Qwen3TTSModelConfig: Decodable, Sendable {
     public init(from decoder: Swift.Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let baseConfig = try? BaseConfiguration(from: decoder)
-        modelType = try c.decodeIfPresent(String.self, forKey: .modelType) ?? "qwen3_tts"
         talkerConfig = try c.decodeIfPresent(Qwen3TTSTalkerConfig.self, forKey: .talkerConfig)
         tokenizerConfig = try c.decodeIfPresent(Qwen3TTSTokenizerConfig.self, forKey: .tokenizerConfig)
         let globalQuant = try c.decodeIfPresent(BaseConfiguration.Quantization.self, forKey: .quantization)
         let altGlobalQuant = try c.decodeIfPresent(BaseConfiguration.Quantization.self, forKey: .quantizationConfig)
         quantization = globalQuant ?? altGlobalQuant
         perLayerQuantization = baseConfig?.perLayerQuantization
-        tokenizerType = try c.decodeIfPresent(String.self, forKey: .tokenizerType) ?? "qwen3_tts_tokenizer_12hz"
-        ttsModelSize = try c.decodeIfPresent(String.self, forKey: .ttsModelSize) ?? "0b6"
         ttsModelType = try c.decodeIfPresent(String.self, forKey: .ttsModelType) ?? "base"
-        imStartTokenId = try c.decodeIfPresent(Int.self, forKey: .imStartTokenId) ?? 151644
-        imEndTokenId = try c.decodeIfPresent(Int.self, forKey: .imEndTokenId) ?? 151645
         ttsPadTokenId = try c.decodeIfPresent(Int.self, forKey: .ttsPadTokenId) ?? 151671
         ttsBosTokenId = try c.decodeIfPresent(Int.self, forKey: .ttsBosTokenId) ?? 151672
         ttsEosTokenId = try c.decodeIfPresent(Int.self, forKey: .ttsEosTokenId) ?? 151673

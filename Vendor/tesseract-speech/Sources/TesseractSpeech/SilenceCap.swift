@@ -5,7 +5,7 @@ import Foundation
 /// Caps each run of silence in one segment's audio. With a Reference Take in
 /// the prompt, the model now and then stalls mid-segment or trails off for
 /// seconds before it ends one. Frames quieter than `threshold` count as
-/// silence; after `maxFrames` of them in a row, further silent frames are
+/// silence; once a run passes `maxSilence`, further silent frames are
 /// dropped until sound resumes. Pauses a reader makes, well under the cap,
 /// pass through unchanged, and no spoken frame is ever dropped.
 struct SilenceCap {
@@ -17,9 +17,9 @@ struct SilenceCap {
 
     private var run = 0
 
-    init(samplesPerFrame: Int, maxFrames: Int = 15, threshold: Float = 0.001) {
-        self.samplesPerFrame = samplesPerFrame
-        self.maxFrames = maxFrames
+    init(format: AudioFormat, maxSilence: TimeInterval = 1.2, threshold: Float = 0.001) {
+        self.samplesPerFrame = format.samplesPerFrame
+        self.maxFrames = Int((maxSilence * format.framesPerSecond).rounded())
         self.threshold = threshold
     }
 

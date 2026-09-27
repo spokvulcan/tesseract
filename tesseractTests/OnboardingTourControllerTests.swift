@@ -268,7 +268,6 @@ private final class TourWorld {
         try FileManager.default.createDirectory(
             at: storageRoot, withIntermediateDirectories: true)
         fetching = InMemoryModelFetching(
-            storageRoot: storageRoot,
             repos: [
                 "fixture/stt": [.init(path: "model.safetensors", size: 8)],
                 "fixture/voice": [.init(path: "model.safetensors", size: 8)],

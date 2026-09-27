@@ -58,15 +58,14 @@ private struct Harness {
         pinnedVoices: PinnedVoiceStore? = nil
     ) async {
         self.pinnedVoices =
-            pinnedVoices
-            ?? PinnedVoiceStore(
-                directory: FileManager.default.temporaryDirectory
-                    .appendingPathComponent("pinned-voices-\(UUID().uuidString)", isDirectory: true)
-            )
+            pinnedVoices ?? PinnedVoiceStore(directory: makeTempDir("pinned-voices"))
         synthesizer = ScriptedSpeechSynthesizer()
         await synthesizer.configure(script)
+        // The app's checkpoint, as DependencyContainer wires it: stored voices
+        // are looked up under this spec.
         let engine = SpeechEngine(
-            model: .voiceDesign17B(.q8), synthesizer: synthesizer, gpu: ImmediateGPULease())
+            model: ModelDefinition.textToSpeechModelSpec, synthesizer: synthesizer,
+            gpu: ImmediateGPULease())
         presenter = SpeechEnginePresenter(engine: engine)
         playback = InMemoryAudioPlayback()
         overlay = RecordingHighlightSurface()

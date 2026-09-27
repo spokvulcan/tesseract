@@ -376,15 +376,16 @@ struct ModelDownloadLifecycleTests {
         #expect(settled == .error("No files found in fixture/empty"))
     }
 
-    // MARK: - Snapshot resolution
+    // MARK: - Other weight formats
 
-    @Test func nonSafetensorsUnprefixedModelResolvesSnapshotWithProgress() async throws {
+    /// Every model downloads file by file, whatever its weight format.
+    @Test func nonSafetensorsUnprefixedModelDownloadsFileByFileWithProgress() async throws {
         let harness = try LifecycleHarness(
             definitions: [
-                Self.model("snap", repo: "fixture/snap", requiredExtension: "bin")
+                Self.model("bin", repo: "fixture/bin", requiredExtension: "bin")
             ],
             repos: [
-                "fixture/snap": [
+                "fixture/bin": [
                     .init(path: "weights.bin", size: 24),
                     .init(path: "config.json", size: 8),
                 ]
@@ -392,11 +393,14 @@ struct ModelDownloadLifecycleTests {
         )
         defer { harness.tearDown() }
 
-        harness.manager.download(modelID: "snap")
-        let settled = try await harness.waitForSettled(id: "snap")
+        harness.manager.download(modelID: "bin")
+        let settled = try await harness.waitForSettled(id: "bin")
 
         #expect(settled == .downloaded(sizeOnDisk: 32))
-        let fractions = harness.history["snap", default: []].compactMap { status -> Double? in
+        #expect(
+            Set(harness.fetching.fetchedFiles)
+                == ["fixture/bin/weights.bin", "fixture/bin/config.json"])
+        let fractions = harness.history["bin", default: []].compactMap { status -> Double? in
             if case .downloading(let progress) = status { return progress }
             return nil
         }
@@ -462,7 +466,7 @@ final class LifecycleHarness {
             .appendingPathComponent("model-lifecycle-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
             at: storageRoot, withIntermediateDirectories: true)
-        fetching = InMemoryModelFetching(storageRoot: storageRoot, repos: repos)
+        fetching = InMemoryModelFetching(repos: repos)
         manager = ModelDownloadManager(
             fetching: fetching, storageRoot: storageRoot, definitions: definitions)
         cancellable = manager.$statuses.sink { [weak self] statuses in

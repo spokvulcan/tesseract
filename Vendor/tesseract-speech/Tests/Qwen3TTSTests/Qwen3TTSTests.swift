@@ -4,7 +4,6 @@
 
 import Foundation
 @preconcurrency import MLX
-import MLXLMCommon
 import Testing
 import Tokenizers
 
@@ -41,8 +40,8 @@ struct Qwen3TTSTests {
                 text: "target voice prompt one two three four five",
                 voice: "sample voice", language: "English",
                 sampling: TinyModel.sampling, streamingInterval: 0.05))
-        #expect(streamed.tokenCount > 0)
-        #expect(streamed.infoCount == 1)
+        #expect(streamed.chunks > 0)
+        #expect(streamed.codeFrames?.isEmpty == false, "the frames follow the audio")
         #expect(streamed.lastAudio?.ndim == 1)
     }
 
@@ -66,10 +65,11 @@ struct Qwen3TTSTests {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }
 
-        _ = try await fixture.model.generate(
-            text: "one two three", voice: "sample voice", language: "English",
-            sampling: TinyModel.sampling)
-        let frames = fixture.model.lastGeneratedCodeFrames
+        let take = try await collect(
+            fixture.model.generateStream(
+                text: "one two three", voice: "sample voice", language: "English",
+                sampling: TinyModel.sampling, streamingInterval: 0.05))
+        let frames = try #require(take.codeFrames)
         #expect(!frames.isEmpty)
         #expect(frames.allSatisfy { $0.count == 2 }, "one code per group per frame")
 
@@ -78,12 +78,13 @@ struct Qwen3TTSTests {
                 text: "four five", voice: "sample voice", language: "English",
                 reference: Qwen3TTSReference(codeFrames: frames, text: "one two three"),
                 sampling: TinyModel.sampling, streamingInterval: 0.05))
-        #expect(streamed.tokenCount > 0)
+        #expect(streamed.codeFrames != nil)
         #expect(streamed.lastAudio?.ndim == 1)
     }
 
     /// The description leads the in-context prompt as the user turn, the same
-    /// tokens the plain VoiceDesign prompt starts with.
+    /// embedding the plain VoiceDesign prompt starts with, so one voice
+    /// prefix cache serves both layouts.
     @Test func theReferencePromptLeadsWithTheDescription() async throws {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }
@@ -100,6 +101,14 @@ struct Qwen3TTSTests {
         let instructTokens = try #require(fixture.model.tokenizer)
             .encode(text: "<|im_start|>user\nsample voice<|im_end|>\n").count
         #expect(described.0.dim(1) == bare.0.dim(1) + instructTokens)
+        #expect(bare.3 == nil)
+
+        let plain = fixture.model.prepareGenerationInputs(
+            text: "three four", language: "English", instruct: "sample voice")
+        let referencePrefix = try #require(described.3)
+        let plainPrefix = try #require(plain.3)
+        #expect(referencePrefix.dim(1) == instructTokens)
+        #expect((referencePrefix .== plainPrefix).all().item(Bool.self))
     }
 
     @Test func aTakeWithTheWrongCodebookCountIsRejected() async throws {
@@ -122,7 +131,7 @@ struct Qwen3TTSTests {
         row[7] = 2.0
         row[8] = 1.0
         let raw = Qwen3TTSModel.filterLogits(
-            MLXArray(row).reshaped(1, row.count), topK: 0, topP: 0.8, minP: 0
+            MLXArray(row).reshaped(1, row.count), topK: 0, topP: 0.8
         ).asArray(Float.self)
         #expect(raw.indices.filter { raw[$0].isFinite } == [7, 8])
 
@@ -137,7 +146,8 @@ struct Qwen3TTSTests {
     }
 
     /// The repetition penalty reads only the tokens it is handed: the
-    /// generation loop passes the last `repetitionWindow` talker tokens.
+    /// generation loop passes the last `Qwen3TTSSampling.repetitionWindow`
+    /// talker tokens.
     @Test func theRepetitionPenaltyOnlyCountsRecentTokens() async throws {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }
@@ -200,7 +210,7 @@ struct Qwen3TTSTests {
     @Test func eosOutsideTheTopPNucleusIsFilteredToNegativeInfinity() {
         let row = Self.eosJustOutsideTheNucleus()
         let filtered = Qwen3TTSModel.filterLogits(
-            MLXArray(row).reshaped(1, row.count), topK: 0, topP: 0.8, minP: 0
+            MLXArray(row).reshaped(1, row.count), topK: 0, topP: 0.8
         ).asArray(Float.self)
 
         #expect(filtered[Self.eosTokenID] == -Float.infinity)
@@ -211,8 +221,9 @@ struct Qwen3TTSTests {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }
 
-        // The talker's call with the Voice Engine's settings: t=0.6, top-p 0.8,
-        // top-k off, penalty 1.3, the special tokens other than EOS suppressed.
+        // The talker's call with the settings the bug shipped under: t=0.6,
+        // top-p 0.8, top-k off, penalty 1.3, the special tokens other than EOS
+        // suppressed.
         let row = Self.eosJustOutsideTheNucleus()
         let logits = MLXArray(row).reshaped(1, 1, row.count)
         let suppressTokens = (2048 ..< row.count).filter { $0 != Self.eosTokenID }
@@ -226,8 +237,7 @@ struct Qwen3TTSTests {
                 topK: 0,
                 repetitionPenalty: 1.3,
                 recentTokens: [],
-                suppressTokens: suppressTokens,
-                minP: 0
+                suppressTokens: suppressTokens
             )
             draws[Int(token[0, 0].item(Int32.self)), default: 0] += 1
         }
@@ -404,16 +414,17 @@ private func makeTinyTokenizerDirectory() throws -> URL {
 
 func collect(
     _ stream: AsyncThrowingStream<AudioGeneration, Error>
-) async throws -> (tokenCount: Int, infoCount: Int, lastAudio: MLXArray?) {
-    var tokenCount = 0
-    var infoCount = 0
+) async throws -> (chunks: Int, lastAudio: MLXArray?, codeFrames: [[Int32]]?) {
+    var chunks = 0
     var lastAudio: MLXArray?
+    var codeFrames: [[Int32]]?
     for try await event in stream {
         switch event {
-        case .token: tokenCount += 1
-        case .info: infoCount += 1
-        case .audio(let audio): lastAudio = audio
+        case .audio(let audio):
+            chunks += 1
+            lastAudio = audio
+        case .codeFrames(let frames): codeFrames = frames
         }
     }
-    return (tokenCount, infoCount, lastAudio)
+    return (chunks, lastAudio, codeFrames)
 }

@@ -67,8 +67,8 @@ expressive, clean.
 ## Consequences
 
 - Each segment re-reads its take before speaking: a few hundred prompt
-  positions, and the instruct-prefix cache no longer applies there. Measured
-  on q6 with the v2-listen harness: first audio of a segment that continues a
+  positions, of which only the description in front comes from the
+  instruct-prefix cache. Measured on q6 with the v2-listen harness: first audio of a segment that continues a
   long-form take lands at about 200 ms (110 ms without one); a companion line
   that continues a short take lands at 141 to 154 ms (112 ms for the line
   that made the take). Both stay inside the 300 ms warm budget. Later

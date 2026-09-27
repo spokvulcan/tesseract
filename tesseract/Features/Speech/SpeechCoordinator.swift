@@ -131,11 +131,13 @@ final class SpeechCoordinator {
     /// audio-only — for callers that bring their own visual surface (the
     /// Companion voice overlay, #328) and must not raise the TTS notch too.
     /// `userInitiated`: the user asked for this speech (a Speak button), so a
-    /// missing Voice Engine sends them to the Models page.
+    /// missing Voice Engine sends them to the Models page. `retake`: speak
+    /// only the opening as a new Reference Take (see `tryAnotherTake`).
     func speakText(
         _ text: String, showsOverlay: Bool = true,
         route: PlaybackRoute = .standard,
         userInitiated: Bool = false,
+        retake: Bool = false,
         onSuccess: (@MainActor @Sendable () -> Void)? = nil
     ) {
         guard !text.isEmpty else { return }
@@ -152,7 +154,8 @@ final class SpeechCoordinator {
         activeTask = Task {
             guard await voiceEngineReady(userInitiated: userInitiated) else { return }
             await generateAndPlay(
-                text: text, showsOverlay: showsOverlay, userInitiated: userInitiated)
+                text: text, showsOverlay: showsOverlay, userInitiated: userInitiated,
+                retake: retake)
         }
     }
 
@@ -164,14 +167,7 @@ final class SpeechCoordinator {
         let sample =
             text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? Self.takeSample : text
-
-        stop()
-        activeSink = playback
-        state = .generating(progress: "")
-        activeTask = Task {
-            guard await voiceEngineReady(userInitiated: true) else { return }
-            await generateAndPlay(text: sample, userInitiated: true, retake: true)
-        }
+        speakText(sample, userInitiated: true, retake: true)
     }
 
     /// What a new take reads when the composer is empty: two sentences with
@@ -374,16 +370,13 @@ final class SpeechCoordinator {
 
             // A retake needs a fresh seed: the settings seed would render the
             // same take again.
+            let options = SpeechOptions(
+                seed: retake ? .entropy : .fixed(UInt64(clamping: settings.ttsSeed)),
+                parameters: settings.ttsParameters)
             let utterance =
                 retake
-                ? try await session.retake(
-                    text,
-                    options: SpeechOptions(seed: .entropy, parameters: settings.ttsParameters))
-                : try await session.speak(
-                    text,
-                    options: SpeechOptions(
-                        seed: .fixed(UInt64(clamping: settings.ttsSeed)),
-                        parameters: settings.ttsParameters))
+                ? try await session.retake(text, options: options)
+                : try await session.speak(text, options: options)
             totalSegments = utterance.segmentCount
             activeSink.startStreaming(sampleRate: utterance.sampleRate)
 
@@ -405,7 +398,7 @@ final class SpeechCoordinator {
                     activeSink.appendChunk(samples: chunk.samples)
 
                 case .segmentDone(let index):
-                    if index == 0 { await rememberVoice(of: session) }
+                    await rememberVoice(of: session)
                     overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
                     Log.speech.info("Segment \(index + 1)/\(self.totalSegments) complete")
                     if index + 1 < utterance.segmentCount {
@@ -468,21 +461,12 @@ final class SpeechCoordinator {
         }
     }
 
-    /// Stores the session's Reference Take once its first segment has made
-    /// one, so the next launch opens the same voice.
+    /// Stores the session's Reference Take once it has one, so the next launch
+    /// opens the same voice. Runs after every segment: the engine decides
+    /// when a take forms, and the store skips a take it already holds.
     private func rememberVoice(of session: SpeechSession) async {
         guard let pinned = await session.exportPinnedVoice() else { return }
-        // Keyed by the voice the take belongs to, not the settings now: the
-        // description may have changed while this utterance played.
-        let language = pinned.language ?? settings.ttsLanguage
-        let model = ModelDefinition.textToSpeechModelSpec
-        guard
-            pinnedVoices.voice(
-                description: pinned.voiceDescription, language: language, model: model)
-                != pinned
-        else { return }
-        pinnedVoices.save(
-            pinned, description: pinned.voiceDescription, language: language, model: model)
+        pinnedVoices.save(pinned)
     }
 
     private func waitForPlaybackDemand() async throws {

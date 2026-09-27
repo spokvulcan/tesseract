@@ -36,7 +36,6 @@ let package = Package(
             name: "TesseractSpeech",
             dependencies: [
                 "Qwen3TTS",
-                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLX", package: "mlx-swift"),
             ],
             path: "Sources/TesseractSpeech"
@@ -53,7 +52,6 @@ let package = Package(
             dependencies: [
                 "Qwen3TTS",
                 .product(name: "MLX", package: "mlx-swift"),
-                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
             ],
             path: "Tests/Qwen3TTSTests"

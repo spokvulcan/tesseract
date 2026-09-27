@@ -46,10 +46,7 @@ final class InMemoryModelFetching: ModelFetching {
     /// Files fetched via `fetchFile`, in order, as "repo/path".
     private(set) var fetchedFiles: [String] = []
 
-    private let storageRoot: URL
-
-    init(storageRoot: URL, repos: [String: [ScriptedFile]] = [:]) {
-        self.storageRoot = storageRoot
+    init(repos: [String: [ScriptedFile]] = [:]) {
         self.repos = repos
     }
 
@@ -75,24 +72,6 @@ final class InMemoryModelFetching: ModelFetching {
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try (file.contents ?? Data(count: file.size)).write(to: destination)
-    }
-
-    func resolveSnapshot(
-        of repo: String,
-        requiredExtension: String,
-        onProgress: @escaping @MainActor @Sendable (Double) -> Void
-    ) async throws {
-        if let error = errorsByRepo[repo] { throw error }
-        let files = repos[repo] ?? []
-        let modelDir = storageRoot.modelDirectory(forRepo: repo)
-        for (index, file) in files.enumerated() {
-            try Task.checkCancellation()
-            let target = modelDir.appendingPathComponent(file.path)
-            try FileManager.default.createDirectory(
-                at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try (file.contents ?? Data(count: file.size)).write(to: target)
-            onProgress(Double(index + 1) / Double(files.count))
-        }
     }
 }
 

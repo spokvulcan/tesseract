@@ -8,44 +8,35 @@ import Foundation
 /// where most of the timbre lives: a lower detail temperature keeps the voice
 /// steadier without flattening the delivery (research/voice-consistency-
 /// 2026-09-26, ADR-0072). The order matches Qwen's reference sampler:
-/// temperature first, then top-k, top-p and min-p; the repetition penalty
-/// looks only at the most recent talker tokens.
+/// temperature first, then top-k and top-p; the repetition penalty looks only
+/// at the most recent talker tokens.
 public struct Qwen3TTSSampling: Sendable, Equatable {
     public var temperature: Float
-    public var topK: Int
     public var topP: Float
-    public var minP: Float
     public var repetitionPenalty: Float
-    /// How many of the latest talker tokens the repetition penalty counts.
-    public var repetitionWindow: Int
     public var detailTemperature: Float
-    public var detailTopK: Int
-    public var detailTopP: Float
     /// Upper bound on frames per generation; the model also caps it at six
     /// frames per text token.
     public var maxTokens: Int
 
+    /// Qwen's reference values for what the app doesn't tune: top-k for both
+    /// models, the code predictor's top-p, and how many of the latest talker
+    /// tokens the repetition penalty counts.
+    static let topK = 50
+    static let detailTopP: Float = 1.0
+    static let repetitionWindow = 64
+
     public init(
         temperature: Float = 0.9,
-        topK: Int = 50,
         topP: Float = 1.0,
-        minP: Float = 0,
         repetitionPenalty: Float = 1.05,
-        repetitionWindow: Int = 64,
         detailTemperature: Float = 0.5,
-        detailTopK: Int = 50,
-        detailTopP: Float = 1.0,
         maxTokens: Int = 4096
     ) {
         self.temperature = temperature
-        self.topK = topK
         self.topP = topP
-        self.minP = minP
         self.repetitionPenalty = repetitionPenalty
-        self.repetitionWindow = repetitionWindow
         self.detailTemperature = detailTemperature
-        self.detailTopK = detailTopK
-        self.detailTopP = detailTopP
         self.maxTokens = maxTokens
     }
 }

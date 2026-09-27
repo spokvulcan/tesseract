@@ -114,9 +114,7 @@ public struct PinnedVoice: Sendable, Equatable, Codable {
     }
 
     var referenceTake: ReferenceTake {
-        ReferenceTake(
-            codeFrames: codeFrames, text: referenceText, voiceDescription: voiceDescription,
-            language: language)
+        ReferenceTake(codeFrames: codeFrames, text: referenceText)
     }
 }
 
@@ -129,10 +127,9 @@ public struct PinnedVoice: Sendable, Equatable, Codable {
 /// the words and the delivery, and `detailTemperature` for the code
 /// predictor's acoustic detail, where most of the timbre lives. The defaults
 /// are the setting the owner listened to: an expressive 0.9 reading with a
-/// steady 0.5 timbre, top-k 50, and Qwen's own repetition penalty.
+/// steady 0.5 timbre and Qwen's own repetition penalty.
 public struct TTSParameters: Sendable, Equatable, Codable {
     public var temperature: Float
-    public var topK: Int
     public var topP: Float
     public var repetitionPenalty: Float
     public var detailTemperature: Float
@@ -140,14 +137,12 @@ public struct TTSParameters: Sendable, Equatable, Codable {
 
     public init(
         temperature: Float = 0.9,
-        topK: Int = 50,
         topP: Float = 1.0,
         repetitionPenalty: Float = 1.05,
         detailTemperature: Float = 0.5,
         maxTokens: Int = 4096
     ) {
         self.temperature = temperature
-        self.topK = topK
         self.topP = topP
         self.repetitionPenalty = repetitionPenalty
         self.detailTemperature = detailTemperature

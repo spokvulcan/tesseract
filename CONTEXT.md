@@ -514,12 +514,11 @@ directly readable for download UI and is not a catalog question.
 
 **Model Fetching**:
 The narrow hub port below the model download lifecycle — list a repo's files,
-fetch one file, resolve-or-download a snapshot — satisfied by the
-HuggingFace-backed production adapter and a scripted in-memory test peer. Disk
-stays outside the seam: file checks and status computation run against the real
-file system.
+fetch one file — satisfied by the HuggingFace-backed production adapter and a
+scripted in-memory test peer. Disk stays outside the seam: file checks and
+status computation run against the real file system.
 _Avoid_: hub client (one adapter, not the seam), download client/backend, model
-fetcher; widening it past the three verbs before a second consumer needs a
+fetcher; widening it past the two verbs before a second consumer needs a
 member.
 
 **Vision Capability Memo**:

@@ -143,8 +143,8 @@ public actor SpeechEngine {
         guard let state = sessions[id], let take = state.reference else { return nil }
         return PinnedVoice(
             modelFingerprint: model.fingerprint,
-            voiceDescription: take.voiceDescription,
-            language: take.language,
+            voiceDescription: state.voice.description,
+            language: state.voice.language,
             referenceText: take.text,
             codeFrames: take.codeFrames)
     }

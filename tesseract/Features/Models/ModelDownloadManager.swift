@@ -227,8 +227,7 @@ final class ModelDownloadManager: ObservableObject {
 
     func download(modelID: String) {
         guard let model = definitions.first(where: { $0.id == modelID }) else { return }
-        guard case .huggingFace(let repo, let requiredExtension, let pathPrefix) = model.source
-        else { return }
+        guard case .huggingFace(let repo, _, let pathPrefix) = model.source else { return }
 
         let occupied: (ModelStatus) -> Bool = {
             if case .downloading = $0 { return true }
@@ -252,21 +251,10 @@ final class ModelDownloadManager: ObservableObject {
             inProgress: .downloading(progress: 0),
             failureLabel: "Download"
         ) { [weak self] in
-            if pathPrefix != nil || requiredExtension == "safetensors" {
-                // Repos with nested directories (transformer/, vae/, scheduler/
-                // subdirs) fail with snapshot resolution due to file/directory
-                // naming conflicts. Download files individually instead.
-                try await self?.downloadFileByFile(
-                    model: model, repo: repo, pathPrefix: pathPrefix)
-            } else {
-                try await self?.fetching.resolveSnapshot(
-                    of: repo,
-                    requiredExtension: requiredExtension,
-                    onProgress: { [weak self] fraction in
-                        self?.statuses[modelID] = .downloading(progress: fraction)
-                    }
-                )
-            }
+            // File by file, never a hub snapshot: repos with nested
+            // directories (transformer/, vae/, scheduler/ subdirs) break
+            // snapshot resolution on file/directory naming conflicts.
+            try await self?.downloadFileByFile(model: model, repo: repo, pathPrefix: pathPrefix)
             Log.general.info("Model downloaded: \(model.displayName)")
         }
     }

@@ -89,10 +89,7 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
                         // Frames that encode the seed, so two takes differ.
                         let mark = Int32(truncatingIfNeeded: request.seed % 1000)
                         captured = ReferenceTake(
-                            codeFrames: (0..<4).map { _ in [mark, 7, 7] },
-                            text: request.text,
-                            voiceDescription: request.voiceDescription,
-                            language: request.language)
+                            codeFrames: (0..<4).map { _ in [mark, 7, 7] }, text: request.text)
                     }
                     continuation.yield(.done(capturedReference: captured))
                     continuation.finish()
