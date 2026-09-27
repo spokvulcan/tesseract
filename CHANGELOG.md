@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.17.0](https://github.com/spokvulcan/tesseract/compare/v1.16.0...v1.17.0) (2026-09-27)
+
+### Highlights
+
+The Speech page is now a Reader. Paste any text, a whole book included, press Read, and the page highlights each word as you hear it and scrolls along. The timing comes from the voice model itself: one of Qwen3-TTS's attention heads follows the text as it speaks, and the engine reads that head while it generates, at no measurable cost. Checked against Whisper's word timestamps, 97% of words start within 200 ms of where Whisper puts them, against 30% when the words were spread evenly over the audio ([measurements](https://github.com/spokvulcan/tesseract/blob/v1.17.0/docs/research/2026-09-27-word-timing-from-attention.md)). The notch is gone. The new Speech Overlay, an island at the top of the screen or captions at the bottom, follows the same clock, so the words on screen no longer run up to 8 seconds ahead of the voice. Reading resumes where it stopped, and an 80,000-word text opens without a pause.
+
+A designed voice now stays the same person. VoiceDesign drew a new speaker for every passage, so each passage could sound like someone else. Now the first passage a voice renders becomes its reference take, and every later passage continues it. The take is saved with the voice, so it survives a relaunch, and "Try another take" rolls a new one. The voice designer builds descriptions from trait chips in the form Qwen's own examples use, renders each new voice reading a line in its language, and lets you compare renders side by side and keep the one you like.
+
+The app now owns its Qwen3-TTS code instead of running a vendored copy of mlx-audio-swift. Checked against Qwen's reference implementation, the codec decoder's waveform was 3 to 7% off, from two bugs shared with the Python MLX port: it attended over the whole passage instead of Qwen's 72-frame window, and when streaming it added a bias twice at every chunk boundary, so the audio changed with the chunk size. The decoder now matches Qwen's, and with a rewritten frame loop the engine is faster and needs about half the memory. On an M3 Max with the 6-bit checkpoint, a minute of speech renders in about 9 seconds instead of 16, the first audio of a reading arrives after 60 ms instead of 251 ms, and a long reading peaks at 2.66 GB of memory instead of 5.57 GB. Where Core ML can place all of it on the Neural Engine, which rules out M1 and M2, the codec's convolutions run there. The [decision record](https://github.com/spokvulcan/tesseract/blob/v1.17.0/docs/adr/0074-qwen3-tts-exact-decoder-pipelined-frames.md) has every measurement.
+
+Onboarding and the Models page now download the Voice Engine checkpoint that speech actually loads, the 6-bit one at 2.7 GB. Before, they fetched a 4.5 GB bf16 copy it never read, and the engine then downloaded the 6-bit one by itself on the first spoken reply, with no progress shown and while holding the GPU, so chats waited behind it. The unused bf16 copy is deleted once at launch, which frees its 4.5 GB, and the engine no longer downloads anything on its own.
+
+On the local server, a request that turned thinking off (`enable_thinking: false`) on Qwen3.5 or later stored its answer in the prompt cache under a path the next user turn could never match, so that turn processed the whole prompt again. The server now measures what each chat template appends to open the assistant turn instead of assuming it. In the prefix cache benchmark on Qwen3.5-4B, the next turn's time to first token went from 315 ms to 123 ms.
+
+A few things change when you update:
+
+- If you skipped the Voice Engine in onboarding, download it from the Models page before using speech. When it's missing, the hotkey and the Speak button open that page.
+- Voices designed in an earlier version keep their descriptions, but their saved takes can't be carried over. The first reading with each one renders a new take, so it may sound different from before.
+- The speech sampler settings moved to Settings > Speech. Values tuned for the old sampler aren't carried over, so the new defaults apply.
+
+
+### Features
+
+* **speech:** make Qwen3-TTS exact, faster and lighter, with its codec on the Neural Engine ([#569](https://github.com/spokvulcan/tesseract/issues/569)) ([0a03178](https://github.com/spokvulcan/tesseract/commit/0a031782f0f1a874122c40bf8ebc51fc5e74d4f9))
+* **speech:** make the Speech page a Reader that follows the voice ([#570](https://github.com/spokvulcan/tesseract/issues/570)) ([0de9df9](https://github.com/spokvulcan/tesseract/commit/0de9df95d3a72d5b5ddeaa287a8845e3fd040c7f))
+* **speech:** own the Qwen3-TTS code and keep a designed voice the same person ([#568](https://github.com/spokvulcan/tesseract/issues/568)) ([21f7de1](https://github.com/spokvulcan/tesseract/commit/21f7de199ac6805cf750d867c6271a8475f8f872))
+* **speech:** time each spoken word from the voice model's own attention ([#571](https://github.com/spokvulcan/tesseract/issues/571)) ([b938b5a](https://github.com/spokvulcan/tesseract/commit/b938b5a39115d54807fdb2cbfc731bc3985a1084))
+
+
+### Bug Fixes
+
+* **models:** download the 6-bit Voice Engine checkpoint the speech engine loads ([#561](https://github.com/spokvulcan/tesseract/issues/561)) ([cda6fd9](https://github.com/spokvulcan/tesseract/commit/cda6fd933cfd80e56621a4a0e1c4ceb1d905c021))
+* **server:** measure the Generation Prompt and derive each request's facts once ([#566](https://github.com/spokvulcan/tesseract/issues/566)) ([d732376](https://github.com/spokvulcan/tesseract/commit/d732376a9d73df552c7664e480c0ab840b1cb17b))
+* **server:** read enable_thinking per request in the prefill planner and echo replay ([#563](https://github.com/spokvulcan/tesseract/issues/563)) ([9b6bc1f](https://github.com/spokvulcan/tesseract/commit/9b6bc1f3ab23ae1a7ccb78c82bdbb2f53bc3eac2))
+* **speech:** filter EOS like every other token in the Qwen3-TTS sampler ([#567](https://github.com/spokvulcan/tesseract/issues/567)) ([d3da27e](https://github.com/spokvulcan/tesseract/commit/d3da27e4b51a8cece6b99432d39f625c4a15d63d))
+* **speech:** inject the model download manager into the Speech page ([4c718a3](https://github.com/spokvulcan/tesseract/commit/4c718a35c36856feabf15117adb6328c9014c306))
+* **speech:** stop the speech engine downloading its own checkpoint ([#565](https://github.com/spokvulcan/tesseract/issues/565)) ([afa18f6](https://github.com/spokvulcan/tesseract/commit/afa18f697438214ec7925939404dd58ddbe18f4c))
+
+
+### Documentation
+
+* **adr:** propose ADR-0070 Keyed Request and measured Generation Prompt ([#564](https://github.com/spokvulcan/tesseract/issues/564)) ([6ed1a21](https://github.com/spokvulcan/tesseract/commit/6ed1a21f9f3e7a0ae5a51a91968c8663acdbb363))
+* **adr:** record ADR-0073, a test run never reaches the owner's data ([f642c73](https://github.com/spokvulcan/tesseract/commit/f642c7306ce569deef251ca1aa88cfe7095bd59e))
+* amend ADR-0066 to fit iOS v1 to the phone ([#559](https://github.com/spokvulcan/tesseract/issues/559)) ([63bab15](https://github.com/spokvulcan/tesseract/commit/63bab154e2c20416ee300fe5fbdca1c8af9da14f))
+
+
+### Tests
+
+* **app:** keep test runs off the owner's data and open every page in tests ([5299e6d](https://github.com/spokvulcan/tesseract/commit/5299e6df38fa91512a6c84965c0e142d537343f8))
+* **server:** skip the catalog gate where no chat model is downloaded ([#572](https://github.com/spokvulcan/tesseract/issues/572)) ([aac5c1f](https://github.com/spokvulcan/tesseract/commit/aac5c1f1fb585c3f7ffee44e0a63b254b5a14406))
+
 ## [1.16.0](https://github.com/spokvulcan/tesseract/compare/v1.15.0...v1.16.0) (2026-09-24)
 
 
