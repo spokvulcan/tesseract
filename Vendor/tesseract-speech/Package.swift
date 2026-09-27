@@ -3,7 +3,9 @@ import PackageDescription
 
 let package = Package(
     name: "tesseract-speech",
-    platforms: [.macOS(.v14), .iOS(.v17)],
+    // macOS 15 / iOS 18: Core ML fp16 buffers and MLComputePlan (the
+    // Neural Engine codec). The app itself requires macOS 26.
+    platforms: [.macOS(.v15), .iOS(.v18)],
     products: [
         .library(name: "TesseractSpeech", targets: ["TesseractSpeech"])
     ],
@@ -63,6 +65,17 @@ let package = Package(
             name: "v2-listen",
             dependencies: ["TesseractSpeech"],
             path: "Sources/Tools/v2-listen"
+        ),
+        // Model-level measurement harness (NOT linked by the app): memory at
+        // each phase, per-component timings, and the golden code frames a
+        // refactor is checked against. Real weights, below the engine.
+        .executableTarget(
+            name: "qwen3-tts-bench",
+            dependencies: [
+                "Qwen3TTS",
+                .product(name: "MLX", package: "mlx-swift"),
+            ],
+            path: "Sources/Tools/qwen3-tts-bench"
         ),
     ]
 )

@@ -836,10 +836,15 @@ final class DependencyContainer: ObservableObject {
         return SpeechEnginePresenter(
             engine: SpeechEngine(
                 model: ModelDefinition.textToSpeechModelSpec,
-                synthesizer: Qwen3Synthesizer(checkpointDirectory: { spec in
-                    store.appendingPathComponent(
-                        ModelDefinition.storageSubdirectory(forRepo: spec.repo))
-                }),
+                // The codec's Neural Engine model is built from the
+                // checkpoint once and kept in Caches (ADR-0075).
+                synthesizer: Qwen3Synthesizer(
+                    checkpointDirectory: { spec in
+                        store.appendingPathComponent(
+                            ModelDefinition.storageSubdirectory(forRepo: spec.repo))
+                    },
+                    neuralEngineCache: Qwen3Synthesizer.neuralEngineCache(
+                        in: StorageEnvironment.caches)),
                 gpu: ArbiterGPULease(arbiter: inferenceArbiter)
             )
         )

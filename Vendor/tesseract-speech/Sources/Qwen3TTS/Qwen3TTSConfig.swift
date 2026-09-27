@@ -50,6 +50,11 @@ public struct Qwen3TTSTalkerCodePredictorConfig: Codable, Sendable {
         attentionBias = try c.decodeIfPresent(Bool.self, forKey: .attentionBias) ?? false
         numCodeGroups = try c.decodeIfPresent(Int.self, forKey: .numCodeGroups) ?? 16
     }
+
+    /// Qwen's defaults, for a talker config without a code predictor.
+    static var defaults: Self {
+        try! JSONDecoder().decode(Self.self, from: Data("{}".utf8))
+    }
 }
 
 // MARK: - Flexible spk_id value (Int or [Int])
@@ -223,10 +228,9 @@ public struct Qwen3TTSTalkerConfig: Codable, Sendable {
         spkIsDialect = try c.decodeIfPresent([String: SpkDialectValue].self, forKey: .spkIsDialect)
     }
 
-    var mropeSection: [Int]? {
-        guard let scaling = ropeScaling,
-              let value = scaling["mrope_section"] else { return nil }
-        return value.asInts()
+    /// Qwen's defaults, for a model config without a talker.
+    static var defaults: Self {
+        try! JSONDecoder().decode(Self.self, from: Data("{}".utf8))
     }
 }
 
@@ -252,6 +256,9 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
     var ropeTheta: Float
     var upsampleRates: [Int]
     var upsamplingRatios: [Int]
+    /// Each transformer query sees itself and the `slidingWindow - 1` frames
+    /// before it (Qwen: "All layer in code2wav should be sliding attention").
+    var slidingWindow: Int
 
     enum CodingKeys: String, CodingKey {
         case attentionBias = "attention_bias"
@@ -273,6 +280,7 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
         case ropeTheta = "rope_theta"
         case upsampleRates = "upsample_rates"
         case upsamplingRatios = "upsampling_ratios"
+        case slidingWindow = "sliding_window"
     }
 
     public init(from decoder: Swift.Decoder) throws {
@@ -296,6 +304,12 @@ public struct Qwen3TTSTokenizerDecoderConfig: Codable, Sendable {
         ropeTheta = try c.decodeIfPresent(Float.self, forKey: .ropeTheta) ?? 10000
         upsampleRates = try c.decodeIfPresent([Int].self, forKey: .upsampleRates) ?? [8, 5, 4, 3]
         upsamplingRatios = try c.decodeIfPresent([Int].self, forKey: .upsamplingRatios) ?? [2, 2]
+        slidingWindow = try c.decodeIfPresent(Int.self, forKey: .slidingWindow) ?? 72
+    }
+
+    /// Qwen's defaults, for a speech tokenizer config without a decoder.
+    static var defaults: Self {
+        try! JSONDecoder().decode(Self.self, from: Data("{}".utf8))
     }
 }
 

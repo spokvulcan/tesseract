@@ -2,10 +2,11 @@
 // Qwen3-TTS model (ADR-0038, ADR-0071).
 //
 // Conditioning and the seed are values in every request, and a captured
-// Reference Take comes back in the segment's stream (ADR-0072). The model's
-// own state, the instruct-prefix cache keyed by description and the
-// decoder's streaming state, assumes one generation at a time; the engine's
-// GPU lease keeps generations from overlapping.
+// Reference Take comes back in the segment's stream (ADR-0072). The model
+// keeps state between generations (the instruct-prefix cache keyed by
+// description, the rewound KV caches) and runs one generation at a time: the
+// engine's GPU lease orders them, and a cancelled one still finishing its
+// frame holds off the next (ADR-0074).
 
 import Foundation
 import MLX
@@ -13,15 +14,50 @@ import Qwen3TTS
 
 public actor Qwen3Synthesizer: SpeechSynthesizing {
     private let checkpointDirectory: @Sendable (TTSModelSpec) -> URL
+    private let neuralEngineCache: URL?
     private var model: Qwen3TTSModel?
     private var loadedSpec: TTSModelSpec?
     private var warmed = false
+    private var neuralEngineTask: Task<Void, Never>?
+
+    /// What moving the codec's conv stack to the Neural Engine came to:
+    /// nil until it finishes; then its placement and check, or why the
+    /// synthesizer stayed on MLX (`neuralEngineReady()`).
+    private var neuralEngineReport: String?
 
     /// `checkpointDirectory` says where a spec's checkpoint lives on disk. In
     /// the app that's the Model Catalog's directory for the Voice Engine. The
     /// synthesizer only loads from there and never downloads.
-    public init(checkpointDirectory: @escaping @Sendable (TTSModelSpec) -> URL) {
+    ///
+    /// With `neuralEngineCache`, the codec's conv stack moves to the Neural
+    /// Engine after warm-up, in the background: a Core ML model built from
+    /// the checkpoint's weights once and kept there (about 140 MB). Until it
+    /// is ready, and wherever it can't run, the MLX conv stack decodes.
+    /// Without one it stays on MLX, so nothing is written anywhere: the app
+    /// passes a directory under its storage root (ADR-0073, ADR-0075).
+    public init(
+        checkpointDirectory: @escaping @Sendable (TTSModelSpec) -> URL,
+        neuralEngineCache: URL? = nil
+    ) {
         self.checkpointDirectory = checkpointDirectory
+        self.neuralEngineCache = neuralEngineCache
+    }
+
+    /// Where the Neural Engine codec is kept under a caches directory.
+    public static func neuralEngineCache(in caches: URL) -> URL {
+        caches.appendingPathComponent("tesseract-speech/neural-codec", isDirectory: true)
+    }
+
+    /// The user's Caches, for tools run outside the app.
+    public static var defaultNeuralEngineCache: URL? {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            .map(neuralEngineCache(in:))
+    }
+
+    /// Waits for the Neural Engine preparation, if one is running.
+    public func neuralEngineReady() async -> String? {
+        await neuralEngineTask?.value
+        return neuralEngineReport
     }
 
     // MARK: - Lifecycle
@@ -51,27 +87,44 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
 
     public func warmUp() async throws {
         guard let model, !warmed else { return }
-        // A tiny end-to-end generation exercises tokenizer materialization,
-        // fused-weight eval, and Metal kernel JIT for talker, code predictor,
-        // and streaming decoder — so the first real request pays generation
-        // only (autopsy F2).
-        _ = try? await model.generate(
-            text: ".", voice: nil, language: "English",
-            sampling: Qwen3TTSSampling(maxTokens: 3))
+        // A tiny end-to-end generation compiles the talker's, the code
+        // predictor's and the decoder's kernels, so the first real request
+        // pays generation only (autopsy F2).
+        try model.warmUp(neuralEngine: neuralEngineCache != nil)
         warmed = true
+        startNeuralEngine(for: model)
+    }
+
+    private func startNeuralEngine(for model: Qwen3TTSModel) {
+        guard let cache = neuralEngineCache, neuralEngineTask == nil else { return }
+        neuralEngineTask = Task.detached(priority: .utility) { [weak self] in
+            let report: String
+            do {
+                report = try await model.prepareNeuralEngine(cacheDirectory: cache)
+            } catch is CancellationError {
+                return
+            } catch {
+                report = "MLX (\(error.localizedDescription))"
+            }
+            await self?.finishNeuralEngine(report)
+        }
+    }
+
+    private func finishNeuralEngine(_ report: String) {
+        neuralEngineReport = report
     }
 
     public func primeVoice(description: String?, language: String?) async throws {
-        guard let model, let description, !description.isEmpty else { return }
-        // The model populates its instruct-prefix KV cache (keyed on the
-        // description) during generation; a minimal generation primes it off
-        // the hot path (autopsy F4).
-        _ = try? await model.generate(
-            text: ".", voice: description, language: language ?? "English",
-            sampling: Qwen3TTSSampling(maxTokens: 2))
+        // The description's instruct-turn KV, cached by the model and reused
+        // by every generation in that voice: off the hot path (autopsy F4).
+        try model?.primeVoice(description)
     }
 
     public func unload() async {
+        neuralEngineTask?.cancel()
+        await neuralEngineTask?.value
+        neuralEngineTask = nil
+        neuralEngineReport = nil
         model = nil
         loadedSpec = nil
         warmed = false
@@ -82,8 +135,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
     public func audioFormat() async -> AudioFormat? {
         // One codec frame per alignment token (the K1 invariant): 1,920
         // samples at 24 kHz for the 12Hz family.
-        guard let model, let samplesPerFrame = model.samplesPerFrame else { return nil }
-        return AudioFormat(sampleRate: model.sampleRate, samplesPerFrame: samplesPerFrame)
+        guard let model else { return nil }
+        return AudioFormat(sampleRate: model.sampleRate, samplesPerFrame: model.samplesPerFrame)
     }
 
     public func alignmentOffsets(for text: String) async throws -> [Int] {
@@ -92,6 +145,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
     }
 
     public func trimCaches() async {
+        // The KV caches kept across the utterance's segments, then the pool.
+        model?.releaseWorkingMemory()
         Memory.clearCache()
     }
 
@@ -116,11 +171,9 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                         },
                         sampling: Self.sampling(request.parameters),
                         seed: request.seed,
-                        // 0.4s chunks: pacing/cancel granularity. Not a perf
-                        // lever — the 2026-07-13 perf pass measured RTF flat at
-                        // interval 2.0, and the streaming decoder is NOT
-                        // chunk-size invariant (samples diverge), so changing
-                        // this alters output audio at a fixed seed.
+                        // 0.4 s chunks on MLX: how often audio is handed over.
+                        // The samples don't depend on it (ADR-0074), and the
+                        // Neural Engine decodes its own fixed chunk.
                         streamingInterval: 0.4)
 
                     // A stall or a long trailing silence plays as a gap in the
@@ -130,7 +183,7 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                     for try await event in modelStream {
                         switch event {
                         case .audio(let audio):
-                            let samples = silence.apply(audio.asArray(Float.self))
+                            let samples = silence.apply(audio)
                             if !samples.isEmpty {
                                 continuation.yield(.chunk(samples))
                             }
