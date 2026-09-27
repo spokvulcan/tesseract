@@ -31,6 +31,12 @@ struct Qwen3TTSPrompt {
     var textTokenCount: Int
 
     var trailingCount: Int { trailingText?.dim(1) ?? 0 }
+
+    /// The text track's input for frame `t`: its trailing text token, then
+    /// pad.
+    func text(forFrame t: Int) -> MLXArray {
+        t < trailingCount ? trailingText![0..., t ..< (t + 1), 0...] : pad
+    }
 }
 
 /// Lays out talker prompts the way Qwen's `generate` does: a text track and a
@@ -41,7 +47,6 @@ struct Qwen3TTSPrompt {
 /// language, a CustomVoice speaker, pad, BOS) under a text track of pads
 /// ending in TTS BOS. What follows depends on the layout.
 final class Qwen3TTSPromptBuilder {
-    private let config: Qwen3TTSModelConfig
     private let talkerConfig: Qwen3TTSTalkerConfig
     private let tokenizer: Tokenizer
     private let talker: Qwen3TTSTalker
@@ -56,7 +61,6 @@ final class Qwen3TTSPromptBuilder {
         config: Qwen3TTSModelConfig, tokenizer: Tokenizer, talker: Qwen3TTSTalker,
         textEmbedding: Qwen3TTSTextEmbedding
     ) throws {
-        self.config = config
         self.talkerConfig = config.talkerConfig ?? .defaults
         self.tokenizer = tokenizer
         self.talker = talker

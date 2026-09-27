@@ -52,7 +52,8 @@ what this one fixed graph needs. The graph:
 
 `MLModel.compileModel` compiles it once, into Caches keyed by the graph
 version, the chunk size, the decoder config and the checkpoint files' sizes
-and dates. Core ML's own cache keeps the ANE specialization per OS build.
+and dates. The builder writes each weight to the package's blob file as it
+converts it, so the build holds one weight at a time, not the 140 MB file. Core ML's own cache keeps the ANE specialization per OS build.
 Measured costs:
 - Cold build: 4.8 s, in the background.
 - Cached load: 0.1 s.
@@ -91,7 +92,7 @@ Measured with the q6 checkpoint on the M3 Max:
 | Real-time factor, engine longform | 0.153 | 0.148 |
 | First audio, first segment | 54 ms | 60 ms |
 | First audio, companion line | 53 to 79 ms | 59 to 81 ms |
-| Peak footprint, engine longform | 2.78 GB | 2.68 GB |
+| Peak footprint, engine longform | 2.72 GB | 2.66 GB |
 | MLX memory with weights | 1,556 MB | 1,449 MB |
 
 - The GPU no longer runs the conv stack, about 1.3 ms of work per 80 ms
@@ -104,7 +105,9 @@ Measured with the q6 checkpoint on the M3 Max:
   than the decoder it replaced (ADR-0074).
 - Chunks on the Neural Engine are 3 frames each, the first included. The last
   chunk of a stream is zero-padded; being causal, padding changes only state
-  nothing reads after it.
+  nothing reads after it. Each stream carries its own conv contexts
+  (`Qwen3TTSNeuralCodec.Stream`), so a cancelled stream's queued chunks never
+  touch the next one's.
 - A `Qwen3TTSTests` case compiles a tiny codec through Core ML (on the CPU, so
   CI needs no Neural Engine) and checks it against MLX. That pins the
   protobuf, the blob format, the polyphase shuffle and the carried state.

@@ -46,15 +46,12 @@ final class Qwen3TTSTextProjection: Module {
 /// The talker: picks each frame's first codebook (the words and the
 /// prosody), and owns the code predictor that fills in the other fifteen.
 final class Qwen3TTSTalker: Module {
-    let config: Qwen3TTSTalkerConfig
-
     @ModuleInfo var model: Qwen3TTSTalkerModel
     @ModuleInfo(key: "text_projection") var textProjection: Qwen3TTSTextProjection
     @ModuleInfo(key: "codec_head") var codecHead: Linear
     @ModuleInfo(key: "code_predictor") var codePredictor: Qwen3TTSCodePredictor
 
     init(config: Qwen3TTSTalkerConfig, fusion: Qwen3TTSFusion = .init()) {
-        self.config = config
         _model.wrappedValue = Qwen3TTSTalkerModel(config: config, fusion: fusion)
         _textProjection.wrappedValue = Qwen3TTSTextProjection(
             inputSize: config.textHiddenSize, outputSize: config.hiddenSize)
@@ -78,18 +75,27 @@ final class Qwen3TTSTalker: Module {
         return (codecHead(hidden).squeezed(axis: 1), hidden)
     }
 
-    /// `callAsFunction` for a prompt. From `layerByLayerLength` positions it
-    /// is evaluated a layer at a time as it is built, so its activations
-    /// don't pile up in MLX's pool; a shorter prompt's are small, and the
-    /// waits would cost first-audio time. Returns before the last layer has
-    /// run.
+    /// `callAsFunction` for a prompt, in pieces of at most `prefillChunk`
+    /// positions, which bounds its working memory (nearly every prompt is one
+    /// piece). A piece of `layerByLayerLength` positions or more is evaluated
+    /// a layer at a time as it is built, so its activations don't pile up in
+    /// MLX's pool; a shorter one's are small, and the waits would cost
+    /// first-audio time. Returns before the last layer has run.
     func prefill(_ embeds: MLXArray, cache: [KVCache]) -> (logits: MLXArray, hidden: MLXArray) {
-        let hidden = runQwen3TTSLayers(
-            embeds, layers: model.layers, cache: cache, finalNorm: model.norm,
-            layerByLayer: embeds.dim(1) >= Self.layerByLayerLength)
-        return (codecHead(hidden).squeezed(axis: 1), hidden)
+        let length = embeds.dim(1)
+        var start = 0
+        while true {
+            let end = min(start + Self.prefillChunk, length)
+            let hidden = runQwen3TTSLayers(
+                embeds[0..., start ..< end, 0...], layers: model.layers, cache: cache,
+                finalNorm: model.norm, layerByLayer: end - start >= Self.layerByLayerLength)
+            if end == length { return (codecHead(hidden).squeezed(axis: 1), hidden) }
+            eval(hidden)
+            start = end
+        }
     }
 
+    static let prefillChunk = 512
     static let layerByLayerLength = 32
 
     /// A KV cache per layer, preallocated for `capacity` positions.
@@ -153,10 +159,12 @@ final class Qwen3TTSCodePredictor: Module {
 
     var codecEmbedding: [Embedding] { model.codecEmbedding }
 
-    /// A cache per layer for one frame's passes (positions 0...numCodeGroups).
+    /// A cache per layer for one frame's passes (positions 0...numCodeGroups),
+    /// that many rows and no more.
     func makeCache() -> [KVCache] {
         model.layers.map { _ in
             let cache = KVCacheSimple()
+            cache.step = numCodeGroups + 1
             cache.reserveCapacity(numCodeGroups + 1)
             return cache
         }

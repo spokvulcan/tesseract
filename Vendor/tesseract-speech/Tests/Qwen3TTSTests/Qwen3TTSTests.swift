@@ -33,12 +33,6 @@ struct Qwen3TTSTests {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }
 
-        let audio = try await fixture.model.generate(
-            text: "target voice prompt one two three four five",
-            voice: "sample voice", language: "English", sampling: TinyModel.sampling)
-        #expect(audio.ndim == 1)
-        #expect(audio.shape[0] > 0)
-
         let streamed = try await collect(
             fixture.model.generateStream(
                 text: "target voice prompt one two three four five",
@@ -49,7 +43,7 @@ struct Qwen3TTSTests {
         #expect(streamed.lastAudio?.isEmpty == false)
         let frames = try #require(streamed.codeFrames)
         #expect(
-            streamed.samples == frames.count * fixture.model.samplesPerFrame,
+            streamed.allAudio.count == frames.count * fixture.model.samplesPerFrame,
             "every accepted frame is decoded, once")
     }
 
@@ -121,16 +115,17 @@ struct Qwen3TTSTests {
             dialectEntries: #""ryan": false"#)
         defer { fixture.cleanUp() }
 
-        let audio = try await fixture.model.generate(
-            text: "target voice prompt one two three four five",
-            voice: "ryan", language: "English", sampling: TinyModel.sampling)
-        #expect(audio.ndim == 1)
-        #expect(audio.shape[0] > 0)
+        let rendered = try await collect(
+            fixture.model.generateStream(
+                text: "target voice prompt one two three four five",
+                voice: "ryan", language: "English", sampling: TinyModel.sampling))
+        #expect(!rendered.allAudio.isEmpty)
 
         await #expect(throws: AudioGenerationError.self) {
-            _ = try await fixture.model.generate(
-                text: "one two", voice: "nobody", language: "English",
-                sampling: TinyModel.sampling)
+            _ = try await collect(
+                fixture.model.generateStream(
+                    text: "one two", voice: "nobody", language: "English",
+                    sampling: TinyModel.sampling))
         }
     }
 
@@ -216,10 +211,11 @@ struct Qwen3TTSTests {
         #expect(upfront.trailingCount == 0)
         #expect(upfront.body.dim(1) == interleaved.body.dim(1) + interleaved.trailingCount + 1)
 
-        let audio = try await fixture.model.generate(
-            text: "one two three four", voice: "sample voice", language: "English",
-            sampling: TinyModel.sampling, layout: .upfront)
-        #expect(audio.shape[0] > 0)
+        let rendered = try await collect(
+            fixture.model.generateStream(
+                text: "one two three four", voice: "sample voice", language: "English",
+                sampling: TinyModel.sampling, layout: .upfront))
+        #expect(!rendered.allAudio.isEmpty)
     }
 
     @Test func aTakeWithTheWrongCodebookCountIsRejected() async throws {
@@ -379,7 +375,7 @@ struct Qwen3TTSTests {
     /// fast math as MLX's kernels are. Compiled without it, one value in
     /// 100,000 to 200,000 lands a bf16 step away, so this checks some 4
     /// million.
-    @Test func theFusedNormRoPEMatchesMLX() {
+    @Test func theFusedNormRoPEMatchesMLX() throws {
         let (heads, kvHeads, headDim) = (16, 8, 128)
         let random = MLXRandom.RandomState(seed: 5)
         let qkv = (MLXRandom.normal([1, 1, (heads + 2 * kvHeads) * headDim], key: random) * 2)
@@ -388,9 +384,10 @@ struct Qwen3TTSTests {
         let kw = (1 + MLXRandom.normal([headDim], key: random) * 0.3).asType(.bfloat16)
         var differ = MLXArray(Int32(0))
         for offset in 0 ..< 1400 {
-            let (q, k) = Qwen3TTSKernels.qkNormRoPE(
-                qkv, qWeight: qw, kWeight: kw, heads: heads, kvHeads: kvHeads, headDim: headDim,
-                eps: 1e-6, base: 1_000_000, offset: offset)
+            let (q, k) = try #require(
+                Qwen3TTSKernels.qkNormRoPE(
+                    qkv, qWeight: qw, kWeight: kw, heads: heads, kvHeads: kvHeads,
+                    headDim: headDim, eps: 1e-6, base: 1_000_000, offset: offset))
             let split = qkv.reshaped(1, 1, heads + 2 * kvHeads, headDim)
             let refQ = MLXFast.RoPE(
                 MLXFast.rmsNorm(split[0..., 0..., ..<heads, 0...], weight: qw, eps: 1e-6)
@@ -456,23 +453,9 @@ struct Qwen3TTSTests {
         var failures: [String] = []
         for seed in 0 ..< 20 {
             let random = MLXRandom.RandomState(seed: UInt64(seed))
-            let layers = (0 ..< 3).map { _ in
-                Qwen3TTSDecoderLayer(
-                    hiddenSize: hidden, intermediateSize: inter, heads: heads, kvHeads: kvHeads,
-                    headDim: headDim, ropeBase: 1_000_000, rmsNormEps: 1e-6, attentionBias: false,
-                    fusion: Qwen3TTSFusion())
-            }
-            let norm = RMSNorm(dimensions: hidden, eps: 1e-6)
-            for layer in layers {
-                let parameters = layer.parameters().flattened().map { key, value in
-                    (key, (key.hasSuffix("norm.weight") || key.hasSuffix("layernorm.weight"))
-                        ? (1 + MLXRandom.normal(value.shape, key: random) * 0.2).asType(.bfloat16)
-                        : (MLXRandom.normal(value.shape, key: random) * 0.03).asType(.bfloat16))
-                }
-                try layer.update(parameters: ModuleParameters.unflattened(parameters), verify: .all)
-            }
-            norm.apply { $0.asType(.bfloat16) }
-            eval(layers.map { $0.parameters() }, norm.parameters())
+            let (layers, norm) = try randomDecoderLayers(
+                3, hidden: hidden, heads: heads, kvHeads: kvHeads, headDim: headDim,
+                intermediate: inter, scale: 0.03, random: random)
             let prompt = MLXRandom.normal([1, 5, hidden], key: random).asType(.bfloat16)
             let step = MLXRandom.normal([1, 1, hidden], key: random).asType(.bfloat16)
             func run(fused: Bool) -> MLXArray {
@@ -496,22 +479,9 @@ struct Qwen3TTSTests {
     func aLayerAtATimePrefillMatchesTheOneGraph(length: Int) throws {
         let (hidden, heads, kvHeads, headDim, inter) = (256, 4, 2, 64, 384)
         let random = MLXRandom.RandomState(seed: 17)
-        let layers = (0 ..< 4).map { _ in
-            Qwen3TTSDecoderLayer(
-                hiddenSize: hidden, intermediateSize: inter, heads: heads, kvHeads: kvHeads,
-                headDim: headDim, ropeBase: 1_000_000, rmsNormEps: 1e-6, attentionBias: false,
-                fusion: Qwen3TTSFusion())
-        }
-        for layer in layers {
-            let parameters = layer.parameters().flattened().map { key, value in
-                (key, (key.hasSuffix("norm.weight") || key.hasSuffix("layernorm.weight"))
-                    ? (1 + MLXRandom.normal(value.shape, key: random) * 0.2).asType(.bfloat16)
-                    : (MLXRandom.normal(value.shape, key: random) * 0.05).asType(.bfloat16))
-            }
-            try layer.update(parameters: ModuleParameters.unflattened(parameters), verify: .all)
-        }
-        let norm = RMSNorm(dimensions: hidden, eps: 1e-6)
-        norm.apply { $0.asType(.bfloat16) }
+        let (layers, norm) = try randomDecoderLayers(
+            4, hidden: hidden, heads: heads, kvHeads: kvHeads, headDim: headDim,
+            intermediate: inter, scale: 0.05, random: random)
         let prompt = MLXRandom.normal([1, length, hidden], key: random).asType(.bfloat16)
         let oneGraph: [KVCache] = layers.map { _ in KVCacheSimple() }
         let layered: [KVCache] = layers.map { _ in KVCacheSimple() }
@@ -696,19 +666,10 @@ struct Qwen3TTSTests {
         var stream = decoder.makeStream()
         let latent = decoder.latent(codes, stream: &stream)
         let expected = try decoder.synthesize(latent, stream: &stream).asArray(Float.self)
-        let values = latent.asType(.float16).asArray(Float16.self)
-        let dim = decoder.config.latentDim
-        var actual: [Float] = []
-        for start in stride(from: 0, to: 7, by: 3) {
-            let valid = min(3, 7 - start)
-            var chunk = Array(values[(start * dim) ..< ((start + valid) * dim)])
-            chunk += [Float16](repeating: 0, count: (3 - valid) * dim)  // the last, padded
-            actual += try codec.decode(latent: chunk, valid: valid)
-        }
+        // Three calls, the last one frame long (padded inside).
+        let actual = try codec.decodeAll(latent: latent.asType(.float16).asArray(Float16.self))
         #expect(actual.count == expected.count)
-        let noise = zip(actual, expected).map { Double(($0 - $1) * ($0 - $1)) }.reduce(0, +)
-        let signal = expected.map { Double($0 * $0) }.reduce(0, +)
-        let snr = 10 * log10(signal / max(noise, 1e-20))
+        let snr = Qwen3TTSNeuralCodec.snr(actual, expected)
         #expect(snr > 40, "Core ML vs MLX: \(snr) dB")
 
         // A second load finds the compiled model in the cache.
@@ -760,25 +721,27 @@ struct TinyModel {
         try? FileManager.default.removeItem(at: tokenizerDirectory)
     }
 
+    /// The tiny decoder's config, as its checkpoint's JSON writes it.
+    static func decoderConfigJSON(slidingWindow: Int) -> String {
+        """
+        {"latent_dim": 32, "codebook_dim": 16, "codebook_size": 2048, "decoder_dim": 48,
+         "hidden_size": 16, "intermediate_size": 32, "num_attention_heads": 2,
+         "num_key_value_heads": 2, "head_dim": 8, "num_hidden_layers": 2,
+         "num_quantizers": 2, "num_semantic_quantizers": 1, "sliding_window": \(slidingWindow),
+         "upsample_rates": [2, 3, 2, 2], "upsampling_ratios": [2, 2]}
+        """
+    }
+
     static func decoderConfig(slidingWindow: Int) -> Qwen3TTSTokenizerDecoderConfig {
-        let json = """
-            {"latent_dim": 32, "codebook_dim": 16, "codebook_size": 2048, "decoder_dim": 48,
-             "hidden_size": 16, "intermediate_size": 32, "num_attention_heads": 2,
-             "num_key_value_heads": 2, "head_dim": 8, "num_hidden_layers": 2,
-             "num_quantizers": 2, "num_semantic_quantizers": 1, "sliding_window": \(slidingWindow),
-             "upsample_rates": [2, 3, 2, 2], "upsampling_ratios": [2, 2]}
-            """
-        return try! JSONDecoder().decode(Qwen3TTSTokenizerDecoderConfig.self, from: Data(json.utf8))
+        try! JSONDecoder().decode(
+            Qwen3TTSTokenizerDecoderConfig.self,
+            from: Data(decoderConfigJSON(slidingWindow: slidingWindow).utf8))
     }
 
     static func speechTokenizerConfigJSON(slidingWindow: Int) -> String {
         """
-        {"decode_upsample_rate": \(samplesPerFrame), "decoder_config": {"latent_dim": 32,
-         "codebook_dim": 16, "codebook_size": 2048, "decoder_dim": 48, "hidden_size": 16,
-         "intermediate_size": 32, "num_attention_heads": 2, "num_key_value_heads": 2,
-         "head_dim": 8, "num_hidden_layers": 2, "num_quantizers": 2,
-         "num_semantic_quantizers": 1, "sliding_window": \(slidingWindow),
-         "upsample_rates": [2, 3, 2, 2], "upsampling_ratios": [2, 2]}}
+        {"decode_upsample_rate": \(samplesPerFrame),
+         "decoder_config": \(decoderConfigJSON(slidingWindow: slidingWindow))}
         """
     }
 
@@ -1046,9 +1009,34 @@ private func makeTinyTokenizerDirectory() throws -> URL {
     return directory
 }
 
+/// `count` decoder layers with random bf16 weights (norm weights near 1,
+/// the rest `scale`-sized), and a final norm.
+func randomDecoderLayers(
+    _ count: Int, hidden: Int, heads: Int, kvHeads: Int, headDim: Int, intermediate: Int,
+    scale: Float, random: MLXRandom.RandomState
+) throws -> (layers: [Qwen3TTSDecoderLayer], norm: RMSNorm) {
+    let layers = (0 ..< count).map { _ in
+        Qwen3TTSDecoderLayer(
+            hiddenSize: hidden, intermediateSize: intermediate, heads: heads, kvHeads: kvHeads,
+            headDim: headDim, ropeBase: 1_000_000, rmsNormEps: 1e-6, attentionBias: false,
+            fusion: Qwen3TTSFusion())
+    }
+    for layer in layers {
+        let parameters = layer.parameters().flattened().map { key, value in
+            (key, (key.hasSuffix("norm.weight") || key.hasSuffix("layernorm.weight"))
+                ? (1 + MLXRandom.normal(value.shape, key: random) * 0.2).asType(.bfloat16)
+                : (MLXRandom.normal(value.shape, key: random) * scale).asType(.bfloat16))
+        }
+        try layer.update(parameters: ModuleParameters.unflattened(parameters), verify: .all)
+    }
+    let norm = RMSNorm(dimensions: hidden, eps: 1e-6)
+    norm.apply { $0.asType(.bfloat16) }
+    eval(layers.map { $0.parameters() }, norm.parameters())
+    return (layers, norm)
+}
+
 struct Collected {
     var chunks = 0
-    var samples = 0
     var allAudio: [Float] = []
     var lastAudio: [Float]?
     var codeFrames: [[Int32]]?
@@ -1060,7 +1048,6 @@ func collect(_ stream: AsyncThrowingStream<AudioGeneration, Error>) async throws
         switch event {
         case .audio(let audio):
             c.chunks += 1
-            c.samples += audio.count
             c.allAudio += audio
             c.lastAudio = audio
         case .codeFrames(let frames): c.codeFrames = frames

@@ -30,7 +30,7 @@ package final class Qwen3TTSTextEmbedding: @unchecked Sendable {
         case .memory(let embedding):
             return embedding(MLXArray(ids).reshaped(1, -1))
         case .file(let descriptor, let offset, let rowBytes, let dtype):
-            var bytes = [UInt8](repeating: 0, count: ids.count * rowBytes)
+            var bytes = Data(count: ids.count * rowBytes)
             try bytes.withUnsafeMutableBytes { buffer in
                 for (i, id) in ids.enumerated() {
                     guard id >= 0, Int(id) < count else {
@@ -50,14 +50,7 @@ package final class Qwen3TTSTextEmbedding: @unchecked Sendable {
                     }
                 }
             }
-            let shape = [1, ids.count, dimensions]
-            return bytes.withUnsafeBytes { raw in
-                switch dtype {
-                case .float32: return MLXArray(raw, shape, type: Float.self)
-                case .float16: return MLXArray(raw, shape, type: UInt16.self).view(dtype: .float16)
-                default: return MLXArray(raw, shape, type: UInt16.self).view(dtype: .bfloat16)
-                }
-            }
+            return MLXArray(bytes, [1, ids.count, dimensions], dtype: dtype)
         }
     }
 
@@ -72,23 +65,17 @@ package final class Qwen3TTSTextEmbedding: @unchecked Sendable {
     /// read on demand. Nil when no file stores it as a plain bf16, fp16 or
     /// fp32 matrix.
     package init?(key: String, directory: URL) {
-        let files =
-            ((try? FileManager.default.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension == "safetensors" }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        for file in files {
+        for file in (try? Qwen3TTSWeights.safetensorsFiles(in: directory)) ?? [] {
             guard let entry = Self.header(of: file)?[key] else { continue }
             let dtype: DType
-            let elementBytes: Int
             switch entry.dtype {
-            case "BF16": (dtype, elementBytes) = (.bfloat16, 2)
-            case "F16": (dtype, elementBytes) = (.float16, 2)
-            case "F32": (dtype, elementBytes) = (.float32, 4)
+            case "BF16": dtype = .bfloat16
+            case "F16": dtype = .float16
+            case "F32": dtype = .float32
             default: return nil
             }
             guard entry.shape.count == 2,
-                entry.end - entry.begin == UInt64(entry.shape[0] * entry.shape[1] * elementBytes)
+                entry.end - entry.begin == UInt64(entry.shape[0] * entry.shape[1] * dtype.size)
             else { return nil }
             let descriptor = open(file.path, O_RDONLY)
             guard descriptor >= 0 else { return nil }
@@ -96,7 +83,7 @@ package final class Qwen3TTSTextEmbedding: @unchecked Sendable {
             dimensions = entry.shape[1]
             storage = .file(
                 descriptor: descriptor, offset: entry.dataStart + entry.begin,
-                rowBytes: dimensions * elementBytes, dtype: dtype)
+                rowBytes: dimensions * dtype.size, dtype: dtype)
             return
         }
         return nil

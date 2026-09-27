@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import MLX
+@preconcurrency import MLXLMCommon
 
 /// Fused Metal kernels for the per-token hot path.
 ///
@@ -9,21 +10,32 @@ import Foundation
 /// exactly what the MLX ops they replace compute: the same casts, the same
 /// math functions, the same random draws.
 ///
+/// q/k RMSNorm + RoPE and the residual add + RMSNorm are MLXLMCommon's
+/// (`attentionNormRope`, `rmsNormResidual`); the top-k draw is this package's.
 /// Each kernel's name starts with `fastmath_`, so the fork compiles it as the
 /// package's MLX kernels are compiled (fast math on). Compiled without it,
-/// `exp2` in the rotary frequencies comes out an ulp away now and then, and
-/// a product near a bf16 rounding boundary lands one step off.
+/// `exp2` in the rotary frequencies comes out an ulp away now and then, and a
+/// product near a bf16 rounding boundary lands one step off.
 enum Qwen3TTSKernels {
-    /// Off runs the plain MLX ops (tests compare the two).
-    nonisolated(unsafe) static var enabled = true
-    /// Per kernel, for bisecting.
+    /// Per kernel: off runs the MLX ops it replaces (tests and the bench
+    /// compare the two).
     nonisolated(unsafe) static var sampler = true
     nonisolated(unsafe) static var normRoPE = true
     nonisolated(unsafe) static var addNorm = true
-    /// Bench: see every fused call's inputs and outputs.
-    nonisolated(unsafe) static var audit: ((Qwen3TTSAttention, MLXArray, MLXArray, MLXArray, Int) -> Void)?
-    nonisolated(unsafe) static var auditAddNorm: ((MLXArray, MLXArray, MLXArray, Float, MLXArray, MLXArray) -> Void)?
-    nonisolated(unsafe) static var auditSample: ((MLXArray, MLXArray, Float, Int, MLXArray) -> Void)?
+
+    /// All three at once.
+    static var enabled: Bool {
+        get { sampler || normRoPE || addNorm }
+        set { (sampler, normRoPE, addNorm) = (newValue, newValue, newValue) }
+    }
+
+    enum Kernel: CaseIterable {
+        case normRoPE, addNorm, sampler
+    }
+
+    /// Bench: sees each fused call's outputs, with a closure computing what
+    /// the MLX ops give for the same inputs.
+    nonisolated(unsafe) static var audit: ((Kernel, [MLXArray], () -> [MLXArray]) -> Void)?
 
     // MARK: - q/k RMSNorm + RoPE
 
@@ -31,140 +43,61 @@ enum Qwen3TTSKernels {
     /// rotate it (non-traditional RoPE at `offset`). `qkv` is the stacked
     /// projection `[1, 1, (heads + 2·kvHeads)·headDim]`. Returns q
     /// `[1, heads, 1, headDim]` and k `[1, kvHeads, 1, headDim]`, as
-    /// `MLXFast.rmsNorm` then `MLXFast.RoPE` would.
+    /// `MLXFast.rmsNorm` then `MLXFast.RoPE` would; nil when switched off or
+    /// when the kernel doesn't take these dtypes (fp32, mixed weights).
     static func qkNormRoPE(
         _ qkv: MLXArray, qWeight: MLXArray, kWeight: MLXArray, heads: Int, kvHeads: Int,
         headDim: Int, eps: Float, base: Float, offset: Int
-    ) -> (q: MLXArray, k: MLXArray) {
-        let outputs = qkNormRoPEKernel(
-            [qkv, qWeight, kWeight, MLXArray([Int32(offset)]), MLXArray([eps, log2(base)])],
-            template: [("T", qkv.dtype), ("HEAD_DIM", headDim), ("QHEADS", heads)],
-            grid: (headDim / 4, heads + kvHeads, 1),
-            threadGroup: (headDim / 4, 1, 1),
-            outputShapes: [[1, heads, 1, headDim], [1, kvHeads, 1, headDim]],
-            outputDTypes: [qkv.dtype, qkv.dtype])
-        return (outputs[0], outputs[1])
+    ) -> (q: MLXArray, k: MLXArray)? {
+        guard normRoPE,
+            let fused = attentionNormRope(
+                rows: qkv, queryOffset: 0, queryHeadStride: headDim, queryHeads: heads,
+                keyOffset: heads * headDim, keyHeadStride: headDim, keyHeads: kvHeads,
+                headDim: headDim, queryWeight: qWeight, keyWeight: kWeight, eps: eps,
+                rope: PlainRoPEParameters(dimensions: headDim, base: base, scale: 1),
+                offset: MLXArray([Int32(offset)]))
+        else { return nil }
+        audit?(.normRoPE, [fused.queries, fused.keys]) {
+            let split = qkv.reshaped(1, 1, heads + 2 * kvHeads, headDim)
+            func rotated(_ x: MLXArray, _ weight: MLXArray) -> MLXArray {
+                MLXFast.RoPE(
+                    MLXFast.rmsNorm(x, weight: weight, eps: eps).transposed(0, 2, 1, 3),
+                    dimensions: headDim, traditional: false, base: base, scale: 1, offset: offset)
+            }
+            return [
+                rotated(split[0..., 0..., ..<heads, 0...], qWeight),
+                rotated(split[0..., 0..., heads ..< (heads + kvHeads), 0...], kWeight),
+            ]
+        }
+        return (fused.queries, fused.keys)
     }
-
-    static func canNormRoPE(headDim: Int) -> Bool {
-        enabled && normRoPE && headDim % 8 == 0 && headDim <= 512
-    }
-
-    private static let qkNormRoPEKernel = MLXFast.metalKernel(
-        name: "fastmath_qwen3tts_qk_norm_rope",
-        inputNames: ["qkv", "qw", "kw", "offset", "params"],
-        outputNames: ["q", "k"],
-        source: """
-            // One threadgroup per head; four elements a thread, as MLX's
-            // rms_norm reads a row this size, so the sum of squares is its sum.
-            uint head = threadgroup_position_in_grid.y;
-            uint t = thread_position_in_threadgroup.x;
-            uint lane = thread_index_in_simdgroup;
-            uint group = simdgroup_index_in_threadgroup;
-            threadgroup float sums[32];
-            threadgroup float normed[HEAD_DIM];
-
-            float xs[4];
-            float acc = 0;
-            for (uint e = 0; e < 4; e++) {
-                xs[e] = static_cast<float>(qkv[head * HEAD_DIM + t * 4 + e]);
-                acc += xs[e] * xs[e];
-            }
-            acc = simd_sum(acc);
-            if (group == 0) { sums[lane] = 0; }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            if (lane == 0) { sums[group] = acc; }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            float total = simd_sum(sums[lane]);
-            float inv = metal::precise::rsqrt(total / HEAD_DIM + params[0]);
-            bool isQ = head < QHEADS;
-            for (uint e = 0; e < 4; e++) {
-                uint i = t * 4 + e;
-                T w = isQ ? qw[i] : kw[i];
-                // The normalized value is cast to T before the weight
-                // multiplies it, as in MLX's rms_norm.
-                T n = w * static_cast<T>(xs[e] * inv);
-                normed[i] = static_cast<float>(n);
-            }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            // RoPE, as MLX's rope_single: pair (j, j + half), frequency
-            // exp2(-j / half * log2(base)), fast sin and cos.
-            constexpr uint HALF = HEAD_DIM / 2;
-            for (uint e = 0; e < 4; e++) {
-                uint i = t * 4 + e;
-                uint j = i < HALF ? i : i - HALF;
-                float d = static_cast<float>(j) / static_cast<float>(HALF);
-                float theta = static_cast<float>(offset[0]) * metal::exp2(-d * params[1]);
-                float c = metal::fast::cos(theta);
-                float s = metal::fast::sin(theta);
-                float x1 = normed[j];
-                float x2 = normed[j + HALF];
-                float r = i < HALF ? x1 * c - x2 * s : x1 * s + x2 * c;
-                if (isQ) {
-                    q[head * HEAD_DIM + i] = static_cast<T>(r);
-                } else {
-                    k[(head - QHEADS) * HEAD_DIM + i] = static_cast<T>(r);
-                }
-            }
-            """)
 
     // MARK: - Residual add + RMSNorm
 
-    /// For one position: `sum = x + y`, and `sum` RMS-normalized with
-    /// `weight`, as MLX's add then rms_norm compute them. `x` and `y` are
-    /// `[1, 1, D]`; D a multiple of 128.
+    /// Whether `runQwen3TTSLayers` fuses the residual adds for `x`: switched
+    /// on, and one position.
+    static func canAddNorm(_ x: MLXArray) -> Bool {
+        addNorm && x.ndim == 3 && x.dim(0) == 1 && x.dim(1) == 1
+    }
+
+    /// `sum = x + y`, and `sum` RMS-normalized with `weight`: one kernel,
+    /// or MLX's add then rms_norm when the dtypes differ (the kernel's
+    /// values either way).
     static func addRMSNorm(_ x: MLXArray, _ y: MLXArray, weight: MLXArray, eps: Float)
         -> (sum: MLXArray, normed: MLXArray)
     {
-        let d = x.dim(-1)
-        let outputs = addRMSNormKernel(
-            [x, y, weight, MLXArray([eps])],
-            template: [("T", x.dtype), ("D", d)],
-            grid: (d / 4, 1, 1),
-            threadGroup: (d / 4, 1, 1),
-            outputShapes: [x.shape, x.shape],
-            outputDTypes: [x.dtype, x.dtype])
-        auditAddNorm?(x, y, weight, eps, outputs[0], outputs[1])
-        return (outputs[0], outputs[1])
+        func ops() -> [MLXArray] {
+            let sum = x + y
+            return [sum, MLXFast.rmsNorm(sum, weight: weight, eps: eps)]
+        }
+        guard x.shape == y.shape, y.dtype == x.dtype, weight.dtype == x.dtype else {
+            let reference = ops()
+            return (reference[0], reference[1])
+        }
+        let (sum, normed) = rmsNormResidual(x, y, weight: weight, eps: eps)
+        audit?(.addNorm, [sum, normed], ops)
+        return (sum, normed)
     }
-
-    static func canAddNorm(_ x: MLXArray) -> Bool {
-        enabled && addNorm && x.ndim == 3 && x.dim(0) == 1 && x.dim(1) == 1 && x.dim(2) % 128 == 0
-            && x.dim(2) <= 4096
-    }
-
-    private static let addRMSNormKernel = MLXFast.metalKernel(
-        name: "fastmath_qwen3tts_add_rms_norm",
-        inputNames: ["x", "y", "w", "params"],
-        outputNames: ["sum", "normed"],
-        source: """
-            // Four elements a thread, as MLX's rms_norm reads them.
-            uint tid = thread_position_in_threadgroup.x;
-            uint lane = thread_index_in_simdgroup;
-            uint group = simdgroup_index_in_threadgroup;
-            threadgroup float sums[32];
-            T s[4];
-            float acc = 0;
-            for (uint e = 0; e < 4; e++) {
-                uint idx = tid * 4 + e;
-                s[e] = static_cast<T>(static_cast<float>(x[idx]) + static_cast<float>(y[idx]));
-                sum[idx] = s[e];
-                float v = static_cast<float>(s[e]);
-                acc += v * v;
-            }
-            acc = simd_sum(acc);
-            if (group == 0) { sums[lane] = 0; }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            if (lane == 0) { sums[group] = acc; }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-            float total = simd_sum(sums[lane]);
-            float inv = metal::precise::rsqrt(total / D + params[0]);
-            for (uint e = 0; e < 4; e++) {
-                uint idx = tid * 4 + e;
-                normed[idx] = w[idx] * static_cast<T>(static_cast<float>(s[e]) * inv);
-            }
-            """)
 
     // MARK: - Top-k categorical sample
 
@@ -172,15 +105,16 @@ enum Qwen3TTSKernels {
     /// every logit at least the k-th largest (ties stay): what
     /// `categorical(which(x < kth, -inf, x), key:)` with `x = logits /
     /// temperature` computes, with the same uniform draw, so the same token.
+    /// `divisor` is `temperature` as MLX divides by it, rounded to the
+    /// logits' type (`[1]` float32, kept by `Qwen3TTSSampler`).
     static func topKSample(
-        _ logits: MLXArray, temperature: Float, topK: Int, random: MLXRandom.RandomState
+        _ logits: MLXArray, temperature: Float, divisor: MLXArray, topK: Int,
+        random: MLXRandom.RandomState
     ) -> MLXArray {
         let vocab = logits.dim(-1)
         // categorical's own draw: uniform [0, 1) of the logits' shape, float32.
         let noise = MLXRandom.uniform(
             low: Float(0), high: Float(1), [1, vocab], dtype: .float32, key: random)
-        // Divided as MLX divides by a scalar: the scalar in the logits' type.
-        let t = MLXArray([temperature]).asType(logits.dtype).asType(.float32)
         let lowBit: Int
         switch logits.dtype {
         case .bfloat16: lowBit = 16
@@ -188,7 +122,7 @@ enum Qwen3TTSKernels {
         default: lowBit = 0
         }
         let token = topKKernel(
-            [logits, noise, t],
+            [logits, noise, divisor],
             template: [
                 ("T", logits.dtype), ("V", vocab), ("K", topK), ("LOW_BIT", lowBit),
             ],
@@ -196,13 +130,17 @@ enum Qwen3TTSKernels {
             threadGroup: (1024, 1, 1),
             outputShapes: [[1, 1]],
             outputDTypes: [.int32])[0]
-        auditSample?(logits, noise, temperature, topK, token)
+        audit?(.sampler, [token]) {
+            // categorical: argmax(gumbel + logits), gumbel = -log(-log(u)).
+            let filtered = Qwen3TTSSampler.filter(logits / temperature, topK: topK, topP: 1)
+            return [argMax(-log(-log(noise)) + filtered, axis: -1).asType(.int32).reshaped(1, 1)]
+        }
         return token
     }
 
     /// Whether `topKSample` computes this sampler's draw.
     static func canSample(_ logits: MLXArray, temperature: Float, topK: Int, topP: Float) -> Bool {
-        enabled && sampler && temperature > 0 && topK > 0 && topK < logits.dim(-1)
+        sampler && temperature > 0 && topK > 0 && topK < logits.dim(-1)
             && (topP <= 0 || topP >= 1) && logits.ndim == 2 && logits.dim(0) == 1
             && [.bfloat16, .float16, .float32].contains(logits.dtype)
     }

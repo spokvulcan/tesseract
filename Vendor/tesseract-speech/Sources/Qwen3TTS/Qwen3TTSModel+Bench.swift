@@ -7,30 +7,11 @@ import Foundation
 
 extension Qwen3TTSModel {
 
-    /// Decodes `codeFrames` (one row of `numCodeGroups` codes per frame)
-    /// with the streaming decoder, `chunk` frames per step. Returns the
-    /// samples and the seconds each step took.
+    /// The codec decoder's streaming decode, timed (`Qwen3TTSCodecDecoder`).
     package func benchStreamingDecode(
         codeFrames: [[Int32]], chunk: Int
     ) throws -> (samples: [Float], stepSeconds: [Double]) {
-        guard !codeFrames.isEmpty else { return ([], []) }
-        let all = MLXArray(codeFrames.flatMap { $0 }).reshaped(1, codeFrames.count, -1)
-        var stream = codecDecoder.makeStream()
-        var samples: [Float] = []
-        var times: [Double] = []
-        var start = 0
-        while start < codeFrames.count {
-            let end = min(start + chunk, codeFrames.count)
-            let codes = all[0..., start ..< end, 0...]
-            eval(codes)
-            let t0 = DispatchTime.now().uptimeNanoseconds
-            let audio = try codecDecoder.decode(codes, stream: &stream)
-            eval([audio] + stream.arrays)
-            times.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
-            samples.append(contentsOf: audio.asArray(Float.self))
-            start = end
-        }
-        return (samples, times)
+        try codecDecoder.benchStreamingDecode(codeFrames: codeFrames, chunk: chunk)
     }
 
     /// Teacher-forced logits for `codeFrames`: the talker's logits before
@@ -41,11 +22,10 @@ extension Qwen3TTSModel {
     /// cpVocab]`.
     package func benchTeacherForced(
         text: String, voice: String?, language: String?,
-        reference: Qwen3TTSReference?, codeFrames: [[Int32]],
-        layout: Qwen3TTSTextLayout = .interleaved
+        reference: Qwen3TTSReference?, codeFrames: [[Int32]]
     ) throws -> (talker: [Float], detail: [Float]) {
         let prompt = try prompt(
-            text: text, voice: voice, language: language, reference: reference, layout: layout)
+            text: text, voice: voice, language: language, reference: reference, layout: .interleaved)
         let full = prompt.instruct.map { concatenated([$0, prompt.body], axis: 1) } ?? prompt.body
         let cache = talker.makeCache(capacity: full.dim(1) + codeFrames.count + 1)
         let codeCache = talker.codePredictor.makeCache()
@@ -66,61 +46,10 @@ extension Qwen3TTSModel {
             for l in groupLogits {
                 detailRows.append(contentsOf: l.asType(.float32).asArray(Float.self))
             }
-            let text =
-                t < prompt.trailingCount
-                ? prompt.trailingText![0..., t ..< (t + 1), 0...] : prompt.pad
-            (logits, hidden) = talker(sum + text, cache: cache)
+            (logits, hidden) = talker(sum + prompt.text(forFrame: t), cache: cache)
         }
         talkerRows.append(contentsOf: logits.asType(.float32).asArray(Float.self))
         return (talkerRows, detailRows)
-    }
-
-    /// Times the talker: one prefill of `promptLength` positions (each run
-    /// on a fresh cache, `repeats` times), then `steps` single-position
-    /// forwards, then `steps` code-predictor frames (15 sequential passes,
-    /// sampling each). Seconds per call.
-    package func benchTalker(
-        promptLength: Int, steps: Int, repeats: Int = 3
-    ) -> (prefill: [Double], talkerStep: [Double], codePredictorFrame: [Double]) {
-        let hiddenSize = talkerConfig.hiddenSize
-        let random = MLXRandom.RandomState(seed: 7)
-        let prompt = (MLXRandom.normal([1, promptLength, hiddenSize], key: random) * 0.02)
-            .asType(.bfloat16)
-        eval(prompt)
-
-        var prefill: [Double] = []
-        var cache = talker.makeCache(capacity: promptLength + steps + 1)
-        var (logits, hidden) = talker.prefill(prompt, cache: cache)
-        for _ in 0 ..< repeats {
-            cache = talker.makeCache(capacity: promptLength + steps + 1)
-            let t0 = DispatchTime.now().uptimeNanoseconds
-            (logits, hidden) = talker.prefill(prompt, cache: cache)
-            eval(logits, hidden)
-            prefill.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
-        }
-
-        var talkerTimes: [Double] = []
-        for _ in 0 ..< steps {
-            let t0 = DispatchTime.now().uptimeNanoseconds
-            (logits, hidden) = talker(hidden, cache: cache)
-            eval(logits, hidden)
-            talkerTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
-        }
-
-        var cpTimes: [Double] = []
-        let codeCache = talker.codePredictor.makeCache()
-        let sampler = Qwen3TTSSampler(temperature: 0.5, topK: 50, topP: 1)
-        let firstEmbedding = talker.embedCodec(MLXArray([Int32(5)]).reshaped(1, 1))
-        eval(firstEmbedding)
-        for _ in 0 ..< steps {
-            let t0 = DispatchTime.now().uptimeNanoseconds
-            let (codes, sum) = talker.codePredictor.predict(
-                hidden: hidden, firstEmbedding: firstEmbedding, cache: codeCache
-            ) { _, logits in sampler(logits, random: random) }
-            eval(codes + [sum])
-            cpTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
-        }
-        return (prefill, talkerTimes, cpTimes)
     }
 }
 
@@ -157,21 +86,13 @@ extension Qwen3TTSModel {
                 hidden: hidden, firstEmbedding: talker.embedCodec(first), cache: codeCache
             ) { _, l in detail(l, random: random) }
             let codes = concatenated([first] + rest, axis: 1)
-            let text = frame < prompt.trailingCount ? prompt.trailingText![0..., frame ..< (frame + 1), 0...] : prompt.pad
-            (logits, hidden) = talker(sum + text, cache: cache)
+            (logits, hidden) = talker(sum + prompt.text(forFrame: frame), cache: cache)
             eval(codes, logits, hidden, sampler.recent)
             accepted.append(codes)
             if (frame + 1) % every == 0 { probe("frame \(frame + 1)") }
         }
-        var stream = codecDecoder.makeStream()
-        var start = 0
-        while start < accepted.count {
-            let end = min(start + 5, accepted.count)
-            let c = concatenated(Array(accepted[start ..< end]), axis: 0).reshaped(1, end - start, -1)
-            let audio = try codecDecoder.decode(c, stream: &stream)
-            eval([audio] + stream.arrays)
-            start = end
-        }
+        _ = try codecDecoder.benchStreamingDecode(
+            codeFrames: accepted.map { $0.asArray(Int32.self) }, chunk: 5)
         probe("decoded")
     }
 }
@@ -183,18 +104,16 @@ extension Qwen3TTSModel {
         guard let codec = neuralCodecForBench else { return ([], []) }
         let all = MLXArray(codeFrames.flatMap { $0 }).reshaped(1, codeFrames.count, -1)
         var stream = codecDecoder.makeStream()
-        codec.reset()
+        let neuralStream = try codec.makeStream()
         var samples: [Float] = []
         var times: [Double] = []
-        let dim = codecDecoder.config.latentDim
         var start = 0
         while start < codeFrames.count {
             let end = min(start + codec.frames, codeFrames.count)
             let latent = codecDecoder.latent(all[0..., start ..< end, 0...], stream: &stream)
-            var values = latent.asType(.float16).asArray(Float16.self)
-            values += [Float16](repeating: 0, count: (codec.frames - (end - start)) * dim)
+            let values = latent.asType(.float16).asArray(Float16.self)
             let t0 = DispatchTime.now().uptimeNanoseconds
-            samples += try codec.decode(latent: values, valid: end - start)
+            samples += try codec.decode(latent: values, stream: neuralStream)
             times.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
             start = end
         }
@@ -203,12 +122,13 @@ extension Qwen3TTSModel {
 }
 
 extension Qwen3TTSModel {
-    /// Splits a talker step's and a code-predictor frame's time into graph
-    /// construction (CPU) and evaluation (GPU, after the graph is built).
-    package func benchBuildVersusRun(steps: Int) -> (talkerBuild: [Double], talkerRun: [Double], cpBuild: [Double], cpRun: [Double]) {
+    /// Times a talker step and a code-predictor frame after a prompt of
+    /// `promptLength` positions, split into graph construction (CPU) and
+    /// evaluation (GPU, after the graph is built).
+    package func benchBuildVersusRun(promptLength: Int, steps: Int) -> (talkerBuild: [Double], talkerRun: [Double], cpBuild: [Double], cpRun: [Double]) {
         let random = MLXRandom.RandomState(seed: 7)
-        let prompt = (MLXRandom.normal([1, 300, talkerConfig.hiddenSize], key: random) * 0.02).asType(.bfloat16)
-        let cache = talker.makeCache(capacity: 300 + steps + 1)
+        let prompt = (MLXRandom.normal([1, promptLength, talkerConfig.hiddenSize], key: random) * 0.02).asType(.bfloat16)
+        let cache = talker.makeCache(capacity: promptLength + steps + 1)
         var (logits, hidden) = talker(prompt, cache: cache)
         eval(logits, hidden)
         var tb: [Double] = [], tr: [Double] = [], cb: [Double] = [], cr: [Double] = []
@@ -238,9 +158,8 @@ extension Qwen3TTSModel {
 }
 
 extension Qwen3TTSModel {
-    /// Bench: the fused Metal kernels on or off.
-    package func setFusedKernels(_ enabled: Bool, sampler: Bool = true, normRoPE: Bool = true, addNorm: Bool = true) {
-        Qwen3TTSKernels.enabled = enabled
+    /// Bench: each fused Metal kernel on or off.
+    package func setFusedKernels(sampler: Bool, normRoPE: Bool, addNorm: Bool) {
         Qwen3TTSKernels.sampler = sampler
         Qwen3TTSKernels.normRoPE = normRoPE
         Qwen3TTSKernels.addNorm = addNorm
@@ -250,95 +169,22 @@ extension Qwen3TTSModel {
 extension Qwen3TTSModel {
     /// Bench: runs `body` with every fused kernel call checked against the
     /// MLX ops it replaces, on the same inputs (the sampler on the same
-    /// uniform draw). The first mismatching q/k calls go to `dump` as JSON.
-    package func benchAudit(dump: URL?, _ body: () async throws -> Void) async rethrows -> String {
-        var names: [ObjectIdentifier: String] = [:]
-        for (i, layer) in talker.model.layers.enumerated() {
-            names[ObjectIdentifier(layer.attention)] = "talker.\(i)"
+    /// uniform draw): how many calls of each kernel differed.
+    package func benchAudit(_ body: () async throws -> Void) async rethrows -> String {
+        var calls: [Qwen3TTSKernels.Kernel: Int] = [:]
+        var differed: [Qwen3TTSKernels.Kernel: Int] = [:]
+        Qwen3TTSKernels.audit = { kernel, fused, reference in
+            let differ = zip(fused, reference()).map { ($0 .!= $1).sum() }
+                .reduce(MLXArray(Int32(0)), +)
+            calls[kernel, default: 0] += 1
+            if differ.item(Int32.self) > 0 { differed[kernel, default: 0] += 1 }
         }
-        for (i, layer) in talker.codePredictor.model.layers.enumerated() {
-            names[ObjectIdentifier(layer.attention)] = "predictor.\(i)"
-        }
-        var calls = (normRoPE: 0, addNorm: 0, sample: 0)
-        var mismatched = (normRoPE: 0, addNorm: 0, sample: 0)
-        var elements = 0
-        var dumped = 0
-        var perLayer: [String: Int] = [:]
-        Qwen3TTSKernels.audit = { attention, qkv, q, k, offset in
-            let h = attention.heads
-            let kv = attention.kvHeads
-            let d = attention.headDim
-            let split = qkv.reshaped(1, 1, h + 2 * kv, d)
-            let nq = attention.qNorm(split[0..., 0..., ..<h, 0...])
-            let nk = attention.kNorm(split[0..., 0..., h ..< (h + kv), 0...])
-            let refQ = MLXFast.RoPE(
-                nq.transposed(0, 2, 1, 3), dimensions: d, traditional: false,
-                base: attention.ropeBase, scale: 1, offset: offset)
-            let refK = MLXFast.RoPE(
-                nk.transposed(0, 2, 1, 3), dimensions: d, traditional: false,
-                base: attention.ropeBase, scale: 1, offset: offset)
-            let differ = (q .!= refQ).sum() + (k .!= refK).sum()
-            eval(differ)
-            calls.normRoPE += 1
-            let n = Int(differ.item(Int32.self))
-            guard n > 0 else { return }
-            let name = names[ObjectIdentifier(attention)] ?? "?"
-            mismatched.normRoPE += 1
-            elements += n
-            perLayer[name, default: 0] += 1
-            guard let dump, dumped < 6 else { return }
-            dumped += 1
-            func floats(_ a: MLXArray) -> [Float] { a.asType(.float32).reshaped(-1).asArray(Float.self) }
-            let record = NormRoPEMismatch(
-                name: name, offset: offset, eps: attention.qNorm.eps, base: attention.ropeBase,
-                heads: h, kvHeads: kv, headDim: d, qkv: floats(qkv),
-                qw: floats(attention.qNorm.weight), kw: floats(attention.kNorm.weight),
-                q: floats(q), k: floats(k), refQ: floats(refQ), refK: floats(refK),
-                nq: floats(nq), nk: floats(nk))
-            try? JSONEncoder().encode(record).write(
-                to: dump.appendingPathComponent("mismatch-\(dumped).json"))
-        }
-        Qwen3TTSKernels.auditAddNorm = { x, y, weight, eps, sum, normed in
-            let refSum = x + y
-            let refNormed = MLXFast.rmsNorm(refSum, weight: weight, eps: eps)
-            let differ = (sum .!= refSum).sum() + (normed .!= refNormed).sum()
-            eval(differ)
-            calls.addNorm += 1
-            if differ.item(Int32.self) > 0 { mismatched.addNorm += 1 }
-        }
-        Qwen3TTSKernels.auditSample = { logits, noise, temperature, topK, token in
-            // categorical: argmax(gumbel + logits), gumbel = -log(-log(u)).
-            let filtered = Qwen3TTSSampler.filter(logits / temperature, topK: topK, topP: 1)
-            let reference = argMax(-log(-log(noise)) + filtered, axis: -1).asType(.int32)
-            let differ = (reference.reshaped(1, 1) .!= token).sum()
-            eval(differ)
-            calls.sample += 1
-            if differ.item(Int32.self) > 0 { mismatched.sample += 1 }
-        }
-        defer {
-            Qwen3TTSKernels.audit = nil
-            Qwen3TTSKernels.auditAddNorm = nil
-            Qwen3TTSKernels.auditSample = nil
-        }
+        defer { Qwen3TTSKernels.audit = nil }
         try await body()
-        let layers = perLayer.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
-        return "q/k norm+RoPE \(mismatched.normRoPE)/\(calls.normRoPE) calls differ (\(elements) elements)"
-            + (layers.isEmpty ? "" : " [" + layers.joined(separator: ", ") + "]")
-            + "; add+norm \(mismatched.addNorm)/\(calls.addNorm); sampler \(mismatched.sample)/\(calls.sample)"
+        return Qwen3TTSKernels.Kernel.allCases.map {
+            "\($0) \(differed[$0] ?? 0)/\(calls[$0] ?? 0)"
+        }.joined(separator: ", ") + " calls differ"
     }
-}
-
-/// Bench: one fused q/k call that differed from MLX's ops, with its inputs
-/// (float32), for offline analysis.
-private struct NormRoPEMismatch: Encodable {
-    var name: String
-    var offset: Int
-    var eps: Float
-    var base: Float
-    var heads: Int
-    var kvHeads: Int
-    var headDim: Int
-    var qkv, qw, kw, q, k, refQ, refK, nq, nk: [Float]
 }
 
 extension Qwen3TTSModel {
@@ -370,5 +216,33 @@ extension Qwen3TTSModel {
                 mb(Memory.activeMemory + Memory.cacheMemory - base)))
         }
         return lines
+    }
+}
+
+extension Qwen3TTSCodecDecoder {
+    /// Bench: decodes `codeFrames` (one row of `numQuantizers` codes per
+    /// frame) as a stream, `chunk` frames at a time. Returns the samples and
+    /// the seconds each chunk took.
+    package func benchStreamingDecode(
+        codeFrames: [[Int32]], chunk: Int
+    ) throws -> (samples: [Float], stepSeconds: [Double]) {
+        guard !codeFrames.isEmpty else { return ([], []) }
+        let all = MLXArray(codeFrames.flatMap { $0 }).reshaped(1, codeFrames.count, -1)
+        var stream = makeStream()
+        var samples: [Float] = []
+        var times: [Double] = []
+        var start = 0
+        while start < codeFrames.count {
+            let end = min(start + chunk, codeFrames.count)
+            let codes = all[0..., start ..< end, 0...]
+            eval(codes)
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            let audio = try decode(codes, stream: &stream)
+            eval([audio] + stream.arrays)
+            times.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
+            samples.append(contentsOf: audio.asArray(Float.self))
+            start = end
+        }
+        return (samples, times)
     }
 }

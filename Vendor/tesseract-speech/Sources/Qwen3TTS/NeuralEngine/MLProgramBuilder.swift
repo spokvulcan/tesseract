@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import MLX
 
 // A small writer for Core ML ML Program packages: the model specification
 // (Model.proto and MIL.proto, coremltools' `mlmodel/format`, BSD-3), its
@@ -150,52 +151,39 @@ final class MILFunctionBuilder {
 
     func ints(_ values: [Int]) -> MILVar {
         let type = MILType(dataType: .int32, shape: [values.count])
-        return const(type) { value in
-            value.message(2) { type.write(&$0) }
-            value.message(3) { imm in
-                imm.message(1) { t in t.message(2) { r in r.packed(1, values.map(Int64.init)) } }
-            }
+        return const(type) {
+            Self.immediateValue(&$0, type, field: 2) { $0.packed(1, values.map(Int64.init)) }
         }
     }
 
     func int(_ value: Int) -> MILVar {
         let type = MILType(dataType: .int32, shape: [])
-        return const(type) { v in
-            v.message(2) { type.write(&$0) }
-            v.message(3) { imm in imm.message(1) { t in t.message(2) { r in r.packed(1, [Int64(value)]) } } }
-        }
+        return const(type) { Self.immediateValue(&$0, type, field: 2) { $0.packed(1, [Int64(value)]) } }
     }
 
     func bool(_ value: Bool) -> MILVar {
         let type = MILType(dataType: .bool, shape: [])
-        return const(type) { v in
-            v.message(2) { type.write(&$0) }
-            v.message(3) { imm in imm.message(1) { t in t.message(3) { r in r.packed(1, [value ? 1 : 0]) } } }
-        }
+        return const(type) { Self.immediateValue(&$0, type, field: 3) { $0.packed(1, [value ? 1 : 0]) } }
     }
 
     func string(_ value: String) -> MILVar {
-        let type = MILType(dataType: .string, shape: [])
-        return const(type) { Self.stringValue(value, &$0) }
+        const(MILType(dataType: .string, shape: [])) { Self.stringValue(value, &$0) }
     }
 
     /// An fp16 scalar, stored as its two bytes (how MIL writes fp16).
     func half(_ value: Float) -> MILVar {
         let type = MILType.fp16([])
         let bits = Float16(value).bitPattern
-        return const(type) { v in
-            v.message(2) { type.write(&$0) }
-            v.message(3) { imm in
-                imm.message(1) { t in
-                    t.message(7) { r in r.bytes(1, Data([UInt8(bits & 0xFF), UInt8(bits >> 8)])) }
-                }
+        return const(type) {
+            Self.immediateValue(&$0, type, field: 7) {
+                $0.bytes(1, Data([UInt8(bits & 0xFF), UInt8(bits >> 8)]))
             }
         }
     }
 
-    /// An fp16 tensor from the blob file.
-    func weight(_ values: [Float16], shape: [Int]) -> MILVar {
-        precondition(values.count == shape.reduce(1, *), "weight size \(values.count) vs \(shape)")
+    /// An fp16 tensor `shape` from the blob file: `values`' bytes.
+    func weight(_ values: MLXArray, shape: [Int]) -> MILVar {
+        precondition(values.size == shape.reduce(1, *), "weight size \(values.size) vs \(shape)")
         let offset = blobs.append(values)
         let type = MILType.fp16(shape)
         return const(type) { v in
@@ -207,10 +195,18 @@ final class MILFunctionBuilder {
         }
     }
 
-    /// Value { type: string scalar, immediateValue { tensor { strings } } }.
+    /// `Value { type, immediateValue { tensor { <field>: payload } } }`, the
+    /// field naming the tensor's value list (ints, bools, strings, bytes).
+    private static func immediateValue(
+        _ v: inout ProtobufWriter, _ type: MILType, field: Int,
+        _ payload: (inout ProtobufWriter) -> Void
+    ) {
+        v.message(2) { type.write(&$0) }
+        v.message(3) { imm in imm.message(1) { t in t.message(field) { payload(&$0) } } }
+    }
+
     private static func stringValue(_ s: String, _ v: inout ProtobufWriter) {
-        v.message(2) { MILType(dataType: .string, shape: []).write(&$0) }
-        v.message(3) { imm in imm.message(1) { t in t.message(4) { r in r.string(1, s) } } }
+        immediateValue(&v, MILType(dataType: .string, shape: []), field: 4) { $0.string(1, s) }
     }
 
     // MARK: Operations
@@ -262,33 +258,60 @@ final class MILFunctionBuilder {
 /// MILBlob storage v2: a 64-byte header (count, version 2), then per blob a
 /// 64-byte metadata record (sentinel 0xDEADBEEF, dtype, size, data offset)
 /// and the data, each 64-byte aligned. A blob is referenced by the offset of
-/// its metadata record.
+/// its metadata record. Each blob goes to the file as it comes, and the
+/// header at the end, so building holds one weight at a time; the first
+/// write error is thrown by `finish()`.
 final class MILBlobWriter {
-    private(set) var data = Data(count: 64)
+    private let handle: FileHandle
+    private var size: UInt64 = 64
     private var blobCount: UInt32 = 0
+    private var error: Error?
 
-    /// Appends fp16 values; returns the offset to reference them by.
-    func append(_ values: [Float16]) -> UInt64 {
-        let metadataOffset = UInt64(data.count)
-        let dataOffset = metadataOffset + 64
-        let byteCount = UInt64(values.count * 2)
-        var meta = Data(count: 64)
-        meta.withUnsafeMutableBytes { p in
+    init(url: URL) throws {
+        guard FileManager.default.createFile(atPath: url.path, contents: Data(count: 64)) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: url.path])
+        }
+        handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+    }
+
+    /// Appends an fp16 array's values; returns the offset to reference them by.
+    func append(_ values: MLXArray) -> UInt64 {
+        precondition(values.dtype == .float16)
+        let bytes = values.asData(access: .noCopyIfContiguous).data
+        let metadataOffset = size
+        var record = Data(count: 64)
+        record.withUnsafeMutableBytes { p in
             p.storeBytes(of: UInt32(0xDEAD_BEEF).littleEndian, toByteOffset: 0, as: UInt32.self)
             p.storeBytes(of: UInt32(1).littleEndian, toByteOffset: 4, as: UInt32.self)  // Float16
-            p.storeBytes(of: byteCount.littleEndian, toByteOffset: 8, as: UInt64.self)
-            p.storeBytes(of: dataOffset.littleEndian, toByteOffset: 16, as: UInt64.self)
+            p.storeBytes(of: UInt64(bytes.count).littleEndian, toByteOffset: 8, as: UInt64.self)
+            p.storeBytes(of: (metadataOffset + 64).littleEndian, toByteOffset: 16, as: UInt64.self)
         }
-        data.append(meta)
-        values.withUnsafeBytes { data.append(contentsOf: $0) }
-        let padding = (64 - data.count % 64) % 64
-        if padding > 0 { data.append(Data(count: padding)) }
+        let padding = (64 - bytes.count % 64) % 64
+        write(record)
+        write(bytes)
+        if padding > 0 { write(Data(count: padding)) }
+        size += UInt64(64 + bytes.count + padding)
         blobCount += 1
-        data.withUnsafeMutableBytes { p in
+        return metadataOffset
+    }
+
+    /// Writes the header and closes the file.
+    func finish() throws {
+        defer { try? handle.close() }
+        if let error { throw error }
+        var header = Data(count: 64)
+        header.withUnsafeMutableBytes { p in
             p.storeBytes(of: blobCount.littleEndian, toByteOffset: 0, as: UInt32.self)
             p.storeBytes(of: UInt32(2).littleEndian, toByteOffset: 4, as: UInt32.self)
         }
-        return metadataOffset
+        try handle.seek(toOffset: 0)
+        try handle.write(contentsOf: header)
+    }
+
+    private func write(_ data: Data) {
+        guard error == nil else { return }
+        do { try handle.write(contentsOf: data) } catch { self.error = error }
     }
 }
 
@@ -338,15 +361,18 @@ enum MLProgramPackage {
         return model.data
     }
 
-    /// Writes `<url>` as an `.mlpackage` directory.
-    static func write(specification: Data, weights: Data, to url: URL) throws {
-        let fm = FileManager.default
-        try? fm.removeItem(at: url)
+    /// The weight file of the `.mlpackage` at `url`, its directories made.
+    static func weightsURL(in url: URL) throws -> URL {
+        let weights = url.appendingPathComponent("Data/com.apple.CoreML/weights", isDirectory: true)
+        try FileManager.default.createDirectory(at: weights, withIntermediateDirectories: true)
+        return weights.appendingPathComponent("weight.bin")
+    }
+
+    /// Completes the `.mlpackage` at `url`, whose weights are written
+    /// (`weightsURL`): the specification and the manifest.
+    static func write(specification: Data, to url: URL) throws {
         let root = url.appendingPathComponent("Data/com.apple.CoreML", isDirectory: true)
-        try fm.createDirectory(
-            at: root.appendingPathComponent("weights"), withIntermediateDirectories: true)
         try specification.write(to: root.appendingPathComponent("model.mlmodel"))
-        try weights.write(to: root.appendingPathComponent("weights/weight.bin"))
         let modelID = UUID().uuidString
         let weightsID = UUID().uuidString
         let manifest: [String: Any] = [

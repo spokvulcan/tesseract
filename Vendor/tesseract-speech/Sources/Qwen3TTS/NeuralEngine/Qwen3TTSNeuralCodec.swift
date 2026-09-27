@@ -21,15 +21,12 @@ import Foundation
 /// on first load and caches that too. Loading refuses a plan that would put
 /// any op off the Neural Engine, and then the MLX conv stack does the work.
 package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
-    /// Frames per call. A stream's last chunk is padded: every layer is
-    /// causal, so padding changes only the state, which nothing reads after.
+    /// Frames per call.
     package let frames: Int
     package let samplesPerFrame: Int
     private let latentDim: Int
     private let model: MLModel
     private let states: [StateSpec]
-    private var state: [String: MLMultiArray] = [:]
-    private let lock = NSLock()
 
     /// Bump when the graph changes: part of the cache key.
     static let graphVersion = 1
@@ -48,29 +45,42 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
         self.latentDim = latentDim
         self.model = model
         self.states = states
-        reset()
     }
 
     // MARK: - Running
 
-    /// Starts a new stream: every conv context back to zeros.
-    package func reset() {
-        lock.lock()
-        defer { lock.unlock() }
-        state = [:]
-        for spec in states {
-            let array = try! MLMultiArray(shape: spec.shape.map { NSNumber(value: $0) }, dataType: .float16)
-            array.withUnsafeMutableBytes { raw, _ in _ = raw.initializeMemory(as: UInt8.self, repeating: 0) }
-            state[spec.input] = array
+    /// One stream's conv contexts, carried from chunk to chunk. Its chunks
+    /// decode one at a time, in order.
+    package final class Stream: @unchecked Sendable {
+        fileprivate var state: [String: MLMultiArray]
+
+        fileprivate init(state: [String: MLMultiArray]) {
+            self.state = state
         }
     }
 
-    /// Decodes one chunk: `latent` is `frames × latentDim` fp16 values,
-    /// frame-major (the MLX latent's own layout). The first `valid` frames
-    /// are real; the rest is padding. Returns `valid × samplesPerFrame`
-    /// samples. Not reentrant: one stream at a time, in order.
-    package func decode(latent: [Float16], valid: Int) throws -> [Float] {
-        precondition(latent.count == frames * latentDim && valid > 0 && valid <= frames)
+    /// A new stream: every conv context zeros.
+    package func makeStream() throws -> Stream {
+        var state: [String: MLMultiArray] = [:]
+        for spec in states {
+            let array = try MLMultiArray(
+                shape: spec.shape.map { NSNumber(value: $0) }, dataType: .float16)
+            array.withUnsafeMutableBytes { raw, _ in
+                _ = raw.initializeMemory(as: UInt8.self, repeating: 0)
+            }
+            state[spec.input] = array
+        }
+        return Stream(state: state)
+    }
+
+    /// Decodes `stream`'s next chunk: `latent` is up to `frames` frames of
+    /// `latentDim` fp16 values, frame-major (the MLX latent's own layout).
+    /// Returns their samples. A shorter chunk, a stream's last, is padded
+    /// with zeros: every layer is causal, so padding changes only the state,
+    /// which nothing reads after it.
+    package func decode(latent: [Float16], stream: Stream) throws -> [Float] {
+        let valid = latent.count / latentDim
+        precondition(latent.count == valid * latentDim && valid > 0 && valid <= frames)
         let input = try MLMultiArray(
             shape: [1, NSNumber(value: latentDim), 1, NSNumber(value: frames)], dataType: .float16)
         // [T, C] in, [1, C, 1, T] (strided) out.
@@ -79,20 +89,21 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
             let timeStride = strides[3]
             for t in 0 ..< frames {
                 for c in 0 ..< latentDim {
-                    buffer[c * channelStride + t * timeStride] = latent[t * latentDim + c]
+                    buffer[c * channelStride + t * timeStride] =
+                        t < valid ? latent[t * latentDim + c] : 0
                 }
             }
         }
-        lock.lock()
-        defer { lock.unlock() }
         var features: [String: MLFeatureValue] = ["latent": MLFeatureValue(multiArray: input)]
-        for spec in states { features[spec.input] = MLFeatureValue(multiArray: state[spec.input]!) }
+        for spec in states {
+            features[spec.input] = MLFeatureValue(multiArray: stream.state[spec.input]!)
+        }
         let output = try model.prediction(from: MLDictionaryFeatureProvider(dictionary: features))
         for spec in states {
             guard let next = output.featureValue(for: spec.output)?.multiArrayValue else {
                 throw AudioGenerationError.modelNotInitialized("The Neural Engine codec lost its state.")
             }
-            state[spec.input] = next
+            stream.state[spec.input] = next
         }
         guard let audio = output.featureValue(for: "audio")?.multiArrayValue else {
             throw AudioGenerationError.modelNotInitialized("The Neural Engine codec returned no audio.")
@@ -104,6 +115,30 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
             for i in 0 ..< count { samples[i] = Float(buffer[i * stride]) }
         }
         return samples
+    }
+
+    /// A whole latent (`frames × latentDim` values each chunk, frame-major),
+    /// decoded on a new stream.
+    package func decodeAll(latent: [Float16]) throws -> [Float] {
+        let stream = try makeStream()
+        let chunk = frames * latentDim
+        var samples: [Float] = []
+        for start in stride(from: 0, to: latent.count, by: chunk) {
+            samples += try decode(
+                latent: Array(latent[start ..< min(start + chunk, latent.count)]), stream: stream)
+        }
+        return samples
+    }
+
+    /// The signal-to-noise ratio of `actual` against `expected`, in dB.
+    package static func snr(_ actual: [Float], _ expected: [Float]) -> Double {
+        var signal = 0.0
+        var noise = 0.0
+        for (a, e) in zip(actual, expected) {
+            signal += Double(e * e)
+            noise += Double((a - e) * (a - e))
+        }
+        return 10 * log10(signal / max(noise, 1e-20))
     }
 
     // MARK: - Loading
@@ -132,14 +167,16 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
         let key = cacheKey(config: config, frames: frames, sourceKey: sourceKey)
         let compiled = cacheDirectory.appendingPathComponent("\(key).mlmodelc", isDirectory: true)
         let fm = FileManager.default
-        var states: [StateSpec] = []
+        let states = stateSpecs(config: config)
         if !fm.fileExists(atPath: compiled.path) {
             try fm.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
-            let builder = MILFunctionBuilder(blobs: MILBlobWriter())
-            states = try buildGraph(builder, decoder: decoder, frames: frames)
             let package = fm.temporaryDirectory.appendingPathComponent(
                 "qwen3tts-codec-\(UUID().uuidString).mlpackage", isDirectory: true)
             defer { try? fm.removeItem(at: package) }
+            let blobs = try MILBlobWriter(url: MLProgramPackage.weightsURL(in: package))
+            let builder = MILFunctionBuilder(blobs: blobs)
+            try buildGraph(builder, decoder: decoder, frames: frames, states: states)
+            try blobs.finish()
             try MLProgramPackage.write(
                 specification: MLProgramPackage.specification(
                     builder,
@@ -147,13 +184,10 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
                         "com.tesseract.qwen3tts.codec": "conv stack, \(frames) frames",
                         "com.tesseract.qwen3tts.graphVersion": "\(graphVersion)",
                     ]),
-                weights: builder.blobs.data, to: package)
+                to: package)
             let temporary = try await MLModel.compileModel(at: package)
             try? fm.removeItem(at: compiled)
             try fm.moveItem(at: temporary, to: compiled)
-        } else {
-            // The state layout is part of the graph; rebuild it (no weights).
-            states = stateSpecs(config: config, frames: frames)
         }
 
         let configuration = MLModelConfiguration()
@@ -213,7 +247,7 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
     // MARK: - The graph
 
     /// The state each causal conv carries, in graph order.
-    static func stateSpecs(config c: Qwen3TTSTokenizerDecoderConfig, frames: Int) -> [StateSpec] {
+    static func stateSpecs(config c: Qwen3TTSTokenizerDecoderConfig) -> [StateSpec] {
         var specs: [StateSpec] = []
         func add(_ channels: Int, _ width: Int) {
             let i = specs.count
@@ -231,13 +265,13 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
         return specs
     }
 
-    /// Emits the conv stack into `f`; returns its states in order.
+    /// Emits the conv stack into `f`, carrying `specs` (`stateSpecs`) as its
+    /// states in order.
     static func buildGraph(
-        _ f: MILFunctionBuilder, decoder: Qwen3TTSCodecDecoder, frames: Int
-    ) throws -> [StateSpec] {
+        _ f: MILFunctionBuilder, decoder: Qwen3TTSCodecDecoder, frames: Int, states specs: [StateSpec]
+    ) throws {
         let c = decoder.config
         let w = try decoder.convStack
-        let specs = stateSpecs(config: c, frames: frames)
         var nextState = 0
 
         // Shared small constants.
@@ -251,8 +285,8 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
 
         // On the CPU stream: building runs beside generation, outside the
         // engine's GPU lease, and never touches the GPU.
-        func halves(_ a: MLXArray) -> [Float16] {
-            contiguous(a.asType(.float16, stream: .cpu), stream: .cpu).asArray(Float16.self)
+        func halves(_ a: MLXArray) -> MLXArray {
+            contiguous(a.asType(.float16, stream: .cpu), stream: .cpu)
         }
         func channelVector(_ a: MLXArray) -> MILVar {
             f.weight(halves(a), shape: [1, a.dim(0), 1, 1])
@@ -372,6 +406,5 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
             name: "audio")
         f.output(audio)
         precondition(nextState == specs.count, "every state is wired")
-        return specs
     }
 }

@@ -8,16 +8,31 @@ struct Qwen3TTSSampler {
     let temperature: Float
     let topK: Int
     let topP: Float
+    /// The temperature as MLX divides by it, rounded to each logits type,
+    /// for the fused draw: built once, not on every draw.
+    private let divisors: [DType: MLXArray]
+
+    init(temperature: Float, topK: Int, topP: Float) {
+        self.temperature = temperature
+        self.topK = topK
+        self.topP = topP
+        divisors = Dictionary(
+            uniqueKeysWithValues: [DType.bfloat16, .float16, .float32].map {
+                ($0, MLXArray([temperature]).asType($0).asType(.float32))
+            })
+    }
 
     /// `logits` `[1, vocab]` to a `[1, 1]` int32 token.
     func callAsFunction(_ logits: MLXArray, random: MLXRandom.RandomState) -> MLXArray {
         guard temperature > 0 else {
             return argMax(logits, axis: -1, keepDims: true).asType(.int32)
         }
-        if Qwen3TTSKernels.canSample(logits, temperature: temperature, topK: topK, topP: topP) {
+        if Qwen3TTSKernels.canSample(logits, temperature: temperature, topK: topK, topP: topP),
+            let divisor = divisors[logits.dtype]
+        {
             // The same draw in one kernel instead of about fourteen.
             return Qwen3TTSKernels.topKSample(
-                logits, temperature: temperature, topK: topK, random: random)
+                logits, temperature: temperature, divisor: divisor, topK: topK, random: random)
         }
         let filtered = Self.filter(logits / temperature, topK: topK, topP: topP)
         return categorical(filtered, key: random).asType(.int32).reshaped(1, 1)
@@ -58,9 +73,14 @@ struct Qwen3TTSSampler {
 ///   generation; the engine counts a window (ADR-0072), so a long segment's
 ///   common tokens don't all end up penalized. The window lives on the GPU.
 struct Qwen3TTSTalkerSampler {
+    /// EOS is suppressed for this many frames (Qwen's `min_new_tokens`).
+    static let minFrames = 2
+
     let base: Qwen3TTSSampler
     let penalty: Float
-    let minFrames: Int
+    /// `penalty` and 0 in the logits' type, as MLX makes a scalar operand.
+    private let penaltyValue: MLXArray
+    private let zero: MLXArray
     private let suppress: MLXArray
     private let suppressWithEOS: MLXArray
     private let vocabulary: MLXArray
@@ -69,12 +89,13 @@ struct Qwen3TTSTalkerSampler {
 
     init(
         sampling: Qwen3TTSSampling, vocabSize: Int, eosTokenID: Int, dtype: DType,
-        window: Int = Qwen3TTSSampling.repetitionWindow, minFrames: Int = 2
+        window: Int = Qwen3TTSSampling.repetitionWindow
     ) {
         base = Qwen3TTSSampler(
             temperature: sampling.temperature, topK: Qwen3TTSSampling.topK, topP: sampling.topP)
         penalty = sampling.repetitionPenalty
-        self.minFrames = minFrames
+        penaltyValue = MLXArray(sampling.repetitionPenalty, dtype: dtype)
+        zero = MLXArray(Float(0), dtype: dtype)
         var mask = [Float](repeating: 0, count: vocabSize)
         for id in max(0, vocabSize - 1024) ..< vocabSize where id != eosTokenID {
             mask[id] = -.infinity
@@ -92,9 +113,9 @@ struct Qwen3TTSTalkerSampler {
         var x = logits
         if penalty != 1 {
             let seen = (recent .== vocabulary).any(axis: 0, keepDims: true)
-            x = which(seen, which(x .< 0, x * penalty, x / penalty), x)
+            x = which(seen, which(x .< zero, x * penaltyValue, x / penaltyValue), x)
         }
-        x = x + (frame < minFrames ? suppressWithEOS : suppress)
+        x = x + (frame < Self.minFrames ? suppressWithEOS : suppress)
         let token = base(x, random: random)
         recent = concatenated([recent[1..., 0...], token], axis: 0)
         return token

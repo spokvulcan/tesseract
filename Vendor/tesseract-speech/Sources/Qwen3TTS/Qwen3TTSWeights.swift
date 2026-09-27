@@ -18,10 +18,7 @@ enum Qwen3TTSWeights {
     ) throws -> (talker: Qwen3TTSTalker, textEmbedding: Qwen3TTSTextEmbedding) {
         let talkerConfig = config.talkerConfig ?? .defaults
         var weights: [String: MLXArray] = [:]
-        let files = try FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil
-        ).filter { $0.pathExtension == "safetensors" }
-        for file in files {
+        for file in try safetensorsFiles(in: directory) {
             // Lazy: nothing is read until evaluated.
             for (key, value) in try MLX.loadArrays(url: file) where key.hasPrefix("talker.") {
                 weights[String(key.dropFirst("talker.".count))] = value
@@ -34,17 +31,13 @@ enum Qwen3TTSWeights {
             directory: directory)
 
         var fusion = Qwen3TTSFusion()
-        fusion.qkv = canStack(["q_proj", "k_proj", "v_proj"], under: "self_attn", in: weights, quantization)
-        fusion.gateUp = canStack(["gate_proj", "up_proj"], under: "mlp", in: weights, quantization)
         var stackedQuantization: [String: (Int, Int, QuantizationMode)] = [:]
-        if fusion.qkv {
-            stack(["q_proj", "k_proj", "v_proj"], into: "qkv_proj", under: "self_attn",
-                  in: &weights, quantization, &stackedQuantization)
-        }
-        if fusion.gateUp {
-            stack(["gate_proj", "up_proj"], into: "gate_up_proj", under: "mlp",
-                  in: &weights, quantization, &stackedQuantization)
-        }
+        fusion.qkv = stack(
+            ["q_proj", "k_proj", "v_proj"], into: "qkv_proj", under: "self_attn", in: &weights,
+            quantization, &stackedQuantization)
+        fusion.gateUp = stack(
+            ["gate_proj", "up_proj"], into: "gate_up_proj", under: "mlp", in: &weights,
+            quantization, &stackedQuantization)
 
         let talker = Qwen3TTSTalker(config: talkerConfig, fusion: fusion)
         if quantization.isQuantized {
@@ -63,6 +56,13 @@ enum Qwen3TTSWeights {
         eval(talker.parameters())
         Memory.clearCache()
         return (talker, textEmbedding)
+    }
+
+    /// `directory`'s safetensors files, by name.
+    static func safetensorsFiles(in directory: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "safetensors" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     // MARK: - Text embedding
@@ -147,12 +147,14 @@ enum Qwen3TTSWeights {
     }
 
     /// Replaces each layer's `parts` with one projection whose output rows
-    /// are theirs, in order.
+    /// are theirs, in order, when they can be stacked (`canStack`). Returns
+    /// whether they were.
     private static func stack(
         _ parts: [String], into name: String, under module: String,
         in weights: inout [String: MLXArray], _ quantization: QuantizationLookup,
         _ stackedQuantization: inout [String: (Int, Int, QuantizationMode)]
-    ) {
+    ) -> Bool {
+        guard canStack(parts, under: module, in: weights, quantization) else { return false }
         for layer in prefixes(of: parts[0], under: module, in: weights) {
             for tensor in ["weight", "scales", "biases", "bias"] {
                 let keys = parts.map { "\(layer).\($0).\(tensor)" }
@@ -163,6 +165,7 @@ enum Qwen3TTSWeights {
             stackedQuantization["\(layer).\(name)"] = quantization.parameters(
                 for: "\(layer).\(parts[0])")
         }
+        return true
     }
 
     // MARK: - Quantization

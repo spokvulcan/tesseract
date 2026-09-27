@@ -214,6 +214,48 @@ func writeWav(_ samples: [Float], sampleRate: Int, to url: URL) throws {
     try file.write(from: buffer)
 }
 
+extension GenerationRecord {
+    /// One line: frames, audio, time, real-time factor, first audio.
+    func summary(_ label: String) -> String {
+        String(
+            format: "%@: %d frames, %.1f s audio in %.2f s (RTF %.3f), first audio %.0f ms",
+            label as NSString, frames, audioSeconds, seconds, seconds / max(audioSeconds, 1e-9),
+            firstAudioSeconds * 1e3)
+    }
+}
+
+/// `<wavDir>/<name>.wav`, when a directory was given.
+func saveWav(_ samples: [Float], _ name: String, sampleRate: Int, in wavDir: String?) throws {
+    guard let wavDir else { return }
+    try writeWav(
+        samples, sampleRate: sampleRate,
+        to: URL(fileURLWithPath: wavDir).appendingPathComponent("\(name).wav"))
+}
+
+/// Raw float32, for the comparison scripts.
+func writeF32(_ values: [Float], to url: URL) throws {
+    try values.withUnsafeBufferPointer { Data(buffer: $0) }.write(to: url)
+}
+
+/// The records of a golden file (`--mode generate --out`).
+func loadGolden(_ path: String?, for mode: String) throws -> [GenerationRecord] {
+    guard let path else { fatalError("\(mode) needs --golden FILE.json") }
+    struct Golden: Codable { var records: [GenerationRecord] }
+    return try JSONDecoder().decode(Golden.self, from: Data(contentsOf: URL(fileURLWithPath: path)))
+        .records
+}
+
+/// A golden record's text, and for "medium+take" the long render as its take.
+func goldenInput(_ name: String, _ records: [GenerationRecord])
+    -> (text: String, reference: Qwen3TTSReference?)
+{
+    let text = prompts.first { name.hasPrefix($0.name) }!.text
+    guard name == "medium+take", let long = records.first(where: { $0.name == "long" }) else {
+        return (text, nil)
+    }
+    return (text, Qwen3TTSReference(codeFrames: long.codeFrames, text: prompts[2].text))
+}
+
 func stats(_ xs: [Double]) -> String {
     guard !xs.isEmpty else { return "n/a" }
     let s = xs.sorted()
@@ -234,13 +276,8 @@ probe("start")
 if args.mode == "decode" {
     // The codec decoder alone on the golden frames: fp32 and fp16, several
     // chunk sizes. Writes <out>/<name>.<dtype>.c<chunk>.f32 for parity checks.
-    guard let golden = args.golden, let out = args.out else {
-        fatalError("decode needs --golden FILE.json and --out DIR")
-    }
-    struct Golden: Codable { var records: [GenerationRecord] }
-    let records = try JSONDecoder().decode(
-        Golden.self, from: Data(contentsOf: URL(fileURLWithPath: golden))
-    ).records
+    let records = try loadGolden(args.golden, for: "decode")
+    guard let out = args.out else { fatalError("decode needs --out DIR") }
     let outDir = URL(fileURLWithPath: out, isDirectory: true)
     try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
     let directory = checkpoint.appendingPathComponent("speech_tokenizer")
@@ -251,29 +288,13 @@ if args.mode == "decode" {
         probe("decoder \(dtype) loaded")
         for name in ["short", "medium", "long", "medium+take"] {
             guard let record = records.first(where: { $0.name == name }) else { continue }
-            let groups = record.codeFrames[0].count
-            let all = MLXArray(record.codeFrames.flatMap { $0 }).reshaped(
-                1, record.codeFrames.count, groups)
             for chunk in [1, 5, 25, 1000] {
-                var stream = decoder.makeStream()
-                var samples: [Float] = []
-                var times: [Double] = []
-                var start = 0
-                while start < record.frames {
-                    let end = min(start + chunk, record.frames)
-                    let codes = all[0..., start ..< end, 0...]
-                    eval(codes)
-                    let t = now()
-                    let audio = try decoder.decode(codes, stream: &stream)
-                    eval([audio] + stream.arrays)
-                    times.append(seconds(since: t) / Double(end - start))
-                    samples.append(contentsOf: audio.asArray(Float.self))
-                    start = end
-                }
-                try samples.withUnsafeBufferPointer { Data(buffer: $0) }.write(
-                    to: outDir.appendingPathComponent("\(name).\(dtype).c\(chunk).f32"))
+                let (samples, times) = try decoder.benchStreamingDecode(
+                    codeFrames: record.codeFrames, chunk: chunk)
+                try writeF32(samples, to: outDir.appendingPathComponent("\(name).\(dtype).c\(chunk).f32"))
                 if name == "long" {
-                    print("  \(dtype) chunk \(chunk) per frame: \(stats(Array(times.dropFirst(min(2, times.count - 1)))))")
+                    let perFrame = times.map { $0 / Double(chunk) }
+                    print("  \(dtype) chunk \(chunk) per frame: \(stats(Array(perFrame.dropFirst(min(2, perFrame.count - 1)))))")
                 }
             }
         }
@@ -287,29 +308,20 @@ let model = try await Qwen3TTSModel.fromModelDirectory(checkpoint)
 print(String(format: "load %.2f s", seconds(since: loadStart)))
 probe("after load")
 
-_ = try await model.generate(
-    text: ".", voice: nil, language: "English", sampling: Qwen3TTSSampling(maxTokens: 3))
+try model.warmUp()
 probe("after warm-up")
 
 switch args.mode {
 case "memory":
     Memory.peakMemory = 0  // resets the MLX peak
     let plain = try await render(model, text: prompts[2].text, reference: nil, seed: args.seed)
-    print(
-        String(
-            format: "plain: %d frames, %.1f s audio in %.2f s (RTF %.3f), first audio %.0f ms",
-            plain.record.frames, plain.record.audioSeconds, plain.record.seconds,
-            plain.record.seconds / plain.record.audioSeconds, plain.record.firstAudioSeconds * 1e3))
+    print(plain.record.summary("plain"))
     probe("after plain generation")
 
     Memory.peakMemory = 0  // resets the MLX peak
     let take = Qwen3TTSReference(codeFrames: plain.record.codeFrames, text: prompts[2].text)
     let icl = try await render(model, text: prompts[1].text, reference: take, seed: args.seed)
-    print(
-        String(
-            format: "reference: %d frames, %.1f s audio in %.2f s (RTF %.3f), first audio %.0f ms",
-            icl.record.frames, icl.record.audioSeconds, icl.record.seconds,
-            icl.record.seconds / icl.record.audioSeconds, icl.record.firstAudioSeconds * 1e3))
+    print(icl.record.summary("reference"))
     probe("after reference generation")
 
     // Four more segments continuing the take, as a read-aloud does.
@@ -325,16 +337,14 @@ case "memory":
     probe("after clearCache")
 
 case "profile":
-    for length in [60, 150, 400] {
-        let talker = model.benchTalker(promptLength: length, steps: 40)
-        print("talker prefill (\(length) positions): \(stats(talker.prefill))")
-        if length == 400 {
-            print("talker step (cache ~400): \(stats(Array(talker.talkerStep.dropFirst(3))))")
-            print("code predictor frame:     \(stats(Array(talker.codePredictorFrame.dropFirst(3))))")
-        }
+    model.benchPrefill(lengths: [60, 150, 400], layerByLayer: true).forEach {
+        print("talker prefill \($0)")
     }
-
-    let split = model.benchBuildVersusRun(steps: 40)
+    let split = model.benchBuildVersusRun(promptLength: 400, steps: 40)
+    let talkerStep = zip(split.talkerBuild, split.talkerRun).map { $0 + $1 }
+    let cpFrame = zip(split.cpBuild, split.cpRun).map { $0 + $1 }
+    print("talker step (cache ~400): \(stats(Array(talkerStep.dropFirst(3))))")
+    print("code predictor frame:     \(stats(Array(cpFrame.dropFirst(3))))")
     print("talker step build: \(stats(Array(split.talkerBuild.dropFirst(3))))")
     print("talker step run:   \(stats(Array(split.talkerRun.dropFirst(3))))")
     print("cp frame build:    \(stats(Array(split.cpBuild.dropFirst(3))))")
@@ -358,16 +368,9 @@ case "generate":
             var named = record
             named.name = name
             records.append(named)
-            print(
-                String(
-                    format: "%@ #%d: %d frames, %.1f s audio, %.2f s (RTF %.3f), first audio %.0f ms",
-                    name as NSString, repeatIndex, record.frames, record.audioSeconds,
-                    record.seconds, record.seconds / max(record.audioSeconds, 1e-9),
-                    record.firstAudioSeconds * 1e3))
-            if let wavDir = args.wavDir, repeatIndex == 0 {
-                try writeWav(
-                    samples, sampleRate: model.sampleRate,
-                    to: URL(fileURLWithPath: wavDir).appendingPathComponent("\(name).wav"))
+            print(record.summary("\(name) #\(repeatIndex)"))
+            if repeatIndex == 0 {
+                try saveWav(samples, name, sampleRate: model.sampleRate, in: args.wavDir)
             }
             previous = named
         }
@@ -380,15 +383,9 @@ case "generate":
             var named = record
             named.name = "medium+take"
             records.append(named)
-            print(
-                String(
-                    format: "medium+take #%d: %d frames, %.1f s audio, %.2f s (RTF %.3f), first audio %.0f ms",
-                    repeatIndex, record.frames, record.audioSeconds, record.seconds,
-                    record.seconds / max(record.audioSeconds, 1e-9), record.firstAudioSeconds * 1e3))
-            if let wavDir = args.wavDir, repeatIndex == 0 {
-                try writeWav(
-                    samples, sampleRate: model.sampleRate,
-                    to: URL(fileURLWithPath: wavDir).appendingPathComponent("medium+take.wav"))
+            print(record.summary("medium+take #\(repeatIndex)"))
+            if repeatIndex == 0 {
+                try saveWav(samples, "medium+take", sampleRate: model.sampleRate, in: args.wavDir)
             }
         }
     }
@@ -408,33 +405,23 @@ case "neural":
     let report = try await model.prepareNeuralEngine(cacheDirectory: cache, frames: args.chunk)
     print(String(format: "neural codec ready in %.2f s: %@", seconds(since: t0), report))
     probe("neural codec loaded")
-    if let golden = args.golden {
-        struct Golden: Codable { var records: [GenerationRecord] }
-        let records = try JSONDecoder().decode(
-            Golden.self, from: Data(contentsOf: URL(fileURLWithPath: golden))
-        ).records
+    if args.golden != nil {
+        let records = try loadGolden(args.golden, for: "neural")
         let outDir = URL(fileURLWithPath: args.out!).appendingPathComponent("decode-ane")
         try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
         for name in ["short", "medium", "long", "medium+take"] {
             guard let record = records.first(where: { $0.name == name }) else { continue }
             let (samples, times) = try model.benchNeuralDecode(codeFrames: record.codeFrames)
-            try samples.withUnsafeBufferPointer { Data(buffer: $0) }
-                .write(to: outDir.appendingPathComponent("\(name).ane.f32"))
+            try writeF32(samples, to: outDir.appendingPathComponent("\(name).ane.f32"))
             print("  \(name): \(record.frames) frames, ANE call \(stats(Array(times.dropFirst())))")
         }
     }
     for repeatIndex in 0 ..< 2 {
         for (name, text) in prompts {
             let (record, samples) = try await render(model, text: text, reference: nil, seed: args.seed)
-            print(
-                String(
-                    format: "ANE %@ #%d: %d frames, %.1f s audio, %.2f s (RTF %.3f), first audio %.0f ms",
-                    name as NSString, repeatIndex, record.frames, record.audioSeconds, record.seconds,
-                    record.seconds / max(record.audioSeconds, 1e-9), record.firstAudioSeconds * 1e3))
-            if let wavDir = args.wavDir, repeatIndex == 0 {
-                try writeWav(
-                    samples, sampleRate: model.sampleRate,
-                    to: URL(fileURLWithPath: wavDir).appendingPathComponent("ane-\(name).wav"))
+            print(record.summary("ANE \(name) #\(repeatIndex)"))
+            if repeatIndex == 0 {
+                try saveWav(samples, "ane-\(name)", sampleRate: model.sampleRate, in: args.wavDir)
             }
         }
     }
@@ -443,14 +430,14 @@ case "neural":
 case "kernels":
     // The fused kernels against the MLX ops they replace: same seed, codes
     // compared, time per frame.
-    let configurations: [(String, Bool, Bool, Bool, Bool)] = [
-        ("off", false, false, false, false), ("sampler", true, true, false, false),
-        ("normRoPE", true, false, true, false), ("addNorm", true, false, false, true),
-        ("all", true, true, true, true),
+    let configurations: [(String, Bool, Bool, Bool)] = [
+        ("off", false, false, false), ("sampler", true, false, false),
+        ("normRoPE", false, true, false), ("addNorm", false, false, true),
+        ("all", true, true, true),
     ]
     var reference: [[[Int32]]]?
-    for (label, enabled, sampler, normRoPE, addNorm) in configurations {
-        model.setFusedKernels(enabled, sampler: sampler, normRoPE: normRoPE, addNorm: addNorm)
+    for (label, sampler, normRoPE, addNorm) in configurations {
+        model.setFusedKernels(sampler: sampler, normRoPE: normRoPE, addNorm: addNorm)
         var frames = 0
         var seconds = 0.0
         var codes: [[[Int32]]] = []
@@ -489,20 +476,11 @@ case "prefill":
 case "audit":
     // Every fused kernel call against the MLX ops it replaces: teacher-forced
     // runs on the golden frames, then sampled generations.
-    guard let golden = args.golden else { fatalError("audit needs --golden FILE.json") }
-    struct Golden: Codable { var records: [GenerationRecord] }
-    let records = try JSONDecoder().decode(
-        Golden.self, from: Data(contentsOf: URL(fileURLWithPath: golden))
-    ).records
-    let dump = args.out.map { URL(fileURLWithPath: $0, isDirectory: true) }
-    if let dump { try FileManager.default.createDirectory(at: dump, withIntermediateDirectories: true) }
+    let records = try loadGolden(args.golden, for: "audit")
     for name in ["short", "medium", "medium+take"] {
         guard let record = records.first(where: { $0.name == name }) else { continue }
-        let text = prompts.first { name.hasPrefix($0.name) }!.text
-        let long = records.first { $0.name == "long" }!
-        let reference = name == "medium+take"
-            ? Qwen3TTSReference(codeFrames: long.codeFrames, text: prompts[2].text) : nil
-        let report = try await model.benchAudit(dump: name == "short" ? dump : nil) {
+        let (text, reference) = goldenInput(name, records)
+        let report = try await model.benchAudit {
             _ = try model.benchTeacherForced(
                 text: text, voice: voice, language: nil, reference: reference,
                 codeFrames: record.codeFrames)
@@ -510,41 +488,29 @@ case "audit":
         print("audit teacher-forced \(name): \(report)")
     }
     for (name, text) in prompts.prefix(2) {
-        let report = try await model.benchAudit(dump: nil) {
+        let report = try await model.benchAudit {
             _ = try await render(model, text: text, reference: nil, seed: args.seed)
         }
         print("audit generated \(name): \(report)")
     }
 
 case "trace", "trace-unfused":
-    if args.mode == "trace-unfused" { model.setFusedKernels(false) }
+    if args.mode == "trace-unfused" { model.setFusedKernels(sampler: false, normRoPE: false, addNorm: false) }
     // Teacher-forced logits on the golden frames, for numerical comparison
     // across implementations: <out>/<name>.talker.f32 and .detail.f32.
-    guard let golden = args.golden, let out = args.out else {
-        fatalError("trace needs --golden FILE.json and --out DIR")
-    }
-    struct Golden: Codable { var records: [GenerationRecord] }
-    let records = try JSONDecoder().decode(
-        Golden.self, from: Data(contentsOf: URL(fileURLWithPath: golden))
-    ).records
+    let records = try loadGolden(args.golden, for: "trace")
+    guard let out = args.out else { fatalError("trace needs --out DIR") }
     let outDir = URL(fileURLWithPath: out, isDirectory: true)
     try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
-    let long = records.first { $0.name == "long" }!
     for name in ["short", "medium", "long", "medium+take"] {
         guard let record = records.first(where: { $0.name == name }) else { continue }
-        let text = prompts.first { name.hasPrefix($0.name) }!.text
-        let reference = name == "medium+take"
-            ? Qwen3TTSReference(codeFrames: long.codeFrames, text: prompts[2].text) : nil
+        let (text, reference) = goldenInput(name, records)
         let t0 = now()
         let (talkerRows, detailRows) = try model.benchTeacherForced(
             text: text, voice: voice, language: nil, reference: reference,
             codeFrames: record.codeFrames)
-        func write(_ rows: [Float], _ suffix: String) throws {
-            try rows.withUnsafeBufferPointer { Data(buffer: $0) }
-                .write(to: outDir.appendingPathComponent("\(name).\(suffix).f32"))
-        }
-        try write(talkerRows, "talker")
-        try write(detailRows, "detail")
+        try writeF32(talkerRows, to: outDir.appendingPathComponent("\(name).talker.f32"))
+        try writeF32(detailRows, to: outDir.appendingPathComponent("\(name).detail.f32"))
         print(String(format: "trace %@: %d frames in %.2f s", name as NSString, record.frames, seconds(since: t0)))
     }
 

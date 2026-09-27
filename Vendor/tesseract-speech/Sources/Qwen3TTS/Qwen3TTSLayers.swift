@@ -65,42 +65,33 @@ final class Qwen3TTSAttention: Module {
     func callAsFunction(_ x: MLXArray, cache: KVCache) -> MLXArray {
         let (batch, length) = (x.dim(0), x.dim(1))
         let offset = cache.offset
-        var q: MLXArray
-        var k: MLXArray
+        let q: MLXArray
+        let k: MLXArray
         let v: MLXArray
-        if length == 1, batch == 1, let qkvProj, Qwen3TTSKernels.canNormRoPE(headDim: headDim) {
-            // One position (every decode step): both norms and both
-            // rotations in one kernel.
-            let qkv = qkvProj(x)
-            (q, k) = Qwen3TTSKernels.qkNormRoPE(
-                qkv, qWeight: qNorm.weight, kWeight: kNorm.weight, heads: heads,
-                kvHeads: kvHeads, headDim: headDim, eps: qNorm.eps, base: ropeBase,
-                offset: offset)
-            Qwen3TTSKernels.audit?(self, qkv, q, k, offset)
-            v = qkv.reshaped(1, 1, heads + 2 * kvHeads, headDim)[
-                0..., 0..., (heads + kvHeads)..., 0...
-            ].transposed(0, 2, 1, 3)
-            let (keys, values) = cache.update(keys: k, values: v)
-            let out = MLXFast.scaledDotProductAttention(
-                queries: q, keys: keys, values: values, scale: scale, mask: .none)
-            return oProj(out.reshaped(1, 1, heads * headDim))
-        }
         if let qkvProj {
-            let qkv = qkvProj(x).reshaped(batch, length, heads + 2 * kvHeads, headDim)
-            q = qkv[0..., 0..., ..<heads, 0...]
-            k = qkv[0..., 0..., heads ..< (heads + kvHeads), 0...]
-            v = qkv[0..., 0..., (heads + kvHeads)..., 0...].transposed(0, 2, 1, 3)
+            let qkv = qkvProj(x)
+            let split = qkv.reshaped(batch, length, heads + 2 * kvHeads, headDim)
+            v = split[0..., 0..., (heads + kvHeads)..., 0...].transposed(0, 2, 1, 3)
+            if length == 1, batch == 1,
+                let fused = Qwen3TTSKernels.qkNormRoPE(
+                    qkv, qWeight: qNorm.weight, kWeight: kNorm.weight, heads: heads,
+                    kvHeads: kvHeads, headDim: headDim, eps: qNorm.eps, base: ropeBase,
+                    offset: offset)
+            {
+                // One position (every decode step): both norms and both
+                // rotations in one kernel.
+                (q, k) = fused
+            } else {
+                (q, k) = normAndRotate(
+                    split[0..., 0..., ..<heads, 0...],
+                    split[0..., 0..., heads ..< (heads + kvHeads), 0...], offset: offset)
+            }
         } else {
-            q = qProj!(x).reshaped(batch, length, heads, headDim)
-            k = kProj!(x).reshaped(batch, length, kvHeads, headDim)
             v = vProj!(x).reshaped(batch, length, kvHeads, headDim).transposed(0, 2, 1, 3)
+            (q, k) = normAndRotate(
+                qProj!(x).reshaped(batch, length, heads, headDim),
+                kProj!(x).reshaped(batch, length, kvHeads, headDim), offset: offset)
         }
-        q = qNorm(q).transposed(0, 2, 1, 3)
-        k = kNorm(k).transposed(0, 2, 1, 3)
-        q = MLXFast.RoPE(
-            q, dimensions: headDim, traditional: false, base: ropeBase, scale: 1, offset: offset)
-        k = MLXFast.RoPE(
-            k, dimensions: headDim, traditional: false, base: ropeBase, scale: 1, offset: offset)
         let (keys, values) = cache.update(keys: k, values: v)
         // `.causal` aligns to the last key, so a prompt after a restored
         // prefix sees the whole prefix.
@@ -108,6 +99,17 @@ final class Qwen3TTSAttention: Module {
             queries: q, keys: keys, values: values, scale: scale,
             mask: length > 1 ? .causal : .none)
         return oProj(out.transposed(0, 2, 1, 3).reshaped(batch, length, heads * headDim))
+    }
+
+    /// Queries and keys `[B, L, heads, D]` normalized per head and rotated,
+    /// head-major: the MLX ops the fused kernel replaces.
+    private func normAndRotate(_ q: MLXArray, _ k: MLXArray, offset: Int) -> (MLXArray, MLXArray) {
+        func rotated(_ x: MLXArray) -> MLXArray {
+            MLXFast.RoPE(
+                x.transposed(0, 2, 1, 3), dimensions: headDim, traditional: false, base: ropeBase,
+                scale: 1, offset: offset)
+        }
+        return (rotated(qNorm(q)), rotated(kNorm(k)))
     }
 }
 

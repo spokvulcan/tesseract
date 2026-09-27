@@ -1,5 +1,6 @@
 import Foundation
 @preconcurrency import MLX
+@preconcurrency import MLXLMCommon
 import MLXNN
 
 /// The Qwen3-TTS-Tokenizer-12Hz decoder: codec frames to 24 kHz audio.
@@ -26,7 +27,6 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
     package let config: Qwen3TTSTokenizerDecoderConfig
     /// Audio samples per codec frame: 1,920 at 24 kHz, 12.5 frames a second.
     package let samplesPerFrame: Int
-    package let dtype: DType
     let front: FrontEnd
 
     /// The conv stack's weights (two thirds of the decoder's memory). While
@@ -51,12 +51,9 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
     }
 
     /// Frees the conv stack's MLX weights, when they can be read back.
-    @discardableResult
-    package func releaseConvStack() -> Bool {
+    package func releaseConvStack() {
         stackLock.withLock {
-            guard reloadStack != nil else { return false }
-            loadedStack = nil
-            return true
+            if reloadStack != nil { loadedStack = nil }
         }
     }
 
@@ -75,9 +72,6 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
         fileprivate var blockUpsample: [MLXArray?]
         fileprivate var residual: [[MLXArray?]]
         fileprivate var finalConv: MLXArray?
-
-        /// Frames decoded so far.
-        package var framesDecoded: Int { position }
 
         fileprivate init(layers: Int, upsamplers: Int, blocks: Int, unitsPerBlock: Int) {
             keys = Array(repeating: nil, count: layers)
@@ -251,27 +245,15 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
     static func slidingWindowMask(queries: Int, cached: Int, window: Int)
         -> MLXFast.ScaledDotProductAttentionMaskMode
     {
-        let keys = cached + queries
         // One query that sees every carried key needs no mask.
-        if queries == 1, keys <= window { return .none }
-        let q = MLXArray(Int32(cached) ..< Int32(keys))[0..., .newAxis]
-        let k = MLXArray(Int32(0) ..< Int32(keys))[.newAxis]
-        return .array((q .>= k) .&& (q .< k + window))
+        if queries == 1, cached + queries <= window { return .none }
+        return .array(createCausalMask(n: queries, offset: cached, windowSize: window))
     }
 
     // MARK: - Weights
 
-    struct Linear {
-        let weight: MLXArray  // [out, in]
-        let bias: MLXArray?
-
-        var arrays: [MLXArray] { [weight] + [bias].compactMap { $0 } }
-
-        func callAsFunction(_ x: MLXArray) -> MLXArray {
-            if let bias { return addMM(bias, x, weight.T) }
-            return matmul(x, weight.T)
-        }
-    }
+    /// Weight `[out, in]`.
+    typealias Linear = MLXNN.Linear
 
     struct Conv {
         let weight: MLXArray  // [out, kernel, in / groups]
@@ -279,8 +261,6 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
         let kernel: Int
         let dilation: Int
         let groups: Int
-
-        var arrays: [MLXArray] { [weight] + [bias].compactMap { $0 } }
     }
 
     /// A transposed conv as its polyphase conv: `[stride·out, taps, in]`,
@@ -294,8 +274,6 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
     struct Snake {
         let alpha: MLXArray
         let inverseBeta: MLXArray
-
-        var arrays: [MLXArray] { [alpha, inverseBeta] }
     }
 
     struct ConvNeXt {
@@ -346,16 +324,6 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
         let layers: [TransformerLayer]
         let finalNorm: MLXArray
         let outputProjection: Linear
-
-        var arrays: [MLXArray] {
-            var all = [codebooks, finalNorm] + preConv.arrays + inputProjection.arrays
-                + outputProjection.arrays
-            for l in layers {
-                all += [l.inputNorm, l.attentionScale, l.postNorm, l.mlpScale]
-                all += l.qkv.arrays + l.output.arrays + l.gateUp.arrays + l.down.arrays
-            }
-            return all
-        }
     }
 
     /// Latent to samples.
@@ -365,23 +333,6 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
         let blocks: [Block]
         let finalSnake: Snake
         let finalConv: Conv
-
-        var arrays: [MLXArray] {
-            var all = initialConv.arrays + finalSnake.arrays + finalConv.arrays
-            for u in upsamplers {
-                all += u.upsample.conv.arrays + u.block.depthwise.arrays
-                all += u.block.pointwise1.arrays + u.block.pointwise2.arrays
-                all += [u.block.normWeight, u.block.normBias, u.block.gamma]
-            }
-            for b in blocks {
-                all += b.snake.arrays + b.upsample.conv.arrays
-                for unit in b.units {
-                    all += unit.snake1.arrays + unit.conv1.arrays + unit.snake2.arrays
-                        + unit.conv2.arrays
-                }
-            }
-            return all
-        }
     }
 
     // MARK: - Loading
@@ -398,9 +349,7 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
             tensors: Self.readTensors(directory), dtype: dtype,
             reloadStack: {
                 let reader = WeightReader(tensors: try Self.readTensors(directory), dtype: dtype)
-                let stack = try Self.readConvStack(config: decoderConfig, reader: reader)
-                eval(stack.arrays)
-                return stack
+                return try Self.readConvStack(config: decoderConfig, reader: reader)
             })
     }
 
@@ -420,12 +369,11 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
     ) throws {
         self.config = config
         self.samplesPerFrame = samplesPerFrame
-        self.dtype = dtype
         self.reloadStack = reloadStack
+        // The reader evaluates every weight as it converts it.
         let reader = WeightReader(tensors: tensors, dtype: dtype)
         self.front = try Self.readFrontEnd(config: config, reader: reader)
         self.loadedStack = try Self.readConvStack(config: config, reader: reader)
-        eval(front.arrays + loadedStack!.arrays)
     }
 
     /// The decoder half of a speech tokenizer directory's tensors, keyed
@@ -433,9 +381,7 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
     /// the encoder never is.
     private static func readTensors(_ directory: URL) throws -> [String: MLXArray] {
         var tensors: [String: MLXArray] = [:]
-        let files = try FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil)
-        for file in files where file.pathExtension == "safetensors" {
+        for file in try Qwen3TTSWeights.safetensorsFiles(in: directory) {
             for (key, value) in try MLX.loadArrays(url: file) {
                 let key = Self.stripPrefixes(key)
                 if key.hasPrefix("decoder.") { tensors[String(key.dropFirst(8))] = value }
@@ -500,16 +446,14 @@ package final class Qwen3TTSCodecDecoder: @unchecked Sendable {
             layers.append(
                 TransformerLayer(
                     inputNorm: try r.vector("\(p).input_layernorm.weight", hidden),
-                    qkv: Linear(
-                        weight: contiguous(concatenated(qkv, axis: 0)), bias: nil),
+                    qkv: Linear(weight: r.finish(concatenated(qkv, axis: 0)), bias: nil),
                     output: Linear(
                         weight: try r.matrix(
                             "\(p).self_attn.o_proj.weight", out: hidden, in: attentionWidth),
                         bias: nil),
                     attentionScale: try r.vector("\(p).self_attn_layer_scale.scale", hidden),
                     postNorm: try r.vector("\(p).post_attention_layernorm.weight", hidden),
-                    gateUp: Linear(
-                        weight: contiguous(concatenated(gateUp, axis: 0)), bias: nil),
+                    gateUp: Linear(weight: r.finish(concatenated(gateUp, axis: 0)), bias: nil),
                     down: Linear(
                         weight: try r.matrix(
                             "\(p).mlp.down_proj.weight", out: hidden, in: c.intermediateSize),
@@ -617,7 +561,7 @@ final class WeightReader {
         return t
     }
 
-    private func finish(_ t: MLXArray) -> MLXArray {
+    func finish(_ t: MLXArray) -> MLXArray {
         let converted = contiguous(t.asType(dtype))
         eval(converted)
         return converted

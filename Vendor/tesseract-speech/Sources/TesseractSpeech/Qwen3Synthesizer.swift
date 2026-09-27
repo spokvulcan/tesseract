@@ -2,10 +2,11 @@
 // Qwen3-TTS model (ADR-0038, ADR-0071).
 //
 // Conditioning and the seed are values in every request, and a captured
-// Reference Take comes back in the segment's stream (ADR-0072). The model's
-// own state, the instruct-prefix cache keyed by description and the
-// decoder's streaming state, assumes one generation at a time; the engine's
-// GPU lease keeps generations from overlapping.
+// Reference Take comes back in the segment's stream (ADR-0072). The model
+// keeps state between generations (the instruct-prefix cache keyed by
+// description, the rewound KV caches) and runs one generation at a time: the
+// engine's GPU lease orders them, and a cancelled one still finishing its
+// frame holds off the next (ADR-0074).
 
 import Foundation
 import MLX
@@ -21,8 +22,8 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
 
     /// What moving the codec's conv stack to the Neural Engine came to:
     /// nil until it finishes; then its placement and check, or why the
-    /// synthesizer stayed on MLX.
-    public private(set) var neuralEngineReport: String?
+    /// synthesizer stayed on MLX (`neuralEngineReady()`).
+    private var neuralEngineReport: String?
 
     /// `checkpointDirectory` says where a spec's checkpoint lives on disk. In
     /// the app that's the Model Catalog's directory for the Voice Engine. The
@@ -42,10 +43,15 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         self.neuralEngineCache = neuralEngineCache
     }
 
-    /// `Caches/tesseract-speech/neural-codec`, for tools run outside the app.
+    /// Where the Neural Engine codec is kept under a caches directory.
+    public static func neuralEngineCache(in caches: URL) -> URL {
+        caches.appendingPathComponent("tesseract-speech/neural-codec", isDirectory: true)
+    }
+
+    /// The user's Caches, for tools run outside the app.
     public static var defaultNeuralEngineCache: URL? {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("tesseract-speech/neural-codec", isDirectory: true)
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            .map(neuralEngineCache(in:))
     }
 
     /// Waits for the Neural Engine preparation, if one is running.
@@ -84,7 +90,7 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
         // A tiny end-to-end generation compiles the talker's, the code
         // predictor's and the decoder's kernels, so the first real request
         // pays generation only (autopsy F2).
-        try model.warmUp()
+        try model.warmUp(neuralEngine: neuralEngineCache != nil)
         warmed = true
         startNeuralEngine(for: model)
     }
@@ -165,11 +171,9 @@ public actor Qwen3Synthesizer: SpeechSynthesizing {
                         },
                         sampling: Self.sampling(request.parameters),
                         seed: request.seed,
-                        // 0.4s chunks: pacing/cancel granularity. Not a perf
-                        // lever — the 2026-07-13 perf pass measured RTF flat at
-                        // interval 2.0, and the streaming decoder is NOT
-                        // chunk-size invariant (samples diverge), so changing
-                        // this alters output audio at a fixed seed.
+                        // 0.4 s chunks on MLX: how often audio is handed over.
+                        // The samples don't depend on it (ADR-0074), and the
+                        // Neural Engine decodes its own fixed chunk.
                         streamingInterval: 0.4)
 
                     // A stall or a long trailing silence plays as a gap in the

@@ -81,9 +81,9 @@ each costing a few microseconds however little it did.
 - Attention uses the `.causal` mode, so no mask is built.
 - For one position (every talker step and code-predictor pass), three Metal
   kernels replace chains of MLX ops (`Qwen3TTSKernels`):
-  - q/k RMSNorm with RoPE;
-  - the residual add with the next RMSNorm;
-  - the top-k categorical draw (about fourteen ops before).
+  - q/k RMSNorm with RoPE (MLXLMCommon's `attentionNormRope`);
+  - the residual add with the next RMSNorm (MLXLMCommon's `rmsNormResidual`);
+  - the top-k categorical draw, this package's (about fourteen ops before).
 - Each computes what the ops it replaces compute, bit for bit: the same
   reduction order, casts, math functions and random draw. They are compiled
   with fast math, as the package's MLX kernels are (the fork's `fastmath_`
@@ -99,10 +99,13 @@ each costing a few microseconds however little it did.
 - The decoder is fp16. Its codebooks are folded through their output
   projections into one gather table, and the conv weights are made contiguous
   once: a strided weight was copied on every conv call.
-- The talker's KV cache is kept across a segment's generations and rewound,
-  in steps of 256 positions. MLX reuses a freed buffer only for a request of
-  nearly its size, so a fresh cache per segment piled up in the pool. It is
-  released at utterance end (`releaseWorkingMemory`).
+- The talker's KV cache is kept across a segment's generations and rewound.
+  Its buffers are sized in steps of 256 positions, and a new set is made
+  only when a generation needs more than they hold. MLX reuses a freed
+  buffer only for a request of nearly its size, so a fresh cache per segment
+  piled up in the pool. It is released at utterance end
+  (`releaseWorkingMemory`). The code predictor's cache is its 17 positions,
+  not the default 256.
 - Loading converts the decoder weights one tensor at a time and stacks the
   talker's projections a layer at a time.
 - A prompt of 32 positions or more is prefilled a layer at a time
@@ -146,7 +149,7 @@ pinned renders companion lines. Model numbers come from qwen3-tts-bench.
 | Code-predictor frame, model bench | 12.3 ms | 9.8 ms |
 | Decoder per frame, 5-frame chunks, model bench | 2.7 ms | 1.3 ms |
 | MLX memory after load | 2,352 MB | 1,556 MB |
-| Peak process footprint, longform | 5.57 GB | 2.78 GB |
+| Peak process footprint, longform | 5.57 GB | 2.72 GB |
 | Peak resident memory, longform | 2.65 GB | 0.95 GB |
 | Decoder against Qwen's | 23 to 30 dB | 55 to 59 dB (fp16) |
 

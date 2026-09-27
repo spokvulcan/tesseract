@@ -843,8 +843,8 @@ final class DependencyContainer: ObservableObject {
                         store.appendingPathComponent(
                             ModelDefinition.storageSubdirectory(forRepo: spec.repo))
                     },
-                    neuralEngineCache: StorageEnvironment.caches
-                        .appendingPathComponent("tesseract-speech/neural-codec", isDirectory: true)),
+                    neuralEngineCache: Qwen3Synthesizer.neuralEngineCache(
+                        in: StorageEnvironment.caches)),
                 gpu: ArbiterGPULease(arbiter: inferenceArbiter)
             )
         )
