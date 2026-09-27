@@ -17,7 +17,11 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
         var chunksPerSegment = 3
         var samplesPerChunk = 1920 * 2  // 2 codec frames per chunk
         var chunkDelayNanos: UInt64 = 0
-        var failOnSegmentIndex: Int? = nil
+        var failOnSegmentIndex: Int?
+        /// Word starts each segment reports after its audio, frames counted
+        /// from the segment's first, as the engine's word timing does
+        /// (ADR-0077). Empty: the segment's words come untimed.
+        var wordStarts: [WordStart] = []
     }
 
     var script = Script()
@@ -55,10 +59,6 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
         AudioFormat(sampleRate: 24_000, samplesPerFrame: 1920)
     }
 
-    func alignmentOffsets(for text: String) async throws -> [Int] {
-        Array(0..<max(1, text.count / 4)).map { $0 * 4 }
-    }
-
     func trimCaches() async {}
 
     private func noteCancelled() { sawCancellation = true }
@@ -83,6 +83,9 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
                         try Task.checkCancellation()
                         continuation.yield(
                             .chunk([Float](repeating: 0.1, count: script.samplesPerChunk)))
+                    }
+                    if !script.wordStarts.isEmpty {
+                        continuation.yield(.words(script.wordStarts))
                     }
                     var captured: ReferenceTake?
                     if request.capturesReference {

@@ -23,9 +23,31 @@ struct Qwen3TTSFusion: Sendable {
     var gateUp = true
 }
 
+/// One head's attention logits over a span of key positions, taken for the
+/// last query of each call: where the talker looks in the text while it
+/// speaks (ADR-0077). Only the talker's alignment layer carries one, and
+/// only while a generation asks for word timing.
+final class Qwen3TTSAlignmentProbe {
+    let head: Int
+    /// Key positions: the prompt's text track.
+    let span: Range<Int>
+    /// The latest call's logits, `[span.count]` float32, lazy. Positions not
+    /// in the cache yet (the streaming-text layout's later text) are left
+    /// out, so it can be shorter than the span.
+    var scores: MLXArray?
+
+    init(head: Int, span: Range<Int>) {
+        self.head = head
+        self.span = span
+    }
+}
+
 /// Qwen3 attention: q/k/v in one projection, RMSNorm on each head's queries
 /// and keys, rotary positions, grouped-query attention over a KV cache.
 final class Qwen3TTSAttention: Module {
+    /// Set on the alignment layer during a generation that times its words.
+    var alignmentProbe: Qwen3TTSAlignmentProbe?
+
     let heads: Int
     let kvHeads: Int
     let headDim: Int
@@ -93,12 +115,30 @@ final class Qwen3TTSAttention: Module {
                 kProj!(x).reshaped(batch, length, kvHeads, headDim), offset: offset)
         }
         let (keys, values) = cache.update(keys: k, values: v)
+        if let probe = alignmentProbe {
+            probe.scores = alignmentScores(probe, q: q, keys: keys, length: length)
+        }
         // `.causal` aligns to the last key, so a prompt after a restored
         // prefix sees the whole prefix.
         let out = MLXFast.scaledDotProductAttention(
             queries: q, keys: keys, values: values, scale: scale,
             mask: length > 1 ? .causal : .none)
         return oProj(out.transposed(0, 2, 1, 3).reshaped(batch, length, heads * headDim))
+    }
+
+    /// The probe's head, last query, over the cached keys in its span: one
+    /// `[1, D] × [D, span]` product in float32. Nil before any key of the
+    /// span is cached.
+    private func alignmentScores(
+        _ probe: Qwen3TTSAlignmentProbe, q: MLXArray, keys: MLXArray, length: Int
+    ) -> MLXArray? {
+        let end = min(probe.span.upperBound, keys.dim(2))
+        guard probe.span.lowerBound < end else { return nil }
+        let kvHead = probe.head / (heads / kvHeads)
+        let query = q[0..., probe.head ..< (probe.head + 1), (length - 1) ..< length, 0...]
+        let span = keys[0..., kvHead ..< (kvHead + 1), probe.span.lowerBound ..< end, 0...]
+        return (matmul(query.asType(.float32), span.asType(.float32).transposed(0, 1, 3, 2))
+            * scale).reshaped(-1)
     }
 
     /// Queries and keys `[B, L, heads, D]` normalized per head and rotated,

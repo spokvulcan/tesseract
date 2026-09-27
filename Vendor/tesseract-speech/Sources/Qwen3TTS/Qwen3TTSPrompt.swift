@@ -29,6 +29,16 @@ struct Qwen3TTSPrompt {
     var pad: MLXArray
     /// The spoken text's tokens, which cap how many frames it can take.
     var textTokenCount: Int
+    /// Where the text track's tokens sit in `body`, one position each: a
+    /// take's text (in-context layout), the new text, then TTS EOS. In the
+    /// streaming-text layout only the first sits in `body`; the rest are fed
+    /// with the frames at the positions that follow. The word timer reads
+    /// the talker's attention over these (ADR-0077).
+    var textSpan: Range<Int> = 0 ..< 0
+    /// How many of the span's first tokens are a take's text.
+    var referenceTokenCount = 0
+    /// The new text's token ids, in order.
+    var targetTokens: [Int] = []
 
     var trailingCount: Int { trailingText?.dim(1) ?? 0 }
 
@@ -169,6 +179,10 @@ final class Qwen3TTSPromptBuilder {
         var prompt = Qwen3TTSPrompt(
             instruct: try self.instruct(instruct), body: embeds, trailingText: nil, pad: ttsPad,
             textTokenCount: textEnd - 3)
+        // Both layouts start the text right after the codec tags' track.
+        let textStart = 3 + codecTags.dim(1) - 1
+        prompt.textSpan = textStart ..< (textStart + prompt.textTokenCount + 1)
+        prompt.targetTokens = ids[3 ..< textEnd].map { Int($0) }
         switch layout {
         case .interleaved:
             prompt.body = concatenated(head + [embeds[0..., 3 ..< 4, 0...] + codecBos], axis: 1)
@@ -213,10 +227,15 @@ final class Qwen3TTSPromptBuilder {
         let textTrack = overCodecPad(concatenated([embeds[0..., 3..., 0...], ttsEos], axis: 1))
 
         let codecTags = codecPrefix(languageID: languageID(language), speaker: nil)
-        return Qwen3TTSPrompt(
+        var prompt = Qwen3TTSPrompt(
             instruct: try self.instruct(instruct),
             body: concatenated(
                 [embeds[0..., ..<3, 0...], prefixTrack(codecTags), textTrack, codecTrack], axis: 1),
             trailingText: nil, pad: ttsPad, textTokenCount: targetEnd - 3)
+        let textStart = 3 + codecTags.dim(1) - 1
+        prompt.textSpan = textStart ..< (textStart + textTrack.dim(1))
+        prompt.referenceTokenCount = spokenIDs.count
+        prompt.targetTokens = target[3 ..< targetEnd].map { Int($0) }
+        return prompt
     }
 }

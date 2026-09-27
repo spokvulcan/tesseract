@@ -22,6 +22,7 @@ final class RecordingHighlightSurface: WordHighlightSurface {
     enum Call: Equatable {
         case show(text: String)
         case switchText(text: String, segmentBase: TimeInterval)
+        case timeWords([TimedWord], segment: Int)
         case updateTotalDuration(TimeInterval)
         case markSegmentComplete
         case markGenerationComplete
@@ -36,6 +37,10 @@ final class RecordingHighlightSurface: WordHighlightSurface {
 
     func switchText(_ text: String, segmentBase: TimeInterval) {
         calls.append(.switchText(text: text, segmentBase: segmentBase))
+    }
+
+    func timeWords(_ words: [TimedWord], segment: Int) {
+        calls.append(.timeWords(words, segment: segment))
     }
 
     func updateTotalDuration(_ duration: TimeInterval) {

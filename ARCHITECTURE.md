@@ -113,9 +113,9 @@ tesseract/
 │   │   ├── AudioPlayback.swift        # @MainActor playback port (seam)
 │   │   ├── AudioPlaybackManager.swift # AVFoundation adapter (real pause/resume)
 │   │   ├── WordHighlightSurface.swift # Spoken-word highlight port (ADR-0004)
-│   │   ├── ReadAlong/                 # Read-Along: the one heard-word clock (ADR-0076)
+│   │   ├── ReadAlong/                 # Read-Along: the one heard-word clock (ADR-0076/0077)
 │   │   ├── Reader/                    # Reader: TextKit 2 text view, bookmark, document store
-│   │   ├── Overlay/                   # Speech Overlay views (island, captions)
+│   │   ├── Overlay/                   # Speech Overlay: one scrolling feed, island or captions
 │   │   ├── Voices/                    # Voice library and designer (VoiceDesign checkpoints)
 │   │   └── Views/                     # Speech page: control bar, display settings
 │   ├── Transcription/
@@ -306,7 +306,11 @@ playback**):
   After warm-up it moves the codec's conv stack to the Neural Engine: a Core ML
   model the package builds from the checkpoint and keeps in the cache directory
   the app passes (under `StorageEnvironment.caches`). It stays on MLX where the
-  Neural Engine can't run it all (ADR-0074/0075). The
+  Neural Engine can't run it all (ADR-0074/0075). Each segment's words are
+  timed by the talker's own attention (ADR-0077): the model streams its
+  Alignment Head's row for every frame, and the adapter's `WordTimer` turns the
+  rows and the frames' loudness into word starts, which the stream carries as
+  `SpeechEvent.words`. The
   app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
   mirror for views and the arbiter — a presenter, not a facade: orchestration
   lives in the package engine.
@@ -314,7 +318,9 @@ playback**):
   `SpeechCoordinator`, turning generated samples into sound. It is
   `@MainActor protocol AudioPlayback: AnyObject` (the coordinator calls it
   *synchronously* while draining engine events), unlike the model ports which are
-  `Sendable nonisolated protocol` actor-backed ports `await`-ed off-main.
+  `Sendable nonisolated protocol` actor-backed ports `await`-ed off-main. Its
+  `heardPlaybackTime()` (the head less the output's latency) is the Read-Along's
+  clock; pacing reads the head itself.
 
 ```
 DictationCoordinator ─(Transcribing)→ TranscriptionEngine ─(SpeechRecognizer)→ adapter

@@ -106,6 +106,28 @@ struct SpeechReaderTests {
         harness.tearDown()
     }
 
+    /// With the engine timing its words (ADR-0077), the page lights the
+    /// word whose sound has started, wherever its characters sit.
+    @Test func theEnginesWordTimingLightsTheHeardWord() async {
+        // Six frames of audio: "The" at 0, "river" at 1, "watched" at 5.
+        let harness = await ReaderHarness(
+            text: Self.threeSentences,
+            script: .init(wordStarts: [
+                WordStart(word: 0, frame: 0), WordStart(word: 1, frame: 1),
+                WordStart(word: 2, frame: 5),
+            ]))
+        harness.reader.play()
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        #expect(harness.playback.totalScheduledDuration == 0.48)
+
+        harness.play(to: 0.3)
+        #expect(await waitUntil { harness.heardWord == "river" })
+        // 0.41 s is 85% of the audio: evenly spread that would be "home."
+        harness.play(to: 0.41)
+        #expect(await waitUntil { harness.heardWord == "watched" })
+        harness.tearDown()
+    }
+
     @Test func playReadsTheSelectionWhenThereIsOne() async {
         let harness = await ReaderHarness(text: Self.threeSentences)
         let selection = harness.text.range(of: "A small boat returned home.")

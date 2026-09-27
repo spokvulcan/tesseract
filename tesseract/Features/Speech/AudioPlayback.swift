@@ -22,6 +22,7 @@
 
 import Foundation
 import Accelerate
+import AVFoundation
 
 @MainActor
 protocol AudioPlayback: AnyObject {
@@ -57,6 +58,12 @@ protocol AudioPlayback: AnyObject {
     /// The playback head position, in seconds, of the current session.
     func currentPlaybackTime() -> TimeInterval
 
+    /// What the listener hears now, in the same time as
+    /// `currentPlaybackTime()`: the head less the audio still on its way to
+    /// the speakers (a few milliseconds built in, 150 ms or more over
+    /// Bluetooth). The Read-Along's clock (ADR-0077). While paused, the head.
+    func heardPlaybackTime() -> TimeInterval
+
     /// Stops and tears down any in-flight playback.
     func stop()
 
@@ -80,6 +87,20 @@ protocol AudioPlayback: AnyObject {
     /// normal), from now until changed. `currentPlaybackTime()` stays in the
     /// audio's own time, so a read-along keeps its place at any speed.
     func setPlaybackRate(_ rate: Float)
+}
+
+extension AudioPlayback {
+    /// A sink that knows no output latency hears its head.
+    func heardPlaybackTime() -> TimeInterval { currentPlaybackTime() }
+}
+
+/// The part of a playing player node's head the listener has heard: the
+/// render position less the latency of everything after the node, scaled to
+/// the audio's own time at the playback `rate`.
+@MainActor
+func heardTime(head: TimeInterval, node: AVAudioPlayerNode?, rate: Float) -> TimeInterval {
+    guard let node else { return head }
+    return max(head - node.outputPresentationLatency * Double(rate), 0)
 }
 
 /// The scheduled-audio loudness timeline behind `playbackLevel()` — shared by

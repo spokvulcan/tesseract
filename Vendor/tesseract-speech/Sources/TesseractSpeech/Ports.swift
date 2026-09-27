@@ -52,6 +52,9 @@ public struct ReferenceTake: Sendable, Equatable {
 
 public enum SynthesisEvent: Sendable {
     case chunk([Float])
+    /// Words whose starts are now known, frames counted from the segment's
+    /// first audio frame: never past the audio already sent (ADR-0077).
+    case words([WordStart])
     /// Terminal on success. Carries the segment as a Reference Take iff the
     /// request asked to capture one.
     case done(capturedReference: ReferenceTake?)
@@ -88,10 +91,9 @@ public protocol SpeechSynthesizing: Sendable {
     func unload() async
     /// Available once loaded.
     func audioFormat() async -> AudioFormat?
-    /// Per-alignment-token character offsets for `text` (the K1 path).
-    func alignmentOffsets(for text: String) async throws -> [Int]
-    /// Stream one segment. Chunks arrive in order; `.done` is terminal on
-    /// success; errors/cancellation terminate the stream. Cancellation of the
+    /// Stream one segment. Chunks arrive in order, and `.words` as the words'
+    /// starts become known; `.done` is terminal on success;
+    /// errors/cancellation terminate the stream. Cancellation of the
     /// consuming task stops generation within one decoder step.
     func synthesizeSegment(_ request: SegmentRequest) async
         -> AsyncThrowingStream<SynthesisEvent, Error>

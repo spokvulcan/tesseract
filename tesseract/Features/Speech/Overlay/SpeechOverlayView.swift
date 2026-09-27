@@ -8,8 +8,11 @@
 //    text; hovering shows pause, stop, progress and a way back to Speech.
 //  - Captions: two large lines at the bottom of the screen.
 //
-//  Both show the page of two lines holding the word being heard (lines are
-//  measured once per segment) and redraw only when that word changes.
+//  Both show one continuous feed of the reading (ADR-0077): the line being
+//  heard on top, the next below. When the voice reaches the next line, the
+//  whole feed moves up one line and the finished line fades out; no text is
+//  ever swapped in place. Passages are laid out as they arrive, ahead of
+//  their audio, and only the lines near the heard one are drawn.
 //
 
 import AppKit
@@ -42,16 +45,25 @@ final class SpeechOverlayModel {
         self.openSpeechPage = openSpeechPage
     }
 
-    var words: [String] {
-        previewWords ?? readAlong.segment?.words.words.map(\.text) ?? []
+    /// What the feed lays out: the reading's passages, or the preview's.
+    var passages: [ReadAlongPassage] {
+        if let previewWords {
+            return [
+                ReadAlongPassage(index: 0, firstWord: 0, text: previewWords.joined(separator: " "))
+            ]
+        }
+        return readAlong.passages
     }
 
-    var word: Int { previewWords == nil ? readAlong.word : previewWord }
+    /// The word being heard, counted over the whole reading.
+    var word: Int {
+        if previewWords != nil { return previewWord }
+        return (readAlong.segment?.firstWord ?? 0) + readAlong.word
+    }
 
-    /// Identifies the text being paged, so lines are measured once per segment.
-    var textKey: String {
-        previewWords != nil
-            ? "preview" : "\(readAlong.utteranceID)#\(readAlong.segment?.index ?? -1)"
+    /// Identifies the reading, so its feed is built once and grown.
+    var feedKey: String {
+        previewWords != nil ? "preview" : readAlong.utteranceID.uuidString
     }
 
     var isPaused: Bool {
@@ -89,16 +101,16 @@ private struct IslandOverlay: View {
     let width: CGFloat
 
     @State private var hovering = false
-    @State private var layout = CaptionLineCache()
+    @State private var feed = CaptionFeedCache()
 
     var body: some View {
         let settings = model.settings
         let font = NSFont.systemFont(ofSize: settings.speechOverlaySize.points, weight: .semibold)
         VStack(spacing: 10) {
             Color.clear.frame(height: max(topInset - 6, 0))
-            CaptionPage(
+            CaptionFeedView(
                 model: model, font: font, width: width - 52,
-                tint: settings.speechOverlayTint.color, alignment: .leading, layout: layout
+                tint: settings.speechOverlayTint.color, alignment: .leading, cache: feed
             )
             .frame(maxWidth: .infinity, alignment: .leading)
             if hovering, settings.speechOverlayShowsControls, model.previewWords == nil {
@@ -128,15 +140,15 @@ private struct CaptionsOverlay: View {
     let width: CGFloat
 
     @State private var hovering = false
-    @State private var layout = CaptionLineCache()
+    @State private var feed = CaptionFeedCache()
 
     var body: some View {
         let settings = model.settings
         let font = NSFont.systemFont(
             ofSize: settings.speechOverlaySize.points + 5, weight: .semibold)
-        CaptionPage(
+        CaptionFeedView(
             model: model, font: font, width: width - 64, tint: settings.speechOverlayTint.color,
-            alignment: .center, layout: layout
+            alignment: .center, cache: feed
         )
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 32)
@@ -164,63 +176,104 @@ private struct CaptionsOverlay: View {
 
 // MARK: - Pieces
 
-/// The last measured line layout, so a segment is measured once.
+/// One reading's feed, grown as its passages arrive: a passage is measured
+/// once, and a new reading, font or width starts a new feed.
 @MainActor
-private final class CaptionLineCache {
+private final class CaptionFeedCache {
     private var key = ""
-    private var lines: [Range<Int>] = []
+    private var feed = CaptionFeed()
 
-    func lines(for words: [String], key: String, font: NSFont, width: CGFloat) -> [Range<Int>] {
-        let fullKey = "\(key)|\(font.pointSize)|\(Int(width))|\(words.count)"
-        if fullKey == self.key { return lines }
+    func feed(
+        for passages: [ReadAlongPassage], key: String, font: NSFont, width: CGFloat
+    ) -> CaptionFeed {
+        let fullKey = "\(key)|\(font.pointSize)|\(Int(width))"
+        if fullKey != self.key {
+            feed = CaptionFeed()
+            self.key = fullKey
+        }
+        if let first = passages.first { feed.drop(passagesBefore: first.index) }
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let widths = words.map { ($0 as NSString).size(withAttributes: attributes).width }
         let space = (" " as NSString).size(withAttributes: attributes).width
-        lines = CaptionLayout.lines(wordWidths: widths, spaceWidth: space, width: width)
-        self.key = fullKey
-        return lines
+        for passage in passages where passage.index > feed.lastPassage {
+            feed.append(
+                passage,
+                wordWidths: passage.words.map {
+                    ($0 as NSString).size(withAttributes: attributes).width
+                },
+                spaceWidth: space, width: width)
+        }
+        return feed
     }
 }
 
-private struct CaptionPage: View {
+/// The feed: the heard line on top, the next below. Lines sit at their
+/// number times the line height in one column; the column moves so the
+/// heard line is on top, on a critically damped spring that keeps its speed
+/// when the target changes mid-move. Only the lines from one above the
+/// heard line to three below exist as views.
+private struct CaptionFeedView: View {
     let model: SpeechOverlayModel
     let font: NSFont
     let width: CGFloat
     let tint: Color
     let alignment: HorizontalAlignment
-    let layout: CaptionLineCache
+    let cache: CaptionFeedCache
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let words = model.words
+        let feed = cache.feed(for: model.passages, key: model.feedKey, font: font, width: width)
         let word = model.word
-        let lines = layout.lines(for: words, key: model.textKey, font: font, width: width)
-        let page = CaptionLayout.page(for: word, in: lines)
-        VStack(alignment: alignment, spacing: font.pointSize * 0.28) {
-            ForEach(Array(page), id: \.lowerBound) { line in
-                Text(attributed(line, words: words, word: word))
+        let lineHeight = (font.ascender - font.descender + font.leading + font.pointSize * 0.28)
+            .rounded(.up)
+        let position = feed.line(holding: max(word, 0))
+        let current = position.map { feed.lines[$0].id } ?? 0
+        let window =
+            position.map { feed.lines[max($0 - 1, 0)..<min($0 + 4, feed.lines.count)] } ?? []
+        ZStack(alignment: .topLeading) {
+            ForEach(window) { line in
+                Text(attributed(line, word: word))
                     .font(Font(font))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-            }
-            if page.count < 2 {
-                Text(" ").font(Font(font))
+                    .frame(
+                        width: width, alignment: Alignment(horizontal: alignment, vertical: .top)
+                    )
+                    .offset(y: CGFloat(line.id) * lineHeight)
+                    .opacity(line.id < current ? 0 : 1)
             }
         }
-        .id(page.first?.lowerBound ?? 0)
-        .transition(
-            .asymmetric(insertion: .opacity.combined(with: .offset(y: 6)), removal: .opacity)
-        )
-        .animation(.easeOut(duration: 0.22), value: page.first?.lowerBound ?? 0)
+        .frame(width: width, height: lineHeight, alignment: .topLeading)
+        .offset(y: -CGFloat(current) * lineHeight)
+        .animation(reduceMotion ? nil : .spring(duration: 0.32, bounce: 0), value: current)
+        .frame(width: width, height: 2 * lineHeight, alignment: .topLeading)
+        .clipped()
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0), .init(color: .black, location: 0.05),
+                    .init(color: .black, location: 0.95), .init(color: .clear, location: 1),
+                ], startPoint: .top, endPoint: .bottom)
+        }
     }
 
-    /// Heard words white, the word being heard in the tint, the rest dim.
-    private func attributed(_ line: Range<Int>, words: [String], word: Int) -> AttributedString {
+    /// Heard words white, the word being heard in the tint on a soft wash,
+    /// the rest at 60% (about 8:1 on black).
+    private func attributed(_ line: CaptionFeed.Line, word: Int) -> AttributedString {
         var result = AttributedString()
-        for index in line {
-            var run = AttributedString(words[index] + (index + 1 < line.upperBound ? " " : ""))
-            run.foregroundColor =
-                index < word ? .white : index == word ? tint : .white.opacity(0.42)
+        for (offset, text) in line.words.enumerated() {
+            let index = line.firstWord + offset
+            var run = AttributedString(text)
+            if index < word {
+                run.foregroundColor = .white
+            } else if index == word {
+                run.foregroundColor = tint
+                run.backgroundColor = tint.opacity(0.2)
+            } else {
+                run.foregroundColor = .white.opacity(0.6)
+            }
             result += run
+            if offset + 1 < line.words.count { result += AttributedString(" ") }
         }
         return result
     }
@@ -242,7 +295,7 @@ private struct OverlayControls: View {
             if showsProgress {
                 let segment = model.readAlong.segment
                 ProgressView(
-                    value: Double(max(model.word, 0)),
+                    value: Double(max(model.readAlong.word, 0)),
                     total: Double(max(segment?.words.words.count ?? 1, 1))
                 )
                 .progressViewStyle(.linear)

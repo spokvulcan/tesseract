@@ -100,6 +100,7 @@ struct Qwen3TTSTests {
             switch event {
             case .audio(let audio): longAudio += audio
             case .codeFrames(let frames): longFrames = frames
+            case .textTrack, .alignment: break
             }
         }
         #expect(short.codeFrames == shortAlone.codeFrames)
@@ -216,6 +217,143 @@ struct Qwen3TTSTests {
                 text: "one two three four", voice: "sample voice", language: "English",
                 sampling: TinyModel.sampling, layout: .upfront))
         #expect(!rendered.allAudio.isEmpty)
+    }
+
+    // MARK: - Word timing (ADR-0077)
+
+    /// Both layouts place the text track right after the codec tags: the
+    /// streaming layout's first token ends the prompt, and a take's text
+    /// comes before the new text.
+    @Test func thePromptKnowsWhereItsTextTrackSits() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        let prompts = fixture.model.prompts
+        let plain = try prompts.plain(
+            text: "one two three", instruct: nil, language: "English", speaker: nil,
+            layout: .interleaved)
+        #expect(plain.textSpan.lowerBound == plain.body.dim(1) - 1)
+        #expect(plain.textSpan.count == plain.textTokenCount + 1)
+        #expect(plain.targetTokens.count == plain.textTokenCount)
+        #expect(plain.referenceTokenCount == 0)
+
+        let take = Qwen3TTSReference(codeFrames: [[1, 2], [3, 4]], text: "four five")
+        let reference = try prompts.reference(
+            text: "one two three", take: take, instruct: nil, language: "English")
+        #expect(reference.textSpan.lowerBound == plain.textSpan.lowerBound)
+        #expect(
+            reference.textSpan.count
+                == reference.referenceTokenCount + reference.textTokenCount + 1)
+        #expect(reference.targetTokens == plain.targetTokens)
+        // After the text track: codec BOS and the take's two frames.
+        #expect(reference.body.dim(1) == reference.textSpan.upperBound + 1 + 2)
+    }
+
+    /// The probe reads one head's logits for the last query over its span of
+    /// cached keys, through the prompt's path and the fused one-position
+    /// path alike.
+    @Test func theProbeReadsOneHeadOverItsSpan() throws {
+        let random = MLXRandom.RandomState(seed: 17)
+        let (heads, kvHeads, headDim, hidden) = (4, 2, 16, 64)
+        let (layers, _) = try randomDecoderLayers(
+            1, hidden: hidden, heads: heads, kvHeads: kvHeads, headDim: headDim,
+            intermediate: 64, scale: 0.05, random: random)
+        let attention = layers[0].attention
+        let cache = KVCacheSimple()
+        let probe = Qwen3TTSAlignmentProbe(head: 3, span: 2 ..< 8)
+        attention.alignmentProbe = probe
+
+        func expected(_ normed: MLXArray, offset: Int) -> [Float] {
+            let length = normed.dim(1)
+            let split = attention.qkvProj!(normed).reshaped(1, length, heads + 2 * kvHeads, headDim)
+            let queries = MLXFast.RoPE(
+                attention.qNorm(split[0..., 0..., ..<heads, 0...]).transposed(0, 2, 1, 3),
+                dimensions: headDim, traditional: false, base: attention.ropeBase, scale: 1,
+                offset: offset)
+            let keys = cache.state[0]
+            let query = queries[0..., 3 ..< 4, (length - 1) ..< length, 0...].asType(.float32)
+            // Head 3 of 4 reads KV head 1 of 2.
+            let span = keys[0..., 1 ..< 2, 2 ..< min(8, keys.dim(2)), 0...].asType(.float32)
+            return (matmul(query, span.transposed(0, 1, 3, 2)) * attention.scale).reshaped(-1)
+                .asArray(Float.self)
+        }
+
+        let prompt = layers[0].inputNorm(
+            (MLXRandom.normal([1, 10, hidden], key: random) * 0.5).asType(.bfloat16))
+        _ = attention(prompt, cache: cache)
+        let first = try #require(probe.scores).asArray(Float.self)
+        #expect(first.count == 6)
+        #expect(maxAbsDifference(first, expected(prompt, offset: 0)) < 1e-3)
+
+        let step = layers[0].inputNorm(
+            (MLXRandom.normal([1, 1, hidden], key: random) * 0.5).asType(.bfloat16))
+        _ = attention(step, cache: cache)
+        let next = try #require(probe.scores).asArray(Float.self)
+        #expect(maxAbsDifference(next, expected(step, offset: 10)) < 1e-3)
+    }
+
+    /// With an alignment head the stream carries the text track once and a
+    /// row per frame, each ahead of its frame's audio; the render itself is
+    /// the same sample for sample.
+    @Test func anAlignmentHeadAddsRowsAndChangesNoSample() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        func render(_ head: Qwen3TTSAlignmentHead?) async throws -> Collected {
+            try await collect(
+                fixture.model.generateStream(
+                    text: "one two three four", voice: "sample voice", language: "English",
+                    sampling: TinyModel.sampling, seed: 3, streamingInterval: 0.004,
+                    alignment: head))
+        }
+        let plain = try await render(nil)
+        let timed = try await render(Qwen3TTSAlignmentHead(layer: 1, head: 2))
+        #expect(timed.codeFrames == plain.codeFrames)
+        #expect(timed.allAudio == plain.allAudio)
+        #expect(plain.textTrack == nil)
+        #expect(plain.alignment.isEmpty)
+
+        let prompt = try fixture.model.prompts.plain(
+            text: "one two three four", instruct: "sample voice", language: "English",
+            speaker: nil, layout: .interleaved)
+        let track = try #require(timed.textTrack)
+        let frames = try #require(timed.codeFrames)
+        #expect(track.referenceTokenCount == 0)
+        #expect(track.characterOffsets.count == prompt.textTokenCount)
+        #expect(track.width == prompt.textSpan.count)
+        #expect(timed.alignment.count == frames.count)
+        #expect(timed.alignment.allSatisfy { $0.count == track.width })
+        for (frame, samplesBefore) in timed.audioFramesAtRow.enumerated() {
+            #expect(samplesBefore <= frame * fixture.model.samplesPerFrame)
+        }
+        // The streaming layout feeds the text with the frames: the first
+        // row sees only the first token; EOS comes in last.
+        #expect(timed.alignment[0][0].isFinite)
+        #expect(timed.alignment[0][track.width - 1] == -.infinity)
+
+        let missing = try await render(Qwen3TTSAlignmentHead(layer: 9, head: 0))
+        #expect(missing.textTrack == nil, "a head the talker doesn't have is ignored")
+    }
+
+    /// Continuing a take, the rows cover the take's text before the new text.
+    @Test func aContinuationsRowsCoverTheTakesText() async throws {
+        let fixture = try await TinyModel.make(ttsModelType: "voice_design")
+        defer { fixture.cleanUp() }
+        let take = Qwen3TTSReference(codeFrames: [[1, 2], [3, 4], [5, 6]], text: "one two")
+        let timed = try await collect(
+            fixture.model.generateStream(
+                text: "three four five", voice: "sample voice", language: "English",
+                reference: take, sampling: TinyModel.sampling, seed: 4,
+                alignment: Qwen3TTSAlignmentHead(layer: 0, head: 1)))
+        let prompt = try fixture.model.prompts.reference(
+            text: "three four five", take: take, instruct: "sample voice", language: "English")
+        let track = try #require(timed.textTrack)
+        #expect(track.referenceTokenCount == prompt.referenceTokenCount)
+        #expect(track.width == prompt.textSpan.count)
+        #expect(!timed.alignment.isEmpty)
+        // The whole text track is in the prompt from the start.
+        #expect(
+            timed.alignment.allSatisfy { row in
+                row.count == track.width && row.allSatisfy(\.isFinite)
+            })
     }
 
     @Test func aTakeWithTheWrongCodebookCountIsRejected() async throws {
@@ -1040,6 +1178,10 @@ struct Collected {
     var allAudio: [Float] = []
     var lastAudio: [Float]?
     var codeFrames: [[Int32]]?
+    var textTrack: Qwen3TTSTextTrack?
+    var alignment: [[Float]] = []
+    /// How many frames of audio had arrived when each alignment row did.
+    var audioFramesAtRow: [Int] = []
 }
 
 func collect(_ stream: AsyncThrowingStream<AudioGeneration, Error>) async throws -> Collected {
@@ -1051,6 +1193,10 @@ func collect(_ stream: AsyncThrowingStream<AudioGeneration, Error>) async throws
             c.allAudio += audio
             c.lastAudio = audio
         case .codeFrames(let frames): c.codeFrames = frames
+        case .textTrack(let track): c.textTrack = track
+        case .alignment(let row):
+            c.alignment.append(row)
+            c.audioFramesAtRow.append(c.allAudio.count)
         }
     }
     return c

@@ -177,21 +177,28 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         Qwen3TTSNeuralCodec.snr(try codec.decodeAll(latent: probe.latent), probe.expected)
     }
 
-    // MARK: - Token alignment
+    // MARK: - Word timing
 
-    /// The character offset where each of `text`'s tokens starts.
-    public func tokenizeForAlignment(text: String) -> [Int] {
-        let tokens = tokenizer.encode(text: text)
+    /// Where each of `tokens` starts in `text`, in characters, for the
+    /// tokens that spell `text`. Decoded prefixes, not single tokens: a
+    /// byte-level token can end mid-character.
+    func characterOffsets(of tokens: [Int], in text: String) -> [Int] {
         guard !tokens.isEmpty else { return [] }
-        // Decoded prefixes, not single tokens: a byte-level token can end
-        // mid-character.
+        let length = text.count
         var offsets: [Int] = [0]
         offsets.reserveCapacity(tokens.count)
         for i in 1 ..< tokens.count {
-            let prefix = tokenizer.decode(tokens: Array(tokens[0 ..< i]))
-            offsets.append(min(prefix.count, text.count))
+            offsets.append(min(tokenizer.decode(tokens: Array(tokens[0 ..< i])).count, length))
         }
         return offsets
+    }
+
+    /// `head`, when the talker has it.
+    private func validated(_ head: Qwen3TTSAlignmentHead?) -> Qwen3TTSAlignmentHead? {
+        guard let head, head.layer >= 0, head.layer < talker.model.layers.count, head.head >= 0,
+            head.head < talkerConfig.numAttentionHeads
+        else { return nil }
+        return head
     }
 
     // MARK: - Generation
@@ -201,6 +208,11 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// instruction"; `seed` makes a render reproducible. With a `reference`,
     /// the voice continues that take: same person, new words. Audio comes every `streamingInterval` seconds of frames (the
     /// first chunk sooner); the samples never depend on the chunking.
+    ///
+    /// With an `alignment` head the stream also carries what that head looks
+    /// at: the text track once, then one row per frame, ahead of the frame's
+    /// audio. Reading it adds one small product per frame and changes no
+    /// sample (ADR-0077).
     public func generateStream(
         text: String,
         voice: String?,
@@ -209,7 +221,8 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         sampling: Qwen3TTSSampling,
         seed: UInt64 = 0,
         streamingInterval: Double = 2.0,
-        layout: Qwen3TTSTextLayout = .interleaved
+        layout: Qwen3TTSTextLayout = .interleaved,
+        alignment: Qwen3TTSAlignmentHead? = nil
     ) -> AsyncThrowingStream<AudioGeneration, Error> {
         let (stream, continuation) = AsyncThrowingStream<AudioGeneration, Error>.makeStream()
         let chunkFrames = max(
@@ -217,12 +230,22 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         let task = Task { @Sendable [weak self] in
             guard let self else { return }
             do {
+                let built = try prompt(
+                    text: text, voice: voice, language: language, reference: reference,
+                    layout: layout)
+                let head = validated(alignment)
+                if head != nil {
+                    continuation.yield(
+                        .textTrack(
+                            Qwen3TTSTextTrack(
+                                referenceTokenCount: built.referenceTokenCount,
+                                characterOffsets: characterOffsets(of: built.targetTokens, in: text))))
+                }
                 let frames = try run(
-                    prompt: prompt(
-                        text: text, voice: voice, language: language, reference: reference,
-                        layout: layout),
-                    voice: voice, sampling: sampling, seed: seed, chunkFrames: chunkFrames,
-                    onAudio: { continuation.yield(.audio($0)) })
+                    prompt: built, voice: voice, sampling: sampling, seed: seed,
+                    chunkFrames: chunkFrames, alignment: head,
+                    onAudio: { continuation.yield(.audio($0)) },
+                    onAlignment: { continuation.yield(.alignment($0)) })
                 continuation.yield(.codeFrames(frames))
                 continuation.finish()
             } catch {
@@ -359,10 +382,14 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     /// frame cap, and returns the frames (EOS excluded), one row of
     /// `numCodeGroups` codes each. With `chunkFrames`, the frames are also
     /// decoded as they arrive and handed to `onAudio`, in order; with the
-    /// Neural Engine, from its queue.
+    /// Neural Engine, from its queue. With an `alignment` head, each kept
+    /// frame's row of that head's attention over the text track goes to
+    /// `onAlignment` as the frame is kept, before its audio.
     private func run(
         prompt: Qwen3TTSPrompt, voice: String?, sampling: Qwen3TTSSampling, seed: UInt64,
-        chunkFrames: Int?, onAudio: (@Sendable ([Float]) -> Void)?
+        chunkFrames: Int?, alignment: Qwen3TTSAlignmentHead? = nil,
+        onAudio: (@Sendable ([Float]) -> Void)?,
+        onAlignment: (@Sendable ([Float]) -> Void)? = nil
     ) throws -> [[Int32]] {
         generationLock.lock()
         defer { generationLock.unlock() }
@@ -387,6 +414,21 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         let codeCache = acquireCodeCache()
         let eos = MLXArray(Int32(talkerConfig.codecEosTokenId))
 
+        // Word timing: the alignment head reads the text track at every step.
+        // Row f comes from the call that predicts frame f: the prefill for the
+        // first, then the step after each frame.
+        let instructLength = prompt.instruct?.dim(1) ?? 0
+        let probe = alignment.map {
+            Qwen3TTSAlignmentProbe(
+                head: $0.head,
+                span: (instructLength + prompt.textSpan.lowerBound)
+                    ..< (instructLength + prompt.textSpan.upperBound))
+        }
+        let probeLayer = alignment.map { talker.model.layers[$0.layer].attention }
+        probeLayer?.alignmentProbe = probe
+        defer { probeLayer?.alignmentProbe = nil }
+        var probeRows: [MLXArray?] = []
+
         // The talker's step from the prompt; each frame then runs in two
         // dispatches. A: sample the first code from the talker's last step
         // and run the code predictor. B: the talker's next step, which
@@ -395,7 +437,12 @@ public final class Qwen3TTSModel: @unchecked Sendable {
         // unfinished command buffer still reads. A keeps the GPU busy while
         // that wait and B's encoding happen.
         var (logits, hidden) = talker.prefill(prompt.body, cache: cache)
-        asyncEval(logits, hidden)
+        if let probe {
+            probeRows.append(probe.scores)
+            asyncEval([logits, hidden] + [probe.scores].compactMap { $0 })
+        } else {
+            asyncEval(logits, hidden)
+        }
 
         var accepted: [MLXArray] = []
         accepted.reserveCapacity(maxFrames)
@@ -478,11 +525,26 @@ public final class Qwen3TTSModel: @unchecked Sendable {
             if final, decoded < accepted.count { try decodeReady(final: true) }
         }
 
+        /// The kept frame `index`'s alignment row, which the step that
+        /// predicted it computed; that step has finished by the time the
+        /// frame settles.
+        func deliverAlignment(_ index: Int) {
+            guard let probe, let onAlignment, index < probeRows.count else { return }
+            let width = probe.span.count
+            var row = probeRows[index].map { $0.asArray(Float.self) } ?? []
+            probeRows[index] = nil
+            if row.count < width {
+                row += [Float](repeating: -.infinity, count: width - row.count)
+            }
+            onAlignment(row)
+        }
+
         /// Frame `previous` is done (its B followed its A); keeps it unless
         /// it is EOS.
         func settle(_ previous: (codes: MLXArray, isEOS: MLXArray)) throws -> Bool {
             if previous.isEOS.item(Bool.self) { return false }
             accepted.append(previous.codes)
+            deliverAlignment(accepted.count - 1)
             try decodeReady(final: false)
             return true
         }
@@ -511,7 +573,12 @@ public final class Qwen3TTSModel: @unchecked Sendable {
 
             // B: the talker's step for this frame.
             (logits, hidden) = talker(embeddingSum + prompt.text(forFrame: frame), cache: cache)
-            asyncEval(logits, hidden)
+            if let probe {
+                probeRows.append(probe.scores)
+                asyncEval([logits, hidden] + [probe.scores].compactMap { $0 })
+            } else {
+                asyncEval(logits, hidden)
+            }
         }
         if !ended, let last = pending {
             eval(last.codes, last.isEOS)
