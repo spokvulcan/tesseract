@@ -15,46 +15,46 @@ public struct SegmentRequest: Sendable {
     /// Resolved by the engine: `.entropy` becomes a fresh random value per
     /// utterance, so the port only ever sees a concrete seed.
     public var seed: UInt64
-    /// Condition generation on this anchor (same realization as its source).
-    public var anchor: AnchorHandle?
-    /// Capture an anchor from this segment's first N codec frames; it arrives
-    /// with `SynthesisEvent.done` — no post-hoc build call, no race window.
-    public var captureAnchorSteps: Int?
+    /// Continue this take's voice: the segment is generated as the next
+    /// words of the same speaker (ADR-0072).
+    public var reference: ReferenceTake?
+    /// Keep this segment as a Reference Take; it arrives with
+    /// `SynthesisEvent.done`, so there is no separate build call to race.
+    public var capturesReference: Bool
 
     public init(
         text: String, voiceDescription: String?, language: String?,
         parameters: TTSParameters, seed: UInt64,
-        anchor: AnchorHandle? = nil, captureAnchorSteps: Int? = nil
+        reference: ReferenceTake? = nil, capturesReference: Bool = false
     ) {
         self.text = text
         self.voiceDescription = voiceDescription
         self.language = language
         self.parameters = parameters
         self.seed = seed
-        self.anchor = anchor
-        self.captureAnchorSteps = captureAnchorSteps
+        self.reference = reference
+        self.capturesReference = capturesReference
     }
 }
 
-/// A voice realization's anchor as a value: the code frames are the durable
-/// ingredients (they serialize into PinnedVoice); adapters rebuild KV from
-/// them whenever the active anchor changes.
-public struct AnchorHandle: Sendable, Equatable {
+/// One rendered take of a voice, as a value: its codec frames and the text
+/// they speak. Every later segment in the session continues it (ADR-0072);
+/// with the session's voice it serializes into a `PinnedVoice`.
+public struct ReferenceTake: Sendable, Equatable {
     public let codeFrames: [[Int32]]
-    public let voiceDescription: String?
-    public let language: String?
+    public let text: String
 
-    public init(codeFrames: [[Int32]], voiceDescription: String?, language: String?) {
+    public init(codeFrames: [[Int32]], text: String) {
         self.codeFrames = codeFrames
-        self.voiceDescription = voiceDescription
-        self.language = language
+        self.text = text
     }
 }
 
 public enum SynthesisEvent: Sendable {
     case chunk([Float])
-    /// Terminal on success. Carries the captured anchor iff requested.
-    case done(capturedAnchor: AnchorHandle?)
+    /// Terminal on success. Carries the segment as a Reference Take iff the
+    /// request asked to capture one.
+    case done(capturedReference: ReferenceTake?)
 }
 
 public struct AudioFormat: Sendable, Equatable {

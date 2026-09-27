@@ -11,6 +11,8 @@ struct SpeechComposerView: View {
     @Binding var text: String
     @Binding var voiceDescription: String
     @Binding var language: String
+    /// "Try another take": re-render the voice and keep the new take.
+    var onTryAnotherTake: () -> Void = {}
 
     private static let voicePresets: [(label: String, description: String)] = [
         (
@@ -76,6 +78,15 @@ struct SpeechComposerView: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Voice presets")
+
+            Button(action: onTryAnotherTake) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(.borderless)
+            .fixedSize()
+            .help(
+                "Try another take: hear this voice rendered again. Every reading keeps the take you heard last."
+            )
 
             Picker("Language", selection: $language) {
                 ForEach(TTSLanguage.allCases) { lang in

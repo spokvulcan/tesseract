@@ -5,7 +5,6 @@
 
 import Foundation
 import HuggingFace
-import MLXAudioCore
 
 /// One file in a remote model repository, as the **Model Fetching** port
 /// reports it: path relative to the repo root, plus the expected byte size
@@ -16,8 +15,8 @@ struct RemoteModelFile: Equatable, Sendable {
 }
 
 /// **Model Fetching** — the narrow hub port below the model download
-/// lifecycle: list a repo's files, fetch one file, resolve-or-download a
-/// snapshot (see `CONTEXT.md` → Model catalog). Two adapters satisfy it —
+/// lifecycle: list a repo's files and fetch one file (see `CONTEXT.md` →
+/// Model catalog). Two adapters satisfy it —
 /// `HuggingFaceModelFetching` (app) and `InMemoryModelFetching` (tests).
 /// Disk deliberately stays outside the seam: size checks, stale-file
 /// cleanup, and status computation run against the real file system,
@@ -29,14 +28,6 @@ protocol ModelFetching {
 
     /// Fetch a single file into `destination`.
     func fetchFile(at path: String, from repo: String, to destination: URL) async throws
-
-    /// Resolve a full snapshot from the shared cache or download it,
-    /// reporting fractional progress in [0, 1] on the main actor.
-    func resolveSnapshot(
-        of repo: String,
-        requiredExtension: String,
-        onProgress: @escaping @MainActor @Sendable (Double) -> Void
-    ) async throws
 }
 
 enum ModelFetchingError: LocalizedError {
@@ -50,8 +41,7 @@ enum ModelFetchingError: LocalizedError {
 }
 
 /// The HuggingFace-backed production adapter: the hub client for listing and
-/// per-file fetches, the shared resolve utility for snapshots. Both sit
-/// behind this adapter unchanged.
+/// per-file fetches.
 struct HuggingFaceModelFetching: ModelFetching {
     func listFiles(in repo: String, recursive: Bool) async throws -> [RemoteModelFile] {
         let entries = try await HubClient.default.listFiles(
@@ -65,24 +55,6 @@ struct HuggingFaceModelFetching: ModelFetching {
     func fetchFile(at path: String, from repo: String, to destination: URL) async throws {
         _ = try await HubClient.default.downloadFile(
             at: path, from: validated(repo), to: destination)
-    }
-
-    func resolveSnapshot(
-        of repo: String,
-        requiredExtension: String,
-        onProgress: @escaping @MainActor @Sendable (Double) -> Void
-    ) async throws {
-        // Upstream v0.1.3 exposes the progress handler only on the
-        // client-explicit overload; the storage location itself is vendor
-        // patch #11 (Application Support/models, the port's layout).
-        _ = try await ModelUtils.resolveOrDownloadModel(
-            client: HubClient.default,
-            repoID: validated(repo),
-            requiredExtension: requiredExtension,
-            progressHandler: { progress in
-                onProgress(progress.fractionCompleted)
-            }
-        )
     }
 
     private func validated(_ repo: String) throws -> Repo.ID {

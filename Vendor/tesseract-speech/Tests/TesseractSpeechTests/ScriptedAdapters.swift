@@ -86,14 +86,15 @@ actor ScriptedSynthesizer: SpeechSynthesizing {
                         try Task.checkCancellation()
                         continuation.yield(.chunk([Float](repeating: 0.1, count: script.samplesPerChunk)))
                     }
-                    var captured: AnchorHandle?
-                    if let steps = request.captureAnchorSteps {
-                        captured = AnchorHandle(
-                            codeFrames: (0..<min(steps, 4)).map { _ in [Int32](repeating: 7, count: 3) },
-                            voiceDescription: request.voiceDescription,
-                            language: request.language)
+                    var captured: ReferenceTake?
+                    if request.capturesReference {
+                        // Four frames that encode the seed, so two takes of
+                        // one text are told apart.
+                        let mark = Int32(truncatingIfNeeded: request.seed % 1000)
+                        captured = ReferenceTake(
+                            codeFrames: (0..<4).map { _ in [mark, 7, 7] }, text: request.text)
                     }
-                    continuation.yield(.done(capturedAnchor: captured))
+                    continuation.yield(.done(capturedReference: captured))
                     await self.noteFinished()
                     continuation.finish()
                 } catch is CancellationError {

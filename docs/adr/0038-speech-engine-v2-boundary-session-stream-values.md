@@ -2,6 +2,7 @@
 
 - Status: Accepted (under overnight delegation, 2026-07-13 — owner review pending)
 - Date: 2026-07-13
+- Amended by: ADR-0072 (2026-09-27: `AnchorPolicy` became `ReferencePolicy`, `PinnedVoice` schema 2 carries a Reference Take, sessions gained `retake`)
 - Relates to: map #334, ticket #343; ADR-0036 (substrate), ADR-0037 (one checkpoint, two roles); autopsy `research/v1-autopsy-342/autopsy.md` §4 (the ten constraints); ADR-0003 (speech seams), ADR-0004 (word-highlight port)
 
 ## Context

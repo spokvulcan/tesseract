@@ -11,13 +11,25 @@ struct TextSegment: Sendable, Equatable {
 
 enum Segmenter {
     private enum Defaults {
-        static let targetTokensPerSegment = 200
+        static let targetTokensPerSegment = 100
         static let tokensPerWordEstimate: Double = 1.3
+        /// A lead segment grows past `leadTokens` until it holds this many,
+        /// so a Reference Take is never a one-word title.
+        static let minimumLeadTokens = 16
     }
 
-    static func segment(_ text: String, targetTokens: Int = Defaults.targetTokensPerSegment)
-        -> [TextSegment]
-    {
+    /// The lead segment's budget when it will become a Reference Take: its
+    /// first sentence or two, about 40 words, so every later segment has
+    /// little to re-read (ADR-0072).
+    static let referenceLeadTokens = 52
+
+    /// Sentences grouped into segments of about `targetTokens`. With
+    /// `leadTokens`, the first segment closes at that smaller budget instead.
+    static func segment(
+        _ text: String,
+        targetTokens: Int = Defaults.targetTokensPerSegment,
+        leadTokens: Int? = nil
+    ) -> [TextSegment] {
         let sentences = splitIntoSentences(text)
         guard sentences.count > 1 else {
             return [TextSegment(index: 0, text: text)]
@@ -29,8 +41,14 @@ enum Segmenter {
 
         for sentence in sentences {
             let sentenceTokens = estimateTokens(sentence)
+            let lead = segments.isEmpty ? leadTokens : nil
+            let limit = lead ?? targetTokens
+            let canClose =
+                lead == nil
+                ? !currentSentences.isEmpty
+                : currentTokenEstimate >= Defaults.minimumLeadTokens
 
-            if currentTokenEstimate + sentenceTokens > targetTokens && !currentSentences.isEmpty {
+            if currentTokenEstimate + sentenceTokens > limit && canClose {
                 segments.append(TextSegment(index: segments.count, text: currentSentences.joined()))
                 currentSentences = []
                 currentTokenEstimate = 0

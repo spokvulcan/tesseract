@@ -33,8 +33,9 @@ public struct TTSModelSpec: Sendable, Equatable, Codable {
             precision: precision)
     }
 
-    /// Fingerprint component for PinnedVoice compatibility checks.
-    var fingerprint: String { "\(repo)#\(precision.rawValue)" }
+    /// Fingerprint component for PinnedVoice compatibility checks: a take
+    /// only conditions the checkpoint and precision that rendered it.
+    public var fingerprint: String { "\(repo)#\(precision.rawValue)" }
 }
 
 // MARK: - Voice
@@ -44,7 +45,8 @@ public enum Voice: Sendable, Equatable {
     case standard(language: String?)
     /// VoiceDesign instruct description — what a voice *is*.
     case designed(description: String, language: String?)
-    /// A prior realization, pinned: survives sessions and relaunches.
+    /// A designed voice with its Reference Take: survives sessions and
+    /// relaunches.
     case pinned(PinnedVoice)
 
     var description: String? {
@@ -63,17 +65,21 @@ public enum Voice: Sendable, Equatable {
     }
 }
 
-/// Voice identity as a serializable value (ADR-0038): the design description plus
-/// the anchor's code frames — a few KB, rebuildable into KV, fingerprinted so a
-/// voice can never silently condition a different checkpoint or precision (#339:
-/// voices do not survive precision changes; a seed never pins a voice).
+/// Voice identity as a serializable value (ADR-0038, ADR-0072): the design
+/// description plus its Reference Take (the codec frames and the text they
+/// speak), a few KB. Fingerprinted so a voice can never condition a different
+/// checkpoint or precision (#339: voices do not survive precision changes; a
+/// seed never pins a voice).
 public struct PinnedVoice: Sendable, Equatable, Codable {
-    public static let currentSchema = 1
+    /// 2: a Reference Take (frames + text). 1 was the 48-frame anchor, which
+    /// carried no text and cannot condition the in-context layout.
+    public static let currentSchema = 2
 
     public let schema: Int
     public let modelFingerprint: String
     public let voiceDescription: String?
     public let language: String?
+    public let referenceText: String
     public let codeFrames: [[Int32]]
 
     public init(
@@ -81,12 +87,14 @@ public struct PinnedVoice: Sendable, Equatable, Codable {
         modelFingerprint: String,
         voiceDescription: String?,
         language: String?,
+        referenceText: String,
         codeFrames: [[Int32]]
     ) {
         self.schema = schema
         self.modelFingerprint = modelFingerprint
         self.voiceDescription = voiceDescription
         self.language = language
+        self.referenceText = referenceText
         self.codeFrames = codeFrames
     }
 
@@ -94,13 +102,19 @@ public struct PinnedVoice: Sendable, Equatable, Codable {
         try JSONEncoder().encode(self)
     }
 
+    /// Decodes a serialized voice; any other schema is `voiceIncompatible`.
     public init(validating data: Data) throws {
-        let decoded = try JSONDecoder().decode(PinnedVoice.self, from: data)
-        guard decoded.schema == PinnedVoice.currentSchema else {
+        struct Envelope: Decodable { let schema: Int }
+        let found = try JSONDecoder().decode(Envelope.self, from: data).schema
+        guard found == PinnedVoice.currentSchema else {
             throw SpeechEngineError.voiceIncompatible(
-                expected: "schema \(PinnedVoice.currentSchema)", found: "schema \(decoded.schema)")
+                expected: "schema \(PinnedVoice.currentSchema)", found: "schema \(found)")
         }
-        self = decoded
+        self = try JSONDecoder().decode(PinnedVoice.self, from: data)
+    }
+
+    var referenceTake: ReferenceTake {
+        ReferenceTake(codeFrames: codeFrames, text: referenceText)
     }
 }
 
@@ -108,28 +122,37 @@ public struct PinnedVoice: Sendable, Equatable, Codable {
 
 /// Sampler defaults. Deliberately no `seed` — seed is a per-utterance
 /// reproducibility knob (`SpeechOptions`), never voice identity (ADR-0038).
+///
+/// Two temperatures (ADR-0072): `temperature` for the talker, which carries
+/// the words and the delivery, and `detailTemperature` for the code
+/// predictor's acoustic detail, where most of the timbre lives. The defaults
+/// are the setting the owner listened to: an expressive 0.9 reading with a
+/// steady 0.5 timbre and Qwen's own repetition penalty.
 public struct TTSParameters: Sendable, Equatable, Codable {
     public var temperature: Float
     public var topP: Float
     public var repetitionPenalty: Float
+    public var detailTemperature: Float
     public var maxTokens: Int
 
     public init(
-        temperature: Float = 0.6,
-        topP: Float = 0.8,
-        repetitionPenalty: Float = 1.3,
+        temperature: Float = 0.9,
+        topP: Float = 1.0,
+        repetitionPenalty: Float = 1.05,
+        detailTemperature: Float = 0.5,
         maxTokens: Int = 4096
     ) {
         self.temperature = temperature
         self.topP = topP
         self.repetitionPenalty = repetitionPenalty
+        self.detailTemperature = detailTemperature
         self.maxTokens = maxTokens
     }
 }
 
 public struct SpeechOptions: Sendable, Equatable {
     /// Reproducibility, not identity: `.fixed` reproduces the waveform only for
-    /// identical (checkpoint, precision, text, options, anchor state).
+    /// identical (checkpoint, precision, text, options, Reference Take).
     public var seed: Seed
     /// Per-utterance override of the session's parameter defaults.
     public var parameters: TTSParameters?
@@ -149,14 +172,15 @@ public struct SpeechOptions: Sendable, Equatable {
 
 // MARK: - Session profile (ADR-0037: roles are configs)
 
-public enum AnchorPolicy: Sendable, Equatable {
+/// Whether a session keeps its voice (ADR-0072).
+public enum ReferencePolicy: Sendable, Equatable {
+    /// Every segment is rendered from the description alone, so each one is
+    /// a new realization of it. For measurements and tests.
     case none
-    /// Anchor from the first `steps` codec frames of each utterance's first
-    /// segment; conditions that utterance's later segments; dies with it.
-    case perUtterance(steps: Int = 48)
-    /// Anchor once from the session's first generated audio; retained until
-    /// `close()` — every utterance speaks the same realization.
-    case pinned(steps: Int = 48)
+    /// One Reference Take per session: the pinned voice it opened with, else
+    /// the first segment it renders. Every other segment continues it, until
+    /// `close()` or a retake.
+    case pinned
 }
 
 public enum PacingPolicy: Sendable, Equatable {
@@ -169,22 +193,25 @@ public enum PacingPolicy: Sendable, Equatable {
 }
 
 public struct SessionProfile: Sendable, Equatable {
-    public var anchor: AnchorPolicy
+    public var reference: ReferencePolicy
     public var defaults: TTSParameters
     public var pacing: PacingPolicy
 
-    public init(anchor: AnchorPolicy, defaults: TTSParameters = TTSParameters(), pacing: PacingPolicy) {
-        self.anchor = anchor
+    public init(
+        reference: ReferencePolicy, defaults: TTSParameters = TTSParameters(),
+        pacing: PacingPolicy
+    ) {
+        self.reference = reference
         self.defaults = defaults
         self.pacing = pacing
     }
 
     /// Quality role: long-form read-aloud.
     public static let readAloud = SessionProfile(
-        anchor: .perUtterance(), pacing: .lookahead(segments: 1))
-    /// Fast role: companion utterances, pinned timbre.
+        reference: .pinned, pacing: .lookahead(segments: 1))
+    /// Fast role: companion utterances.
     public static let companion = SessionProfile(
-        anchor: .pinned(), pacing: .eager)
+        reference: .pinned, pacing: .eager)
 }
 
 // MARK: - Lifecycle

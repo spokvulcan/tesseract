@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import TesseractSpeech
 import Testing
 
 @testable import Tesseract_Agent
@@ -34,6 +35,25 @@ struct SettingsManagerTests {
         #expect(settings.prefixCacheSSDDirectoryOverride == nil)
         #expect(settings.selectedAgentModelID == ModelDefinition.defaultAgentModelID)
         #expect(settings.useVisionWhenAvailable == true)
+    }
+
+    /// ADR-0072: values tuned for the old TTS sampler (temperature after
+    /// top-p, a whole-chunk repetition penalty) sit under abandoned keys and
+    /// are never read, so the new defaults apply and nothing is written.
+    @Test
+    func oldSamplerValuesAreLeftUnread() {
+        let store = InMemorySettingsStore()
+        store.set(0.6, for: "ttsTemperature")
+        store.set(0.8, for: "ttsTopP")
+        store.set(1.3, for: "ttsRepetitionPenalty")
+        store.resetWriteRecording()
+
+        let settings = SettingsManager(store: store)
+        #expect(settings.ttsParameters == TTSParameters())
+        #expect(store.writes.isEmpty)
+
+        settings.ttsTemperature = 0.8
+        #expect(SettingsManager(store: store).ttsTemperature == 0.8)
     }
 
     /// The vision opt-out persists across a relaunch and writes exactly its own

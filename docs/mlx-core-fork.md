@@ -8,9 +8,10 @@ experiments: `benchmarks/experiments-ledger.md`). Established 2026-07-23.
 
 ```
 tesseract.xcodeproj
-  └─ local packages: Vendor/mlx-swift-lm (submodule), Vendor/mlx-audio-swift,
-     Vendor/tesseract-speech — each pins, in lockstep (SwiftPM cannot mix two
-     revision-based requirements for one package):
+  └─ local packages: Vendor/mlx-swift-lm (submodule) and
+     Vendor/tesseract-speech (Vendor/mlx-audio-swift too, until ADR-0071);
+     each pins, in lockstep (SwiftPM cannot mix two revision-based
+     requirements for one package):
        url: https://github.com/spokvulcan/mlx-swift
        revision: <exact commit on the current pin branch>
   └─ spokvulcan/mlx-swift @ pin-tesseract
@@ -24,10 +25,10 @@ tesseract.xcodeproj
 ```
 
 The branch tips move with every accepted experiment; the **current** pins are
-whatever the three `Package.swift` files record (the diagram describes the
+whatever the two `Package.swift` files record (the diagram describes the
 structure, not a snapshot). Every ACCEPTED Cmlx experiment adds one commit on
 `spokvulcan/mlx`, one gitlink-bump commit on `spokvulcan/mlx-swift`, and moves
-the three Package.swift pins to that new commit.
+the two Package.swift pins to that new commit.
 
 ## Pin branch history
 
@@ -228,7 +229,7 @@ vendor re-pin left this fork level on its July base deliberately.
    - **ACCEPTED** — port the diff verbatim to `~/projects/mlx`
      (`pin-tesseract`), commit (Conventional Commits), push. In
      `~/projects/mlx-swift`: advance the `Source/Cmlx/mlx` gitlink to the new
-     commit, commit, push. Update the three Package.swift pins to the new
+     commit, commit, push. Update the two Package.swift pins to the new
      mlx-swift commit (the Vendor/mlx-swift-lm one is a commit on its
      `pin-upstream-mlx-swift` branch per `docs/mlx-swift-lm-fork.md`; the
      other two are in-tree edits). Commit in tesseract: pins + gitlink +

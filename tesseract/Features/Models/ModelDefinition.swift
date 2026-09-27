@@ -84,9 +84,12 @@ struct ModelDefinition: Identifiable, Sendable {
         return Self.storageSubdirectory(forRepo: repo)
     }
 
-    /// A repo's directory name under the model store: "/" flattened to "_",
-    /// the same layout the vendored resolver loads from (mlx-audio-swift
-    /// patch #11).
+    /// The model store's directory name under Application Support. Every
+    /// model family (agent, TTS, ASR) stores here, and users' existing
+    /// multi-GB downloads live at this path, so it never changes.
+    nonisolated static let storageDirectoryName = "models"
+
+    /// A repo's directory name under the model store: "/" flattened to "_".
     nonisolated static func storageSubdirectory(forRepo repo: String) -> String {
         repo.replacingOccurrences(of: "/", with: "_")
     }

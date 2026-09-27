@@ -514,12 +514,11 @@ directly readable for download UI and is not a catalog question.
 
 **Model Fetching**:
 The narrow hub port below the model download lifecycle — list a repo's files,
-fetch one file, resolve-or-download a snapshot — satisfied by the
-HuggingFace-backed production adapter and a scripted in-memory test peer. Disk
-stays outside the seam: file checks and status computation run against the real
-file system.
+fetch one file — satisfied by the HuggingFace-backed production adapter and a
+scripted in-memory test peer. Disk stays outside the seam: file checks and
+status computation run against the real file system.
 _Avoid_: hub client (one adapter, not the seam), download client/backend, model
-fetcher; widening it past the three verbs before a second consumer needs a
+fetcher; widening it past the two verbs before a second consumer needs a
 member.
 
 **Vision Capability Memo**:
@@ -1033,8 +1032,9 @@ transcriber, ASR backend.
 
 **Speech Synthesizer**:
 The model-only TTS port below the `SpeechEngine` facade, faithful to the model
-surface (one-shot/streaming generate, voice anchoring, token offsets). The
-synthesis counterpart of **Speech Recognizer**.
+surface (one-shot/streaming generate, **Reference Take** capture and
+conditioning, token offsets). The synthesis counterpart of **Speech
+Recognizer**.
 _Avoid_: SpeechEngine (the facade above it, not the port), Qwen3SpeechSynthesizer
 (one adapter), TTS backend.
 
@@ -1112,9 +1112,9 @@ highlight view, **Overlay Panel** (the separate dictation HUD surface).
 
 **Speech Session**:
 The voice-identity owner at the engine boundary: opened from a `SessionProfile`
-and a **Voice**, it holds the voice-prefix KV and the anchor per policy, admits
-utterances one at a time, and dies by `close()`. Sessions survive engine unload
-as ingredient values and rebuild KV transparently.
+and a **Voice**, it holds the voice's **Reference Take** (per its policy),
+admits utterances one at a time, and dies by `close()`. Sessions survive engine
+unload as ingredient values.
 _Avoid_: generation session (an LLM concept), voice handle, session manager.
 
 **Utterance**:
@@ -1131,18 +1131,26 @@ token→char offsets, and the utterance-global `startFrame` — the **Segment
 Window** as ground truth from the generation loop, ending the estimator era.
 _Avoid_: segment metadata, offsets payload.
 
+**Reference Take**:
+One short rendering of a voice, kept as its codec frames plus the text they
+speak, that every later segment of the voice continues so it stays the same
+person (ADR-0072). It is the first segment a session renders, or the one
+"Try another take" renders; it is never encoded from audio.
+_Avoid_: voice anchor (the retired 48-frame KV prefix), reference audio, voice
+sample, seed.
+
 **Pinned Voice**:
-Voice identity as a serializable value: voice spec + the ≤48 anchor code frames
-+ a {model, precision, schema} fingerprint — a few KB, rebuildable into KV, the
-thing that makes the companion's voice survive relaunch. Restore validates the
-fingerprint or throws; a seed is never voice identity (#339).
-_Avoid_: voice anchor (the KV realization inside a session), seed, voice id.
+Voice identity as a serializable value: the description, its **Reference
+Take**, and a {model, precision, schema} fingerprint. A few KB, stored per
+designed voice so the voice survives relaunch. Restore validates the
+fingerprint and schema or throws; a seed is never voice identity (#339).
+_Avoid_: voice anchor, seed, voice id.
 
 **Preset Voice**:
-A fixed-timbre named speaker of a CustomVoice checkpoint — chosen from the
-checkpoint's own list, never designed, needing no anchor; the phone's voice
-identity. Distinct from **Pinned Voice**, which is designed from a description
-and anchored per session.
+A fixed-timbre named speaker of a CustomVoice checkpoint: chosen from the
+checkpoint's own list, never designed, needing no **Reference Take**; the
+phone's voice identity. Distinct from **Pinned Voice**, which is designed from
+a description and holds a take.
 _Avoid_: speaker id (the wire field), custom voice (the checkpoint family, not
 the identity), voice preset, fallback voice (the system synthesizer that plays
 while a Preset Voice loads is not a voice identity at all).

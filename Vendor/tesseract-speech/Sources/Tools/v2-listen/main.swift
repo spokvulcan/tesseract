@@ -1,19 +1,25 @@
 // v2-listen — engine v2 listening-artifact + measurement harness.
 // NOT part of the app. Drives the production stack (SpeechEngine actor →
-// Qwen3Synthesizer → re-vendored MLXAudioTTS) against real weights and writes:
+// Qwen3Synthesizer → Qwen3TTS) against real weights and writes:
 //   pinned    — 6 utterances in one pinned-voice session + a 7th from a
-//               serialized/restored PinnedVoice (anchored-consistency listen)
+//               serialized/restored PinnedVoice (voice-consistency listen)
 //   longform  — one long read-aloud utterance (multi-segment); reports
 //               per-segment TTFA, wall, RTF, and peak RSS (the ADR-0037 gate)
-//   ab        — #339-matched settings (seed 42, t=0.9/p=1.0/rp=1.05) for
-//               same-seed A/B against research/model-bench-339/audio WAVs
+//   ab        — #339-matched settings (seed 42, t=0.9 for both models,
+//               p=1.0, rp=1.05) for same-seed A/B against
+//               research/model-bench-339/audio WAVs
 //
-// Usage: swift run -c release v2-listen --mode pinned|longform|ab \
-//          [--precision 8bit|6bit|bf16] [--out-dir DIR] [--text-file PATH] [--seed N]
+// Usage: v2-listen --mode pinned|longform|ab [--precision 8bit|6bit|bf16]
+//          [--checkpoint DIR] [--out-dir DIR] [--text-file PATH] [--seed N]
+//          [--temperature T] [--detail-temperature T] [--voice DESCRIPTION]
+//          [--reference pinned|none]
+//
+// Loads the checkpoint the app downloaded (Application Support/models) unless
+// --checkpoint names another directory; it never downloads. Build with
+// xcodebuild (scheme v2-listen) so MLX's metallib lands next to the binary.
 
+import AVFoundation
 import Foundation
-import HuggingFace
-import MLXAudioCore
 import TesseractSpeech
 
 // MARK: - Args
@@ -23,7 +29,12 @@ struct Args {
     var precision = "8bit"
     var outDir = "."
     var textFile: String?
+    var checkpoint: String?
     var seed: UInt64 = 42
+    var temperature: Float?
+    var detailTemperature: Float?
+    var voice: String?
+    var reference = "pinned"
     var timing = false
 }
 
@@ -40,6 +51,11 @@ func parseArgs() -> Args {
         case "--precision": a.precision = next(flag)
         case "--out-dir": a.outDir = next(flag)
         case "--text-file": a.textFile = next(flag)
+        case "--checkpoint": a.checkpoint = next(flag)
+        case "--temperature": a.temperature = Float(next(flag))!
+        case "--detail-temperature": a.detailTemperature = Float(next(flag))!
+        case "--voice": a.voice = next(flag)
+        case "--reference": a.reference = next(flag)
         case "--seed": a.seed = UInt64(next(flag))!
         case "--timing": a.timing = true
         default: fatalError("unknown flag \(flag)")
@@ -88,6 +104,9 @@ struct UtteranceCapture {
     var wallSec: Double = 0
     var segmentTTFAsMs: [Double] = []
     var segmentCount = 0
+    /// Where each segment starts in `samples`, for per-segment listening and
+    /// scoring.
+    var segmentStarts: [Int] = []
 }
 
 func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
@@ -113,6 +132,9 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
                     Double(now.uptimeNanoseconds - segmentStart.uptimeNanoseconds) / 1e6)
                 sawAudioForSegment = true
             }
+            while capture.segmentStarts.count <= chunk.segmentIndex {
+                capture.segmentStarts.append(capture.samples.count)
+            }
             capture.samples.append(contentsOf: chunk.samples)
         case .segmentDone, .finished:
             break
@@ -123,9 +145,39 @@ func drain(_ utterance: Utterance) async throws -> UtteranceCapture {
     return capture
 }
 
+/// Mono float32 WAV through AVAudioFile.
+func writeWav(samples: ArraySlice<Float>, sampleRate: Int, to url: URL) throws {
+    guard
+        let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32, sampleRate: Double(sampleRate), channels: 1,
+            interleaved: false),
+        let buffer = AVAudioPCMBuffer(
+            pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
+    else {
+        throw CocoaError(.fileWriteUnknown)
+    }
+    buffer.frameLength = AVAudioFrameCount(samples.count)
+    samples.withUnsafeBufferPointer { source in
+        buffer.floatChannelData![0].update(from: source.baseAddress!, count: samples.count)
+    }
+    let file = try AVAudioFile(
+        forWriting: url, settings: format.settings, commonFormat: format.commonFormat,
+        interleaved: format.isInterleaved)
+    try file.write(from: buffer)
+}
+
 func write(_ capture: UtteranceCapture, to url: URL, label: String) throws {
-    try AudioUtils.writeWavFile(
-        samples: capture.samples, sampleRate: capture.sampleRate, fileURL: url)
+    try writeWav(samples: capture.samples[...], sampleRate: capture.sampleRate, to: url)
+    if capture.segmentStarts.count > 1 {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ends = capture.segmentStarts.dropFirst() + [capture.samples.count]
+        for (index, (start, end)) in zip(capture.segmentStarts, ends).enumerated() {
+            try writeWav(
+                samples: capture.samples[start..<end], sampleRate: capture.sampleRate,
+                to: url.deletingLastPathComponent().appendingPathComponent(
+                    String(format: "%@_seg%02d.wav", stem, index + 1)))
+        }
+    }
     let audioSec = Double(capture.samples.count) / Double(capture.sampleRate)
     let rtf = audioSec > 0 ? capture.wallSec / audioSec : -1
     let segTTFAs = capture.segmentTTFAsMs.map { String(format: "%.0f", $0) }
@@ -146,15 +198,13 @@ let args = parseArgs()
 let outDir = URL(fileURLWithPath: args.outDir, isDirectory: true)
 try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 
-// The engine only loads from disk, so the harness fetches the checkpoint
-// first: the vendored resolver, into the Application Support store the app
-// also uses (a checkpoint the app downloaded is reused as-is).
+// The engine only loads from disk: the app's model store, or --checkpoint.
 let modelSpec = spec(for: args.precision)
-guard let repoID = Repo.ID(rawValue: modelSpec.repo) else {
-    fatalError("invalid repo id \(modelSpec.repo)")
-}
-let checkpoint = try await ModelUtils.resolveOrDownloadModel(
-    repoID: repoID, requiredExtension: "safetensors")
+let checkpoint =
+    args.checkpoint.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    ?? URL.applicationSupportDirectory
+    .appendingPathComponent("models")
+    .appendingPathComponent(modelSpec.repo.replacingOccurrences(of: "/", with: "_"))
 
 let engine = SpeechEngine(
     model: modelSpec,
@@ -163,12 +213,21 @@ let engine = SpeechEngine(
     diagnostics: args.timing ? StderrTimingTap() : nil
 )
 
-let narrator = "A calm, warm female narrator with a clear, steady tone."
+let narrator = args.voice ?? "A calm, warm female narrator with a clear, steady tone."
+
+/// The engine defaults, with any sampler overrides from the command line.
+var listenParameters: TTSParameters {
+    var parameters = TTSParameters()
+    if let t = args.temperature { parameters.temperature = t }
+    if let t = args.detailTemperature { parameters.detailTemperature = t }
+    return parameters
+}
+let referencePolicy: ReferencePolicy = args.reference == "none" ? .none : .pinned
 
 do {
     switch args.mode {
     case "pinned":
-        // Six lines, one pinned session: the anchored-consistency listen.
+        // Six lines, one pinned session: the voice-consistency listen.
         let lines = [
             "Good morning. Here is the first thing worth knowing today.",
             "The build finished overnight, and every test came back green.",
@@ -178,10 +237,11 @@ do {
             "That is everything for now; I will speak up if anything changes.",
         ]
         let session = try await engine.session(
-            .companion, voice: .designed(description: narrator, language: nil))
+            SessionProfile(reference: referencePolicy, pacing: .eager),
+            voice: .designed(description: narrator, language: nil))
         for (index, line) in lines.enumerated() {
             let utterance = try await session.speak(
-                line, options: SpeechOptions(seed: .fixed(args.seed)))
+                line, options: SpeechOptions(seed: .fixed(args.seed), parameters: listenParameters))
             let capture = try await drain(utterance)
             try write(
                 capture,
@@ -202,7 +262,7 @@ do {
         let restoredSession = try await engine.session(.companion, voice: .pinned(restored))
         let utterance = try await restoredSession.speak(
             "And this line comes from the restored voice, after a relaunch.",
-            options: SpeechOptions(seed: .fixed(args.seed)))
+            options: SpeechOptions(seed: .fixed(args.seed), parameters: listenParameters))
         let capture = try await drain(utterance)
         try write(
             capture,
@@ -217,9 +277,10 @@ do {
         let text = try String(contentsOfFile: textFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let session = try await engine.session(
-            .readAloud, voice: .designed(description: narrator, language: nil))
+            SessionProfile(reference: referencePolicy, pacing: .lookahead(segments: 1)),
+            voice: .designed(description: narrator, language: nil))
         let utterance = try await session.speak(
-            text, options: SpeechOptions(seed: .fixed(args.seed)))
+            text, options: SpeechOptions(seed: .fixed(args.seed), parameters: listenParameters))
         let capture = try await drain(utterance)
         try write(
             capture,
@@ -235,10 +296,11 @@ do {
         }
         let text = try String(contentsOfFile: textFile, encoding: .utf8)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let benchParams = TTSParameters(
-            temperature: 0.9, topP: 1.0, repetitionPenalty: 1.05, maxTokens: 4096)
+        // #339 ran both models at 0.9, before ADR-0072 split the temperature;
+        // the rest are the engine defaults.
+        let benchParams = TTSParameters(detailTemperature: 0.9)
         let session = try await engine.session(
-            SessionProfile(anchor: .perUtterance(), pacing: .eager),
+            SessionProfile(reference: referencePolicy, pacing: .eager),
             voice: .designed(description: narrator, language: nil))
         let utterance = try await session.speak(
             text,

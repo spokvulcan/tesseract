@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import TesseractSpeech
 
 /// The table of all `Setting` declarations — one per persisted primitive, the
 /// single source of truth for each setting's key and default. Replaces the
@@ -79,10 +80,24 @@ enum SettingsCatalogue {
 
     // MARK: - TTS
 
-    static let ttsTemperature = Setting.double("ttsTemperature", default: 0.6)
-    static let ttsTopP = Setting.double("ttsTopP", default: 0.8)
-    static let ttsRepetitionPenalty = Setting.double("ttsRepetitionPenalty", default: 1.3)
-    static let ttsMaxTokens = Setting.int("ttsMaxTokens", default: 4096)
+    // The ADR-0072 sampler applies temperature before top-p and counts the
+    // repetition penalty over recent frames only, so values tuned for the old
+    // one mean something else. Its keys (`ttsTemperature`, `ttsTopP`,
+    // `ttsRepetitionPenalty`) are abandoned, not migrated: reading simply
+    // stopped, and these start from the new defaults. The defaults are the
+    // engine's own, so the app and `v2-listen` never tune different voices.
+    private static let ttsDefaults = TTSParameters()
+    /// The talker's temperature: how expressive the reading is.
+    static let ttsTemperature = Setting.double(
+        "ttsTalkerTemperature", default: Double(ttsDefaults.temperature))
+    static let ttsTopP = Setting.double("ttsTalkerTopP", default: Double(ttsDefaults.topP))
+    static let ttsRepetitionPenalty = Setting.double(
+        "ttsTalkerRepetitionPenalty", default: Double(ttsDefaults.repetitionPenalty))
+    /// The code predictor's temperature: the acoustic detail that carries
+    /// most of the timbre, kept lower so the voice stays steady.
+    static let ttsDetailTemperature = Setting.double(
+        "ttsDetailTemperature", default: Double(ttsDefaults.detailTemperature))
+    static let ttsMaxTokens = Setting.int("ttsMaxTokens", default: ttsDefaults.maxTokens)
     static let ttsSeed = Setting.int("ttsSeed", default: 0)
     static let ttsVoiceDescription = Setting.string("ttsVoiceDescription", default: "")
     static let ttsLanguage = Setting.string("ttsLanguage", default: "English")
