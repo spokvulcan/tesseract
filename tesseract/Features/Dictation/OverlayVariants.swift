@@ -70,9 +70,12 @@ enum OverlayVariants {
         AnyView(GlobalOverlayHUD(feed: feed, actions: actions))
     }
 
-    static let all: [OverlayVariant] = [
-        classic, ribbon, orb, island, whisper, stageCard, caption,
-    ]
+    static let all: [OverlayVariant] =
+        [
+            classic, ribbon, orb, island, whisper, stageCard, caption,
+        ]
+        // PROTOTYPE (Dictation page redesign, never merge): the lab's pill.
+        + (PrototypeGate.isDevelopmentBuild ? [LabOverlay.variant] : [])
 
     /// Unknown ids (a removed exploration surviving in defaults) fall back to
     /// the classic pill.

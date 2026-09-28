@@ -26,6 +26,11 @@ final class HotkeyManager: ObservableObject {
     static let dictationHotkeyID = "dictation"
 
     @Published private(set) var isListening = false
+
+    /// PROTOTYPE (Dictation page redesign, never merge): key presses that
+    /// reached an app (not a hotkey, not auto-repeat). The dictation lab
+    /// compares it across a fix so it never backspaces over typed text.
+    private(set) var keyDownCount = 0
     @Published private(set) var isUsingEventTap = false
 
     /// The dictation registration's current combo — the gate read App
@@ -197,6 +202,11 @@ final class HotkeyManager: ObservableObject {
                     return nil
                 }
 
+                // PROTOTYPE (Dictation page redesign, never merge).
+                if type == .keyDown, event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+                    manager.keyDownCount += 1
+                }
+
                 return Unmanaged.passUnretained(event)
             },
             userInfo: refcon
@@ -293,6 +303,8 @@ final class HotkeyManager: ObservableObject {
 
         // Monitors cannot suppress events; deliver synchronously.
         deliver(verdict.fires, deferred: false)
+        // PROTOTYPE (Dictation page redesign, never merge).
+        if kind == .keyDown, verdict.fires.isEmpty, !event.isARepeat { keyDownCount += 1 }
     }
 
     /// Deliver matcher fires to their registrations, looking each one up at

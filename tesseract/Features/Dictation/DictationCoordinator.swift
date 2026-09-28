@@ -74,6 +74,12 @@ final class DictationCoordinator {
     /// variant-blind. Default off: no pump, zero cost, baselines untouched.
     var isLivePartialsEnabled: @MainActor () -> Bool = { false }
 
+    /// PROTOTYPE (Dictation page redesign, never merge): the lab's learned
+    /// replacements, applied after the regex cleanup in place of the
+    /// Proofread Pass; the pass still runs when the lab asks for it.
+    var labRefine: (@MainActor (String) -> (text: String, edits: [WordEdit]))?
+    var labUsesProofreadPass: @MainActor () -> Bool = { true }
+
     /// The **Live Partial** pump (ticket #291) and its staleness epoch. The
     /// epoch guards a decode that resolves after its take ended against
     /// captioning the *next* take (the feed's phase guard alone can't tell
@@ -312,6 +318,33 @@ final class DictationCoordinator {
                         span: "proofread", ms: DictationPerf.msSince(proofreadStart))
                     if feed.phase == .proofreading {
                         feed.setPhase(.processing)
+                    }
+                    return verdict
+                }
+            }
+
+            // PROTOTYPE (Dictation page redesign, never merge): the lab's
+            // learned replacements take the proofread slot.
+            if let labRefine {
+                let pass = proofreadPass
+                let usesPass = labUsesProofreadPass
+                proofread = { [feed] text in
+                    let refined = labRefine(text)
+                    var verdict: ProofreadVerdict? =
+                        refined.edits.isEmpty
+                        ? nil : .corrected(text: refined.text, edits: refined.edits)
+                    if let pass, usesPass() {
+                        feed.setPhase(.proofreading)
+                        let passVerdict = await pass.proofread(refined.text)
+                        if feed.phase == .proofreading { feed.setPhase(.processing) }
+                        switch passVerdict {
+                        case .corrected(let text, let edits):
+                            verdict = .corrected(text: text, edits: refined.edits + edits)
+                        case .rejected:
+                            verdict = passVerdict
+                        case .unchanged, nil:
+                            break
+                        }
                     }
                     return verdict
                 }

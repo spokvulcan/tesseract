@@ -6,6 +6,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import Carbon.HIToolbox
 import MLX
 import TesseractSpeech
 import os
@@ -659,6 +660,14 @@ final class DependencyContainer: ObservableObject {
             return OverlayVariants.variant(for: self.settingsManager.overlayVariantRaw)
                 .usesLivePartials
         }
+        // PROTOTYPE (Dictation page redesign, never merge): in a development
+        // build the dictation lab's learned replacements take the proofread
+        // slot; the old pass runs only when the lab's switch asks for it.
+        if PrototypeGate.isDevelopmentBuild {
+            let lab = DictationLab.shared
+            coordinator.labRefine = { lab.refine($0) }
+            coordinator.labUsesProofreadPass = { lab.usesProofreadPass }
+        }
         return coordinator
     }()
 
@@ -841,6 +850,26 @@ final class DependencyContainer: ObservableObject {
                     onUp: { [weak self] in self?.capturePanel.hotkeyUp() },
                     onCancel: { [weak self] in self?.capturePanel.hotkeyCancelled() }
                 )
+                // PROTOTYPE (Dictation page redesign, never merge): the
+                // dictation lab and its fix shortcut, ⌃⌥Space, in development
+                // builds only.
+                if PrototypeGate.isDevelopmentBuild {
+                    let lab = DictationLab.shared
+                    lab.attach(
+                        feed: dictationFeed, coordinator: dictationCoordinator,
+                        injector: textInjector, settings: settingsManager,
+                        keyDownCount: { [hotkeyManager] in hotkeyManager.keyDownCount },
+                        voice: LabVoiceFix(
+                            audioCapture: audioCaptureEngine,
+                            transcriptionEngine: transcriptionEngine, settings: settingsManager))
+                    hotkeyManager.registerHotkey(
+                        id: "dictationLabFix",
+                        combo: KeyCombo(
+                            keyCode: UInt16(kVK_Space), modifiers: [.control, .option]),
+                        onDown: { lab.shortcutDown() },
+                        onUp: { lab.shortcutUp() }
+                    )
+                }
                 // Register Appshot hotkey (one-shot tap, no held state)
                 hotkeyManager.registerHotkey(
                     id: "appshot",

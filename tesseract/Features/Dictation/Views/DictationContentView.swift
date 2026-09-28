@@ -27,6 +27,16 @@ struct DictationContentView: View {
     @State private var expandedEntryID: UUID?
 
     var body: some View {
+        // PROTOTYPE (Dictation page redesign, never merge): the variants.
+        if PrototypeGate.isDevelopmentBuild {
+            DictationPrototypeHost { currentPage }
+        } else {
+            currentPage
+        }
+    }
+
+    @ViewBuilder
+    private var currentPage: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(spacing: DictationPageStyle.rhythm) {

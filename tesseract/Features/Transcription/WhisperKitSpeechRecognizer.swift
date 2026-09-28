@@ -17,6 +17,9 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
         static let noSpeechThreshold: Float = 0.6
     }
     private var whisperKit: WhisperKit?
+    /// PROTOTYPE (Dictation page redesign, never merge): the lab's vocabulary
+    /// bias, rebuilt when the lab's terms change.
+    private var labBiasVersion = -1
 
     func load(modelPath: URL) async throws {
         let logger = Logger(subsystem: "app.tesseract.agent", category: "transcription")
@@ -75,6 +78,15 @@ actor WhisperKitSpeechRecognizer: SpeechRecognizer {
 
         // Capture whisperKit in a local constant to satisfy concurrency checking
         let kit = whisperKit
+
+        // PROTOTYPE (Dictation page redesign, never merge): lean decoding
+        // toward the lab's learned vocabulary.
+        let bias = LabBias.shared.snapshot()
+        if bias.version != labBiasVersion, let tokenizer = kit.tokenizer {
+            let filter = LabBiasFilter(terms: bias.terms, tokenizer: tokenizer)
+            kit.textDecoder.logitsFilters = filter.isEmpty ? [] : [filter]
+            labBiasVersion = bias.version
+        }
         let results = try await kit.transcribe(
             audioArray: samples,
             decodeOptions: options
