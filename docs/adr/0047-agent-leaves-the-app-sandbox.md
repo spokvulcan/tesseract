@@ -14,12 +14,16 @@ notification on the Mac and interrupting only when it is worth the owner's
 time (#357). The only offline, no-private-entitlement way to read other apps'
 notifications is Accessibility observation of the `NotificationCenter`
 process. Verified live (#377): under the App Sandbox, cross-process
-`AXUIElementCopyAttributeValue` returns `-25204 (kAXErrorAPIDisabled)` for
+`AXUIElementCopyAttributeValue` returns `-25204 (kAXErrorCannotComplete)` for
 *any* target — Finder as much as NotificationCenter — even with
 `AXIsProcessTrusted() == true`; non-sandboxed, the identical call returns
 `AXError=0` with the full window tree. The sandbox forbids a process from
 being an AX assistive *client* of other processes; #331's tap-class grant
-never generalized to reads.
+never generalized to reads. (Corrected 2026-09-28 against the SDK's
+`AXError.h`: this ADR and #377 first named the code `kAXErrorAPIDisabled`,
+which is -25211. On its own, -25204 is not a permission error; a busy or hung
+target returns it too once the messaging timeout runs out. The A/B above is
+what pins it on the sandbox.)
 
 The sandbox is not free either way. An ambient agent whose whole job is to
 observe the machine — notifications now, the screen next (#357's Eyes) — is
