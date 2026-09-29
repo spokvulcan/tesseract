@@ -1,0 +1,290 @@
+<title>Tesseract Dictation Prototypes</title>
+<meta charset="utf-8">
+<meta name="description" content="PROTOTYPE, THROWAWAY. Five Dictation page + overlay + correction concepts on a fake Mac.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Nunito:wght@500;600;700;800&display=swap">
+<style>
+/* Layout: a prototype harness (always dark, so it never reads as part of the design) wraps a
+   1280×800 Mac screen that follows the viewer's light/dark setting. Switcher pinned at the bottom. */
+:root{
+  --h-bg:#0d0d0f; --h-panel:#16161a; --h-fg:#efefe9; --h-dim:#9b9ba3; --h-line:#2a2a31; --h-hi:#ffd84d; --h-hi-ink:#1a1500;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;
+  --display:-apple-system,BlinkMacSystemFont,"SF Pro Display","Helvetica Neue",system-ui,sans-serif;
+  --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  --rounded:ui-rounded,"SF Pro Rounded","Nunito",-apple-system,system-ui,sans-serif;
+  --tool:"JetBrains Mono","SF Mono",ui-monospace,Menlo,monospace;
+
+  --wall-1:#7f9fd0; --wall-2:#c9a3c9; --wall-3:#f0b98f; --wall-4:#5e7fb8;
+  --menu-ink:#ffffff;
+  --win-bg:#fcfcfb; --win-bar:rgba(252,252,251,.78); --ink:#1d1d1f; --ink2:rgba(29,29,31,.62); --ink3:rgba(29,29,31,.38);
+  --line:rgba(0,0,0,.09); --fill:rgba(0,0,0,.045); --fill2:rgba(0,0,0,.08); --raise:#ffffff;
+  --accent:#D68C27; --accent-ink:#ffffff; --accent-text:#a8660f;
+  --ok:#1f9d55; --danger:#d93a2b; --blue:#2A78D6; --green:#1BAF7A; --violet:#4A3AA7;
+  --glass:rgba(250,250,252,.62); --glass-edge:rgba(255,255,255,.9); --glass-ink:#1d1d1f; --glass-ink2:rgba(29,29,31,.58);
+  --glass-shadow:0 12px 34px rgba(0,0,0,.2),0 1px 3px rgba(0,0,0,.12);
+  --shadow-win:0 18px 50px rgba(0,0,0,.24),0 0 0 .5px rgba(0,0,0,.2);
+  --shadow-win-front:0 28px 70px rgba(0,0,0,.36),0 0 0 .5px rgba(0,0,0,.28);
+  --notes-bg:#fffef9; --notes-ink:#2a2924; --notes-dim:#8f8c80; --notes-accent:#e0a800;
+  --term-bg:#1b1b1d; --term-ink:#e4e4e2; --term-dim:#86868c; --term-green:#7ee08f; --term-box:#3b3b41;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --wall-1:#1d2b4d; --wall-2:#44305a; --wall-3:#8a4b3a; --wall-4:#0f1a33; --menu-ink:#ffffff;
+  --win-bg:#1e1e1d; --win-bar:rgba(30,30,29,.8); --ink:#f2f2ef; --ink2:rgba(242,242,239,.62); --ink3:rgba(242,242,239,.36);
+  --line:rgba(255,255,255,.1); --fill:rgba(255,255,255,.055); --fill2:rgba(255,255,255,.1); --raise:#2a2a29;
+  --accent:#F5A742; --accent-ink:#1d1204; --accent-text:#F5A742;
+  --ok:#32c46e; --danger:#ff6a5c; --blue:#3987E5; --green:#199E70; --violet:#9085E9;
+  --glass:rgba(44,44,48,.6); --glass-edge:rgba(255,255,255,.16); --glass-ink:#f4f4f2; --glass-ink2:rgba(244,244,242,.6);
+  --glass-shadow:0 12px 34px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --shadow-win:0 18px 50px rgba(0,0,0,.5),0 0 0 .5px rgba(255,255,255,.12);
+  --shadow-win-front:0 28px 70px rgba(0,0,0,.62),0 0 0 .5px rgba(255,255,255,.18);
+  --notes-bg:#232220; --notes-ink:#ecebe6; --notes-dim:#9a978c; --notes-accent:#e6b422;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --wall-1:#1d2b4d; --wall-2:#44305a; --wall-3:#8a4b3a; --wall-4:#0f1a33; --menu-ink:#ffffff;
+  --win-bg:#1e1e1d; --win-bar:rgba(30,30,29,.8); --ink:#f2f2ef; --ink2:rgba(242,242,239,.62); --ink3:rgba(242,242,239,.36);
+  --line:rgba(255,255,255,.1); --fill:rgba(255,255,255,.055); --fill2:rgba(255,255,255,.1); --raise:#2a2a29;
+  --accent:#F5A742; --accent-ink:#1d1204; --accent-text:#F5A742;
+  --ok:#32c46e; --danger:#ff6a5c; --blue:#3987E5; --green:#199E70; --violet:#9085E9;
+  --glass:rgba(44,44,48,.6); --glass-edge:rgba(255,255,255,.16); --glass-ink:#f4f4f2; --glass-ink2:rgba(244,244,242,.6);
+  --glass-shadow:0 12px 34px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.4);
+  --shadow-win:0 18px 50px rgba(0,0,0,.5),0 0 0 .5px rgba(255,255,255,.12);
+  --shadow-win-front:0 28px 70px rgba(0,0,0,.62),0 0 0 .5px rgba(255,255,255,.18);
+  --notes-bg:#232220; --notes-ink:#ecebe6; --notes-dim:#9a978c; --notes-accent:#e6b422;
+  color-scheme:dark;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--h-bg);color:var(--h-fg);font:13px/1.4 var(--sans);overflow:hidden;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+kbd{font:500 11px/1 var(--tool)}
+:focus-visible{outline:2px solid var(--h-hi);outline-offset:2px}
+
+#app{height:100%;display:flex;flex-direction:column;padding-inline:16px}
+
+/* ---------- harness (prototype chrome, not the design) ---------- */
+#harness{flex:none;display:grid;grid-template-columns:minmax(220px,1.05fr) minmax(0,1.5fr) minmax(0,1.45fr);gap:18px;align-items:start;padding-block:10px 8px;font-family:var(--tool);border-bottom:1px solid var(--h-line)}
+#harness.min{grid-template-columns:1fr auto}
+#harness.min .h-steps,#harness.min .h-thesis{display:none}
+.h-kicker{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--h-hi)}
+.h-dot{width:7px;height:7px;border-radius:50%;background:var(--h-hi);box-shadow:0 0 10px var(--h-hi)}
+.h-title{font:600 17px/1.2 var(--tool);margin-top:3px;letter-spacing:-.01em}
+.h-title span{color:var(--h-dim);font-weight:400;margin-right:6px}
+.h-thesis{color:var(--h-dim);font-size:11.5px;margin-top:3px;max-width:44ch}
+.h-steps{list-style:none;margin:0;padding:0;display:grid;gap:3px;counter-reset:st;font-size:11.5px;color:var(--h-dim)}
+.h-steps li{counter-increment:st;display:grid;grid-template-columns:20px 1fr;gap:4px;align-items:baseline}
+.h-steps li::before{content:counter(st);font-size:10px;width:16px;height:16px;border-radius:50%;border:1px solid var(--h-line);display:grid;place-items:center;color:var(--h-dim)}
+.h-steps li.done{color:#6f6f76;text-decoration:line-through;text-decoration-color:#4a4a52}
+.h-steps li.done::before{content:"✓";background:var(--h-hi);border-color:var(--h-hi);color:var(--h-hi-ink);font-weight:700}
+.h-steps li.now{color:var(--h-fg)}
+.h-steps li.now::before{border-color:var(--h-hi);color:var(--h-hi)}
+.h-steps b{color:var(--h-fg);font-weight:500}
+.h-say-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--h-dim)}
+.h-say-label em{font-style:normal;color:var(--h-fg)}
+.h-say-line{font:500 13px/1.35 var(--sans);color:var(--h-fg);margin:3px 0 7px;min-height:18px}
+.h-say-line b{color:var(--h-hi);font-weight:600}
+.h-ctrls{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.h-btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:7px;border:1px solid var(--h-line);background:var(--h-panel);color:var(--h-fg);font:500 11.5px/1 var(--tool);cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
+.h-btn:hover{border-color:#44444c}
+.h-btn kbd{padding:2px 5px;border-radius:4px;background:#26262c;color:var(--h-dim)}
+.h-btn.talk{border-color:var(--h-hi);color:var(--h-hi)}
+.h-btn.talk.on{background:var(--h-hi);color:var(--h-hi-ink)}
+.h-btn.talk.on kbd{background:rgba(0,0,0,.15);color:var(--h-hi-ink)}
+.h-btn.ghost{background:transparent}
+.h-legend{font-size:10.5px;color:#6d6d75;margin-top:5px}
+.h-legend b{color:var(--h-dim);font-weight:500}
+.h-toggle{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--h-dim);cursor:pointer}
+.h-toggle input{accent-color:var(--h-hi)}
+
+/* ---------- stage + the fake Mac ---------- */
+#stage{flex:1;min-height:0;position:relative}
+#screen{position:absolute;left:50%;top:50%;width:1280px;height:800px;transform:translate(-50%,-50%) scale(var(--s,1));border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px #2c2c33,0 30px 80px rgba(0,0,0,.6);font:13px/1.4 var(--sans);color:var(--ink);isolation:isolate;user-select:none;-webkit-user-select:none}
+#screen input,#screen textarea,#screen [contenteditable]{user-select:text;-webkit-user-select:text}
+.wall{position:absolute;inset:0;background:
+  radial-gradient(900px 520px at 18% 88%,var(--wall-3),transparent 62%),
+  radial-gradient(760px 520px at 86% 18%,var(--wall-2),transparent 60%),
+  radial-gradient(1100px 700px at 50% 40%,var(--wall-1),transparent 70%),
+  linear-gradient(160deg,var(--wall-4),var(--wall-1) 55%,var(--wall-3))}
+
+.menubar{position:absolute;left:0;right:0;top:0;height:28px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;color:var(--menu-ink);font-size:13px;z-index:40;text-shadow:0 1px 2px rgba(0,0,0,.25);background:linear-gradient(rgba(0,0,0,.12),rgba(0,0,0,0))}
+.mb-left,.mb-right{display:flex;align-items:center;gap:17px}
+.mb-left b{font-weight:700}
+.mb-apple svg{display:block}
+.mb-right{gap:14px;font-variant-numeric:tabular-nums}
+.mb-tess{position:relative;display:grid;place-items:center;width:24px;height:20px;border-radius:5px}
+.mb-tess.live{background:rgba(255,255,255,.22)}
+.mb-tess .badge{position:absolute;right:-3px;top:-2px;min-width:13px;height:13px;border-radius:7px;background:var(--accent);color:#fff;font:700 9px/13px var(--sans);text-align:center;padding:0 3px;text-shadow:none}
+
+.win{position:absolute;border-radius:16px;background:var(--win-bg);box-shadow:var(--shadow-win);overflow:hidden;display:flex;flex-direction:column;transition:box-shadow .25s,left .35s cubic-bezier(.2,.8,.2,1),top .35s cubic-bezier(.2,.8,.2,1),width .35s cubic-bezier(.2,.8,.2,1),height .35s cubic-bezier(.2,.8,.2,1);z-index:2}
+.win.front{box-shadow:var(--shadow-win-front);z-index:6}
+.tls{display:flex;gap:8px;flex:none}
+.tl{width:12px;height:12px;border-radius:50%;background:#d3d3d6;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.12);display:block}
+.win.front .tl.r{background:#ff5f57}.win.front .tl.y{background:#febc2e}.win.front .tl.g{background:#28c840}
+.tl.g{cursor:pointer}
+
+/* Terminal */
+#win-terminal{left:14px;top:40px;width:452px;height:432px;background:var(--term-bg);color:var(--term-ink)}
+.tbar{height:30px;flex:none;display:flex;align-items:center;padding:0 12px;position:relative;background:#28282b;border-bottom:1px solid #111}
+.tbar .ttl{position:absolute;left:0;right:0;text-align:center;font:600 12px/30px var(--sans);color:#a9a9ae;pointer-events:none}
+.win.front .tbar .ttl{color:#d6d6d9}
+.term-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;padding:10px 12px 10px;font:12.5px/1.55 var(--mono)}
+.term-log{overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;gap:8px;min-height:0;flex:1;padding-bottom:10px}
+.term-log .ln{color:var(--term-dim);white-space:pre-wrap;word-break:break-word}
+.term-log .ln i{font-style:normal;color:#5d5d63;margin-right:8px}
+.term-log .reply{color:#b8b8bd;padding-left:18px;white-space:pre-wrap}
+.term-log .reply::before{content:"●";color:#8a8a90;margin-left:-16px;margin-right:7px;font-size:9px;vertical-align:1px}
+.term-box{border:1px solid var(--term-box);border-radius:8px;padding:7px 10px;white-space:pre-wrap;word-break:break-word;min-height:36px;position:relative}
+.term-box .pr{color:#8a8a90;margin-right:8px}
+.term-meta{display:flex;justify-content:space-between;color:#6a6a70;font-size:11px;margin-top:6px}
+.caret{display:inline-block;width:7px;height:15px;vertical-align:-3px;margin-left:1px;background:transparent}
+.win.front .caret{background:var(--term-ink);animation:blink 1.05s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* Notes */
+#win-notes{left:14px;top:486px;width:452px;height:250px;background:var(--notes-bg);color:var(--notes-ink)}
+.nbar{height:38px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid var(--line)}
+.nbar .nttl{font:600 13px/1 var(--sans);color:var(--notes-ink)}
+.nbar .ndim{margin-left:auto;font-size:11px;color:var(--notes-dim)}
+.notes-body{flex:1;min-height:0;overflow:hidden;padding:12px 18px;font:14px/1.5 var(--sans);display:flex;flex-direction:column;justify-content:flex-end;gap:4px}
+.notes-body h4{margin:0 0 2px;font:700 18px/1.2 var(--display)}
+.notes-body .nd{font-size:11px;color:var(--notes-dim);margin-bottom:6px}
+.notes-body p{margin:0}
+.notes-caret{display:inline-block;width:1.5px;height:17px;vertical-align:-3px;margin-left:1px;background:transparent}
+.win.front .notes-caret{background:var(--notes-accent);animation:blink 1.05s steps(1) infinite}
+
+/* Tesseract window */
+#win-tess{left:480px;top:36px;width:786px;height:750px;color:var(--ink)}
+#win-tess.zoomed{left:12px;top:36px;width:1256px;height:752px;z-index:9}
+.tess-bar{position:absolute;left:0;right:0;top:0;height:54px;display:flex;align-items:center;gap:12px;padding:0 12px 0 18px;z-index:5;background:linear-gradient(var(--win-bg) 68%,color-mix(in srgb,var(--win-bg) 0%,transparent));}
+.tess-title{font:700 15px/1 var(--display);letter-spacing:-.005em;margin-left:4px;white-space:nowrap}
+.tess-tools{margin-left:auto;display:flex;align-items:center;gap:8px}
+.tess-content{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;padding-top:54px;scrollbar-width:thin}
+.win:not(.front) .tess-title{color:var(--ink2)}
+
+/* Liquid Glass (functional layer only) */
+.glass{background:var(--glass);-webkit-backdrop-filter:blur(20px) saturate(1.8);backdrop-filter:blur(20px) saturate(1.8);border:.5px solid var(--glass-edge);box-shadow:var(--glass-shadow),inset 0 .5px 0 rgba(255,255,255,.55);color:var(--glass-ink)}
+.gbtn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;min-width:30px;padding:0 11px;border-radius:15px;border:.5px solid var(--glass-edge);background:var(--glass);-webkit-backdrop-filter:blur(14px) saturate(1.7);backdrop-filter:blur(14px) saturate(1.7);box-shadow:0 1px 3px rgba(0,0,0,.1),inset 0 .5px 0 rgba(255,255,255,.5);font:500 12.5px/1 var(--sans);color:var(--ink);cursor:pointer;white-space:nowrap}
+.gbtn.icon{padding:0;width:32px}
+.gbtn:hover{background:color-mix(in srgb,var(--glass) 80%,var(--ink) 6%)}
+.gbtn.prominent{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.seg-ctl{display:inline-flex;height:30px;padding:2px;border-radius:15px;border:.5px solid var(--glass-edge);background:var(--glass);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.seg-ctl button{border:0;background:transparent;border-radius:13px;padding:0 12px;font:500 12.5px/1 var(--sans);color:var(--ink2);cursor:pointer}
+.seg-ctl button.on{background:var(--raise);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.status-chip{display:inline-flex;align-items:center;gap:7px;font:500 12px/1 var(--sans);color:var(--ink2);white-space:nowrap}
+.status-chip i{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.kc{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:19px;padding:0 5px;border-radius:5px;border:.5px solid var(--line);background:var(--fill);box-shadow:inset 0 -1px 0 var(--line);font:500 11px/1 var(--sans);color:inherit;white-space:nowrap;vertical-align:1px}
+.ic{display:block;flex:none}
+
+/* The overlay layer floats above every window */
+#overlay-layer{position:absolute;inset:0;z-index:30;pointer-events:none}
+#overlay-layer > *{pointer-events:auto}
+
+/* What you actually said (a harness annotation, not a design element) */
+.truth .seg.mis{background:rgba(255,216,77,.26);box-shadow:inset 0 -2px 0 #e9bd1c;border-radius:2px}
+.seg.flash{animation:segflash 1.6s ease-out}
+@keyframes segflash{0%{background:color-mix(in srgb,var(--accent) 55%,transparent);color:inherit}100%{background:transparent}}
+
+/* ---------- switcher (prototype chrome) ---------- */
+#switcher{flex:none;height:60px;display:flex;align-items:center;justify-content:center;gap:14px}
+.sw{display:flex;align-items:center;gap:4px;padding:4px;border-radius:999px;background:#000;border:1.5px solid var(--h-hi);box-shadow:0 8px 30px rgba(0,0,0,.6);font-family:var(--tool)}
+.sw button{border:0;background:transparent;color:var(--h-fg);height:32px;border-radius:16px;cursor:pointer}
+.sw .arr{width:34px;font-size:15px}
+.sw .arr:hover,.sw .v:hover{background:#1f1f25}
+.sw .v{padding:0 11px;font:500 12px/1 var(--tool);color:var(--h-dim);display:flex;align-items:center;gap:6px}
+.sw .v b{font-weight:600;color:inherit}
+.sw .v.on{background:var(--h-hi);color:var(--h-hi-ink)}
+.sw-hint{font:11px var(--tool);color:#5f5f67}
+@media (max-width:980px){
+  #harness{grid-template-columns:1fr;gap:6px}
+  .h-steps,.h-thesis{display:none}
+  .sw .v:not(.on) b{display:none}
+  .sw-hint{display:none}
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
+</style>
+<style id="variant-css"></style>
+
+<div id="app">
+  <header id="harness">
+    <div class="h-id">
+      <div class="h-kicker"><span class="h-dot"></span>Prototype · Dictation, round 2</div>
+      <div class="h-title"><span id="h-num">1/5</span><b id="h-name">…</b></div>
+      <div class="h-thesis" id="h-thesis"></div>
+    </div>
+    <ol class="h-steps" id="h-steps"></ol>
+    <div class="h-say">
+      <div class="h-say-label">Next line you say <em id="h-say-app">into Terminal</em></div>
+      <div class="h-say-line" id="h-say-line"></div>
+      <div class="h-ctrls">
+        <button class="h-btn talk" id="h-talk" title="Press and hold. Stands in for ⌥Space.">Hold to talk <kbd>`</kbd></button>
+        <button class="h-btn" id="h-fix" title="Stands in for ⌃⌥Space.">Fix key <kbd>Tab</kbd></button>
+        <button class="h-btn ghost" id="h-reset">Reset</button>
+        <label class="h-toggle"><input type="checkbox" id="h-truth" checked> mark mistakes</label>
+      </div>
+      <div class="h-legend">Hold <b>`</b> for ⌥Space and press <b>Tab</b> for ⌃⌥Space. Your running Tesseract keeps the real keys. Click a window to type in it.</div>
+    </div>
+  </header>
+
+  <main id="stage">
+    <div id="screen" class="truth">
+      <div class="wall"></div>
+      <div class="menubar">
+        <div class="mb-left">
+          <span class="mb-apple"><svg width="14" height="16" viewBox="0 0 14 17" fill="currentColor" aria-hidden="true"><path d="M11.6 9c0-2 1.6-2.9 1.7-3-.9-1.4-2.4-1.6-2.9-1.6-1.2-.1-2.4.7-3 .7-.6 0-1.6-.7-2.6-.7C3.4 4.5 2.1 5.3 1.4 6.5 0 9 1 12.7 2.4 14.7c.7 1 1.5 2 2.5 2 1 0 1.4-.6 2.6-.6s1.5.6 2.6.6c1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0 0-2-.8-2-3.4zM9.7 3.1c.5-.7.9-1.6.8-2.5-.8 0-1.7.5-2.3 1.2-.5.6-.9 1.5-.8 2.4.9.1 1.8-.4 2.3-1.1z"/></svg></span>
+          <b id="mb-app">Terminal</b><span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+        </div>
+        <div class="mb-right">
+          <span class="mb-tess" id="mb-tess" title="Tesseract Agent"></span>
+          <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor" aria-hidden="true"><path d="M8 11.5 5.6 9a3.4 3.4 0 0 1 4.8 0L8 11.5zM3.4 6.8a6.5 6.5 0 0 1 9.2 0l-1.1 1.1a5 5 0 0 0-7 0L3.4 6.8zM1.1 4.5a9.7 9.7 0 0 1 13.8 0l-1.1 1.1a8.2 8.2 0 0 0-11.6 0L1.1 4.5z"/></svg>
+          <svg width="25" height="12" viewBox="0 0 25 12" fill="none" aria-hidden="true"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".6"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23 4v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity=".6"/></svg>
+          <span id="mb-clock"></span>
+        </div>
+      </div>
+
+      <section class="win term front" id="win-terminal" data-win="terminal">
+        <div class="tbar"><div class="tls"><i class="tl r"></i><i class="tl y"></i><i class="tl g"></i></div><span class="ttl">tesseract — claude — 84×26</span></div>
+        <div class="term-body">
+          <div class="term-log" id="term-log"></div>
+          <div class="term-box" id="term-box"></div>
+          <div class="term-meta"><span>~/projects/tesseract · main</span><span>⏎ send</span></div>
+        </div>
+      </section>
+
+      <section class="win notes" id="win-notes" data-win="notes">
+        <div class="nbar"><div class="tls"><i class="tl r"></i><i class="tl y"></i><i class="tl g"></i></div><span class="nttl">Notes</span><span class="ndim">iCloud · Field log</span></div>
+        <div class="notes-body" id="notes-body"></div>
+      </section>
+
+      <section class="win tess" id="win-tess" data-win="tess">
+        <div class="tess-bar">
+          <div class="tls"><i class="tl r"></i><i class="tl y"></i><i class="tl g" id="tess-zoom" title="Zoom the window"></i></div>
+          <button class="gbtn icon" title="Show sidebar" tabindex="-1"><svg class="ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="3.5"/><path d="M9.5 4.5v15"/></svg></button>
+          <div class="tess-title">Dictation</div>
+          <div class="tess-tools" id="tess-tools"></div>
+        </div>
+        <div class="tess-content" id="tess-content"></div>
+      </section>
+
+      <div id="overlay-layer"></div>
+    </div>
+  </main>
+
+  <nav id="switcher" aria-label="Prototype variants">
+    <div class="sw" id="sw"></div>
+    <span class="sw-hint">← → to switch</span>
+  </nav>
+</div>
+
+<script src="shell.js"></script>
+<script src="v1-roll-call.js"></script>
+<script src="v2-catch.js"></script>
+<script src="v3-ask-me.js"></script>
+<script src="v4-just-type.js"></script>
+<script src="v5-places.js"></script>
+<script>Proto.boot();</script>
