@@ -95,6 +95,13 @@ final class AgentEngine {
     /// unloaded or when the model has no override (vendor JSON default).
     private(set) var toolCallFormat: ToolCallFormat?
 
+    /// Whether the DFlash2 draft loaded beside the model, cached at load like
+    /// `toolCallFormat` so the Models page can read it synchronously. The
+    /// load decides it from the setting, the draft on disk and the target's
+    /// pairing, so nothing reads it off the target's id. `false` when
+    /// unloaded.
+    private(set) var isDFlash2DraftLoaded = false
+
     /// The shared inference actor. Created by the composition root and
     /// injected so the server dispatcher can reach the same actor (ADR-0015);
     /// benchmarks and unit tests rely on the `init` default instead.
@@ -218,6 +225,7 @@ final class AgentEngine {
                 templateDefaults: templateFlagDefaults
             )
             toolCallFormat = await llmActor.loadedToolCallFormat()
+            isDFlash2DraftLoaded = await llmActor.loadedDFlash2Draft()
             loadedVisionMode = visionMode
             isModelLoaded = true
             loadingStatus = ""
@@ -389,6 +397,7 @@ final class AgentEngine {
         reasoningEffortTemplateDefault = nil
         agentRenderContext = .canonical
         toolCallFormat = nil
+        isDFlash2DraftLoaded = false
         loadedVisionMode = false
         isModelLoaded = false
         loadingStatus = ""

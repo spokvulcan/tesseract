@@ -372,6 +372,13 @@ actor LLMActor {
         resolvedToolCallFormat
     }
 
+    /// Whether the DFlash2 draft loaded beside the model: the setting allowed
+    /// it, the draft was on disk and the loaded target pairs with it. `false`
+    /// before a load and after an unload.
+    func loadedDFlash2Draft() -> Bool {
+        dflash2Drafter != nil
+    }
+
     /// Whether the loaded instance processes images — the instance truth
     /// the keying phase reads (`ModelSession.producesFlatTextTokens`), not
     /// the checkpoint's config claim. A text-class load (a `textOnlyOverride`

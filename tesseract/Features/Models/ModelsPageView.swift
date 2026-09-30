@@ -183,25 +183,46 @@ struct ModelsPageView: View {
     // MARK: - Memory state
 
     private func isModelLoadedInMemory(_ model: ModelDefinition) -> Bool {
+        LoadedModels(
+            speechToTextModelID: container.transcriptionEngine.isModelLoaded
+                ? container.settingsManager.selectedSpeechToTextModelID : nil,
+            isVoiceModelLoaded: container.speechEnginePresenter.isModelLoaded,
+            agentModelID: container.inferenceArbiter.loadedLLMModelID,
+            isDFlash2DraftLoaded: container.agentEngine.isDFlash2DraftLoaded,
+            isProofreadModelLoaded: container.proofreadPass.isModelLoaded,
+            isEmbedderLoaded: container.memoryEngine.isEmbedderLoaded
+        ).contains(model)
+    }
+}
+
+// MARK: - Loaded models
+
+/// What the Models page marks as in memory, one fact per engine, each from
+/// the engine that holds the model. A draft is never loaded on its own: it
+/// loads beside its target when the setting allows it and the target pairs
+/// with it, so its fact comes from that load, not from the target's id.
+struct LoadedModels: Equatable {
+    var speechToTextModelID: String?
+    var isVoiceModelLoaded = false
+    var agentModelID: String?
+    var isDFlash2DraftLoaded = false
+    var isProofreadModelLoaded = false
+    var isEmbedderLoaded = false
+
+    func contains(_ model: ModelDefinition) -> Bool {
         switch model.category {
         case .speechToText:
-            return model.id == container.settingsManager.selectedSpeechToTextModelID
-                && container.transcriptionEngine.isModelLoaded
+            model.id == speechToTextModelID
         case .textToSpeech:
-            return model.id == "qwen3-tts-voicedesign"
-                && container.speechEnginePresenter.isModelLoaded
+            model.id == ModelDefinition.defaultTextToSpeechModelID && isVoiceModelLoaded
         case .agent:
-            return container.inferenceArbiter.loadedLLMModelID == model.id
+            model.id == agentModelID
         case .proofread:
-            return model.id == ModelDefinition.defaultProofreadModelID
-                && container.proofreadPass.isModelLoaded
+            model.id == ModelDefinition.defaultProofreadModelID && isProofreadModelLoaded
         case .embedding:
-            return model.id == ModelDefinition.defaultEmbeddingModelID
-                && container.memoryEngine.isEmbedderLoaded
+            model.id == ModelDefinition.defaultEmbeddingModelID && isEmbedderLoaded
         case .draft:
-            // Drafts are never loaded standalone — they co-reside with their
-            // target agent model.
-            return container.inferenceArbiter.loadedLLMModelID == "qwen3.8-27b"
+            model.id == DFlash2Support.draftModelID && isDFlash2DraftLoaded
         }
     }
 }
