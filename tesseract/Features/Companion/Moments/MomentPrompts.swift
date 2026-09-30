@@ -95,6 +95,38 @@ nonisolated enum MomentPrompts {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: Night Reflection
+
+    static func nightReflection(facts: DayFacts, profile: [String]) -> String {
+        var lines = ["[Night Reflection]"]
+        lines.append(
+            "Look back over today's thread. Write tomorrow's carry-over note, a first draft of tomorrow, and at most three facts worth asking the owner to remember."
+        )
+        if !facts.doneToday.isEmpty {
+            lines.append("Done today: " + facts.doneToday.map(\.title).joined(separator: "; "))
+        }
+        let tomorrow = facts.tomorrowEvents
+        if !tomorrow.isEmpty {
+            lines.append(
+                "Tomorrow's calendar: "
+                    + tomorrow.map { "\(clock($0.start, facts)) \($0.title)" }.joined(
+                        separator: "; "))
+        }
+        if !profile.isEmpty {
+            lines.append("Already in their Profile (don't propose these again):")
+            lines += profile.map { "- \($0)" }
+        }
+        lines.append("")
+        lines.append("Reply with only this JSON, nothing before or after it:")
+        lines.append(
+            #"{"carry_over": "<2–4 warm sentences for tomorrow morning: where things stand, what matters first>", "tomorrow": ["<one short line each, at most 5>"], "proposals": [{"text": "<a lasting fact about the owner, third person>", "reason": "<what today showed>"}]}"#
+        )
+        lines.append(
+            "Propose only lasting facts the owner showed today — a preference, a routine, a person who matters — never guesses, never anything sensitive they didn't volunteer. An empty list is fine."
+        )
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: Shared
 
     static func agendaLines(_ facts: DayFacts) -> [String] {

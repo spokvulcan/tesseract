@@ -15,6 +15,8 @@ enum WindowID {
     /// The Markdown Gallery (see `CONTEXT.md`): the living style reference
     /// for chat markdown, reached from the Window menu.
     static let markdownGallery = "markdown-gallery"
+    /// The Profile: everything Jarvis knows about the owner, editable.
+    static let profile = "profile"
 }
 
 /// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
@@ -243,6 +245,15 @@ struct TesseractApp: App {
             MarkdownGalleryView()
         }
         .defaultSize(width: 1280, height: 860)
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+
+        // The Profile: on-demand singleton, opened from Today and Settings.
+        Window("Profile", id: WindowID.profile) {
+            ProfileView()
+                .environment(container.profileStore)
+        }
+        .defaultSize(width: 620, height: 560)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
     }

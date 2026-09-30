@@ -12,6 +12,7 @@ import SwiftUI
 
 struct CompanionSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
+    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var container: DependencyContainer
     @State private var showingLaunchAtLoginAsk = false
 
@@ -22,6 +23,7 @@ struct CompanionSettingsPane: View {
                 Toggle("Companion", isOn: $settings.companionHeartbeatEnabled)
                 Toggle("Speak Urgent Things Aloud", isOn: $settings.companionSpeaks)
                     .disabled(!settings.companionHeartbeatEnabled)
+                Button("Open Profile…") { openWindow(id: WindowID.profile) }
                 // Never a silent login-item flip: the toggle reads and writes
                 // the real SMAppService state.
                 Toggle(

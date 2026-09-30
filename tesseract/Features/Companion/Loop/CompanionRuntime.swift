@@ -43,6 +43,7 @@ final class CompanionRuntime {
     @ObservationIgnored private let frontmost: FrontmostAppTracker
     @ObservationIgnored private let power: PowerMonitor
     @ObservationIgnored private let delivery: CompanionDelivery
+    @ObservationIgnored private let profile: ProfileStore?
     @ObservationIgnored private let now: @MainActor () -> Date
     @ObservationIgnored private var watcher: NotificationCenterWatcher?
 
@@ -55,7 +56,7 @@ final class CompanionRuntime {
         settings: SettingsManager, agenda: Agenda, notifier: CompanionNotifier,
         trace: CompanionTrace, idleMonitor: IdleMonitor, presence: CompanionPresence,
         thread: DayThread, stateStore: DayStateStore, frontmost: FrontmostAppTracker,
-        power: PowerMonitor, delivery: CompanionDelivery,
+        power: PowerMonitor, delivery: CompanionDelivery, profile: ProfileStore? = nil,
         now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.settings = settings
@@ -69,6 +70,7 @@ final class CompanionRuntime {
         self.frontmost = frontmost
         self.power = power
         self.delivery = delivery
+        self.profile = profile
         self.now = now
         var loaded = stateStore.load() ?? DayState(day: DayKey(for: now()))
         // A moment in flight when the app quit never finished.
@@ -198,7 +200,8 @@ final class CompanionRuntime {
             inboxListID: agenda.inbox?.id, ownerPresent: idleMonitor.isOwnerPresent,
             chatBusy: thread.isChatBusy, frontmostAppName: frontmost.name,
             frontmostBundleID: frontmost.bundleID,
-            lastTerminalFrontAt: frontmost.lastTerminalFrontAt(now: now()), power: power.state)
+            lastTerminalFrontAt: frontmost.lastTerminalFrontAt(now: now()), power: power.state,
+            profile: profile?.facts.map(\.text) ?? [])
     }
 
     private var daySettings: DaySettings {
@@ -217,7 +220,8 @@ final class CompanionRuntime {
     private func dayOpening() -> String {
         let snapshot = snapshot()
         return MomentPrompts.dayOpening(
-            facts: snapshot.facts(state: state), profile: [], carryOver: state.carryOver)
+            facts: snapshot.facts(state: state), profile: snapshot.profile,
+            carryOver: state.carryOver)
     }
 
     // MARK: Effects
@@ -255,6 +259,9 @@ final class CompanionRuntime {
 
         case .setWaiting(let count):
             presence.setWaiting(count: count)
+
+        case .proposeFacts(let drafts):
+            profile?.propose(drafts, source: "night-reflection")
 
         case .trace(let event, let fields):
             trace.record(

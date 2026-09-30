@@ -123,6 +123,41 @@ nonisolated enum CardParser {
         return .card(.eveningWrapUp(card))
     }
 
+    // MARK: Night Reflection
+
+    private struct ReflectionReply: Decodable {
+        struct Proposal: Decodable {
+            let text: String?
+            let reason: String?
+        }
+        let carryOver: String?
+        let tomorrow: [String]?
+        let proposals: [Proposal]?
+
+        enum CodingKeys: String, CodingKey {
+            case tomorrow, proposals
+            case carryOver = "carry_over"
+        }
+    }
+
+    static func nightReflection(_ reply: String) -> CardParse {
+        guard let data = jsonObject(in: reply) else { return .invalid("no JSON object") }
+        guard let decoded = try? JSONDecoder().decode(ReflectionReply.self, from: data),
+            let note = decoded.carryOver?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !note.isEmpty
+        else { return .invalid("no carry-over note") }
+        let proposals = (decoded.proposals ?? []).compactMap { proposal -> ProposalDraft? in
+            guard let text = cleanLine(proposal.text) else { return nil }
+            return ProposalDraft(text: text, reason: cleanLine(proposal.reason) ?? "")
+        }
+        return .card(
+            .reflection(
+                ReflectionCard(
+                    carryOver: String(note.prefix(1200)),
+                    tomorrow: (decoded.tomorrow ?? []).compactMap(cleanLine).prefix(5).map { $0 },
+                    proposals: Array(proposals.prefix(3)))))
+    }
+
     // MARK: Shared
 
     /// A usable one-liner: trimmed, non-empty, a sentence rather than an essay.
@@ -148,6 +183,23 @@ nonisolated enum FallbackCards {
             : "Here's your day: \(count) event\(count == 1 ? "" : "s") ahead."
         return MorningPlanCard(
             line: line, mustDoID: facts.mustDoID, placements: [], suggestions: [])
+    }
+
+    static func nightReflection(facts: DayFacts) -> ReflectionCard {
+        var parts: [String] = []
+        if !facts.doneToday.isEmpty {
+            parts.append(
+                "Yesterday you finished " + facts.doneToday.map(\.title).joined(separator: ", ")
+                    + ".")
+        }
+        if let first = facts.tomorrowEvents.first {
+            parts.append(
+                "Today starts with \(first.title) at \(AgendaTime.clock(first.start, calendar: facts.calendar))."
+            )
+        }
+        return ReflectionCard(
+            carryOver: parts.isEmpty ? "A new day." : parts.joined(separator: " "), tomorrow: [],
+            proposals: [])
     }
 
     static func eveningWrapUp(facts: DayFacts, leftovers: [AgendaReminder]) -> EveningWrapUpCard {

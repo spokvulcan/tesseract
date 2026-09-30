@@ -2,7 +2,8 @@
 //  MemoryEmbedder.swift
 //  tesseract
 //
-//  The memory system's embedding worker (ADR-0035 §5, §8).
+//  The embedding worker behind `recall`: it reranks full-text candidates
+//  from past conversations by meaning.
 //
 //  A third co-resident MLX model, following ADR-0034's proofreader precedent
 //  exactly: an `actor` so inference runs off the main actor, its own

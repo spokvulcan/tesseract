@@ -2,7 +2,7 @@
 //  SQLiteDatabase.swift
 //  tesseract
 //
-//  A small typed wrapper over the *system* SQLite (ADR-0035 §8).
+//  A small typed wrapper over the *system* SQLite.
 //
 //  Deliberately not a library. The app has no database dependency and does not
 //  gain one here: macOS ships SQLite 3.51 with FTS5, JSON1 and WAL already
@@ -10,7 +10,7 @@
 //  This file exists only to make that C API safe to use from Swift — RAII on
 //  statements, typed binding, and errors as `throws`.
 //
-//  Not thread-safe by itself. `MemoryStore` is an `actor` and owns the single
+//  Not thread-safe by itself. `RecallIndex` is an `actor` and owns the single
 //  connection; nothing else may touch it.
 //
 

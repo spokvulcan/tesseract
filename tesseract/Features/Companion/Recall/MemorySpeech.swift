@@ -2,23 +2,9 @@
 //  MemorySpeech.swift
 //  tesseract
 //
-//  What counts as something the owner *said* (ADR-0035 §1).
-//
-//  An episode is testimony — the immutable layer every belief is ultimately
-//  answerable to. So it had better contain his words and not the app's.
-//
-//  It did not. A skill invocation sends the skill's whole body as the user
-//  message (`<skill name="proofread" location="…">…</skill>` followed by
-//  whatever he actually typed — `ChatSession.executeSkill`), and memory recorded
-//  that verbatim. 28 of the first 207 episodes in the owner's own store were
-//  hundreds of lines of skill instructions with a sentence of his at the bottom;
-//  eight beliefs had been distilled from them; and the retrieval block quoted
-//  them back to the model as "things that were actually said, verbatim" —
-//  complete with the container paths they carried.
-//
-//  So the machine wrapper comes off at the door, and it comes off in exactly one
-//  place, used by both the live capture and the backfill: history and future
-//  have to agree about what he said.
+//  What counts as something the owner *said*: the machine wrappers a message
+//  may carry (a skill invocation's `<skill>` block, the retired `<memory>`
+//  block) come off, so `recall` searches the owner's own words.
 //
 
 import Foundation

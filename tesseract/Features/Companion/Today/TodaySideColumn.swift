@@ -21,6 +21,7 @@ struct TodaySideColumn: View {
                 WaitingOnYou(now: now)
             }
             InboxSection(now: now)
+            JarvisNoticed()
         }
     }
 
@@ -154,6 +155,30 @@ private struct WaitingOnYou: View {
             ForEach(cards, id: \.0) { cardID, items in
                 ForEach(items) { item in
                     WaitingItemRow(cardID: cardID, item: item)
+                }
+            }
+        }
+    }
+}
+
+/// Jarvis's "Should I remember this?" proposals, until the owner decides.
+private struct JarvisNoticed: View {
+    @Environment(ProfileStore.self) private var profile
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        if !profile.openProposals.isEmpty {
+            VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
+                HStack {
+                    Text("Jarvis noticed").fontWeight(.semibold)
+                    Spacer()
+                    Button("Profile") { openWindow(id: WindowID.profile) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .focusable(false)
+                }
+                ForEach(profile.openProposals) { proposal in
+                    ProposalRow(proposal: proposal)
                 }
             }
         }

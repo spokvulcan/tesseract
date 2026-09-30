@@ -79,6 +79,8 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case openApp(name: String)
     /// Change the owner's Reminders.
     case mutateAgenda(AgendaMutation)
+    /// "Should I remember this?" proposals for the Profile.
+    case proposeFacts([ProposalDraft])
     /// How many things are waiting on the owner, for the glyph.
     case setWaiting(Int)
     /// Write one Companion Trace event.
@@ -129,13 +131,15 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     /// when one is in front.
     var lastTerminalFrontAt: Date?
     var power: PowerState
+    /// The owner's Profile facts (for the reflection's "don't propose again").
+    var profile: [String]
 
     init(
         now: Date, calendar: Calendar = .current, settings: DaySettings,
         agenda: AgendaSnapshot, areas: [Area] = [], inboxListID: String? = nil,
         ownerPresent: Bool = true, chatBusy: Bool = false, frontmostAppName: String? = nil,
         frontmostBundleID: String? = nil, lastTerminalFrontAt: Date? = nil,
-        power: PowerState = .nominal
+        power: PowerState = .nominal, profile: [String] = []
     ) {
         self.now = now
         self.calendar = calendar
@@ -149,6 +153,7 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         self.frontmostBundleID = frontmostBundleID
         self.lastTerminalFrontAt = lastTerminalFrontAt
         self.power = power
+        self.profile = profile
     }
 
     func facts(state: DayState) -> DayFacts {

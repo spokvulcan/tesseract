@@ -133,6 +133,7 @@ extension View {
             .environment(container.companionRuntime)
             .environment(container.dayThread)
             .environment(container.captureService)
+            .environment(container.profileStore)
             .environment(container.settingsManager)
             .environment(container.agentEngine)
             .environment(container.composerDraft)

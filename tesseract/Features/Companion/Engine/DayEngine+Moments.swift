@@ -130,7 +130,9 @@ nonisolated extension DayEngine {
         case .triage:
             return triageReplied(request, reply: reply, snapshot: snapshot, state: &state)
         case .nightReflection:
-            return nil
+            guard case .card(let body) = CardParser.nightReflection(reply) else { return nil }
+            return accept(
+                body, kind: .nightReflection, fallback: false, snapshot: snapshot, state: &state)
         }
     }
 
@@ -157,7 +159,9 @@ nonisolated extension DayEngine {
             state.ledger.markTriaged(request.context.notificationIDs, at: snapshot.now)
             return []
         case .nightReflection:
-            return []
+            return accept(
+                .reflection(FallbackCards.nightReflection(facts: facts)), kind: .nightReflection,
+                fallback: true, snapshot: snapshot, state: &state)
         }
     }
 
@@ -173,7 +177,10 @@ nonisolated extension DayEngine {
             if !card.placements.isEmpty { state.plan = card.placements }
         case .eveningWrapUp:
             state.eveningWrapUpAt = snapshot.now
-        case .breakpoint, .triage, .reflection:
+        case .reflection(let card):
+            state.nightReflectionAt = snapshot.now
+            state.carryOverForNextDay = card.carryOver
+        case .breakpoint, .triage:
             break
         }
         // Refining a card in place (a Breakpoint's model version).
@@ -218,6 +225,9 @@ nonisolated extension DayEngine {
                     "rungs": .string(rungs.map(\.rawValue).joined(separator: ",")),
                     "fallback": .bool(fallback), "importance": .string(importance.rawValue),
                 ]))
+        if case .reflection(let reflection) = body, !reflection.proposals.isEmpty {
+            effects.append(.proposeFacts(reflection.proposals))
+        }
         return effects
     }
 

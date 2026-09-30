@@ -275,6 +275,12 @@ nonisolated extension DayEngine {
             state.lastTriageAt = nil
             return snapshot.ownerPresent ? triageIfDue(snapshot: snapshot, state: &state) : []
         }
+        if state.deferred.contains(.nightReflection),
+            Governor.deferral(for: .nightReflection, power: snapshot.power) == nil
+        {
+            state.deferred.remove(.nightReflection)
+            return nightReflectionIfDue(snapshot: snapshot, state: &state)
+        }
         return []
     }
 }

@@ -128,6 +128,12 @@ final class DependencyContainer: ObservableObject {
         }
         // "Never tell me about CI passing": the owner's notification rules.
         registry.appendBuiltInTool(createNotificationRuleTool(store: triageRuleStore))
+        // Memory the owner controls: remember, forget, recall — pull only.
+        for tool in createProfileTools(
+            profile: profileStore, index: recallIndex, embed: recallEmbedding)
+        {
+            registry.appendBuiltInTool(tool)
+        }
         return registry
     }()
 
@@ -188,6 +194,36 @@ final class DependencyContainer: ObservableObject {
         summarize: internalCompletion,
         trace: companionTrace)
     lazy var triageRuleStore = TriageRuleStore(settings: settingsManager)
+    /// The owner's Profile: facts they approved, and Jarvis's proposals.
+    lazy var profileStore = ProfileStore(
+        url: ProcessEnvironment.isRunningTests ? nil : ProfileStore.productionURL,
+        trace: companionTrace)
+    /// Full-text search over saved conversations, for `recall`.
+    lazy var recallIndex = RecallIndex(
+        conversationsDirectory: StorageEnvironment.applicationSupport
+            .appendingPathComponent("Tesseract Agent/agent/conversations", isDirectory: true),
+        databaseURL: StorageEnvironment.applicationSupport
+            .appendingPathComponent("Tesseract Agent/companion/recall.sqlite"))
+    /// The embedder that reranks recall by meaning, loaded on first use when
+    /// its model is downloaded.
+    lazy var memoryEmbedder = MemoryEmbedder()
+    /// Whether the recall embedder holds its model, for the Models page.
+    @Published private(set) var isEmbedderLoaded = false
+    private var recallEmbedding: RecallEmbedding {
+        let embedder = memoryEmbedder
+        let downloads = modelDownloadManager
+        let id = ModelDefinition.defaultEmbeddingModelID
+        return { [weak self] texts in
+            let directory: URL? = await MainActor.run {
+                downloads.isDownloaded(id) ? downloads.modelPath(for: id) : nil
+            }
+            guard let directory else { return nil }
+            do { try await embedder.load(from: directory) } catch { return nil }
+            await MainActor.run { self?.isEmbedderLoaded = true }
+            let vectors = await embedder.embed(texts)
+            return vectors.count == texts.count ? vectors : nil
+        }
+    }
     lazy var frontmostApp = FrontmostAppTracker()
     lazy var powerMonitor = PowerMonitor()
     /// The Jarvis panel's own push-to-talk.
@@ -216,7 +252,8 @@ final class DependencyContainer: ObservableObject {
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
             retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
             speak: { [weak self] line in self?.speechCoordinator.speakText(line) },
-            openApp: { name in AppOpener.open(named: name) }))
+            openApp: { name in AppOpener.open(named: name) }),
+        profile: profileStore)
 
     /// The Companion Trace: every Jarvis decision, card, reaction and agenda
     /// change, one JSONL file per day under Application Support.

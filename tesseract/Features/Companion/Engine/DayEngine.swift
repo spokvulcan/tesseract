@@ -49,6 +49,7 @@ nonisolated enum DayEngine {
                 effects += triageIfDue(snapshot: snapshot, state: &state)
                 effects += speakForWaitingAgents(snapshot: snapshot, state: &state)
             }
+            effects += nightReflectionIfDue(snapshot: snapshot, state: &state)
             effects += runDeferred(snapshot: snapshot, state: &state)
             state.lastTickAt = snapshot.now
 
@@ -138,6 +139,21 @@ nonisolated enum DayEngine {
     static func eveningIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
         guard state.eveningWrapUpAt == nil, isEvening(snapshot) else { return [] }
         return run(.eveningWrapUp, trigger: .eveningTime, snapshot: snapshot, state: &state)
+    }
+
+    /// The Night Reflection: once per night, at least half an hour after the
+    /// Evening Wrap-up (leftovers decided), before the 04:00 rollover. The
+    /// governor holds it for power and a cool Mac.
+    static func nightReflectionIfDue(snapshot: DaySnapshot, state: inout DayState) -> [DayEffect] {
+        guard state.nightReflectionAt == nil, state.running == nil,
+            !state.deferred.contains(.nightReflection),
+            let wrapUp = state.eveningWrapUpAt,
+            snapshot.now.timeIntervalSince(wrapUp) >= 30 * 60, isEvening(snapshot)
+        else { return [] }
+        return run(
+            .nightReflection, trigger: .night, snapshot: snapshot, state: &state,
+            text: MomentPrompts.nightReflection(
+                facts: snapshot.facts(state: state), profile: snapshot.profile))
     }
 
     static func isEvening(_ snapshot: DaySnapshot) -> Bool {
