@@ -511,6 +511,81 @@ struct SpeechCoordinatorTests {
         #expect(probe.fireCount == 1)
     }
 
+    /// A stop can land while the stopped request's stream still holds
+    /// events the engine sent before it. The stopped request once drained
+    /// them into what the next one owned by then: its text shown over the
+    /// new reading, its audio appended to the new playback, and its finish
+    /// ending the new request early.
+    @Test
+    func aStoppedRequestLeavesItsBufferedEventsAlone() async throws {
+        let harness = await Harness()
+        var buffered: DispatchTimeoutResult?
+        // As the first request starts playing, hold the main actor until
+        // the engine has sent its whole stream, then start the next one:
+        // the stop lands with every event of the first still to drain.
+        harness.playback.onStartStreaming = {
+            harness.playback.onStartStreaming = nil
+            buffered = harness.synthesizer.utteranceEnds.wait(timeout: .now() + 60)
+            harness.coordinator.speakText("Hello again.")
+        }
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.overlay.calls.contains(.markGenerationComplete) })
+
+        #expect(buffered == .success)
+        #expect(harness.overlay.displayedTexts == ["Hello again."])
+        #expect(harness.playback.appendedChunks.count == 3)
+        #expect(harness.playback.finishStreamingCount == 1)
+        harness.playback.firePlaybackFinished()
+    }
+
+    /// A stop can land while the session opens, which loads the voice model
+    /// for the first request. The stopped request once carried on once it had
+    /// opened: back to generating for good after the stop, speaking its text,
+    /// and starting the sink again under the next request.
+    @Test
+    func aRequestStoppedWhileItsSessionOpensStaysStopped() async throws {
+        let harness = await Harness()
+        harness.coordinator.speakText("Hello world.")
+        harness.coordinator.stop()
+        // The stopped request has seen its session open: it clears the
+        // loading note in the step that once set the state to generating.
+        #expect(
+            await waitUntil {
+                await harness.synthesizer.primedVoices.count == 1
+                    && !harness.presenter.isLoading
+            })
+        #expect(harness.coordinator.state == .idle)
+
+        harness.coordinator.speakText("Hello again.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        #expect(await harness.synthesizer.requests.map(\.text) == ["Hello again."])
+        #expect(harness.playback.startStreamingCount == 1)
+        harness.playback.firePlaybackFinished()
+    }
+
+    /// A stop can also land while the engine admits the utterance, which
+    /// loads the voice model again there after an unload. The stopped
+    /// request once started the sink after the stop, as the request that
+    /// stopped it was about to.
+    @Test
+    func aRequestStoppedWhileItsUtteranceIsAdmittedStaysStopped() async throws {
+        let harness = await Harness()
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        harness.playback.firePlaybackFinished()
+
+        // The next request is stopped mid-admission by the one after it.
+        let coordinator = harness.coordinator
+        await harness.synthesizer.onNextAudioFormat {
+            await MainActor.run { coordinator.speakText("And again.") }
+        }
+        harness.coordinator.speakText("Hello again.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 2 })
+
+        #expect(harness.playback.startStreamingCount == 2)
+        harness.playback.firePlaybackFinished()
+    }
+
     @Test
     func playbackSpeedAppliesAtTheStartAndWhenChanged() async throws {
         let harness = await Harness(

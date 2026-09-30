@@ -397,7 +397,12 @@ final class SpeechCoordinator {
         // every overlay touch below no-ops.
         let overlay = showsOverlay ? notchOverlay : nil
         do {
+            // Neither opening the session nor admitting the utterance ends at a
+            // stop(), and either can spend seconds loading the voice model, so
+            // check after each. The opened session stays for the next request;
+            // the dropped utterance stops its generation.
             let session = try await openOrReuseSession()
+            try Task.checkCancellation()
             state = .generating(progress: "")
 
             // A retake needs a fresh seed: the settings seed would render the
@@ -409,6 +414,7 @@ final class SpeechCoordinator {
                 retake
                 ? try await session.retake(text, options: options)
                 : try await session.speak(text, options: options)
+            try Task.checkCancellation()
             totalSegments = utterance.segmentCount
             activeSink.startStreaming(sampleRate: utterance.sampleRate)
             if activeSink === playback {
@@ -419,6 +425,10 @@ final class SpeechCoordinator {
             var takeSamples: [Float] = []
             var overlayShown = false
             for try await event in utterance.events {
+                // stop() cancels this task, but the stream still hands over
+                // events the engine sent before it; by then the next request
+                // owns the sink, the overlay and the state.
+                try Task.checkCancellation()
                 switch event {
                 case .segment(let script):
                     currentSegmentIndex = script.index
@@ -447,6 +457,7 @@ final class SpeechCoordinator {
 
                 case .segmentDone(let index):
                     await rememberVoice(of: session)
+                    try Task.checkCancellation()
                     overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
                     Log.speech.info("Segment \(index + 1)/\(self.totalSegments) complete")
                     if index + 1 < utterance.segmentCount {
