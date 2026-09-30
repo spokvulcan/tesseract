@@ -173,14 +173,26 @@ private struct TodayHeader: View {
         }
     }
 
+    private var shape: String {
+        let events = timeline.rows.filter { if case .event = $0.kind { true } else { false } }.count
+        let tasks = timeline.totalCount
+        var parts: [String] = []
+        if events > 0 { parts.append("\(events) event\(events == 1 ? "" : "s")") }
+        if tasks > 0 { parts.append("\(tasks) task\(tasks == 1 ? "" : "s")") }
+        return parts.isEmpty ? "A clear day." : parts.joined(separator: " · ") + " today."
+    }
+
     private var isEvening: Bool {
         let parts = Calendar.current.dateComponents([.hour, .minute], from: now)
         let minute = (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
         return minute >= settings.companionEveningMinutes || minute < 3 * 60
     }
 
+    /// Jarvis's one-line note. While a card is open below, the card carries
+    /// his words, so the header gives the day's shape instead.
     private var line: String {
-        if let card = runtime.state.openCards.last { return card.line }
+        if !runtime.state.openCards.isEmpty { return shape }
+        if let card = runtime.state.cards.last { return card.line }
         if !settings.companionHeartbeatEnabled {
             return "Your day from Reminders and Calendar."
         }

@@ -229,8 +229,10 @@ private struct CardContent: View {
         VStack(alignment: .leading, spacing: 12) {
             switch card.body {
             case .breakpoint(let breakpoint):
-                Text("Welcome back").fontWeight(.semibold)
-                Text(awayText(breakpoint)).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Welcome back").fontWeight(.semibold)
+                    Text(awayText(breakpoint)).foregroundStyle(.secondary)
+                }
                 Text(breakpoint.line).fixedSize(horizontal: false, vertical: true)
                 if !breakpoint.needsYou.isEmpty {
                     Group {

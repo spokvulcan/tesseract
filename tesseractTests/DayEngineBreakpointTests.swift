@@ -108,7 +108,7 @@ struct DayEngineBreakpointTests {
             Issue.record("expected a Breakpoint card")
             return
         }
-        #expect(breakpoint.line == "Welcome back. Nothing needs you.")
+        #expect(breakpoint.line == "Nothing needs you right now.")
         #expect(breakpoint.canWaitCount == 2)
         #expect(breakpoint.next.first?.title == "Design review")
         let request = try #require(Self.moments(decision.effects).first)

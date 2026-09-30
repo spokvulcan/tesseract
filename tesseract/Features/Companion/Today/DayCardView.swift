@@ -60,11 +60,8 @@ private struct MorningPlanBody: View {
     let facts: DayFacts
 
     var body: some View {
+        // The must-do shows in the header chip, where it can be moved.
         VStack(alignment: .leading, spacing: 6) {
-            if let mustDo = card.mustDoID, let task = facts.task(mustDo) {
-                Label("Must-do: \(task.title)", systemImage: "star.fill")
-                    .foregroundStyle(Color.accentColor)
-            }
             if !card.placements.isEmpty {
                 Text(
                     "\(card.placements.count) task\(card.placements.count == 1 ? "" : "s") placed in your day below."

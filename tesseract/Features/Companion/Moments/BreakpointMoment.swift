@@ -187,9 +187,9 @@ nonisolated enum BreakpointMoment {
 
     static func fallbackLine(_ inputs: BreakpointInputs, needs: Int) -> String {
         switch needs {
-        case 0: "Welcome back. Nothing needs you."
-        case 1: "Welcome back. One thing needs you."
-        default: "Welcome back. \(needs) things need you."
+        case 0: "Nothing needs you right now."
+        case 1: "One thing needs you."
+        default: "\(needs) things need you."
         }
     }
 }
