@@ -22,6 +22,7 @@
 
 import Foundation
 import Observation
+import TesseractSpeech
 
 // MARK: - Timing
 
@@ -197,7 +198,7 @@ nonisolated struct ReadAlongPassage: Equatable, Sendable {
         var ends: Set<Int> = []
         var current = ""
         for character in text {
-            if character.isWhitespace || character.isNewline {
+            if character.separatesWords {
                 if !current.isEmpty {
                     words.append(current)
                     current = ""

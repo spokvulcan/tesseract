@@ -9,25 +9,39 @@
 
 import Foundation
 import NaturalLanguage
+import TesseractSpeech
 
 nonisolated enum ReaderText {
     /// A window wide enough to see a sentence boundary on either side.
     static let sentenceWindow = 4_000
 
-    /// The ranges of the `count` whitespace-separated words starting at
-    /// `offset` — the engine's and the Word Timeline's definition of a word,
-    /// so word `i` of a spoken segment is range `i` here.
+    /// How much text a walk over Characters reads at a time.
+    static let characterWindow = 1_024
+
+    /// The ranges of the `count` words starting at `offset`, split as the
+    /// engine splits them: by Character, with `Character.separatesWords`. So
+    /// word `i` of a spoken segment is range `i` here, and a mark joined to
+    /// a space is part of the space, not a word.
     static func words(in text: NSString, from offset: Int, count: Int) -> [NSRange] {
+        guard count > 0 else { return [] }
         var ranges: [NSRange] = []
         ranges.reserveCapacity(count)
-        var index = offset
-        let length = text.length
-        while ranges.count < count, index < length {
-            while index < length, isSeparator(text.character(at: index)) { index += 1 }
-            guard index < length else { break }
-            let start = index
-            while index < length, !isSeparator(text.character(at: index)) { index += 1 }
-            ranges.append(NSRange(location: start, length: index - start))
+        var wordStart: Int?
+        var wordEnd = offset
+        forEachCharacter(in: text, from: offset) { character, range in
+            guard character.separatesWords else {
+                if wordStart == nil { wordStart = range.location }
+                wordEnd = range.upperBound
+                return true
+            }
+            if let start = wordStart {
+                ranges.append(NSRange(location: start, length: wordEnd - start))
+                wordStart = nil
+            }
+            return ranges.count < count
+        }
+        if let start = wordStart, ranges.count < count {
+            ranges.append(NSRange(location: start, length: wordEnd - start))
         }
         return ranges
     }
@@ -39,13 +53,13 @@ nonisolated enum ReaderText {
 
     /// Whether `text` holds anything to read in `range`.
     static func hasWords(_ text: NSString, in range: NSRange) -> Bool {
-        let end = min(range.upperBound, text.length)
-        var index = range.location
-        while index < end {
-            if !isSeparator(text.character(at: index)) { return true }
-            index += 1
+        var found = false
+        forEachCharacter(in: text, from: range.location) { character, characterRange in
+            guard characterRange.location < range.upperBound else { return false }
+            found = !character.separatesWords
+            return !found
         }
-        return false
+        return found
     }
 
     /// Sentence ranges within `range`.
@@ -97,31 +111,80 @@ nonisolated enum ReaderText {
     /// start of the text.
     static func previousSentenceStart(before offset: Int, in text: NSString) -> Int {
         let current = sentenceStart(containing: offset, in: text)
+        guard current > 0 else { return 0 }
         // Back over the space before it: the tokenizer can count a paragraph
         // break as the start of the next sentence.
-        var index = current - 1
-        while index > 0, isSeparator(text.character(at: index)) { index -= 1 }
-        guard index >= 0 else { return 0 }
-        return sentenceStart(containing: index, in: text)
+        let before = lastReadable(before: current, in: text) ?? 0
+        return sentenceStart(containing: before, in: text)
     }
 
-    /// The first non-separator at or after `offset` (clamped to the text).
+    /// The first readable Character at or after `offset` (clamped to the
+    /// text).
     static func firstReadable(in text: NSString, from offset: Int) -> Int {
-        var index = max(offset, 0)
-        while index < text.length, isSeparator(text.character(at: index)) { index += 1 }
-        return min(index, text.length)
+        var readable = text.length
+        forEachCharacter(in: text, from: max(offset, 0)) { character, range in
+            guard character.separatesWords else {
+                readable = range.location
+                return false
+            }
+            return true
+        }
+        return readable
+    }
+
+    /// The start of the last readable Character before `offset`, or nil
+    /// when only separators come before it.
+    private static func lastReadable(before offset: Int, in text: NSString) -> Int? {
+        var lower = min(offset, text.length)
+        while lower > 0 {
+            lower = max(0, lower - sentenceWindow)
+            var last: Int?
+            forEachCharacter(in: text, from: lower) { character, range in
+                guard range.location < offset else { return false }
+                if !character.separatesWords { last = range.location }
+                return true
+            }
+            if let last { return last }
+        }
+        return nil
+    }
+
+    /// Visit `text`'s Characters from `offset` on, each with its UTF-16
+    /// range, until `body` returns false or the text ends. Characters are
+    /// Swift's, as the engine splits them, and the walk reads a window at a
+    /// time, so it costs what it reads.
+    private static func forEachCharacter(
+        in text: NSString, from offset: Int, _ body: (Character, NSRange) -> Bool
+    ) {
+        let length = text.length
+        var location = max(offset, 0)
+        var window = characterWindow
+        while location < length {
+            let end = min(length, location + window)
+            let slice = text.substring(with: NSRange(location: location, length: end - location))
+            var characters = slice.makeIterator()
+            var current = characters.next()
+            var visited = 0
+            while let character = current {
+                let next = characters.next()
+                // The window may cut its last Character short: read it
+                // again, whole, at the start of the next window.
+                if next == nil, end < length { break }
+                let size = character.utf16.count
+                guard body(character, NSRange(location: location, length: size)) else { return }
+                location += size
+                visited += 1
+                current = next
+            }
+            guard end < length else { return }
+            // A single Character wider than the window.
+            if visited == 0 { window *= 2 }
+        }
     }
 
     private static func around(_ offset: Int, in text: NSString) -> NSRange {
         let lower = max(0, offset - sentenceWindow)
         let upper = min(text.length, offset + sentenceWindow / 4)
         return NSRange(location: lower, length: upper - lower)
-    }
-
-    /// Whitespace and newlines: what splits words for the engine, the Word
-    /// Timeline and here.
-    static func isSeparator(_ unit: unichar) -> Bool {
-        guard let scalar = Unicode.Scalar(unit) else { return false }
-        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 }

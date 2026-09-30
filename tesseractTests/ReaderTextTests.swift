@@ -59,6 +59,37 @@ struct ReaderTextTests {
         #expect(ReaderText.firstReadable(in: "word  " as NSString, from: 4) == 6)
     }
 
+    // MARK: - A mark after a space (#581)
+
+    /// A combining mark, a zero-width joiner or a variation selector right
+    /// after a space joins the space's Character, so the engine and the Word
+    /// Timeline count no word there. The Reader finds the same words.
+    @Test(arguments: [
+        "one \u{301} two three", "one \u{200D} two three", "one\u{00A0}\u{FE0F} two three",
+        "one\u{3000}\u{301}two three",
+    ])
+    func aMarkAfterASpaceIsPartOfTheSpace(_ text: String) {
+        let ns = text as NSString
+        let words = ReaderText.words(in: ns, from: 0, count: 10).map(ns.substring(with:))
+        #expect(words == text.splitIntoWords().map(String.init))
+        #expect(words == ["one", "two", "three"])
+    }
+
+    @Test func aMarkAfterASpaceIsNothingToRead() {
+        let text = "one. \u{301}" as NSString
+        #expect(!ReaderText.hasWords(text, in: NSRange(location: 4, length: 2)))
+        let next = "one \u{301} two" as NSString
+        #expect(ReaderText.firstReadable(in: next, from: 3) == next.range(of: "two").location)
+    }
+
+    /// Going back a sentence steps over the space and its mark, back into the
+    /// sentence before.
+    @Test func thePreviousSentenceIsFoundPastAMarkAfterASpace() {
+        let text = "First one here. \u{301}Second one here." as NSString
+        let second = text.range(of: "Second").location
+        #expect(ReaderText.previousSentenceStart(before: second + 2, in: text) == 0)
+    }
+
     /// Deep in a book-length text the answer comes from a window around the
     /// offset, and it is the same as near the start.
     @Test func sentencesDeepInABookAreFoundLocally() {

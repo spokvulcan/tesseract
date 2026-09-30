@@ -263,15 +263,15 @@ struct WordTimer {
 
     /// The word each token is in: the word holding the token's first
     /// non-space character. A token of spaces goes with the word after it;
-    /// past the last word is `wordCount`. Words split on whitespace and
-    /// newlines, as the app's Word Timeline splits them.
+    /// past the last word is `wordCount`. Words split by
+    /// `Character.separatesWords`, as the app splits them.
     static func tokenWords(offsets: [Int], text: String) -> (words: [Int], wordCount: Int) {
         let characters = Array(text)
         var wordAt = [Int](repeating: -1, count: characters.count)
         var count = 0
         var inWord = false
         for (index, character) in characters.enumerated() {
-            if character.isWhitespace || character.isNewline {
+            if character.separatesWords {
                 inWord = false
                 continue
             }

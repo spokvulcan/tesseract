@@ -99,3 +99,14 @@ page that stays fast with a whole book pasted in.
 - **Fixing the notch's clock and keeping the notch.** A notch-wide strip shows
   too little of the text, and displays without a notch had no good place
   for it.
+
+## Amendment 2026-09-30: one word rule (#581)
+
+Decision 3 relies on the engine, the Word Timeline and the Reader splitting
+words the same way, but the Reader looked at UTF-16 units and the others at
+Characters. A mark right after a space (a combining accent, a zero-width
+joiner, a variation selector) belongs to the space's Character, so the engine
+counted no word there while the Reader counted one, and every later segment
+was highlighted one word off. The speech package now defines the rule once,
+`Character.separatesWords`. The word timer numbers words by it, and the Word
+Timeline, the Read-Along and the Reader count Characters by it.
