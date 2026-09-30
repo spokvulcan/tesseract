@@ -5,8 +5,11 @@
 //  The view-facing residency mirror of the v2 speech engine (ADR-0038/0039).
 //  The engine itself is an actor in the TesseractSpeech package; views and
 //  the InferenceArbiter need synchronous main-actor reads (`isModelLoaded`,
-//  `isLoading`), so the SpeechCoordinator reports transitions here as it
-//  drives sessions. Replaces the v1 `SpeechEngine` facade in the environment.
+//  `isLoading`). `isModelLoaded` follows the Readiness the engine publishes,
+//  including a load the engine starts by itself for an utterance on a session
+//  that outlived an unload. `isLoading` is the SpeechCoordinator's note that
+//  it is opening a session. Replaces the v1 `SpeechEngine` facade in the
+//  environment.
 //
 
 import Foundation
@@ -15,6 +18,8 @@ import TesseractSpeech
 
 @Observable @MainActor
 final class SpeechEnginePresenter {
+    /// Written only by the engine's readiness updates, so it can't drift from
+    /// what the engine holds (Offload Model decides from it).
     private(set) var isModelLoaded = false
     private(set) var isLoading = false
     private(set) var loadingStatus: String = ""
@@ -23,6 +28,15 @@ final class SpeechEnginePresenter {
 
     init(engine: SpeechEngine) {
         self.engine = engine
+        // Holds the stream, not the engine: the loop ends when the engine
+        // goes away and finishes it.
+        Task { [weak self] in
+            guard let updates = await self?.engine.readinessUpdates() else { return }
+            for await readiness in updates {
+                guard let self else { return }
+                self.isModelLoaded = readiness >= .loaded
+            }
+        }
     }
 
     func noteLoading(_ status: String) {
@@ -31,7 +45,6 @@ final class SpeechEnginePresenter {
     }
 
     func noteReady() {
-        isModelLoaded = true
         isLoading = false
         loadingStatus = ""
     }
@@ -46,7 +59,6 @@ final class SpeechEnginePresenter {
     /// the GPU stream synced. Sessions survive as ingredient values.
     func unload() async {
         await engine.unload()
-        isModelLoaded = false
         isLoading = false
         loadingStatus = ""
     }

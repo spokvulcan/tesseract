@@ -11,7 +11,13 @@ public actor SpeechEngine {
     private let memory: MemoryPolicy
     private let diagnostics: (any SpeechDiagnosticsTap)?
 
-    public private(set) var readiness: Readiness = .unloaded
+    public private(set) var readiness: Readiness = .unloaded {
+        didSet {
+            guard readiness != oldValue else { return }
+            for observer in readinessObservers.values { observer.yield(readiness) }
+        }
+    }
+    private var readinessObservers: [UUID: AsyncStream<Readiness>.Continuation] = [:]
     private var inFlightPrepare: Task<Void, Error>?
 
     private struct SessionState {
@@ -38,7 +44,33 @@ public actor SpeechEngine {
         self.diagnostics = diagnostics
     }
 
+    deinit {
+        for observer in readinessObservers.values { observer.finish() }
+    }
+
     // MARK: - Lifecycle (ADR-0039)
+
+    /// `readiness` now, then each change to it. For a caller that can't await
+    /// the engine, like a view or a synchronous policy read, to follow it
+    /// without keeping a copy of its own: the engine also loads by itself,
+    /// when an utterance arrives on a session that outlived an unload. A
+    /// reader that falls behind gets the latest value, not the backlog. The
+    /// stream finishes when the engine goes away.
+    public func readinessUpdates() -> AsyncStream<Readiness> {
+        let (updates, observer) = AsyncStream.makeStream(
+            of: Readiness.self, bufferingPolicy: .bufferingNewest(1))
+        let id = UUID()
+        readinessObservers[id] = observer
+        observer.onTermination = { [weak self] _ in
+            Task { await self?.removeReadinessObserver(id) }
+        }
+        observer.yield(readiness)
+        return updates
+    }
+
+    private func removeReadinessObserver(_ id: UUID) {
+        readinessObservers[id] = nil
+    }
 
     /// Drive the engine to `target` readiness. Idempotent; concurrent calls
     /// coalesce onto one transition. `.warm` additionally primes `priming`

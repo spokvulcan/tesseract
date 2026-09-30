@@ -123,8 +123,8 @@ struct SpeechCoordinatorTests {
             harness.overlay.calls.contains { if case .show = $0 { true } else { false } })
         #expect(harness.overlay.calls.contains(.markGenerationComplete))
 
-        // Residency mirrored for views/arbiter once the session opened.
-        #expect(harness.presenter.isModelLoaded)
+        // Residency mirrored for views/arbiter from the engine's readiness.
+        #expect(await waitUntil { harness.presenter.isModelLoaded })
         #expect(await harness.synthesizer.loadCount == 1)
 
         // Completion fires only when the audio layer reports drained.
@@ -221,6 +221,32 @@ struct SpeechCoordinatorTests {
         let requests = await harness.synthesizer.requests
         #expect(requests.allSatisfy { $0.seed == 42 })
         #expect(requests.last?.voiceDescription == "warm narrator")
+    }
+
+    /// Offload Model unloads the engine but keeps the session (ADR-0038/0039),
+    /// so reading again in the same voice reloads the checkpoint under that
+    /// session. The presenter follows the engine's own Readiness, so the
+    /// Models page and the next Offload Model see the voice model loaded.
+    @Test
+    func aSameVoiceReadAfterUnloadShowsTheModelLoadedAgain() async throws {
+        let harness = await Harness()
+
+        harness.coordinator.speakText("Hello world.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
+        harness.playback.firePlaybackFinished()
+        #expect(await waitUntil { harness.presenter.isModelLoaded })
+
+        // What Offload Model does for the voice slot.
+        await harness.presenter.unload()
+        #expect(await waitUntil { !harness.presenter.isModelLoaded })
+
+        harness.coordinator.speakText("Hello again.")
+        #expect(await waitUntil { harness.playback.finishStreamingCount == 2 })
+        harness.playback.firePlaybackFinished()
+
+        #expect(await harness.synthesizer.loadCount == 2)
+        #expect(await harness.presenter.engine.readiness == .warm)
+        #expect(await waitUntil { harness.presenter.isModelLoaded })
     }
 
     /// ADR-0072: the first take of a designed voice is kept, and the next
