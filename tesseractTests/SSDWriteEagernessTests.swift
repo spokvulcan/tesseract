@@ -84,7 +84,7 @@ struct SSDWriteEagernessTests {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "view-eagerness", ramBudgetBytes: policy == "pressure" ? 600 : 100_000_000,
             ssdBudgetBytes: policy == "systemProtected" ? 2200 : 10_000_000,
-            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) },
+            demotionPayloadExtractor: { SnapshotPayload.extract($0) },
             activityGate: activityGate,
             adaptiveWriteEagerness: eagerness)
         defer { try? FileManager.default.removeItem(at: root) }

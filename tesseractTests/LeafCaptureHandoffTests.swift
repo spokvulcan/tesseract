@@ -124,7 +124,7 @@ struct LeafCaptureHandoffTests {
     @Test func evictionDemotesMovedLeafAndSSDStillRestoresIt() async throws {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "moved-demotion", ramBudgetBytes: 4_112,
-            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) })
+            demotionPayloadExtractor: { SnapshotPayload.extract($0) })
         defer { try? FileManager.default.removeItem(at: root) }
         let request = owner()
         weak let attention = request.cache[0] as? KVCacheSimple
@@ -155,16 +155,16 @@ struct LeafCaptureHandoffTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let first = owner()
         try admit(first, into: manager) { leaf in
-            .ramAndSSD(ServerCompletion.extractSnapshotPayload(leaf))
+            .ramAndSSD(SnapshotPayload.extract(leaf))
         }
         #expect(first.cache.isEmpty)
         let base = try #require(manager.extensionBase(tokens: Array(1...10), partitionKey: key))
         let next = owner(offset: 10)
         let addresses = next.cache.flatMap(\.state).map(backingAddress)
         let expected = next.cache.flatMap(\.state).map { $0.asData(access: .copy).data }
-        var owed: ServerCompletion.DeferredLayers?
+        var owed: SnapshotPayload.DeferredLayers?
         try admit(next, offset: 10, into: manager) { leaf in
-            let deferred = ServerCompletion.deferredPayload(for: leaf, extending: base)
+            let deferred = SnapshotPayload.deferred(for: leaf, extending: base)
             #expect(deferred.payload.extending != nil)
             owed = deferred.owed
             return .ramAndSSD(deferred.payload)

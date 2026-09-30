@@ -122,7 +122,7 @@ struct CacheClaimMemoryEvidenceTests {
         let before = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let old = try await decodedTurn(before)
         let oldStart = Self.settledActiveMemory()
-        let oldPayload = ServerCompletion.deferredPayload(
+        let oldPayload = SnapshotPayload.deferred(
             for: old.leaf, extending: Self.extensionBase)
         let oldCheckIn = await checkIn(old.handOver, old.leaf, from: old.live, tokens: old.tokens)
         let oldPeak = Memory.peakMemory - oldStart
@@ -134,7 +134,7 @@ struct CacheClaimMemoryEvidenceTests {
         let new = try await decodedTurn(after)
         let newStart = Self.settledActiveMemory()
         let newCheckIn = await checkIn(new.handOver, new.leaf, from: new.live, tokens: new.tokens)
-        let newPayload = ServerCompletion.deferredPayload(
+        let newPayload = SnapshotPayload.deferred(
             for: new.leaf, extending: Self.extensionBase)
         let newPeak = Memory.peakMemory - newStart
         #expect(newCheckIn == .committed)
@@ -184,7 +184,7 @@ struct CacheClaimMemoryEvidenceTests {
 
         let rewound = try #require(
             manager.lookup(tokens: Array(0..<Self.rows) + [7], partitionKey: key).snapshot)
-        let payloadBytes = ServerCompletion.deferredPayload(
+        let payloadBytes = SnapshotPayload.deferred(
             for: rewound, extending: Self.extensionBase
         ).payload.totalBytes
         Self.report("refusedCheckIn", ["peakBytes": peak, "payloadBytes": payloadBytes])
@@ -296,7 +296,7 @@ struct CacheClaimMemoryEvidenceTests {
             try #require(
                 SnapshotAdmission.leaf(
                     storedTokens: tokens, snapshot: body,
-                    storage: .ramAndSSD(ServerCompletion.extractSnapshotPayload(body)),
+                    storage: .ramAndSSD(SnapshotPayload.extract(body)),
                     partitionKey: key)))
         await store.flush()
         #expect(manager.clearRAMTier() > 0)

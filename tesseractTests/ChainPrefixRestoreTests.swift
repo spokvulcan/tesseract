@@ -579,7 +579,7 @@ struct ChainPrefixHydrationTests {
             cache: [kvHead, mambaHead], offset: 7, type: .leaf
         )!
 
-        let basePayload = ServerCompletion.extractSnapshotPayload(baseSnapshot)
+        let basePayload = SnapshotPayload.extract(baseSnapshot)
         guard
             case .accepted = store.tryEnqueue(
                 payload: basePayload,
@@ -591,7 +591,7 @@ struct ChainPrefixHydrationTests {
         }
         await store.flushAsync()
 
-        let headPayload = ServerCompletion.extractSnapshotPayload(
+        let headPayload = SnapshotPayload.extract(
             headSnapshot,
             extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
         )

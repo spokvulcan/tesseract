@@ -8,7 +8,7 @@
 //  re-writing the full KV state every turn (issue #78).
 //
 //  Four layers, mirroring the production seams:
-//  1. Extraction — `ServerCompletion.extractSnapshotPayload(_:extending:)`
+//  1. Extraction — `SnapshotPayload.extract(_:extending:)`
 //     suffix slicing + the worth-it gate (no store).
 //  2. Ledger — the transfer protocol: shield, fold, consuming commit,
 //     chain removal, rebuild head detection (no writer scaffold).
@@ -132,7 +132,7 @@ struct LeafExtensionExtractionTests {
         let snapshot = makeSliceableSnapshot(tokenOffset: 8)
         let extending = SnapshotExtension(baseSnapshotID: "base-1", baseOffset: 5)
 
-        let payload = ServerCompletion.extractSnapshotPayload(snapshot, extending: extending)
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
 
         #expect(payload.extending == extending)
         #expect(payload.tokenOffset == 8)
@@ -170,7 +170,7 @@ struct LeafExtensionExtractionTests {
         )!
         let extending = SnapshotExtension(baseSnapshotID: "base-2", baseOffset: 2)
 
-        let payload = ServerCompletion.extractSnapshotPayload(snapshot, extending: extending)
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
 
         #expect(payload.extending == extending)
         let kvLayer = try #require(payload.layers.first)
@@ -189,7 +189,7 @@ struct LeafExtensionExtractionTests {
         let snapshot = makeSliceableSnapshot(tokenOffset: 20)
         let extending = SnapshotExtension(baseSnapshotID: "base-3", baseOffset: 1)
 
-        let payload = ServerCompletion.extractSnapshotPayload(snapshot, extending: extending)
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
 
         #expect(payload.extending == nil)
         let layer = try #require(payload.layers.first)
@@ -203,7 +203,7 @@ struct LeafExtensionExtractionTests {
         let snapshot = makeMambaOnlySnapshot(tokenOffset: 64)
         let extending = SnapshotExtension(baseSnapshotID: "base-4", baseOffset: 32)
 
-        let payload = ServerCompletion.extractSnapshotPayload(snapshot, extending: extending)
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
 
         #expect(payload.extending == nil)
         #expect(payload.layers.allSatisfy { $0.suffixBaseOffset == nil })
@@ -212,7 +212,7 @@ struct LeafExtensionExtractionTests {
     @Test func invalidBaseOffsetsAreIgnored() {
         let snapshot = makeSliceableSnapshot(tokenOffset: 8)
         for badOffset in [0, 8, 9, -3] {
-            let payload = ServerCompletion.extractSnapshotPayload(
+            let payload = SnapshotPayload.extract(
                 snapshot,
                 extending: SnapshotExtension(baseSnapshotID: "base-5", baseOffset: badOffset)
             )
@@ -685,7 +685,7 @@ struct LeafExtensionStoreTests {
         )!
 
         // Extract through the production slicing path.
-        let basePayload = ServerCompletion.extractSnapshotPayload(baseSnapshot)
+        let basePayload = SnapshotPayload.extract(baseSnapshot)
         let base = makeDescriptor(id: "base", bytes: basePayload.totalBytes, tokenOffset: 4)
         guard case .accepted = store.tryEnqueue(payload: basePayload, descriptor: base) else {
             Issue.record("base enqueue rejected")
@@ -693,7 +693,7 @@ struct LeafExtensionStoreTests {
         }
         await store.flushAsync()
 
-        let headPayload = ServerCompletion.extractSnapshotPayload(
+        let headPayload = SnapshotPayload.extract(
             headSnapshot,
             extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
         )
@@ -849,8 +849,8 @@ struct LeafExtensionStoreTests {
         )
         let (base, head) = makeHybridBaseAndHead()
 
-        let (basePayload, baseOwed) = ServerCompletion.deferredPayload(for: base)
-        let (headPayload, headOwed) = ServerCompletion.deferredPayload(
+        let (basePayload, baseOwed) = SnapshotPayload.deferred(for: base)
+        let (headPayload, headOwed) = SnapshotPayload.deferred(
             for: head,
             extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
         )
@@ -917,7 +917,7 @@ struct LeafExtensionStoreTests {
         let store = makeStoreWithPartition(config: config)
         let (base, head) = makeHybridBaseAndHead()
 
-        let basePayload = ServerCompletion.extractSnapshotPayload(base)
+        let basePayload = SnapshotPayload.extract(base)
         guard
             case .accepted = store.tryEnqueue(
                 payload: basePayload,
@@ -931,7 +931,7 @@ struct LeafExtensionStoreTests {
         await store.flushAsync()
 
         let extending = SnapshotExtension(baseSnapshotID: "base", baseOffset: 4)
-        let headPayload = ServerCompletion.extractSnapshotPayload(head, extending: extending)
+        let headPayload = SnapshotPayload.extract(head, extending: extending)
         try #require(headPayload.extending == extending)
 
         // The reference is the pre-detach shape: the attention suffix
@@ -943,7 +943,7 @@ struct LeafExtensionStoreTests {
             let copy = array.asData(access: .copy)
             return SnapshotPayload.ArrayPayload(
                 data: copy.data,
-                dtype: ServerCompletion.dtypeWireString(copy.dType),
+                dtype: SnapshotPayload.dtypeWireString(copy.dType),
                 shape: copy.shape
             )
         }

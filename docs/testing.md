@@ -1233,7 +1233,7 @@ numbers were read.
 
 ### No-copy SSD writer (#469)
 
-`ServerCompletionExtractSnapshotPayloadsTests` checks borrowed backing addresses,
+`SnapshotPayloadTests` checks borrowed backing addresses,
 Data/array lifetime, empty arrays and release after each streamed layer.
 `PlaceholderContainerEncodingTests` pins bounded borrowed chunks and the existing
 full/suffix golden files. `SSDSnapshotStoreTests` compares normal-leaf and demotion

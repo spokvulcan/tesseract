@@ -301,7 +301,7 @@ struct WarmBodyDrainTests {
             memoryBudgetBytes: 1_000_000,
             evictionConfig: EvictionConfiguration(warmCompressionEnabled: true),
             tieredStore: tier,
-            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) },
+            demotionPayloadExtractor: { SnapshotPayload.extract($0) },
             modelSessions: sessions)
         for index in 1...2 {
             manager.restoreSnapshot(
@@ -364,7 +364,7 @@ struct WarmBodyDrainTests {
         let manager = PrefixCacheManager(
             memoryBudgetBytes: 1_000_000,
             evictionConfig: EvictionConfiguration(warmCompressionEnabled: true), tieredStore: tier,
-            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) },
+            demotionPayloadExtractor: { SnapshotPayload.extract($0) },
             modelSessions: sessions)
         manager.restoreSnapshot(
             path: Array(repeating: 1, count: 8), snapshot: warm,

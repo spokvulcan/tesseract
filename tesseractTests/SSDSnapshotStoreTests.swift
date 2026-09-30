@@ -1256,11 +1256,11 @@ struct SSDSnapshotStoreTests {
                     state: layer.state.map { array in
                         .init(
                             data: array.asData(access: .copy).data,
-                            dtype: ServerCompletion.dtypeWireString(array.dtype), shape: array.shape
+                            dtype: SnapshotPayload.dtypeWireString(array.dtype), shape: array.shape
                         )
                     }, metaState: layer.metaState, offset: layer.offset)
             })
-        let payload = ServerCompletion.extractSnapshotPayload(snapshot)
+        let payload = SnapshotPayload.extract(snapshot)
         let descriptor = makeDescriptor(bytes: payload.totalBytes, lastAccessAt: 123)
         let expected = try encodePlaceholderContainer(payload: copyPayload, descriptor: descriptor)
         guard
