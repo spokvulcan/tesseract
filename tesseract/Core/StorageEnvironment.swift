@@ -24,6 +24,14 @@ nonisolated enum StorageEnvironment {
     /// The Caches root, resolved the same way.
     static let caches: URL = root(.cachesDirectory, scratchName: "Caches")
 
+    /// The owner's home folder, for other apps' settings Tesseract edits on
+    /// request (Claude Code's `~/.claude/settings.json`); a scratch folder
+    /// under a test runner.
+    static let home: URL =
+        ProcessEnvironment.isRunningTests
+        ? scratchRoot.appendingPathComponent("Home", isDirectory: true)
+        : FileManager.default.homeDirectoryForCurrentUser
+
     /// The scratch directory that holds a test process's storage roots.
     static let scratchRoot: URL = FileManager.default.temporaryDirectory
         .appendingPathComponent(

@@ -37,7 +37,7 @@ nonisolated enum ClaudeCodeHooks {
 
     /// The owner's Claude Code user settings.
     static var settingsURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        StorageEnvironment.home
             .appendingPathComponent(".claude", isDirectory: true)
             .appendingPathComponent("settings.json")
     }

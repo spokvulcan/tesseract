@@ -231,8 +231,13 @@ final class DayThread {
                 latencySeconds: now().timeIntervalSince(started),
                 hitCap: result.hitCap, modelID: modelID)
             // Request and reply join the thread whatever the reply holds: the
-            // thread records what was asked and said, append-only.
-            chat.appendCommitted([message, result.reply])
+            // thread records what was asked and said, append-only. A moment
+            // runs no tools, so a tool call it emitted is dropped rather than
+            // left in the thread without a result.
+            var reply = result.reply
+            reply.content.removeAll { if case .toolCall = $0 { true } else { false } }
+            if reply.content.isEmpty { reply.content = [.text(TextPart(text: "(no card)"))] }
+            chat.appendCommitted([message, reply])
             return .reply(result.text, measure)
         } catch {
             return .failed(error.localizedDescription, nil)
