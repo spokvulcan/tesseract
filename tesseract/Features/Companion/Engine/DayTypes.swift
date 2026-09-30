@@ -54,6 +54,11 @@ nonisolated enum CardAction: Sendable, Equatable {
     /// A card item is handled: the notification or agent is resolved, the
     /// reminder is completed.
     case itemDone(cardID: String, itemID: String)
+    /// Not now: a notification becomes a follow-up reminder in half an hour;
+    /// a reminder moves half an hour on.
+    case itemLater(cardID: String, itemID: String)
+    /// A leftover moves to a chosen day.
+    case leftoverOn(cardID: String, reminderID: String, day: Date)
     /// A waiting coding agent was dealt with, from Today.
     case agentHandled(agentID: String)
     /// Plan the day now, whatever the hour.
@@ -108,6 +113,12 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     case delete(reminderID: String)
     /// Done.
     case complete(reminderID: String)
+    /// Due on this day, keeping a time of day if it had one.
+    case dueOn(reminderID: String, day: Date)
+    /// Due at this moment.
+    case dueAt(reminderID: String, at: Date)
+    /// A new reminder: a follow-up for something that can't be handled now.
+    case followUp(title: String, at: Date)
 }
 
 // MARK: - Snapshot

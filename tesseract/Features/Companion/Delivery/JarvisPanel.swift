@@ -317,6 +317,13 @@ private struct ItemRow: View {
                     .foregroundStyle(Color.accentColor)
                     .focusable(false)
             }
+            if item.kind != .agent {
+                Button("Later") { act(.itemLater(cardID: cardID, itemID: item.id)) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .focusable(false)
+                    .help("Remind me in half an hour")
+            }
             Button("Done") { act(.itemDone(cardID: cardID, itemID: item.id)) }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)

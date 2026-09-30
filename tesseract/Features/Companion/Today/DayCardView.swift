@@ -96,6 +96,23 @@ private struct EveningWrapUpBody: View {
                         Text(leftover.title).lineLimit(1)
                         Spacer(minLength: 8)
                         choice("Tomorrow", .tomorrow, leftover)
+                        Menu("Another day") {
+                            ForEach(2..<8, id: \.self) { offset in
+                                let day =
+                                    Calendar.current.date(
+                                        byAdding: .day, value: offset,
+                                        to: Calendar.current.startOfDay(for: Date())) ?? Date()
+                                Button(day.formatted(.dateTime.weekday(.wide).day().month())) {
+                                    runtime.act(
+                                        .leftoverOn(
+                                            cardID: cardID, reminderID: leftover.reminderID,
+                                            day: day))
+                                }
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .controlSize(.small)
                         choice("Later", .later, leftover)
                         choice("Let go", .drop, leftover)
                     }
@@ -193,6 +210,13 @@ struct WaitingItemRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
                     .focusable(false)
+            }
+            if item.kind != .agent {
+                Button("Later") { runtime.act(.itemLater(cardID: cardID, itemID: item.id)) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .focusable(false)
+                    .help("Remind me in half an hour")
             }
             Button("Done") { runtime.act(.itemDone(cardID: cardID, itemID: item.id)) }
                 .buttonStyle(.plain)

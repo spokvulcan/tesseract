@@ -251,6 +251,7 @@ final class DependencyContainer: ObservableObject {
         delivery: CompanionDelivery(
             showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
             retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
+            closePanel: { [weak self] in self?.jarvisPanel.close() },
             speak: { [weak self] line in self?.speechCoordinator.speakText(line) },
             openApp: { name in AppOpener.open(named: name) }),
         profile: profileStore)

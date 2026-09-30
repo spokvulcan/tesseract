@@ -71,7 +71,7 @@ nonisolated extension DayEngine {
         state: inout DayState
     ) -> [DayEffect] {
         state.running = nil
-        var fields = traceFields(request, outcome: outcome)
+        var fields = traceFields(request, outcome: outcome, power: snapshot.power)
         var failure = "unknown"
         if case .reply(let text, let measure) = outcome {
             if measure.hitCap {
@@ -231,13 +231,15 @@ nonisolated extension DayEngine {
         return effects
     }
 
-    private static func traceFields(_ request: MomentRequest, outcome: MomentOutcome)
-        -> [String: CompanionTraceValue]
-    {
+    private static func traceFields(
+        _ request: MomentRequest, outcome: MomentOutcome, power: PowerState
+    ) -> [String: CompanionTraceValue] {
         var fields: [String: CompanionTraceValue] = [
             "moment": .string(request.kind.rawValue), "trigger": .string(request.trigger.rawValue),
-            "attempt": .int(request.attempt),
+            "attempt": .int(request.attempt), "thermal": .string("\(power.thermal)"),
+            "onACPower": .bool(power.onACPower),
         ]
+        if let battery = power.batteryPercent { fields["batteryPercent"] = .int(battery) }
         let measure: MomentMeasure? =
             switch outcome {
             case .reply(_, let measure): measure
@@ -245,6 +247,7 @@ nonisolated extension DayEngine {
             }
         if let measure {
             fields["promptTokens"] = .int(measure.promptTokens)
+            fields["cachedTokens"] = .int(measure.cachedTokens)
             fields["outputTokens"] = .int(measure.outputTokens)
             fields["prefillSeconds"] = .double(measure.prefillSeconds)
             fields["generateSeconds"] = .double(measure.generateSeconds)
@@ -331,6 +334,40 @@ nonisolated extension DayEngine {
                     reaction("done.\(item.kind.rawValue)", card: card, snapshot: snapshot))
             }
             return effects
+
+        case .itemLater(let cardID, let itemID):
+            guard let item = removeItem(itemID, fromCard: cardID, state: &state) else { return [] }
+            let later = snapshot.now.addingTimeInterval(30 * 60)
+            var effects: [DayEffect] = []
+            switch item.kind {
+            case .notification:
+                state.ledger.markSeen([item.id], at: snapshot.now)
+                effects.append(
+                    .mutateAgenda(.followUp(title: "Follow up: \(item.title)", at: later)))
+            case .reminder:
+                let reminderID = String(item.id.dropFirst("reminder:".count))
+                effects.append(.mutateAgenda(.dueAt(reminderID: reminderID, at: later)))
+            case .agent:
+                break  // It stays in Waiting on you.
+            }
+            if let card = state.cards.first(where: { $0.id == cardID }) {
+                effects.append(
+                    reaction("later.\(item.kind.rawValue)", card: card, snapshot: snapshot))
+            }
+            return effects
+
+        case .leftoverOn(let cardID, let reminderID, let day):
+            guard let index = state.cards.firstIndex(where: { $0.id == cardID }),
+                case .eveningWrapUp(var card) = state.cards[index].body,
+                card.leftovers.contains(where: { $0.reminderID == reminderID })
+            else { return [] }
+            card.leftovers.removeAll { $0.reminderID == reminderID }
+            state.cards[index].body = .eveningWrapUp(card)
+            state.plan.removeAll { $0.reminderID == reminderID }
+            return [
+                .mutateAgenda(.dueOn(reminderID: reminderID, day: day)),
+                reaction("leftover.day", card: state.cards[index], snapshot: snapshot),
+            ]
 
         case .agentHandled(let agentID):
             state.agents.removeAll { $0.id == agentID }

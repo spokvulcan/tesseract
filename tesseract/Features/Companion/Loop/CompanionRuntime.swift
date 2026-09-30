@@ -21,6 +21,7 @@ import Observation
 struct CompanionDelivery {
     var showPanel: (DayCard) -> Void = { _ in }
     var retractPanel: (String) -> Void = { _ in }
+    var closePanel: () -> Void = {}
     var speak: (String) -> Void = { _ in }
     var openApp: (String) -> Void = { _ in }
 }
@@ -165,6 +166,7 @@ final class CompanionRuntime {
         }
         send(.companionDisabled)
         isActive = false
+        delivery.closePanel()
         Log.companion.info("Companion off")
     }
 
@@ -287,6 +289,8 @@ final class CompanionRuntime {
     }
 
     private func present(_ card: DayCard, on rung: DeliveryRung) async {
+        // Switched off: the card stays in Today, and nothing else reaches out.
+        guard isActive || rung == .today else { return }
         switch rung {
         case .today:
             break  // Today renders the day's cards from `state`.
@@ -300,38 +304,49 @@ final class CompanionRuntime {
     }
 
     private func mutate(_ mutation: AgendaMutation) async {
+        let calendar = Calendar.current
         do {
             switch mutation {
             case .dueTomorrow(let id):
-                let reminder = await agenda.store.reminder(id: id, now: now())
-                let calendar = Calendar.current
-                let base = reminder?.due ?? now()
+                // The owner's tomorrow: after a wrap-up at 01:30 it is today's date.
                 let tomorrow =
-                    calendar.date(
-                        byAdding: .day, value: 1,
-                        to: max(calendar.startOfDay(for: now()), calendar.startOfDay(for: base)))
+                    DayKey(for: now(), calendar: calendar).next(calendar: calendar).date(
+                        calendar: calendar)
                     ?? now()
-                var target = tomorrow
-                if let due = reminder?.due, reminder?.dueHasTime == true {
-                    let time = calendar.dateComponents([.hour, .minute], from: due)
-                    target =
-                        calendar.date(
-                            bySettingHour: time.hour ?? 9, minute: time.minute ?? 0, second: 0,
-                            of: tomorrow) ?? tomorrow
-                }
+                try await moveReminder(id, toDay: tomorrow)
+            case .dueOn(let id, let day):
+                try await moveReminder(id, toDay: calendar.startOfDay(for: day))
+            case .dueAt(let id, let at):
                 _ = try await agenda.updateReminder(
-                    id: id, due: .set(target, hasTime: reminder?.dueHasTime ?? false),
-                    source: "wrapUp")
+                    id: id, due: .set(at, hasTime: true), source: "card")
             case .clearDue(let id):
                 _ = try await agenda.updateReminder(id: id, due: .clear, source: "wrapUp")
             case .delete(let id):
                 try await agenda.deleteReminder(id: id, source: "wrapUp")
             case .complete(let id):
                 _ = try await agenda.updateReminder(id: id, completed: true, source: "card")
+            case .followUp(let title, let at):
+                _ = try agenda.addReminder(title: title, due: at, dueHasTime: true, source: "card")
             }
         } catch {
             Log.companion.error("Agenda change failed: \(error.localizedDescription)")
         }
+    }
+
+    /// Re-date a reminder to `day`, keeping its time of day if it had one.
+    private func moveReminder(_ id: String, toDay day: Date) async throws {
+        let calendar = Calendar.current
+        let reminder = await agenda.store.reminder(id: id, now: now())
+        var target = day
+        if let due = reminder?.due, reminder?.dueHasTime == true {
+            let time = calendar.dateComponents([.hour, .minute], from: due)
+            target =
+                calendar.date(
+                    bySettingHour: time.hour ?? 9, minute: time.minute ?? 0, second: 0, of: day)
+                ?? day
+        }
+        _ = try await agenda.updateReminder(
+            id: id, due: .set(target, hasTime: reminder?.dueHasTime ?? false), source: "wrapUp")
     }
 }
 

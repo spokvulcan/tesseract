@@ -99,6 +99,8 @@ nonisolated enum MomentOutcome: Sendable, Equatable {
 
 nonisolated struct MomentMeasure: Sendable, Equatable, Codable {
     var promptTokens: Int
+    /// Prompt tokens the prefix cache supplied (not prefilled again).
+    var cachedTokens: Int = 0
     var outputTokens: Int
     var prefillSeconds: Double
     var generateSeconds: Double

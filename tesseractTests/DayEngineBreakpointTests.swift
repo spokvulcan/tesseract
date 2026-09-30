@@ -342,3 +342,54 @@ struct DayEngineBreakpointTests {
         #expect(Self.moments(back.effects).isEmpty)
     }
 }
+
+struct CardItemActionTests {
+
+    @Test func laterTurnsANotificationIntoAFollowUpReminder() throws {
+        let start = DayEngine.decide(
+            .presenceReturned(awayFrom: DayEngineBreakpointTests.local(12)),
+            snapshot: DayEngineBreakpointTests.snapshot(at: DayEngineBreakpointTests.local(13)),
+            state: DayEngineBreakpointTests.awayWithNotifications())
+        var state = start.state
+        state.running = nil
+        let index = state.cards.count - 1
+        guard case .breakpoint(var card) = state.cards[index].body else { return }
+        card.needsYou = [BreakpointMoment.item(for: try #require(state.ledger.entry("n-anna")))]
+        state.cards[index].body = .breakpoint(card)
+
+        let later = DayEngine.decide(
+            .cardAction(.itemLater(cardID: state.cards[index].id, itemID: "n-anna")),
+            snapshot: DayEngineBreakpointTests.snapshot(at: DayEngineBreakpointTests.local(13, 5)),
+            state: state)
+        #expect(
+            later.effects.contains(
+                .mutateAgenda(
+                    .followUp(title: "Follow up: Anna", at: DayEngineBreakpointTests.local(13, 35)))
+            ))
+        #expect(later.state.ledger.entry("n-anna")?.seenAt != nil)
+    }
+
+    @Test func aLeftoverCanMoveToAnotherDay() throws {
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.cards = [
+            DayCard(
+                id: "wrap", kind: .eveningWrapUp, createdAt: DayEngineBreakpointTests.local(21),
+                isFallback: false,
+                body: .eveningWrapUp(
+                    EveningWrapUpCard(
+                        line: "Good day.", done: [],
+                        leftovers: [
+                            Leftover(reminderID: "R1", title: "Spec", suggestion: .tomorrow)
+                        ],
+                        tomorrowFirst: nil)))
+        ]
+        let friday = DayEngineBreakpointTests.local(0).addingTimeInterval(3 * 86_400)
+        let decision = DayEngine.decide(
+            .cardAction(.leftoverOn(cardID: "wrap", reminderID: "R1", day: friday)),
+            snapshot: DayEngineBreakpointTests.snapshot(at: DayEngineBreakpointTests.local(21, 5)),
+            state: state)
+        #expect(decision.effects.contains(.mutateAgenda(.dueOn(reminderID: "R1", day: friday))))
+        guard case .eveningWrapUp(let card) = decision.state.cards.first?.body else { return }
+        #expect(card.leftovers.isEmpty)
+    }
+}

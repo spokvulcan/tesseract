@@ -186,8 +186,10 @@ final class DayThread {
         let message = UserMessage(content: request.text, timestamp: started, turnOrigin: .moment)
         var parameters = settings.makeAgentGenerateParameters()
         parameters.maxTokens = request.kind.maxTokens
+        let cached = CachedTokenBox()
         let generate = makeServerInferenceGenerateClosure(
-            inferenceService: inferenceService, parametersProvider: { [parameters] in parameters })
+            inferenceService: inferenceService, parametersProvider: { [parameters] in parameters },
+            onStart: { count in cached.value = count })
         let systemPrompt = agent.state.systemPrompt
         let tools = agent.state.tools
         let history = agent.state.messages + [message]
@@ -217,6 +219,7 @@ final class DayThread {
             }
             let measure = MomentMeasure(
                 promptTokens: result.info?.promptTokenCount ?? 0,
+                cachedTokens: cached.value,
                 outputTokens: result.info?.generationTokenCount ?? 0,
                 prefillSeconds: result.info?.promptTime ?? 0,
                 generateSeconds: result.info?.generateTime ?? 0,
@@ -254,6 +257,12 @@ final class DayThread {
             .threadCompacted, conversationID: store.currentConversation?.id,
             fields: ["beforeTokens": .int(before), "afterTokens": .int(after)])
     }
+}
+
+/// Where the inference start reports the cache's share of the prompt.
+@MainActor
+private final class CachedTokenBox {
+    var value = 0
 }
 
 private nonisolated struct MomentGenerationResult: Sendable {
