@@ -84,6 +84,8 @@ struct SalvageOnCancelTests {
 
     @Test func cancelledPrefillPastTheThresholdIsVisibleToTheNextLookup() async {
         let (manager, key, diagnostics) = makeFixture()
+        let telemetry = TelemetryCapture(modelID: key.modelID)
+        defer { telemetry.stop() }
         let offset = threshold + 256
         let keyPath = (0..<(offset + 512)).map { $0 % 997 }
 
@@ -110,10 +112,17 @@ struct SalvageOnCancelTests {
         #expect(snapshotOffset == offset)
         #expect(type == .leaf)
         #expect(lookup.snapshot != nil)
+        // The salvaged leaf's capture line keeps its source label.
+        let capture = telemetry.drain().first {
+            $0.requestID == diagnostics.requestID && $0.eventName == "capture"
+        }
+        #expect(capture?.field("source") == "cancelledPrefillSalvage")
     }
 
     @Test func progressBelowTheThresholdAdmitsNothing() async {
         let (manager, key, diagnostics) = makeFixture()
+        let telemetry = TelemetryCapture(modelID: key.modelID)
+        defer { telemetry.stop() }
         let offset = threshold - 1
         let keyPath = Array(0..<(offset + 512))
 
@@ -132,6 +141,11 @@ struct SalvageOnCancelTests {
         }
 
         #expect(manager.stats.snapshotCount == 0)
+        let skip = telemetry.drain().first {
+            $0.requestID == diagnostics.requestID && $0.eventName == "skip"
+        }
+        #expect(skip?.field("stage") == "salvageOnCancel")
+        #expect(skip?.field("reason") == "below-progress-threshold")
     }
 
     @Test func progressIsMeasuredFromTheRestoreBaseNotZero() async {
