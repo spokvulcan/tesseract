@@ -39,6 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // never loaded; remove it once, in the background.
         RetiredCheckpoints.scheduleRemoval()
 
+        // Companion v2's clean start: the retired memory store and Mission
+        // Control conversation go, and tasks.md moves out of the agent's
+        // folder. Idempotent; before the conversation store first loads.
+        if !isRunningUnderTests {
+            RetiredCompanionData.cleanAtLaunch(trace: CompanionTrace())
+        }
+
         // Setup window lifecycle tracking
         setupWindowTracking()
 

@@ -41,16 +41,13 @@ struct MenuBarActivityResolverTests {
                 == .idle)
     }
 
-    /// The quietest Companion rungs still surface when nothing acute runs —
-    /// a summons or the sleep pass is visible presence.
+    /// The quietest Companion rung still surfaces when nothing acute runs:
+    /// something waiting on the owner is visible presence.
     @Test
     func companionRungsSurfaceWhenAlone() {
         #expect(
-            MenuBarActivityResolver.merged(dictation: .idle, speech: .idle, companion: .summoning)
-                == .summoning)
-        #expect(
-            MenuBarActivityResolver.merged(dictation: .idle, speech: .idle, companion: .asleep)
-                == .asleep)
+            MenuBarActivityResolver.merged(dictation: .idle, speech: .idle, companion: .waiting)
+                == .waiting)
     }
 
     // MARK: - Per-source mappings
@@ -83,7 +80,6 @@ struct MenuBarActivityResolverTests {
     func companionPresenceMapsOneToOne() {
         #expect(MenuBarActivityResolver.activity(fromCompanion: .idle) == .idle)
         #expect(MenuBarActivityResolver.activity(fromCompanion: .thinking) == .thinking)
-        #expect(MenuBarActivityResolver.activity(fromCompanion: .summoning) == .summoning)
-        #expect(MenuBarActivityResolver.activity(fromCompanion: .asleep) == .asleep)
+        #expect(MenuBarActivityResolver.activity(fromCompanion: .waiting) == .waiting)
     }
 }

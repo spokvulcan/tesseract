@@ -313,17 +313,14 @@ struct AgentComposerView: View {
 
     private var isSpeechActive: Bool { speechCoordinator.state.isActive }
 
-    /// What the Companion is doing *away from this window* — his turns run
-    /// headless in their own conversations (a wake, an ambient pass, sleep),
-    /// so nothing streams here while they happen. This line is the only
-    /// in-window sign of that background life; visible generation in the open
-    /// conversation never sets it.
+    /// What the Companion is doing *away from this window* — his moments run
+    /// in the Day Thread, so nothing streams here while they happen. This line
+    /// is the only in-window sign of that background work; visible generation
+    /// in the open conversation never sets it.
     private var companionPresenceLine: String? {
         switch companionPresence.state {
-        case .summoning: "Jarvis is asking for you…"
         case .thinking: "Jarvis is thinking in the background…"
-        case .asleep: "Jarvis is consolidating the day…"
-        case .idle: nil
+        case .waiting, .idle: nil
         }
     }
 

@@ -32,12 +32,10 @@ final class MenuBarManager: NSObject {
         case listening
         case processing
         case speaking
-        /// A Companion turn in flight (#327 §3) — the quietest presence rung.
+        /// A Companion moment in flight — the quietest presence rung.
         case thinking
-        /// A Companion summons awaiting the owner's answer.
-        case summoning
-        /// A sleep pass consolidating the day (#327 §3).
-        case asleep
+        /// Something is waiting on the owner.
+        case waiting
     }
 
     // MARK: - Dependencies
@@ -198,12 +196,9 @@ final class MenuBarManager: NSObject {
         case .thinking:
             symbolName = "sparkle"
             description = "Tesseract Agent — Jarvis is thinking"
-        case .summoning:
+        case .waiting:
             symbolName = "bell.badge"
-            description = "Tesseract Agent — Jarvis is asking for you"
-        case .asleep:
-            symbolName = "moon.zzz"
-            description = "Tesseract Agent — Jarvis is consolidating the day"
+            description = "Tesseract Agent — something is waiting for you"
         }
 
         iconView.removeAllSymbolEffects()
@@ -217,14 +212,14 @@ final class MenuBarManager: NSObject {
         }
 
         // Animate transient activity only; idle stays static (HIG), and so
-        // does asleep — a sleeping glyph must not pulse for attention. Symbol
-        // effects honor Reduce Motion on their own.
+        // does waiting — a waiting item is a quiet badge, never a pulse for
+        // attention. Symbol effects honor Reduce Motion on their own.
         switch activity {
-        case .idle, .asleep:
+        case .idle, .waiting:
             break
         case .listening, .speaking:
             iconView.addSymbolEffect(.variableColor.iterative, options: .repeating)
-        case .processing, .thinking, .summoning:
+        case .processing, .thinking:
             iconView.addSymbolEffect(.pulse, options: .repeating)
         }
     }
@@ -612,14 +607,13 @@ nonisolated enum MenuBarActivityResolver {
         }
     }
 
-    /// The Companion's presence rungs map one-to-one (#327 §3).
+    /// The Companion's presence states map one-to-one.
     static func activity(fromCompanion presence: CompanionPresence.State) -> MenuBarManager.Activity
     {
         switch presence {
         case .idle: .idle
         case .thinking: .thinking
-        case .summoning: .summoning
-        case .asleep: .asleep
+        case .waiting: .waiting
         }
     }
 

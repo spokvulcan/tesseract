@@ -27,7 +27,7 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     }
 
     func loadMostRecent() {
-        // Same rule as the real store, from the rule's one home (ADR-0046).
+        // Same rule as the real store, from the rule's one home.
         currentConversation =
             stored.values
             .filter { $0.origin.opensAtLaunch }
@@ -42,11 +42,6 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
         return conversation
     }
 
-    func adopt(_ conversation: AgentConversation) {
-        saveOutgoingCurrent()
-        currentConversation = conversation
-    }
-
     func load(id: UUID) {
         saveOutgoingCurrent()
         // A miss leaves the current conversation unchanged, like the real store.
@@ -54,12 +49,8 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
         currentConversation = conversation
     }
 
-    /// Same rule as the real store, from the seam's contract: the chat funnel
-    /// never writes the fold (ADR-0046).
     private func saveOutgoingCurrent() {
-        guard let current = currentConversation, !current.messages.isEmpty,
-            !current.isMissionControl
-        else { return }
+        guard let current = currentConversation, !current.messages.isEmpty else { return }
         stored[current.id] = current
     }
 
@@ -71,7 +62,6 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     }
 
     func updateCurrentMessages(_ messages: [any AgentMessageProtocol & Sendable]) {
-        guard currentConversation?.isMissionControl != true else { return }
         currentConversation?.messages = messages
     }
 
@@ -86,7 +76,7 @@ final class InMemoryAgentConversationStore: AgentConversationStoring {
     /// A future multi-conversation, recency-ordered, or codec-sensitive test must
     /// not lean on these — extend the fixture to match the real store first.
     func saveCurrent() {
-        guard let current = currentConversation, !current.isMissionControl else { return }
+        guard let current = currentConversation else { return }
         stored[current.id] = current
     }
 }

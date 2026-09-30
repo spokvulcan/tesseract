@@ -18,29 +18,11 @@ import Foundation
 
 // MARK: - ToolGating
 
-/// The gating context one resolve runs under: which agent consumes the set,
-/// and the state of the Web Access switch.
+/// The gating context one resolve runs under: the state of the Web Access
+/// switch. Every conversation and every Companion moment resolves the same
+/// way, so they all share one cached system-and-tools prefix.
 nonisolated struct ToolGating: Sendable, Equatable {
-
-    /// Which agent the resolved set feeds. Audience rules (ADR-0040 §10,
-    /// ADR-0052) are consumer facts, not per-tool special cases.
-    enum Consumer: Sendable, Equatable {
-        /// Any owner-facing chat — interactive or summoned dialogue, one
-        /// contract (ADR-0052): `.chatOnly` tools (`report_back`) surface,
-        /// `.companionOnly` delivery tools are dropped.
-        case chat
-        /// The Companion's headless Mission Control agent: `.companionOnly`
-        /// tools surface; `.chatOnly` never do — a Mission Control turn
-        /// has no conversation to report back from.
-        case companionHeadless
-    }
-
-    var consumer: Consumer
-
-    /// The **Web Access** switch (`webAccessEnabled`). The headless companion
-    /// passes `true`: its turns are not governed by the chat's switch today,
-    /// and this refactor preserves that behavior (flagged in ADR-0048 as a
-    /// deliberate product decision to revisit, not a mechanical fact).
+    /// The **Web Access** switch (`webAccessEnabled`).
     var webAccessEnabled: Bool
 }
 
@@ -71,18 +53,12 @@ nonisolated enum ActiveToolSet {
     /// can't drift.
     static let webGatedToolNames: Set<String> = MCPServerConfig.browserToolNames
 
-    /// Resolve the live tool set for one consumer. Preserves the input order
-    /// (registry order is the loop's dispatch precedence).
+    /// Resolve the live tool set. Preserves the input order (registry order
+    /// is the loop's dispatch precedence).
     static func resolve(
         from all: [AgentToolDefinition], gating: ToolGating
     ) -> [AgentToolDefinition] {
-        var tools: [AgentToolDefinition]
-        switch gating.consumer {
-        case .chat:
-            tools = all.filter { $0.audience != .companionOnly }
-        case .companionHeadless:
-            tools = all.filter { $0.audience != .chatOnly }
-        }
+        var tools = all
         if !gating.webAccessEnabled {
             tools.removeAll { webGatedToolNames.contains($0.name) }
         }

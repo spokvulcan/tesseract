@@ -15,12 +15,6 @@ enum WindowID {
     /// The Markdown Gallery (see `CONTEXT.md`): the living style reference
     /// for chat markdown, reached from the Window menu.
     static let markdownGallery = "markdown-gallery"
-    /// The Memory window (ADR-0035 §9): what the assistant believes and why —
-    /// browse, drill into source episodes, contest, delete.
-    static let memory = "memory"
-    /// The Companion's standing instructions (ADR-0040 §12): the versioned
-    /// document the entity authors for itself — owner-readable and -editable.
-    static let companionInstructions = "companion-instructions"
 }
 
 /// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
@@ -249,28 +243,6 @@ struct TesseractApp: App {
             MarkdownGalleryView()
         }
         .defaultSize(width: 1280, height: 860)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
-        // The Memory window (ADR-0035 §9): on-demand singleton, never
-        // presented at launch; the system Window menu lists it automatically.
-        Window("Memory", id: WindowID.memory) {
-            MemoryWindowView()
-                .environment(container.memoryEngine)
-        }
-        .defaultSize(width: 1000, height: 680)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
-        // The Companion's standing instructions (ADR-0040 §12): on-demand
-        // singleton — the entity's self-authored conduct, owner-editable.
-        Window("Companion Instructions", id: WindowID.companionInstructions) {
-            CompanionInstructionsView(
-                store: container.memoryStore,
-                recorder: container.companionFlightRecorder
-            )
-        }
-        .defaultSize(width: 860, height: 560)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
     }

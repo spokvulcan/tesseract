@@ -190,7 +190,7 @@ struct ModelsPageView: View {
             agentModelID: container.inferenceArbiter.loadedLLMModelID,
             isDFlash2DraftLoaded: container.agentEngine.isDFlash2DraftLoaded,
             isProofreadModelLoaded: container.proofreadPass.isModelLoaded,
-            isEmbedderLoaded: container.memoryEngine.isEmbedderLoaded
+            isEmbedderLoaded: false
         ).contains(model)
     }
 }

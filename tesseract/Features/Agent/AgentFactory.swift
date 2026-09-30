@@ -71,7 +71,6 @@ enum AgentFactory {
             loadedContext: loadedContext,
             skills: skills,
             facts: facts,
-            dateTime: Date(),
             agentRoot: agentRoot.path
         )
 
@@ -120,7 +119,6 @@ enum AgentFactory {
                 loadedContext: loadedContext,
                 skills: skills,
                 facts: facts,
-                dateTime: Date(),
                 agentRoot: agentRoot.path
             )
         }

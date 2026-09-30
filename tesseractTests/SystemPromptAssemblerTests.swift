@@ -20,8 +20,7 @@ struct SystemPromptAssemblerTests {
 
     private func assemble(tools: [AgentToolDefinition]) -> String {
         SystemPromptAssembler.assemble(
-            loadedContext: Self.emptyContext, skills: [], tools: tools,
-            dateTime: Date(timeIntervalSince1970: 0), agentRoot: "/tmp/agent")
+            loadedContext: Self.emptyContext, skills: [], tools: tools, agentRoot: "/tmp/agent")
     }
 
     /// The web-orientation block appears when the turn carries a browser tool.
@@ -42,5 +41,25 @@ struct SystemPromptAssemblerTests {
     @Test func anyBrowserToolTriggersTheBlock() {
         let prompt = assemble(tools: [tool("browser.navigate")])
         #expect(prompt.contains("Web access:"))
+    }
+
+    /// The prefix-cache contract: the system prompt carries no time and
+    /// nothing per-conversation, so assembling it at two different moments
+    /// yields the same bytes and every chat shares one cached prefix. The time
+    /// rides each user message as the Now Tag instead.
+    @Test func systemPromptIsByteIdenticalAcrossTime() async throws {
+        let first = assemble(tools: [tool("read"), tool("browser.search")])
+        try await Task.sleep(for: .milliseconds(1100))
+        let second = assemble(tools: [tool("read"), tool("browser.search")])
+        #expect(first == second)
+        #expect(!first.contains("Current date and time"))
+        let year = Calendar.current.component(.year, from: Date())
+        #expect(!first.contains(String(year)))
+    }
+
+    /// The prompt explains the Now Tag once, so the model knows the `<now>`
+    /// line is the app's, not the owner's.
+    @Test func systemPromptExplainsTheNowTag() {
+        #expect(assemble(tools: []).contains("<now>"))
     }
 }

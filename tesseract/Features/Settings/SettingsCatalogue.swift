@@ -126,15 +126,10 @@ enum SettingsCatalogue {
     static let speechOverlayScopeRaw = Setting.string(
         "speechOverlayScope", default: SpeechOverlayScope.automatic.rawValue)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
-    /// The Companion master switch (ADR-0040). The key keeps its skeleton-era
-    /// name so the owner's existing opt-in survives the cutover to the loop.
+    /// The Companion master switch. The key keeps its skeleton-era name so the
+    /// owner's existing opt-in survives each redesign.
     static let companionHeartbeatEnabled = Setting.bool(
         "companionHeartbeatEnabled", default: false)
-    /// The Companion's own model (ADR-0040 §9): his turns run on the smartest
-    /// model on the machine regardless of the interactive picker. Empty falls
-    /// back to the selected agent model.
-    static let companionModelID = Setting.string(
-        "companionModelID", default: "qwen3.6-35b-a3b-paro")
     /// The one-time launch-at-login ask (ADR-0040 §3): asked when the
     /// Companion is first enabled; a silent login-item flip is a trust
     /// violation, so the answer is always the owner's.
@@ -144,10 +139,6 @@ enum SettingsCatalogue {
     /// scaffolding: deleted when the concepts prune to one winner.
     static let companionVoiceConcept = Setting.string(
         "companionVoiceConcept", default: "emissary")
-    /// #328 wearing instrument: heartbeat beats summon the picked overlay
-    /// concept instead of a banner (banner stays the unanswered fallback).
-    static let companionBeatsUseOverlay = Setting.bool(
-        "companionBeatsUseOverlay", default: false)
     /// The voice session's taste ledger (#310) — every disputed call ships as
     /// a Setting the owner tunes on the wearing build.
     static let companionVoiceAutoSend = Setting.bool(
@@ -158,19 +149,6 @@ enum SettingsCatalogue {
         "companionVoiceSessionTimeout", default: 30)
     static let companionVoiceBargeInLevel = Setting.double(
         "companionVoiceBargeInLevel", default: 0.25)
-
-    // MARK: - Memory (ADR-0035, map #314)
-
-    /// The master switch for the living memory system. Off disables capture,
-    /// retrieval, and consolidation alike.
-    static let memoryEnabled = Setting.bool("memoryEnabled", default: true)
-    /// Whether dictated content becomes memory. The owner's explicit call
-    /// ("dictated content is your life too", map #314 final grill) — but it is
-    /// the one capture source whose text is usually addressed to *other* apps,
-    /// so it gets its own switch.
-    static let memoryCaptureDictation = Setting.bool("memoryCaptureDictation", default: true)
-    /// Whether sleep consolidation may run when the Mac goes idle.
-    static let memorySleepEnabled = Setting.bool("memorySleepEnabled", default: true)
 
     static let selectedAgentModelID = Setting.string(
         "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)

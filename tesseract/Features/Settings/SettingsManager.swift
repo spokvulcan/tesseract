@@ -340,12 +340,6 @@ final class SettingsManager {
         }
     }
 
-    var companionModelID: String {
-        didSet {
-            SettingsCatalogue.companionModelID.write(companionModelID, to: store)
-        }
-    }
-
     var companionLaunchAtLoginAsked: Bool {
         didSet {
             SettingsCatalogue.companionLaunchAtLoginAsked.write(
@@ -356,12 +350,6 @@ final class SettingsManager {
     var companionVoiceConceptRaw: String {
         didSet {
             SettingsCatalogue.companionVoiceConcept.write(companionVoiceConceptRaw, to: store)
-        }
-    }
-
-    var companionBeatsUseOverlay: Bool {
-        didSet {
-            SettingsCatalogue.companionBeatsUseOverlay.write(companionBeatsUseOverlay, to: store)
         }
     }
 
@@ -390,22 +378,6 @@ final class SettingsManager {
             SettingsCatalogue.companionVoiceBargeInLevel.write(
                 companionVoiceBargeInLevel, to: store)
         }
-    }
-
-    // MARK: - Memory (ADR-0035)
-
-    var memoryEnabled: Bool {
-        didSet { SettingsCatalogue.memoryEnabled.write(memoryEnabled, to: store) }
-    }
-
-    var memoryCaptureDictation: Bool {
-        didSet {
-            SettingsCatalogue.memoryCaptureDictation.write(memoryCaptureDictation, to: store)
-        }
-    }
-
-    var memorySleepEnabled: Bool {
-        didSet { SettingsCatalogue.memorySleepEnabled.write(memorySleepEnabled, to: store) }
     }
 
     var selectedAgentModelID: String {
@@ -704,13 +676,9 @@ final class SettingsManager {
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
         self.companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.load(
             from: store)
-        self.companionModelID = SettingsCatalogue.companionModelID.load(
-            from: store)
         self.companionLaunchAtLoginAsked = SettingsCatalogue.companionLaunchAtLoginAsked.load(
             from: store)
         self.companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.load(from: store)
-        self.companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.load(
-            from: store)
         self.companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.load(from: store)
         self.companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence
             .load(from: store)
@@ -718,9 +686,6 @@ final class SettingsManager {
             .load(from: store)
         self.companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.load(
             from: store)
-        self.memoryEnabled = SettingsCatalogue.memoryEnabled.load(from: store)
-        self.memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.load(from: store)
-        self.memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.load(from: store)
         self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
         self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(
             from: store)
@@ -862,17 +827,12 @@ final class SettingsManager {
         speechOverlayScopeRaw = SettingsCatalogue.speechOverlayScopeRaw.default
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
-        companionModelID = SettingsCatalogue.companionModelID.default
         companionLaunchAtLoginAsked = SettingsCatalogue.companionLaunchAtLoginAsked.default
         companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.default
-        companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.default
         companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.default
         companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence.default
         companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout.default
         companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.default
-        memoryEnabled = SettingsCatalogue.memoryEnabled.default
-        memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.default
-        memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.default
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default

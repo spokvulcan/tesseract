@@ -1,62 +1,32 @@
+import CryptoKit
 import Foundation
 
-/// The turn-class vocabulary (#327 §2, ADR-0040 §8) — and, since ADR-0046, the
-/// conversation-kind tag. `interactive` is the owner typing; `missionControl`
-/// is the one standing conversation the loop folds into (a conversation kind,
-/// never a turn class — no turn is "opened by" it); the rest are the
-/// Companion's turn classes, which since ADR-0046 tag the opening message of
-/// each turn inside Mission Control rather than a conversation of their own.
-/// Raw values are the persisted tag — the store and the index keep plain
-/// strings so pre-tag files load unchanged.
+/// The conversation-kind and turn-class tag. Raw values are the persisted
+/// tag; the store and the index keep plain strings, so files written before a
+/// tag existed (or with a retired tag) load as ordinary chats.
 nonisolated enum TurnOrigin: String, Codable, Sendable {
-    /// The owner's own typed (or spoken) chat — never badged.
+    /// The owner's own typed (or spoken) chat, never badged.
     case interactive
-    /// A rhythm beat's turn — the fired batch carried a rhythm-class wake.
-    case beat
-    /// A booked wake fired on time (promise, follow-up, re-summons).
-    case wake
-    /// A fold turn granted by pending Events alone — no wake due (#371).
-    case event
-    /// RETIRED (ADR-0046 #371): the unoccasioned cadence-granted turn died
-    /// with the Event Fold. The case survives only so historical transcripts
-    /// keep their tag; nothing emits it.
-    case ambient
-    /// Overdue wakes triaged late (past the catch-up grace).
-    case catchup
-    /// Reserved (#327 §2): sleep passes ride `internalCompletion`, not the
-    /// turn machinery, so nothing emits this yet — the tag waits for them.
-    case sleep
-    /// Mission Control (ADR-0046): the fold's standing conversation. Tags the
-    /// conversation, never a turn — turns inside it carry their own class on
-    /// their opening message (`UserMessage.turnOrigin`).
-    case missionControl = "mission-control"
-    /// A summoned dialogue (ADR-0046 #372): the separate chat a summons
-    /// engagement opens, voice or typed — the loop's sub-agent conversation
-    /// that owes Mission Control a Report-Back. A conversation kind like
-    /// `missionControl`, never a turn class.
-    case dialogue
+    /// A Day Thread: the one append-only conversation per day that the Today
+    /// page's chat shows. A conversation kind, never a turn class.
+    case dayThread = "day-thread"
+    /// A Companion moment's request inside a Day Thread (Morning Plan,
+    /// Breakpoint, Triage, Evening Wrap-up, Night Reflection). Tags the
+    /// message, never a conversation.
+    case moment
 
-    /// The lenient read of a persisted tag: nil, or an unknown future tag,
-    /// reads as nil instead of failing the whole file's decode — pre-tag
-    /// histories load unchanged. The one home of the rule; message decode and
-    /// both conversation-level readers go through it.
+    /// The lenient read of a persisted tag: nil, or an unknown or retired tag
+    /// (the old Companion's `wake`, `beat`, `mission-control`, `dialogue`…),
+    /// reads as nil instead of failing the whole file's decode.
     init?(persisted raw: String?) {
         guard let raw, let origin = TurnOrigin(rawValue: raw) else { return nil }
         self = origin
     }
 
-    /// Whether launch recency may land on this conversation kind. The fold is
-    /// excluded: the loop appends to it around the clock, so it would win
-    /// recency nearly always, and launch must open on the owner's own last
-    /// chat (ADR-0046). The one home of the rule — the real store and the
-    /// in-memory test fixture both filter on it.
-    var opensAtLaunch: Bool { self != .missionControl }
-
-    /// Whether launch-time index validation fully parses this kind's backing
-    /// file. The fold is exempt: validating means parsing a file that grows
-    /// all day, on every launch — and a corrupt fold already degrades
-    /// gracefully (`missionControl()` re-seeds it empty).
-    var validatesAtLaunch: Bool { self != .missionControl }
+    /// Whether launch recency may land on this conversation kind on the Agent
+    /// page. Day Threads belong to Today; the Agent page opens on the owner's
+    /// own last chat.
+    var opensAtLaunch: Bool { self == .interactive }
 }
 
 struct AgentConversation: Identifiable, Sendable {
@@ -64,24 +34,36 @@ struct AgentConversation: Identifiable, Sendable {
     var messages: [any AgentMessageProtocol & Sendable]
     let createdAt: Date
     var updatedAt: Date
-    /// Which turn class opened this conversation (#327's one-interface tag).
+    /// Which kind of conversation this is.
     var origin: TurnOrigin
 
-    /// Mission Control's identity is a constant of the domain (ADR-0046):
-    /// there is exactly one standing conversation, so the loop finds it by id
-    /// across relaunches, and deleting it just means the next turn re-seeds it
-    /// empty under the same id — no index scan, no second source of truth.
-    nonisolated static let missionControlID = UUID(
+    /// The retired Mission Control conversation's id. The one-time migration
+    /// deletes it, and the store never lists it.
+    nonisolated static let retiredMissionControlID = UUID(
         uuidString: "AD460046-0367-4366-B301-000000000001")!
 
-    /// Whether this is the fold's standing conversation (ADR-0046).
-    var isMissionControl: Bool { origin == .missionControl }
+    /// A Day Thread's id is a pure function of its day, so the Companion finds
+    /// the day's thread across relaunches without scanning the index.
+    nonisolated static func dayThreadID(for day: DayKey) -> UUID {
+        var bytes = Array(
+            Insecure.SHA1.hash(data: Data("tesseract.day-thread.\(day.rawValue)".utf8)))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50  // version 5
+        bytes[8] = (bytes[8] & 0x3F) | 0x80  // RFC 4122 variant
+        return UUID(
+            uuid: (
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+            ))
+    }
 
-    /// Derive title from first user message content. Mission Control's name is
-    /// fixed — its first message is a turn opening (instructions + briefing),
-    /// which would make a meaningless title.
+    var isDayThread: Bool { origin == .dayThread }
+
+    /// Derive title from first user message content. A Day Thread's name is
+    /// its date: its first message is the Day Opening, not the owner's words.
     var title: String {
-        if isMissionControl { return "Mission Control" }
+        if isDayThread {
+            return "Today · " + createdAt.formatted(.dateTime.weekday(.wide).day().month(.wide))
+        }
         for msg in messages {
             if let user = msg.asUser {
                 let text = user.content.prefix(80)

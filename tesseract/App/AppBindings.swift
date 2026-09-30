@@ -43,12 +43,6 @@ final class AppBindings {
         /// The model download manager's status stream, watched for the Whisper
         /// model's download completing.
         let modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
-        /// Gate read for the Companion-model default rule (ADR-0040 §9) — an
-        /// undownloaded model must never become the interactive default.
-        let isAgentModelDownloaded: @MainActor (String) -> Bool
-        /// Tracked read of the sleep pass's run state — feeds the Companion's
-        /// `asleep` presence (#327 §3).
-        let isMemorySleepRunning: @MainActor () -> Bool
 
         init(
             dictationState: @escaping @MainActor () -> DictationFeed.Phase,
@@ -58,9 +52,7 @@ final class AppBindings {
             isLLMSlotLoaded: @escaping @MainActor () -> Bool,
             whisperModelPath: @escaping @MainActor () -> URL?,
             isTranscriptionModelLoaded: @escaping @MainActor () -> Bool,
-            modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>,
-            isAgentModelDownloaded: @escaping @MainActor (String) -> Bool = { _ in false },
-            isMemorySleepRunning: @escaping @MainActor () -> Bool = { false }
+            modelDownloadStatuses: AnyPublisher<[String: ModelStatus], Never>
         ) {
             self.dictationState = dictationState
             self.dictationBeat = dictationBeat
@@ -70,8 +62,6 @@ final class AppBindings {
             self.whisperModelPath = whisperModelPath
             self.isTranscriptionModelLoaded = isTranscriptionModelLoaded
             self.modelDownloadStatuses = modelDownloadStatuses
-            self.isAgentModelDownloaded = isAgentModelDownloaded
-            self.isMemorySleepRunning = isMemorySleepRunning
         }
     }
 
@@ -98,10 +88,6 @@ final class AppBindings {
         /// no-op while the pass is disabled or its model isn't downloaded),
         /// so no pass pays the model load interactively.
         let prewarmProofreader: @MainActor () async -> Void
-        /// Brings the living memory up (ADR-0035): loads the embedder, then
-        /// seeds the store from the owner's existing corpus on first run. A
-        /// no-op once seeded, and while memory is off.
-        let startMemory: @MainActor () async -> Void
         let updateDictationHotkey: @MainActor (KeyCombo) -> Void
         let updateTTSHotkey: @MainActor (KeyCombo) -> Void
         let updateAgentHotkey: @MainActor (KeyCombo) -> Void
@@ -113,8 +99,6 @@ final class AppBindings {
         /// Loads the Whisper model from its on-disk path into the
         /// transcription engine.
         let loadWhisperModel: @MainActor (URL) async -> Void
-        /// Mirrors the sleep pass into the Companion's presence (#327 §3).
-        let pushCompanionAsleep: @MainActor (Bool) -> Void
         /// Starts the Reader and the Speech Overlay following the Read-Along
         /// (ADR-0076), so speech from the hotkey shows before the Speech page
         /// is ever opened.
@@ -129,7 +113,6 @@ final class AppBindings {
             pushSpeechStateToMenuBar: @escaping @MainActor (SpeechState) -> Void,
             prewarmAudioCapture: @escaping @MainActor () -> Void = {},
             prewarmProofreader: @escaping @MainActor () async -> Void = {},
-            startMemory: @escaping @MainActor () async -> Void = {},
             updateDictationHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
@@ -139,7 +122,6 @@ final class AppBindings {
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
             reloadLLMIfNeeded: @escaping @MainActor () async throws -> Void,
             loadWhisperModel: @escaping @MainActor (URL) async -> Void,
-            pushCompanionAsleep: @escaping @MainActor (Bool) -> Void = { _ in },
             startSpeechSurfaces: @escaping @MainActor () -> Void = {}
         ) {
             self.setUpOverlayPanel = setUpOverlayPanel
@@ -150,7 +132,6 @@ final class AppBindings {
             self.pushSpeechStateToMenuBar = pushSpeechStateToMenuBar
             self.prewarmAudioCapture = prewarmAudioCapture
             self.prewarmProofreader = prewarmProofreader
-            self.startMemory = startMemory
             self.updateDictationHotkey = updateDictationHotkey
             self.updateTTSHotkey = updateTTSHotkey
             self.updateAgentHotkey = updateAgentHotkey
@@ -160,7 +141,6 @@ final class AppBindings {
             self.updateHTTPServerPort = updateHTTPServerPort
             self.reloadLLMIfNeeded = reloadLLMIfNeeded
             self.loadWhisperModel = loadWhisperModel
-            self.pushCompanionAsleep = pushCompanionAsleep
             self.startSpeechSurfaces = startSpeechSurfaces
         }
     }
@@ -205,11 +185,6 @@ final class AppBindings {
             // After the capture arm (same background task, launch-only): the
             // proofread model load is MLX weight I/O, harmless to sequence.
             await self?.effects.prewarmProofreader()
-            // And last, behind both: the memory embedder, and — on a machine
-            // that has never run this before — the backfill of the owner's
-            // existing conversations. Last because it is the one launch task
-            // nothing else waits on, and on first run it is the long one.
-            await self?.effects.startMemory()
         }
 
         // Load an already-downloaded Whisper model as an owned child task,
@@ -323,43 +298,6 @@ final class AppBindings {
                     } catch {
                         Log.agent.error("Agent model reload failed: \(error.localizedDescription)")
                     }
-                }
-            })
-
-        // While the Companion is enabled his model IS the app's default agent
-        // model (ADR-0040 §9) — one model, one mind: interactive chats and his
-        // turns share loaded weights instead of thrashing a swap per turn. The
-        // initial emission re-asserts it at launch; a deliberate owner switch
-        // afterwards is respected until the entity's next turn swaps the
-        // weights back (§9's owner-right-of-way semantics). Undownloaded
-        // models never become the default.
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await (enabled, companionModel) in Observations({
-                    (self.settings.companionHeartbeatEnabled, self.settings.companionModelID)
-                }) {
-                    guard
-                        let adopted = ModelSelectionHealing.adoptedCompanionAgentDefault(
-                            companionEnabled: enabled,
-                            companionModelID: companionModel,
-                            selectedAgentModelID: self.settings.selectedAgentModelID,
-                            isDownloaded: self.inputs.isAgentModelDownloaded)
-                    else { continue }
-                    Log.companion.info(
-                        "Companion enabled — \(adopted) becomes the agent default (ADR-0040 §9)"
-                    )
-                    self.settings.selectedAgentModelID = adopted
-                }
-            })
-
-        // The sleep pass's run state mirrors into the Companion's presence —
-        // the `asleep` glyph rung (#327 §3).
-        observationTasks.append(
-            Task { [weak self] in
-                guard let self else { return }
-                for await sleeping in Observations({ self.inputs.isMemorySleepRunning() }) {
-                    self.effects.pushCompanionAsleep(sleeping)
                 }
             })
 
