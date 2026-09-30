@@ -472,6 +472,39 @@ private let shortText = "Hello there, this is a short utterance."
         _ = session
     }
 
+    /// A caller that can't await the engine follows its readiness from the
+    /// updates, including the reload under a session that outlived an unload.
+    @Test func readinessUpdatesFollowEveryLoadAndUnload() async throws {
+        let (engine, synth, _) = await makeEngine()
+        var updates = await engine.readinessUpdates().makeAsyncIterator()
+        let initial = await updates.next()
+        #expect(initial == .unloaded)
+
+        let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
+        let opened = await updates.next()
+        #expect(opened == .warm)
+
+        await engine.unload()
+        let unloaded = await updates.next()
+        #expect(unloaded == .unloaded)
+
+        for try await _ in try await session.speak(shortText).events {}
+        let reloaded = await updates.next()
+        #expect(reloaded == .warm)
+        #expect(await synth.loadCount == 2)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func readinessUpdatesFinishWhenTheEngineGoesAway() async throws {
+        var engine: SpeechEngine? = await makeEngine().0
+        let updates = await engine!.readinessUpdates()
+        engine = nil
+        var seen: [Readiness] = []
+        for await readiness in updates { seen.append(readiness) }
+        #expect(seen == [.unloaded])
+        _ = engine
+    }
+
     @Test func prepareCoalescesAndPrimes() async throws {
         let (engine, synth, _) = await makeEngine()
         async let a: Void = engine.prepare(.warm, priming: [.designed(description: "narrator", language: "en")])

@@ -315,7 +315,9 @@ playback**):
   `SpeechEvent.words`. The
   app-side `SpeechEnginePresenter` is the `@Observable @MainActor` residency
   mirror for views and the arbiter — a presenter, not a facade: orchestration
-  lives in the package engine.
+  lives in the package engine. It follows the Readiness the engine publishes,
+  so a reload the engine starts by itself, for an utterance on a session that
+  outlived Offload Model, shows as loaded too.
 - **`AudioPlayback`** — a `@MainActor` *sibling* seam (not a model port) below
   `SpeechCoordinator`, turning generated samples into sound. It is
   `@MainActor protocol AudioPlayback: AnyObject` (the coordinator calls it

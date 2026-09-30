@@ -914,7 +914,8 @@ approval requirement in the capture baseline still applies to #480.
 - Speech package tests (`Vendor/tesseract-speech`, needs the
   `Vendor/mlx-swift-lm` submodule checked out). Two suites, no weights:
   - `TesseractSpeechTests`: scripted adapters, no GPU. `EngineContractTests`
-    (the ADR-0038 contracts, the ADR-0072 Reference Take rules: the lead
+    (the ADR-0038 contracts, the readiness updates the app's presenter
+    follows, the ADR-0072 Reference Take rules: the lead
     segment becomes the take, later segments and utterances continue it,
     a pinned voice round-trips, a cancelled retake keeps the old take,
     schema-1 voices are rejected; `SegmenterTests` for the short lead
