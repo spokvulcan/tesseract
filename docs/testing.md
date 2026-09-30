@@ -134,11 +134,13 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
 # loop — no flags must exit 2 while the OS still hangs, --unfocusable must exit 0):
 swift run --package-path tools/overlay-focus-hang-lab overlay-focus-hang-lab --unfocusable
 
-# App bindings, image input, integrations, and model-selection seams:
+# App bindings, image input, integrations, and model-selection seams (and the
+# Models page's in-memory mark):
 xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
   -skipPackagePluginValidation \
   -only-testing:tesseractTests/AppBindingsTests \
   -only-testing:tesseractTests/SettingsManagerModelSelectionTests \
+  -only-testing:tesseractTests/LoadedModelsTests \
   -only-testing:tesseractTests/ImageInputAvailabilityTests \
   -only-testing:tesseractTests/ImageIngestTests \
   -only-testing:tesseractTests/ImagePreviewSetTests \
