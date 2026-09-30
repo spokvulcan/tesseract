@@ -43,6 +43,11 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/ManagedGenerationDriverTests \
   -only-testing:tesseractTests/ReasoningEffortTests \
   -only-testing:tesseractTests/RawGenerationStartTests \
+  -only-testing:tesseractTests/SpeculationPlanTests \
+  -only-testing:tesseractTests/SpeculationResidencyTests \
+  -only-testing:tesseractTests/SpeculativeDecodeToyTests \
+  -only-testing:tesseractTests/DFlash2SupportTests \
+  -only-testing:tesseractTests/MTPDrafterSupportTests \
   -only-testing:tesseractTests/EditToolTests
 
 # Prefix cache suites (radix tree + hybrid snapshot + stable prefix detector):
@@ -190,6 +195,22 @@ after checking its fixtures, rather than the broad target. In particular,
 `MemoryEmbedderQualityTests`, and `RecallToolSmokeTests` intentionally load the
 installed embedder. The prefix block's `Real` suites load tokenizer files,
 not model weights. Leave corpus and allocation opt-ins unset.
+
+**Speculative decoding** (ADR-0079) is covered on the toy.
+`SpeculationPlanTests` pins the **Speculation Plan**'s table from the request's
+facts alone: which arm engages, the advance allowance, and where the DFlash2
+prefill splits. `SpeculationResidencyTests` runs the real drafter loader over the
+toy's container for the loads that attach nothing: the setting off, no MTP head,
+no pairing class, no draft downloaded, a Rotated Ternary Checkpoint.
+`SpeculativeDecodeToyTests` runs the vendor DFlash2 iterator over the toy target
+with a scripted drafter (`tesseractTests/ToyDFlash2Drafter.swift`), through the
+Raw Generation Start and the Server Completion. The text equals the toy's script
+with and without drafter misses, a thinking turn keeps its boundary snapshots, a
+warm turn speculates over the stored leaf, and a quantized-KV turn keeps ordinary
+decoding. The MTP iterator can't run on the toy (its head reads the target's
+hidden states), so a presence-only drafter that traps if engaged
+(`Speculation.inactiveMTP`) pins where MTP must stay off. `DFlash2SupportTests`
+and `MTPDrafterSupportTests` keep the per-family detection, geometry and pairing.
 
 The **Generation Prompt** (ADR-0070) is covered at three levels.
 `GenerationPromptProbeTests` measures a fake template of every shape the probe

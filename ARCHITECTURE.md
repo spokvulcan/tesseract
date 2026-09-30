@@ -133,6 +133,7 @@ tesseract/
 │   │   ├── AgentEngine.swift          # @Observable, wraps LLMActor (chat path)
 │   │   ├── AgentFactory.swift         # Bootstrap: packages, tools, prompt
 │   │   ├── LLMActor.swift             # MLX LLM inference actor
+│   │   ├── Speculation.swift          # Speculation: resident drafters + the per-request Speculation Plan (ADR-0079)
 │   │   ├── GPULeaseQueue.swift        # FIFO GPU mutual-exclusion lease
 │   │   ├── InferenceArbiter.swift     # Lease + model ownership facade
 │   │   ├── Core/                      # Agent loop, state reducer, accumulator
@@ -411,6 +412,14 @@ The app-owned `LinearStreamingDetokenizer` is shared by the live token loop and
 Emitted Path fidelity replay. Live delivery emits on the naive decoder's token
 steps for recognized ByteLevel configurations and uses naive streaming otherwise;
 replay retains verified segment delivery and its window/fallback paths (ADR-0065).
+
+**Speculative decoding**: `Speculation` owns the drafters (the MTP head inside a
+Qwen3.5-family checkpoint, the DFlash2 draft beside Qwen3.8-27B): `LLMActor`'s
+load attaches them, the Model Session carries them, and each request asks for a
+**Speculation Plan**. The Server Completion and the Raw Generation Start read the
+same plan, and the session builds its iterator from it (ADR-0079).
+`DFlash2Support` and `MTPDrafterSupport` keep the per-family detection, pairing
+and loading.
 
 **Agent bootstrap** (`AgentFactory.makeAgent()`): Discovers packages → registers extensions → discovers skills → loads context files → assembles system prompt → wires compaction → creates Agent instance.
 
