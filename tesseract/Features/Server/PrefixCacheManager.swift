@@ -307,6 +307,10 @@ final class PrefixCacheManager {
         /// Entries rejected by active ownership. Return these leases before
         /// retrying admission; no RAM replacement or SSD write was accepted.
         let leaseRefusals: [UUID]
+        /// A leaf admission's leaf is still in RAM once the admission's own
+        /// eviction pass is done: `false` when a lease refused it or the pass
+        /// evicted it, and always for checkpoints.
+        let leafIsResident: Bool
     }
 
     struct LeafSupersession: Sendable {
@@ -1446,6 +1450,7 @@ final class PrefixCacheManager {
         let tree = store.getOrCreateTree(for: admission.partitionKey)
         var supersededLeaves: [LeafSupersession] = []
         var leaseRefusals: [UUID] = []
+        var storedLeaf: (node: RadixTreeNode, bodyID: UUID)?
         let hasSSDEntry = admission.entries.contains { entry in
             if case .ramAndSSD = entry.storage { return true }
             return false
@@ -1556,10 +1561,12 @@ final class PrefixCacheManager {
         case .leaf:
             let entry = admission.entries.first
             // A Leaf Lease must be returned before end-of-turn admission.
-            // Rejection here is an ownership-order error, logged by the tree,
-            // and the caller must retry after check-in/rewind (ADR-0019).
-            // #480 wires that ordering; no production checkout exists yet.
+            // Rejection here is an ownership-order error, logged by the tree
+            // and reported in `leaseRefusals`: the caller checks its own
+            // lease in first (ADR-0064), so only another owner's lease
+            // refuses a leaf.
             guard let stored = storeRAMEntry(entry) else { break }
+            storedLeaf = (stored.node, entry.snapshot.bodyID)
             // Enqueue-before-delete (ADR-0019; vLLM's offload-safety
             // invariant: never free the source until the save is
             // durable). Every leaf admission enqueues its SSD write
@@ -1610,11 +1617,15 @@ final class PrefixCacheManager {
             requestID: admission.requestID,
             preferredPartitionKey: admission.partitionKey
         )
+        // By identity, not offset: the pass may have evicted another leaf of
+        // the same length.
+        let leafIsResident = storedLeaf.map { $0.node.state.body?.bodyID == $0.bodyID } ?? false
         return StoreDiagnostics(
             evictions: evictions,
             supersededLeaves: supersededLeaves,
             stats: stats,
-            leaseRefusals: leaseRefusals
+            leaseRefusals: leaseRefusals,
+            leafIsResident: leafIsResident
         )
     }
 

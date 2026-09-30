@@ -243,9 +243,7 @@ struct LeafAdmissionTests {
 
     @Test func anAdmissionLogsItsEvictionsOnceAndHandsBackTheirTally() async throws {
         // Room for the newer twelve-row leaf alone: its admission evicts the
-        // older ten-row leaf. The lengths differ on purpose: the
-        // captured-then-evicted check matches an eviction by offset and type,
-        // so an older leaf of the same length would read as the new one.
+        // older ten-row leaf.
         let fixture = makeFixture("evict", budget: 12 * 512)
         defer { fixture.telemetry.stop() }
         let older = await prepare(fixture, tokens: Array(1...10))
@@ -272,5 +270,101 @@ struct LeafAdmissionTests {
         #expect(
             request.terminalEvictionCount + request.recoveredEvictionCount == 1,
             "the request's record counts what the admission classified")
+    }
+
+    // MARK: - Whether the leaf survived (#578)
+
+    /// The admission evicts another conversation's leaf of the same length.
+    /// The new leaf is still in the tree, so it survived: no
+    /// `capturedThenEvicted` warning, and the turn keeps its tuner record
+    /// and speculative seed.
+    @Test func evictingAnotherLeafOfTheSameLengthLeavesTheNewLeafStored() async throws {
+        let fixture = makeFixture("same-length", budget: 10 * 512)
+        defer { fixture.telemetry.stop() }
+        let olderTokens = Array(1...10)
+        let newerTokens = Array(20...29)
+        let older = await prepare(fixture, tokens: olderTokens)
+        let newer = await prepare(fixture, tokens: newerTokens)
+        let labels = Self.labels
+        let outcome = await sessions.withSession { session in
+            _ = await older.admit(.lent(Self.cache(rows: 10)), in: session, labels: labels)
+            return await newer.admit(.lent(Self.cache(rows: 10)), in: session, labels: labels)
+        }
+
+        guard case .admitted(let admitted) = outcome else {
+            Issue.record("expected an admitted leaf, got \(outcome)")
+            return
+        }
+        #expect(admitted.survived)
+        #expect(
+            fixture.manager.lookup(tokens: newerTokens, partitionKey: fixture.key).snapshot != nil)
+        #expect(
+            fixture.manager.lookup(tokens: olderTokens, partitionKey: fixture.key).snapshot == nil)
+        let events = fixture.telemetry.drain()
+        #expect(events.filter { $0.eventName == "eviction" }.map { $0.intField("offset") } == [10])
+        #expect(!events.contains { $0.field("reason") == "capturedThenEvicted" })
+    }
+
+    /// A Cache Claim holds the leaf at this path by Leaf Handoff, so the tree
+    /// refuses the new body (ADR-0064). Nothing was stored: the admission
+    /// says so, and the claim's rewind puts the original leaf back.
+    @Test func aLeafTheTreeRefusesIsNotReportedStored() async throws {
+        let fixture = makeFixture("refused")
+        defer { fixture.telemetry.stop() }
+        let tokens = Array(1...16)
+        let kv = KVCacheSimple()
+        kv.state = [MLXArray.ones([1, 1, 16, 64]), MLXArray.ones([1, 1, 16, 64])]
+        let recurrent = MambaCache()
+        recurrent.state = [MLXArray.ones([4]), MLXArray.ones([4])]
+        recurrent.offset = 16
+        let owner = FinalGenerationCache([kv, recurrent])
+        eval(owner.cache)
+        let original = try #require(owner.moveSnapshot(offset: 16))
+        let originalArrays = original.layers.flatMap(\.state).map(ObjectIdentifier.init)
+        fixture.manager.admit(
+            try #require(
+                SnapshotAdmission.leaf(
+                    storedTokens: tokens, snapshot: original, storage: .ramOnly,
+                    partitionKey: fixture.key)))
+        let requested = tokens + [7]
+        let (checkout, handOver) = await fixture.manager.checkOutHoldingClaim(
+            .init(
+                lookup: fixture.manager.lookup(tokens: requested, partitionKey: fixture.key),
+                hydratedFromSSD: false, hydrationSeconds: 0),
+            tokens: requested, maximumAdvance: 2, diagnostics: fixture.diagnostics,
+            sessions: sessions)
+        guard case .handoff = checkout else {
+            Issue.record("expected the claim to hold the leaf by handoff, got \(checkout)")
+            return
+        }
+
+        let admission = await prepare(fixture, tokens: tokens)
+        let labels = Self.labels
+        let outcome = await sessions.withSession { session in
+            await admission.admit(.lent(Self.cache(rows: 16)), in: session, labels: labels)
+        }
+
+        guard case .admitted(let admitted) = outcome else {
+            Issue.record("expected an admission attempt, got \(outcome)")
+            return
+        }
+        #expect(!admitted.survived)
+        let events = fixture.telemetry.drain()
+        #expect(
+            events.contains {
+                $0.eventName == "leafLeaseRefused" && $0.field("reason") == "bodyReplacement"
+            })
+        #expect(!events.contains { $0.field("reason") == "capturedThenEvicted" })
+
+        // The rewind rebuilds the recurrent layer's state, so the original
+        // shows in its attention arrays and its two layers (the refused body
+        // had one).
+        await handOver.rewindAndConclude(sessions: sessions)
+        let stored = try #require(
+            fixture.manager.lookup(tokens: tokens, partitionKey: fixture.key).snapshot)
+        #expect(stored.layers.count == 2)
+        #expect(
+            stored.layers.first?.state.map(ObjectIdentifier.init)
+                == Array(originalArrays.prefix(2)))
     }
 }
