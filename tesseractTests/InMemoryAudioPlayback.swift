@@ -23,6 +23,10 @@ final class InMemoryAudioPlayback: AudioPlayback {
     // MARK: Installed by the coordinator
     var onPlaybackFinished: (@MainActor @Sendable () -> Void)?
 
+    /// Runs inside `startStreaming`, as an utterance's playback begins, for
+    /// a test that acts at exactly that point.
+    var onStartStreaming: (() -> Void)?
+
     // MARK: Pure virtual clock (test-controlled, never wall-clock)
     private var virtualPlaybackTime: TimeInterval = 0
     func advance(by seconds: TimeInterval) { virtualPlaybackTime += seconds }
@@ -65,6 +69,7 @@ final class InMemoryAudioPlayback: AudioPlayback {
         startedSampleRates.append(sampleRate)
         scheduler.beginStream(sampleRate: sampleRate)
         volume = 1.0
+        onStartStreaming?()
     }
 
     func appendChunk(samples: [Float]) {

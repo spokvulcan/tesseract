@@ -35,9 +35,20 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
     private(set) var primedVoices: [String?] = []
     private(set) var unloadCount = 0
     private(set) var sawCancellation = false
+    /// Signalled as each utterance ends. The engine trims caches after its
+    /// stream's last event, so a test holding the main actor on this knows
+    /// the whole stream is waiting to be drained.
+    nonisolated let utteranceEnds = DispatchSemaphore(value: 0)
+    /// Runs once, the next time the engine asks for the audio format. It
+    /// asks while it admits an utterance, so a test acts in the middle of
+    /// the next admission.
+    private var beforeNextAudioFormat: (@Sendable () async -> Void)?
 
     func configure(_ script: Script) { self.script = script }
     func setCheckpointOnDisk(_ onDisk: Bool) { checkpointOnDisk = onDisk }
+    func onNextAudioFormat(_ action: @escaping @Sendable () async -> Void) {
+        beforeNextAudioFormat = action
+    }
 
     func checkAvailable(_ spec: TTSModelSpec) async throws {
         guard checkpointOnDisk else {
@@ -59,10 +70,14 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
     func unload() async { unloadCount += 1 }
 
     func audioFormat() async -> AudioFormat? {
-        AudioFormat(sampleRate: 24_000, samplesPerFrame: 1920)
+        if let action = beforeNextAudioFormat {
+            beforeNextAudioFormat = nil
+            await action()
+        }
+        return AudioFormat(sampleRate: 24_000, samplesPerFrame: 1920)
     }
 
-    func trimCaches() async {}
+    func trimCaches() async { utteranceEnds.signal() }
 
     private func noteCancelled() { sawCancellation = true }
     private func record(_ request: SegmentRequest) { requests.append(request) }
