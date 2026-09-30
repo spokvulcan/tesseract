@@ -1490,13 +1490,11 @@ identity layer below), per-consumer filter chains (the retired shape),
 toolset (unqualified).
 
 **Tool Gating**:
-The context one Active Tool Set resolve runs under: the consumer
-(interactive chat, dialogue chat, or the Companion's headless agent) and the
-Web Access switch. Audience rules (ADR-0040 §10, ADR-0046 #372) are consumer
-facts inside the resolve, never per-call-site filters. The headless
-companion pins Web Access on — shipped behavior preserved, revisiting it is
-a product call (ADR-0048).
-_Avoid_: audience filter (one input, not the concept), web gate
+The context one Active Tool Set resolve runs under: the Web Access switch.
+There are no tool audiences: every conversation and every Companion moment
+resolves the same way, so they share one cached system-and-tools prefix
+(ADR-0080).
+_Avoid_: audience filter (retired with the old Companion), web gate
 (unqualified — the switch is one field), consumer flag.
 
 **Prompt Tool Facts**:
@@ -1667,87 +1665,170 @@ _Avoid_: skill block (vague), per-call-site literals (the pre-#401 shape — a
 contract living only as matching producer/fixture literals drifts green), parsing
 the tool results (deliberately parser-less).
 
-### Living memory read paths
+### Companion: the day (ADR-0080)
 
-The three distinct ways memory reaches the model (ADR-0035); they are not
-synonyms, and the 2026-07-12 recall defect (#332) hid partly in the gap.
+Jarvis thinks at moments; code keeps the promises. Every decision becomes an
+artifact — a reminder, a calendar event, a Nudge, an owner rule, a Profile fact
+or a card — that code and the OS keep without the model.
 
-**Memory Injection**:
-The automatic read path — the lifecycle-scored working set (core tier, top-ranked
-beliefs, relevant episodes) put in front of the model on a turn without being
-asked, riding a user message. Deliberately excludes the cold tier apart from the
-ε-exploration draw.
-_Avoid_: auto-recall, context stuffing; **Recall** (the deliberate tool, not this).
+**Today**:
+The app's home and first main-window page: the owner's day in the Timeline
+layout (events and tasks in time order, free gaps, a Now line), a header with
+Jarvis's line, "N of M done" and the Must-do, the day's cards on top, and a side
+column with Capture, Waiting on You, the Inbox and "Jarvis noticed" (Fact
+Proposals). Its Chat mode shows the Day Thread.
+_Avoid_: dashboard, Mission Control (retired), home screen (unqualified).
 
-**Conversation Memory**:
-The chat's collaborator over the living memory (ADR-0045) — the two verbs one
-conversation exercises: *enrich* (hang the **Memory Injection** block on an
-outgoing user message, deduped against what this window was already told) and
-*capture* (append the turn through the chat door of **One Door Per Testimony**,
-under the user message's own id). Held optionally by the **Chat Session** —
-chat must run without memory.
-_Avoid_: memory manager/service; attachMemory (the pre-extraction method name);
-folding it back into the **Chat Session** (whose glossary shape is the event
-fold alone).
+**Agenda**:
+Apple Reminders and Calendar as Tesseract reads and writes them: one port with
+an EventKit store and an in-memory store (the test host's, ADR-0073), and a
+facade that keeps today's snapshot and turns every write into a one-line
+confirmation with an undo. The single source of truth for tasks and plans.
+_Avoid_: tasks file (retired `tasks.md`), task store (Reminders is the store).
 
-**Memory Search**:
-The deliberate relevance-only lookup over *every* belief — retired and superseded
-included, tiers and lifecycle ignored — that marks what it surfaces as seen.
-The engine verb beneath **Recall**; sleep's internal reconcile lookups use it
-without marking.
-_Avoid_: retrieval (unqualified — say injection or search), semantic search (it
-is hybrid dense ⊕ keyword).
+**Area**:
+A part of the owner's life a day spans — Work, a side project, Health, Life —
+stored as a Reminders list and mapped once in Settings.
+_Avoid_: project, category, domain.
+
+**Inbox**:
+The Reminders list where captures without a home land, undated. "Find a time"
+places an Inbox item into the day's next free slot.
+
+**Capture**:
+Typed or spoken words turned into a reminder without a model: the capture
+hotkey's panel (tap to type, hold to speak) and Today's Capture box both go
+through one door and the deterministic capture parser ("call the dentist
+tomorrow at 10", "after the 1:1", "#health").
+
+**Must-do**:
+The day's one optional thing that matters most. It can sit anywhere in the day,
+even late; the owner moves or clears it with one click.
+_Avoid_: focus (the day has several goals, not one focus), priority.
+
+**Nudge**:
+A notification scheduled with the OS a few minutes before a calendar event, so
+it fires even with Tesseract closed. Reminders with a due time need none: they
+carry their own alarm, delivered by Reminders on every device.
+_Avoid_: wake (retired), alert (unqualified).
+
+**Day Engine**:
+The Companion's pure decider: signals (the clock, presence, a meeting ending,
+notifications, an app coming forward, coding agents, the agenda, a moment's
+result, a card action, power) and a snapshot in; the day's next state and an
+ordered list of effects out. It performs no I/O; the Companion runtime gathers
+and performs.
+_Avoid_: Wake Evaluator, fold reducer (both retired), scheduler.
+
+**Moment**:
+One model call at a point in the day when there is something to judge — the
+Morning Plan, a Breakpoint, a Triage, the Evening Wrap-up, the Night
+Reflection — asking for a JSON card. A reply is validated against the facts it
+was shown; an invalid or failed one gets one retry, then a deterministic card.
+Every moment runs at the owner's own reasoning effort (one cached prefix) and
+under its own output cap. No moment runs without new input.
+_Avoid_: turn (a chat word), beat, wake.
+
+**Morning Plan**:
+The moment at the day's first sit-down (after an overnight gap of four hours or
+more, within the morning window), or when Today is first opened that day: small
+tasks into the free time before the first meeting, the Must-do placed where it
+fits. Skipping it costs nothing and nothing nags.
+
+**Breakpoint**:
+Coming back after the away threshold (ten minutes by default), or a meeting
+ending while the owner is present. A code-built **Breakpoint Card** goes up at
+once; the model refines it in place only when there are notifications to judge.
+Nothing waiting means no card at all.
+_Avoid_: summons (retired), welcome-back notification.
+
+**Breakpoint Card**:
+What needs the owner (people, agents, missed notifications — one action each:
+Open, Later, Done), the next event and what fits before it, where the owner
+was, and how many other things can wait (expandable).
+
+**Jarvis Panel**:
+The floating card rung: a Siri-style Liquid Glass panel near the top-right,
+over any app — close top-left, expand to Today top-right, the card, and an "Ask
+Jarvis" field between + (capture) and a mic. It never steals typing: it turns
+key only when its field is clicked. Replies go to the Day Thread.
+
+**Triage**:
+The moment that judges new unresolved notifications while the owner works — at
+most every ten minutes, in a batch, never one by one — and raises only what
+can't wait for the next Breakpoint.
+
+**Evening Wrap-up**:
+The moment at the evening time (or the next presence before 03:00): what got
+done, and each leftover rolled to tomorrow or another day, kept for later, or
+let go. Nothing is ever labelled missed or failed.
+
+**Night Reflection**:
+Once a night, after the Evening Wrap-up, on power and with a nominal thermal
+state: tomorrow's carry-over note, a first draft of tomorrow, and zero to three
+Fact Proposals.
+
+**Day Thread**:
+One append-only conversation per day, on its own agent with the same system
+prompt and tools as every chat. It opens with the **Day Opening** (the Profile,
+the Areas, today's agenda, last night's carry-over note); moments append a
+request and a card; the owner's Today chat appends too. A new day (at 04:00)
+starts a new thread; within a day compaction runs only past its ceiling.
+_Avoid_: Mission Control, standing conversation (both retired).
+
+**Now Tag**:
+The one line of time every user message carries into the model — local date,
+weekday, time and time zone — stamped when the message is created and stored
+with it. The system prompt carries no time, so it is byte-identical everywhere.
+
+**Seen Ledger**:
+Which of other apps' banners the owner has already seen: seen when the app comes
+forward (within 15 minutes while present, or on return if it arrived while
+away). Only unresolved banners reach Jarvis, never twice; they expire after a
+day. **Owner rules** (app, sender, keywords → ignore, hold or raise), set by
+talking to Jarvis, apply first.
+_Avoid_: Notification Hub, Event (both retired).
+
+**Waiting on You**:
+People, coding agents and missed notifications that need the owner, in Today's
+side column; a waiting agent also shows on the glyph.
+
+**Delivery Ladder**:
+How a card reaches the owner, decided by code: the glyph for anything waiting,
+the Jarvis Panel for Breakpoints and urgent items when present, a banner when
+away or locked, a spoken line for urgent items when voice is on. Quiet hours
+silence Jarvis's own deliveries; the owner's reminders and Nudges still fire.
+Nothing unanswered is re-summoned; it stays in Today.
+
+**Governor**:
+No daily budget, usefulness first — but Triage and the Night Reflection wait
+while the Mac is hot or low on battery, and the Night Reflection runs only on
+power with a nominal thermal state.
+
+**Profile**:
+The small set of facts about the owner that they approved — readable, editable
+and deletable on the Profile page. `remember` saves one (an explicit ask is
+approval), `forget` removes one. Facts ride only the Day Opening; ordinary chats
+get none.
+_Avoid_: memory (unqualified), beliefs, episodes (all retired).
+
+**Fact Proposal**:
+A "Should I remember this?" from the Night Reflection, waiting in Today and on
+the Profile page until the owner chooses Remember, Edit or Not true.
 
 **Recall**:
-The agent's tool over memory: **Memory Search** across beliefs *plus* the raw
-episodic record, so a fact told the same morning — an episode not yet distilled
-into a belief — is still findable. Superseded beliefs come back plainly marked;
-episodes come back dated and quoted.
-_Avoid_: memory_search (the ADR's design-phase name; the tool shipped as
-`recall`), beliefs-only search (the pre-#332 blind spot).
+The `recall` tool: a search, only when asked, over the Profile and past
+conversations (a full-text index, reranked by the embedder), answering with
+dated snippets.
 
-**Agent Voice**:
-The deictic convention every stored belief obeys: memories are the assistant's
-own, so every pronoun must resolve with no conversational context — "he" is
-always the owner, "I" is always the assistant ("He gave me the nickname
-Pelican"). A directive stays anchored on its ordainer: "He wants me to answer
-briefly when he is debugging". Holds at both write doors (`remember` and sleep
-consolidation); the owner's words as spoken are episodes, quoted verbatim,
-never beliefs.
-_Avoid_: first person (unqualified — ADR-0035's "first-person layer" means the
-*assistant's* first person, and the unqualified phrase inverted the referent
-and caused #333), user voice (the owner's "I" stored as if it could survive
-recall).
+**Companion Trace**:
+The append-only JSONL record of every Jarvis decision, card, reaction and
+agenda change, in a closed vocabulary, one file per day, each record stamped
+with its Day Thread; model calls carry tokens (with the cache's share),
+latency, the model, and the thermal and power state.
+_Avoid_: flight recorder (the retired one it replaced).
 
-**One Door Per Testimony**:
-The episodic-capture rule: one utterance becomes exactly one episode, entering
-through the door that knows the most about it. Words sent to the agent enter
-through chat capture, which attaches the reply; dictation capture takes only
-speech aimed at *other* apps and skips when the frontmost app is Tesseract
-itself.
-_Avoid_: episode dedup(lication) — the rule turns the twin away at the door
-rather than deleting it later; episode merging.
-
-**Episode Origin**:
-The memory store an episode was first written in. Each store takes a random id
-when it is created and stamps it on every episode it writes, so that two stores,
-the Mac's and the phone's, can later be merged by query. An unstamped episode
-belongs to the store that holds it and was written before stamping began.
-_Avoid_: device id (it names a store, not hardware: a reinstall is a new origin),
-source (a belief's source episodes), platform.
-
-**Owner's Veto**:
-The revision path that answers "that's wrong": the memory flips to *contested*
-— a status change, never an edit or a delete — and the next sleep re-reads its
-source episodes with the owner's rejection note beside them, minting a
-corrected successor (which inherits none of the rejected belief's strength) or
-retiring it cold. Two doors relay the veto: the Memory window, and the agent's
-`contest` tool, which names a memory by the short handle on its `recall` line
-and records what he said when he rejected it.
-_Avoid_: forget/delete (deletion is the owner's hand alone, in the window),
-belief editing (the agent never rewrites a memory's text), negation belief (the
-pre-#333 workaround — `remember`ing the correction beside the wrong memory left
-both live, contradicting each other).
+### Voice capture
 
 **Operation Guard**:
 The shared stale-result protocol for the capture→transcribe→commit coordinators: a
@@ -1801,247 +1882,6 @@ history window; the overlay stays keyboard-free.
 _Avoid_: training data (unqualified — pairs are candidates until gold),
 feedback log, transcription history (the sibling store it links to by id),
 fine-tune corpus (the export's *consumer*, out of scope — see the map).
-
-### Tracking (Companion)
-
-The measurement grain beside memory's two (map #301, ticket #308): episodes are
-*testimony*, observations are *measurement*, beliefs are *conclusion*. Flow into
-memory is one-way, in sleep — pattern distillation reads the observation stream
-and mints pattern beliefs.
-
-**Observation**:
-One dated, typed fact about the owner's day — an elicited sample (sleep, mood,
-energy, movement), a step event, a habit check-off, or a sensed span (presence,
-app session, power). Append-only and kept forever: facts don't decay; a
-correction is a newer row (recency wins at read), never an edit. Elicited
-observations carry the episode that produced them, so the verbatim words stay
-recoverable behind the structured fact.
-_Avoid_: sample (one species — the elicited kind), metric/log line,
-observation-as-belief (facts are never superseded and have no lifecycle).
-
-**Observation Source**:
-Which of the three doors wrote an observation: *sensed* (sensor code, no LLM
-between sensor and disk), *elicited* (conversation, through a typed tool),
-*imported* (a bridge from an external store). One door per fact: each
-observation kind has exactly one writing door — the tracking-side analogue of
-**One Door Per Testimony**.
-_Avoid_: provenance (that's the episode link), mixed-source kinds.
-
-**Contract Chain**:
-The day contract's shape: an ordered chain of hard steps with at most one
-*active*; finishing a step arms the next immediately, the same day. Generalizes
-the anchor day's "ONE hard step" — the preserved invariant is one step *at a
-time*, not one per day; the push (the midday pulse) always aims at the single
-active step.
-_Avoid_: task list (the chain is chosen and pushed, never dumped), parallel
-steps, ONE hard step (the superseded per-day cap — see #302's amendment).
-
-**Keystone**:
-Step one of the **Contract Chain**: the single step that makes the day a win.
-Streaks count keystones alone; nothing past the keystone can fail a day.
-_Avoid_: hard step (any chain step is hard; only one is the keystone),
-most-important-task.
-
-**Chain Depth**:
-How far past the **Keystone** a day's chain actually went — surplus recorded,
-never failure ("kept, depth 2/3"). The signal that eventually tells the owner
-his realistic daily ambition.
-_Avoid_: completion rate (depth is not a percentage of plan), failure count.
-
-**Stream**:
-A named area of the owner's life that work flows in — Tesseract, the employer's
-work, health. Tags work items and observations so cross-stream balance becomes
-visible to pattern distillation; streams are conversational names, never a
-configuration surface.
-_Avoid_: project (a stream outlives any project), area/category (say stream),
-audio/transport streams (Generation Stream Loop and friends are unrelated).
-
-**Work Item**:
-One backlog entry the Companion may draw a chain step from: a title, its
-**Stream**, and a cadence — one-shot, or a recurring habit that re-arms daily.
-The evening close-out checks due habits; check-offs land as **Observation**s.
-The successor to the retired `tasks.md`.
-_Avoid_: task (the retired file's word; too broad here), reminder (EventKit's,
-not ours), habit tracker (a habit is a cadence value, not a product surface).
-
-**Read-Through Source**:
-An external store the Companion consults live at compose time and never
-mirrors — the calendar is queried when the evening's tomorrow-preview or the
-morning placement needs it. Observations record only what has no other home.
-_Avoid_: import (that's a copy, with `imported` as its **Observation Source**),
-sync (nothing is mirrored, so nothing can drift).
-
-### Proactive loop (Companion)
-
-The entity/harness split (map #301, ticket #307, ADR-0040): the model — Jarvis,
-the *entity* — decides everything with judgment in it; the *harness* (code)
-contributes turns, continuity, and the record, never judgment.
-
-**Event Fold**:
-The loop's algorithm: every digital input becomes exactly one **Event**, events
-queue in order, and each granted **Turn** folds everything pending into
-**Mission Control** — state' = turn(state, events). The harness owns the math
-(nothing lost, nothing duplicated, order kept, one turn at a time); the entity
-owns every judgment inside the turn. A turn runs only for pending events or a
-due **Wake** — there is no harness cadence and no safety tick; the entity owns
-its clock entirely.
-_Avoid_: event loop (a runtime word), scheduler, inbox (the queue is plumbing,
-not the concept), ambient cadence (the retired 30-minute gate).
-
-**Event**:
-One perception queued for the entity: a due **Wake**, a **Report-Back**, a day
-or system transition (day start/end, Mac wake, launch catch-up, power change),
-a sustained app switch, or a notification arrival (the **Notification Hub**) —
-later a screen glance, the same shape. Coalesced: one turn drains all pending
-events.
-_Avoid_: trigger/signal (implementation words), notification (one event kind,
-not the concept), tick (the retired cadence's clock).
-
-**Mission Control**:
-The one standing conversation that is the fold's state — every loop turn
-appends to it, origin-tagged; per-turn conversation minting is retired. Rides
-a fixed context ceiling: the nightly sleep pass authors a **Digest** that
-becomes its head with the recent tail kept verbatim, and hitting the ceiling
-intraday runs the same fold early, on the record.
-_Avoid_: companion chat (the retired one-chat-per-turn shape), home surface
-(the chat-UI concept, #327), main thread.
-
-**Digest**:
-The entity-authored fold-down of **Mission Control**'s older history, written
-in the nightly sleep pass and spliced in as the conversation's new head.
-_Avoid_: summary (mechanical flavor — the digest is the entity's own memory
-practice), compaction (the operation, not the artifact).
-
-**Report-Back**:
-What every owner conversation owes **Mission Control** — summoned dialogue and
-owner-opened chat alike (ADR-0052): a deposit — on end, at a milestone, or
-when nudged once after going quiet — that lands as an **Event**, so the one
-mind knows what its conversations concluded. Conversations stay their own
-chats; cognition stays in the fold; whether anything concluded at all is the
-entity's judgment, never code's.
-_Avoid_: summary (it carries decisions and debts, not prose recap), sync,
-hand-off, chat capture (the harness never authors a deposit).
-
-**Wake**:
-One persisted row granting the entity a future turn — a promise, a rhythm beat,
-a follow-up, or a re-summons, all one table. Booked by the entity through a
-typed tool; state transitions written only by app code. The loop's one
-correctness invariant: a wake is consumed only by a completed turn.
-_Avoid_: trigger/timer (implementation words for what fires it), reminder (a
-wake wakes Jarvis, not the owner), notification (one possible *outcome* of the
-turn a wake grants).
-
-**Wake Evaluator**:
-The pure decider holding the fold's whole clock (ADR-0040 §2, ADR-0043,
-ADR-0046 #371): every tick, one gathered snapshot of signals — pending
-**Event**s, due **Wake**s, day state, presence, power, GPU — goes in, and at
-most one decision comes out: grant the fold **Turn**, record a deferral,
-perceive day start, or wait. The purist rule lives here: a turn iff pending
-Events or a due Wake, and the model slot free — no cadence, no safety tick,
-no attention gate (the arbiter's FIFO protects the owner mechanically).
-Due-ness and eligibility only, never judgment; the loop gathers the signals
-and performs the decision.
-_Avoid_: scheduler (implies code owns the rhythm — the entity books its own),
-dispatcher, trigger engine, evaluate() (the loop's method that calls it).
-
-**Companion Fold Reducer**:
-The **Wake Evaluator**'s write-side sibling (ADR-0051): the fold's sequencing —
-fire the due **Wake**s, run the beat's resurfacing, consume only on a completed
-**Turn**, re-present on failure, the retry ladder's banner fallback, and every
-reaction write — as one pure decider returning ordered effect values the loop
-performs. The one home of wake-state transitions; its single piece of state is
-the failed-attempt ledger. The correctness invariant (consumed only by a
-completed turn; anything less re-presents) is decided here, enforced at the
-store, and performed by the loop.
-_Avoid_: turn runner (the performer of the agent run, not a decider),
-handleTurnFailure (the retired inline home), fold reducer (unqualified — the
-**Event Fold** names the algorithm; this is its write-side decider).
-
-**Reaction**:
-The owner's answer to one delivered line, whatever the surface — a banner
-click, inline reply, or wave-off; an overlay-summons engage or dismiss —
-reported through the loop's one door and decided by the **Companion Fold
-Reducer**'s reaction table: heard stamped first for every outcome, an engage
-upgrading the wake and landing him in a conversation (the correlated chat, or
-a minted dialogue tagged with the surface's provenance). A summons that
-lapses unanswered is *not* a Reaction — nothing reached him — and takes the
-fallback-banner path instead (#391).
-_Avoid_: ping outcome (the wire enum, one input to the table), banner
-handling (one surface of several), per-surface reaction writes (the pre-#391
-summons defect — hand-rolled writes that dropped the wakeID).
-
-**Trace Vocabulary**:
-The closed, typed set of flight-recorder event names (`CompanionTraceEvent`)
-that every producer writes and the weekly aggregator reads, named once so the
-contract is compile-checked in both directions: a producer typo is a compile
-error, and the aggregator's exhaustive switch forces a decision when a new
-name is added. The `rawValue` is the wire string the JSONL corpus stores, so
-names on disk that aren't in the set — legacy v0 `beat.*`, a future version's
-events — decode to `nil` at the reader and are skipped by name (#393).
-_Avoid_: event string (the wire encoding a trace line persists, not the
-vocabulary), log category (the `Log` enum's channels, unrelated), metric name
-(a weekly-report field, which *consumes* events — the reader side, not the
-name).
-
-**Turn**:
-One full agent run granted to the entity by pending **Event**s or a due
-**Wake**. Every turn appends, origin-tagged, to **Mission Control** — full
-observability, one place. Silence is a decision a turn records, never a
-branch code took. Time to think is a wake the entity books itself.
-_Avoid_: check/tick (the evaluator's clock, which decides nothing), beat (the
-anchor rhythm's word for the *content* of some turns), heartbeat (the retired
-skeleton's fixed-time pings), ambient turn (retired — the unoccasioned
-cadence-granted turn died with the **Event Fold**).
-
-**Situation Briefing**:
-The code-gathered context handed to the entity at the start of every turn:
-time, presence span, frontmost app, calendar (read-through), contract state,
-its own due and upcoming **Wake**s, recency of last interaction. Gathering is
-mechanical; interpreting it is the turn's job. Its contract, due, and upcoming
-lines come from the shared Companion Fold Render primitives (#403).
-_Avoid_: prompt (it's one input to the turn, not the instructions), snapshot
-(the flight recorder's word for the verbatim copy a trace keeps).
-
-**Fold Briefing**:
-The code-rendered account of the fold's recent life handed to an owner
-conversation — today's contract, due and recently-fired **Wake**s, recent
-deliveries, the entity's last fold-turn conclusions verbatim — so every chat
-opens as the one mind, current, and re-briefs when the fold advances
-mid-conversation (ADR-0052). The **Situation Briefing**'s conversation-facing
-sibling: gathering is mechanical, interpreting is the entity's job; it closes
-with the **Report-Back** contract line. Its contract, due, upcoming, and
-recently-fired lines come from the shared Companion Fold Render primitives
-(#403).
-_Avoid_: status block (it carries his own conclusions, not just state),
-digest (the entity-authored nightly artifact), situation briefing (the
-turn-facing sibling), fold summary.
-
-**Standing Instructions**:
-The entity's self-authored policy document — one versioned text in two
-sections: IDENTITY, riding the opening message of every conversation (loop
-turns, interactive chat, the voice session — one Jarvis everywhere), and LOOP
-POLICY, riding only **Mission Control** turns, where the delivery tools exist.
-Never the system prompt: the loop injects the whole document on each turn's
-opening message, and the chat/voice path injects the IDENTITY section on a
-conversation's first message. Edited by the entity section-by-section through
-a typed tool, reviewed once a day at the tail of the sleep pass, always
-owner-readable and owner-editable. Escalation ladders, interruption ethics,
-quiet hours, and rhythm defaults live in LOOP POLICY, as seeds the entity
-rewrites with wear — never as code.
-_Avoid_: system prompt (a superseded claim — the instructions ride opening
-messages), settings/config (not a UI surface; a document the entity owns),
-rules (they're his practice, not his cage).
-
-**Notification Hub**:
-The Companion's attention filter (PRD #376): every banner another app shows the
-owner becomes a notification **Event** Jarvis perceives, weighs against what he
-knows of the owner, and escalates only when it is important and likely unseen —
-silence is a legitimate verdict. v1 observes, triages, and escalates while the
-owner's notifications still pop; the end vision — the owner on Do Not Disturb,
-Jarvis the sole interface — is a flip his record must first earn and his eyes
-cannot yet see past.
-_Avoid_: notification center (the OS surface, not the filter), digest/inbox
-(batching words — the Hub interrupts on judgment, not a schedule), triage queue.
 
 ### Voice session (Companion)
 

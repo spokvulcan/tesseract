@@ -1,6 +1,6 @@
 # ADR-0051: The Event Fold's write side is a reducer
 
-- Status: Accepted
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted
 - Date: 2026-07-19
 - Relates to: ADR-0040 (§13 failure semantics, the harness/entity split),
   ADR-0043 (Wake Evaluator — the fold's read side), ADR-0046 (the Event
