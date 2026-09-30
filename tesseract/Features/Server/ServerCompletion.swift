@@ -1073,6 +1073,9 @@ nonisolated final class ServerCompletion {
             // leaf store completed.
             memory.mark(
                 .storingLeaf, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
+            // The phase's report, logged below, is now the turn's one
+            // `leafStore` event, a rewind in the phase included.
+            claim.enterLeafStorePhase()
             let leafStoreStart = Date.timeIntervalSinceReferenceDate
             var leafResult = await LeafStorePhase.run(
                 mlxStartBox: mlxStartBox,
