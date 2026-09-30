@@ -151,8 +151,13 @@ final class DayThread {
         chat.showDayThread { store.show(day: day) }
     }
 
+    /// Whether the owner can send now: not while a turn or a moment is
+    /// generating, so every turn lands in the thread in order.
+    var canSend: Bool { !chat.isGenerating && momentRunning == nil }
+
     /// The owner's own message in Today.
     func send(_ text: String) {
+        guard canSend else { return }
         openIfNeeded()
         chat.sendMessage(text)
     }

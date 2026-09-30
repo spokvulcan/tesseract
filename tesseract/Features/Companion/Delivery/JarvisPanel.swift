@@ -117,7 +117,7 @@ final class JarvisPanelController {
 
     private func send() {
         let text = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !thread.chat.isGenerating else { return }
+        guard !text.isEmpty, thread.canSend else { return }
         thread.send(text)
         model.asked = text
         model.draft = ""

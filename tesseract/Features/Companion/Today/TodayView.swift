@@ -471,7 +471,7 @@ private struct AskJarvisBar: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty || thread.chat.isGenerating)
+            .disabled(text.trimmingCharacters(in: .whitespaces).isEmpty || !thread.canSend)
             .help("Send")
         }
         .padding(.horizontal, 14)
@@ -482,7 +482,7 @@ private struct AskJarvisBar: View {
 
     private func send() {
         let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty, !thread.chat.isGenerating else { return }
+        guard !message.isEmpty, thread.canSend else { return }
         thread.send(message)
         text = ""
         onSend()
