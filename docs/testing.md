@@ -53,6 +53,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/WarmBodyDrainTests \
   -only-testing:tesseractTests/SnapshotLayerKindTests \
   -only-testing:tesseractTests/LeafCaptureHandoffTests \
+  -only-testing:tesseractTests/LeafAdmissionTests \
+  -only-testing:tesseractTests/LeafAdmissionSourceShapeTests \
+  -only-testing:tesseractTests/SnapshotPayloadTests \
+  -only-testing:tesseractTests/SnapshotAdmissionStorageTests \
+  -only-testing:tesseractTests/SalvageOnCancelTests \
+  -only-testing:tesseractTests/CompletionTraceAccumulatorTests \
+  -only-testing:tesseractTests/SnapshotDemotionTests \
+  -only-testing:tesseractTests/SurvivalGateTests \
   -only-testing:tesseractTests/LeafLeaseTests \
   -only-testing:tesseractTests/CacheClaimTests \
   -only-testing:tesseractTests/ServerCompletionExitMatrixTests \

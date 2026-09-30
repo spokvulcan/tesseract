@@ -1,30 +1,21 @@
 //
-//  ServerCompletionExtractSnapshotPayloadsTests.swift
+//  LeafAdmissionSourceShapeTests.swift
 //  tesseractTests
 //
-//  Source-shape checks on the leaf admission call sites: one owner builds
-//  a leaf Snapshot Admission, and the MainActor closures around the
-//  manager's admit stay non-suspending.
+//  Source-shape checks on the leaf producers (ADR-0078): only the Leaf
+//  Admission builds a leaf Snapshot Admission, every producer reaches it,
+//  and the MainActor closures around the manager's admit stay
+//  non-suspending. The admission's behaviour is tested through its interface
+//  in `LeafAdmissionTests`; these pin that no producer grows its own tail
+//  again.
 //
 
 import Foundation
-import MLX
-import MLXLMCommon
 import Testing
 
 @testable import Tesseract_Agent
 
-struct ServerCompletionExtractSnapshotPayloadsTests {
-
-    // MARK: - Call-site wiring regression coverage
-    //
-    // The leaf Server Completion call sites cannot be exercised by unit tests
-    // without a loaded MLX model — the full wiring is gated behind
-    // `container.perform` on a real `ModelContainer`. These source
-    // checks pin shared structured leaf capture and the synchronous
-    // cache admission invariant.
-    // Mirrors the `threadAffinityContractDocCommentIsPinned` pattern
-    // at `HybridCacheSnapshotTests.swift:539`.
+struct LeafAdmissionSourceShapeTests {
 
     private func readServerSource(_ fileName: String) throws -> String {
         let testFile = URL(fileURLWithPath: #filePath)
@@ -50,72 +41,72 @@ struct ServerCompletionExtractSnapshotPayloadsTests {
     }
 
     @Test
-    func structuredLeafAdmissionStaysWithItsSingleOwner() throws {
-        // Post ADR-0033: every Leaf Store executor (live, direct, boundary)
-        // ends in the one shared `admitLeaf` tail, which — like the
-        // speculative executor — routes through the one
-        // `admitStructuredLeaf` owner, which alone constructs the leaf
-        // Snapshot Admission value. The older dedicated
-        // `strippedLeafPayload` path no longer exists under the single-leaf
-        // policy.
+    func onlyTheLeafAdmissionBuildsALeafSnapshotAdmission() throws {
+        let admission = try readServerSource("LeafAdmission.swift")
+        let producers = [
+            ("the Leaf Store phase", try readLeafStorePhaseSources()),
+            ("ServerCompletion.swift", try readServerSource("ServerCompletion.swift")),
+            ("SpeculativePrefill.swift", try readServerSource("SpeculativePrefill.swift")),
+        ]
+        #expect(
+            admission.components(separatedBy: "SnapshotAdmission.leaf(").count - 1 == 1,
+            "The Leaf Admission builds the one leaf Snapshot Admission")
+        for (name, source) in producers {
+            #expect(
+                !source.contains("SnapshotAdmission.leaf("),
+                "\(name) must hand its cache to a Leaf Admission, not build the admission itself")
+        }
+    }
+
+    @Test
+    func everyLeafProducerReachesTheAdmission() throws {
         let leafPhase = try readLeafStorePhaseSources()
         let completion = try readServerSource("ServerCompletion.swift")
         let speculative = try readServerSource("SpeculativePrefill.swift")
         #expect(
             leafPhase.contains("private static func admitLeaf("),
-            "The shared admit tail must exist so the live, direct and boundary executors share one leaf admission path"
-        )
+            "The live, direct and boundary executors share one hand-over to the admission")
         #expect(
-            completion.components(separatedBy: "SnapshotAdmission.leaf(").count - 1 == 1,
-            "admitStructuredLeaf must be the only structured-leaf admission constructor in the completion module"
-        )
+            leafPhase.components(separatedBy: "await admission.admit(").count - 1 == 1,
+            "The executors' shared tail is their one call into the admission")
         #expect(
-            !leafPhase.contains("SnapshotAdmission.leaf(")
-                && !speculative.contains("SnapshotAdmission.leaf("),
-            "Leaf callers must route through admitStructuredLeaf, never construct admissions inline"
-        )
+            leafPhase.components(separatedBy: "LeafAdmission.prepare(").count - 1 == 1,
+            "Every executor prepares through the one context helper")
         #expect(
-            leafPhase.components(separatedBy: "await ServerCompletion.admitStructuredLeaf(").count
-                - 1 == 1,
-            "Every Leaf Store executor must reach the shared owner through the one admit tail"
-        )
+            speculative.components(separatedBy: "LeafAdmission.prepare(").count - 1 == 1
+                && speculative.components(separatedBy: "await admission.admit(").count - 1 == 1,
+            "The Speculative Canonical Prefill stores its leaf through one admission")
         #expect(
-            speculative.components(separatedBy: "await ServerCompletion.admitStructuredLeaf(")
-                .count - 1 == 1,
-            "The speculative executor must route through the shared owner"
-        )
-        #expect(
-            !completion.contains("leafPayload: strippedLeafPayload"),
-            "Single-leaf policy should not retain the removed strippedLeafPayload store path"
-        )
+            completion.components(separatedBy: "LeafAdmission.prepare(").count - 1 == 1,
+            "Salvage-on-cancel stores its leaf through one admission")
     }
 
     @Test
     func mainActorRunClosuresAroundPrefixCacheAdmissionsAreNonSuspending() throws {
-        // The `MainActor.run` closures wrapping
-        // `prefixCache.admit` must stay
-        // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated
-        // under an `NSLock`; an `await` inside the closure would
-        // force the HTTP hot path to suspend mid-admission and break
-        // the ordering the pending-ref map was designed around.
-        // Post ADR-0033 there are exactly two: the drive's mid-prefill
-        // checkpoint admission and the coalesced admit-plus-stats hop
-        // inside `admitStructuredLeaf` (every leaf path funnels there).
+        // The `MainActor.run` closures wrapping `prefixCache.admit` must stay
+        // synchronous. `SSDSnapshotStore.tryEnqueue` is nonisolated under an
+        // `NSLock`; an `await` inside the closure would force the HTTP hot
+        // path to suspend mid-admission and break the ordering the
+        // pending-ref map was designed around. There are exactly two: the
+        // drive's mid-prefill checkpoint admission and the coalesced
+        // admit-plus-stats hop inside the Leaf Admission (every leaf goes
+        // through it).
         let source =
             try readServerSource("ServerCompletion.swift")
             + (try readLeafStorePhaseSources())
+            + (try readServerSource("LeafAdmission.swift"))
         let bodies = extractMainActorRunBodies(
             source: source,
             containing: ["prefixCache.admit"]
         )
         #expect(
             bodies.count == 2,
-            "Expected exactly 2 MainActor.run closures calling prefixCache admission APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated the mid-prefill or admitStructuredLeaf site — review before updating this assertion."
+            "Expected exactly 2 MainActor.run closures calling prefixCache admission APIs; found \(bodies.count). A refactor may have moved, collapsed, or duplicated the mid-prefill or Leaf Admission site; review before updating this assertion."
         )
         for (index, body) in bodies.enumerated() {
             #expect(
                 !body.contains("await"),
-                "MainActor.run closure #\(index) calling prefixCache admission APIs contains an `await` — non-suspending admission is broken. Body:\n\(body)"
+                "MainActor.run closure #\(index) calling prefixCache admission APIs contains an `await`, so non-suspending admission is broken. Body:\n\(body)"
             )
         }
     }

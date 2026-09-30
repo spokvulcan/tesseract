@@ -3,8 +3,9 @@
 //  tesseract
 //
 //  The model-affine executors of the **Leaf Store** phase — `LeafStorePhase.run`
-//  decides, these perform the Metal capture and admit. Three ways to bring
-//  the cache to snapshot, one shared tail (`admitLeaf`):
+//  decides, these bring the cache to the state its leaf is stored at and hand
+//  it to the leaf's **Leaf Admission** (ADR-0078). Three ways to bring the
+//  cache to snapshot, one shared tail (`admitLeaf`):
 //  - live: the finished turn's final cache at its own offset, under the
 //    fed path, no prefill (**Live Leaf Capture** — the fast path)
 //  - direct: the same live cache under a non-thinking template's canonical
@@ -33,6 +34,11 @@ nonisolated extension LeafStorePhase {
         static let direct = LeafStages(
             store: "leafStore", capture: "leafCapture", admission: "leafAdmission",
             source: "leaf")
+
+        /// The labels the path's **Leaf Admission** logs under.
+        var admissionLabels: LeafAdmission.Labels {
+            LeafAdmission.Labels(capture: capture, admission: admission, source: source)
+        }
     }
 
     /// What every executor needs beside the cache it brings to snapshot: the
@@ -51,6 +57,9 @@ nonisolated extension LeafStorePhase {
         /// The request's **Cache Claim**: a leaf captured by move from the
         /// leased cache checks in through it.
         let claim: CacheClaim
+        /// Whether no image reached the model (instance truth, ADR-0070): one
+        /// of the facts a finished turn's leaf moves on.
+        let isTextOnly: Bool
         /// The request's restore mode (`cold`, `copy`, `failedCopy`,
         /// `handoff`), as its check-out decided it — one input to the stored
         /// leaf's source.
@@ -70,6 +79,7 @@ nonisolated extension LeafStorePhase {
             self.stages = stages
             memory = inputs.memory
             claim = inputs.claim
+            isTextOnly = inputs.request.facts.isTextOnly
             restoreMode = mlxStart.restoreMode
             maximumAdvance = mlxStart.maximumAdvance
             copyReason =
@@ -78,25 +88,30 @@ nonisolated extension LeafStorePhase {
                 : inputs.request.facts.partitionKey.kvBits != nil ? .quantized : nil
         }
 
-        /// The SSD extension base for `storedTokens`, resolved before the
-        /// session is entered (a MainActor hop).
-        func resolveExtensionBase() async -> SnapshotExtension? {
-            await ServerCompletion.resolveExtensionBase(
-                ssdEnabled: ssdEnabled,
-                tokens: storedTokens,
+        /// Prepare this leaf's **Leaf Admission** before the session is
+        /// entered: an SSD-bound one resolves its extension base here (a
+        /// MainActor hop).
+        func prepareAdmission() async -> LeafAdmission {
+            await LeafAdmission.prepare(
+                storedTokens: storedTokens,
                 partitionKey: partitionKey,
-                prefixCache: prefixCache
+                reachesSSD: ssdEnabled,
+                requestID: requestID,
+                prefixCache: prefixCache,
+                diagnostics: diagnosticsContext
             )
         }
     }
 
     /// What an executor produced: the tuner record when the leaf survived,
-    /// the admission's store diagnostics for the phase to tally into the
+    /// the admission's eviction tally for the phase to fold into the
     /// per-request trace (nil when no admission was attempted), and the
     /// report fields the drive prints.
     struct LeafCapture: Sendable {
         var leafStore: AlphaTuner.LeafStore?
-        var admission: PrefixCacheManager.StoreDiagnostics?
+        /// Already logged by the admission; the phase merges it without
+        /// logging again.
+        var evictionTally: CompletionTraceAccumulator?
         /// Why no leaf was captured, when the executor decided that itself.
         var skipReason: String?
         /// The captured leaf's token offset (nil when capture never ran).
@@ -119,6 +134,7 @@ nonisolated extension LeafStorePhase {
     /// restore, no prefill: the generation loop has been
     /// awaited by the drive, so the array is quiescent (ADR-0006), and the
     /// eligible text leaf takes ownership inside a Metal-affine Model Session.
+    /// `move: false` lends the cache instead, so the leaf is always copied.
     /// `path` is the report path the caller runs under (`.live`, or
     /// `.direct` through the direct executor); it names the stored leaf's
     /// source for the reserve.
@@ -129,21 +145,24 @@ nonisolated extension LeafStorePhase {
         move: Bool = true,
         path: Report.Path
     ) async -> LeafCapture {
-        let extensionBase = await context.resolveExtensionBase()
+        let admission = await context.prepareAdmission()
         return await sessions.withSession { session in
             // `finalCache` is non-`Sendable` `[any KVCache]` — reached
             // through the boxed generation instead of a direct capture.
             let generation = mlxStartBox.value
-            let moving =
-                move && context.copyReason == nil && generation.speculativeArm != .mtp
-                ? generation.finalCacheOwner : nil
+            let cache: LeafAdmission.Cache =
+                move
+                ? .finishedTurn(
+                    generation.finalCacheOwner, claim: context.claim,
+                    textOnly: context.isTextOnly, arm: generation.speculativeArm)
+                : .lent(generation.finalCache)
             return await admitLeaf(
-                cache: moving == nil ? generation.finalCache : [],
-                moving: moving,
+                cache,
+                preparing: generation.finalCache,
+                admission: admission,
                 path: path,
                 session: session,
                 residualTokens: 0,
-                extensionBase: extensionBase,
                 context: context,
                 timings: Timings()
             )
@@ -221,10 +240,11 @@ nonisolated extension LeafStorePhase {
     // MARK: - Boundary executor
 
     /// Restore the boundary snapshot, prefill the residual stored-token
-    /// suffix, capture a `.leaf`, and admit it under the stored path. The
-    /// model-affine executor for a `.fromBoundary` **Leaf Capture Plan**,
-    /// shared by the direct-tool and canonical-user modes so both align to
-    /// the structured template render, not the raw generated bytes.
+    /// suffix, and hand the restored cache to the leaf's admission under the
+    /// stored path. The model-affine executor for a `.fromBoundary` **Leaf
+    /// Capture Plan**, shared by the direct-tool and canonical-user modes so
+    /// both align to the structured template render, not the raw generated
+    /// bytes.
     ///
     /// The **Leaf Admission Builder** only emits `.fromBoundary` when
     /// `storedTokens.count > boundary.tokenOffset`, so the residual is
@@ -243,7 +263,7 @@ nonisolated extension LeafStorePhase {
     ) async -> LeafCapture {
         let boundaryOffset = boundarySnapshot.tokenOffset
         let storedTokens = context.storedTokens
-        let extensionBase = await context.resolveExtensionBase()
+        let admission = await context.prepareAdmission()
 
         do {
             return try await sessions.withSession { session in
@@ -288,23 +308,19 @@ nonisolated extension LeafStorePhase {
                 // deep-copies every layer out of the tree (a Prefix-View
                 // Checkpoint's slices of its Backing Leaf included) and the
                 // residual prefill wrote only into it. Nothing else can reach
-                // these objects, so the leaf takes them instead of paying a
+                // these objects, so it is handed over as owned and the leaf
+                // takes them when every layer can move, instead of paying a
                 // second full-KV deep copy — the boundary turn's memory peak,
                 // and the `.copied` body that made the next turn restore by
-                // copy. ADR-0064's one-owner rule holds: the owner below is
-                // the only reference, and `admitLeaf` reads `cache` only when
-                // it is not moving.
-                let moving =
-                    HybridCacheSnapshot.canCaptureMoving(cache: restoredCache)
-                    ? FinalGenerationCache(restoredCache) : nil
-
+                // copy. ADR-0064's one-owner rule holds: after the move the
+                // leaf holds the only reference.
                 return await admitLeaf(
-                    cache: moving == nil ? restoredCache : [],
-                    moving: moving,
+                    .owned(restoredCache),
+                    preparing: restoredCache,
+                    admission: admission,
                     path: .boundary,
                     session: session,
                     residualTokens: residual.count,
-                    extensionBase: extensionBase,
                     context: context,
                     timings: timings
                 )
@@ -322,135 +338,77 @@ nonisolated extension LeafStorePhase {
 
     // MARK: - Shared tail
 
-    /// Inside a Model Session: snapshot `cache` at the stored path's length,
-    /// check a leaf moved from the leased cache in through the request's
-    /// claim, derive its admission storage (**Deferred Payload Extraction**:
-    /// an extension payload's arrays — the attention suffix slices and the
-    /// whole recurrent state — are detached and evaluated here, the host
-    /// copy waits for the SSD writer), admit through the one shared owner —
-    /// the same path the speculative pass uses — and release the MLX buffer
-    /// pool so it doesn't accumulate transient prefill intermediates across
-    /// requests. `timings` carries the stages the caller already ran.
+    /// Inside a Model Session: compact the cache the leaf is taken from
+    /// (#534), hand it to the leaf's **Leaf Admission** — which captures it,
+    /// checks a moved leaf in through the request's claim before anything is
+    /// extracted, admits it and classifies what that evicted — and release the
+    /// MLX buffer pool so it doesn't accumulate transient prefill intermediates
+    /// across requests. `timings` carries the stages the caller already ran.
     private static func admitLeaf(
-        cache: [any KVCache],
-        moving: FinalGenerationCache? = nil,
+        _ cache: LeafAdmission.Cache,
+        preparing target: [any KVCache],
+        admission: LeafAdmission,
         path: Report.Path,
         session: any ModelSession,
         residualTokens: Int,
-        extensionBase: SnapshotExtension?,
         context: LeafAdmissionContext,
         timings: Timings
     ) async -> LeafCapture {
         var timings = timings
-        let storedTokens = context.storedTokens
         // #534: a check-in keeps whatever capacity the growth granule rounded
         // up, and a returned leaf carries a rewound generation's rows; compact
         // above the threshold before the capture takes the arrays.
-        let compaction = AttentionCapacityCompaction.compactIfNeeded(moving?.cache ?? cache)
+        let compaction = AttentionCapacityCompaction.compactIfNeeded(target)
         context.memory?.mark(
             .capturingLeaf,
-            facts: RequestMemoryTelemetry.cacheFacts(moving?.cache ?? cache).merging(
+            facts: RequestMemoryTelemetry.cacheFacts(target).merging(
                 ["leafCompactedBytes": "\(compaction.freedBytes)"], uniquingKeysWith: { $1 }))
-        let captureStart = Date.timeIntervalSinceReferenceDate
-        guard
-            let leaf = moving != nil
-                ? moving?.moveSnapshot(offset: storedTokens.count)
-                : session.captureSnapshot(
-                    cache: cache,
-                    offset: storedTokens.count,
-                    type: .leaf
-                )
-        else {
-            context.diagnosticsContext.logSkip(
-                stage: context.stages.capture,
-                reason: "unsupported-cache-type"
-            )
-            return LeafCapture(
-                skipReason: "unsupported-cache-type",
-                residualTokens: residualTokens, timings: timings)
-        }
-        timings.captureSeconds = secondsSince(captureStart)
-        Log.agent.info(
-            "\(context.stages.source) captured — offset=\(leaf.tokenOffset) "
-                + "residualTokens=\(residualTokens) "
-                + "captureMs=\(PrefixCacheDiagnostics.milliseconds(timings.captureSeconds)) "
-                + "storedLen=\(storedTokens.count)"
+        let outcome = await admission.admit(
+            cache,
+            in: session,
+            labels: context.stages.admissionLabels,
+            turn: LeafAdmission.Turn(
+                path: path, restoreMode: context.restoreMode,
+                maximumAdvance: context.maximumAdvance),
+            memory: context.memory
         )
-
-        context.memory?.mark(
-            .preparingPayload,
-            facts: [
-                "leafSnapshotArrayBytes": "\(leaf.memoryBytes)",
-                "leafCaptureMode": moving == nil ? "copy" : "handoff",
-                "requestCacheLayerCountAfterCapture": "\(moving?.cache.count ?? cache.count)",
-            ])
-        // Check in before the payload is extracted (ADR-0069): the check-in
-        // frees the recurrent rewind backup just before an extension payload
-        // allocates arrays of the same shapes, so the check-in peak holds two
-        // copies of the recurrent state, not three. A refused check-in skips
-        // extraction entirely. Nothing can take the leaf in between: check-outs
-        // are serialized by this Model Session, and only a live generation
-        // writes arrays in place.
-        if let moving,
-            case .rewound(let cause) = await context.claim.checkIn(
-                leaf, from: moving, tokens: storedTokens, in: session)
-        {
-            // Not committed: the claim took the objects back and returned
-            // the original leaf.
+        switch outcome {
+        case .notCaptured(let reason):
+            return LeafCapture(skipReason: reason, residualTokens: residualTokens, timings: timings)
+        case .returned(let cause, let capture):
+            logCaptured(capture, residualTokens: residualTokens, context: context)
             return LeafCapture(
                 skipReason: cause == .cancelled ? "cancelled" : "lease-return-refused")
+        case .admitted(let admitted):
+            timings.captureSeconds = admitted.capture.seconds
+            timings.payloadSeconds = admitted.payloadSeconds
+            timings.admitSeconds = admitted.admitSeconds
+            logCaptured(admitted.capture, residualTokens: residualTokens, context: context)
+            Memory.clearCache()
+            return LeafCapture(
+                leafStore: admitted.survived
+                    ? AlphaTuner.LeafStore(
+                        storedTokens: context.storedTokens, bytes: admitted.capture.bytes)
+                    : nil,
+                evictionTally: admitted.tally,
+                leafOffset: admitted.capture.offset,
+                residualTokens: residualTokens,
+                handedOff: admitted.capture.handedOff,
+                copyReason: context.copyReason,
+                compactedBytes: compaction.freedBytes,
+                timings: timings
+            )
         }
-        let payloadStart = Date.timeIntervalSinceReferenceDate
-        let storage = SnapshotAdmission.Storage.intent(
-            for: leaf,
-            ssdEnabled: context.ssdEnabled,
-            extending: extensionBase
-        )
-        timings.payloadSeconds = secondsSince(payloadStart)
+    }
 
-        var payloadFacts = ["ssdPayloadMode": "none", "ssdPayloadArrayBytes": "0"]
-        if case .ramAndSSD(let payload) = storage {
-            payloadFacts = [
-                "ssdPayloadMode": payload.extending == nil ? "full" : "extension",
-                "ssdPayloadArrayBytes": "\(payload.totalBytes)",
-            ]
-        }
-        context.memory?.mark(.admittingLeaf, facts: payloadFacts)
-        context.memory?.mark(
-            .admittingLeaf,
-            facts: [
-                "leafLeaseActive": "false", "recurrentRewindStateBytes": "0",
-            ])
-        let admitStart = Date.timeIntervalSinceReferenceDate
-        // The reserve observes the source the `leafStore` event will
-        // report for this leaf: the same fold, from the same facts.
-        let admission = await ServerCompletion.admitStructuredLeaf(
-            leaf,
-            storedTokens: storedTokens,
-            storage: storage,
-            partitionKey: context.partitionKey,
-            requestID: context.requestID,
-            prefixCache: context.prefixCache,
-            diagnostics: context.diagnosticsContext,
-            admissionStage: context.stages.admission,
-            captureSource: context.stages.source,
-            source: Report.Source.stored(
-                path: path, restoreMode: context.restoreMode, handedOff: moving != nil),
-            maximumAdvance: context.maximumAdvance
-        )
-        timings.admitSeconds = secondsSince(admitStart)
-        Memory.clearCache()
-        return LeafCapture(
-            leafStore: admission.survived
-                ? AlphaTuner.LeafStore(storedTokens: storedTokens, bytes: leaf.memoryBytes)
-                : nil,
-            admission: admission.store,
-            leafOffset: leaf.tokenOffset,
-            residualTokens: residualTokens,
-            handedOff: moving != nil,
-            copyReason: context.copyReason,
-            compactedBytes: compaction.freedBytes,
-            timings: timings
+    private static func logCaptured(
+        _ capture: LeafAdmission.Capture, residualTokens: Int, context: LeafAdmissionContext
+    ) {
+        Log.agent.info(
+            "\(context.stages.source) captured — offset=\(capture.offset) "
+                + "residualTokens=\(residualTokens) "
+                + "captureMs=\(PrefixCacheDiagnostics.milliseconds(capture.seconds)) "
+                + "storedLen=\(context.storedTokens.count)"
         )
     }
 }

@@ -43,18 +43,23 @@ struct LeafCaptureHandoffTests {
         var cache: [any KVCache] = []
         #expect(HybridCacheSnapshot.captureMoving(cache: &cache, offset: 8) == nil)
         #expect(HybridCacheSnapshot.capture(cache: [], offset: 8, type: .leaf) == nil)
-        let empty = HybridCacheSnapshot(
-            tokenOffset: 8, layers: [], checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000)
         let requestID = UUID()
-        let admission = await ServerCompletion.admitStructuredLeaf(
-            empty, storedTokens: Array(1...8), storage: .ramOnly, partitionKey: key,
+        let admission = await LeafAdmission.prepare(
+            storedTokens: Array(1...8), partitionKey: key, reachesSSD: false,
             requestID: requestID, prefixCache: manager,
             diagnostics: .init(
-                requestID: requestID, modelID: key.modelID, kvBits: nil, kvGroupSize: 64),
-            admissionStage: "leafAdmission", captureSource: "leaf")
-        #expect(!admission.survived)
-        #expect(admission.store == nil)
+                requestID: requestID, modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        let outcome = await ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2]))
+            .withSession { session in
+                await admission.admit(
+                    .owned([]), in: session,
+                    labels: LeafStorePhase.LeafStages.direct.admissionLabels)
+            }
+        guard case .notCaptured = outcome else {
+            Issue.record("an empty cache must not be captured, got \(outcome)")
+            return
+        }
         #expect(manager.lookup(tokens: Array(1...9), partitionKey: key).snapshot == nil)
     }
 

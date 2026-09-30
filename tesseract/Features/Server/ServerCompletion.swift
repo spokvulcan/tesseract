@@ -1948,7 +1948,8 @@ nonisolated final class ServerCompletion {
                         partitionKey: partitionKey,
                         requestID: requestID,
                         prefixCache: prefixCache,
-                        diagnostics: diagnosticsContext
+                        diagnostics: diagnosticsContext,
+                        session: session
                     )
                 }
                 Memory.clearCache()
@@ -2602,125 +2603,6 @@ nonisolated final class ServerCompletion {
         return cache
     }
 
-    // MARK: - Leaf admission statics
-
-    /// Resolve the **Leaf Extension Admission** base for a leaf about
-    /// to be captured: one hop to the MainActor (radix tree + ledger),
-    /// made *before* entering the Metal-affine `container.perform` so
-    /// capture closures stay free of cross-actor hops. Every
-    /// leaf-capture path (direct, boundary, speculative) funnels
-    /// through here. `nil` when `ssdEnabled` is false — the leaf
-    /// admits full.
-    static func resolveExtensionBase(
-        ssdEnabled: Bool,
-        tokens: [Int],
-        partitionKey: CachePartitionKey,
-        prefixCache: PrefixCacheManager
-    ) async -> SnapshotExtension? {
-        guard ssdEnabled else { return nil }
-        return await MainActor.run {
-            prefixCache.extensionBase(tokens: tokens, partitionKey: partitionKey)
-        }
-    }
-
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable function_parameter_count
-    /// Shared admission tail for structured-leaf executors (the **Leaf
-    /// Store** phase and the **Speculative Canonical Prefill**): wrap a
-    /// captured leaf in a leaf admission, log the capture, admit on
-    /// MainActor, and report whether the admission survived its own
-    /// eviction pass — returning the store diagnostics so the caller
-    /// classifies and logs evictions through the trace accumulator. Call it
-    /// from inside the Model Session, like `SnapshotAdmission.Storage.intent`.
-    /// What a structured-leaf admission produced. `store` is nil when the
-    /// admission was never attempted (invalid token path); otherwise it
-    /// carries the eviction/supersession events for the caller to classify
-    /// and log through the **Completion Trace Accumulator** — the one home
-    /// for that pairing, shared by the Leaf Store phase (which tallies them
-    /// into the per-request record) and the speculative pass (which only
-    /// logs).
-    struct StructuredLeafAdmission: Sendable {
-        let survived: Bool
-        let store: PrefixCacheManager.StoreDiagnostics?
-    }
-
-    static func admitStructuredLeaf(
-        _ leaf: HybridCacheSnapshot,
-        storedTokens: [Int],
-        storage: SnapshotAdmission.Storage,
-        partitionKey: CachePartitionKey,
-        requestID: UUID,
-        prefixCache: PrefixCacheManager,
-        diagnostics: PrefixCacheDiagnostics.Context,
-        admissionStage: String,
-        captureSource: String,
-        source: LeafStorePhase.Report.Source? = nil,
-        maximumAdvance: Int = .max
-    ) async -> StructuredLeafAdmission {
-        // swiftlint:enable function_parameter_count
-        guard !leaf.layers.isEmpty else {
-            diagnostics.logSkip(stage: admissionStage, reason: "empty-cache-body")
-            return StructuredLeafAdmission(survived: false, store: nil)
-        }
-        guard
-            let admission = SnapshotAdmission.leaf(
-                storedTokens: storedTokens,
-                snapshot: leaf,
-                storage: storage,
-                partitionKey: partitionKey,
-                requestID: requestID,
-                source: source,
-                maximumAdvance: maximumAdvance
-            )
-        else {
-            diagnostics.logSkip(
-                stage: admissionStage,
-                reason: "invalid-path",
-                extraFields: [
-                    ("offset", "\(leaf.tokenOffset)"),
-                    ("storedLen", "\(storedTokens.count)"),
-                ]
-            )
-            return StructuredLeafAdmission(survived: false, store: nil)
-        }
-
-        diagnostics.log(
-            PrefixCacheDiagnostics.CaptureEvent(
-                offset: leaf.tokenOffset,
-                checkpointType: leaf.checkpointType,
-                bytes: leaf.memoryBytes,
-                duringPrefill: false,
-                source: captureSource
-            ))
-
-        // Coalesce admit + stats read in one MainActor hop; the post-store
-        // budget/total snapshot feeds the capturedThenEvicted diagnostic
-        // without another hop.
-        let (storeDiagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
-            await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                let d = prefixCache.admit(admission)
-                return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
-            }
-        let admissionEvicted = storeDiagnostics.evictions.contains { event in
-            event.offset == leaf.tokenOffset && event.checkpointType == .leaf
-        }
-        if admissionEvicted {
-            diagnostics.logSkip(
-                stage: admissionStage,
-                reason: "capturedThenEvicted",
-                level: .warning,
-                extraFields: [
-                    ("offset", "\(leaf.tokenOffset)"),
-                    ("bytes", "\(leaf.memoryBytes)"),
-                    ("budgetBytes", "\(postStoreBudgetBytes)"),
-                    ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
-                ]
-            )
-            return StructuredLeafAdmission(survived: false, store: storeDiagnostics)
-        }
-        return StructuredLeafAdmission(survived: true, store: storeDiagnostics)
-    }
-
     private static func currentMaxMetalBufferBytes() -> UInt64 {
         guard let device = MTLCreateSystemDefaultDevice() else {
             return UInt64.max
@@ -2758,12 +2640,13 @@ nonisolated final class ServerCompletion {
     /// it RAM-only, so a re-sent request or an abort-seeded speculative
     /// pass resumes there instead of the restore floor. Runs after the
     /// cancellation landed (the GPU is already idle, nobody is waiting on
-    /// this request) inside the same Metal-affine scope as the prefill.
-    /// RAM-only by design: the imminent retry supersedes this leaf with
-    /// its own SSD-backed one, so the payload extraction and disk churn
-    /// are both skipped — the same economics as speculative preempt
-    /// capture. Below the progress threshold nothing is admitted, leaving
-    /// the cancellation contract (no leaf, no trace record) unchanged.
+    /// this request) inside the same Metal-affine scope as the prefill, whose
+    /// `session` its **Leaf Admission** captures in. RAM-only by design: the
+    /// imminent retry supersedes this leaf with its own SSD-backed one, so
+    /// the payload extraction and disk churn are both skipped — the same
+    /// economics as speculative preempt capture. Below the progress
+    /// threshold nothing is admitted, leaving the cancellation contract (no
+    /// leaf, no trace record) unchanged.
     static func salvageCancelledPrefill(
         cache: [any KVCache],
         keySpace: CacheKeySpace,
@@ -2771,7 +2654,8 @@ nonisolated final class ServerCompletion {
         partitionKey: CachePartitionKey,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
-        diagnostics: PrefixCacheDiagnostics.Context
+        diagnostics: PrefixCacheDiagnostics.Context,
+        session: any ModelSession
     ) async {
         let reportedOffset = httpPrefixCacheReportedTokenCount(cache)
         guard
@@ -2815,36 +2699,18 @@ nonisolated final class ServerCompletion {
             )
             return
         }
-        guard
-            let leaf = HybridCacheSnapshot.capture(
-                cache: cache, offset: offset, type: .leaf
-            )
-        else {
-            diagnostics.logSkip(
-                stage: "salvageOnCancel",
-                reason: "unsupported-cache-type"
-            )
-            return
-        }
-        let admission = await admitStructuredLeaf(
-            leaf,
+        // The prefill's cache is lent: the leaf is a copy, admitted RAM-only,
+        // so preparing resolves no extension base and makes no MainActor hop.
+        let admission = await LeafAdmission.prepare(
             storedTokens: Array(keySpace.keyPath[0..<offset]),
-            storage: .ramOnly,
             partitionKey: partitionKey,
+            reachesSSD: false,
             requestID: requestID,
             prefixCache: prefixCache,
-            diagnostics: diagnostics,
-            admissionStage: "salvageOnCancel",
-            captureSource: "cancelledPrefillSalvage"
+            diagnostics: diagnostics
         )
-        if let store = admission.store {
-            // Classification + correlated logging through the shared
-            // accumulator; the salvage keeps no per-request record.
-            var trace = CompletionTraceAccumulator()
-            trace.ingest(evictions: store.evictions, diagnostics: diagnostics)
-            trace.logSupersessions(store.supersededLeaves, diagnostics: diagnostics)
-        }
-        if admission.survived {
+        let outcome = await admission.admit(.lent(cache), in: session, labels: .salvageOnCancel)
+        if case .admitted(let admitted) = outcome, admitted.survived {
             Log.agent.info(
                 "Salvage-on-cancel admitted — offset=\(offset) "
                     + "restoreBase=\(restoreBaseOffset) "

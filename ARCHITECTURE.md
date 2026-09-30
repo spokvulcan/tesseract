@@ -158,6 +158,7 @@ tesseract/
 │   │   ├── RequestKeyingPhase.swift   # Request Keying: a request's keys and facts, derived once (Keyed Request, ADR-0070)
 │   │   ├── ConversationRender.swift   # Conversation Render module: the one chat-template application, Emitted Path Resolve, Generation Prompt probe
 │   │   ├── LeafStorePhase.swift       # Leaf Store phase: fast path vs boundary path (+Report, +Executors)
+│   │   ├── LeafAdmission.swift        # Leaf Admission: the one way a leaf enters the prefix cache (ADR-0078)
 │   │   ├── LeafStoreCounters.swift    # Boundary-turn tally by reason, logged at unload
 │   │   ├── LeafAdmissionBuilder.swift # GPU-free leaf-snapshot routing
 │   │   ├── LiveLeafCapture.swift      # Pure fast-path eligibility (live vs boundary)
