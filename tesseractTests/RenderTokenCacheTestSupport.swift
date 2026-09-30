@@ -268,20 +268,24 @@ let chatMLGreedyPieces = [
 /// production request-edge constructor, uncached unless a `fingerprint` is
 /// given, with the C31 base render optionally carried. The eligibility knobs
 /// default to the eligible text-only shape; the eligibility suite flips them.
+/// Like production, it consults the shared Emitted Path Index unless given
+/// another index, or `nil` for none.
 nonisolated func makeRender(
     _ tokenizer: any MLXLMCommon.Tokenizer,
     toolSpecs: [ToolSpec]? = nil,
     renderContext: TemplateRenderContext = .canonical,
     fingerprint: String? = nil,
     base: [Int]? = nil,
-    cache: RenderTokenCache = .shared
+    cache: RenderTokenCache = .shared,
+    emittedPathIndex: EmittedPathIndex? = .shared
 ) -> ConversationRender {
     let render = ConversationRender.forRequest(
         tokenizer: tokenizer,
         toolSpecs: toolSpecs,
         renderContext: renderContext,
         modelFingerprint: fingerprint,
-        cache: cache
+        cache: cache,
+        emittedPathIndex: emittedPathIndex
     )
     return base.map { render.carryingBaseRender($0) } ?? render
 }

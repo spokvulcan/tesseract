@@ -279,6 +279,10 @@ private enum ProbeParityFixtures {
     /// tokenizer, the CACHED continuation verb moves the private cache's
     /// telemetry (a cold tail-replacement fallback). The probe verb, twice
     /// over, applies the template on every call and leaves it untouched.
+    ///
+    /// Neither render consults an Emitted Path Index: the shared one keeps
+    /// one fingerprint's End-of-Turn Marker, which costs two renders to derive
+    /// again whenever another suite has adopted its own fingerprint (#583).
     @Test func uncachedContinuationRenderNeverTouchesTheRenderTokenCache() throws {
         let messages =
             ProbeParityFixtures.stopTurn.promptMessages
@@ -286,13 +290,16 @@ private enum ProbeParityFixtures {
 
         let controlCache = RenderTokenCache()
         let control = TemplateCallObservingTokenizer(GreedyTokenizer(pieces: chatMLGreedyPieces))
-        _ = try makeRender(control, fingerprint: "probe-parity", cache: controlCache)
-            .continuationRender(messages: messages)
+        _ = try makeRender(
+            control, fingerprint: "probe-parity", cache: controlCache, emittedPathIndex: nil
+        )
+        .continuationRender(messages: messages)
         #expect(controlCache.statsSnapshot().replacedFallbacks == 1)
 
         let cache = RenderTokenCache()
         let tokenizer = TemplateCallObservingTokenizer(GreedyTokenizer(pieces: chatMLGreedyPieces))
-        let render = makeRender(tokenizer, fingerprint: "probe-parity", cache: cache)
+        let render = makeRender(
+            tokenizer, fingerprint: "probe-parity", cache: cache, emittedPathIndex: nil)
         let first = try render.uncachedContinuationRender(messages: messages)
         let second = try render.uncachedContinuationRender(messages: messages)
 
