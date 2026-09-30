@@ -2266,7 +2266,7 @@ final class PrefixCacheManager {
                 floorBytes: floor
             ))
         if budgetBand.currentBytes < previous {
-            evictToFitBudget()
+            drainAndLogEvictions()
         }
     }
 
@@ -2345,7 +2345,7 @@ final class PrefixCacheManager {
                 ))
         }
         guard budgetBand.currentBytes < previous else { return [] }
-        return evictToFitBudget()
+        return drainAndLogEvictions()
     }
 
     /// Override the RAM-tier budget, band-consistently: the band is
@@ -2375,7 +2375,7 @@ final class PrefixCacheManager {
                     floorBytes: floorContents().bytes
                 ))
         }
-        return evictToFitBudget()
+        return drainAndLogEvictions()
     }
 
     /// Override the eviction weighting (`alpha`) in the **Eviction
@@ -2584,6 +2584,10 @@ final class PrefixCacheManager {
     /// one most likely to kill the just-captured leaf: it used to run
     /// unconditionally, so the fresh leaf could be evicted by its own
     /// admission (`capturedThenEvicted`).
+    ///
+    /// Logs nothing: the caller logs the returned events, an admission
+    /// against its request, the manager's own drains through
+    /// `drainAndLogEvictions`.
     @discardableResult
     func evictToFitBudget(
         requestID: UUID? = nil,
@@ -2640,6 +2644,23 @@ final class PrefixCacheManager {
             pendingBootstrapBoundary == nil
         {
             pendingBootstrapBoundary = requestID.map(PendingBootstrapBoundary.request) ?? .unscoped
+        }
+        return events
+    }
+
+    /// Drain to the budget on the manager's own account (memory pressure, a
+    /// budget re-measure, a budget override) and log what it dropped, since
+    /// no request is there to log it. An admission's drain hands its events
+    /// to the admission, which logs them against its request; the Compressed
+    /// Warm Tier's drain logs its own.
+    @discardableResult
+    private func drainAndLogEvictions() -> [EvictionEvent] {
+        let events = evictToFitBudget()
+        for event in events {
+            PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.EvictionEvent(event))
+            if let id = event.bodyDroppedSnapshotRefID {
+                PrefixCacheDiagnostics.logSystem(PrefixCacheDiagnostics.SSDBodyDropEvent(id: id))
+            }
         }
         return events
     }

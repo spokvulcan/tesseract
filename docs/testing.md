@@ -67,6 +67,7 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/TokenRadixTreeTests \
   -only-testing:tesseractTests/StablePrefixDetectorTests \
   -only-testing:tesseractTests/PrefixCacheManagerTests \
+  -only-testing:tesseractTests/BudgetDrainDiagnosticsTests \
   -only-testing:tesseractTests/PrefixCacheIntegrationTests \
   -only-testing:tesseractTests/CheckpointCaptureTests \
   -only-testing:tesseractTests/PrefixViewModelSessionTests \
