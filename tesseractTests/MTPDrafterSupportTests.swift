@@ -3,82 +3,10 @@ import Testing
 
 @testable import Tesseract_Agent
 
+/// The MTP head's own facts: pairing, head detection and the greedy preset.
+/// When a request engages the head is the Speculation Plan's table
+/// (`SpeculationPlanTests`).
 struct MTPDrafterSupportTests {
-
-    // MARK: - Engagement policy
-
-    /// The 27B profile: 24 attention heads, bf16 scores.
-    private static let scratchProfile27B = ModelIdentity.FullAttentionScratchProfile(
-        attentionHeads: 24, bytesPerElement: 2)
-
-    /// `shouldEngage` with the engaging happy path as defaults, so each test
-    /// names only the axis it varies.
-    private func engages(
-        hasDrafter: Bool = true,
-        temperature: Float = 0,
-        textOnlyIdentityKeySpace: Bool = true,
-        predictedLeafStoreMode: HTTPLeafStoreMode = .directLeaf,
-        promptTokens: Int = 2048,
-        scratchProfile: ModelIdentity.FullAttentionScratchProfile? = Self.scratchProfile27B
-    ) -> Bool {
-        MTPDrafterSupport.shouldEngage(
-            hasDrafter: hasDrafter,
-            temperature: temperature,
-            textOnlyIdentityKeySpace: textOnlyIdentityKeySpace,
-            predictedLeafStoreMode: predictedLeafStoreMode,
-            promptTokens: promptTokens,
-            scratchProfile: scratchProfile
-        )
-    }
-
-    @Test func engagesOnGreedyTextOnlyColdPromptWithinBudget() {
-        #expect(engages())
-    }
-
-    @Test func refusesWithoutDrafter() {
-        #expect(!engages(hasDrafter: false))
-    }
-
-    @Test func refusesNonGreedySampling() {
-        // The Qwen drafters are greedy-only; engaging at temp > 0 would make
-        // the vendor iterator passthrough after paying the drafter prefill.
-        #expect(!engages(temperature: 0.6))
-    }
-
-    @Test func refusesImageBearingRequests() {
-        #expect(!engages(textOnlyIdentityKeySpace: false))
-    }
-
-    @Test func refusesPromptsPastTheScratchBudget() {
-        // 24 heads × L² × 2 bytes ≤ 4 GiB ⇒ L ≤ ~9459. One past the
-        // boundary must refuse — the MTP prompt prefill is unchunked.
-        let boundary = Int(
-            (Double(MTPDrafterSupport.singleShotScratchBudgetBytes) / (24 * 2))
-                .squareRoot())
-        #expect(engages(promptTokens: boundary))
-        #expect(!engages(promptTokens: boundary + 1))
-    }
-
-    @Test func refusesThinkingTemplates() {
-        // The MTP prompt prefill forfeits the transient boundary snapshots a
-        // thinking template's canonical leaf is synthesized from — engaging
-        // would skip every leaf store and keep the whole conversation cold
-        // forever (the 2026-08-18 qwen3.8-27b incident).
-        #expect(!engages(predictedLeafStoreMode: .canonicalUserLeaf))
-    }
-
-    @Test func refusesToolBearingRequests() {
-        // A tool-call turn's direct-tool leaf needs the last-message boundary
-        // snapshot the MTP arm forfeits; emission is unknowable up front, so
-        // defined tools predict as tool turns and refuse engagement.
-        #expect(!engages(predictedLeafStoreMode: .directToolLeaf))
-    }
-
-    @Test func refusesWithoutAScratchProfile() {
-        // No profile means the single-shot prepare cannot be priced — never
-        // engage unpriced.
-        #expect(!engages(promptTokens: 128, scratchProfile: nil))
-    }
 
     // MARK: - Drafter pairing
 

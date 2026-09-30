@@ -20,11 +20,11 @@ nonisolated enum RawGenerationPrompt {
 /// **Raw Generation Start** (CONTEXT.md → Server completion; ADR-0016
 /// amendment): the one script that starts a whole-prompt-from-zero
 /// generation over a **Model Session** — tokenize through the session's
-/// agent-edge verb, emit the lookup and prefill progress events, engage the
-/// DFlash2 raw arm when the session pairs a drafter and the prompt is
-/// text-only, else run the **Prefill Strategy** route, start the token-event
-/// loop, and wrap the handles. Every raw start runs the same script, so the
-/// speculation badge, tokenize step, and handle wrap exist once.
+/// agent-edge verb, emit the lookup and prefill progress events, decode
+/// through the session's **Speculation Plan** when there is one, else run
+/// the **Prefill Strategy** route, start the token-event loop, and wrap the
+/// handles. Every raw start runs the same script, so the speculation badge,
+/// tokenize step, and handle wrap exist once.
 ///
 /// **Metal-affinity contract:** must run inside a session (`withSession`),
 /// exactly as the arms it replaced ran inside `container.perform`. The actor
@@ -75,33 +75,38 @@ nonisolated enum RawGenerationStart {
         await progressHandler?(.prefillStarted(prefill))
         let prefillStarted = Date.timeIntervalSinceReferenceDate
 
-        // DFlash2 speculative arm: a text-only prompt on a session whose
-        // drafter pairs with the loaded target (the drafter is only loaded
-        // when it pairs) decodes through the block-parallel speculative
-        // iterator — its init runs the capture-emitting chunked prefill
-        // itself. Sampling presets speculate identically (the draft carries
-        // a selector for rejection sampling).
+        // The Speculation Plan (ADR-0079): the whole prompt from zero, so
+        // nothing is restored and no leaf is stored. A plan's iterator runs
+        // the whole prompt's prefill in its init — DFlash2's own chunked
+        // capture prefill — over a fresh cache.
         //
         // `prefillMs` is stamped right after the iterator build, before the
         // MainActor round trips of the badge and the loop start — the number
         // measures the model, not the renderer.
+        let speculation = session.speculation.plan(
+            for: SpeculationRequest(
+                isTextOnly: prepared.image == nil && prepared.video == nil
+                    && prepared.audio == nil,
+                kvBits: parameters.kvBits,
+                temperature: parameters.temperature,
+                promptTokens: promptTokenCount,
+                restoresPrefix: false,
+                storedLeaf: nil
+            ))
         let loop: (AsyncStream<RawGeneration>, Task<Void, Never>)
         var engagedArm: SpeculativeArm?
-        if DFlash2Support.shouldEngageRawArm(
-            hasDrafter: session.dflash2Drafter != nil, input: prepared)
-        {
-            let specParams = DFlash2Support.rawArmParameters(parameters)
-            let cache = try session.newCache(parameters: specParams)
+        if let speculation {
+            let cache = try session.newCache(parameters: parameters)
             for layer in cache { layer.reserveCapacity(promptTokenCount) }
-            let iterator = try session.makeDFlash2DecodeIterator(
-                prepared, cache: cache, prefilledPrefixTokens: 0, parameters: specParams)
+            let iterator = try session.makeSpeculativeDecodeIterator(
+                prepared, cache: cache, prefilledPrefixTokens: 0, plan: speculation,
+                parameters: parameters)
             prefill.prefillMs = (Date.timeIntervalSinceReferenceDate - prefillStarted) * 1000
-            engagedArm = .dflash2
-            loop = TokenGenerationLoop.start(
+            engagedArm = speculation.arm
+            loop = iterator.startGeneration(
                 promptTokenCount: promptTokenCount,
                 modelConfiguration: session.configuration,
                 tokenizer: session.tokenizer,
-                iterator: iterator,
                 tools: tools
             )
         } else {

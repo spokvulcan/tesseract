@@ -191,12 +191,12 @@ nonisolated enum HTTPLeafStoreMode: String, Sendable {
 }
 
 /// The two decode iterators the keyed path constructs after its app-owned
-/// prefill: the ordinary state-threaded decode, or DFlash2 speculative
-/// decode over the same warmed cache (its capture prefill covers only the
+/// prefill: the ordinary state-threaded decode, or the **Speculation
+/// Plan**'s iterator over the same warmed cache (its prefill covers only the
 /// prompt tail past the app driver's checkpoint captures).
 private nonisolated enum KeyedDecodeIterator {
     case standard(StateThreadedTokenIterator)
-    case dflash2(DFlash2SpeculativeTokenIterator)
+    case speculative(SpeculativeDecodeIterator)
 
     /// Start the app-owned generation stream over whichever iterator the
     /// keyed path built — one `TokenGenerationLoop.start` per case because
@@ -218,37 +218,16 @@ private nonisolated enum KeyedDecodeIterator {
                 tools: tools,
                 generatedTokens: generatedTokens
             )
-        case .dflash2(let decode):
-            TokenGenerationLoop.start(
+        case .speculative(let decode):
+            decode.startGeneration(
                 promptTokenCount: promptTokenCount,
                 modelConfiguration: modelConfiguration,
                 tokenizer: tokenizer,
-                iterator: decode,
                 tools: tools,
                 generatedTokens: generatedTokens
             )
         }
     }
-}
-
-/// Where the DFlash2 arm splits the prompt suffix between the app's
-/// checkpoint-capturing prefill driver and the iterator's own capture
-/// prefill: past the deepest planned capture (every boundary snapshot
-/// survives), but no earlier than the drafter's context-window start (a
-/// deep cold prompt still rides the pipelined driver for its bulk), and
-/// always leaving at least the final prompt token for the iterator.
-private nonisolated func dflash2PrefillSplitOffset(
-    drafter: any DFlash2DrafterModel,
-    checkpointOffsets: some Sequence<Int>,
-    executionBaseOffset: Int,
-    fullTokenCount: Int
-) -> Int {
-    let lastCapture = checkpointOffsets.max() ?? executionBaseOffset
-    let windowStart = fullTokenCount - 1 - drafter.contextWindow
-    return min(
-        max(executionBaseOffset, lastCapture, windowStart),
-        fullTokenCount - 1
-    )
 }
 
 nonisolated enum VisionPrefixMemoryGuard {
@@ -1301,16 +1280,7 @@ nonisolated final class ServerCompletion {
         )
 
         return try await sessions.withSession { session in
-            let draftBytes =
-                session.dflash2Drafter?.parameters().flattened()
-                .reduce(0) { $0 + $1.1.nbytes } ?? 0
-            memory.mark(
-                .preparing,
-                facts: [
-                    "dflash2WeightArrayBytes": "\(draftBytes)",
-                    "dflash2Loaded": "\(session.dflash2Drafter != nil)",
-                    "mtpLoaded": "\(session.mtpDrafter != nil)",
-                ])
+            memory.mark(.preparing, facts: session.speculation.memoryFacts)
             func measure<T>(_ work: () throws -> T) rethrows -> (T, TimeInterval) {
                 let started = Date.timeIntervalSinceReferenceDate
                 let value = try work()
@@ -1515,19 +1485,22 @@ nonisolated final class ServerCompletion {
                 )
             }
 
-            // DFlash2 engagement is a keyed-path decision, not a cold-path
-            // one: the arm rides the ordinary restore + checkpoint-capturing
-            // prefill below (transient boundary snapshots preserved, warm
-            // restores speculate too), so it needs none of this switch's
-            // outcomes. Preferred over MTP when both drafters are present:
-            // deeper blocks (8 vs 2 effective), it engages under sampling
-            // presets, and it decodes over restored caches. The policy lives
-            // on `DFlash2Support.shouldEngage`.
-            let dflash2Engages = DFlash2Support.shouldEngage(
-                hasDrafter: session.dflash2Drafter != nil,
-                textOnlyIdentityKeySpace: facts.isTextOnly,
-                kvBits: parameters.kvBits
-            )
+            // The Speculation Plan (ADR-0079), decided once from the facts
+            // the restore switch below acts on. DFlash2 rides the ordinary
+            // restore + checkpoint-capturing prefill (boundary snapshots
+            // preserved, warm restores speculate too) and splits the
+            // prefill with its iterator; MTP takes the whole prompt from
+            // zero in the cold case. Tool emission is unknowable here, so
+            // defined tools predict a tool leaf.
+            let speculation = session.speculation.plan(
+                for: SpeculationRequest(
+                    isTextOnly: facts.isTextOnly,
+                    kvBits: parameters.kvBits,
+                    temperature: parameters.temperature,
+                    promptTokens: fullTokenCount,
+                    restoresPrefix: prefillPlan.restore.restoresPrefix,
+                    storedLeaf: facts.predictedLeafStoreMode
+                ))
             memory.mark(
                 .restoring, facts: await MainActor.run { prefixCache.memoryTelemetryFacts() })
             if lookupResult.snapshot == nil {
@@ -1537,7 +1510,7 @@ nonisolated final class ServerCompletion {
                 .restoring,
                 facts: [
                     "promptTokens": "\(fullTokenCount)",
-                    "dflash2Engaged": "\(dflash2Engages)",
+                    "dflash2Engaged": "\(speculation?.arm == .dflash2)",
                     "restoreSnapshotBytes": "\(lookupResult.snapshot?.memoryBytes ?? 0)",
                 ])
             // The claim's typed restore outcome: a handoff holds the lease
@@ -1560,7 +1533,7 @@ nonisolated final class ServerCompletion {
             let maximumAdvance = CacheClaim.maximumAdvance(
                 newPromptTokens: fullTokenCount - restoredOffset,
                 outputCeiling: parameters.maxTokens,
-                speculativeAllowance: dflash2Engages ? DFlash2Support.blockSize : 0)
+                speculativeAllowance: speculation?.advanceAllowance ?? 0)
             switch prefillPlan.restore {
             case .restore(let cacheOffset, let anchorDelta):
                 let restoreStarted = Date.timeIntervalSinceReferenceDate
@@ -1648,26 +1621,13 @@ nonisolated final class ServerCompletion {
                 restoreMs = 0
                 executionBaseOffset = prefixEnd
             case .cold:
-                // MTP speculative arm (v1): a text-only cold prompt at greedy
-                // sampling with a loaded drafter decodes through the vendor
-                // MTP iterator instead of the chunked-prefill path — unless
-                // the DFlash2 arm already engaged above (it rides the keyed
-                // path, not this cold body). The full MTP engagement policy —
-                // including why only `.directLeaf` traffic qualifies — lives
-                // on `MTPDrafterSupport.shouldEngage`.
-                if !dflash2Engages,
-                    MTPDrafterSupport.shouldEngage(
-                        hasDrafter: session.mtpDrafter != nil,
-                        temperature: parameters.temperature,
-                        textOnlyIdentityKeySpace: facts.isTextOnly,
-                        // Tool emission is unknowable at engagement time, so
-                        // defined tools predict as if they will be called.
-                        predictedLeafStoreMode: facts.predictedLeafStoreMode,
-                        promptTokens: fullTokenCount,
-                        scratchProfile: fullAttentionScratchProfile
-                    )
-                {
-                    return try await Self.makeMTPGeneration(
+                // A plan whose iterator prefills the whole prompt (MTP) takes
+                // over the cold request here: its unchunked vendor prefill
+                // forfeits the checkpoints, which the plan only accepts for a
+                // direct leaf (ADR-0056 amendment).
+                if let speculation, speculation.prefillsWholePrompt {
+                    return try await Self.makeWholePromptSpeculativeGeneration(
+                        plan: speculation,
                         session: session,
                         request: request,
                         input: fullInput,
@@ -1675,6 +1635,7 @@ nonisolated final class ServerCompletion {
                         toolSpecs: canonicalTools,
                         lookupReason: lookupResult.reason,
                         lookupMs: lookupMs,
+                        maximumAdvance: maximumAdvance,
                         visionAttentionScratchProfile: visionAttentionScratchProfile,
                         diagnosticsContext: diagnosticsContext,
                         progressHandler: progressHandler
@@ -1746,18 +1707,13 @@ nonisolated final class ServerCompletion {
                 stored
             }
 
-            // The DFlash2 arm splits the suffix: the app driver prefills
-            // (and snapshots) through the split, then the iterator's capture
-            // prefill takes the tail for the drafter's hidden-state window.
-            let dflash2SplitOffset: Int? =
-                dflash2Engages
-                ? session.dflash2Drafter.map {
-                    dflash2PrefillSplitOffset(
-                        drafter: $0,
-                        checkpointOffsets: allCheckpoints.keys,
-                        executionBaseOffset: executionBaseOffset,
-                        fullTokenCount: fullTokenCount)
-                } : nil
+            // A speculative plan splits the suffix: the app driver prefills
+            // (and snapshots) through the split, then the iterator's own
+            // prefill takes the tail (DFlash2's hidden-state window).
+            let speculativeSplitOffset: Int? = speculation?.prefillSplit(
+                checkpointOffsets: allCheckpoints.keys,
+                executionBaseOffset: executionBaseOffset,
+                promptTokens: fullTokenCount)
 
             // 9. App-owned prefill (ADR-0006): drive chunked forward passes
             // over the suffix, capturing snapshots at the checkpoint offsets,
@@ -1852,8 +1808,8 @@ nonisolated final class ServerCompletion {
                                 try MLXCheckedEvaluation.eval(liveCache)
                             }
                         }
-                        // DFlash2 arm: driver prefill up to the split (the
-                        // split sits at or past the deepest capture, so
+                        // Speculative plan: driver prefill up to the split
+                        // (the split sits at or past the deepest capture, so
                         // every checkpoint and boundary snapshot lands),
                         // then the iterator's capture prefill for the tail.
                         // The driver slice keeps one token back so its final
@@ -1861,7 +1817,7 @@ nonisolated final class ServerCompletion {
                         // for the iterator, which prefills [split, end) and
                         // samples the first token exactly like its cold
                         // prepare's own-chunk final position.
-                        if let splitOffset = dflash2SplitOffset {
+                        if let speculation, let splitOffset = speculativeSplitOffset {
                             var snapshots = prefixSnapshots
                             if splitOffset > executionBaseOffset {
                                 let prefixTokenCount = splitOffset - executionBaseOffset
@@ -1888,14 +1844,15 @@ nonisolated final class ServerCompletion {
                             memory.mark(
                                 .dflashPreparing,
                                 facts: RequestMemoryTelemetry.cacheFacts(liveCache))
-                            let iterator = try session.makeDFlash2DecodeIterator(
+                            let iterator = try session.makeSpeculativeDecodeIterator(
                                 fullInput,
                                 cache: liveCache,
                                 prefilledPrefixTokens: splitOffset,
+                                plan: speculation,
                                 parameters: facts.decodeParameters
                             )
                             try error.check()
-                            return (iterator: .dflash2(iterator), snapshots: snapshots)
+                            return (iterator: .speculative(iterator), snapshots: snapshots)
                         }
 
                         // Pipeline the image-free text path for TTFT; keep the
@@ -1979,11 +1936,11 @@ nonisolated final class ServerCompletion {
                         "\(boundarySnapshots.reduce(0) { $0 + $1.memoryBytes })",
                 ]) { _, new in new })
             let iterator = prefillResult.iterator
-            if case .dflash2 = iterator {
+            if case .speculative(let decode) = iterator {
                 // The iterator exists — the request will decode speculatively.
                 // Fired before the token loop so the activity surfaces badge
                 // the arm live.
-                await progressHandler?(.speculationEngaged(.dflash2))
+                await progressHandler?(.speculationEngaged(decode.arm))
             }
             await progressHandler?(
                 .prefillFinished(
@@ -2072,7 +2029,7 @@ nonisolated final class ServerCompletion {
                 stream: stream,
                 completion: task,
                 finalCacheOwner: finalCacheOwner,
-                speculativeArm: dflash2Engages ? .dflash2 : nil,
+                speculativeArm: speculation?.arm,
                 diagnosticsContext: diagnosticsContext,
                 lookupMs: lookupMs,
                 restoreMs: restoreMs,
@@ -2365,17 +2322,19 @@ nonisolated final class ServerCompletion {
         )
     }
 
-    /// The MTP speculative arm of the keyed cold path (v1): whole-prompt
-    /// vendor prepare (the drafter's private cache needs one target hidden
-    /// row per prompt token, so the prefill is unchunked — engagement is
-    /// scratch-budget-gated upstream in `MTPDrafterSupport.shouldEngage`),
-    /// then speculative decode through `MTPSpeculativeTokenIterator`.
+    /// The cold keyed path for a **Speculation Plan** whose iterator
+    /// prefills the whole prompt (MTP, ADR-0056): the iterator's unchunked
+    /// vendor prepare runs over a fresh cache (the head needs one target
+    /// hidden row per prompt token), then the token loop. The plan was
+    /// decided only for a cold, direct-leaf turn whose single-shot prefill
+    /// fits the scratch budget.
     ///
     /// Mid-prefill checkpoints are forfeited, but the returned record keeps
     /// the request's real key space and `finalCache`, so the post-generation
     /// leaf capture admits the whole run and the next turn restores warm.
     // swiftlint:disable:next function_parameter_count
-    static func makeMTPGeneration(
+    private static func makeWholePromptSpeculativeGeneration(
+        plan: SpeculationPlan,
         session: any ModelSession,
         request: KeyedRequest,
         input fullInput: LMInput,
@@ -2383,51 +2342,12 @@ nonisolated final class ServerCompletion {
         toolSpecs: [ToolSpec]?,
         lookupReason: PrefixCacheManager.LookupReason,
         lookupMs: TimeInterval,
+        maximumAdvance: Int,
         visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
         diagnosticsContext: PrefixCacheDiagnostics.Context,
         progressHandler: ServerInferenceProgressHandler?
     ) async throws -> HTTPPrefixCacheGeneration {
-        try await makeSpeculativeGeneration(
-            arm: .mtp,
-            session: session,
-            request: request,
-            input: fullInput,
-            parameters: parameters,
-            toolSpecs: toolSpecs,
-            lookupReason: lookupReason,
-            lookupMs: lookupMs,
-            visionAttentionScratchProfile: visionAttentionScratchProfile,
-            diagnosticsContext: diagnosticsContext,
-            progressHandler: progressHandler
-        ) { session, input, cache, iteratorParams in
-            try session.makeMTPDecodeIterator(
-                input,
-                cache: cache,
-                parameters: iteratorParams
-            )
-        }
-    }
-
-    /// The body of the MTP speculative cold-path arm: cold prefill into a
-    /// fresh cache, iterator construction under checked evaluation, then the
-    /// token loop. (The DFlash2 arm no longer routes here — it rides the
-    /// ordinary keyed path, whose app-owned prefill preserves the boundary
-    /// snapshots and restores warm.)
-    // swiftlint:disable:next function_parameter_count
-    private static func makeSpeculativeGeneration<I: TokenIteratorProtocol & SendableMetatype>(
-        arm: SpeculativeArm,
-        session: any ModelSession,
-        request: KeyedRequest,
-        input fullInput: LMInput,
-        parameters: GenerateParameters,
-        toolSpecs: [ToolSpec]?,
-        lookupReason: PrefixCacheManager.LookupReason,
-        lookupMs: TimeInterval,
-        visionAttentionScratchProfile: ModelIdentity.FullAttentionScratchProfile?,
-        diagnosticsContext: PrefixCacheDiagnostics.Context,
-        progressHandler: ServerInferenceProgressHandler?,
-        makeIterator: (any ModelSession, LMInput, [any KVCache], GenerateParameters) throws -> I
-    ) async throws -> HTTPPrefixCacheGeneration {
+        let arm = plan.arm
         let fullTokenCount = request.facts.promptTokenCount
         diagnosticsContext.logSkip(
             stage: "prefill",
@@ -2450,11 +2370,12 @@ nonisolated final class ServerCompletion {
         let cache = begin.cache
 
         let iterator = try MLXCheckedEvaluation.withErrors { error in
-            let built = try makeIterator(
-                session,
+            let built = try session.makeSpeculativeDecodeIterator(
                 fullInput,
-                cache,
-                request.facts.decodeParameters
+                cache: cache,
+                prefilledPrefixTokens: 0,
+                plan: plan,
+                parameters: request.facts.decodeParameters
             )
             try error.check()
             return built
@@ -2473,11 +2394,10 @@ nonisolated final class ServerCompletion {
                 )))
 
         let generatedTokens = GeneratedTokenRecorder()
-        let (stream, task) = TokenGenerationLoop.start(
+        let (stream, task) = iterator.startGeneration(
             promptTokenCount: fullTokenCount,
             modelConfiguration: session.configuration,
             tokenizer: session.tokenizer,
-            iterator: iterator,
             tools: toolSpecs,
             generatedTokens: generatedTokens
         )
@@ -2496,9 +2416,7 @@ nonisolated final class ServerCompletion {
             skippedPrefillTokens: 0,
             lookupReason: lookupReason,
             sharedPrefixLength: 0,
-            maximumAdvance: CacheClaim.maximumAdvance(
-                newPromptTokens: fullTokenCount, outputCeiling: parameters.maxTokens,
-                speculativeAllowance: MTPDrafterSupport.blockSize),
+            maximumAdvance: maximumAdvance,
             keying: .keyed(request),
             snapshotAdmission: nil,
             transientLastMessageBoundarySnapshot: nil,

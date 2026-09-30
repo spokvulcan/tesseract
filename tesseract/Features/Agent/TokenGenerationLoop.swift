@@ -116,23 +116,26 @@ nonisolated enum TokenGenerationLoop {
     /// Cache-aware overload: same event mapping, driven by the state-threaded
     /// decode loop instead of upstream's concrete-`TokenIterator` task.
     /// Generic over the app's decode iterators (``StateThreadedTokenIterator``
-    /// and the vendor `MTPSpeculativeTokenIterator`); the concrete
-    /// `TokenIterator` overload above still wins resolution for the vendor
-    /// prepare path.
+    /// and the vendor speculative iterators); the concrete `TokenIterator`
+    /// overload above still wins resolution for the vendor prepare path.
+    /// `speculativeArm` names the algorithm in the speculation log line; the
+    /// **Speculation Plan**'s iterator passes it.
     static func start(
         promptTokenCount: Int,
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
         iterator: consuming some TokenIteratorProtocol & SendableMetatype,
         tools: [ToolSpec]? = nil,
-        generatedTokens: GeneratedTokenRecorder? = nil
+        generatedTokens: GeneratedTokenRecorder? = nil,
+        speculativeArm: SpeculativeArm? = nil
     ) -> (AsyncStream<RawGeneration>, Task<Void, Never>) {
         let (tokens, generationTask) = rawTokenTask(
             promptTokenCount: promptTokenCount,
             modelConfiguration: modelConfiguration,
             tokenizer: tokenizer,
             iterator: iterator,
-            generatedTokens: generatedTokens
+            generatedTokens: generatedTokens,
+            speculativeArm: speculativeArm
         )
         return events(
             from: tokens,
@@ -156,7 +159,8 @@ nonisolated enum TokenGenerationLoop {
         modelConfiguration: ModelConfiguration,
         tokenizer: any Tokenizer,
         iterator: consuming some TokenIteratorProtocol & SendableMetatype,
-        generatedTokens: GeneratedTokenRecorder?
+        generatedTokens: GeneratedTokenRecorder?,
+        speculativeArm: SpeculativeArm?
     ) -> (AsyncStream<TokenGeneration>, Task<Void, Never>) {
         let (stream, continuation) = AsyncStream<TokenGeneration>.makeStream()
 
@@ -243,8 +247,7 @@ nonisolated enum TokenGenerationLoop {
             _ = continuation.yield(.info(info))
 
             if let telemetry {
-                let algorithm =
-                    iterator is DFlash2SpeculativeTokenIterator ? "DFlash2" : "MTP"
+                let algorithm = speculativeArm?.displayName ?? "Speculative"
                 Log.agent.notice(
                     "\(algorithm) speculation — rounds=\(telemetry.roundCount) "
                         + "proposed=\(telemetry.draftTokenCount) "

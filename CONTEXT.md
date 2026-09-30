@@ -816,8 +816,8 @@ concept); widening it before a second consumer needs a member.
 The one script that starts a whole-prompt-from-zero generation over a **Model
 Session** for an agent chat turn: tokenize through the session's agent-edge verb (the **Conversation
 Render**'s agent edge when eligible, the processor otherwise), emit the lookup and prefill progress
-events, engage the DFlash2 raw arm on a text-only prompt when the session pairs a
-drafter, else run the **Prefill Strategy** route, start the token-event loop, wrap
+events, decode through the session's **Speculation Plan** when it has one, else run
+the **Prefill Strategy** route, start the token-event loop, wrap
 the handles. It is the **Model Session**'s second consumer (ADR-0016 amendment);
 `LLMActor` keeps only the lifecycle around it. Never consults the prefix cache.
 _Avoid_: raw arm (the three retired `LLMActor` copies); standard path (the
@@ -2342,6 +2342,28 @@ is a Qwen3.5-family model to everything downstream.
 _Avoid_: "model type" for the family (the pack's type name is the loader key, not
 the architecture), "base model" (the checkpoint it derives from, e.g. Qwen3.8-27B,
 not the architecture).
+
+### Speculative decoding
+
+**Speculation**:
+The drafters resident beside one model load, and the rules for engaging them: the
+MTP head a Qwen3.5-family checkpoint ships, and the separate DFlash2 draft beside
+Qwen3.8-27B. A load attaches what the Speculative Decoding setting allows and the
+loaded target pairs with. Residency (the Models page's draft row) is read from it,
+and every request asks it for a **Speculation Plan** (ADR-0079).
+_Avoid_: drafter support (the per-family facts it loads through); speculation
+mode (the load-time setting); **Speculative Canonical Prefill** (an unrelated
+background prefill).
+
+**Speculation Plan**:
+What one request runs speculatively, decided once from the request's facts (text-only
+input, KV quantization, temperature, prompt length, whether a prefix is restored,
+which leaf the turn stores): the arm, the advance allowance its rounds add to the
+turn's maximum advance, and where the app's prefill hands over to the iterator. The
+**Server Completion** and the **Raw Generation Start** read the same plan; no plan
+means ordinary decoding.
+_Avoid_: engagement policy or predicate (the retired per-arm rules); speculative arm
+(the plan's arm, not the plan).
 
 ### Cache memory budget
 

@@ -55,6 +55,11 @@ nonisolated struct PrefillPlan: Sendable {
     enum Restore: Sendable {
         case cold
         case restore(cacheOffset: Int, anchorDelta: Int)
+
+        /// Whether the turn starts from a cached prefix.
+        var restoresPrefix: Bool {
+            if case .restore = self { true } else { false }
+        }
     }
 
     let restore: Restore

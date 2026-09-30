@@ -53,16 +53,22 @@ nonisolated final class ServerCompletionFixture: @unchecked Sendable {
     func start(
         conversation: HTTPPrefixCacheConversation,
         parameters: AgentGenerateParameters,
-        renderContext: TemplateRenderContext = .canonical
+        renderContext: TemplateRenderContext = .canonical,
+        progress: ProgressEventLog? = nil
     ) async throws -> HTTPServerGenerationStart {
-        try await module.start(
+        var progressHandler: ServerInferenceProgressHandler?
+        if let progress {
+            progressHandler = { event in progress.append(event) }
+        }
+        return try await module.start(
             on: actor,
             sessions: provider,
             modelID: modelID,
             conversation: conversation,
             toolSpecs: nil,
             parameters: parameters,
-            renderContext: renderContext
+            renderContext: renderContext,
+            progressHandler: progressHandler
         )
     }
 

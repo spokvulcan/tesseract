@@ -456,6 +456,7 @@ nonisolated enum ModelVerb: String, Equatable, Sendable {
     case makeDecodeIterator
     case makePreparingDecodeIterator
     case makeRawDecodeIterator
+    case makeSpeculativeDecodeIterator
     case quantizeKVCache
     case captureSnapshot
     case visionContinuationQuery
@@ -525,7 +526,7 @@ nonisolated struct RecordingModelSession: ModelSession {
 
     var configuration: ModelConfiguration { base.configuration }
     var tokenizer: any Tokenizer { base.tokenizer }
-    var mtpDrafter: (any MTPDrafterModel)? { base.mtpDrafter }
+    var speculation: Speculation { base.speculation }
     var anchoredVisionPrepare: AnchoredVisionPrepare? {
         recorder.record(.visionContinuationQuery)
         return anchoredVisionPrepareOverride ?? base.anchoredVisionPrepare
@@ -630,6 +631,23 @@ nonisolated struct RecordingModelSession: ModelSession {
         )
     }
 
+    func makeSpeculativeDecodeIterator(
+        _ input: LMInput,
+        cache: [any KVCache],
+        prefilledPrefixTokens: Int,
+        plan: SpeculationPlan,
+        parameters: GenerateParameters
+    ) throws -> SpeculativeDecodeIterator {
+        recorder.record(.makeSpeculativeDecodeIterator)
+        return try base.makeSpeculativeDecodeIterator(
+            input,
+            cache: cache,
+            prefilledPrefixTokens: prefilledPrefixTokens,
+            plan: plan,
+            parameters: parameters
+        )
+    }
+
     func quantizeKVCache(_ cache: inout [any KVCache], parameters: GenerateParameters) {
         recorder.record(.quantizeKVCache)
         base.quantizeKVCache(&cache, parameters: parameters)
@@ -659,7 +677,9 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     /// a keyed image-bearing request runs end to end over the toy (the
     /// vision-container shape; the stub's pad run stands in for the tower).
     let anchorsVision: Bool
-    let hasMTPDrafter: Bool
+    /// The drafters every session carries; `.none` decodes without
+    /// speculation.
+    let speculation: Speculation
     /// Fails the next `prefill` verb once armed; `nil` never fails.
     let prefillFault: ToyPrefillFault?
 
@@ -671,12 +691,12 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         vision: ToyUserInputProcessor.VisionStub? = nil,
         reportsFlatTextTokens: Bool = false,
         anchorsVision: Bool = false,
-        hasMTPDrafter: Bool = false,
+        speculation: Speculation = .none,
         prefillFault: ToyPrefillFault? = nil
     ) {
         self.reportsFlatTextTokens = reportsFlatTextTokens
         self.anchorsVision = anchorsVision
-        self.hasMTPDrafter = hasMTPDrafter
+        self.speculation = speculation
         self.prefillFault = prefillFault
         self.container = ModelContainer(
             context: ModelContext(
@@ -695,15 +715,13 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
         let recorder = self.recorder
         let reportsFlatTextTokens = self.reportsFlatTextTokens
         let anchorsVision = self.anchorsVision
-        let hasMTPDrafter = self.hasMTPDrafter
+        let speculation = self.speculation
         let prefillFault = self.prefillFault
         return try await container.perform(nonSendable: payload) { context, payload in
             try await ModelSessionScope.$isInside.withValue(true) {
                 try await body(
                     RecordingModelSession(
-                        base: ContextBackedModelSession(
-                            context: context, mtpDrafter: hasMTPDrafter ? InactiveMTPDrafter() : nil
-                        ),
+                        base: ContextBackedModelSession(context: context, speculation: speculation),
                         recorder: recorder,
                         prefillFault: prefillFault,
                         producesFlatTextTokensOverride: reportsFlatTextTokens ? true : nil,
@@ -728,7 +746,7 @@ nonisolated struct ToyModelSessionProvider: ModelSessionProviding {
     }
 }
 
-/// Presence-only drafter for requests whose policy must select ordinary
+/// Presence-only drafter for requests whose plan must select ordinary
 /// decoding. Any attempt to use the MTP path fails at the model boundary.
 nonisolated final class InactiveMTPDrafter: Module, MTPDrafterModel {
     func draftBlock(
@@ -742,6 +760,18 @@ nonisolated final class InactiveMTPDrafter: Module, MTPDrafterModel {
         sampler: any LogitSampler
     ) -> MLXArray {
         preconditionFailure("MTP must not engage in this fixture")
+    }
+}
+
+extension Speculation {
+    /// A resident MTP drafter that traps if a request engages it, with
+    /// `identity`'s scratch profile pricing the single-shot prefill (none
+    /// prices nothing, so MTP never engages): the Speculation of a load whose
+    /// requests must keep ordinary decoding.
+    nonisolated static func inactiveMTP(pricedBy identity: ModelIdentity? = nil) -> Speculation {
+        Speculation(
+            mtpDrafter: InactiveMTPDrafter(),
+            scratchProfile: identity?.fullAttentionScratchProfile)
     }
 }
 

@@ -219,7 +219,7 @@ struct EmittedPathSynthesizedReplayTests {
     func liveTurnRegistersAndTheNextRequestServesTheWholePath(mtpLoaded: Bool) async throws {
         // A loaded but ineligible drafter must not turn an ordinary cold
         // or warm generation's leaf handoff into a full capture copy.
-        let session = Session(hasMTPDrafter: mtpLoaded)
+        let session = Session(speculation: mtpLoaded ? .inactiveMTP() : .none)
         let turn1 = try await session.turn(Self.conversation([Self.user("hi")]))
         #expect(turn1.text == "hello world")
         #expect(turn1.thinking == "plan")
@@ -936,7 +936,7 @@ struct EmittedPathSynthesizedReplayTests {
             vision: ToyUserInputProcessor.VisionStub? = nil,
             identity: ModelIdentity? = nil,
             ssdConfig: SSDPrefixCacheConfig? = nil,
-            hasMTPDrafter: Bool = false,
+            speculation: Speculation = .none,
             prefillFault: ToyPrefillFault? = nil,
             recurrentElements: Int = 0,
             onForward: (@Sendable (Int) -> Void)? = nil
@@ -957,7 +957,7 @@ struct EmittedPathSynthesizedReplayTests {
                 vision: vision,
                 reportsFlatTextTokens: vision == nil,
                 anchorsVision: vision != nil,
-                hasMTPDrafter: hasMTPDrafter,
+                speculation: speculation,
                 prefillFault: prefillFault)
             self.tokenizer = tokenizer
             self.queue = queue
