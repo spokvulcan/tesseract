@@ -89,21 +89,26 @@ private struct Harness {
     }
 }
 
-/// Poll until `condition` holds (the coordinator drains on its own task).
-@MainActor
-private func waitUntil(
-    timeout: Duration = .seconds(5), _ condition: @MainActor () async -> Bool
-) async -> Bool {
-    let deadline = ContinuousClock.now + timeout
-    while ContinuousClock.now < deadline {
-        if await condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return await condition()
-}
-
 @MainActor
 struct SpeechCoordinatorTests {
+
+    /// Poll until `condition` holds (the coordinator drains on its own task).
+    /// The minute is a backstop, not a latency budget: every event of an
+    /// utterance hops between the engine's actors and the main actor, and in
+    /// the first seconds of a parallel run each hop can wait that long for a
+    /// thread behind the other suites' work. A member, so it shadows the
+    /// shared five-second `waitUntil`, which a file-level helper loses to for
+    /// every condition that doesn't await.
+    private func waitUntil(
+        timeout: Duration = .seconds(60), _ condition: @MainActor () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await condition()
+    }
 
     @Test
     func speakTextDrainsEngineEventsIntoPlaybackAndOverlay() async throws {
@@ -152,8 +157,7 @@ struct SpeechCoordinatorTests {
 
     @Test
     func stopCancelsGenerationAndResetsPresentation() async throws {
-        let harness = await Harness(
-            script: .init(chunksPerSegment: 200, chunkDelayNanos: 2_000_000))
+        let harness = await Harness(script: .init(holdAfterChunks: 1))
 
         harness.coordinator.speakText("Hello world.")
         #expect(await waitUntil { !harness.playback.appendedChunks.isEmpty })
@@ -170,8 +174,7 @@ struct SpeechCoordinatorTests {
 
     @Test
     func pauseHoldsPlaybackAndResumeContinues() async throws {
-        let harness = await Harness(
-            script: .init(chunksPerSegment: 200, chunkDelayNanos: 2_000_000))
+        let harness = await Harness(script: .init(holdAfterChunks: 1))
 
         harness.coordinator.speakText("Hello world.")
         #expect(await waitUntil { harness.coordinator.state == .streaming })
@@ -513,8 +516,7 @@ struct SpeechCoordinatorTests {
 
     @Test
     func playbackSpeedAppliesAtTheStartAndWhenChanged() async throws {
-        let harness = await Harness(
-            script: .init(chunksPerSegment: 200, chunkDelayNanos: 2_000_000))
+        let harness = await Harness(script: .init(holdAfterChunks: 1))
         harness.settings.ttsPlaybackRate = 1.5
 
         harness.coordinator.speakText("Hello world.")

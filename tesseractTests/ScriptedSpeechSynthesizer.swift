@@ -16,7 +16,10 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
     struct Script {
         var chunksPerSegment = 3
         var samplesPerChunk = 1920 * 2  // 2 codec frames per chunk
-        var chunkDelayNanos: UInt64 = 0
+        /// A segment stops after this many chunks until it is cancelled, so
+        /// a test acts on a generation still in flight however late it gets
+        /// there. Nil: segments never wait.
+        var holdAfterChunks: Int?
         var failOnSegmentIndex: Int?
         /// Word starts each segment reports after its audio, frames counted
         /// from the segment's first, as the engine's word timing does
@@ -76,9 +79,10 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
                     if script.failOnSegmentIndex == segmentIndex {
                         throw SpeechEngineError.generationFailed("scripted failure")
                     }
-                    for _ in 0..<script.chunksPerSegment {
-                        if script.chunkDelayNanos > 0 {
-                            try await Task.sleep(nanoseconds: script.chunkDelayNanos)
+                    for chunk in 0..<script.chunksPerSegment {
+                        if chunk == script.holdAfterChunks {
+                            // Only the cancel ends this wait; the minute is a backstop.
+                            try await Task.sleep(for: .seconds(60))
                         }
                         try Task.checkCancellation()
                         continuation.yield(

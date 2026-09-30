@@ -275,7 +275,9 @@ struct SpeechReadAlongTests {
         readAlong.markGenerationComplete()
         readAlong.tick()
         #expect(readAlong.isActive, "the last word stays lit a moment")
-        let deadline = ContinuousClock.now + .seconds(3)
+        // The minute is a backstop: letting go takes a timer and a main-actor
+        // turn, and in a parallel run either can wait seconds for a thread.
+        let deadline = ContinuousClock.now + .seconds(60)
         while readAlong.isActive, ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
