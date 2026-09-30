@@ -231,7 +231,24 @@ the new tests cover, the Budget Floor kept the newest leaf resident, and the
 line fired only through follow-up 6. Every producer's labels, the
 capture-stage skip and salvage's labels are pinned.
 
-Still to run before this is accepted: `scripts/dev.sh prefix-cache-e2e`,
-`scripts/dev.sh hybrid-cache-correctness`, the bounded-cache parity run, and
-the before/after diagnostics diff. All of them need a downloaded model, and
-the dev script quits a running Tesseract Agent first.
+Loaded-model gates, run on 2026-09-30 on a MacBook Pro with an Apple M3 Max
+and 48 GB, macOS 27.0:
+
+- `scripts/dev.sh prefix-cache-e2e` on `qwen3.5-4b-paro`: all 34 checks
+  pass, as they do on the commit this branch starts from.
+- `scripts/dev.sh hybrid-cache-correctness`: all 12 checks pass, and every
+  restore matches bitwise.
+- The diagnostics of that e2e run before and after this change match, with
+  ids and timings masked. Two kinds of line follow the clock or the
+  machine's free memory, so the comparison leaves them out: the periodic
+  memory samples (87 before, 77 after) and the budget re-measures, which run
+  at most once every 15 seconds (10 and 9). Of the remaining 1,840 lines on
+  each side, the 281 written from other tasks (the memory observer's samples
+  and the SSD writer's events) match as a set. The other 1,559 match in
+  order, except one speculative-prefill `not-idle` skip that trades places
+  with the next request's first line; the two come from different tasks.
+- The bounded-cache parity run did not reach its checks. It stopped itself
+  7 seconds in, at critical memory pressure while loading `qwen3.8-27b`: the
+  machine had 19 GiB available at the start, and the archived pass peaked
+  at a 23.5 GiB footprint. It needs a rerun with more memory free before
+  this is accepted.
