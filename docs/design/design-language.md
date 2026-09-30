@@ -31,7 +31,10 @@ and [Settings](https://developer.apple.com/design/human-interface-guidelines/set
    35 %-opacity dim layer over bright media.
 6. **Overlay windows: known ceiling.** `.clear` + forced-aqua is the public
    maximum; the Control Center variant is private; `appearsActive` /
-   key-window-faking do nothing. Don't relitigate.
+   key-window-faking do nothing. Don't relitigate. The macOS 27 SDK adds no
+   glass styles; the Jarvis panel lab (`tools/jarvis-panel-lab`, on the
+   `prototype/companion-today` branch) re-checks the ceiling on 27, where
+   `NSGlassEffectView` `.regular` is the Siri-panel look.
 7. **Settings is a `Settings` scene with a `TabView` of panes** — a
    noncustomizable toolbar of panes, not a sidebar. Window sizes to the
    current pane; title reflects the pane; last pane restored; minimize/zoom
@@ -53,6 +56,13 @@ same PR:
 - Global overlay HUD (`GlobalOverlayHUD`)
 - Dictation recording button (`RecordingButtonView`)
 - Models action bar (`ModelsActionBar`)
+- Jarvis panel (`JarvisPanelController` over `GlassPanel`, ADR-0080): a
+  Siri-style floating card over every app. An `NSGlassEffectView` content view
+  (`.regular`, corner radius 28) in a borderless non-activating `NSPanel` that
+  turns key only when its field is clicked. Every button is non-focusable and
+  the field exists from the first layout (the macOS 27.0 focus freeze).
+- Capture panel (`CapturePanelController` over `GlassPanel`): the capture
+  hotkey's bar near the top of the screen, same construction.
 
 The inventory governs custom `.glassEffect` surfaces. The system glass
 button styles (`.glass` / `.glassProminent`) are standard components — they

@@ -19,6 +19,8 @@ nonisolated enum SystemPromptAssembler: Sendable {
         - edit replaces exact text — old_text must match the file exactly
         - write creates files; pass overwrite: true only to replace a file you have already read
         - Keep replies brief; refer to files by their paths
+
+        Time: every user message starts with a <now> line — the current local date, weekday, time and time zone, added by the app, not written by the user. Use the newest one whenever time matters.
         """
 
     /// A short web-orientation block, injected only when the turn carries browser
@@ -31,16 +33,6 @@ nonisolated enum SystemPromptAssembler: Sendable {
         - navigate / page_map / click / type to interact with pages that are gated or dynamic.
         Search snippets are navigation hints, not facts: open and read a page before relying on it, and cite the pages you read.
         """
-
-    // MARK: - Private
-
-    /// Shared date formatter (thread-safe after initialization).
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .full
-        f.timeStyle = .short
-        return f
-    }()
 
     // MARK: - Assembly
 
@@ -56,14 +48,17 @@ nonisolated enum SystemPromptAssembler: Sendable {
     /// 2. APPEND_SYSTEM.md content
     /// 3. Skills listing (only when a `use_skill` tool is available)
     /// 4. Context files as "# Project Context" sections
-    /// 5. Date/time
-    /// 6. Working directory
+    /// 5. Working directory
+    ///
+    /// The result carries no time and nothing per-conversation: it is
+    /// byte-identical for every chat and every Companion moment, so they all
+    /// share one cached system-and-tools prefix. The time rides each user
+    /// message instead (the Now Tag).
     static func assemble(
         defaultPrompt: String = defaultCorePrompt,
         loadedContext: ContextLoader.LoadedContext,
         skills: [SkillMetadata],
         facts: PromptToolFacts,
-        dateTime: Date = Date(),
         agentRoot: String
     ) -> String {
         var sections: [String] = []
@@ -99,10 +94,7 @@ nonisolated enum SystemPromptAssembler: Sendable {
             sections.append("# Project Context: \(filename)\n\n\(content)")
         }
 
-        // 5. Date/time
-        sections.append("Current date and time: \(dateFormatter.string(from: dateTime))")
-
-        // 6. Working directory
+        // 5. Working directory
         sections.append("Current working directory: \(agentRoot)")
 
         return sections.joined(separator: "\n\n")
@@ -116,7 +108,6 @@ nonisolated enum SystemPromptAssembler: Sendable {
         loadedContext: ContextLoader.LoadedContext,
         skills: [SkillMetadata],
         tools: [AgentToolDefinition],
-        dateTime: Date = Date(),
         agentRoot: String
     ) -> String {
         assemble(
@@ -124,7 +115,6 @@ nonisolated enum SystemPromptAssembler: Sendable {
             loadedContext: loadedContext,
             skills: skills,
             facts: ActiveToolSet.promptFacts(for: tools),
-            dateTime: dateTime,
             agentRoot: agentRoot
         )
     }

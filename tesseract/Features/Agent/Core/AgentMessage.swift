@@ -77,34 +77,26 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
     let images: [ImageAttachment]
     let timestamp: Date
 
-    /// Context the app rides along with this message into the model, but which
-    /// the *user* never wrote and must never see in their own bubble — today,
-    /// the memory system's `<memory>` block (ADR-0035 §5).
-    ///
-    /// Stored on the message rather than recomputed at load, for two reasons.
-    /// The context a turn was actually answered with is the only honest record
-    /// of it. And the radix prefix cache requires that reopening a conversation
-    /// reproduce byte-identical context — a fresh retrieval at load time would
-    /// silently rewrite history and miss the cache on every turn of the thread.
-    let injectedContext: String?
+    /// The Now Tag stamped when the message was created: the local date,
+    /// weekday, time and time zone the model reads "now" from. Stored rather
+    /// than recomputed so a replayed conversation renders byte-identical
+    /// context, which the radix prefix cache depends on.
+    let nowTag: String
 
-    /// Which turn class this message opened (ADR-0046). Loop turns fold into
-    /// the one Mission Control conversation, so the per-turn origin the
-    /// conversation tag used to carry now rides the turn's opening message —
-    /// nil for everything the owner typed. Metadata only: never rendered into
-    /// the LLM context.
+    /// `.moment` for a Companion moment's request in a Day Thread; nil for
+    /// everything the owner typed. Metadata only: never rendered into the LLM
+    /// context.
     let turnOrigin: TurnOrigin?
 
     init(
         id: UUID = UUID(), content: String, images: [ImageAttachment] = [],
-        timestamp: Date = Date(), injectedContext: String? = nil,
-        turnOrigin: TurnOrigin? = nil
+        timestamp: Date = Date(), nowTag: String? = nil, turnOrigin: TurnOrigin? = nil
     ) {
         self.id = id
         self.content = content
         self.images = images
         self.timestamp = timestamp
-        self.injectedContext = injectedContext
+        self.nowTag = nowTag ?? NowTag.render(timestamp)
         self.turnOrigin = turnOrigin
     }
 
@@ -114,31 +106,22 @@ nonisolated struct UserMessage: AgentMessageProtocol, Codable, Equatable, Identi
         content = try container.decode(String.self, forKey: .content)
         images = try container.decodeIfPresent([ImageAttachment].self, forKey: .images) ?? []
         timestamp = try container.decode(Date.self, forKey: .timestamp)
-        injectedContext = try container.decodeIfPresent(String.self, forKey: .injectedContext)
+        // Messages saved before the tag existed get one from their own time.
+        nowTag =
+            try container.decodeIfPresent(String.self, forKey: .nowTag)
+            ?? NowTag.render(timestamp)
         turnOrigin = TurnOrigin(
             persisted: try container.decodeIfPresent(String.self, forKey: .turnOrigin))
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, content, images, timestamp, injectedContext, turnOrigin
+        case id, content, images, timestamp, nowTag, turnOrigin
     }
 
-    /// A copy with the memory block hung on it — the one place enrichment
-    /// rebuilds the message. Lives with the field list so a new stored field
-    /// can't be silently dropped in transit by a caller's hand-rolled copy.
-    func with(injectedContext: String?) -> UserMessage {
-        UserMessage(
-            id: id, content: content, images: images, timestamp: timestamp,
-            injectedContext: injectedContext, turnOrigin: turnOrigin)
-    }
-
-    /// The wrapper goes *before* the user's words, mirroring `<skill>`: what I
-    /// know, then what I was asked.
+    /// The Now Tag goes on its own line before the words, so the newest
+    /// message always tells the model what time it is.
     func toLLMMessage() -> LLMMessage? {
-        guard let injectedContext, !injectedContext.isEmpty else {
-            return .user(content: content, images: images)
-        }
-        return .user(content: "\(injectedContext)\n\n\(content)", images: images)
+        .user(content: "\(nowTag)\n\(content)", images: images)
     }
 }
 
@@ -400,17 +383,5 @@ extension AgentMessageProtocol {
         if let t = self as? ToolResultMessage { return t }
         if let core = self as? CoreMessage, case .toolResult(let t) = core { return t }
         return nil
-    }
-
-    /// The wrapper-restore contract every outgoing-message decorator shares
-    /// (memory enrich, identity, fold briefing): only a user message takes
-    /// injected context, and whatever shape the send handed over goes back
-    /// in that shape — a `CoreMessage` stays a `CoreMessage`.
-    func decoratingUser(
-        _ decorate: (UserMessage) async -> UserMessage
-    ) async -> any AgentMessageProtocol & Sendable {
-        guard let user = asUser else { return self }
-        let decorated = await decorate(user)
-        return self is CoreMessage ? CoreMessage.user(decorated) : decorated
     }
 }

@@ -53,7 +53,7 @@ final class CompanionVoiceSessionController {
     private let speechState: @MainActor () -> SpeechState
     private let currentConversationID: @MainActor () -> UUID?
     private let overlay: CompanionVoicePrototype
-    private let recorder: CompanionFlightRecorder
+    private let recorder: CompanionTrace
     private let settings: SettingsManager
     private let proofreadPass: ProofreadPass?
     /// The ADR-0041 voice hold: the capture engine is held (and hosts the
@@ -91,7 +91,7 @@ final class CompanionVoiceSessionController {
         speechState: @escaping @MainActor () -> SpeechState,
         currentConversationID: @escaping @MainActor () -> UUID?,
         overlay: CompanionVoicePrototype,
-        recorder: CompanionFlightRecorder,
+        recorder: CompanionTrace,
         settings: SettingsManager,
         proofreadPass: ProofreadPass?,
         playbackLevel: @escaping @MainActor () -> Float = { 0 },

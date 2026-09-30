@@ -3,10 +3,9 @@
 //  tesseractTests
 //
 //  The **Active Tool Set** at its own seam (ADR-0048): pure decision tables
-//  over `resolve` (consumer × audience × Web Access) and `promptFacts`, plus
-//  the prompt/callable consistency invariant that used to be unrepresentable —
-//  the callable set was filtered per turn while the prompt was assembled from
-//  the unfiltered registry, and no test could pin the two to one universe.
+//  over `resolve` (Web Access) and `promptFacts`, plus the prompt/callable
+//  consistency invariant. Every conversation and every Companion moment
+//  resolves the same way, so they share one cached system-and-tools prefix.
 //
 
 import Foundation
@@ -19,85 +18,48 @@ struct ActiveToolSetTests {
 
     // MARK: - Fixtures
 
-    private func tool(
-        _ name: String, audience: AgentToolDefinition.Audience = .all
-    ) -> AgentToolDefinition {
+    private func tool(_ name: String) -> AgentToolDefinition {
         AgentToolDefinition(
             name: name, label: name, description: "",
             parameterSchema: JSONSchema(type: "object", properties: [:], required: []),
-            audience: audience,
             execute: { _, _, _, _ in .text("") })
     }
 
-    /// A registry-shaped universe: built-ins, a companion-only tool, a
-    /// chat-only tool, a real browser tool name, and a non-browser
-    /// extension tool.
+    /// A registry-shaped universe: built-ins, the skill tool, a real browser
+    /// tool name, and a non-browser extension tool.
     private var universe: [AgentToolDefinition] {
         [
             tool("read"),
             tool(skillToolName),
-            tool("track", audience: .companionOnly),
-            tool("report_back", audience: .chatOnly),
+            tool("agenda"),
             tool("browser.search"),
             tool("files.list"),
         ]
     }
 
-    private func names(
-        _ consumer: ToolGating.Consumer, web: Bool
-    ) -> [String] {
+    private func names(web: Bool) -> [String] {
         ActiveToolSet.resolve(
-            from: universe,
-            gating: ToolGating(consumer: consumer, webAccessEnabled: web)
+            from: universe, gating: ToolGating(webAccessEnabled: web)
         ).map(\.name)
-    }
-
-    // MARK: - resolve: audience rules per consumer
-
-    /// Every owner-facing chat carries the chat-only tools (`report_back` —
-    /// ADR-0052's one contract) while companion-only delivery tools still
-    /// never reach a chat the owner is looking at (ADR-0040 §10).
-    @Test func chatKeepsChatOnlyDropsCompanionOnly() {
-        let resolved = names(.chat, web: true)
-        #expect(resolved.contains("report_back"))
-        #expect(!resolved.contains("track"))
-        #expect(resolved.contains("read"))
-        #expect(resolved.contains("browser.search"))
-    }
-
-    /// The Companion's headless agent keeps its companion-only tools and never
-    /// carries chat-only ones — a Mission Control turn has no conversation to
-    /// report back from (#372).
-    @Test func companionHeadlessKeepsCompanionOnlyDropsChatOnly() {
-        let resolved = names(.companionHeadless, web: true)
-        #expect(resolved.contains("track"))
-        #expect(!resolved.contains("report_back"))
     }
 
     // MARK: - resolve: Web Access gate
 
-    /// Web off strips exactly the browser tools, for every consumer; a
-    /// non-browser extension tool is untouched, so the switch keeps meaning
-    /// what it says (#190, US #16).
-    @Test func webOffStripsBrowserToolsForEveryConsumer() {
-        for consumer: ToolGating.Consumer in [
-            .chat, .companionHeadless,
-        ] {
-            let resolved = names(consumer, web: false)
-            #expect(!resolved.contains("browser.search"))
-            #expect(resolved.contains("files.list"))
-        }
+    /// Web off strips exactly the browser tools; a non-browser extension tool
+    /// is untouched, so the switch keeps meaning what it says (#190, US #16).
+    @Test func webOffStripsBrowserTools() {
+        let resolved = names(web: false)
+        #expect(!resolved.contains("browser.search"))
+        #expect(resolved.contains("files.list"))
     }
 
-    @Test func webOnKeepsBrowserTools() {
-        #expect(names(.chat, web: true).contains("browser.search"))
+    @Test func webOnKeepsEveryTool() {
+        #expect(names(web: true) == universe.map(\.name))
     }
 
     /// Registry order is the loop's dispatch precedence — resolve must keep it.
     @Test func resolvePreservesInputOrder() {
-        let resolved = names(.chat, web: true)
-        #expect(
-            resolved == ["read", skillToolName, "report_back", "browser.search", "files.list"])
+        #expect(names(web: false) == ["read", skillToolName, "agenda", "files.list"])
     }
 
     // MARK: - promptFacts
@@ -117,21 +79,16 @@ struct ActiveToolSetTests {
     /// that shipped (prompt instructing stripped browser tools) is
     /// unrepresentable through this seam.
     @Test func promptFactsAgreeWithResolvedSetForEveryGating() {
-        for consumer: ToolGating.Consumer in [
-            .chat, .companionHeadless,
-        ] {
-            for web in [true, false] {
-                let resolved = ActiveToolSet.resolve(
-                    from: universe,
-                    gating: ToolGating(consumer: consumer, webAccessEnabled: web))
-                let facts = ActiveToolSet.promptFacts(for: resolved)
-                #expect(
-                    facts.carriesBrowserTools
-                        == resolved.contains {
-                            ActiveToolSet.webGatedToolNames.contains($0.name)
-                        })
-                #expect(facts.hasSkillTool == resolved.contains { $0.name == skillToolName })
-            }
+        for web in [true, false] {
+            let resolved = ActiveToolSet.resolve(
+                from: universe, gating: ToolGating(webAccessEnabled: web))
+            let facts = ActiveToolSet.promptFacts(for: resolved)
+            #expect(
+                facts.carriesBrowserTools
+                    == resolved.contains {
+                        ActiveToolSet.webGatedToolNames.contains($0.name)
+                    })
+            #expect(facts.hasSkillTool == resolved.contains { $0.name == skillToolName })
         }
     }
 

@@ -1,6 +1,6 @@
 # ADR-0040: Companion proactive loop — an entity in a harness (wakes, turns, self-authored instructions)
 
-- Status: Accepted (grilled with the owner, 2026-07-16)
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted (grilled with the owner, 2026-07-16)
 - Date: 2026-07-16
 - Relates to: map #301, ticket #307; the anchor experience (#302), tracking model (#308), persona & trust (#309), success metrics (#313), flight recorder (#326); ADR-0035 (memory), ADR-0032 (prepared checkpoint); walking skeleton #303 (`Features/Companion/CompanionHeartbeat.swift`)
 

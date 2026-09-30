@@ -6,7 +6,8 @@ private nonisolated func makeInternalInferenceStream(
     parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters,
     requestBuilder:
         @escaping @MainActor @Sendable (AgentGenerateParameters, ServerInferenceModelState?)
-        -> ServerInferenceRequest
+        -> ServerInferenceRequest,
+    onStart: (@MainActor @Sendable (_ cachedTokenCount: Int) -> Void)? = nil
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
     let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
     let cancelHandle = OSAllocatedUnfairLock<@Sendable () -> Void>(initialState: {})
@@ -17,6 +18,7 @@ private nonisolated func makeInternalInferenceStream(
             let parameters = parametersProvider()
             let modelState = inferenceService.currentModelState()
             start = try await inferenceService.start(requestBuilder(parameters, modelState))
+            if let start { onStart?(start.cachedTokenCount) }
 
             if let cancel = start?.cancel {
                 cancelHandle.withLock { $0 = cancel }
@@ -65,9 +67,13 @@ private nonisolated func makeInternalInferenceStream(
 /// exactly as it does for HTTP — agent chat and the OpenAI edge ride one
 /// Server Completion machinery. A `nil` conversation (undecodable attachment)
 /// falls back to the standard managed path, today's uncached behavior.
+///
+/// `onStart` hears how many prompt tokens the prefix cache supplied, once the
+/// request starts — the Companion Trace's cache-reuse measure.
 nonisolated func makeServerInferenceGenerateClosure(
     inferenceService: ServerInferenceService,
-    parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters
+    parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters,
+    onStart: (@MainActor @Sendable (_ cachedTokenCount: Int) -> Void)? = nil
 ) -> LLMGenerateFunction {
     return { systemPrompt, messages, tools, _ in
         makeInternalInferenceStream(
@@ -105,7 +111,8 @@ nonisolated func makeServerInferenceGenerateClosure(
                     parameters: parameters,
                     route: .serverCompatible
                 )
-            }
+            },
+            onStart: onStart
         )
     }
 }

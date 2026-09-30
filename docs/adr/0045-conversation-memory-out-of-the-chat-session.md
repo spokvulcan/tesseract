@@ -1,6 +1,6 @@
 # ADR-0045: Conversation Memory — the chat's memory fold, out of the Chat Session
 
-- Status: Accepted
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted
 - Date: 2026-07-18
 - Relates to: ADR-0035 (the living memory this is the chat side of),
   ADR-0024 (the Chat Session event fold this returns to), ADR-0034 (the

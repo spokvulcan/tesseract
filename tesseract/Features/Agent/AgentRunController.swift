@@ -86,24 +86,10 @@ final class AgentRunController {
 
     /// Begin a foreground turn for `message`. Syncs the active tool set for the
     /// current web-access setting, then drives `agent.prompt` under the lease.
-    ///
-    /// `prepare` gets one last async pass at the message *inside* the run task,
-    /// after the busy flag is up and before it reaches the agent — the seam the
-    /// memory system uses to attach its `<memory>` block (ADR-0035 §5). Doing it
-    /// here rather than in the caller keeps sends strictly ordered (they are
-    /// serialized by the same task the lease is) and lets the Pending Row rise
-    /// the instant the user hits send, with retrieval hidden behind it.
-    func send(
-        _ message: any AgentMessageProtocol & Sendable,
-        prepare: (
-            @MainActor (any AgentMessageProtocol & Sendable) async -> any AgentMessageProtocol
-                & Sendable
-        )? = nil
-    ) {
+    func send(_ message: any AgentMessageProtocol & Sendable) {
         syncActiveTools()
         runUnderLease { [agent] in
-            let outgoing = await prepare?(message) ?? message
-            agent.prompt(outgoing)
+            agent.prompt(message)
             await agent.waitForIdle()
         }
     }
@@ -187,17 +173,14 @@ final class AgentRunController {
     // MARK: - Private
 
     /// Resolve the live tool set before each prompt so the LLM sees the
-    /// current set — audience and Web Access rules live in `ActiveToolSet`
-    /// (ADR-0048); every owner-facing chat is one consumer now (ADR-0052).
+    /// current set — the Web Access rule lives in `ActiveToolSet` (ADR-0048);
+    /// every conversation resolves the same way.
     /// The same resolve's prompt facts drive `syncSystemPrompt`, so the
     /// system prompt's orientation sections track the callable set instead
     /// of the raw registry.
     private func syncActiveTools() {
         guard let toolRegistry else { return }
-        let gating = ToolGating(
-            consumer: .chat,
-            webAccessEnabled: settings?.webAccessEnabled == true
-        )
+        let gating = ToolGating(webAccessEnabled: settings?.webAccessEnabled == true)
         let tools = ActiveToolSet.resolve(from: toolRegistry.allTools, gating: gating)
         agent.updateTools(tools)
         agent.syncSystemPrompt(facts: ActiveToolSet.promptFacts(for: tools))

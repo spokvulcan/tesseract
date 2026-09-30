@@ -3,7 +3,6 @@
 //  tesseract
 //
 
-import ServiceManagement
 import SwiftUI
 
 /// The Agent pane (#213): model choice (with the per-model Preserve-Thinking
@@ -12,26 +11,9 @@ import SwiftUI
 /// manager is a task surface, not a Settings pane (#213).
 struct AgentSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
-    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var container: DependencyContainer
     @State private var selectedAgentModelDeclaresPreserveThinking = false
     @State private var selectedAgentModelDeclaresReasoningEffort = false
-    /// The one-time launch-at-login ask (ADR-0040 §3), raised on first enable.
-    @State private var showingLaunchAtLoginAsk = false
-
-    /// What sleep is doing right now, in the owner's words rather than the
-    /// engine's.
-    private var sleepStatus: String {
-        switch container.memorySleep.phase {
-        case .idle: "Working…"
-        case .grading: "Judging what helped…"
-        case .reexamining: "Re-reading what you disputed…"
-        case .extracting: "Reading what you said…"
-        case .reconciling: "Checking it against what I know…"
-        case .sweeping: "Tidying…"
-        case .companion: "Jarvis is reviewing his own conduct…"
-        }
-    }
 
     private var selectedAgentModelStatus: ModelStatus {
         container.modelDownloadManager.status(for: settings.selectedAgentModelID)
@@ -42,55 +24,6 @@ struct AgentSettingsPane: View {
     /// submenu.
     private var translateLanguageOptions: [String] {
         SupportedLanguage.translateTargetOptions(current: settings.translateTargetLanguage)
-    }
-
-    private var companionSection: some View {
-        @Bindable var settings = settings
-        return Section {
-            Toggle("Companion", isOn: $settings.companionHeartbeatEnabled)
-            Picker("Companion Model", selection: $settings.companionModelID) {
-                ForEach(
-                    container.modelDownloadManager.downloadedModels(in: .agent)
-                ) { model in
-                    Text(model.displayName).tag(model.id)
-                }
-            }
-            .disabled(!settings.companionHeartbeatEnabled)
-            // Never a silent login-item flip (ADR-0040 §3): the toggle
-            // reads and writes the real SMAppService state.
-            Toggle(
-                "Launch at Login",
-                isOn: Binding(
-                    get: { SMAppService.mainApp.status == .enabled },
-                    set: { wanted in
-                        do {
-                            if wanted {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
-                            }
-                        } catch {
-                            Log.companion.error(
-                                "Launch-at-login change failed: \(error)")
-                        }
-                    }
-                ))
-            HStack {
-                Button("Book Test Wake") {
-                    container.companionLoop.bookTestWake()
-                }
-                .disabled(!settings.companionHeartbeatEnabled)
-                Button("Edit Instructions…") {
-                    openWindow(id: WindowID.companionInstructions)
-                }
-            }
-        } header: {
-            Text("Companion (Experimental)")
-        } footer: {
-            Text(
-                "A mind that happens to live in your Mac. The Companion books his own day — morning planning, a midday pulse, an evening journal — and wakes for what he booked; every turn is a real conversation you can open in the chat list, and every delivery is recorded to his flight log. While the Companion is enabled his model also becomes the default agent model — one model, one mind, no swap cost between your chats and his turns; if it isn't downloaded he runs on the model selected above. If no notification appears, allow notifications in System Settings → Notifications → Tesseract."
-            )
-        }
     }
 
     private var modelSection: some View {
@@ -189,8 +122,6 @@ struct AgentSettingsPane: View {
                     container.companionVoicePrototype.stopScene()
                 }
             }
-            Toggle("Summon Overlay for Beats", isOn: $settings.companionBeatsUseOverlay)
-                .disabled(!settings.companionHeartbeatEnabled)
             // The voice session's taste ledger (#310) — tuned in wear.
             Toggle("Auto-Send Voice Turns", isOn: $settings.companionVoiceAutoSend)
             HStack {
@@ -218,7 +149,7 @@ struct AgentSettingsPane: View {
             Text("Companion Voice")
         } footer: {
             Text(
-                "Voice conversations ride the chat itself: the waveform button in the composer (or engaging a spoken summons) opens a session where the mic listens after each reply, silence sends your turn, and speaking over him stops him mid-word. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. With Summon Overlay for Beats on, his spoken lines raise the picked concept as the summons surface; every reaction is recorded. Auto-Send off stages your words in the composer instead of sending."
+                "Voice conversations ride the chat itself: the waveform button in the composer opens a session where the mic listens after each reply, silence sends your turn, and speaking over him stops him mid-word. The overlay concepts (ticket #328) are the session's face — pick one, preview with the scripted scenes. Auto-Send off stages your words in the composer instead of sending."
             )
         }
     }
@@ -281,66 +212,10 @@ struct AgentSettingsPane: View {
                 )
             }
 
-            // The living memory (ADR-0035, map #314). Dictation gets its own
-            // switch because it is the one capture source whose text is usually
-            // addressed to *other* apps — the owner's call was to capture it, and
-            // a call like that is only really the owner's if he can take it back.
-            Section {
-                Toggle("Memory", isOn: $settings.memoryEnabled)
-                Toggle("Remember Dictated Text", isOn: $settings.memoryCaptureDictation)
-                    .disabled(!settings.memoryEnabled)
-                Toggle("Consolidate While Idle", isOn: $settings.memorySleepEnabled)
-                    .disabled(!settings.memoryEnabled)
-                HStack {
-                    Button("Open Memory…") { openWindow(id: WindowID.memory) }
-                    Button("Consolidate Now") { container.memorySleep.start() }
-                        .disabled(
-                            !settings.memoryEnabled || !settings.memorySleepEnabled
-                                || container.memorySleep.isRunning)
-                    if container.memorySleep.isRunning {
-                        ProgressView().controlSize(.small)
-                        Text(sleepStatus)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } header: {
-                Text("Memory")
-            } footer: {
-                Text(
-                    "What you say is stored verbatim as it happens, and distilled into memories while the Mac is idle — nothing leaves this machine. Consolidation yields the moment you touch the keyboard. Open Memory to see what I believe about you, why, and to contest or delete any of it."
-                )
-            }
-
-            // The Companion (ADR-0040): the entity's master switch, his model,
-            // and the one test lever that exercises the whole pipe. Extracted
-            // — the one Form body was past the type-checker's budget.
-            companionSection
-
             // PROTOTYPE — the Companion voice-overlay concepts (map #301, #328).
             companionVoiceSection
         }
         .formStyle(.grouped)
-        .onChange(of: settings.companionHeartbeatEnabled) { _, enabled in
-            if enabled {
-                container.companionLoop.activate()
-                if !settings.companionLaunchAtLoginAsked {
-                    settings.companionLaunchAtLoginAsked = true
-                    showingLaunchAtLoginAsk = true
-                }
-            }
-        }
-        .alert("Keep Jarvis running?", isPresented: $showingLaunchAtLoginAsk) {
-            Button("Launch at Login") {
-                do { try SMAppService.mainApp.register() } catch {
-                    Log.companion.error("Launch-at-login register failed: \(error)")
-                }
-            }
-            Button("Not Now", role: .cancel) {}
-        } message: {
-            Text(
-                "The Companion only runs while Tesseract is open. Start it at login so his day survives reboots — you can change this anytime with the Launch at Login toggle."
-            )
-        }
         .onAppear {
             refreshSelectedAgentModelCapabilities()
         }

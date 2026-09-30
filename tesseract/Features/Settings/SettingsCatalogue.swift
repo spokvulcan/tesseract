@@ -126,15 +126,10 @@ enum SettingsCatalogue {
     static let speechOverlayScopeRaw = Setting.string(
         "speechOverlayScope", default: SpeechOverlayScope.automatic.rawValue)
     static let agentAutoSpeak = Setting.bool("agentAutoSpeak", default: false)
-    /// The Companion master switch (ADR-0040). The key keeps its skeleton-era
-    /// name so the owner's existing opt-in survives the cutover to the loop.
+    /// The Companion master switch. The key keeps its skeleton-era name so the
+    /// owner's existing opt-in survives each redesign.
     static let companionHeartbeatEnabled = Setting.bool(
         "companionHeartbeatEnabled", default: false)
-    /// The Companion's own model (ADR-0040 §9): his turns run on the smartest
-    /// model on the machine regardless of the interactive picker. Empty falls
-    /// back to the selected agent model.
-    static let companionModelID = Setting.string(
-        "companionModelID", default: "qwen3.6-35b-a3b-paro")
     /// The one-time launch-at-login ask (ADR-0040 §3): asked when the
     /// Companion is first enabled; a silent login-item flip is a trust
     /// violation, so the answer is always the owner's.
@@ -144,10 +139,6 @@ enum SettingsCatalogue {
     /// scaffolding: deleted when the concepts prune to one winner.
     static let companionVoiceConcept = Setting.string(
         "companionVoiceConcept", default: "emissary")
-    /// #328 wearing instrument: heartbeat beats summon the picked overlay
-    /// concept instead of a banner (banner stays the unanswered fallback).
-    static let companionBeatsUseOverlay = Setting.bool(
-        "companionBeatsUseOverlay", default: false)
     /// The voice session's taste ledger (#310) — every disputed call ships as
     /// a Setting the owner tunes on the wearing build.
     static let companionVoiceAutoSend = Setting.bool(
@@ -159,18 +150,42 @@ enum SettingsCatalogue {
     static let companionVoiceBargeInLevel = Setting.double(
         "companionVoiceBargeInLevel", default: 0.25)
 
-    // MARK: - Memory (ADR-0035, map #314)
+    // MARK: - Companion (the day)
 
-    /// The master switch for the living memory system. Off disables capture,
-    /// retrieval, and consolidation alike.
-    static let memoryEnabled = Setting.bool("memoryEnabled", default: true)
-    /// Whether dictated content becomes memory. The owner's explicit call
-    /// ("dictated content is your life too", map #314 final grill) — but it is
-    /// the one capture source whose text is usually addressed to *other* apps,
-    /// so it gets its own switch.
-    static let memoryCaptureDictation = Setting.bool("memoryCaptureDictation", default: true)
-    /// Whether sleep consolidation may run when the Mac goes idle.
-    static let memorySleepEnabled = Setting.bool("memorySleepEnabled", default: true)
+    /// The owner's Areas: which Reminders lists count as Areas, their names,
+    /// and the Inbox list (`AreaMap`, JSON). `{}` means every list is an Area.
+    static let companionAreasJSON = Setting.string("companionAreasJSON", default: "{}")
+    /// The calendar new events go to; nil is the system default calendar.
+    static let companionDefaultCalendarID = Setting.optionalString("companionDefaultCalendarID")
+    /// How long before an event its nudge fires.
+    static let companionNudgeLeadMinutes = Setting.int("companionNudgeLeadMinutes", default: 10)
+    /// The Morning Plan's window: it may run from this hour…
+    static let companionMorningStartHour = Setting.int("companionMorningStartHour", default: 4)
+    /// …until this hour, local time.
+    static let companionMorningEndHour = Setting.int("companionMorningEndHour", default: 12)
+    /// When the Evening Wrap-up is due, in minutes after midnight.
+    static let companionEveningMinutes = Setting.int("companionEveningMinutes", default: 21 * 60)
+    /// How long the owner must be away before coming back is a Breakpoint.
+    static let companionBreakpointAwayMinutes = Setting.int(
+        "companionBreakpointAwayMinutes", default: 10)
+    /// Whether Jarvis may speak urgent lines aloud (the voice rung).
+    static let companionSpeaks = Setting.bool("companionSpeaks", default: true)
+    /// Quiet hours start (minutes after midnight): Jarvis's own deliveries stop;
+    /// the owner's reminders and event nudges still fire.
+    static let companionQuietStartMinutes = Setting.int(
+        "companionQuietStartMinutes", default: 23 * 60)
+    /// Quiet hours end (minutes after midnight).
+    static let companionQuietEndMinutes = Setting.int("companionQuietEndMinutes", default: 8 * 60)
+    /// The owner's notification rules (`[TriageRule]`, JSON), newest first.
+    static let companionTriageRulesJSON = Setting.string("companionTriageRulesJSON", default: "[]")
+    /// The Day Thread's compaction ceiling, in tokens.
+    static let companionThreadCeilingTokens = Setting.int(
+        "companionThreadCeilingTokens", default: 80_000)
+    /// The capture hotkey: a thought into Reminders from any app.
+    static let captureHotkeyKeyCode = Setting.int(
+        "captureHotkeyKeyCode", default: Int(KeyCombo.optionShiftSpace.keyCode))
+    static let captureHotkeyModifiers = Setting.int(
+        "captureHotkeyModifiers", default: Int(KeyCombo.optionShiftSpace.modifiers))
 
     static let selectedAgentModelID = Setting.string(
         "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)

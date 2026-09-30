@@ -142,6 +142,21 @@ tesseract/
 │   │   ├── Context/                   # System prompt, skills, compaction
 │   │   ├── ParoQuant/                 # PARO-quantized weight loading
 │   │   └── Views/                     # Chat UI
+│   ├── Companion/                     # Jarvis: the owner's day (ADR-0080)
+│   │   ├── Agenda/                    # Reminders + Calendar port (EventKit, in-memory), facade, tools, Areas
+│   │   ├── Capture/                   # Capture parser, capture door, hotkey panel
+│   │   ├── Engine/                    # Day Engine (pure decider), Delivery Ladder, governor, nudges
+│   │   ├── Moments/                   # Moments, cards, prompts, card parsing, fallbacks
+│   │   ├── Thread/                    # Day Thread: one conversation per day on its own agent
+│   │   ├── Loop/                      # Companion runtime: gather → decide → perform, day state
+│   │   ├── Today/                     # The Today page (Timeline layout)
+│   │   ├── Delivery/                  # Jarvis panel, banners and nudges, glyph state
+│   │   ├── Perception/                # Notification Center watcher, seen ledger, owner rules
+│   │   ├── CodingAgents/              # Agent signals, Claude Code hooks (Config Merge)
+│   │   ├── Profile/ Recall/           # Profile + proposals, remember/forget/recall, FTS index, embedder
+│   │   ├── Presence/                  # Idle monitor, frontmost app, power
+│   │   ├── Trace/                     # Companion Trace (closed vocabulary, JSONL per day)
+│   │   └── Voice/ VoiceOverlay/       # Voice session (the voice rung)
 │   ├── Server/                        # Local OpenAI-compatible HTTP server
 │   │   ├── HTTPServer.swift           # HTTP/1.1 server
 │   │   ├── CompletionHandler.swift    # HTTP framing edge: lease, validation, start
@@ -425,7 +440,10 @@ and loading.
 
 **Double-loop** (`Features/Agent/Core/AgentLoop.swift`): Outer loop handles follow-ups, inner loop handles tool calls + steering. No fixed round limit.
 
-**4 built-in tools**: `read`, `write`, `edit`, `ls` — all sandboxed via `PathSandbox`.
+**Built-in tools**: `read`, `write`, `edit`, `ls` (all sandboxed via `PathSandbox`), and the
+Companion's tools, registered in every conversation: the agenda tools (`agenda`,
+`add_reminder`, `update_reminder`, `add_event`, `move_event`), `notification_rule`, and
+`remember` / `forget` / `recall`.
 
 **Extensibility**: Packages, Extensions (tool plugins), Skills (markdown with YAML frontmatter), slash commands (built-in + skills + extensions).
 
@@ -495,7 +513,32 @@ the first adapter. HTTP requests load the vision variant for vision-capable
 models unconditionally (ADR-0008), so a generated config never advertises what
 the server won't serve. Vocabulary: CONTEXT.md → Client integrations.
 
-### 7. Platform Adapters
+### 7. The Companion
+
+Jarvis thinks at moments; code keeps the promises (ADR-0080, `CONTEXT.md` →
+Companion: the day). **Today** is the main window's first page. Apple
+Reminders and Calendar are the single source of truth, behind one **Agenda**
+port (`EventKitAgendaStore`; `InMemoryAgendaStore` for the test host and every
+test) whose five tools ride every conversation.
+
+The **Day Engine** is a pure decider: `CompanionRuntime` gathers a
+`DaySnapshot` (agenda, presence, the app in front, power), feeds one
+`DaySignal` at a time, persists the returned `DayState`, and performs the
+`DayEffect`s — scheduling OS nudges, running a moment, putting a card on a
+rung, changing Reminders, writing the **Companion Trace**. A **Moment** is one
+generation over the day's **Day Thread** (`DayThread`, its own agent with the
+same system prompt and tools as every chat, so all share one cached prefix);
+its JSON card is validated, retried once, or replaced by a deterministic card.
+Cards reach the owner through the **Delivery Ladder**: the glyph, the **Jarvis
+Panel** (`Platform/GlassPanel.swift`, a borderless non-activating panel over
+`NSGlassEffectView`), a banner, or voice. The system prompt carries no time;
+every user message carries a stored **Now Tag**.
+
+Tests never touch EventKit or a model: the engine is covered by decision
+tables, the tools run against the in-memory Agenda, and cards parse canned
+replies (`docs/testing.md` → Companion).
+
+### 8. Platform Adapters
 
 All AppKit bridging lives in `Platform/`. These are the features that SwiftUI cannot cover:
 

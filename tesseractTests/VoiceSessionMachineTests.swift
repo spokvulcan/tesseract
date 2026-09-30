@@ -265,7 +265,7 @@ extension [VoiceSessionMachine.Effect] {
         h.ticks(12, level: 0.6)
         let effects = h.ticks(8, level: 0.6)
         #expect(effects.contains(.pauseSpeaking))
-        #expect(effects.snapshot(of: "reaction.barge-in")?["detector"] == "energy-soft")
+        #expect(effects.snapshot(of: "voice.barge-in")?["detector"] == "energy-soft")
     }
 
     @Test func aSilentConfirmWindowFadesTheReplyBack() {
@@ -332,7 +332,7 @@ extension [VoiceSessionMachine.Effect] {
         h.startSpeaking()
         let effects = h.send(.clickBarge(source: "click"))
         #expect(effects.first == .pauseSpeaking)
-        #expect(effects.snapshot(of: "reaction.barge-in")?["detector"] == "click")
+        #expect(effects.snapshot(of: "voice.barge-in")?["detector"] == "click")
         #expect(effects.contains(.feedState(.listening)))
         #expect(h.machine.phase == .capturing)
     }
@@ -343,7 +343,7 @@ extension [VoiceSessionMachine.Effect] {
         h.ticks(12, level: 0.6)
         let effects = h.send(.clickBarge(source: "click"))
         #expect(effects.contains(.pauseSpeaking))
-        #expect(effects.snapshot(of: "reaction.barge-in")?["detector"] == "click")
+        #expect(effects.snapshot(of: "voice.barge-in")?["detector"] == "click")
         #expect(h.machine.phase == .capturing)
     }
 

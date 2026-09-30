@@ -82,16 +82,9 @@ func makeTempDir(_ label: String = "scratch") -> URL {
     return dir
 }
 
-/// A hermetic `MemoryStore` over its own scratch directory. Consolidates the
-/// helper the companion suites each built identically, so a
-/// `MemoryStore(directory:)` change touches one place, not three.
-func scratchStore() throws -> MemoryStore {
-    try MemoryStore(directory: makeTempDir("scratch-memory"))
-}
-
-/// A hermetic flight recorder over its own scratch directory.
-func scratchRecorder() -> CompanionFlightRecorder {
-    CompanionFlightRecorder(directory: makeTempDir("scratch-flight"))
+/// A hermetic Companion Trace over its own scratch directory.
+func scratchTrace() -> CompanionTrace {
+    CompanionTrace(directory: makeTempDir("scratch-trace"))
 }
 
 /// Minimal thread-safe mutable box for observing side effects from `@Sendable`
@@ -165,4 +158,19 @@ enum GenerationFixtures {
             ] as [String: any Sendable],
         ]
     ]
+}
+
+/// A seeded RNG, so "random" is reproducible (splitmix64).
+nonisolated struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) { self.state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
 }

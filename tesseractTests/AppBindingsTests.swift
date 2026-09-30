@@ -217,40 +217,32 @@ struct AppBindingsTests {
     }
 
     @Test
-    func companionEnabledMakesItsModelTheAgentDefault() async {
-        let h = makeHarness {
-            $0.companionModelID = "big-model"
-            $0.companionHeartbeatEnabled = false
-        }
+    func captureHotkeyChangeReBindsItsRegistration() async {
+        let h = makeHarness()
         defer { h.bindings.stop() }
-        h.driver.isAgentModelDownloaded = true
-        let originalDefault = h.settings.selectedAgentModelID
 
         h.bindings.start()
-        // Disabled: the interactive default is untouched.
-        _ = await waitUntil { false }
-        #expect(h.settings.selectedAgentModelID == originalDefault)
 
-        // Enabling flips the default to the Companion model (ADR-0040 §9).
-        h.settings.companionHeartbeatEnabled = true
-        #expect(await waitUntil { h.settings.selectedAgentModelID == "big-model" })
+        let combo = KeyCombo(keyCode: 40, modifiers: [.control, .option])
+        h.settings.captureHotkey = combo
 
-        // Picking a different Companion model while enabled follows it too.
-        h.settings.companionModelID = "bigger-model"
-        #expect(await waitUntil { h.settings.selectedAgentModelID == "bigger-model" })
+        #expect(
+            await waitUntil {
+                h.recorder.events(withPrefix: "updateCaptureHotkey").last
+                    == "updateCaptureHotkey(\(combo.displayString))"
+            })
     }
 
+    /// The selected model is never silently switched: turning the Companion
+    /// on leaves the owner's agent model alone.
     @Test
-    func undownloadedCompanionModelNeverBecomesTheDefault() async {
-        let h = makeHarness {
-            $0.companionModelID = "big-model"
-            $0.companionHeartbeatEnabled = true
-        }
+    func companionEnabledNeverSwitchesTheAgentModel() async {
+        let h = makeHarness { $0.companionHeartbeatEnabled = false }
         defer { h.bindings.stop() }
-        h.driver.isAgentModelDownloaded = false
         let originalDefault = h.settings.selectedAgentModelID
 
         h.bindings.start()
+        h.settings.companionHeartbeatEnabled = true
         _ = await waitUntil { false }
         #expect(h.settings.selectedAgentModelID == originalDefault)
     }
@@ -555,7 +547,6 @@ private final class InputDriver {
     var isLLMSlotLoaded = false
     var whisperModelPath: URL?
     var isTranscriptionModelLoaded = false
-    var isAgentModelDownloaded = false
 }
 
 @MainActor
@@ -605,8 +596,7 @@ private func makeHarness(
             isLLMSlotLoaded: { driver.isLLMSlotLoaded },
             whisperModelPath: { driver.whisperModelPath },
             isTranscriptionModelLoaded: { driver.isTranscriptionModelLoaded },
-            modelDownloadStatuses: statuses.eraseToAnyPublisher(),
-            isAgentModelDownloaded: { _ in driver.isAgentModelDownloaded }
+            modelDownloadStatuses: statuses.eraseToAnyPublisher()
         ),
         effects: .init(
             setUpOverlayPanel: { recorder("setUpOverlayPanel") },
@@ -619,6 +609,7 @@ private func makeHarness(
             updateTTSHotkey: { recorder("updateTTSHotkey(\($0.displayString))") },
             updateAgentHotkey: { recorder("updateAgentHotkey(\($0.displayString))") },
             updateAppshotHotkey: { recorder("updateAppshotHotkey(\($0.displayString))") },
+            updateCaptureHotkey: { recorder("updateCaptureHotkey(\($0.displayString))") },
             startHTTPServer: { recorder("startHTTPServer") },
             stopHTTPServer: { recorder("stopHTTPServer") },
             updateHTTPServerPort: { recorder("updateHTTPServerPort(\($0))") },

@@ -1,6 +1,6 @@
 # ADR-0043: The Wake Evaluator is a pure decider; the loop gathers and performs
 
-- Status: Accepted (amended by ADR-0046 #371 — see the note at the end)
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted (amended by ADR-0046 #371 — see the note at the end)
 - Date: 2026-07-18
 - Relates to: ADR-0040 (the promise this delivers — §2's "a pure function,
   replayable over a recorder snapshot"), ADR-0042 (the sibling split in the

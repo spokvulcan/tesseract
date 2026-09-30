@@ -204,6 +204,26 @@ between families and modes, so it gets its own column.
 - **App default** (`AgentGenerateParameters.default`): temperature 0.6,
   top_p 0.95, no penalties, max_tokens 262,144, prefill step 1,024.
 
+## Companion moments (ADR-0080)
+
+Every Companion moment is one generation over the Day Thread on the selected
+agent model, at the owner's reasoning effort and sampling preset: on Qwen3.8
+the effort is written into the first system block, so one effort for every
+moment keeps one cached prefix. Each moment has its own output cap (thinking
+included); a reply that hits it falls back to the deterministic card.
+
+| Moment | Output cap (tokens) |
+|---|---|
+| Morning Plan | 6,000 |
+| Breakpoint | 3,000 |
+| Triage | 2,500 |
+| Evening Wrap-up | 4,000 |
+| Night Reflection | 8,000 |
+
+The Day Thread compacts past its ceiling (Settings → Companion, 80k tokens by
+default). On the 27B hybrid checkpoints only 16 of 64 layers hold a KV cache,
+64 KB per token at full precision, so an 80k-token thread is about 5 GB.
+
 ## Non-LLM entries
 
 | Catalog id | Repo | Facts from the checkpoint |

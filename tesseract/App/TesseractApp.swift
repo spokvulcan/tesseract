@@ -15,12 +15,8 @@ enum WindowID {
     /// The Markdown Gallery (see `CONTEXT.md`): the living style reference
     /// for chat markdown, reached from the Window menu.
     static let markdownGallery = "markdown-gallery"
-    /// The Memory window (ADR-0035 §9): what the assistant believes and why —
-    /// browse, drill into source episodes, contest, delete.
-    static let memory = "memory"
-    /// The Companion's standing instructions (ADR-0040 §12): the versioned
-    /// document the entity authors for itself — owner-readable and -editable.
-    static let companionInstructions = "companion-instructions"
+    /// The Profile: everything Jarvis knows about the owner, editable.
+    static let profile = "profile"
 }
 
 /// Bridges the SwiftUI `openWindow`/`openSettings` environment actions to the
@@ -50,7 +46,7 @@ private struct WindowOpenerView: View {
 struct TesseractApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var container = DependencyContainer()
-    @State private var selectedNavigation: NavigationItem? = .agent
+    @State private var selectedNavigation: NavigationItem? = .today
 
     /// Launch arguments that select a headless harness run (dispatched in
     /// `init`). Harness instances are exempt from the single-instance guard
@@ -252,25 +248,12 @@ struct TesseractApp: App {
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
 
-        // The Memory window (ADR-0035 §9): on-demand singleton, never
-        // presented at launch; the system Window menu lists it automatically.
-        Window("Memory", id: WindowID.memory) {
-            MemoryWindowView()
-                .environment(container.memoryEngine)
+        // The Profile: on-demand singleton, opened from Today and Settings.
+        Window("Profile", id: WindowID.profile) {
+            ProfileView()
+                .environment(container.profileStore)
         }
-        .defaultSize(width: 1000, height: 680)
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
-
-        // The Companion's standing instructions (ADR-0040 §12): on-demand
-        // singleton — the entity's self-authored conduct, owner-editable.
-        Window("Companion Instructions", id: WindowID.companionInstructions) {
-            CompanionInstructionsView(
-                store: container.memoryStore,
-                recorder: container.companionFlightRecorder
-            )
-        }
-        .defaultSize(width: 860, height: 560)
+        .defaultSize(width: 620, height: 560)
         .defaultLaunchBehavior(.suppressed)
         .restorationBehavior(.disabled)
     }

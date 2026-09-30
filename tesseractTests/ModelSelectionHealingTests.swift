@@ -60,47 +60,4 @@ struct ModelSelectionHealingTests {
             statuses: [:])
         #expect(decided == nil)
     }
-
-    // MARK: - Companion agent default (ADR-0040 §9)
-
-    /// The enabled Companion adopts its downloaded model as the agent
-    /// default.
-    @Test func enabledCompanionAdoptsItsDownloadedModel() {
-        let decided = ModelSelectionHealing.adoptedCompanionAgentDefault(
-            companionEnabled: true,
-            companionModelID: "jarvis-model",
-            selectedAgentModelID: "other-model",
-            isDownloaded: { _ in true })
-        #expect(decided == "jarvis-model")
-    }
-
-    /// An undownloaded model must never become the interactive default.
-    @Test func undownloadedCompanionModelIsNeverAdopted() {
-        let decided = ModelSelectionHealing.adoptedCompanionAgentDefault(
-            companionEnabled: true,
-            companionModelID: "jarvis-model",
-            selectedAgentModelID: "other-model",
-            isDownloaded: { _ in false })
-        #expect(decided == nil)
-    }
-
-    /// A disabled Companion, an empty companion model, or an already
-    /// matching selection all decide nothing.
-    @Test func disabledEmptyOrMatchingDecidesNothing() {
-        #expect(
-            ModelSelectionHealing.adoptedCompanionAgentDefault(
-                companionEnabled: false, companionModelID: "jarvis-model",
-                selectedAgentModelID: "other", isDownloaded: { _ in true })
-                == nil)
-        #expect(
-            ModelSelectionHealing.adoptedCompanionAgentDefault(
-                companionEnabled: true, companionModelID: "",
-                selectedAgentModelID: "other", isDownloaded: { _ in true })
-                == nil)
-        #expect(
-            ModelSelectionHealing.adoptedCompanionAgentDefault(
-                companionEnabled: true, companionModelID: "jarvis-model",
-                selectedAgentModelID: "jarvis-model", isDownloaded: { _ in true })
-                == nil)
-    }
 }

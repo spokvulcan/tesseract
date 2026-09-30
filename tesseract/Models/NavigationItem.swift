@@ -10,6 +10,8 @@ import SwiftUI
 /// download manager is server-side infrastructure (#213) — but stays a
 /// main-window task surface (live progress, storage, verify).
 enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
+    /// The app's home: the owner's day (Companion v2).
+    case today
     case dictation
     case speech
     case agent
@@ -19,11 +21,12 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var id: String { rawValue }
 
-    static let mainPages: [NavigationItem] = [.agent, .dictation, .speech]
+    static let mainPages: [NavigationItem] = [.today, .agent, .dictation, .speech]
     static let serverPages: [NavigationItem] = [.serverActivity, .serverCache, .model]
 
     var name: LocalizedStringResource {
         switch self {
+        case .today: "Today"
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .agent: "Agent"
@@ -35,6 +38,7 @@ enum NavigationItem: String, Equatable, Hashable, Identifiable, CaseIterable {
 
     var symbolName: String {
         switch self {
+        case .today: "sun.max"
         case .dictation: "mic.fill"
         case .speech: "speaker.wave.3.fill"
         case .agent: "brain.head.profile"

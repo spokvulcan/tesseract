@@ -79,21 +79,8 @@ struct AgentContentView: View {
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
 
-                            // Mission Control opens for reading (ADR-0046):
-                            // the fold only gains messages through the loop,
-                            // so the composer yields to a quiet notice.
-                            if session.isMissionControlOpen {
-                                Text(
-                                    "Mission Control is Jarvis's own record — start a chat to talk to him."
-                                )
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity)
+                            AgentComposerView()
                                 .padding(Theme.Spacing.md)
-                            } else {
-                                AgentComposerView()
-                                    .padding(Theme.Spacing.md)
-                            }
                         }
                     }
                     // The Skill Cluster floats above the composer's trailing
@@ -247,14 +234,18 @@ struct AgentContentView: View {
     private var conversationHistoryPopover: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if conversationStore.conversations.isEmpty {
+                // Day Threads belong to the Today page, not the Agent page.
+                let chats = conversationStore.conversations.filter {
+                    $0.turnOrigin == .interactive
+                }
+                if chats.isEmpty {
                     Text("No past conversations")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .padding()
                         .frame(maxWidth: .infinity)
                 } else {
-                    ForEach(conversationStore.conversations) { summary in
+                    ForEach(chats) { summary in
                         conversationRow(summary)
                     }
                 }
@@ -271,24 +262,11 @@ struct AgentContentView: View {
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(summary.title)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .foregroundStyle(
-                                isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                        // The origin badge (#327 §3): the Companion's own
-                        // turns are findable at a glance; typed chats stay
-                        // unbadged.
-                        if let badge = ConversationOriginBadge.label(for: summary.turnOrigin) {
-                            Text(badge)
-                                .font(.caption2)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(.tint.opacity(0.14), in: Capsule())
-                                .foregroundStyle(.tint)
-                        }
-                    }
+                    Text(summary.title)
+                        .font(.callout)
+                        .lineLimit(1)
+                        .foregroundStyle(
+                            isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
                     Text(summary.updatedAt.formatted(.relative(presentation: .named)))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -309,31 +287,6 @@ struct AgentContentView: View {
             } label: {
                 Label("Delete", systemImage: "trash")
             }
-        }
-    }
-}
-
-// MARK: - Origin badges (#327 §3)
-
-/// The conversation-list origin vocabulary (#327 §2): `interactive` (and
-/// legacy untagged) rows stay clean; the Companion's turn classes get a small
-/// badge. Exhaustive over `TurnOrigin` so the vocabulary can't drift from
-/// what the loop actually emits.
-enum ConversationOriginBadge {
-    static func label(for origin: TurnOrigin) -> String? {
-        switch origin {
-        case .interactive: nil
-        case .beat: "beat"
-        case .wake: "wake"
-        case .event: "events"
-        // Retired by #371 — renders only on pre-fold transcripts.
-        case .ambient: "ambient"
-        case .catchup: "catch-up"
-        case .sleep: "sleep"
-        // The fixed title "Mission Control" already names the row (ADR-0046);
-        // a badge repeating it would be noise.
-        case .missionControl: nil
-        case .dialogue: "dialogue"
         }
     }
 }

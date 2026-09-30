@@ -1,6 +1,6 @@
 # ADR-0046: The Companion loop is an Event Fold over one standing conversation
 
-- Status: Accepted
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted
 - Date: 2026-07-18
 - Relates to: ADR-0040 (the entity/harness split this refines), ADR-0043 (the
   pure decider that absorbs the fold's clock), ADR-0035 (the sleep pass the

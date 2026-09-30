@@ -160,6 +160,40 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/VisionPrefixMemoryGuardTests \
   -only-testing:tesseractTests/Qwen3VLProcessorCapTests
 
+# The Companion (ADR-0080), with no model and no EventKit: the Day Engine's
+# decision tables (nudges, moments, Breakpoints, Triage, agents, the Night
+# Reflection, card actions), the Agenda tools over the in-memory store, capture,
+# the Timeline, cards and prompts, the Day Thread's store, the seen ledger, the
+# Delivery Ladder and governor, the Claude Code merge, the Profile and recall
+# (fixture conversation files), the trace, and the prefix-cache contract (a
+# byte-identical system prompt; the Now Tag on every user message):
+xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'platform=macOS' \
+  -skipPackagePluginValidation \
+  -only-testing:tesseractTests/DayEngineNudgeTests \
+  -only-testing:tesseractTests/DayEngineMomentTests \
+  -only-testing:tesseractTests/DayEngineBreakpointTests \
+  -only-testing:tesseractTests/CardItemActionTests \
+  -only-testing:tesseractTests/NightReflectionTests \
+  -only-testing:tesseractTests/DayStateStoreTests \
+  -only-testing:tesseractTests/AgendaToolsTests \
+  -only-testing:tesseractTests/AgendaTimeTests \
+  -only-testing:tesseractTests/CaptureParserTests \
+  -only-testing:tesseractTests/NudgePlannerTests \
+  -only-testing:tesseractTests/TimelineBuilderTests \
+  -only-testing:tesseractTests/CardParserTests \
+  -only-testing:tesseractTests/MomentPromptsTests \
+  -only-testing:tesseractTests/DayThreadTests \
+  -only-testing:tesseractTests/SeenLedgerTests \
+  -only-testing:tesseractTests/DeliveryLadderTests \
+  -only-testing:tesseractTests/ClaudeCodeHooksTests \
+  -only-testing:tesseractTests/ProfileStoreTests \
+  -only-testing:tesseractTests/RecallIndexTests \
+  -only-testing:tesseractTests/CompanionTraceTests \
+  -only-testing:tesseractTests/DayKeyTests \
+  -only-testing:tesseractTests/NowTagTests \
+  -only-testing:tesseractTests/SystemPromptAssemblerTests \
+  -only-testing:tesseractTests/RetiredCompanionDataTests
+
 # Every main-window page opens with the app's own wiring, and test runs stay
 # off the owner's data (ADR-0073). A page missing an environment dependency
 # crashes the host: the result shows "Crash" on that page's case.
@@ -179,22 +213,19 @@ A test run never reaches the owner's data (ADR-0073). The app is the test
 host, and under a test runner it keeps everything it stores in
 `$TMPDIR/TesseractTestStorage-<pid>`, keeps its settings in memory, and opens
 no windows. The model folder stays in place, so suites that load installed
-models still find them. Suites that need the owner's data, like the memory
-evals, find it themselves and only read it; one that goes through an app
-default such as `PathSandbox.defaultRoot` gets the empty scratch copy and
-skips. `StorageEnvironmentTests` fails when app code finds Application Support
+models still find them. A suite that goes through an app default such as
+`PathSandbox.defaultRoot` gets the empty scratch copy and skips. The
+Companion's Agenda is the in-memory store under a test runner, so no test asks
+for or touches the owner's Reminders or Calendar, not even a scratch list. `StorageEnvironmentTests` fails when app code finds Application Support
 or Caches without going through `StorageEnvironment`.
 
 For a validation run that must not load models, prefix the command with
 `TEST_RUNNER_XCTestSessionIdentifier=prefix-cache-unit-tests`. The existing
 test-host detector makes `DependencyContainer.setup()` return before app
-bootstrap, including Whisper, proofreader and memory-model prewarms. Use an
-explicit suite allowlist (the prefix-cache block above plus touched suites)
-after checking its fixtures, rather than the broad target. In particular,
-`MemoryBaselineTests`, `MemoryEvalTests`, `MemoryRecallEvalTests`,
-`MemoryEmbedderQualityTests`, and `RecallToolSmokeTests` intentionally load the
-installed embedder. The prefix block's `Real` suites load tokenizer files,
-not model weights. Leave corpus and allocation opt-ins unset.
+bootstrap, including Whisper and proofreader prewarms. Use an explicit suite
+allowlist (the prefix-cache block above plus touched suites) after checking its
+fixtures, rather than the broad target. The prefix block's `Real` suites load
+tokenizer files, not model weights. Leave corpus and allocation opt-ins unset.
 
 **Speculative decoding** (ADR-0079) is covered on the toy.
 `SpeculationPlanTests` pins the **Speculation Plan**'s table from the request's

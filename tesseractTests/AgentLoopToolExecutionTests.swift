@@ -508,7 +508,10 @@ struct AgentLoopToolExecutionTests {
         // interjection.
         #expect(llm.callCount == 2)
         let followUpMessages = llm.messages(forCall: 1)
-        #expect(followUpMessages.contains(.user(content: "wait", images: [])))
+        let steeringMessage = try #require(context.messages[4] as? UserMessage)
+        #expect(
+            followUpMessages.contains(.user(content: "\(steeringMessage.nowTag)\nwait", images: []))
+        )
         #expect(
             followUpMessages.contains(
                 .toolResult(

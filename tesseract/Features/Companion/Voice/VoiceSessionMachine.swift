@@ -394,7 +394,7 @@ nonisolated struct VoiceSessionMachine {
         var effects: [Effect] = [
             .pauseSpeaking,
             energyRecord(
-                .reactionBargeIn,
+                .voiceBargeIn,
                 extra: ["offsetSeconds": speakingOffsetSeconds(now: now), "detector": source]),
         ]
         // Fresh take from the interruption on — the playback-period audio
@@ -447,7 +447,7 @@ nonisolated struct VoiceSessionMachine {
         return [
             .pauseSpeaking,
             energyRecord(
-                .reactionBargeIn,
+                .voiceBargeIn,
                 extra: [
                     "offsetSeconds": speakingOffsetSeconds(now: now), "detector": detector,
                 ]),

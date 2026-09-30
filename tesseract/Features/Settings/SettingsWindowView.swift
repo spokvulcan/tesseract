@@ -24,6 +24,10 @@ struct SettingsWindowView: View {
                 HotkeysSettingsPane()
                     .frame(width: 620, height: 560)
             }
+            Tab("Companion", systemImage: "sun.max") {
+                CompanionSettingsPane()
+                    .frame(width: 620, height: 700)
+            }
             Tab("Agent", systemImage: "brain.head.profile") {
                 AgentSettingsPane()
                     .frame(width: 620, height: 700)

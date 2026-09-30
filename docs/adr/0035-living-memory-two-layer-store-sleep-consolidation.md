@@ -1,6 +1,6 @@
 # ADR-0035: Living memory — an immutable episodic layer under a first-person semantic layer, with salience decided in sleep
 
-- Status: Accepted
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted
 - Date: 2026-07-12
 - Relates to: map #314 (Memory — the living, brain-inspired memory system), tickets #319–#325; map #301 (Companion), ticket #302 (the anchor day); ADR-0034 (Proofread Pass — own co-resident MLX model), ADR-0015/0018/0019 (prefix cache), ADR-0024 (chat parts model)
 

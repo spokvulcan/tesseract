@@ -340,12 +340,6 @@ final class SettingsManager {
         }
     }
 
-    var companionModelID: String {
-        didSet {
-            SettingsCatalogue.companionModelID.write(companionModelID, to: store)
-        }
-    }
-
     var companionLaunchAtLoginAsked: Bool {
         didSet {
             SettingsCatalogue.companionLaunchAtLoginAsked.write(
@@ -356,12 +350,6 @@ final class SettingsManager {
     var companionVoiceConceptRaw: String {
         didSet {
             SettingsCatalogue.companionVoiceConcept.write(companionVoiceConceptRaw, to: store)
-        }
-    }
-
-    var companionBeatsUseOverlay: Bool {
-        didSet {
-            SettingsCatalogue.companionBeatsUseOverlay.write(companionBeatsUseOverlay, to: store)
         }
     }
 
@@ -392,20 +380,99 @@ final class SettingsManager {
         }
     }
 
-    // MARK: - Memory (ADR-0035)
+    // MARK: - Companion (the day)
 
-    var memoryEnabled: Bool {
-        didSet { SettingsCatalogue.memoryEnabled.write(memoryEnabled, to: store) }
+    var companionAreasJSON: String {
+        didSet { SettingsCatalogue.companionAreasJSON.write(companionAreasJSON, to: store) }
     }
 
-    var memoryCaptureDictation: Bool {
+    var companionDefaultCalendarID: String? {
         didSet {
-            SettingsCatalogue.memoryCaptureDictation.write(memoryCaptureDictation, to: store)
+            SettingsCatalogue.companionDefaultCalendarID.write(
+                companionDefaultCalendarID, to: store)
         }
     }
 
-    var memorySleepEnabled: Bool {
-        didSet { SettingsCatalogue.memorySleepEnabled.write(memorySleepEnabled, to: store) }
+    var companionNudgeLeadMinutes: Int {
+        didSet {
+            SettingsCatalogue.companionNudgeLeadMinutes.write(companionNudgeLeadMinutes, to: store)
+        }
+    }
+
+    var companionMorningStartHour: Int {
+        didSet {
+            SettingsCatalogue.companionMorningStartHour.write(companionMorningStartHour, to: store)
+        }
+    }
+
+    var companionMorningEndHour: Int {
+        didSet {
+            SettingsCatalogue.companionMorningEndHour.write(companionMorningEndHour, to: store)
+        }
+    }
+
+    var companionEveningMinutes: Int {
+        didSet {
+            SettingsCatalogue.companionEveningMinutes.write(companionEveningMinutes, to: store)
+        }
+    }
+
+    var companionBreakpointAwayMinutes: Int {
+        didSet {
+            SettingsCatalogue.companionBreakpointAwayMinutes.write(
+                companionBreakpointAwayMinutes, to: store)
+        }
+    }
+
+    var companionSpeaks: Bool {
+        didSet { SettingsCatalogue.companionSpeaks.write(companionSpeaks, to: store) }
+    }
+
+    var companionQuietStartMinutes: Int {
+        didSet {
+            SettingsCatalogue.companionQuietStartMinutes.write(
+                companionQuietStartMinutes, to: store)
+        }
+    }
+
+    var companionQuietEndMinutes: Int {
+        didSet {
+            SettingsCatalogue.companionQuietEndMinutes.write(companionQuietEndMinutes, to: store)
+        }
+    }
+
+    var companionTriageRulesJSON: String {
+        didSet {
+            SettingsCatalogue.companionTriageRulesJSON.write(companionTriageRulesJSON, to: store)
+        }
+    }
+
+    var companionThreadCeilingTokens: Int {
+        didSet {
+            SettingsCatalogue.companionThreadCeilingTokens.write(
+                companionThreadCeilingTokens, to: store)
+        }
+    }
+
+    var captureHotkeyKeyCode: Int {
+        didSet { SettingsCatalogue.captureHotkeyKeyCode.write(captureHotkeyKeyCode, to: store) }
+    }
+
+    var captureHotkeyModifiers: Int {
+        didSet { SettingsCatalogue.captureHotkeyModifiers.write(captureHotkeyModifiers, to: store) }
+    }
+
+    var captureHotkey: KeyCombo {
+        get {
+            KeyCombo(
+                keyCode: UInt16(captureHotkeyKeyCode),
+                modifiers: NSEvent.ModifierFlags(rawValue: UInt(captureHotkeyModifiers))
+            )
+        }
+        set {
+            captureHotkeyKeyCode = Int(newValue.keyCode)
+            captureHotkeyModifiers = Int(newValue.modifiers)
+        }
     }
 
     var selectedAgentModelID: String {
@@ -704,13 +771,9 @@ final class SettingsManager {
         self.agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.load(from: store)
         self.companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.load(
             from: store)
-        self.companionModelID = SettingsCatalogue.companionModelID.load(
-            from: store)
         self.companionLaunchAtLoginAsked = SettingsCatalogue.companionLaunchAtLoginAsked.load(
             from: store)
         self.companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.load(from: store)
-        self.companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.load(
-            from: store)
         self.companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.load(from: store)
         self.companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence
             .load(from: store)
@@ -718,9 +781,26 @@ final class SettingsManager {
             .load(from: store)
         self.companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.load(
             from: store)
-        self.memoryEnabled = SettingsCatalogue.memoryEnabled.load(from: store)
-        self.memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.load(from: store)
-        self.memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.load(from: store)
+        self.companionAreasJSON = SettingsCatalogue.companionAreasJSON.load(from: store)
+        self.companionDefaultCalendarID = SettingsCatalogue.companionDefaultCalendarID.load(
+            from: store)
+        self.companionNudgeLeadMinutes = SettingsCatalogue.companionNudgeLeadMinutes.load(
+            from: store)
+        self.companionMorningStartHour = SettingsCatalogue.companionMorningStartHour.load(
+            from: store)
+        self.companionMorningEndHour = SettingsCatalogue.companionMorningEndHour.load(from: store)
+        self.companionEveningMinutes = SettingsCatalogue.companionEveningMinutes.load(from: store)
+        self.companionBreakpointAwayMinutes = SettingsCatalogue.companionBreakpointAwayMinutes.load(
+            from: store)
+        self.companionSpeaks = SettingsCatalogue.companionSpeaks.load(from: store)
+        self.companionQuietStartMinutes = SettingsCatalogue.companionQuietStartMinutes.load(
+            from: store)
+        self.companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.load(from: store)
+        self.companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.load(from: store)
+        self.companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.load(
+            from: store)
+        self.captureHotkeyKeyCode = SettingsCatalogue.captureHotkeyKeyCode.load(from: store)
+        self.captureHotkeyModifiers = SettingsCatalogue.captureHotkeyModifiers.load(from: store)
         self.selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.load(from: store)
         self.selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.load(
             from: store)
@@ -862,17 +942,26 @@ final class SettingsManager {
         speechOverlayScopeRaw = SettingsCatalogue.speechOverlayScopeRaw.default
         agentAutoSpeak = SettingsCatalogue.agentAutoSpeak.default
         companionHeartbeatEnabled = SettingsCatalogue.companionHeartbeatEnabled.default
-        companionModelID = SettingsCatalogue.companionModelID.default
         companionLaunchAtLoginAsked = SettingsCatalogue.companionLaunchAtLoginAsked.default
         companionVoiceConceptRaw = SettingsCatalogue.companionVoiceConcept.default
-        companionBeatsUseOverlay = SettingsCatalogue.companionBeatsUseOverlay.default
         companionVoiceAutoSend = SettingsCatalogue.companionVoiceAutoSend.default
         companionVoiceTrailingSilence = SettingsCatalogue.companionVoiceTrailingSilence.default
         companionVoiceSessionTimeout = SettingsCatalogue.companionVoiceSessionTimeout.default
         companionVoiceBargeInLevel = SettingsCatalogue.companionVoiceBargeInLevel.default
-        memoryEnabled = SettingsCatalogue.memoryEnabled.default
-        memoryCaptureDictation = SettingsCatalogue.memoryCaptureDictation.default
-        memorySleepEnabled = SettingsCatalogue.memorySleepEnabled.default
+        companionAreasJSON = SettingsCatalogue.companionAreasJSON.default
+        companionDefaultCalendarID = SettingsCatalogue.companionDefaultCalendarID.default
+        companionNudgeLeadMinutes = SettingsCatalogue.companionNudgeLeadMinutes.default
+        companionMorningStartHour = SettingsCatalogue.companionMorningStartHour.default
+        companionMorningEndHour = SettingsCatalogue.companionMorningEndHour.default
+        companionEveningMinutes = SettingsCatalogue.companionEveningMinutes.default
+        companionBreakpointAwayMinutes = SettingsCatalogue.companionBreakpointAwayMinutes.default
+        companionSpeaks = SettingsCatalogue.companionSpeaks.default
+        companionQuietStartMinutes = SettingsCatalogue.companionQuietStartMinutes.default
+        companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.default
+        companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.default
+        companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.default
+        captureHotkeyKeyCode = SettingsCatalogue.captureHotkeyKeyCode.default
+        captureHotkeyModifiers = SettingsCatalogue.captureHotkeyModifiers.default
         selectedAgentModelID = SettingsCatalogue.selectedAgentModelID.default
         selectedSpeechToTextModelID = SettingsCatalogue.selectedSpeechToTextModelID.default
         webAccessEnabled = SettingsCatalogue.webAccessEnabled.default

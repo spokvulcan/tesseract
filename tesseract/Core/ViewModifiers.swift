@@ -118,11 +118,25 @@ extension View {
             .environment(container.agentVoiceInput)
             .environment(container.companionVoiceSession)
             .environment(container.companionPresence)
-            .environment(container.memorySleep)
             .environment(container.agentSystemPromptInspector)
             .environment(container.agentEngine)
             .environment(container.appshotController)
             .environmentObject(container.agentConversationStore)
+    }
+
+    /// The Companion's day: the Today page and its Day Thread chat (whose
+    /// transcript rows need the agent engine, settings and the composer draft).
+    @MainActor
+    func injectCompanionDependencies(from container: DependencyContainer) -> some View {
+        self
+            .environment(container.agenda)
+            .environment(container.companionRuntime)
+            .environment(container.dayThread)
+            .environment(container.captureService)
+            .environment(container.profileStore)
+            .environment(container.settingsManager)
+            .environment(container.agentEngine)
+            .environment(container.composerDraft)
     }
 
     /// Model management and inference arbitration.

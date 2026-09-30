@@ -112,7 +112,7 @@ struct BootstrapSequenceTests {
     }
 
     /// Golden order — any reorder of `setup()` is a conscious diff here, and the
-    /// three known invariants are asserted directly against it.
+    /// known invariants are asserted directly against it.
     @Test
     func goldenLaunchOrder() {
         #expect(
@@ -123,21 +123,18 @@ struct BootstrapSequenceTests {
                 "startHotkeyListening",
                 "registerHTTPRoutes",
                 "startAppBindings",
-                "startCompanionLoop",
-                "wirePerceptionCallbacks",
-                "startCompanionPerception",
+                "startCompanion",
                 "materializeAgent",
                 "startMCPClient",
             ])
     }
 
     @Test
-    func theThreeKnownInvariantsArePresent() {
+    func theKnownInvariantsArePresent() {
         let pairs = Set(
             DependencyContainer.bootstrapInvariants.map { "\($0.before)>\($0.after)" }
         )
         #expect(pairs.contains("registerHTTPRoutes>startAppBindings"))
-        #expect(pairs.contains("wirePerceptionCallbacks>startCompanionPerception"))
         #expect(pairs.contains("materializeAgent>startMCPClient"))
     }
 }

@@ -39,6 +39,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // never loaded; remove it once, in the background.
         RetiredCheckpoints.scheduleRemoval()
 
+        // Companion v2's clean start: the retired memory store and Mission
+        // Control conversation go, and tasks.md moves out of the agent's
+        // folder. Idempotent; before the conversation store first loads.
+        if !isRunningUnderTests {
+            RetiredCompanionData.cleanAtLaunch(trace: CompanionTrace())
+        }
+
         // Setup window lifecycle tracking
         setupWindowTracking()
 
@@ -214,6 +221,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// target from the Settings panes and the composer's download affordances.
     func navigateToModels() {
         navigationSelection?.wrappedValue = .model
+        showMainWindow()
+    }
+
+    /// Summon the main window onto Today — the Companion's banners and
+    /// nudges, and the Jarvis panel's expand button.
+    func navigateToToday() {
+        navigationSelection?.wrappedValue = .today
         showMainWindow()
     }
 

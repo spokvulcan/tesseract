@@ -1,6 +1,6 @@
 # ADR-0052: Every chat is a conversation of the fold
 
-- Status: Accepted
+- Status: Superseded by ADR-0080 (2026-09-30); was Accepted
 - Date: 2026-07-19
 - Relates to: ADR-0040 (the entity/harness split; §10 delivery ladder; §11
   never-silent guarantees), ADR-0045 (injected context rides the message,

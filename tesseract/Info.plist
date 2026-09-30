@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>The Companion reads your calendar to weave today's schedule into its plans and reminders — read-only, entirely on this Mac.</string>
+	<string>Jarvis keeps your day in Calendar: he shows today's events on the Today page, nudges you before they start, and adds or moves events when you ask. Everything stays on this Mac and in your own calendars.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Jarvis keeps your tasks in Reminders, so they reach your phone and watch: he shows them on the Today page, adds what you capture, and checks things off when you ask. Everything stays on this Mac and in your own lists.</string>
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Tesseract Agent uses Accessibility to register global keyboard shortcuts for dictation, text-to-speech, and agent voice input.</string>
 </dict>
