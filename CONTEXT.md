@@ -90,13 +90,22 @@ of evaluated contiguous arrays on its own task right before the file write. Each
 view retains its array until its layer's bytes have been written, then releases
 it. Header and blobs go directly to the file in bounded chunks, without a full
 output buffer. **Snapshot Admission**, eviction and **Snapshot Demotion** on the
-MainActor and the **Leaf Store** tail on the inference thread never pay a full-KV
+MainActor and a **Leaf Admission** on the inference thread never pay a full-KV
 host copy. A full payload's arrays are the body's own and exclude checkout until
 the write releases them, except for a Prefix-View Checkpoint's full-format
 payload. View and extension payloads retain no body array: their attention
 prefix or suffix and their whole-state layers are independent evaluated copies
 the extraction edge *detaches* there.
 _Avoid_: lazy payload, async extraction, background asData, payload streaming.
+
+**Snapshot Payload**:
+The SSD tier's byte form of one snapshot: the whole body, a **Leaf Extension
+Admission**'s suffix past its base, or a **Prefix-View Checkpoint**'s
+materialized prefix, each array under a stable dtype name that is part of the
+on-disk contract. **Deferred Payload Extraction** builds it, and whether an
+extension is worth writing instead of the whole body is its rule too.
+_Avoid_: SSD payload (unqualified); serialized snapshot, wire format (the
+container framing around the payload is separate).
 
 **Layer Kind**:
 The one fact a snapshot layer carries about how its arrays relate to the token
@@ -127,6 +136,20 @@ The validated token path carried by a **Snapshot Admission** — the proof that 
 snapshot may be stored at a given token offset, checked before any cache mutation.
 _Avoid_: promptTokens, storedTokens (both name unrelated token fields), offset
 guard.
+
+**Leaf Admission**:
+The one way a leaf enters the prefix cache, whichever producer made it: a
+finished turn, a boundary re-prefill, a **Speculative Canonical Prefill**, or a
+salvaged cancelled prefill. The producer brings the cache to its final state and
+says whose it is. The admission decides move or copy, checks a leased leaf in
+through its **Cache Claim** before anything is extracted, builds the **Snapshot
+Payload** and the **Snapshot Admission**, and classifies what the admission
+evicted and superseded. Its extension base is settled before the **Model
+Session** is entered; every other step runs inside it.
+_Avoid_: leaf write ("write" is the SSD tier's word, as in **Guarantee-Class
+Write**); Leaf Store (the phase that decides whether a turn stores a leaf, and
+which); **Leaf Admission Builder** (the boundary route's plan, which a Leaf
+Admission carries out); admission tail (the retired hand-sequenced shape).
 
 **Snapshot Resolution**:
 The read side of the prefix cache: resolve a token path to the best usable
@@ -570,7 +593,8 @@ The GPU-free routing decision for storing one leaf snapshot on the boundary path
 in two steps: the reusable-prefix probe that finds the token path a future
 continuation will share, then a capture-from-boundary plan or a typed skip
 reason. A turn the fast path takes (Live Leaf Capture) never enters it. It
-decides; the actor-side execution does the Metal capture and admit.
+decides; the boundary executor re-prefills and a **Leaf Admission** does the
+capture and admit.
 _Avoid_: leaf store mode (one input, not the whole story); capture port (it returns
 a decision, not a capture).
 
@@ -741,7 +765,8 @@ plan application (inline by decision — the deletion test fails), the stream
 drive (the Managed Generation Driver, shared with the agent), the leaf store,
 and trace accumulation. Phases are implementation structure inside the
 module's seam — the dispatcher's interface is unchanged — and each phase
-returns values; the completion module owns effects.
+returns values; the completion module owns effects, except a leaf's: the leaf
+store decides which leaf, and its **Leaf Admission** stores it (ADR-0078).
 _Avoid_: pipeline stages (the Generation* family owns "stream" vocabulary);
 new entry points (ADR-0015's seam is untouched); extracting plan application
 (recorded shallow — see ADR-0033).

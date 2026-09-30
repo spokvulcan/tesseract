@@ -1397,7 +1397,7 @@ final class PrefixCacheManager {
             let payload: SnapshotPayload?
             do {
                 payload = try await sessions.withSession { _ in
-                    try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf).payload
+                    try SnapshotPayload.deferred(for: view, backingLeaf: leaf).payload
                 }
             } catch {
                 Log.agent.warning(

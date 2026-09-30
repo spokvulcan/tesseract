@@ -42,9 +42,10 @@ nonisolated enum LeafStorePhase {
     struct Result: Sendable {
         var leafStore: AlphaTuner.LeafStore?
         var speculativeSeed: SpeculativeCanonicalPrefill.Seed?
-        /// The admission's store diagnostics, for the per-request trace
-        /// (nil when no admission was attempted).
-        var admission: PrefixCacheManager.StoreDiagnostics?
+        /// The admission's eviction tally, already logged by its **Leaf
+        /// Admission**, for the per-request trace (nil when no admission was
+        /// attempted).
+        var evictionTally: CompletionTraceAccumulator?
         var report = Report()
     }
 
@@ -194,11 +195,7 @@ nonisolated enum LeafStorePhase {
                             capture: "boundaryBackingLeafCapture",
                             admission: "boundaryBackingLeafAdmission",
                             source: "boundaryBackingLeaf"), ssdEnabled: false), path: .live)
-                if let admission = backer.admission {
-                    trace.ingest(evictions: admission.evictions, diagnostics: diagnosticsContext)
-                    trace.logSupersessions(
-                        admission.supersededLeaves, diagnostics: diagnosticsContext)
-                }
+                if let tally = backer.evictionTally { trace.merge(tally) }
                 if backer.leafStore != nil { boundaryBackingLeafPath = path }
             }
             // A boundary or intervened turn must return the original leaf
@@ -225,10 +222,7 @@ nonisolated enum LeafStorePhase {
             }
         }
 
-        if let admission = result.admission {
-            trace.ingest(evictions: admission.evictions, diagnostics: diagnosticsContext)
-            trace.logSupersessions(admission.supersededLeaves, diagnostics: diagnosticsContext)
-        }
+        if let tally = result.evictionTally { trace.merge(tally) }
         if let boundaryBackingLeafPath, let canonical = result.leafStore?.storedTokens {
             if let released = await inputs.prefixCache.releaseBoundaryBackingLeaf(
                 path: boundaryBackingLeafPath, sparing: canonical,
@@ -847,7 +841,7 @@ nonisolated extension LeafStorePhase.Result {
         pendingSeed: SpeculativeCanonicalPrefill.Seed?
     ) {
         leafStore = capture.leafStore
-        admission = capture.admission
+        evictionTally = capture.evictionTally
         if capture.leafStore != nil {
             speculativeSeed = pendingSeed
         } else {

@@ -11,16 +11,15 @@
 //  projections. The drive feeds facts; this value decides what the
 //  record contains.
 //
-//  Every structured-leaf admission (`admitStructuredLeaf`) also routes its
-//  eviction/supersession events through here: the Leaf Store phase tallies
-//  them into the per-request record; the speculative pass and the
-//  salvage-on-cancel path use a throwaway accumulator for the correlated
-//  logging alone.
+//  Every **Leaf Admission** classifies its own admission here, once, and
+//  hands back the tally: the Leaf Store phase merges it into the
+//  per-request record, and the speculative pass and salvage-on-cancel, which
+//  keep no record, let it go.
 //
 
 import Foundation
 
-nonisolated struct CompletionTraceAccumulator {
+nonisolated struct CompletionTraceAccumulator: Sendable {
 
     /// The start-time cache facts a record derives from — a plain value
     /// so derivation is testable without building a live generation
@@ -73,6 +72,14 @@ nonisolated struct CompletionTraceAccumulator {
                 diagnostics.log(PrefixCacheDiagnostics.SSDBodyDropEvent(id: id))
             }
         }
+    }
+
+    /// Add another accumulator's eviction tally to this one without logging:
+    /// a **Leaf Admission** emitted those lines when it classified its own
+    /// admission.
+    mutating func merge(_ other: CompletionTraceAccumulator) {
+        terminalEvictionCount += other.terminalEvictionCount
+        recoveredEvictionCount += other.recoveredEvictionCount
     }
 
     /// Emit the supersession diagnostics for one admit's superseded

@@ -200,7 +200,7 @@ nonisolated enum BoundedCacheParity {
         id: String, tokens: [Int], digest: String, fingerprint: String,
         extending: SnapshotExtension?
     ) async throws -> HybridCacheSnapshot {
-        let payload = ServerCompletion.extractSnapshotPayload(snapshot, extending: extending)
+        let payload = SnapshotPayload.extract(snapshot, extending: extending)
         guard payload.extending == extending else {
             throw HybridCacheCorrectnessError.verificationFailed(failedChecks: [
                 "extension degraded to full"

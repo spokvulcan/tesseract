@@ -187,7 +187,7 @@ struct CacheClaimTests {
         kv.state = [MLXArray.ones([1, 1, 8, 64]), MLXArray.ones([1, 1, 8, 64])]
         let body = try #require(FinalGenerationCache([kv]).moveSnapshot(offset: 8))
         let tokens = Array(1...8)
-        let payload = ServerCompletion.deferredPayload(for: body, extending: nil).payload
+        let payload = SnapshotPayload.deferred(for: body, extending: nil).payload
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
@@ -291,7 +291,7 @@ struct CacheClaimTests {
                     storedTokens: stored, snapshot: body,
                     storage: .ramAndSSD(
                         materializing.gating(
-                            ServerCompletion.deferredPayload(for: body, extending: nil).payload)),
+                            SnapshotPayload.deferred(for: body, extending: nil).payload)),
                     partitionKey: key)))
         return PendingLeafScene(
             manager: manager, store: store, root: root, key: key, kv: kv,
@@ -716,7 +716,7 @@ struct CacheClaimTests {
             modelID: label, kvBits: nil, kvGroupSize: 64,
             modelFingerprint: String(repeating: "a", count: 64))
         let storage = SnapshotAdmission.Storage.ramAndSSD(
-            ServerCompletion.extractSnapshotPayload(body))
+            SnapshotPayload.extract(body))
         let admission =
             checkpoint
             ? SnapshotAdmission.checkpoints(

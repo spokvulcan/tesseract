@@ -449,16 +449,16 @@ nonisolated enum SpeculativeCanonicalPrefill {
         )
     }
 
-    /// Shared capture tail for both exits: snapshot the warm cache at
-    /// `storedTokens.count` and admit it via the structured-leaf admission
-    /// (`ServerCompletion.admitStructuredLeaf`). Completed passes persist
-    /// RAM+SSD like any leaf; preempted partial leaves are **RAM-only** —
-    /// their sole purpose is the imminent preempting request, which
-    /// supersedes them with its own SSD-backed leaf moments later, so the
-    /// SSD payload extraction (the dominant capture cost) and the disk
-    /// churn are both skipped. Releases the warm cache on every path: the
-    /// leaf deep-copied what it needed, and holding the working buffers any
-    /// longer would keep their pool memory from the next user.
+    /// Shared capture tail for both exits: the warm cache's leaf goes
+    /// through a **Leaf Admission**, which snapshots it at
+    /// `storedTokens.count` and admits it. Completed passes persist RAM+SSD
+    /// like any leaf; preempted partial leaves are **RAM-only** — their sole
+    /// purpose is the imminent preempting request, which supersedes them with
+    /// its own SSD-backed leaf moments later, so the SSD payload extraction
+    /// (the dominant capture cost) and the disk churn are both skipped.
+    /// Releases the warm cache on every path: the leaf copied what it needed,
+    /// and holding the working buffers any longer would keep their pool
+    /// memory from the next user.
     private static func captureAndAdmit(
         storedTokens: [Int],
         warm: WarmState,
@@ -472,58 +472,27 @@ nonisolated enum SpeculativeCanonicalPrefill {
         let diagnostics = seed.diagnostics
         // Preempted partial leaves and abandonment spines are RAM-only
         // and never consult the extension base.
-        let extensionBase = await ServerCompletion.resolveExtensionBase(
-            ssdEnabled: seed.request.facts.ssdEnabled && !preempted && !seed.ramOnlySpine,
-            tokens: storedTokens,
+        let admission = await LeafAdmission.prepare(
+            storedTokens: storedTokens,
             partitionKey: seed.request.facts.partitionKey,
-            prefixCache: prefixCache
+            reachesSSD: seed.request.facts.ssdEnabled && !preempted && !seed.ramOnlySpine,
+            requestID: diagnostics.requestID,
+            prefixCache: prefixCache,
+            diagnostics: diagnostics
         )
-        await container.perform { _ in
+        await container.perform { context in
             defer {
                 warm.cache = []
                 warm.chunkState = nil
             }
-            guard
-                let leaf = HybridCacheSnapshot.capture(
-                    cache: warm.cache,
-                    offset: storedTokens.count,
-                    type: .leaf
-                )
-            else {
-                diagnostics.logSkip(
-                    stage: "speculativePrefill",
-                    reason: "unsupported-cache-type"
-                )
-                return
-            }
-            let storage: SnapshotAdmission.Storage =
-                preempted || seed.ramOnlySpine
-                ? .ramOnly
-                : ServerCompletion.snapshotAdmissionStorage(
-                    for: leaf,
-                    ssdEnabled: seed.request.facts.ssdEnabled,
-                    extending: extensionBase
-                )
-            let admission = await ServerCompletion.admitStructuredLeaf(
-                leaf,
-                storedTokens: storedTokens,
-                storage: storage,
-                partitionKey: seed.request.facts.partitionKey,
-                requestID: diagnostics.requestID,
-                prefixCache: prefixCache,
-                diagnostics: diagnostics,
-                admissionStage: "speculativePrefill",
-                captureSource: preempted ? "speculativePartialLeaf" : "speculativeLeaf"
+            // The pass lends its warm cache: the leaf is a copy, as it was
+            // before the admission existed (ADR-0078).
+            let outcome = await admission.admit(
+                .lent(warm.cache),
+                in: ContextBackedModelSession(context: context),
+                labels: .speculativeCanonicalPrefill(preempted: preempted)
             )
-            if let store = admission.store {
-                // Classification + correlated logging through the shared
-                // accumulator; the speculative pass keeps no per-request
-                // record, so the tallies are discarded.
-                var trace = CompletionTraceAccumulator()
-                trace.ingest(evictions: store.evictions, diagnostics: diagnostics)
-                trace.logSupersessions(store.supersededLeaves, diagnostics: diagnostics)
-            }
-            guard admission.survived else { return }
+            guard case .admitted(let admitted) = outcome, admitted.survived else { return }
 
             diagnostics.log(
                 PrefixCacheDiagnostics.SpeculativePrefillEvent(

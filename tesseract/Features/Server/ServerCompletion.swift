@@ -1948,7 +1948,8 @@ nonisolated final class ServerCompletion {
                         partitionKey: partitionKey,
                         requestID: requestID,
                         prefixCache: prefixCache,
-                        diagnostics: diagnosticsContext
+                        diagnostics: diagnosticsContext,
+                        session: session
                     )
                 }
                 Memory.clearCache()
@@ -2030,7 +2031,7 @@ nonisolated final class ServerCompletion {
                     transientSnapshots[offset]
                         ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
                 }
-            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
+            let checkpointCandidates = SnapshotAdmission.checkpointCandidates(
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
             )
@@ -2566,7 +2567,7 @@ nonisolated final class ServerCompletion {
                 // only and the SSD writer copies the bytes (snapshot arrays
                 // are evaluated deep copies, never live model state).
                 demotionPayloadExtractor: { snapshot in
-                    Self.extractSnapshotPayload(snapshot)
+                    SnapshotPayload.extract(snapshot)
                 },
                 // The Pressure-Reactive Budget's event feed. The manager
                 // holds the adapter strongly, so a model unload (which
@@ -2600,487 +2601,6 @@ nonisolated final class ServerCompletion {
         }
         _prefixCache = cache
         return cache
-    }
-
-    // MARK: - Snapshot payload extraction statics
-
-    /// Pre-extract checkpoint snapshots into Snapshot Admission
-    /// candidates, attaching storage intent to each entry at the
-    /// Metal-affine extraction edge.
-    ///
-    /// **Metal-affinity contract.** Must be called from inside
-    /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
-    /// outside a live Metal-affine scope risks re-issuing command-queue
-    /// work on a non-inference thread. The method is `static` so callers
-    /// can invoke it synchronously from inside a `container.perform`
-    /// closure without an `await`; the Metal affinity is enforced by
-    /// convention, not the type system.
-    static func extractCheckpointAdmissionCandidates(
-        _ snapshots: [HybridCacheSnapshot],
-        ssdEnabled: Bool
-    ) -> [SnapshotAdmission.CheckpointCandidate] {
-        snapshots.map { snapshot in
-            return SnapshotAdmission.CheckpointCandidate(
-                snapshot: snapshot,
-                storage: snapshotAdmissionStorage(
-                    for: snapshot,
-                    ssdEnabled: ssdEnabled
-                )
-            )
-        }
-    }
-
-    /// Resolve the **Leaf Extension Admission** base for a leaf about
-    /// to be captured: one hop to the MainActor (radix tree + ledger),
-    /// made *before* entering the Metal-affine `container.perform` so
-    /// capture closures stay free of cross-actor hops. Every
-    /// leaf-capture path (direct, boundary, speculative) funnels
-    /// through here. `nil` when `ssdEnabled` is false — the leaf
-    /// admits full.
-    static func resolveExtensionBase(
-        ssdEnabled: Bool,
-        tokens: [Int],
-        partitionKey: CachePartitionKey,
-        prefixCache: PrefixCacheManager
-    ) async -> SnapshotExtension? {
-        guard ssdEnabled else { return nil }
-        return await MainActor.run {
-            prefixCache.extensionBase(tokens: tokens, partitionKey: partitionKey)
-        }
-    }
-
-    /// Internal (not private): the **Speculative Canonical Prefill** executor
-    /// derives its leaf admission storage through the same policy.
-    ///
-    /// `extending` carries the **Leaf Extension Admission** base (the
-    /// deepest SSD-backed ancestor leaf, resolved by
-    /// `PrefixCacheManager.extensionBase`); when the payload's sliceable
-    /// layers can carry just the suffix past it — and that suffix is
-    /// worth writing (see `extensionMaxSuffixFraction`) — the payload
-    /// admits as an extension. `nil` (every checkpoint, and leaves with
-    /// no usable base) admits full.
-    static func snapshotAdmissionStorage(
-        for snapshot: HybridCacheSnapshot,
-        ssdEnabled: Bool,
-        extending: SnapshotExtension? = nil
-    ) -> SnapshotAdmission.Storage {
-        guard ssdEnabled else { return .ramOnly }
-        if snapshot.isPrefixView { return .viewSSD }
-        return .ramAndSSD(extractSnapshotPayload(snapshot, extending: extending))
-    }
-
-    /// Worth-it gate for a **Leaf Extension Admission**: when the
-    /// estimated suffix payload exceeds this fraction of the full
-    /// payload (a model whose layers are mostly non-sliceable, or a
-    /// near-root base), the leaf admits full — a "delta" that rivals
-    /// the full write buys chain complexity for nothing.
-    static let extensionMaxSuffixFraction = 0.9
-
-    /// The validated, worth-it extension for `snapshot`, or `nil` when
-    /// the payload should admit full. Pure metadata arithmetic — no
-    /// array bytes move here. Which layers would slice is each layer's
-    /// ``HybridCacheSnapshot/LayerState/Kind``, derived at capture; a
-    /// whole-state layer (recurrent, rotating, chunked, or an attention
-    /// layer the shape guard kept whole) counts whole.
-    private static func validatedExtension(
-        _ extending: SnapshotExtension?,
-        for snapshot: HybridCacheSnapshot
-    ) -> SnapshotExtension? {
-        guard let extending,
-            extending.baseOffset > 0,
-            extending.baseOffset < snapshot.tokenOffset
-        else { return nil }
-
-        var fullBytes = 0
-        var suffixBytes = 0
-        let suffixFraction =
-            Double(snapshot.tokenOffset - extending.baseOffset)
-            / Double(snapshot.tokenOffset)
-        for layer in snapshot.layers {
-            let layerBytes = layer.state.reduce(0) { $0 + $1.nbytes }
-            fullBytes += layerBytes
-            switch layer.kind {
-            case .sliceableAttention:
-                suffixBytes += Int(Double(layerBytes) * suffixFraction)
-            case .wholeState:
-                suffixBytes += layerBytes
-            }
-        }
-        guard fullBytes > 0,
-            Double(suffixBytes) <= extensionMaxSuffixFraction * Double(fullBytes)
-        else { return nil }
-        return extending
-    }
-
-    // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
-    // swiftlint:disable function_parameter_count
-    /// Shared admission tail for structured-leaf executors (the **Leaf
-    /// Store** phase and the **Speculative Canonical Prefill**): wrap a
-    /// captured leaf in a leaf admission, log the capture, admit on
-    /// MainActor, and report whether the admission survived its own
-    /// eviction pass — returning the store diagnostics so the caller
-    /// classifies and logs evictions through the trace accumulator. Same
-    /// Metal-affinity contract as `extractCheckpointAdmissionCandidates`:
-    /// call from inside ``ModelContainer/perform(_:)``.
-    /// What a structured-leaf admission produced. `store` is nil when the
-    /// admission was never attempted (invalid token path); otherwise it
-    /// carries the eviction/supersession events for the caller to classify
-    /// and log through the **Completion Trace Accumulator** — the one home
-    /// for that pairing, shared by the Leaf Store phase (which tallies them
-    /// into the per-request record) and the speculative pass (which only
-    /// logs).
-    struct StructuredLeafAdmission: Sendable {
-        let survived: Bool
-        let store: PrefixCacheManager.StoreDiagnostics?
-    }
-
-    static func admitStructuredLeaf(
-        _ leaf: HybridCacheSnapshot,
-        storedTokens: [Int],
-        storage: SnapshotAdmission.Storage,
-        partitionKey: CachePartitionKey,
-        requestID: UUID,
-        prefixCache: PrefixCacheManager,
-        diagnostics: PrefixCacheDiagnostics.Context,
-        admissionStage: String,
-        captureSource: String,
-        source: LeafStorePhase.Report.Source? = nil,
-        maximumAdvance: Int = .max
-    ) async -> StructuredLeafAdmission {
-        // swiftlint:enable function_parameter_count
-        guard !leaf.layers.isEmpty else {
-            diagnostics.logSkip(stage: admissionStage, reason: "empty-cache-body")
-            return StructuredLeafAdmission(survived: false, store: nil)
-        }
-        guard
-            let admission = SnapshotAdmission.leaf(
-                storedTokens: storedTokens,
-                snapshot: leaf,
-                storage: storage,
-                partitionKey: partitionKey,
-                requestID: requestID,
-                source: source,
-                maximumAdvance: maximumAdvance
-            )
-        else {
-            diagnostics.logSkip(
-                stage: admissionStage,
-                reason: "invalid-path",
-                extraFields: [
-                    ("offset", "\(leaf.tokenOffset)"),
-                    ("storedLen", "\(storedTokens.count)"),
-                ]
-            )
-            return StructuredLeafAdmission(survived: false, store: nil)
-        }
-
-        diagnostics.log(
-            PrefixCacheDiagnostics.CaptureEvent(
-                offset: leaf.tokenOffset,
-                checkpointType: leaf.checkpointType,
-                bytes: leaf.memoryBytes,
-                duringPrefill: false,
-                source: captureSource
-            ))
-
-        // Coalesce admit + stats read in one MainActor hop; the post-store
-        // budget/total snapshot feeds the capturedThenEvicted diagnostic
-        // without another hop.
-        let (storeDiagnostics, postStoreBudgetBytes, postStoreSnapshotBytes) =
-            await MainActor.run { () -> (PrefixCacheManager.StoreDiagnostics, Int, Int) in
-                let d = prefixCache.admit(admission)
-                return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
-            }
-        let admissionEvicted = storeDiagnostics.evictions.contains { event in
-            event.offset == leaf.tokenOffset && event.checkpointType == .leaf
-        }
-        if admissionEvicted {
-            diagnostics.logSkip(
-                stage: admissionStage,
-                reason: "capturedThenEvicted",
-                level: .warning,
-                extraFields: [
-                    ("offset", "\(leaf.tokenOffset)"),
-                    ("bytes", "\(leaf.memoryBytes)"),
-                    ("budgetBytes", "\(postStoreBudgetBytes)"),
-                    ("snapshotBytesAfter", "\(postStoreSnapshotBytes)"),
-                ]
-            )
-            return StructuredLeafAdmission(survived: false, store: storeDiagnostics)
-        }
-        return StructuredLeafAdmission(survived: true, store: storeDiagnostics)
-    }
-
-    /// Build the SSD payload for `snapshot` — **Deferred Payload
-    /// Extraction**, so this call moves no array bytes on the calling
-    /// thread. It settles the extension and fixes the byte total; the
-    /// host views are prepared when the payload's `layers` are first read, on
-    /// the SSD writer's task. Callable from the MainActor too (**Snapshot
-    /// Demotion**'s extractor passes no extension, so that path reads
-    /// shapes only): the arrays are evaluated deep copies, never live
-    /// model state.
-    static func extractSnapshotPayload(
-        _ snapshot: HybridCacheSnapshot,
-        extending: SnapshotExtension? = nil
-    ) -> SnapshotPayload {
-        deferredPayload(for: snapshot, extending: extending).payload
-    }
-
-    /// `extractSnapshotPayload` together with the box of arrays the
-    /// payload still owes the SSD writer. What a pending payload retains
-    /// is a memory-safety claim (ADR-0064: an extension payload retains
-    /// no body array) that only a physical-address comparison can check,
-    /// so the box is returned for tests; production reads the payload.
-    ///
-    /// For a **Leaf Extension Admission** every retained array is
-    /// detached here, on the Metal-affine caller, by the layer's kind: a
-    /// sliceable-attention layer's suffix past the base is sliced into
-    /// its own contiguous device buffer, and every whole-state layer
-    /// (recurrent, rotating, chunked — small next to the attention
-    /// suffix) is deep-copied whole, all evaluated in one sync, so the
-    /// later host view can borrow contiguous storage and never references
-    /// the body it was built from. A full payload retains the body's own
-    /// arrays: copying them is what the deferral exists to avoid.
-    static func deferredPayload(
-        for snapshot: HybridCacheSnapshot,
-        extending: SnapshotExtension? = nil
-    ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
-        precondition(!snapshot.isPrefixView, "a view payload requires its Backing Leaf")
-        let activeExtension = validatedExtension(extending, for: snapshot)
-        return deferredPayload(
-            for: snapshot, layers: snapshot.layers, extending: activeExtension, detaching: false)
-    }
-
-    /// A full-format view payload owns every retained array independently
-    /// of both the Backing Leaf and the view. Run inside the Model Session
-    /// while the backer is protected; only the later host copy is deferred.
-    static func deferredPayload(
-        for view: HybridCacheSnapshot, backingLeaf: HybridCacheSnapshot
-    ) throws -> (payload: SnapshotPayload, owed: DeferredLayers) {
-        precondition(view.isPrefixView)
-        if backingLeaf.isWarm {
-            // Stored Form remains full until #531. View restore dequantizes
-            // only the prefix and copies whole-state layers into private
-            // buffers, so this payload can take those buffers without a
-            // second copy or retaining any tree body array.
-            var cache = try view.restore(backingLeaf: backingLeaf)
-            guard
-                let materialized = HybridCacheSnapshot.captureMoving(
-                    cache: &cache, offset: view.tokenOffset)
-            else { throw HybridCacheSnapshot.ViewRestoreError.invalidBackingLeaf }
-            return deferredPayload(
-                for: view, layers: materialized.layers, extending: nil, detaching: false)
-        }
-        return deferredPayload(
-            for: view, layers: try view.materializationLayers(backingLeaf: backingLeaf),
-            extending: nil, detaching: true)
-    }
-
-    private static func deferredPayload(
-        for snapshot: HybridCacheSnapshot, layers: [HybridCacheSnapshot.LayerState],
-        extending activeExtension: SnapshotExtension?, detaching: Bool
-    ) -> (payload: SnapshotPayload, owed: DeferredLayers) {
-
-        var owed: [DeferredLayers.Layer] = []
-        owed.reserveCapacity(snapshot.layers.count)
-        var detached: [MLXArray] = []
-        var totalBytes = 0
-
-        for layer in layers {
-            var suffixBaseOffset: Int?
-            var arrays = layer.state
-            if detaching {
-                arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
-                detached.append(contentsOf: arrays)
-            } else if let activeExtension {
-                switch layer.kind {
-                case .sliceableAttention:
-                    suffixBaseOffset = activeExtension.baseOffset
-                    arrays = layer.state.map { array in
-                        HybridCacheSnapshot.deepCopyState(
-                            array[
-                                .ellipsis, activeExtension.baseOffset..<snapshot.tokenOffset, 0...]
-                        )
-                    }
-                case .wholeState:
-                    // A whole-state layer rides whole in the segment and
-                    // is detached whole: an extension payload retains no
-                    // body array.
-                    arrays = layer.state.map { HybridCacheSnapshot.deepCopyState($0) }
-                }
-                detached.append(contentsOf: arrays)
-            }
-            totalBytes += arrays.reduce(0) { $0 + $1.nbytes }
-            owed.append(
-                DeferredLayers.Layer(
-                    className: layer.className,
-                    arrays: arrays,
-                    metaState: layer.metaState,
-                    offset: layer.offset,
-                    suffixBaseOffset: suffixBaseOffset
-                ))
-        }
-        // One sync for every detached array, as `HybridCacheSnapshot.capture`
-        // does for its copies; a full payload has nothing to evaluate.
-        if !detached.isEmpty {
-            eval(detached)
-        }
-
-        let deferred = DeferredLayers(owed)
-        let payload = SnapshotPayload(
-            tokenOffset: snapshot.tokenOffset,
-            checkpointType: snapshot.checkpointType,
-            extending: activeExtension,
-            totalBytes: totalBytes,
-            retainsBodyArrays: !snapshot.isPrefixView && !detaching && activeExtension == nil,
-            materialize: { deferred.materialize() }
-        )
-        return (payload, deferred)
-    }
-
-    /// The evaluated arrays a deferred payload owes the SSD writer. Preparation
-    /// transfers each array into its Data view's lifetime owner; the consuming
-    /// writer releases that owner after the layer's last chunk. The lock guards
-    /// the pending list; no live generation state enters this box.
-    final class DeferredLayers: @unchecked Sendable {
-        struct Layer {
-            let className: String
-            let arrays: [MLXArray]
-            let metaState: [String]
-            let offset: Int
-            let suffixBaseOffset: Int?
-        }
-
-        private let owed: OSAllocatedUnfairLock<[Layer]>
-
-        init(_ layers: [Layer]) {
-            owed = OSAllocatedUnfairLock(uncheckedState: layers)
-        }
-
-        /// Arrays not yet transferred to borrowed Data owners, in layer order.
-        /// Empty once prepared; the Data still retains each array until written. Read by tests that
-        /// check, by physical address, what a pending payload retains.
-        var retainedArrays: [MLXArray] {
-            owed.withLockUnchecked { $0.flatMap(\.arrays) }
-        }
-
-        /// Data's custom deallocator owns this box for exactly the lifetime
-        /// of its borrowed bytes. It also retains a fallback contiguous Data
-        /// if the vendor had to copy a non-contiguous input.
-        private final class BorrowedArrayBytes: @unchecked Sendable {
-            let array: MLXArray
-            let data: Data
-
-            init(_ array: MLXArray) {
-                self.array = array
-                // MLX's no-copy path force-unwraps the zero-size pointer.
-                data = array.size == 0 ? Data() : array.asData(access: .noCopyIfContiguous).data
-            }
-
-            func view() -> Data {
-                guard !data.isEmpty else { return Data() }
-                return data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-                    Data(
-                        bytesNoCopy: UnsafeMutableRawPointer(mutating: buffer.baseAddress!),
-                        count: buffer.count,
-                        deallocator: .custom { [self] _, _ in
-                            withExtendedLifetime(self) {}
-                        })
-                }
-            }
-        }
-
-        func materialize() -> [SnapshotPayload.LayerPayload] {
-            var layers: [SnapshotPayload.LayerPayload] = []
-            layers.reserveCapacity(owed.withLockUnchecked { $0.count })
-            while let layer = owed.withLockUnchecked({ $0.isEmpty ? nil : $0.removeFirst() }) {
-                var arrays: [SnapshotPayload.ArrayPayload] = []
-                arrays.reserveCapacity(layer.arrays.count)
-                for array in layer.arrays {
-                    let bytes = BorrowedArrayBytes(array)
-                    arrays.append(
-                        SnapshotPayload.ArrayPayload(
-                            data: bytes.view(),
-                            dtype: ServerCompletion.dtypeWireString(array.dtype),
-                            shape: array.shape, borrowsArray: array.size > 0
-                        ))
-                }
-                layers.append(
-                    SnapshotPayload.LayerPayload(
-                        className: layer.className,
-                        state: arrays,
-                        metaState: layer.metaState,
-                        offset: layer.offset,
-                        suffixBaseOffset: layer.suffixBaseOffset
-                    ))
-            }
-            return layers
-        }
-    }
-
-    /// Stable wire-format name for an MLX `DType`. Load-bearing: the
-    /// result is written into the SSD snapshot header at
-    /// `encodePlaceholderContainer(payload:descriptor:)` (in
-    /// `PlaceholderContainer.swift`), so the mapping is part of the
-    /// on-disk contract. A vendor-side rename of any `DType` case label
-    /// would silently corrupt files without this explicit table.
-    ///
-    /// `@unknown default` traps via `fatalError` rather than inventing
-    /// a placeholder string, because reaching it means the vendor
-    /// shipped a new case that this table hasn't audited — inventing
-    /// a wire name would persist an unreadable header under a claim of
-    /// success. The remediation is always "add the case", not "paper
-    /// over with a sentinel." Mirrors `DType.init(_ cmlxDtype:)` at
-    /// `Vendor/.../mlx-swift/Source/MLX/DType.swift:61`, which uses
-    /// the same loud-failure pattern for the C → Swift direction.
-    static func dtypeWireString(_ dtype: DType) -> String {
-        switch dtype {
-        case .bool: return "bool"
-        case .uint8: return "uint8"
-        case .uint16: return "uint16"
-        case .uint32: return "uint32"
-        case .uint64: return "uint64"
-        case .int8: return "int8"
-        case .int16: return "int16"
-        case .int32: return "int32"
-        case .int64: return "int64"
-        case .float16: return "float16"
-        case .float32: return "float32"
-        case .bfloat16: return "bfloat16"
-        case .complex64: return "complex64"
-        case .float64: return "float64"
-        @unknown default:
-            fatalError(
-                "dtypeWireString missing case for MLX DType \(dtype) — "
-                    + "extend the switch to preserve the SSD wire-format contract."
-            )
-        }
-    }
-
-    /// Inverse of ``dtypeWireString``. Must stay exhaustive against
-    /// the forward table so round-tripping an SSD-resident snapshot
-    /// cannot silently lose dtype information; every branch in
-    /// `dtypeWireString` has a matching branch here. Returns `nil`
-    /// for unknown wire strings so the `SSDSnapshotStore` decoder
-    /// can distinguish a parse error from a supported dtype.
-    static func dtypeFromWireString(_ wire: String) -> DType? {
-        switch wire {
-        case "bool": return .bool
-        case "uint8": return .uint8
-        case "uint16": return .uint16
-        case "uint32": return .uint32
-        case "uint64": return .uint64
-        case "int8": return .int8
-        case "int16": return .int16
-        case "int32": return .int32
-        case "int64": return .int64
-        case "float16": return .float16
-        case "float32": return .float32
-        case "bfloat16": return .bfloat16
-        case "complex64": return .complex64
-        case "float64": return .float64
-        default: return nil
-        }
     }
 
     private static func currentMaxMetalBufferBytes() -> UInt64 {
@@ -3120,12 +2640,13 @@ nonisolated final class ServerCompletion {
     /// it RAM-only, so a re-sent request or an abort-seeded speculative
     /// pass resumes there instead of the restore floor. Runs after the
     /// cancellation landed (the GPU is already idle, nobody is waiting on
-    /// this request) inside the same Metal-affine scope as the prefill.
-    /// RAM-only by design: the imminent retry supersedes this leaf with
-    /// its own SSD-backed one, so the payload extraction and disk churn
-    /// are both skipped — the same economics as speculative preempt
-    /// capture. Below the progress threshold nothing is admitted, leaving
-    /// the cancellation contract (no leaf, no trace record) unchanged.
+    /// this request) inside the same Metal-affine scope as the prefill, whose
+    /// `session` its **Leaf Admission** captures in. RAM-only by design: the
+    /// imminent retry supersedes this leaf with its own SSD-backed one, so
+    /// the payload extraction and disk churn are both skipped — the same
+    /// economics as speculative preempt capture. Below the progress
+    /// threshold nothing is admitted, leaving the cancellation contract (no
+    /// leaf, no trace record) unchanged.
     static func salvageCancelledPrefill(
         cache: [any KVCache],
         keySpace: CacheKeySpace,
@@ -3133,7 +2654,8 @@ nonisolated final class ServerCompletion {
         partitionKey: CachePartitionKey,
         requestID: UUID,
         prefixCache: PrefixCacheManager,
-        diagnostics: PrefixCacheDiagnostics.Context
+        diagnostics: PrefixCacheDiagnostics.Context,
+        session: any ModelSession
     ) async {
         let reportedOffset = httpPrefixCacheReportedTokenCount(cache)
         guard
@@ -3177,36 +2699,18 @@ nonisolated final class ServerCompletion {
             )
             return
         }
-        guard
-            let leaf = HybridCacheSnapshot.capture(
-                cache: cache, offset: offset, type: .leaf
-            )
-        else {
-            diagnostics.logSkip(
-                stage: "salvageOnCancel",
-                reason: "unsupported-cache-type"
-            )
-            return
-        }
-        let admission = await admitStructuredLeaf(
-            leaf,
+        // The prefill's cache is lent: the leaf is a copy, admitted RAM-only,
+        // so preparing resolves no extension base and makes no MainActor hop.
+        let admission = await LeafAdmission.prepare(
             storedTokens: Array(keySpace.keyPath[0..<offset]),
-            storage: .ramOnly,
             partitionKey: partitionKey,
+            reachesSSD: false,
             requestID: requestID,
             prefixCache: prefixCache,
-            diagnostics: diagnostics,
-            admissionStage: "salvageOnCancel",
-            captureSource: "cancelledPrefillSalvage"
+            diagnostics: diagnostics
         )
-        if let store = admission.store {
-            // Classification + correlated logging through the shared
-            // accumulator; the salvage keeps no per-request record.
-            var trace = CompletionTraceAccumulator()
-            trace.ingest(evictions: store.evictions, diagnostics: diagnostics)
-            trace.logSupersessions(store.supersededLeaves, diagnostics: diagnostics)
-        }
-        if admission.survived {
+        let outcome = await admission.admit(.lent(cache), in: session, labels: .salvageOnCancel)
+        if case .admitted(let admitted) = outcome, admitted.survived {
             Log.agent.info(
                 "Salvage-on-cancel admitted — offset=\(offset) "
                     + "restoreBase=\(restoreBaseOffset) "

@@ -27,7 +27,7 @@ struct SnapshotDemotionTests {
         memoryBudgetBytes: Int,
         ssdBudgetBytes: Int = 10_000_000,
         extractor: ((HybridCacheSnapshot) -> SnapshotPayload?)? = { snapshot in
-            ServerCompletion.extractSnapshotPayload(snapshot)
+            SnapshotPayload.extract(snapshot)
         }
     ) -> (manager: PrefixCacheManager, store: TieredSnapshotStore, root: URL) {
         PrefixCacheTestFixtures.makeSSDBackedManager(

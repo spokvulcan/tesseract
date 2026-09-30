@@ -56,7 +56,9 @@ struct SalvageOnCancelTests {
 
     // MARK: - Salvage seam (capture → admit → lookup)
 
-    private func makeWarmedCache(offset: Int) -> [any KVCache] {
+    private let sessions = ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2]))
+
+    nonisolated private static func makeWarmedCache(offset: Int) -> [any KVCache] {
         let kv = KVCacheSimple()
         kv.state = [
             MLXArray.zeros([1, 1, offset, 8]),
@@ -82,18 +84,24 @@ struct SalvageOnCancelTests {
 
     @Test func cancelledPrefillPastTheThresholdIsVisibleToTheNextLookup() async {
         let (manager, key, diagnostics) = makeFixture()
+        let telemetry = TelemetryCapture(modelID: key.modelID)
+        defer { telemetry.stop() }
         let offset = threshold + 256
         let keyPath = (0..<(offset + 512)).map { $0 % 997 }
 
-        await ServerCompletion.salvageCancelledPrefill(
-            cache: makeWarmedCache(offset: offset),
-            keySpace: .identity(keyPath: keyPath),
-            restoreBaseOffset: 0,
-            partitionKey: key,
-            requestID: UUID(),
-            prefixCache: manager,
-            diagnostics: diagnostics
-        )
+        await sessions.withSession { session in
+            // The salvage captures inside the prefill's session; here the toy's.
+            await ServerCompletion.salvageCancelledPrefill(
+                cache: Self.makeWarmedCache(offset: offset),
+                keySpace: .identity(keyPath: keyPath),
+                restoreBaseOffset: 0,
+                partitionKey: key,
+                requestID: UUID(),
+                prefixCache: manager,
+                diagnostics: diagnostics,
+                session: session
+            )
+        }
 
         // A re-sent identical request restores at the salvaged offset.
         let lookup = manager.lookup(tokens: keyPath, partitionKey: key)
@@ -104,24 +112,40 @@ struct SalvageOnCancelTests {
         #expect(snapshotOffset == offset)
         #expect(type == .leaf)
         #expect(lookup.snapshot != nil)
+        // The salvaged leaf's capture line keeps its source label.
+        let capture = telemetry.drain().first {
+            $0.requestID == diagnostics.requestID && $0.eventName == "capture"
+        }
+        #expect(capture?.field("source") == "cancelledPrefillSalvage")
     }
 
     @Test func progressBelowTheThresholdAdmitsNothing() async {
         let (manager, key, diagnostics) = makeFixture()
+        let telemetry = TelemetryCapture(modelID: key.modelID)
+        defer { telemetry.stop() }
         let offset = threshold - 1
         let keyPath = Array(0..<(offset + 512))
 
-        await ServerCompletion.salvageCancelledPrefill(
-            cache: makeWarmedCache(offset: offset),
-            keySpace: .identity(keyPath: keyPath),
-            restoreBaseOffset: 0,
-            partitionKey: key,
-            requestID: UUID(),
-            prefixCache: manager,
-            diagnostics: diagnostics
-        )
+        await sessions.withSession { session in
+            // The salvage captures inside the prefill's session; here the toy's.
+            await ServerCompletion.salvageCancelledPrefill(
+                cache: Self.makeWarmedCache(offset: offset),
+                keySpace: .identity(keyPath: keyPath),
+                restoreBaseOffset: 0,
+                partitionKey: key,
+                requestID: UUID(),
+                prefixCache: manager,
+                diagnostics: diagnostics,
+                session: session
+            )
+        }
 
         #expect(manager.stats.snapshotCount == 0)
+        let skip = telemetry.drain().first {
+            $0.requestID == diagnostics.requestID && $0.eventName == "skip"
+        }
+        #expect(skip?.field("stage") == "salvageOnCancel")
+        #expect(skip?.field("reason") == "below-progress-threshold")
     }
 
     @Test func progressIsMeasuredFromTheRestoreBaseNotZero() async {
@@ -133,15 +157,19 @@ struct SalvageOnCancelTests {
         let offset = base + threshold - 1
         let keyPath = Array(0..<(offset + 512)).map { $0 % 997 }
 
-        await ServerCompletion.salvageCancelledPrefill(
-            cache: makeWarmedCache(offset: offset),
-            keySpace: .identity(keyPath: keyPath),
-            restoreBaseOffset: base,
-            partitionKey: key,
-            requestID: UUID(),
-            prefixCache: manager,
-            diagnostics: diagnostics
-        )
+        await sessions.withSession { session in
+            // The salvage captures inside the prefill's session; here the toy's.
+            await ServerCompletion.salvageCancelledPrefill(
+                cache: Self.makeWarmedCache(offset: offset),
+                keySpace: .identity(keyPath: keyPath),
+                restoreBaseOffset: base,
+                partitionKey: key,
+                requestID: UUID(),
+                prefixCache: manager,
+                diagnostics: diagnostics,
+                session: session
+            )
+        }
 
         #expect(manager.stats.snapshotCount == 0)
     }

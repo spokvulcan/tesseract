@@ -142,4 +142,21 @@ struct CompletionTraceAccumulatorTests {
         // Rewind derives from the same restored offset: 350 - 300.
         #expect(record.rewind?.rewindSize == 50)
     }
+
+    /// A Leaf Admission classifies its own admission and hands back the
+    /// tally; the request's record takes the counts without a second line.
+    @Test func mergingATallyAddsItsCountsToTheRecord() throws {
+        var admission = CompletionTraceAccumulator()
+        admission.ingest(
+            evictions: [makeEviction(terminalRefID: nil), makeEviction(terminalRefID: "ref")],
+            diagnostics: makeDiagnostics())
+        var request = CompletionTraceAccumulator()
+        request.ingest(
+            evictions: [makeEviction(terminalRefID: nil)], diagnostics: makeDiagnostics())
+
+        request.merge(admission)
+
+        #expect(request.terminalEvictionCount == 2)
+        #expect(request.recoveredEvictionCount == 1)
+    }
 }

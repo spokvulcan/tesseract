@@ -50,13 +50,12 @@ struct CacheClaimMemoryEvidenceTests {
         return try #require(owner.moveSnapshot(offset: Self.rows))
     }
 
-    /// A handed-off turn that decoded `grown` tokens and was captured by
-    /// move, ready for its check-in: the request's claim (handed over, not
-    /// yet redeemed), the live cache and the captured leaf.
+    /// A handed-off turn that decoded `grown` tokens, ready for its leaf to
+    /// be stored: the request's claim (handed over, not yet redeemed), the
+    /// live cache and the path the leaf is stored under.
     private struct DecodedTurn {
         let handOver: CacheClaim.HandOver
         let live: FinalGenerationCache
-        let leaf: HybridCacheSnapshot
         let tokens: [Int]
     }
 
@@ -90,8 +89,7 @@ struct CacheClaimMemoryEvidenceTests {
         ]
         recurrent.offset = requested.count
         eval(live.cache)
-        let leaf = try #require(live.moveSnapshot(offset: requested.count))
-        return DecodedTurn(handOver: handOver, live: live, leaf: leaf, tokens: requested)
+        return DecodedTurn(handOver: handOver, live: live, tokens: requested)
     }
 
     private enum EvidenceError: Error { case notHandedOff }
@@ -113,46 +111,74 @@ struct CacheClaimMemoryEvidenceTests {
         }
     }
 
-    /// Item 1 of #554: the executors check the leaf in before they extract
-    /// an SSD extension payload. The check-in frees the recurrent rewind
-    /// backup just before the payload copies the recurrent state, so the
-    /// step's peak holds one copy of it fewer than extracting first did.
+    /// Store the turn's leaf the way production does: through a **Leaf
+    /// Admission** that moves the live cache, checks it in, and only then
+    /// extracts an extension payload against `extensionBase`.
+    private func admit(
+        _ turn: DecodedTurn, into manager: PrefixCacheManager
+    ) async -> LeafAdmission.Outcome {
+        let admission = LeafAdmission(
+            storedTokens: turn.tokens, partitionKey: key, requestID: UUID(),
+            prefixCache: manager,
+            diagnostics: .init(
+                requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64),
+            reachesSSD: true, extensionBase: Self.extensionBase)
+        let sessions = sessions
+        let live = turn.live
+        return await turn.handOver.withClaim { claim in
+            await sessions.withSession { session in
+                await admission.admit(
+                    .finishedTurn(live, claim: claim, textOnly: true, arm: nil), in: session,
+                    labels: LeafStorePhase.LeafStages.direct.admissionLabels)
+            }
+        }
+    }
+
+    /// Item 1 of #554: a leaf is checked in before its SSD extension payload
+    /// is extracted. The check-in frees the recurrent rewind backup just
+    /// before the payload copies the recurrent state, so the step's peak
+    /// holds one copy of it fewer than extracting first did. The first half
+    /// re-enacts the retired order by hand; the second runs the production
+    /// order, the **Leaf Admission** (ADR-0078).
     @Test func checkingInBeforeExtractionHoldsOneFewerRecurrentCopy() async throws {
-        // The order the executors used before: extract, then check in.
+        // The retired order: extract, then check in.
         let before = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let old = try await decodedTurn(before)
+        let oldLeaf = try #require(old.live.moveSnapshot(offset: old.tokens.count))
         let oldStart = Self.settledActiveMemory()
-        let oldPayload = ServerCompletion.deferredPayload(
-            for: old.leaf, extending: Self.extensionBase)
-        let oldCheckIn = await checkIn(old.handOver, old.leaf, from: old.live, tokens: old.tokens)
+        let oldPayload = SnapshotPayload.deferred(
+            for: oldLeaf, extending: Self.extensionBase)
+        let oldCheckIn = await checkIn(old.handOver, oldLeaf, from: old.live, tokens: old.tokens)
         let oldPeak = Memory.peakMemory - oldStart
         #expect(oldCheckIn == .committed)
         #expect(oldPayload.payload.extending != nil)
 
-        // The executors' order now: check in, then extract.
+        // Production's order: the admission checks in, then extracts.
         let after = PrefixCacheManager(memoryBudgetBytes: 1 << 30)
         let new = try await decodedTurn(after)
         let newStart = Self.settledActiveMemory()
-        let newCheckIn = await checkIn(new.handOver, new.leaf, from: new.live, tokens: new.tokens)
-        let newPayload = ServerCompletion.deferredPayload(
-            for: new.leaf, extending: Self.extensionBase)
+        let outcome = await admit(new, into: after)
         let newPeak = Memory.peakMemory - newStart
-        #expect(newCheckIn == .committed)
-        #expect(newPayload.payload.totalBytes == oldPayload.payload.totalBytes)
+        guard case .admitted(let admitted) = outcome else {
+            Issue.record("expected the leaf checked in and admitted, got \(outcome)")
+            return
+        }
+        #expect(admitted.capture.handedOff)
+        #expect(admitted.survived)
 
         Self.report(
             "checkInBeforeExtraction",
             [
                 "extractFirstPeakBytes": oldPeak, "checkInFirstPeakBytes": newPeak,
                 "recurrentStateBytes": Self.recurrentBytes,
-                "payloadBytes": newPayload.payload.totalBytes,
+                "payloadBytes": oldPayload.payload.totalBytes,
             ])
         if Self.assertsPeaks {
             #expect(
                 oldPeak - newPeak >= Self.recurrentBytes * 9 / 10,
                 "checking in first holds one recurrent copy fewer at the peak")
         }
-        withExtendedLifetime((oldPayload, newPayload)) {}
+        withExtendedLifetime(oldPayload) {}
     }
 
     /// A check-in the tree refuses rewinds in place: it rebuilds the
@@ -175,16 +201,20 @@ struct CacheClaimMemoryEvidenceTests {
                     storedTokens: turn.tokens, snapshot: occupantBody, storage: .ramOnly,
                     partitionKey: key)))
         let start = Self.settledActiveMemory()
-        let outcome = await checkIn(turn.handOver, turn.leaf, from: turn.live, tokens: turn.tokens)
+        let outcome = await admit(turn, into: manager)
         // The rewind frees the turn's own arrays, so the peak can sit below
         // where the step started; only what it rose above counts.
         let peak = max(0, Memory.peakMemory - start)
-        #expect(outcome == .rewound(.refused(.occupiedDestination)))
+        guard case .returned(let cause, _) = outcome else {
+            Issue.record("expected the claim to take the leaf back, got \(outcome)")
+            return
+        }
+        #expect(cause == .refused(.occupiedDestination))
         #expect(manager.lookup(tokens: turn.tokens, partitionKey: key).snapshot != nil)
 
         let rewound = try #require(
             manager.lookup(tokens: Array(0..<Self.rows) + [7], partitionKey: key).snapshot)
-        let payloadBytes = ServerCompletion.deferredPayload(
+        let payloadBytes = SnapshotPayload.deferred(
             for: rewound, extending: Self.extensionBase
         ).payload.totalBytes
         Self.report("refusedCheckIn", ["peakBytes": peak, "payloadBytes": payloadBytes])
@@ -296,7 +326,7 @@ struct CacheClaimMemoryEvidenceTests {
             try #require(
                 SnapshotAdmission.leaf(
                     storedTokens: tokens, snapshot: body,
-                    storage: .ramAndSSD(ServerCompletion.extractSnapshotPayload(body)),
+                    storage: .ramAndSSD(SnapshotPayload.extract(body)),
                     partitionKey: key)))
         await store.flush()
         #expect(manager.clearRAMTier() > 0)

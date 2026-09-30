@@ -43,18 +43,23 @@ struct LeafCaptureHandoffTests {
         var cache: [any KVCache] = []
         #expect(HybridCacheSnapshot.captureMoving(cache: &cache, offset: 8) == nil)
         #expect(HybridCacheSnapshot.capture(cache: [], offset: 8, type: .leaf) == nil)
-        let empty = HybridCacheSnapshot(
-            tokenOffset: 8, layers: [], checkpointType: .leaf, memoryBytes: 0, createdAt: .now)
         let manager = PrefixCacheManager(memoryBudgetBytes: 1_000_000)
         let requestID = UUID()
-        let admission = await ServerCompletion.admitStructuredLeaf(
-            empty, storedTokens: Array(1...8), storage: .ramOnly, partitionKey: key,
+        let admission = await LeafAdmission.prepare(
+            storedTokens: Array(1...8), partitionKey: key, reachesSSD: false,
             requestID: requestID, prefixCache: manager,
             diagnostics: .init(
-                requestID: requestID, modelID: key.modelID, kvBits: nil, kvGroupSize: 64),
-            admissionStage: "leafAdmission", captureSource: "leaf")
-        #expect(!admission.survived)
-        #expect(admission.store == nil)
+                requestID: requestID, modelID: key.modelID, kvBits: nil, kvGroupSize: 64))
+        let outcome = await ToyModelSessionProvider(model: ToyLanguageModel(script: [1, 2]))
+            .withSession { session in
+                await admission.admit(
+                    .owned([]), in: session,
+                    labels: LeafStorePhase.LeafStages.direct.admissionLabels)
+            }
+        guard case .notCaptured = outcome else {
+            Issue.record("an empty cache must not be captured, got \(outcome)")
+            return
+        }
         #expect(manager.lookup(tokens: Array(1...9), partitionKey: key).snapshot == nil)
     }
 
@@ -124,7 +129,7 @@ struct LeafCaptureHandoffTests {
     @Test func evictionDemotesMovedLeafAndSSDStillRestoresIt() async throws {
         let (manager, store, root) = PrefixCacheTestFixtures.makeSSDBackedManager(
             label: "moved-demotion", ramBudgetBytes: 4_112,
-            demotionPayloadExtractor: { ServerCompletion.extractSnapshotPayload($0) })
+            demotionPayloadExtractor: { SnapshotPayload.extract($0) })
         defer { try? FileManager.default.removeItem(at: root) }
         let request = owner()
         weak let attention = request.cache[0] as? KVCacheSimple
@@ -155,16 +160,16 @@ struct LeafCaptureHandoffTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let first = owner()
         try admit(first, into: manager) { leaf in
-            .ramAndSSD(ServerCompletion.extractSnapshotPayload(leaf))
+            .ramAndSSD(SnapshotPayload.extract(leaf))
         }
         #expect(first.cache.isEmpty)
         let base = try #require(manager.extensionBase(tokens: Array(1...10), partitionKey: key))
         let next = owner(offset: 10)
         let addresses = next.cache.flatMap(\.state).map(backingAddress)
         let expected = next.cache.flatMap(\.state).map { $0.asData(access: .copy).data }
-        var owed: ServerCompletion.DeferredLayers?
+        var owed: SnapshotPayload.DeferredLayers?
         try admit(next, offset: 10, into: manager) { leaf in
-            let deferred = ServerCompletion.deferredPayload(for: leaf, extending: base)
+            let deferred = SnapshotPayload.deferred(for: leaf, extending: base)
             #expect(deferred.payload.extending != nil)
             owed = deferred.owed
             return .ramAndSSD(deferred.payload)

@@ -45,7 +45,7 @@ import Testing
                 })
             // #531 has not changed Stored Form: a warm-backed view's SSD
             // payload is still full form, detached from every tree buffer.
-            let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: warm)
+            let (payload, owed) = try SnapshotPayload.deferred(for: view, backingLeaf: warm)
             let fullBytes = dtype == .float16 ? 2064 : 4112
             #expect(view.materializationByteCount(backingLeaf: warm) == fullBytes)
             #expect(payload.totalBytes == fullBytes)
@@ -119,7 +119,7 @@ import Testing
                 prefillStepSize: 4, consumeAll: true, initialState: nil, evalPolicy: .pipelined)
             let owned = try #require(
                 session.captureSnapshot(cache: baseline, offset: 4, type: .system))
-            let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: leaf)
+            let (payload, owed) = try SnapshotPayload.deferred(for: view, backingLeaf: leaf)
             #expect(payload.totalBytes == owned.memoryBytes)
             #expect(view.materializationByteCount(backingLeaf: leaf) == owned.memoryBytes)
             #expect(!payload.isMaterialized)

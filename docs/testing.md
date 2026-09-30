@@ -53,6 +53,14 @@ xcodebuild test -project tesseract.xcodeproj -scheme tesseract -destination 'pla
   -only-testing:tesseractTests/WarmBodyDrainTests \
   -only-testing:tesseractTests/SnapshotLayerKindTests \
   -only-testing:tesseractTests/LeafCaptureHandoffTests \
+  -only-testing:tesseractTests/LeafAdmissionTests \
+  -only-testing:tesseractTests/LeafAdmissionSourceShapeTests \
+  -only-testing:tesseractTests/SnapshotPayloadTests \
+  -only-testing:tesseractTests/SnapshotAdmissionStorageTests \
+  -only-testing:tesseractTests/SalvageOnCancelTests \
+  -only-testing:tesseractTests/CompletionTraceAccumulatorTests \
+  -only-testing:tesseractTests/SnapshotDemotionTests \
+  -only-testing:tesseractTests/SurvivalGateTests \
   -only-testing:tesseractTests/LeafLeaseTests \
   -only-testing:tesseractTests/CacheClaimTests \
   -only-testing:tesseractTests/ServerCompletionExitMatrixTests \
@@ -210,7 +218,7 @@ eviction exclusion, lease/check-in and last-backer self-heal.
 retirement after the final active request skips leaf storage. `CacheClaimTests`
 checks that a view copies with the `checkpoint` copy reason and the `prefixView`
 refusal in image and quantized partitions.
-`ServerCompletionExtractSnapshotPayloadsTests` keeps views RAM-only;
+`SnapshotAdmissionStorageTests` gives a view SSD intent without extracting it;
 `ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
 canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`
 checks planned-view restore and pin cleanup through the toy Model Session.
@@ -1233,7 +1241,7 @@ numbers were read.
 
 ### No-copy SSD writer (#469)
 
-`ServerCompletionExtractSnapshotPayloadsTests` checks borrowed backing addresses,
+`SnapshotPayloadTests` checks borrowed backing addresses,
 Data/array lifetime, empty arrays and release after each streamed layer.
 `PlaceholderContainerEncodingTests` pins bounded borrowed chunks and the existing
 full/suffix golden files. `SSDSnapshotStoreTests` compares normal-leaf and demotion

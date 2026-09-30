@@ -49,6 +49,48 @@ nonisolated func backingAddress(_ array: MLXArray) -> UInt {
 @MainActor
 enum PrefixCacheTestFixtures {
 
+    /// Build a single-layer `KVCacheSimple` snapshot whose arrays have
+    /// deterministic content so round-trip equality is byte-exact.
+    nonisolated static func makeSimpleKVSnapshot(
+        tokenOffset: Int = 5,
+        type: HybridCacheSnapshot.CheckpointType = .system
+    ) -> HybridCacheSnapshot {
+        let kv = KVCacheSimple()
+        // `.ones` picks a non-zero value so a failed asData() call
+        // (returning an empty `Data`) fails loudly on a size check.
+        kv.state = [
+            MLXArray.ones([1, 2, 4, 8]),
+            MLXArray.ones([1, 2, 4, 8]),
+        ]
+        return HybridCacheSnapshot.capture(
+            cache: [kv], offset: tokenOffset, type: type
+        )!
+    }
+
+    /// Build a mixed-layer snapshot (KV + Mamba + Quantized) to
+    /// exercise the per-layer `className` + `metaState` plumbing.
+    nonisolated static func makeMixedSnapshot(
+        tokenOffset: Int = 32
+    ) -> HybridCacheSnapshot {
+        let kv = KVCacheSimple()
+        kv.state = [
+            MLXArray.zeros([1, 1, 4, 64]),
+            MLXArray.zeros([1, 1, 4, 64]),
+        ]
+
+        let mamba = MambaCache()
+        mamba.state = [
+            MLXArray.zeros([1, 3, 128]),
+            MLXArray.zeros([1, 8, 16, 32]),
+        ]
+
+        let quantized = QuantizedKVCache(groupSize: 64, bits: 8)
+
+        return HybridCacheSnapshot.capture(
+            cache: [kv, mamba, quantized], offset: tokenOffset, type: .leaf
+        )!
+    }
+
     /// Build a `KVCacheSimple`-backed snapshot whose `memoryBytes` does
     /// **not** depend on `offset`. Eviction tests need same-size snapshots
     /// to keep "evict exactly N snapshots" budgets predictable; the

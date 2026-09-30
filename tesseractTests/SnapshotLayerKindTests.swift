@@ -220,7 +220,7 @@ struct SnapshotLayerKindTests {
                 cache: [VendorClass.simple.make(tokens: 7), VendorClass.mamba.make(tokens: 7)],
                 offset: 7, type: .leaf))
 
-        let basePayload = ServerCompletion.extractSnapshotPayload(base)
+        let basePayload = SnapshotPayload.extract(base)
         guard
             case .accepted = store.tryEnqueue(
                 payload: basePayload,
@@ -230,7 +230,7 @@ struct SnapshotLayerKindTests {
             return
         }
         await store.flushAsync()
-        let headPayload = ServerCompletion.extractSnapshotPayload(
+        let headPayload = SnapshotPayload.extract(
             head, extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 4))
         #expect(headPayload.extending != nil)
         guard
@@ -267,7 +267,7 @@ struct SnapshotLayerKindTests {
             HybridCacheSnapshot.capture(cache: [sliceable, behind], offset: 6, type: .leaf))
         #expect(snapshot.layers.map(\.kind) == [.sliceableAttention, .wholeState])
 
-        let payload = ServerCompletion.extractSnapshotPayload(
+        let payload = SnapshotPayload.extract(
             snapshot, extending: SnapshotExtension(baseSnapshotID: "base", baseOffset: 2))
         #expect(payload.extending != nil)
         let layers = payload.layers

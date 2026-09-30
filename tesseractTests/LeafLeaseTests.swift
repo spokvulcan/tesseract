@@ -34,7 +34,7 @@ struct LeafLeaseTests {
         let view = try #require(
             HybridCacheSnapshot.capture(
                 cache: caches, offset: 4, type: .branchPoint, prefixView: true))
-        let (payload, owed) = try ServerCompletion.deferredPayload(for: view, backingLeaf: body)
+        let (payload, owed) = try SnapshotPayload.deferred(for: view, backingLeaf: body)
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
@@ -145,7 +145,7 @@ struct LeafLeaseTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let tokens = Array(1...8)
         let body = try snapshot()
-        let payload = ServerCompletion.extractSnapshotPayload(body)
+        let payload = SnapshotPayload.extract(body)
         payload.materialize()
         #expect(payload.isMaterialized)
         #expect(payload.retainsBodyArrays)
@@ -181,7 +181,7 @@ struct LeafLeaseTests {
         defer { PrefixCacheDiagnostics.removeTestSink(handle) }
         let tokens = Array(1...8)
         let body = try snapshot()
-        let deferred = ServerCompletion.deferredPayload(for: body, extending: nil)
+        let deferred = SnapshotPayload.deferred(for: body, extending: nil)
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
@@ -226,7 +226,7 @@ struct LeafLeaseTests {
             label: "lease-promotion", ramBudgetBytes: 1_000_000,
             demotionPayloadExtractor: {
                 extractions += 1
-                return ServerCompletion.extractSnapshotPayload($0)
+                return SnapshotPayload.extract($0)
             }, adaptiveWriteEagerness: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let tokens = Array(1...8)
@@ -343,7 +343,7 @@ struct LeafLeaseTests {
                 on: node,
                 context: .init(
                     requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)))
-        let payload = ServerCompletion.deferredPayload(for: body)
+        let payload = SnapshotPayload.deferred(for: body)
         let admission = try #require(
             SnapshotAdmission.leaf(
                 storedTokens: tokens, snapshot: body, storage: .ramAndSSD(payload.payload),
@@ -522,7 +522,7 @@ struct LeafLeaseTests {
         #expect(
             original.layers[0].state.map(backingAddress)
                 == grown.layers[0].state.map(backingAddress))
-        let pending = ServerCompletion.deferredPayload(for: original)
+        let pending = SnapshotPayload.deferred(for: original)
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
@@ -567,7 +567,7 @@ struct LeafLeaseTests {
         let barrier = LeafWriterBarrier()
         defer { barrier.open() }
         let body = try snapshot()
-        let deferred = ServerCompletion.deferredPayload(for: body)
+        let deferred = SnapshotPayload.deferred(for: body)
         let payload = SnapshotPayload(tokenOffset: 8, checkpointType: .leaf, totalBytes: 4_160) {
             barrier.wait()
             return deferred.payload.layers
@@ -612,7 +612,7 @@ struct LeafLeaseTests {
         let grown = try snapshot(offset: 12)
         let barrier = LeafWriterBarrier()
         defer { barrier.open() }
-        let deferred = ServerCompletion.deferredPayload(for: grown)
+        let deferred = SnapshotPayload.deferred(for: grown)
         let payload = SnapshotPayload(tokenOffset: 12, checkpointType: .leaf, totalBytes: 6_208) {
             barrier.wait()
             return deferred.payload.layers
@@ -661,7 +661,7 @@ struct LeafLeaseTests {
             try #require(
                 SnapshotAdmission.leaf(
                     storedTokens: tokens, snapshot: body,
-                    storage: .ramAndSSD(ServerCompletion.extractSnapshotPayload(body)),
+                    storage: .ramAndSSD(SnapshotPayload.extract(body)),
                     partitionKey: key)))
         let tree = try #require(store.tree(for: key))
         let node = try #require(tree.findBestSnapshot(tokens: tokens, updateAccess: false)?.node)
@@ -692,7 +692,7 @@ struct LeafLeaseTests {
             writerDrainPreludeForTesting: { await gate.wait() })
         defer { try? FileManager.default.removeItem(at: root) }
         let body = try snapshot()
-        let full = ServerCompletion.deferredPayload(for: body)
+        let full = SnapshotPayload.deferred(for: body)
         let tokens = Array(1...8)
         manager.admit(
             try #require(
@@ -708,14 +708,14 @@ struct LeafLeaseTests {
                     requestID: UUID(), modelID: key.modelID, kvBits: nil, kvGroupSize: 64)))
         let base = try #require(manager.extensionBase(tokens: Array(1...12), partitionKey: key))
         let grown = try snapshot(offset: 12)
-        let suffix = ServerCompletion.deferredPayload(for: grown, extending: base)
+        let suffix = SnapshotPayload.deferred(for: grown, extending: base)
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
                     storedTokens: Array(1...12), snapshot: grown,
                     storage: .ramAndSSD(suffix.payload), partitionKey: key)))
         let unrelated = try snapshot()
-        let independent = ServerCompletion.deferredPayload(for: unrelated)
+        let independent = SnapshotPayload.deferred(for: unrelated)
         manager.admit(
             try #require(
                 SnapshotAdmission.leaf(
