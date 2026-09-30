@@ -1,6 +1,6 @@
 # ADR-0079: Speculative decoding lives in one Speculation module; both arms read one Speculation Plan
 
-- Status: Proposed
+- Status: Accepted (built; loaded-model gates passed, see As built)
 - Date: 2026-09-30
 - Amends: ADR-0016 (the Model Session sheds its per-drafter members for one
   speculation fact and one plan-taking verb; the amendment's "revisit inside
@@ -139,3 +139,60 @@ The Models page read the draft's residency off the loaded model's id until
 - Adding a drafter family means a residency loader, a table row and an
   iterator case in one module, plus a session verb only if its iterator needs
   something new from the model.
+
+## As built (2026-09-30)
+
+The branch landed in three commits after the proposal: the module with every
+consumer moved onto it and the plan's table tests, the toy runs of the DFlash2
+arm, and the glossary and docs.
+
+How the shape came out:
+
+- `Speculation` holds the drafters and answers `plan(for:)`,
+  `isResident(_:)`, its memory facts, and the unload with its release probe.
+  `SpeculationPlan` carries the arm, `advanceAllowance`,
+  `prefillsWholePrompt`, `prefillSplit(checkpointOffsets:executionBaseOffset:promptTokens:)`
+  and the one iterator factory. `SpeculativeDecodeIterator` starts the token
+  loop for either arm.
+- The MTP scratch profile became a load-time fact of the Speculation (priced
+  from Model Identity when the drafters load), so neither arm passes it.
+- The Server Completion's cold MTP body stays, now driven by the plan
+  (`prefillsWholePrompt`). The prefill plan's restore answers
+  `restoresPrefix`, so the keyed closure reads the plan without growing its
+  branches.
+- The unload still releases MTP before DFlash2 with a memory phase after
+  each, inside `Speculation.unload()`.
+
+Measured:
+
+- `LLMActor.swift` 916 → 800 lines, `ModelSession.swift` 537 → 443,
+  `DFlash2Support.swift` 250 → 150, `MTPDrafterSupport.swift` 177 → 141,
+  `ServerCompletion.swift` 2,725 → 2,643; `Speculation.swift` is 477.
+- The server, agent and prefix-cache test lists in `docs/testing.md`, plus the
+  touched suites: 1,098 cases pass. Breaking the DFlash2 split (handing over at
+  the execution base) fails the thinking-turn toy test and the plan's split
+  rows.
+- The whole unit target in one process fails only in unrelated suites that
+  time out under that load; run alone they pass, except
+  `MemoryBaselineTests.corpusLoads`, which reads the owner's memory corpus.
+
+Loaded-model gates, run on 2026-09-30 on a MacBook Pro with an Apple M3 Max
+and 48 GB, macOS 27.0:
+
+- `scripts/dev.sh prefix-cache-e2e` on `qwen3.5-4b-paro`: all 34 checks pass.
+  The load refuses the DFlash2 draft by geometry (64 target layers against
+  32) before reading its weights, and the checkpoint ships no MTP head.
+- `scripts/dev.sh hybrid-cache-correctness`: all 12 checks pass, every
+  restore bitwise.
+- The e2e runner on `qwen3.8-27b-paro`, speculation Automatic: all 34 checks
+  pass with both drafters resident and DFlash2 engaged, warm restores
+  included. The same run on main gives the same speculation log lines for
+  every request (rounds, proposed, accepted and emitted tokens) and the same
+  check values once timings are masked.
+
+Not verified on a real model: MTP drafting. The only local checkpoint with a
+head, the 27B PARO with a grafted bf16 head, traps in the fused RMSNorm
+(`residual dtypes differ`) on its first drafted turn, on main as on this
+branch, so MTP engagement is covered by the plan's table and the
+presence-only drafter.
+
