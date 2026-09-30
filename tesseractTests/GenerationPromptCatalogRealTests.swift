@@ -73,6 +73,21 @@ struct GenerationPromptCatalogRealTests {
         return .measuresOnly
     }
 
+    /// What the gate reads of a catalog chat model, taken on the main actor
+    /// where the catalog lives, so the loads and renders can run off it.
+    struct Entry: Sendable {
+        let id: String
+        let subdirectory: String?
+        let family: Family
+    }
+
+    @MainActor
+    static var entries: [Entry] {
+        chatModels.map {
+            Entry(id: $0.id, subdirectory: $0.cacheSubdirectory, family: family(of: $0.id))
+        }
+    }
+
     static func measured(
         _ tokenizer: any Tokenizer, _ context: TemplateRenderContext
     ) throws -> GenerationPrompt {
@@ -85,13 +100,16 @@ struct GenerationPromptCatalogRealTests {
         ).checked(against: fed)
     }
 
-    @MainActor
+    /// Off the main actor: each model's tokenizer load and renders take a
+    /// second or more in a Debug build, and in a parallel run the main actor
+    /// is every other suite's too.
+    @concurrent
     @Test(.enabled("no catalog chat model is downloaded") { await anyChatModelDownloaded })
     func everyDownloadedCatalogModelMeasures() async throws {
         var checked: [String] = []
         var skipped: [String] = []
-        for model in Self.chatModels {
-            guard let subdirectory = model.cacheSubdirectory else { continue }
+        for model in await Self.entries {
+            guard let subdirectory = model.subdirectory else { continue }
             let directory = Self.modelsRoot.appendingPathComponent(subdirectory)
             guard Self.hasTokenizer(directory) else {
                 skipped.append(model.id)
@@ -104,7 +122,7 @@ struct GenerationPromptCatalogRealTests {
                 tokenizer, Self.context(enableThinking: false, identity: identity))
             #expect(byDefault.unknownReason == nil, "\(model.id) default: \(byDefault.traceValue)")
             #expect(off.unknownReason == nil, "\(model.id) thinking off: \(off.traceValue)")
-            switch Self.family(of: model.id) {
+            switch model.family {
             case .thinksWhenAsked:
                 #expect(byDefault.thinkBlock == .closed, "\(model.id): \(byDefault.traceValue)")
                 #expect(off.thinkBlock == .closed, "\(model.id) thinking off: \(off.traceValue)")
