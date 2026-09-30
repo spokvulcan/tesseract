@@ -3,8 +3,8 @@ import Foundation
 /// Which speculative-decoding drafters a model load may attach — the
 /// "Speculative Decoding" picker in agent settings. A load-time policy, not a
 /// per-request one: each case gates the corresponding drafter loader in
-/// `LLMActor.loadModel`, and the generation-time preference between loaded
-/// drafters (DFlash2 over MTP) stays in the engagement policies.
+/// `Speculation.load`, and the generation-time preference between loaded
+/// drafters (DFlash2 over MTP) is the **Speculation Plan**'s.
 nonisolated enum SpeculationMode: String, CaseIterable, Sendable {
     /// Load every drafter the checkpoint supports. DFlash2 wins at
     /// generation time when both attach: deeper blocks (8 vs 2 effective)
@@ -31,11 +31,11 @@ nonisolated enum SpeculationMode: String, CaseIterable, Sendable {
     }
 }
 
-/// The speculative algorithm that actually decoded a request — resolved per
-/// request at iterator construction, unlike ``SpeculationMode`` which is the
+/// The speculative algorithm that actually decoded a request — the
+/// **Speculation Plan**'s arm, unlike ``SpeculationMode`` which is the
 /// load-time policy. Absence (a `nil` field) means plain autoregressive
-/// decoding: drafters may be loaded and still not engage (warm cache hits,
-/// image prompts, non-identity key spaces).
+/// decoding: drafters may be loaded and still not engage (image prompts,
+/// quantized KV, an MTP drafter on a warm or sampled turn).
 nonisolated enum SpeculativeArm: String, Sendable, Equatable {
     case mtp
     case dflash2

@@ -1,38 +1,12 @@
 import Foundation
-import MLX
-import MLXLMCommon
 import Testing
 
 @testable import Tesseract_Agent
 
+/// The DFlash2 draft's own facts: checkpoint refusal, target geometry,
+/// folder detection and catalog wiring. When a request engages the draft is
+/// the Speculation Plan's table (`SpeculationPlanTests`).
 struct DFlash2SupportTests {
-
-    // MARK: - Server keyed-path engagement policy
-
-    /// `shouldEngage` with the engaging happy path as defaults, so each test
-    /// names only the axis it varies.
-    private func engages(
-        hasDrafter: Bool = true,
-        textOnlyIdentityKeySpace: Bool = true,
-        kvBits: Int? = nil
-    ) -> Bool {
-        DFlash2Support.shouldEngage(
-            hasDrafter: hasDrafter,
-            textOnlyIdentityKeySpace: textOnlyIdentityKeySpace,
-            kvBits: kvBits
-        )
-    }
-
-    @Test func engagesOnTextOnlyIdentityRequests() {
-        // No leaf-mode or cold-path axis anymore: the arm rides the keyed
-        // path's own restore + checkpoint-capturing prefill, so thinking and
-        // tool traffic (and warm restores) engage too.
-        #expect(engages())
-    }
-
-    @Test func refusesWithoutDrafter() {
-        #expect(!engages(hasDrafter: false))
-    }
 
     // MARK: - Checkpoint-level refusal
 
@@ -51,29 +25,6 @@ struct DFlash2SupportTests {
 
         #expect(DFlash2Support.checkpointRefusesDraft(rotated))
         #expect(!DFlash2Support.checkpointRefusesDraft(plain))
-    }
-
-    @Test func refusesImageBearingRequests() {
-        #expect(!engages(textOnlyIdentityKeySpace: false))
-    }
-
-    @Test func refusesQuantizedKVPartitions() {
-        // Speculation rewinds verify rows in place through the plain
-        // `KVCacheSimple` machinery; quantized-KV partitions keep the
-        // ordinary decode path.
-        #expect(!engages(kvBits: 8))
-    }
-
-    // MARK: - Agent raw-arm engagement policy
-
-    @Test func rawArmEngagesOnTextOnlyInput() {
-        let input = LMInput(text: .init(tokens: MLXArray([Int32(1), 2, 3])))
-        #expect(DFlash2Support.shouldEngageRawArm(hasDrafter: true, input: input))
-    }
-
-    @Test func rawArmRefusesWithoutDrafter() {
-        let input = LMInput(text: .init(tokens: MLXArray([Int32(1), 2, 3])))
-        #expect(!DFlash2Support.shouldEngageRawArm(hasDrafter: false, input: input))
     }
 
     // MARK: - Target geometry

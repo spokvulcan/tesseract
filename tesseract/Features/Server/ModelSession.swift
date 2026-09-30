@@ -51,16 +51,11 @@ nonisolated protocol ModelSession {
     /// 27B, the PARO Qwen3.5 pack) tokenizes through both like any LLM.
     var producesFlatTextTokens: Bool { get }
 
-    /// The MTP speculative-decoding drafter paired with the loaded model,
-    /// when one was loaded beside it (`mtp.*` head weights present and the
-    /// setting on). `nil` disables the speculative arm — the common case.
-    var mtpDrafter: (any MTPDrafterModel)? { get }
-
-    /// The DFlash2 block-parallel drafter paired with the loaded model, when
-    /// the separate draft checkpoint was downloaded and the setting allows
-    /// it. Preferred over ``mtpDrafter`` when both are present: deeper blocks
-    /// (8 vs 2 effective), and it speculates under sampling presets too.
-    var dflash2Drafter: (any DFlash2DrafterModel)? { get }
+    /// The **Speculation** resident beside the loaded model: the drafters
+    /// its load attached, and the rules for engaging them. A request asks it
+    /// for a **Speculation Plan** (ADR-0079). `.none` on sessions without
+    /// drafters, the common case.
+    var speculation: Speculation { get }
 
     /// Run the model's input processor: `UserInput` (messages, images,
     /// tools) → tokenized `LMInput`.
@@ -134,34 +129,20 @@ nonisolated protocol ModelSession {
         prepare: ((LMInput, [any KVCache], Int?) throws -> PrepareResult)?
     ) throws -> StateThreadedTokenIterator
 
-    /// Construct the MTP speculative decode iterator over the whole prompt
-    /// (its init runs the vendor `prepare` — whole-prompt and unchunked when
-    /// the drafter requires prompt prefill, which is why callers gate on a
-    /// scratch-size budget first). Only callable when ``mtpDrafter`` is
-    /// non-nil. Penalties are stripped from the iterator's parameters inside
-    /// the implementation and re-attached as the app logit processor
-    /// (ADR-0053), so the vendor's parameter-built penalty processor never
-    /// doubles them.
-    func makeMTPDecodeIterator(
-        _ input: LMInput,
-        cache: [any KVCache],
-        parameters: GenerateParameters
-    ) throws -> MTPSpeculativeTokenIterator
-
-    /// Construct the DFlash2 speculative decode iterator. Its init runs the
-    /// capture-emitting chunked prefill (building the drafter's sliding
-    /// hidden-state window) over the prompt positions past
-    /// `prefilledPrefixTokens` — the leading positions `cache` already holds
-    /// from a warm restore plus the app driver's checkpoint-capturing
-    /// prefill. Only callable when ``dflash2Drafter`` is non-nil. Penalties
-    /// are stripped and re-attached as the app logit processor, exactly like
-    /// the MTP variant.
-    func makeDFlash2DecodeIterator(
+    /// Construct a **Speculation Plan**'s decode iterator over `cache`,
+    /// which already holds the first `prefilledPrefixTokens` positions of
+    /// `input` (a warm restore plus the app driver's checkpoint-capturing
+    /// prefill). Its init runs the rest of the prompt's prefill: the whole
+    /// prompt, unchunked, for MTP; the tail, capture-emitting, for DFlash2.
+    /// The plan builds it with this session's model
+    /// (`SpeculationPlan.makeIterator`).
+    func makeSpeculativeDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
         prefilledPrefixTokens: Int,
+        plan: SpeculationPlan,
         parameters: GenerateParameters
-    ) throws -> DFlash2SpeculativeTokenIterator
+    ) throws -> SpeculativeDecodeIterator
 
     /// Quantize the cache in place per the parameters' `kvBits`/`kvGroupSize`
     /// (no-op when unset) — once, before the iterator, so the array the
@@ -177,14 +158,6 @@ nonisolated protocol ModelSession {
     ) -> HybridCacheSnapshot?
 }
 
-/// Thrown by the default ``ModelSession/makeMTPDecodeIterator(_:cache:parameters:)``
-/// when a session has no drafter — reaching it means an engagement-policy bug,
-/// since callers gate on ``ModelSession/mtpDrafter`` first.
-struct MTPDrafterUnavailableError: Error {}
-
-/// The DFlash2 arm's twin of ``MTPDrafterUnavailableError``.
-struct DFlash2DrafterUnavailableError: Error {}
-
 extension ModelSession {
     /// Sessions without speculative decoding (the test peers, and any future
     /// adapter that never loads a drafter) inherit the disabled state.
@@ -193,9 +166,7 @@ extension ModelSession {
     /// the project's MainActor default isolation an unannotated extension
     /// member becomes a MainActor-isolated witness for a nonisolated
     /// requirement, and the runtime isolation check traps off the main actor.
-    nonisolated var mtpDrafter: (any MTPDrafterModel)? { nil }
-
-    nonisolated var dflash2Drafter: (any DFlash2DrafterModel)? { nil }
+    nonisolated var speculation: Speculation { .none }
 
     /// The agent-edge tokenize verb (ADR-0016 amendment): the **Conversation
     /// Render**'s `agentEdgeFullRender` — C25 **Render+Token Cache** render +
@@ -243,23 +214,6 @@ extension ModelSession {
         let flat = MLXArray(tokens)
         return LMInput(tokens: producesFlatTextTokens ? flat : flat.expandedDimensions(axis: 0))
     }
-
-    nonisolated func makeMTPDecodeIterator(
-        _ input: LMInput,
-        cache: [any KVCache],
-        parameters: GenerateParameters
-    ) throws -> MTPSpeculativeTokenIterator {
-        throw MTPDrafterUnavailableError()
-    }
-
-    nonisolated func makeDFlash2DecodeIterator(
-        _ input: LMInput,
-        cache: [any KVCache],
-        prefilledPrefixTokens: Int,
-        parameters: GenerateParameters
-    ) throws -> DFlash2SpeculativeTokenIterator {
-        throw DFlash2DrafterUnavailableError()
-    }
 }
 
 /// Whether the current task is inside a Model Session. Every session
@@ -304,12 +258,9 @@ extension ModelSessionProviding {
 /// peer, so only the model varies across the seam.
 nonisolated struct ContextBackedModelSession: ModelSession {
     let context: ModelContext
-    /// The drafter loaded beside this model, threaded in by the production
-    /// provider; `nil` on sessions without speculative decoding.
-    var mtpDrafter: (any MTPDrafterModel)?
-    /// The DFlash2 draft loaded beside this model (separate checkpoint);
-    /// `nil` unless the draft folder exists and the setting is on.
-    var dflash2Drafter: (any DFlash2DrafterModel)?
+    /// The drafters loaded beside this model, threaded in by the provider;
+    /// `.none` on sessions without speculative decoding.
+    var speculation: Speculation = .none
 
     var configuration: ModelConfiguration { context.configuration }
     var tokenizer: any Tokenizer { context.tokenizer }
@@ -434,56 +385,16 @@ nonisolated struct ContextBackedModelSession: ModelSession {
         )
     }
 
-    func makeMTPDecodeIterator(
-        _ input: LMInput,
-        cache: [any KVCache],
-        parameters: GenerateParameters
-    ) throws -> MTPSpeculativeTokenIterator {
-        guard let drafter = mtpDrafter else {
-            throw MTPDrafterUnavailableError()
-        }
-        // Penalties ride the app processor (ADR-0053), injected through
-        // `GenerationComponents`; strip them from the iterator's parameters
-        // so `components.logitProcessor(parameters:)` doesn't also build the
-        // vendor's parameter-driven penalty processor on top.
-        var iteratorParams = parameters
-        iteratorParams.repetitionPenalty = nil
-        iteratorParams.presencePenalty = nil
-        iteratorParams.frequencyPenalty = nil
-        var components = GenerationComponents()
-        if let processor = GenerationLogitProcessor.resolve(
-            for: parameters, pathQuantizesKVUpFront: true)
-        {
-            // One iterator = one generation, so handing the factory a single
-            // resolved instance preserves the fresh-state contract; the box
-            // routes the non-Sendable processor into the @Sendable factory.
-            let box = UnsafeSendableBox(processor)
-            components = components.appendingLogitProcessor { box.value }
-        }
-        return try MTPSpeculativeTokenIterator(
-            input: input,
-            mainModel: context.model,
-            drafter: drafter,
-            mainCache: cache,
-            parameters: iteratorParams,
-            blockSize: MTPDrafterSupport.blockSize,
-            components: components
-        )
-    }
-
-    func makeDFlash2DecodeIterator(
+    func makeSpeculativeDecodeIterator(
         _ input: LMInput,
         cache: [any KVCache],
         prefilledPrefixTokens: Int,
+        plan: SpeculationPlan,
         parameters: GenerateParameters
-    ) throws -> DFlash2SpeculativeTokenIterator {
-        guard let drafter = dflash2Drafter else {
-            throw DFlash2DrafterUnavailableError()
-        }
-        return try DFlash2Support.makeIterator(
+    ) throws -> SpeculativeDecodeIterator {
+        try plan.makeIterator(
             input: input,
             model: context.model,
-            drafter: drafter,
             cache: cache,
             prefilledPrefixTokens: prefilledPrefixTokens,
             parameters: parameters
@@ -514,11 +425,8 @@ nonisolated struct ContextBackedModelSession: ModelSession {
 /// coexist mid-migration with identical Metal-affine batching.
 nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
     let container: ModelContainer
-    /// Boxed drafter handed through to every session; see the `LLMActor`
-    /// field for the sharing rationale.
-    var mtpDrafter: UnsafeSendableBox<any MTPDrafterModel>?
-    /// Boxed DFlash2 draft handed through to every session.
-    var dflash2Drafter: UnsafeSendableBox<any DFlash2DrafterModel>?
+    /// The load's resident drafters, handed through to every session.
+    var speculation: Speculation = .none
 
     func withSession<V, R: Sendable>(
         nonSendable payload: sending V,
@@ -527,9 +435,7 @@ nonisolated struct ContainerModelSessionProvider: ModelSessionProviding {
         try await container.perform(nonSendable: payload) { context, payload in
             try await ModelSessionScope.$isInside.withValue(true) {
                 try await body(
-                    ContextBackedModelSession(
-                        context: context, mtpDrafter: mtpDrafter?.value,
-                        dflash2Drafter: dflash2Drafter?.value),
+                    ContextBackedModelSession(context: context, speculation: speculation),
                     payload)
             }
         }

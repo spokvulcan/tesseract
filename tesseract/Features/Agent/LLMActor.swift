@@ -56,18 +56,10 @@ actor LLMActor {
     }
 
     private var modelContainer: ModelContainer?
-    /// The MTP speculative-decoding drafter loaded from the same checkpoint
-    /// as the model — present only when the checkpoint ships `mtp.*` head
-    /// weights and the setting is on. Boxed rather than container-wrapped:
-    /// drafters are vendor-documented stateless and safe to share across
-    /// iterators, and every use is confined to generation work inside
-    /// `ModelContainer.perform`.
-    private var mtpDrafter: UnsafeSendableBox<any MTPDrafterModel>?
-    /// The DFlash2 block-parallel drafter loaded from its own checkpoint
-    /// (separate download from the target model). Same boxing rationale as
-    /// `mtpDrafter`. Preferred over MTP when both are present: deeper blocks
-    /// and sampling-preset support.
-    private var dflash2Drafter: UnsafeSendableBox<any DFlash2DrafterModel>?
+    /// The **Speculation** the load attached: the speculative drafters
+    /// resident beside the model (ADR-0079). `.none` before a load and
+    /// after an unload.
+    private var speculation: Speculation = .none
     private(set) var agentTokenizer: AgentTokenizer?
     /// The loaded model's weight/config/template fingerprint
     /// (`ModelFingerprint.computeFingerprint`), keyed on by the C25
@@ -120,7 +112,7 @@ actor LLMActor {
         visionMode: Bool,
         ssdConfig: SSDPrefixCacheConfig? = nil,
         ramBudgetCapBytes: Int? = nil,
-        speculation: SpeculationMode = .automatic
+        speculation mode: SpeculationMode = .automatic
     ) async throws -> (AgentTokenizer, canonicalGenerationPrompt: GenerationPrompt) {
         let loadClock = ContinuousClock()
         let loadStart = loadClock.now
@@ -173,10 +165,8 @@ actor LLMActor {
                 : try await loadParoQuantLLMContainer(from: directory)
             await stackTargetProjections(container: container)
             let result = try await verifyAndStore(container: container, identity: identity)
-            await loadMTPDrafterIfPresent(
-                directory: directory, container: container, enabled: speculation.allowsMTP)
-            await loadDFlash2DrafterIfPresent(
-                container: container, identity: identity, enabled: speculation.allowsDFlash2)
+            await loadSpeculation(
+                mode, directory: directory, container: container, identity: identity)
             logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
             return result
         }
@@ -204,12 +194,24 @@ actor LLMActor {
         }
         await stackTargetProjections(container: container)
         let result = try await verifyAndStore(container: container, identity: identity)
-        await loadMTPDrafterIfPresent(
-            directory: directory, container: container, enabled: speculation.allowsMTP)
-        await loadDFlash2DrafterIfPresent(
-            container: container, identity: identity, enabled: speculation.allowsDFlash2)
+        await loadSpeculation(
+            mode, directory: directory, container: container, identity: identity)
         logLoadCompleted(since: loadStart, clock: loadClock, visionMode: visionMode)
         return result
+    }
+
+    /// Attach the drafters `mode` allows beside the loaded target. A
+    /// previous load's drafters are released first, so two drafts are never
+    /// resident at once. Never fails the model load.
+    private func loadSpeculation(
+        _ mode: SpeculationMode, directory: URL, container: ModelContainer,
+        identity: ModelIdentity
+    ) async {
+        speculation = .none
+        let draftStorageRoot = await MainActor.run { ModelDownloadManager.modelStorageURL }
+        speculation = await Speculation.load(
+            mode, beside: container, checkpoint: directory, identity: identity,
+            draftStorageRoot: draftStorageRoot)
     }
 
     /// Fold the target's same-input projections (q|k|v, gate|up, the GDN
@@ -300,11 +302,10 @@ actor LLMActor {
     }
 
     /// The **Model Session** provider over the loaded container, with the
-    /// drafters loaded beside it — the one place the drafter list is wired,
-    /// so neither consumer can silently drop a speculative arm.
+    /// load's **Speculation** — the one place it is wired, so neither
+    /// consumer can silently drop a speculative arm.
     private func sessionProvider(_ container: ModelContainer) -> ContainerModelSessionProvider {
-        ContainerModelSessionProvider(
-            container: container, mtpDrafter: mtpDrafter, dflash2Drafter: dflash2Drafter)
+        ContainerModelSessionProvider(container: container, speculation: speculation)
     }
 
     /// Start the HTTP text-based prefix-cache path for `/v1/chat/completions` —
@@ -376,7 +377,7 @@ actor LLMActor {
     /// it, the draft was on disk and the loaded target pairs with it. `false`
     /// before a load and after an unload.
     func loadedDFlash2Draft() -> Bool {
-        dflash2Drafter != nil
+        speculation.isResident(.dflash2)
     }
 
     /// Whether the loaded instance processes images — the instance truth
@@ -435,8 +436,7 @@ actor LLMActor {
         // until this function returns, past every release below.
         let containerAtEntry = modelContainer.map(ObjectIdentifier.init)
         weak let releasedContainer = modelContainer
-        weak let releasedMTPDrafter: AnyObject? = mtpDrafter?.value as AnyObject?
-        weak let releasedDFlash2Drafter: AnyObject? = dflash2Drafter?.value as AnyObject?
+        let releasedDrafters = speculation.releaseProbe
         if let serverCompletion {
             await serverCompletion.drainActiveCompletion(on: self)
         }
@@ -452,10 +452,7 @@ actor LLMActor {
         RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadBegin", facts: [:])
         modelContainer = nil
         RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadContainerReleased", facts: [:])
-        mtpDrafter = nil
-        RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadMTPReleased", facts: [:])
-        dflash2Drafter = nil
-        RequestMemoryTelemetry.recordAllocation(phase: "modelUnloadDFlash2Released", facts: [:])
+        speculation.unload()
         agentTokenizer = nil
         serverCompletion = nil
         RequestMemoryTelemetry.recordAllocation(
@@ -487,11 +484,9 @@ actor LLMActor {
         Memory.clearCache()
         RequestMemoryTelemetry.recordAllocation(
             phase: "modelUnloadEnd",
-            facts: [
-                "containerRetained": "\(releasedContainer != nil)",
-                "mtpDrafterRetained": "\(releasedMTPDrafter != nil)",
-                "dflash2DrafterRetained": "\(releasedDFlash2Drafter != nil)",
-            ])
+            facts: ["containerRetained": "\(releasedContainer != nil)"].merging(
+                releasedDrafters.facts
+            ) { _, new in new })
     }
 
     /// Cancel-and-await the active **Server Completion**, leaving the model
@@ -803,114 +798,3 @@ actor LLMActor {
 }
 
 extension LLMActor: ServerCompletionStarting {}
-
-// MARK: - MTP drafter loading
-
-extension LLMActor {
-    /// Load the MTP drafter beside the model when the checkpoint ships the
-    /// `mtp.*` head and the setting allows it. Never fails the model load:
-    /// a drafter problem degrades to ordinary (non-speculative) decoding
-    /// with a warning. The drafter family is derived from the class of the
-    /// model instance in `container` — never from the vision *intent*: the
-    /// generic loader falls back VLM → LLM on legacy-layout checkpoints, so
-    /// intent and outcome can diverge (see `MTPDrafterSupport.drafterPairing`).
-    private func loadMTPDrafterIfPresent(
-        directory: URL, container: ModelContainer, enabled: Bool
-    ) async {
-        mtpDrafter = nil
-        guard enabled else {
-            Log.agent.info("MTP drafter: disabled by setting — speculation off")
-            return
-        }
-        guard MTPDrafterSupport.checkpointShipsMTPHead(directory: directory) else {
-            Log.agent.info("MTP drafter: checkpoint ships no mtp.* weights — speculation off")
-            return
-        }
-        let pairing = await container.perform { context in
-            MTPDrafterSupport.drafterPairing(for: context.model)
-        }
-        guard let pairing else {
-            Log.agent.info(
-                "MTP drafter: no drafter pairs with the loaded target class — speculation off")
-            return
-        }
-        do {
-            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoadBegin", facts: [:])
-            let context = try await MTPDrafterSupport.loadDrafter(
-                directory: directory, pairing: pairing)
-            mtpDrafter = UnsafeSendableBox(context.model)
-            // The head shard's pre-quantization arrays are dead once the
-            // draft holds its parameters; return them before the next load.
-            Memory.clearCache()
-            RequestMemoryTelemetry.recordAllocation(phase: "modelMTPLoaded", facts: [:])
-            Log.agent.notice(
-                "MTP drafter loaded — pairing=\(pairing.rawValue) "
-                    + "blockSize=\(MTPDrafterSupport.blockSize)")
-        } catch {
-            Log.agent.warning(
-                "MTP drafter load failed — continuing without speculation: \(error)")
-        }
-    }
-
-    /// Load the DFlash2 draft from its own folder when it exists on disk, the
-    /// loaded target pairs with it, and the setting allows it. Same degrade-
-    /// to-plain-decoding discipline as the MTP drafter: a draft problem warns,
-    /// never fails the model load.
-    private func loadDFlash2DrafterIfPresent(
-        container: ModelContainer, identity: ModelIdentity, enabled: Bool
-    ) async {
-        dflash2Drafter = nil
-        guard enabled else { return }
-        let storageRoot = await MainActor.run { ModelDownloadManager.modelStorageURL }
-        guard let directory = DFlash2Support.draftDirectory(storageRoot: storageRoot) else {
-            return  // draft not downloaded — the common case, stay silent
-        }
-        guard !DFlash2Support.checkpointRefusesDraft(identity) else {
-            Log.agent.notice(
-                "DFlash2 draft: the target is a Rotated Ternary Checkpoint — the draft was "
-                    + "distilled for the full-precision target and decodes slower on it — off")
-            return
-        }
-        let targetLayers = await container.perform { context in
-            DFlash2Support.targetLayerCount(context.model)
-        }
-        guard let targetLayers else {
-            Log.agent.info(
-                "DFlash2 draft: loaded target class pairs with no DFlash2 draft — off")
-            return
-        }
-        do {
-            // Geometry comes from config.json, so a mismatched draft is
-            // refused before its weights are read.
-            let draftConfig = try DFlash2Support.draftConfiguration(directory: directory)
-            guard
-                DFlash2Support.geometryMatches(
-                    targetLayerCount: targetLayers,
-                    draftNumTargetLayers: draftConfig.numTargetLayers,
-                    draftTargetLayerIds: draftConfig.dflash.targetLayerIds)
-            else {
-                Log.agent.notice(
-                    "DFlash2 draft: distilled for a \(draftConfig.numTargetLayers)-layer target, "
-                        + "loaded target has \(targetLayers) layers — off")
-                return
-            }
-            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2LoadBegin", facts: [:])
-            let draft = try DFlash2Support.loadDrafter(directory: directory)
-            RequestMemoryTelemetry.recordAllocation(phase: "modelDFlash2Loaded", facts: [:])
-            // The target's projections were stacked at load; the draft's
-            // fold here (same pass, bitwise-exact).
-            Memory.clearCache()
-            RequestMemoryTelemetry.recordAllocation(phase: "modelDraftStackingBegin", facts: [:])
-            let stackedDraft = stackSameInputProjections(in: draft)
-            if stackedDraft > 0 { Memory.clearCache() }
-            Log.agent.notice("DFlash2 same-input stacking: draft=\(stackedDraft) blocks")
-            dflash2Drafter = UnsafeSendableBox(draft)
-            RequestMemoryTelemetry.recordAllocation(phase: "modelProjectionStackingEnd", facts: [:])
-            Log.agent.notice(
-                "DFlash2 draft loaded (4-bit) — blockSize=\(DFlash2Support.blockSize)")
-        } catch {
-            Log.agent.warning(
-                "DFlash2 draft load failed — continuing without it: \(error)")
-        }
-    }
-}

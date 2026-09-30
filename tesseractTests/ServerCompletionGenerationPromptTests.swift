@@ -117,7 +117,8 @@ struct ServerCompletionGenerationPromptTests {
             enableThinking: testCase.enableThinking, preserveThinking: testCase.preserveThinking)
         let mtp = testCase.mode != .directLeaf
         let session = Replay.Session(
-            identity: mtp ? Self.mtpEligibleIdentity : nil, hasMTPDrafter: mtp)
+            identity: mtp ? Self.mtpEligibleIdentity : nil,
+            speculation: mtp ? .inactiveMTP(pricedBy: Self.mtpEligibleIdentity) : .none)
         let conversation = Replay.conversation(
             [
                 Replay.user("hi"), Replay.assistant("calling", reasoning: ""),
@@ -178,7 +179,8 @@ struct ServerCompletionGenerationPromptTests {
             provider: ToyModelSessionProvider(
                 model: ToyLanguageModel(
                     script: prompt + Array("thought</think>ok".utf8).map(Int.init)),
-                tokenizer: tokenizer, hasMTPDrafter: true),
+                tokenizer: tokenizer,
+                speculation: .inactiveMTP(pricedBy: Self.mtpEligibleIdentity)),
             identity: Self.mtpEligibleIdentity, modelID: modelID)
 
         let handle = try await fixture.start(

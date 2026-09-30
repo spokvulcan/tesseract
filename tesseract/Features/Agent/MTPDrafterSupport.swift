@@ -8,6 +8,8 @@ import Tokenizers  // referenced by the #huggingFaceTokenizerLoader macro expans
 
 /// App-side surface for loading the MTP speculative-decoding drafter that
 /// rides inside a Qwen3.5-family checkpoint (the `mtp.*` weight prefix).
+/// **Speculation** loads it through these and decides when a request
+/// engages it (ADR-0079).
 ///
 /// Two jobs:
 /// 1. **Detection** — does this checkpoint ship the MTP head at all? Most
@@ -50,44 +52,6 @@ nonisolated enum MTPDrafterSupport {
     /// effective ceiling is a 2× cut in target calls; the 4 stays for any
     /// future drafter that can draft deeper.
     static let blockSize = 4
-
-    /// Ceiling on the single-shot full-attention score matrix
-    /// (`[heads, L, L]`) the MTP prepare may allocate. The vendor MTP prompt
-    /// prefill is unchunked by design (the target must expose one hidden row
-    /// per prompt token for the drafter's shifted-prompt cache), so prompt
-    /// length is the engagement knob: past this bound the request stays on
-    /// the ordinary chunked path. 4 GiB ≈ a 9K-token prompt on the 27B's
-    /// 24-head bf16 profile.
-    static let singleShotScratchBudgetBytes: UInt64 = 4 << 30
-
-    // MARK: - Engagement policy
-
-    /// The cold-path engagement decision (pure, unit-tested): speculate only
-    /// when a drafter is loaded, sampling is greedy (the Qwen drafters are
-    /// greedy-only — the vendor iterator would silently passthrough
-    /// otherwise, wasting the drafter prefill), the request is text-only
-    /// (identity key space), the leaf store will run off `finalCache` alone
-    /// (`.directLeaf` — the unchunked MTP prompt prefill forfeits the
-    /// boundary snapshots every other mode synthesizes its leaf from, which
-    /// starves the partition and re-colds every turn; ADR-0056, amendment
-    /// 2026-08-18), and the whole-prompt single-shot prepare fits the
-    /// scratch budget.
-    static func shouldEngage(
-        hasDrafter: Bool,
-        temperature: Float,
-        textOnlyIdentityKeySpace: Bool,
-        predictedLeafStoreMode: HTTPLeafStoreMode,
-        promptTokens: Int,
-        scratchProfile: ModelIdentity.FullAttentionScratchProfile?
-    ) -> Bool {
-        guard hasDrafter, temperature == 0, textOnlyIdentityKeySpace,
-            predictedLeafStoreMode == .directLeaf
-        else { return false }
-        guard let scratchProfile,
-            let scratchBytes = scratchProfile.scoreMatrixBytes(sequenceLength: promptTokens)
-        else { return false }
-        return scratchBytes <= singleShotScratchBudgetBytes
-    }
 
     // MARK: - Detection
 
