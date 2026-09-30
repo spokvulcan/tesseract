@@ -87,9 +87,10 @@ nonisolated struct LeafAdmission: Sendable {
 
     struct Admitted: Sendable {
         let capture: Capture
-        /// Whether the leaf is in the tree after its admission's own eviction
-        /// pass; also false when the admission was refused before it touched
-        /// the cache (an empty body, an invalid path).
+        /// Whether the tree holds the leaf after its admission's own eviction
+        /// pass. False when another owner's lease refused it, and when the
+        /// admission was refused before it touched the cache (an empty body,
+        /// an invalid path).
         let survived: Bool
         /// The admission's eviction tally. Its lines are already logged, so a
         /// request merges it without logging again; `nil` when no admission
@@ -247,8 +248,9 @@ nonisolated struct LeafAdmission: Sendable {
     }
 
     /// Build the leaf's Snapshot Admission, log the capture, admit it on the
-    /// MainActor, and say whether it survived its own eviction pass. `store`
-    /// is `nil` when the admission was refused before any cache mutation.
+    /// MainActor, and say whether the tree holds it afterwards: a lease can
+    /// refuse it, and its own eviction pass can evict it. `store` is `nil`
+    /// when the admission was refused before any cache mutation.
     private func store(
         _ leaf: HybridCacheSnapshot,
         storage: SnapshotAdmission.Storage,
@@ -300,10 +302,12 @@ nonisolated struct LeafAdmission: Sendable {
                 let d = prefixCache.admit(admission)
                 return (d, prefixCache.memoryBudgetBytes, prefixCache.totalSnapshotBytes)
             }
-        let admissionEvicted = storeDiagnostics.evictions.contains { event in
-            event.offset == leaf.tokenOffset && event.checkpointType == .leaf
+        // Another owner's lease refused the leaf: the tree logged
+        // `leafLeaseRefused`, and nothing was stored.
+        if !storeDiagnostics.leaseRefusals.isEmpty {
+            return (false, storeDiagnostics)
         }
-        if admissionEvicted {
+        if !storeDiagnostics.leafIsResident {
             diagnostics.logSkip(
                 stage: labels.admission,
                 reason: "capturedThenEvicted",

@@ -184,6 +184,10 @@ it regained.
      speculative seed are dropped and a false warning is logged. The new
      eviction test found it.
 
+  Follow-ups 2 and 6 are fixed (#578): the manager reports whether the tree
+  still holds the admitted leaf, matched by body rather than offset, and a
+  leaf another owner's lease refused reads as not stored.
+
 ## As built (2026-09-30)
 
 The branch landed in four commits after the proposal, each green on the
