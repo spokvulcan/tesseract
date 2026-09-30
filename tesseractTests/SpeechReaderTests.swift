@@ -70,19 +70,24 @@ private struct ReaderHarness {
 }
 
 @MainActor
-private func waitUntil(
-    timeout: Duration = .seconds(5), _ condition: @MainActor () async -> Bool
-) async -> Bool {
-    let deadline = ContinuousClock.now + timeout
-    while ContinuousClock.now < deadline {
-        if await condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return await condition()
-}
-
-@MainActor
 struct SpeechReaderTests {
+
+    /// Poll until `condition` holds. The minute is a backstop, not a latency
+    /// budget: every event of an utterance hops between the engine's actors
+    /// and the main actor, and in the first seconds of a parallel run each hop
+    /// can wait that long for a thread behind the other suites' work. A
+    /// member, so it shadows the shared five-second `waitUntil`, which a
+    /// file-level helper loses to for every condition that doesn't await.
+    private func waitUntil(
+        timeout: Duration = .seconds(60), _ condition: @MainActor () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await condition()
+    }
 
     private static let threeSentences =
         "The river watched the harbor. A small boat returned home. The keeper climbed the steps."
