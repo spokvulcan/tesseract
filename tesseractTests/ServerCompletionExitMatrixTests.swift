@@ -15,7 +15,8 @@ import Testing
 ///
 /// 1. the leaf back: no lease, and the next request hits it at its offset;
 /// 2. no pins and no lane for the request;
-/// 3. exactly one release of the request.
+/// 3. exactly one release of the request;
+/// 4. exactly one `leafStore` event, saying what became of the turn's leaf.
 ///
 /// Each case runs the real **Server Completion** module on the toy **Model
 /// Session** and waits for the drive to finish before asserting anything.
@@ -321,9 +322,11 @@ struct ServerCompletionExitMatrixTests {
 
     // MARK: - Helpers
 
-    /// Facts 2 and 3 of every exit, read once the drive has finished: no
-    /// lane, no pins and no lease for the request, and one conclusion of
-    /// its Cache Claim — and the terminal sample agrees about the lease.
+    /// Facts 2 to 4 of every exit, read once the drive has finished: no
+    /// lane, no pins and no lease for the request, one conclusion of its
+    /// Cache Claim (the terminal sample agrees about the lease), and one
+    /// `leafStore` event. A rewind the Leaf Store phase causes is in that
+    /// phase's report; one at the conclusion reports itself (#580).
     private static func expectReleased(
         _ fixture: ServerCompletionFixture, _ events: [PromptCacheTelemetryEvent],
         sourceLocation: SourceLocation = #_sourceLocation
@@ -338,6 +341,11 @@ struct ServerCompletionExitMatrixTests {
         // The request's Cache Claim concluded once: one release.
         let releases = events.filter { isPhaseBegin($0, "releasingRequest") }
         #expect(releases.count == 1, "exactly one conclusion", sourceLocation: sourceLocation)
+        let leafStores = events.filter { $0.eventName == "leafStore" }
+        #expect(
+            leafStores.count == 1,
+            "one leafStore per request: \(leafStores.map { ($0.field("path"), $0.field("skip")) })",
+            sourceLocation: sourceLocation)
     }
 
     private static func terminal(

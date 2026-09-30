@@ -424,3 +424,18 @@ differ.
 
 The pin table's age-out, which this ADR exempted the lease from, no longer
 exists (ADR-0019's 2026-09-22 amendment).
+
+## Amendment 2026-09-30: one `leafStore` per turn (#580)
+
+A rewind logged `leafStore source=rewind` wherever it happened. When the Leaf
+Store phase itself rewound the leaf, because a structural guard kept a direct
+turn off the live path or the tree refused the check-in, the drive then logged
+the phase's own report too, so the turn had two `leafStore` events, and for a
+refused check-in they disagreed (`path=rewind` and `path=skipped
+skip=lease-return-refused`).
+
+The drive now tells the Cache Claim when it enters the Leaf Store phase. From
+then on a rewind logs only `leafRewind`, and the phase's report is the turn's
+one `leafStore`. A turn that ends before the phase (a cancel during startup or
+decode, a failed prefill) has no report, so its rewind at the claim's
+conclusion still logs `leafStore source=rewind` as above.
