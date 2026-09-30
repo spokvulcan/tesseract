@@ -32,6 +32,43 @@ the parked Gemma 4 12B multimodal stack (audio encoder + encoder-free
 `gemma4_unified` processor + suppress_tokens) that tesseract draft PR #359
 pins; it rejoins this table's carry list only if that experiment is revived.
 
+## MTP head of an unindexed checkpoint (2026-09-30)
+
+The gitlink advances from `a3c1776` to `7d8e38e` on
+`fix/mtp-head-unindexed-checkpoint`, one commit on top of the #550 carry
+(fast-forward; `pin-upstream-mlx-swift` and every historical tip unchanged).
+
+- `7d8e38e` `feat(load): find a key prefix's files by their headers when
+  there is no index`. `indexedKeyPrefix` (`4bbca60`, below) only helped a
+  checkpoint with a safetensors index. A z-lab PARO release ships one
+  `model.safetensors` and no index, and `scripts/graft_mtp_head.py` puts the
+  head beside it as `model-mtp-head.safetensors` without writing one, so the
+  MTP drafter fell back to `automatic` and read the whole target file for
+  the head. Without a usable index the selection now keeps the files
+  `automatic` would choose whose safetensors header names a weight with the
+  prefix, reading only the headers (`safetensorSpansInFileOrder`). The scan
+  stays within those files because the PARO Prepared Checkpoint beside them
+  (`prepared_checkpoint.safetensors`, 19.9 GB) holds the same 15 `mtp.*`
+  tensors.
+
+Measured on Qwen3.8-27B PARO with a grafted head, two loads in one process
+(`TESSERACT_ALLOCATION_DIAGNOSTICS=1 TESSERACT_E2E_RELOAD_ONLY=1`, e2e
+runner, speculation Automatic, Apple M3 Max 48 GB):
+
+| | before | after |
+|---|---|---|
+| MLX peak while the head loads (GB) | 32.5 | 19.0 (the target load's own peak; the head adds none) |
+| head load time | 7.0 s | 0.16 s |
+| model load time | 15.2 s | 9.8 s |
+| system swap growth over the run | +3.5 GB | none |
+
+Validation: `LoadWeightsTests` 27 (two new: the PARO layout selects the
+head file alone, and headers that name no prefix keep the automatic
+selection). Upstream: this extends
+[#632](https://github.com/ml-explore/mlx-swift-lm/pull/632) (branch
+`upstream/indexed-key-prefix-selection`); adding it there as a follow-up
+commit is the owner's call. Drop the carry when #632 merges with it.
+
 ## Load memory carry (2026-09-20, #550)
 
 The #550 app branch advances the gitlink from `f177464` to `a3c1776` on
@@ -169,8 +206,8 @@ disclosure line is the owner's to write.
 ## Capacity reservation carry (2026-09-19, #533)
 
 The #533 app branch advanced the gitlink from `51542c4` to `f177464` on
-`codex/533-cache-capacity-reservation`; the current pin (`a3c1776` on
-`fix/550-load-memory-retention`) carries that commit underneath the later
+`codex/533-cache-capacity-reservation`; the current pin (`7d8e38e` on
+`fix/mtp-head-unindexed-checkpoint`) carries that commit underneath the later
 #550 work. This was a fast-forward carry; the shared
 `pin-upstream-mlx-swift` branch and every historical tip remain unchanged. `f177464` adds `KVCache.reserveCapacity(_:)`, honored
 by simple and quantized attention caches and forwarded by CacheList. Allocation
