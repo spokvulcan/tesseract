@@ -1,6 +1,6 @@
 # ADR-0078: Every leaf enters the prefix cache through one Leaf Admission; the Snapshot Payload owns the SSD byte form
 
-- Status: Proposed
+- Status: Proposed (built; accepted once the loaded-model gates pass, see As built)
 - Date: 2026-09-29
 - Amends: ADR-0033 (the phase map: the leaf store decides which leaf, a Leaf
   Admission stores it)
@@ -177,4 +177,61 @@ it regained.
   4. the speculative pass still enters a raw `ModelContainer` (the deviation
      from ADR-0016); the admission reaches it through the existing
      context-backed session;
-  5. an MTP turn copies its leaf, but the report gives no copy reason.
+  5. an MTP turn copies its leaf, but the report gives no copy reason;
+  6. the captured-then-evicted check matches an eviction by offset and
+     checkpoint type only, so when an admission evicts a different leaf of
+     the same length, the new leaf is reported evicted: its tuner record and
+     speculative seed are dropped and a false warning is logged. The new
+     eviction test found it.
+
+## As built (2026-09-30)
+
+The branch landed in four commits after the proposal, each green on the
+prefix-cache test allowlist:
+
+1. The Snapshot Payload moves into its own file with its builder. The
+   manager, the SSD store and the bounded-parity bench call it directly.
+2. Storage intent and the checkpoint candidates move beside the Snapshot
+   Admission value.
+3. The Leaf Admission, with every producer moved onto it. The plan had the
+   executors and the other two producers as separate commits. They landed as
+   one, because the source-shape checks pin a single owner, which only holds
+   once every producer has moved.
+4. Salvage's capture source and below-threshold skip are pinned.
+
+How the shape came out:
+
+- `LeafAdmission.prepare`, then `admit(_:in:labels:turn:memory:)` inside the
+  producer's session. The cache is `finishedTurn`, `owned` or `lent`.
+- The finished turn's case takes whether the turn was text-only and which
+  speculative arm ran, not the request's facts: only Request Keying can build
+  those. The KV quantization fact comes from the admission's own partition
+  key.
+- When the claim takes a leased leaf back, the outcome carries the claim's
+  own rewind cause, and the Leaf Store phase words it as its skip reason.
+- Capacity Compaction and its `capturingLeaf` memory phase stay with the
+  Leaf Store executors, the only producers that ever ran them.
+- The executors' "captured" line in the unified log is now written after the
+  admission returns instead of right after the capture. It is not a
+  diagnostics line, and the order of the diagnostics lines is unchanged.
+
+Measured:
+
+- ServerCompletion.swift went from 3,218 to 2,722 lines. The cache tiers
+  make no calls into it.
+- The memory evidence reproduces ADR-0069's table exactly, now measured
+  through the admission rather than a re-enactment: 6,324,240 bytes when the
+  payload is extracted first, 2,129,936 when the leaf is checked in first.
+
+Two wire strings can no longer be reached through the interface, so no test
+pins them: `empty-cache-body` and `invalid-path`. The admission captures at
+the stored length, and a capture never yields an empty body, so both guards
+are defensive now. `capturedThenEvicted` isn't pinned either: in the cases
+the new tests cover, the Budget Floor kept the newest leaf resident, and the
+line fired only through follow-up 6. Every producer's labels, the
+capture-stage skip and salvage's labels are pinned.
+
+Still to run before this is accepted: `scripts/dev.sh prefix-cache-e2e`,
+`scripts/dev.sh hybrid-cache-correctness`, the bounded-cache parity run, and
+the before/after diagnostics diff. All of them need a downloaded model, and
+the dev script quits a running Tesseract Agent first.
