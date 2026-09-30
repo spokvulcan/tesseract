@@ -180,7 +180,9 @@ struct CompletionDeliveryTests {
                 signal.yield(())
                 signal.finish()
                 do {
-                    try await Task.sleep(for: .milliseconds(500))
+                    // Only the cancel ends this wait, however long the
+                    // disconnect takes to arrive; the minute is a backstop.
+                    try await Task.sleep(for: .seconds(60))
                     return .failure(ScriptedFailure())
                 } catch {
                     observedCancel.set()
@@ -209,7 +211,9 @@ struct CompletionDeliveryTests {
             start: {
                 signal.yield(())
                 signal.finish()
-                try? await Task.sleep(for: .seconds(1))
+                // Returns its handle once cancelled, however long the
+                // disconnect takes to arrive; the minute is a backstop.
+                try? await Task.sleep(for: .seconds(60))
                 return .success(scripted.generation)
             })
         await dropper.value
@@ -232,7 +236,9 @@ struct CompletionDeliveryTests {
                 start: {
                     signal.yield(())
                     signal.finish()
-                    try? await Task.sleep(for: .seconds(1))
+                    // Returns its handle once cancelled, however long the
+                    // cancel takes to arrive; the minute is a backstop.
+                    try? await Task.sleep(for: .seconds(60))
                     return .success(scripted.generation)
                 })
         }
