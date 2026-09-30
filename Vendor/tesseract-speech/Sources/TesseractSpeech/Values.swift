@@ -288,8 +288,16 @@ public struct SegmentScript: Sendable, Equatable {
     }
 }
 
-/// Where a spoken word starts: its place among the segment's words (split on
-/// whitespace and newlines, from 0) and the codec frame its sound starts in.
+extension Character {
+    /// What splits speech into words: whitespace and newlines, judged on the
+    /// whole Character, so a mark joined to a space is part of the space.
+    /// `WordStart.word` counts words split by it, so anything that finds
+    /// those words in the text splits by it too.
+    public var separatesWords: Bool { isWhitespace || isNewline }
+}
+
+/// Where a spoken word starts: its place among the segment's words (split by
+/// `Character.separatesWords`, from 0) and the codec frame its sound starts in.
 public struct WordStart: Sendable, Equatable {
     public let word: Int
     public let frame: Int
