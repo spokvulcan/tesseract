@@ -2030,7 +2030,7 @@ nonisolated final class ServerCompletion {
                     transientSnapshots[offset]
                         ?? capturedSnapshots.first(where: { $0.tokenOffset == offset })
                 }
-            let checkpointCandidates = Self.extractCheckpointAdmissionCandidates(
+            let checkpointCandidates = SnapshotAdmission.checkpointCandidates(
                 capturedSnapshots,
                 ssdEnabled: ssdEnabled
             )
@@ -2602,33 +2602,7 @@ nonisolated final class ServerCompletion {
         return cache
     }
 
-    // MARK: - Snapshot payload extraction statics
-
-    /// Pre-extract checkpoint snapshots into Snapshot Admission
-    /// candidates, attaching storage intent to each entry at the
-    /// Metal-affine extraction edge.
-    ///
-    /// **Metal-affinity contract.** Must be called from inside
-    /// ``ModelContainer/perform(_:)`` on `LLMActor` — calling it
-    /// outside a live Metal-affine scope risks re-issuing command-queue
-    /// work on a non-inference thread. The method is `static` so callers
-    /// can invoke it synchronously from inside a `container.perform`
-    /// closure without an `await`; the Metal affinity is enforced by
-    /// convention, not the type system.
-    static func extractCheckpointAdmissionCandidates(
-        _ snapshots: [HybridCacheSnapshot],
-        ssdEnabled: Bool
-    ) -> [SnapshotAdmission.CheckpointCandidate] {
-        snapshots.map { snapshot in
-            return SnapshotAdmission.CheckpointCandidate(
-                snapshot: snapshot,
-                storage: snapshotAdmissionStorage(
-                    for: snapshot,
-                    ssdEnabled: ssdEnabled
-                )
-            )
-        }
-    }
+    // MARK: - Leaf admission statics
 
     /// Resolve the **Leaf Extension Admission** base for a leaf about
     /// to be captured: one hop to the MainActor (radix tree + ledger),
@@ -2649,26 +2623,6 @@ nonisolated final class ServerCompletion {
         }
     }
 
-    /// Internal (not private): the **Speculative Canonical Prefill** executor
-    /// derives its leaf admission storage through the same policy.
-    ///
-    /// `extending` carries the **Leaf Extension Admission** base (the
-    /// deepest SSD-backed ancestor leaf, resolved by
-    /// `PrefixCacheManager.extensionBase`); when the payload's sliceable
-    /// layers can carry just the suffix past it — and that suffix is
-    /// worth writing (see `SnapshotPayload.extensionMaxSuffixFraction`) — the payload
-    /// admits as an extension. `nil` (every checkpoint, and leaves with
-    /// no usable base) admits full.
-    static func snapshotAdmissionStorage(
-        for snapshot: HybridCacheSnapshot,
-        ssdEnabled: Bool,
-        extending: SnapshotExtension? = nil
-    ) -> SnapshotAdmission.Storage {
-        guard ssdEnabled else { return .ramOnly }
-        if snapshot.isPrefixView { return .viewSSD }
-        return .ramAndSSD(SnapshotPayload.extract(snapshot, extending: extending))
-    }
-
     // Evolving MVP mid-refactor (see CLAUDE.md); structural limit kept lenient — splitting deferred.
     // swiftlint:disable function_parameter_count
     /// Shared admission tail for structured-leaf executors (the **Leaf
@@ -2676,9 +2630,8 @@ nonisolated final class ServerCompletion {
     /// captured leaf in a leaf admission, log the capture, admit on
     /// MainActor, and report whether the admission survived its own
     /// eviction pass — returning the store diagnostics so the caller
-    /// classifies and logs evictions through the trace accumulator. Same
-    /// Metal-affinity contract as `extractCheckpointAdmissionCandidates`:
-    /// call from inside ``ModelContainer/perform(_:)``.
+    /// classifies and logs evictions through the trace accumulator. Call it
+    /// from inside the Model Session, like `SnapshotAdmission.Storage.intent`.
     /// What a structured-leaf admission produced. `store` is nil when the
     /// admission was never attempted (invalid token path); otherwise it
     /// carries the eviction/supersession events for the caller to classify

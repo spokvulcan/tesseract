@@ -221,3 +221,48 @@ nonisolated struct SnapshotAdmission: Sendable {
         )
     }
 }
+
+// MARK: - Storage intent at the extraction edge
+
+nonisolated extension SnapshotAdmission.Storage {
+    /// The storage intent for one captured snapshot, decided where its
+    /// **Snapshot Payload** is built: RAM only when the admission may not
+    /// reach SSD; SSD intent without a payload for a **Prefix-View
+    /// Checkpoint**, whose attention arrays come from its Backing Leaf after
+    /// check-in; otherwise RAM and SSD with the snapshot's payload.
+    ///
+    /// `extending` carries the **Leaf Extension Admission** base (the deepest
+    /// SSD-backed ancestor leaf, from `PrefixCacheManager.extensionBase`). The
+    /// payload carries only the suffix past it when that suffix is worth
+    /// writing (see `SnapshotPayload.extensionMaxSuffixFraction`); `nil`
+    /// (every checkpoint, and a leaf with no usable base) admits the whole
+    /// body. Building the payload detaches arrays on the calling thread, so
+    /// call this inside the Model Session.
+    static func intent(
+        for snapshot: HybridCacheSnapshot,
+        ssdEnabled: Bool,
+        extending: SnapshotExtension? = nil
+    ) -> SnapshotAdmission.Storage {
+        guard ssdEnabled else { return .ramOnly }
+        if snapshot.isPrefixView { return .viewSSD }
+        return .ramAndSSD(SnapshotPayload.extract(snapshot, extending: extending))
+    }
+}
+
+nonisolated extension SnapshotAdmission {
+    /// Pair each checkpoint captured during prefill with its storage intent,
+    /// at the extraction edge. Same Metal-affinity contract as
+    /// ``Storage/intent(for:ssdEnabled:extending:)``: call it inside the
+    /// Model Session, before the admission crosses to the MainActor.
+    static func checkpointCandidates(
+        _ snapshots: [HybridCacheSnapshot],
+        ssdEnabled: Bool
+    ) -> [CheckpointCandidate] {
+        snapshots.map { snapshot in
+            CheckpointCandidate(
+                snapshot: snapshot,
+                storage: .intent(for: snapshot, ssdEnabled: ssdEnabled)
+            )
+        }
+    }
+}

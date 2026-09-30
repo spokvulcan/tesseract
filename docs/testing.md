@@ -210,7 +210,7 @@ eviction exclusion, lease/check-in and last-backer self-heal.
 retirement after the final active request skips leaf storage. `CacheClaimTests`
 checks that a view copies with the `checkpoint` copy reason and the `prefixView`
 refusal in image and quantized partitions.
-`ServerCompletionExtractSnapshotPayloadsTests` keeps views RAM-only;
+`SnapshotAdmissionStorageTests` gives a view SSD intent without extracting it;
 `ServerCompletionKeyedSequencingTests` checks capture/lookup telemetry and
 canonical reconstruction from a planned view. `SpeculativePrefillPreemptionTests`
 checks planned-view restore and pin cleanup through the toy Model Session.

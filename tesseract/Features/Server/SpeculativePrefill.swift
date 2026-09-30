@@ -499,7 +499,7 @@ nonisolated enum SpeculativeCanonicalPrefill {
             let storage: SnapshotAdmission.Storage =
                 preempted || seed.ramOnlySpine
                 ? .ramOnly
-                : ServerCompletion.snapshotAdmissionStorage(
+                : SnapshotAdmission.Storage.intent(
                     for: leaf,
                     ssdEnabled: seed.request.facts.ssdEnabled,
                     extending: extensionBase

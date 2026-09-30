@@ -108,7 +108,7 @@ struct SSDWriteEagernessTests {
         let admission = try #require(
             SnapshotAdmission.checkpoints(
                 fullPromptTokens: Array(1...8),
-                candidates: ServerCompletion.extractCheckpointAdmissionCandidates(
+                candidates: SnapshotAdmission.checkpointCandidates(
                     [view], ssdEnabled: true),
                 partitionKey: key))
         manager.admit(admission)
@@ -203,7 +203,7 @@ struct SSDWriteEagernessTests {
             try #require(
                 SnapshotAdmission.checkpoints(
                     fullPromptTokens: Array(1...8),
-                    candidates: ServerCompletion.extractCheckpointAdmissionCandidates(
+                    candidates: SnapshotAdmission.checkpointCandidates(
                         [snapshot], ssdEnabled: true),
                     partitionKey: key))
         }

@@ -401,7 +401,7 @@ nonisolated extension LeafStorePhase {
                 skipReason: cause == .cancelled ? "cancelled" : "lease-return-refused")
         }
         let payloadStart = Date.timeIntervalSinceReferenceDate
-        let storage = ServerCompletion.snapshotAdmissionStorage(
+        let storage = SnapshotAdmission.Storage.intent(
             for: leaf,
             ssdEnabled: context.ssdEnabled,
             extending: extensionBase
