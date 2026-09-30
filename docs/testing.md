@@ -735,7 +735,11 @@ carries `containerRetained`, `mtpDrafterRetained` and `dflash2DrafterRetained`
 them) and follows the `Memory.clearCache()` that returns the model's
 buffers, so its `activeMemory` is what survived the unload. The load path
 bounds the MLX buffer cache from the first shard (generation's 2 GB limit),
-clears it after the MTP head loads, and packs the DFlash2 draft leaf by leaf
+reads the MTP head from its own file (by the safetensors index, or by the
+files' headers when a single-file checkpoint has none: on Qwen3.8-27B PARO with
+a grafted head the whole-file read peaked 32.5 GB, and the head now adds
+nothing to the load's 19.0 GB peak), clears the cache after the head loads,
+and packs the DFlash2 draft leaf by leaf
 from its unread bfloat16 checkpoint instead of reading the whole file first
 (`modelDFlash2LoadBegin` to `modelDFlash2Loaded` peaks 0.3 GB over the
 resident target on the 27B pairing, where the whole-file read peaked 4.5 GB

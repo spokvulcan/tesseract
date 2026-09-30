@@ -19,7 +19,9 @@ Single-file checkpoints without an index (the z-lab PARO releases ship one
 `model.safetensors`) get the extra shard only: every loader that matters —
 the app's `checkpointShipsMTPHead` header scan, the vendor weight loader,
 and the PARO loader's `sourceURLs` — enumerates `*.safetensors` in the
-directory when no index exists, so no index is fabricated. Note the PARO
+directory when no index exists, so no index is fabricated. The vendor's MTP
+drafter load finds the head's file by its safetensors header in that case,
+so it reads the 0.85 GB shard and not the whole target. Note the PARO
 loader's Prepared Checkpoint manifest covers every source shard, so the
 graft invalidates it and the next load re-converts once.
 """
