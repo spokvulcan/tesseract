@@ -123,6 +123,7 @@ struct BootstrapSequenceTests {
                 "startHotkeyListening",
                 "registerHTTPRoutes",
                 "startAppBindings",
+                "startCompanion",
                 "materializeAgent",
                 "startMCPClient",
             ])

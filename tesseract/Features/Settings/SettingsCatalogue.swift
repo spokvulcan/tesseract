@@ -150,6 +150,41 @@ enum SettingsCatalogue {
     static let companionVoiceBargeInLevel = Setting.double(
         "companionVoiceBargeInLevel", default: 0.25)
 
+    // MARK: - Companion (the day)
+
+    /// The owner's Areas: which Reminders lists count as Areas, their names,
+    /// and the Inbox list (`AreaMap`, JSON). `{}` means every list is an Area.
+    static let companionAreasJSON = Setting.string("companionAreasJSON", default: "{}")
+    /// The calendar new events go to; nil is the system default calendar.
+    static let companionDefaultCalendarID = Setting.optionalString("companionDefaultCalendarID")
+    /// How long before an event its nudge fires.
+    static let companionNudgeLeadMinutes = Setting.int("companionNudgeLeadMinutes", default: 10)
+    /// The Morning Plan's window: it may run from this hour…
+    static let companionMorningStartHour = Setting.int("companionMorningStartHour", default: 4)
+    /// …until this hour, local time.
+    static let companionMorningEndHour = Setting.int("companionMorningEndHour", default: 12)
+    /// When the Evening Wrap-up is due, in minutes after midnight.
+    static let companionEveningMinutes = Setting.int("companionEveningMinutes", default: 21 * 60)
+    /// How long the owner must be away before coming back is a Breakpoint.
+    static let companionBreakpointAwayMinutes = Setting.int(
+        "companionBreakpointAwayMinutes", default: 10)
+    /// Whether Jarvis may speak urgent lines aloud (the voice rung).
+    static let companionSpeaks = Setting.bool("companionSpeaks", default: true)
+    /// Quiet hours start (minutes after midnight): Jarvis's own deliveries stop;
+    /// the owner's reminders and event nudges still fire.
+    static let companionQuietStartMinutes = Setting.int(
+        "companionQuietStartMinutes", default: 23 * 60)
+    /// Quiet hours end (minutes after midnight).
+    static let companionQuietEndMinutes = Setting.int("companionQuietEndMinutes", default: 8 * 60)
+    /// The Day Thread's compaction ceiling, in tokens.
+    static let companionThreadCeilingTokens = Setting.int(
+        "companionThreadCeilingTokens", default: 80_000)
+    /// The capture hotkey: a thought into Reminders from any app.
+    static let captureHotkeyKeyCode = Setting.int(
+        "captureHotkeyKeyCode", default: Int(KeyCombo.optionShiftSpace.keyCode))
+    static let captureHotkeyModifiers = Setting.int(
+        "captureHotkeyModifiers", default: Int(KeyCombo.optionShiftSpace.modifiers))
+
     static let selectedAgentModelID = Setting.string(
         "selectedAgentModelID", default: ModelDefinition.defaultAgentModelID)
     static let selectedSpeechToTextModelID = Setting.string(

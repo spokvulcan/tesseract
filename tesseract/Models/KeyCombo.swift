@@ -132,4 +132,6 @@ nonisolated struct KeyCombo: Codable, Equatable, Sendable {
     static let optionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .option)
     static let controlSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .control)
     static let functionSpace = KeyCombo(keyCode: UInt16(kVK_Space), modifiers: .function)
+    static let optionShiftSpace = KeyCombo(
+        keyCode: UInt16(kVK_Space), modifiers: [.option, .shift])
 }

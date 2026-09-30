@@ -92,6 +92,8 @@ final class AppBindings {
         let updateTTSHotkey: @MainActor (KeyCombo) -> Void
         let updateAgentHotkey: @MainActor (KeyCombo) -> Void
         let updateAppshotHotkey: @MainActor (KeyCombo) -> Void
+        /// Re-binds the capture hotkey (a thought into Reminders from any app).
+        let updateCaptureHotkey: @MainActor (KeyCombo) -> Void
         let startHTTPServer: @MainActor () async -> Void
         let stopHTTPServer: @MainActor () -> Void
         let updateHTTPServerPort: @MainActor (UInt16) async -> Void
@@ -117,6 +119,7 @@ final class AppBindings {
             updateTTSHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAgentHotkey: @escaping @MainActor (KeyCombo) -> Void,
             updateAppshotHotkey: @escaping @MainActor (KeyCombo) -> Void,
+            updateCaptureHotkey: @escaping @MainActor (KeyCombo) -> Void = { _ in },
             startHTTPServer: @escaping @MainActor () async -> Void,
             stopHTTPServer: @escaping @MainActor () -> Void,
             updateHTTPServerPort: @escaping @MainActor (UInt16) async -> Void,
@@ -136,6 +139,7 @@ final class AppBindings {
             self.updateTTSHotkey = updateTTSHotkey
             self.updateAgentHotkey = updateAgentHotkey
             self.updateAppshotHotkey = updateAppshotHotkey
+            self.updateCaptureHotkey = updateCaptureHotkey
             self.startHTTPServer = startHTTPServer
             self.stopHTTPServer = stopHTTPServer
             self.updateHTTPServerPort = updateHTTPServerPort
@@ -433,6 +437,13 @@ final class AppBindings {
                 guard let self else { return }
                 for await hotkey in Observations({ self.settings.appshotHotkey }) {
                     self.effects.updateAppshotHotkey(hotkey)
+                }
+            })
+        observationTasks.append(
+            Task { [weak self] in
+                guard let self else { return }
+                for await hotkey in Observations({ self.settings.captureHotkey }) {
+                    self.effects.updateCaptureHotkey(hotkey)
                 }
             })
     }

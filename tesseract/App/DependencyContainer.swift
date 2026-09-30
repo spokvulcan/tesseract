@@ -120,8 +120,49 @@ final class DependencyContainer: ObservableObject {
     lazy var packageRegistry = PackageRegistry()
     lazy var contextManager = ContextManager(settings: .standard)
     lazy var newToolRegistry: ToolRegistry = {
-        ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
+        let registry = ToolRegistry(sandbox: agentSandbox, extensionHost: extensionHost)
+        // The agenda tools ride every conversation, Companion on or off:
+        // "remind me" always becomes a real reminder in Reminders.
+        for tool in createAgendaTools(agenda: agenda) {
+            registry.appendBuiltInTool(tool)
+        }
+        return registry
     }()
+
+    // MARK: - The Companion's day
+
+    /// Apple Reminders and Calendar, the single source of truth for the
+    /// owner's tasks and plans. The test host gets the in-memory store, so a
+    /// test run never asks for or touches the owner's real data (ADR-0073).
+    lazy var agendaStore: any AgendaStore =
+        ProcessEnvironment.isRunningTests ? InMemoryAgendaStore() : EventKitAgendaStore()
+    lazy var agenda = Agenda(
+        store: agendaStore,
+        areaMapJSON: { [settingsManager] in settingsManager.companionAreasJSON },
+        defaultCalendarID: { [settingsManager] in settingsManager.companionDefaultCalendarID },
+        trace: companionTrace)
+    lazy var captureService = CaptureService(agenda: agenda)
+    /// The capture panel's own push-to-talk, separate from the composer's.
+    lazy var captureVoiceInput = AgentVoiceInputController(
+        audioCapture: audioCaptureEngine,
+        transcriptionEngine: transcriptionEngine,
+        settings: settingsManager,
+        proofreadPass: proofreadPass,
+        captureDump: captureDumpStore
+    )
+    lazy var capturePanel = CapturePanelController(
+        capture: captureService, voice: captureVoiceInput)
+    lazy var companionNotifier: CompanionNotifier = {
+        let notifier = CompanionNotifier()
+        notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.showMainWindow() }
+        notifier.onNudgeDelivered = { [companionTrace] id in
+            companionTrace.record(.nudgeFired, fields: ["id": .string(id)])
+        }
+        return notifier
+    }()
+    lazy var companionRuntime = CompanionRuntime(
+        settings: settingsManager, agenda: agenda, notifier: companionNotifier,
+        trace: companionTrace)
 
     /// The Companion Trace: every Jarvis decision, card, reaction and agenda
     /// change, one JSONL file per day under Application Support.
@@ -632,6 +673,7 @@ final class DependencyContainer: ObservableObject {
         case startHotkeyListening
         case registerHTTPRoutes
         case startAppBindings
+        case startCompanion
         case materializeAgent
         case startMCPClient
     }
@@ -701,6 +743,13 @@ final class DependencyContainer: ObservableObject {
                     onDown: { [weak self] in self?.agentVoiceInput.start() },
                     onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
                 )
+                // Register the capture hotkey: tap to type, hold to speak.
+                hotkeyManager.registerHotkey(
+                    id: "capture",
+                    combo: settingsManager.captureHotkey,
+                    onDown: { [weak self] in self?.capturePanel.hotkeyDown() },
+                    onUp: { [weak self] in self?.capturePanel.hotkeyUp() }
+                )
                 // Register Appshot hotkey (one-shot tap, no held state)
                 hotkeyManager.registerHotkey(
                     id: "appshot",
@@ -730,6 +779,11 @@ final class DependencyContainer: ObservableObject {
                 // Hand off to App Bindings: the launch ordering and every runtime
                 // subscription with a rule live (and are tested) there.
                 appBindings.start()
+            }
+        case .startCompanion:
+            return { [self] in
+                // The Companion's loop follows its switch from here on.
+                companionRuntime.start()
             }
         case .materializeAgent:
             return { [self] in
@@ -818,6 +872,9 @@ final class DependencyContainer: ObservableObject {
                 },
                 updateAppshotHotkey: { [hotkeyManager] in
                     hotkeyManager.updateRegisteredHotkey(id: "appshot", combo: $0)
+                },
+                updateCaptureHotkey: { [hotkeyManager] in
+                    hotkeyManager.updateRegisteredHotkey(id: "capture", combo: $0)
                 },
                 startHTTPServer: { [httpServer] in
                     await httpServer.start()
