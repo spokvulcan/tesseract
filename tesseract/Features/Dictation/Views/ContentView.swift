@@ -26,7 +26,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .scrollEdgeEffectStyle(.soft, for: .top)
                 } else {
-                    injectedDestinationView(for: .dictation)
+                    injectedDestinationView(for: .today)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .scrollEdgeEffectStyle(.soft, for: .top)
                 }
@@ -51,6 +51,9 @@ struct ContentView: View {
     @ViewBuilder
     private func injectedDestinationView(for page: NavigationItem) -> some View {
         switch page {
+        case .today:
+            TodayView()
+                .injectCompanionDependencies(from: container)
         case .dictation:
             DictationContentView()
                 .injectDictationDependencies(from: container)

@@ -44,7 +44,7 @@ private struct WindowOpenerView: View {
 struct TesseractApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var container = DependencyContainer()
-    @State private var selectedNavigation: NavigationItem? = .agent
+    @State private var selectedNavigation: NavigationItem? = .today
 
     /// Launch arguments that select a headless harness run (dispatched in
     /// `init`). Harness instances are exempt from the single-instance guard

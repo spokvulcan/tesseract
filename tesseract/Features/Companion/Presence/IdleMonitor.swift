@@ -2,16 +2,13 @@
 //  IdleMonitor.swift
 //  tesseract
 //
-//  "Is he away?" (ADR-0035 §7 — the owner's call: idle-opportunistic sleep.)
-//
-//  Nothing in the app knew this before. Dictation knows about hotkeys, the
-//  agent knows about turns, but nobody was watching for the absence of a person
-//  — which is the only thing consolidation is allowed to run in.
+//  Is the owner at the Mac? The Companion's presence signal: coming back after
+//  being away is when a Breakpoint (or the day's first Morning Plan) is due.
 //
 //  Two signals, because one is not enough:
 //
 //    - `CGEventSource.secondsSinceLastEventType` — HID idle. Cheap, polled, and
-//      the one that catches "he walked away mid-sentence".
+//      the one that catches walking away mid-sentence.
 //    - Screen lock and system sleep/wake notifications. Instant, and they catch
 //      the case the idle timer cannot: a locked screen is *definitely* away,
 //      immediately, with no three-minute wait.
@@ -19,9 +16,7 @@
 //  The return signal is the one that must never be slow. Unlock and wake enqueue
 //  `onReturn` directly onto MainActor; HID return has no event to subscribe to
 //  without Input Monitoring entitlements, so it is caught by the poll — which
-//  tightens to one second the moment the machine goes idle. Sleep's contract
-//  with the owner is that coming back to the machine costs him at most about a
-//  second of queueing, on top of the one in-flight generation `yield()` cancels.
+//  tightens to one second the moment the machine goes idle.
 //
 
 import AppKit
@@ -31,16 +26,16 @@ import Foundation
 @Observable
 final class IdleMonitor {
 
-    /// How long with no keyboard or mouse before the machine counts as idle.
-    ///
-    /// Three minutes is a compromise between two failure modes: too short and
-    /// consolidation starts while he is reading the screen; too long and a
-    /// coffee break is never long enough to consolidate anything. A locked
-    /// screen bypasses it entirely.
+    /// How long with no keyboard or mouse before the owner counts as away. A
+    /// Breakpoint needs a much longer absence (Settings, 10 minutes by
+    /// default), measured from `awaySince`; a locked screen is away at once.
     static let idleThreshold: TimeInterval = 180
 
     private(set) var isIdle = false
     private(set) var isScreenLocked = false
+    /// When the owner was last active before going idle: the last input, or
+    /// the moment the screen locked. nil while present.
+    private(set) var awaySince: Date?
 
     /// The one home of "he is with the machine": recent input AND unlocked.
     /// The Companion's evaluator and the Situation Briefing both read this —
@@ -135,12 +130,12 @@ final class IdleMonitor {
                 guard let self else { return }
                 self.poll()
                 // Tight while idle: the poll is how a keyboard return gets
-                // noticed, and a sleeping consolidation may be holding the GPU.
+                // noticed, and a return should reach the Companion at once.
                 try? await Task.sleep(
                     for: self.isIdle ? self.returnPollInterval : self.pollInterval)
             }
         }
-        Log.memory.info("Idle monitor started")
+        Log.companion.info("Idle monitor started")
     }
 
     func stop() {
@@ -162,7 +157,8 @@ final class IdleMonitor {
         if idle {
             guard !isIdle else { return }
             isIdle = true
-            Log.memory.info("Machine idle — consolidation may run")
+            awaySince = Date().addingTimeInterval(-secondsSinceLastEvent())
+            Log.companion.info("Owner away (idle)")
             onIdle?()
         } else {
             // `ownerReturned` owns the flag and the idempotence — clearing it
@@ -175,7 +171,8 @@ final class IdleMonitor {
         isScreenLocked = true
         guard !isIdle else { return }
         isIdle = true
-        Log.memory.info("Screen locked — consolidation may run")
+        awaySince = Date()
+        Log.companion.info("Owner away (screen locked)")
         onIdle?()
     }
 
@@ -185,7 +182,8 @@ final class IdleMonitor {
         isScreenLocked = false
         guard isIdle else { return }
         isIdle = false
-        Log.memory.info("Owner is back — yielding")
+        defer { awaySince = nil }
+        Log.companion.info("Owner is back")
         onReturn?()
     }
 
@@ -194,8 +192,8 @@ final class IdleMonitor {
     ///
     /// `~0` is `kCGAnyInputEventType`: not a named Swift case, but constructible
     /// (verified on macOS 26). If that ever stops being true, this reports zero
-    /// — "the owner is here" — which is the safe direction to be wrong in: sleep
-    /// simply never runs, rather than running over his shoulder.
+    /// — "the owner is here" — which is the safe direction to be wrong in: no
+    /// Breakpoint fires, rather than one firing while they are at the Mac.
     static func hidIdleSeconds() -> TimeInterval {
         guard let anyInput = CGEventType(rawValue: ~0) else { return 0 }
         return CGEventSource.secondsSinceLastEventType(

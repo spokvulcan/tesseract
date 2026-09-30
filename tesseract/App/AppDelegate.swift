@@ -224,6 +224,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showMainWindow()
     }
 
+    /// Summon the main window onto Today — the Companion's banners and
+    /// nudges, and the Jarvis panel's expand button.
+    func navigateToToday() {
+        navigationSelection?.wrappedValue = .today
+        showMainWindow()
+    }
+
     func navigateToAgent() {
         navigationSelection?.wrappedValue = .agent
         showMainWindow()

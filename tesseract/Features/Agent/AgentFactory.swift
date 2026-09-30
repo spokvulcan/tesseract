@@ -26,7 +26,8 @@ enum AgentFactory {
         contextManager: ContextManager,
         settingsManager: SettingsManager,
         gating: ToolGating,
-        mcpToolsExtension: MCPToolsExtension? = nil
+        mcpToolsExtension: MCPToolsExtension? = nil,
+        compactionWindow: Int = 262_144
     ) -> Agent {
         let agentRoot = PathSandbox.defaultRoot
 
@@ -84,7 +85,7 @@ enum AgentFactory {
 
         let compactionTransform = makeCompactionTransform(
             contextManager: contextManager,
-            contextWindow: 262_144,
+            contextWindow: compactionWindow,
             summarize: makeSummarizeClosure(
                 inferenceService: inferenceService,
                 parametersProvider: parametersProvider

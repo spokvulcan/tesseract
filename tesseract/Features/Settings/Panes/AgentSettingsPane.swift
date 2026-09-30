@@ -3,7 +3,6 @@
 //  tesseract
 //
 
-import ServiceManagement
 import SwiftUI
 
 /// The Agent pane (#213): model choice (with the per-model Preserve-Thinking
@@ -12,12 +11,9 @@ import SwiftUI
 /// manager is a task surface, not a Settings pane (#213).
 struct AgentSettingsPane: View {
     @Environment(SettingsManager.self) private var settings
-    @Environment(\.openWindow) private var openWindow
     @EnvironmentObject private var container: DependencyContainer
     @State private var selectedAgentModelDeclaresPreserveThinking = false
     @State private var selectedAgentModelDeclaresReasoningEffort = false
-    /// The one-time launch-at-login ask (ADR-0040 §3), raised on first enable.
-    @State private var showingLaunchAtLoginAsk = false
 
     private var selectedAgentModelStatus: ModelStatus {
         container.modelDownloadManager.status(for: settings.selectedAgentModelID)
@@ -28,38 +24,6 @@ struct AgentSettingsPane: View {
     /// submenu.
     private var translateLanguageOptions: [String] {
         SupportedLanguage.translateTargetOptions(current: settings.translateTargetLanguage)
-    }
-
-    private var companionSection: some View {
-        @Bindable var settings = settings
-        return Section {
-            Toggle("Companion", isOn: $settings.companionHeartbeatEnabled)
-            // Never a silent login-item flip (ADR-0040 §3): the toggle
-            // reads and writes the real SMAppService state.
-            Toggle(
-                "Launch at Login",
-                isOn: Binding(
-                    get: { SMAppService.mainApp.status == .enabled },
-                    set: { wanted in
-                        do {
-                            if wanted {
-                                try SMAppService.mainApp.register()
-                            } else {
-                                try SMAppService.mainApp.unregister()
-                            }
-                        } catch {
-                            Log.companion.error(
-                                "Launch-at-login change failed: \(error)")
-                        }
-                    }
-                ))
-        } header: {
-            Text("Companion (Experimental)")
-        } footer: {
-            Text(
-                "Jarvis helps you run your day from the Today page: a plan in the morning, a card when you come back, a wrap-up in the evening. He runs on the agent model selected above, and every decision is logged to the Companion Trace."
-            )
-        }
     }
 
     private var modelSection: some View {
@@ -248,34 +212,10 @@ struct AgentSettingsPane: View {
                 )
             }
 
-            // The Companion's master switch. Extracted — the one Form body was
-            // past the type-checker's budget.
-            companionSection
-
             // PROTOTYPE — the Companion voice-overlay concepts (map #301, #328).
             companionVoiceSection
         }
         .formStyle(.grouped)
-        .onChange(of: settings.companionHeartbeatEnabled) { _, enabled in
-            if enabled {
-                if !settings.companionLaunchAtLoginAsked {
-                    settings.companionLaunchAtLoginAsked = true
-                    showingLaunchAtLoginAsk = true
-                }
-            }
-        }
-        .alert("Keep Jarvis running?", isPresented: $showingLaunchAtLoginAsk) {
-            Button("Launch at Login") {
-                do { try SMAppService.mainApp.register() } catch {
-                    Log.companion.error("Launch-at-login register failed: \(error)")
-                }
-            }
-            Button("Not Now", role: .cancel) {}
-        } message: {
-            Text(
-                "The Companion only runs while Tesseract is open. Start it at login so his day survives reboots — you can change this anytime with the Launch at Login toggle."
-            )
-        }
         .onAppear {
             refreshSelectedAgentModelCapabilities()
         }

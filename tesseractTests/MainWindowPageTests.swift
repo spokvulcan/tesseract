@@ -38,6 +38,7 @@ struct MainWindowPageTests {
     /// compile here until the suite covers it.
     private static func title(of page: NavigationItem) -> String {
         switch page {
+        case .today: "Today"
         case .dictation: "Dictation"
         case .speech: "Speech"
         case .agent: "Agent"

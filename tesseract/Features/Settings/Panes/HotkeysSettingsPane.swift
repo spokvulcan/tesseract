@@ -18,6 +18,9 @@ struct HotkeysSettingsPane: View {
                 HotkeyRecorderRow(label: "Dictation Push-to-Talk", combo: $settings.hotkey)
                 HotkeyRecorderRow(label: "Speak Selected Text", combo: $settings.ttsHotkey)
                 HotkeyRecorderRow(label: "Talk to Tesseract", combo: $settings.agentHotkey)
+                HotkeyRecorderRow(
+                    label: "Capture to Reminders", combo: $settings.captureHotkey,
+                    resetTo: .optionShiftSpace, resetLabel: "Reset to ⌥⇧Space")
             }
 
             Section {

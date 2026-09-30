@@ -154,15 +154,42 @@ final class DependencyContainer: ObservableObject {
         capture: captureService, voice: captureVoiceInput)
     lazy var companionNotifier: CompanionNotifier = {
         let notifier = CompanionNotifier()
-        notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.showMainWindow() }
+        notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.navigateToToday() }
         notifier.onNudgeDelivered = { [companionTrace] id in
             companionTrace.record(.nudgeFired, fields: ["id": .string(id)])
         }
         return notifier
     }()
+    /// The Day Thread's own agent: the same system prompt and tools as every
+    /// chat (one cached prefix), compacting only past the thread's ceiling.
+    lazy var dayAgent: Agent = AgentFactory.makeAgent(
+        inferenceService: serverInferenceService,
+        packageRegistry: packageRegistry,
+        extensionHost: extensionHost,
+        toolRegistry: newToolRegistry,
+        contextManager: contextManager,
+        settingsManager: settingsManager,
+        gating: ToolGating(webAccessEnabled: settingsManager.webAccessEnabled),
+        mcpToolsExtension: mcpClientManager.toolsExtension,
+        compactionWindow: DayThread.compactionWindow(
+            ceiling: settingsManager.companionThreadCeilingTokens)
+    )
+    lazy var dayThread = DayThread(
+        agent: dayAgent,
+        store: DayThreadStore(backing: agentConversationStore, day: DayKey(for: Date())),
+        arbiter: inferenceArbiter,
+        inferenceService: serverInferenceService,
+        toolRegistry: newToolRegistry,
+        settings: settingsManager,
+        speechCoordinator: speechCoordinator,
+        contextManager: contextManager,
+        summarize: internalCompletion,
+        trace: companionTrace)
     lazy var companionRuntime = CompanionRuntime(
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
-        trace: companionTrace)
+        trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
+        thread: dayThread,
+        stateStore: ProcessEnvironment.isRunningTests ? DayStateStore(url: nil) : .production)
 
     /// The Companion Trace: every Jarvis decision, card, reaction and agenda
     /// change, one JSONL file per day under Application Support.

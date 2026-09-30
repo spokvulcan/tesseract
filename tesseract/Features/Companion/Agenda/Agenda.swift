@@ -34,6 +34,7 @@ nonisolated struct AgendaSnapshot: Sendable, Equatable {
 nonisolated enum AgendaUndo: Sendable, Equatable {
     case deleteReminder(id: String)
     case changeReminder(id: String, ReminderChange)
+    case restoreReminder(ReminderDraft)
     case deleteEvent(id: String)
     case changeEvent(id: String, EventChange)
 }
@@ -232,6 +233,23 @@ final class Agenda {
         return (after, record)
     }
 
+    /// Let a reminder go. The undo adds it back as it was.
+    @discardableResult
+    func deleteReminder(id: String, source: String) async throws -> AgendaChange {
+        guard let before = await store.reminder(id: id, now: now()) else {
+            throw AgendaError.notFound("reminder \(id)")
+        }
+        try store.deleteReminder(id: id)
+        let change = AgendaChange(
+            at: now(), line: "Let go of “\(before.title)”.",
+            undo: .restoreReminder(
+                ReminderDraft(
+                    title: before.title, listID: before.listID, due: before.due,
+                    dueHasTime: before.dueHasTime, notes: before.notes)))
+        record(change, kind: "reminder.deleted", source: source, id: id)
+        return change
+    }
+
     /// Add a calendar event to the default calendar (or the named one).
     @discardableResult
     func addEvent(
@@ -297,6 +315,7 @@ final class Agenda {
         switch change.undo {
         case .deleteReminder(let id): try store.deleteReminder(id: id)
         case .changeReminder(let id, let inverse): _ = try store.updateReminder(id: id, inverse)
+        case .restoreReminder(let draft): _ = try store.addReminder(draft)
         case .deleteEvent(let id): try store.deleteEvent(id: id)
         case .changeEvent(let id, let inverse): _ = try store.updateEvent(id: id, inverse)
         }

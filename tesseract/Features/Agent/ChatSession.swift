@@ -166,6 +166,10 @@ final class ChatSession {
     /// Skill Pill ranking recompute, ephemeral composer state reset. The
     /// Composer Draft's *content* deliberately rides across the switch.
     private let onConversationSwitch: @MainActor () -> Void
+    /// How a Companion moment turn reads in this transcript (the Day
+    /// Thread): one quiet line in place of the request and its card. nil
+    /// shows moment turns as ordinary messages.
+    private let momentSummary: (@MainActor (UserMessage, AssistantMessage?) -> String)?
     private let debugLogger = AgentDebugLogger()
 
     @ObservationIgnored private var unsubscribe: (@MainActor () -> Void)?
@@ -190,8 +194,10 @@ final class ChatSession {
         restoreComposerDraft: @MainActor @escaping (String, [ImageAttachment]) -> Void = { _, _ in
         },
         onConversationSwitch: @MainActor @escaping () -> Void = {},
+        momentSummary: (@MainActor (UserMessage, AssistantMessage?) -> String)? = nil,
         liveMarkdownThrottle: Duration = .milliseconds(100)
     ) {
+        self.momentSummary = momentSummary
         self.agent = agent
         self.conversationStore = conversationStore
         self.settings = settings
@@ -524,8 +530,17 @@ final class ChatSession {
         pendingUserMessage = nil
         var rebuilt: [ChatItem] = []
         var results: [String: ToolResultMessage] = [:]
-        for message in messages {
-            if let user = message.asUser {
+        var skipNextAssistant = false
+        for (index, message) in messages.enumerated() {
+            if let user = message.asUser, user.turnOrigin == .moment, let momentSummary {
+                let reply =
+                    messages.indices.contains(index + 1) ? messages[index + 1].asAssistant : nil
+                rebuilt.append(.system(id: user.id, text: momentSummary(user, reply)))
+                skipNextAssistant = reply != nil
+            } else if message.asAssistant != nil, skipNextAssistant {
+                skipNextAssistant = false
+            } else if let user = message.asUser {
+                skipNextAssistant = false
                 rebuilt.append(.user(user))
             } else if let assistant = message.asAssistant {
                 rebuilt.append(.assistant(assistant))
@@ -538,6 +553,34 @@ final class ChatSession {
         }
         items = rebuilt
         toolResultsByCallID = results
+    }
+
+    // MARK: - Turns from outside the run
+
+    /// Append messages produced outside this session's own run — a Companion
+    /// moment's request and reply — and persist them. Refused while a run is
+    /// live, so the thread stays append-only and ordered.
+    @discardableResult
+    func appendCommitted(_ messages: [any AgentMessageProtocol & Sendable]) -> Bool {
+        guard !agentRun.isGenerating else { return false }
+        let all = agent.state.messages + messages
+        agent.loadMessages(all)
+        resync(from: all)
+        persistCurrentConversation()
+        return true
+    }
+
+    /// Re-read the agent's messages after it changed them itself (a forced
+    /// compaction), and persist.
+    func adoptAgentMessages() {
+        resync(from: agent.state.messages)
+        persistCurrentConversation()
+    }
+
+    /// Switch conversations through the store's own mutation (the Day
+    /// Thread's rollover to a new day), with the usual switch discipline.
+    func showDayThread(_ mutateStore: () -> Void) {
+        switchConversation(mutateStore: mutateStore)
     }
 
     // MARK: - Send / cancel
