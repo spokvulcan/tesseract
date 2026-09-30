@@ -126,6 +126,8 @@ final class DependencyContainer: ObservableObject {
         for tool in createAgendaTools(agenda: agenda) {
             registry.appendBuiltInTool(tool)
         }
+        // "Never tell me about CI passing": the owner's notification rules.
+        registry.appendBuiltInTool(createNotificationRuleTool(store: triageRuleStore))
         return registry
     }()
 
@@ -185,11 +187,36 @@ final class DependencyContainer: ObservableObject {
         contextManager: contextManager,
         summarize: internalCompletion,
         trace: companionTrace)
-    lazy var companionRuntime = CompanionRuntime(
+    lazy var triageRuleStore = TriageRuleStore(settings: settingsManager)
+    lazy var frontmostApp = FrontmostAppTracker()
+    lazy var powerMonitor = PowerMonitor()
+    /// The Jarvis panel's own push-to-talk.
+    lazy var panelVoiceInput = AgentVoiceInputController(
+        audioCapture: audioCaptureEngine,
+        transcriptionEngine: transcriptionEngine,
+        settings: settingsManager,
+        proofreadPass: proofreadPass,
+        captureDump: captureDumpStore
+    )
+    /// The floating card rung: the Breakpoint card in a Siri-style glass panel.
+    lazy var jarvisPanel: JarvisPanelController = JarvisPanelController(
+        thread: dayThread, voice: panelVoiceInput,
+        onAction: { [weak self] action in self?.companionRuntime.act(action) },
+        onExpand: { (NSApp.delegate as? AppDelegate)?.navigateToToday() },
+        onCapture: { [weak self] text in
+            Task { await self?.captureService.capture(text, source: "panel") }
+        })
+    lazy var companionRuntime: CompanionRuntime = CompanionRuntime(
         settings: settingsManager, agenda: agenda, notifier: companionNotifier,
         trace: companionTrace, idleMonitor: idleMonitor, presence: companionPresence,
         thread: dayThread,
-        stateStore: ProcessEnvironment.isRunningTests ? DayStateStore(url: nil) : .production)
+        stateStore: ProcessEnvironment.isRunningTests ? DayStateStore(url: nil) : .production,
+        frontmost: frontmostApp, power: powerMonitor,
+        delivery: CompanionDelivery(
+            showPanel: { [weak self] card in self?.jarvisPanel.show(card) },
+            retractPanel: { [weak self] cardID in self?.jarvisPanel.retract(cardID: cardID) },
+            speak: { [weak self] line in self?.speechCoordinator.speakText(line) },
+            openApp: { name in AppOpener.open(named: name) }))
 
     /// The Companion Trace: every Jarvis decision, card, reaction and agenda
     /// change, one JSONL file per day under Application Support.
@@ -1006,6 +1033,44 @@ final class DependencyContainer: ObservableObject {
                 )
             }
             try await writer.send(response)
+        }
+
+        // Coding agents (Claude Code hooks): localhost-only by the server's
+        // bind; browsers are refused, since they send an Origin and curl
+        // never does.
+        let runtime = companionRuntime
+        for (_, kind) in ClaudeCodeHooks.events {
+            httpServer.route(.POST, ClaudeCodeHooks.routePrefix + kind.rawValue) {
+                request, writer in
+                let fromBrowser: Bool = await MainActor.run { request.header("Origin") != nil }
+                guard !fromBrowser else {
+                    try await writer.send(.error(status: 403, message: "Forbidden"))
+                    return
+                }
+                let signal = AgentSignal.parse(hookBody: request.body, kind: kind, at: Date())
+                await MainActor.run { runtime.receive(signal) }
+                try await writer.send(.json(["ok": true]))
+            }
+        }
+        httpServer.route(.GET, ClaudeCodeHooks.setupScriptPath) { _, writer in
+            let port: Int = await MainActor.run { Int(HTTPServer.clampedPort(settings.serverPort)) }
+            try await writer.send(
+                HTTPResponse(
+                    statusCode: 200, statusText: "OK",
+                    headers: [("Content-Type", "text/x-shellscript; charset=utf-8")],
+                    body: Data(ClaudeCodeHooks.setupScript(port: port).utf8)))
+        }
+        httpServer.route(.POST, ClaudeCodeHooks.mergePath) { request, writer in
+            let port: Int = await MainActor.run { Int(HTTPServer.clampedPort(settings.serverPort)) }
+            do {
+                let merged = try ClaudeCodeHooks.merge(existing: request.body, port: port)
+                try await writer.send(.jsonBody(merged))
+            } catch {
+                try await writer.send(
+                    .error(
+                        status: 422, message: "The settings file isn't valid JSON; left unchanged.")
+                )
+            }
         }
 
         // Browser MCP Server (PRD #189): the `/mcp` endpoint. Registered

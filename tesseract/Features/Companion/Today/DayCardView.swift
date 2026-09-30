@@ -39,7 +39,13 @@ struct DayCardView: View {
                 MorningPlanBody(card: plan, facts: facts)
             case .eveningWrapUp(let wrapUp):
                 EveningWrapUpBody(cardID: card.id, card: wrapUp)
-            case .breakpoint, .triage, .reflection:
+            case .breakpoint(let breakpoint):
+                BreakpointBody(cardID: card.id, card: breakpoint)
+            case .triage(let triage):
+                ForEach(triage.raise) { item in
+                    WaitingItemRow(cardID: card.id, item: item)
+                }
+            case .reflection:
                 EmptyView()
             }
         }
@@ -116,5 +122,82 @@ private struct EveningWrapUpBody: View {
         .buttonStyle(.bordered)
         .tint(leftover.suggestion == suggestion ? .accentColor : nil)
         .focusable(false)
+    }
+}
+
+private struct BreakpointBody: View {
+    let cardID: String
+    let card: BreakpointCard
+    @State private var showQuiet = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            let minutes = Int(card.awayUntil.timeIntervalSince(card.awayFrom) / 60)
+            Text(
+                "Away \(MomentPrompts.minutesText(minutes)) · \(AgendaTime.clock(card.awayFrom))–\(AgendaTime.clock(card.awayUntil))"
+            )
+            .foregroundStyle(.secondary)
+            ForEach(card.needsYou) { item in
+                WaitingItemRow(cardID: cardID, item: item)
+            }
+            ForEach(card.next) { next in
+                HStack {
+                    Text(
+                        next.kind == .event
+                            ? "Next: \(next.title)" : "Fits before it: \(next.title)")
+                    Spacer()
+                    if let at = next.at {
+                        Text(AgendaTime.clock(at)).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                }
+            }
+            if let place = card.whereYouWere {
+                Text("You were in \(place).").foregroundStyle(.secondary)
+            }
+            if card.canWaitCount > 0 {
+                Button(
+                    showQuiet
+                        ? "Hide what can wait"
+                        : "\(card.canWaitCount) other notification\(card.canWaitCount == 1 ? "" : "s") can wait"
+                ) { showQuiet.toggle() }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .focusable(false)
+                if showQuiet {
+                    ForEach(card.canWait) { group in
+                        Text("\(group.app): " + group.lines.joined(separator: " · "))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One item that needs the owner, with its one action.
+struct WaitingItemRow: View {
+    @Environment(CompanionRuntime.self) private var runtime
+    let cardID: String
+    let item: WaitingItem
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title).fontWeight(.medium).lineLimit(1)
+                Text(item.detail).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 6)
+            if item.app != nil {
+                Button("Open") { runtime.act(.openItem(cardID: cardID, itemID: item.id)) }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .focusable(false)
+            }
+            Button("Done") { runtime.act(.itemDone(cardID: cardID, itemID: item.id)) }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .focusable(false)
+        }
     }
 }

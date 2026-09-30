@@ -1,0 +1,101 @@
+//
+//  Delivery.swift
+//  tesseract
+//
+//  The Delivery Ladder and the compute governor, both pure.
+//
+//  The ladder: the model decides what matters; code decides how it reaches
+//  the owner — from importance, presence, the app in front, and quiet hours.
+//  Glyph for anything waiting; the Jarvis panel for Breakpoints and urgent
+//  items when the owner is at the Mac; a banner when away or locked; voice
+//  for urgent items when present and voice is on. Quiet hours silence
+//  Jarvis's own deliveries (the owner's reminders and nudges still fire).
+//  Nothing unanswered is ever re-summoned; it stays in Today.
+//
+//  The governor: no fixed budget, usefulness first — but non-urgent model
+//  work waits while the Mac is hot or low on battery, and the Night
+//  Reflection runs only on power with a nominal thermal state.
+//
+
+import Foundation
+
+nonisolated enum Importance: String, Sendable, Equatable, Codable {
+    /// A Breakpoint card, a wrap-up: worth a look when convenient.
+    case normal
+    /// Can't wait for the next break: a person waiting now, an agent stuck.
+    case urgent
+}
+
+nonisolated enum DeliveryLadder {
+
+    /// Apps in which a panel or a spoken line would interrupt the owner
+    /// mid-call or mid-presentation.
+    static let interruptionFreeApps: Set<String> = [
+        "us.zoom.xos", "com.apple.FaceTime", "com.microsoft.teams2", "com.microsoft.teams",
+        "com.cisco.webexmeetingsapp", "com.apple.iWork.Keynote",
+    ]
+
+    static func rungs(for importance: Importance, snapshot: DaySnapshot) -> [DeliveryRung] {
+        if isQuietHours(snapshot) { return [.today] }
+        guard snapshot.ownerPresent else {
+            // Away or locked: a banner waits on the lock screen; normal cards
+            // wait in Today.
+            return importance == .urgent ? [.banner] : [.today]
+        }
+        if interruptionFreeApps.contains(snapshot.frontmostBundleID ?? "") {
+            return importance == .urgent ? [.banner] : [.today]
+        }
+        switch importance {
+        case .normal:
+            return [.panel]
+        case .urgent:
+            return snapshot.settings.speaks ? [.panel, .voice] : [.panel, .banner]
+        }
+    }
+
+    static func isQuietHours(_ snapshot: DaySnapshot) -> Bool {
+        let start = snapshot.settings.quietStartMinutes
+        let end = snapshot.settings.quietEndMinutes
+        let minute = snapshot.minuteOfDay
+        if start == end { return false }
+        return start < end ? (minute >= start && minute < end) : (minute >= start || minute < end)
+    }
+}
+
+// MARK: - Governor
+
+/// The Mac's power and heat, as the governor reads them.
+nonisolated struct PowerState: Sendable, Equatable {
+    enum Thermal: Int, Sendable, Comparable {
+        case nominal, fair, serious, critical
+        static func < (lhs: Thermal, rhs: Thermal) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+
+    var onACPower: Bool
+    /// 0–100, nil on a desktop.
+    var batteryPercent: Int?
+    var thermal: Thermal
+
+    static let nominal = PowerState(onACPower: true, batteryPercent: nil, thermal: .nominal)
+}
+
+nonisolated enum Governor {
+
+    /// Why a moment must wait, or nil when it may run now.
+    static func deferral(for kind: MomentKind, power: PowerState) -> String? {
+        switch kind {
+        case .nightReflection:
+            if !power.onACPower { return "on battery" }
+            if power.thermal > .nominal { return "thermal \(power.thermal)" }
+            return nil
+        case .triage:
+            if power.thermal >= .serious { return "thermal \(power.thermal)" }
+            if !power.onACPower, let battery = power.batteryPercent, battery < 20 {
+                return "battery \(battery)%"
+            }
+            return nil
+        case .morningPlan, .breakpoint, .eveningWrapUp:
+            return nil
+        }
+    }
+}

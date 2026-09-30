@@ -176,6 +176,8 @@ enum SettingsCatalogue {
         "companionQuietStartMinutes", default: 23 * 60)
     /// Quiet hours end (minutes after midnight).
     static let companionQuietEndMinutes = Setting.int("companionQuietEndMinutes", default: 8 * 60)
+    /// The owner's notification rules (`[TriageRule]`, JSON), newest first.
+    static let companionTriageRulesJSON = Setting.string("companionTriageRulesJSON", default: "[]")
     /// The Day Thread's compaction ceiling, in tokens.
     static let companionThreadCeilingTokens = Setting.int(
         "companionThreadCeilingTokens", default: 80_000)

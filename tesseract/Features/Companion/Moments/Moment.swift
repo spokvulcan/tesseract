@@ -81,9 +81,12 @@ nonisolated struct MomentRequest: Sendable, Equatable, Codable {
 nonisolated struct MomentContext: Sendable, Equatable, Codable {
     var awayFrom: Date?
     var awayUntil: Date?
+    /// The notifications the request showed the model, in the order its
+    /// short ids ("n1"…) number them.
     var notificationIDs: [String] = []
-    var agentIDs: [String] = []
-    var whereYouWere: String?
+    /// The card this moment refines (a Breakpoint shows a code-built card at
+    /// once; the model's version replaces it in place).
+    var cardID: String?
 }
 
 /// What a moment's model call produced, fed back to the engine as a signal.

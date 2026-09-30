@@ -15,6 +15,16 @@
 import Foundation
 import Observation
 
+/// How cards reach the owner, as closures the composition root wires: the
+/// Jarvis panel, the voice, apps to bring forward.
+@MainActor
+struct CompanionDelivery {
+    var showPanel: (DayCard) -> Void = { _ in }
+    var retractPanel: (String) -> Void = { _ in }
+    var speak: (String) -> Void = { _ in }
+    var openApp: (String) -> Void = { _ in }
+}
+
 @Observable @MainActor
 final class CompanionRuntime {
 
@@ -30,7 +40,11 @@ final class CompanionRuntime {
     @ObservationIgnored private let presence: CompanionPresence
     @ObservationIgnored private let thread: DayThread
     @ObservationIgnored private let stateStore: DayStateStore
+    @ObservationIgnored private let frontmost: FrontmostAppTracker
+    @ObservationIgnored private let power: PowerMonitor
+    @ObservationIgnored private let delivery: CompanionDelivery
     @ObservationIgnored private let now: @MainActor () -> Date
+    @ObservationIgnored private var watcher: NotificationCenterWatcher?
 
     @ObservationIgnored private var clockTask: Task<Void, Never>?
     @ObservationIgnored private var toggleTask: Task<Void, Never>?
@@ -40,7 +54,8 @@ final class CompanionRuntime {
     init(
         settings: SettingsManager, agenda: Agenda, notifier: CompanionNotifier,
         trace: CompanionTrace, idleMonitor: IdleMonitor, presence: CompanionPresence,
-        thread: DayThread, stateStore: DayStateStore,
+        thread: DayThread, stateStore: DayStateStore, frontmost: FrontmostAppTracker,
+        power: PowerMonitor, delivery: CompanionDelivery,
         now: @escaping @MainActor () -> Date = Date.init
     ) {
         self.settings = settings
@@ -51,6 +66,9 @@ final class CompanionRuntime {
         self.presence = presence
         self.thread = thread
         self.stateStore = stateStore
+        self.frontmost = frontmost
+        self.power = power
+        self.delivery = delivery
         self.now = now
         var loaded = stateStore.load() ?? DayState(day: DayKey(for: now()))
         // A moment in flight when the app quit never finished.
@@ -70,6 +88,23 @@ final class CompanionRuntime {
             self.send(.presenceReturned(awayFrom: awayFrom))
         }
         idleMonitor.start()
+        frontmost.onActivate = { [weak self] name, bundleID in
+            self?.send(.appActivated(name: name, bundleID: bundleID))
+        }
+        frontmost.start()
+        power.onChange = { [weak self] in self?.send(.powerChanged) }
+        power.start()
+        let selfNames: Set<String> = ["Tesseract Agent", "Tesseract"]
+        let watcher = NotificationCenterWatcher(
+            isEnabled: { [settings] in settings.companionHeartbeatEnabled },
+            onNotification: { [weak self] captured in
+                guard let notification = captured.admitted(selfDisplayNames: selfNames) else {
+                    return
+                }
+                self?.send(.notificationArrived(notification))
+            })
+        watcher.start()
+        self.watcher = watcher
         thread.show(day: state.day)
         toggleTask = Task { [weak self] in
             guard let self else { return }
@@ -90,6 +125,14 @@ final class CompanionRuntime {
     func act(_ action: CardAction) {
         send(.cardAction(action))
     }
+
+    /// A coding agent's hook reported in (the local route).
+    func receive(_ signal: AgentSignal) {
+        send(.agentSignal(signal))
+    }
+
+    /// The owner's notification rules.
+    var rules: [TriageRule] { TriageRules.decode(settings.companionTriageRulesJSON) }
 
     // MARK: Lifecycle
 
@@ -153,7 +196,9 @@ final class CompanionRuntime {
         DaySnapshot(
             now: now(), settings: daySettings, agenda: agenda.snapshot, areas: agenda.areas,
             inboxListID: agenda.inbox?.id, ownerPresent: idleMonitor.isOwnerPresent,
-            chatBusy: thread.isChatBusy)
+            chatBusy: thread.isChatBusy, frontmostAppName: frontmost.name,
+            frontmostBundleID: frontmost.bundleID,
+            lastTerminalFrontAt: frontmost.lastTerminalFrontAt(now: now()), power: power.state)
     }
 
     private var daySettings: DaySettings {
@@ -165,7 +210,8 @@ final class CompanionRuntime {
             breakpointAwayMinutes: settings.companionBreakpointAwayMinutes,
             speaks: settings.companionSpeaks,
             quietStartMinutes: settings.companionQuietStartMinutes,
-            quietEndMinutes: settings.companionQuietEndMinutes)
+            quietEndMinutes: settings.companionQuietEndMinutes,
+            rules: rules)
     }
 
     private func dayOpening() -> String {
@@ -194,6 +240,15 @@ final class CompanionRuntime {
 
         case .presentCard(let card, let rung):
             await present(card, on: rung)
+
+        case .retractCard(let cardID):
+            delivery.retractPanel(cardID)
+
+        case .speak(let line):
+            delivery.speak(line)
+
+        case .openApp(let name):
+            delivery.openApp(name)
 
         case .mutateAgenda(let mutation):
             await mutate(mutation)
@@ -226,10 +281,14 @@ final class CompanionRuntime {
 
     private func present(_ card: DayCard, on rung: DeliveryRung) async {
         switch rung {
-        case .today, .panel, .voice:
+        case .today:
             break  // Today renders the day's cards from `state`.
+        case .panel:
+            delivery.showPanel(card)
         case .banner:
             await notifier.post(title: card.kind.title, body: card.line, cardID: card.id)
+        case .voice:
+            delivery.speak(card.line)
         }
     }
 
@@ -260,6 +319,8 @@ final class CompanionRuntime {
                 _ = try await agenda.updateReminder(id: id, due: .clear, source: "wrapUp")
             case .delete(let id):
                 try await agenda.deleteReminder(id: id, source: "wrapUp")
+            case .complete(let id):
+                _ = try await agenda.updateReminder(id: id, completed: true, source: "card")
             }
         } catch {
             Log.companion.error("Agenda change failed: \(error.localizedDescription)")

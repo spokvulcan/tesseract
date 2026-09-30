@@ -441,6 +441,12 @@ final class SettingsManager {
         }
     }
 
+    var companionTriageRulesJSON: String {
+        didSet {
+            SettingsCatalogue.companionTriageRulesJSON.write(companionTriageRulesJSON, to: store)
+        }
+    }
+
     var companionThreadCeilingTokens: Int {
         didSet {
             SettingsCatalogue.companionThreadCeilingTokens.write(
@@ -790,6 +796,7 @@ final class SettingsManager {
         self.companionQuietStartMinutes = SettingsCatalogue.companionQuietStartMinutes.load(
             from: store)
         self.companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.load(from: store)
+        self.companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.load(from: store)
         self.companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.load(
             from: store)
         self.captureHotkeyKeyCode = SettingsCatalogue.captureHotkeyKeyCode.load(from: store)
@@ -951,6 +958,7 @@ final class SettingsManager {
         companionSpeaks = SettingsCatalogue.companionSpeaks.default
         companionQuietStartMinutes = SettingsCatalogue.companionQuietStartMinutes.default
         companionQuietEndMinutes = SettingsCatalogue.companionQuietEndMinutes.default
+        companionTriageRulesJSON = SettingsCatalogue.companionTriageRulesJSON.default
         companionThreadCeilingTokens = SettingsCatalogue.companionThreadCeilingTokens.default
         captureHotkeyKeyCode = SettingsCatalogue.captureHotkeyKeyCode.default
         captureHotkeyModifiers = SettingsCatalogue.captureHotkeyModifiers.default

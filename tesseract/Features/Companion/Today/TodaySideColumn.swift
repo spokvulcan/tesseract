@@ -18,7 +18,7 @@ struct TodaySideColumn: View {
         VStack(alignment: .leading, spacing: TodayLayout.rhythm) {
             CaptureBox()
             section("Waiting on you") {
-                Text("Nothing waiting on you.").foregroundStyle(.secondary)
+                WaitingOnYou(now: now)
             }
             InboxSection(now: now)
         }
@@ -110,5 +110,52 @@ private struct InboxSection: View {
             return
         }
         runtime.act(.place(reminderID: reminder.id, start: start, minutes: minutes))
+    }
+}
+
+/// Coding agents that wait on the owner, and what the day's open cards say
+/// needs them.
+private struct WaitingOnYou: View {
+    @Environment(CompanionRuntime.self) private var runtime
+    let now: Date
+
+    var body: some View {
+        let agents = runtime.state.agentsWaiting(now: now)
+        let cards = runtime.state.openCards.compactMap { card -> (String, [WaitingItem])? in
+            switch card.body {
+            case .breakpoint(let breakpoint):
+                let items = breakpoint.needsYou.filter { $0.kind != .agent }
+                return items.isEmpty ? nil : (card.id, items)
+            case .triage(let triage):
+                return triage.raise.isEmpty ? nil : (card.id, triage.raise)
+            case .morningPlan, .eveningWrapUp, .reflection:
+                return nil
+            }
+        }
+        VStack(alignment: .leading, spacing: TodayLayout.rowSpacing) {
+            if agents.isEmpty && cards.isEmpty {
+                Text("Nothing waiting on you.").foregroundStyle(.secondary)
+            }
+            ForEach(agents) { agent in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(agent.title).fontWeight(.medium).lineLimit(1)
+                        Text(agent.kind == .waiting ? agent.message : "Finished: \(agent.message)")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer(minLength: 6)
+                    Button("Handled") { runtime.act(.agentHandled(agentID: agent.id)) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .focusable(false)
+                }
+            }
+            ForEach(cards, id: \.0) { cardID, items in
+                ForEach(items) { item in
+                    WaitingItemRow(cardID: cardID, item: item)
+                }
+            }
+        }
     }
 }

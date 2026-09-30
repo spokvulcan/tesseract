@@ -310,3 +310,22 @@ struct DayEngineMomentTests {
         #expect(decision.state.plan.isEmpty)
     }
 }
+
+struct DayStateStoreTests {
+
+    @Test @MainActor func aSavedDayComesBackAndOldFilesStillLoad() throws {
+        let url = makeTempDir("day-state").appendingPathComponent("day-state.json")
+        let store = DayStateStore(url: url)
+        var state = DayState(day: DayKey(rawValue: "2026-09-30"))
+        state.mustDoID = "R1"
+        state.carryOverForNextDay = "Start with the spec."
+        store.save(state)
+        #expect(store.load() == state)
+
+        // A file written before the ledger and agents existed.
+        try Data(#"{"day": "2026-09-30", "mustDoID": "R2"}"#.utf8).write(to: url)
+        let old = try #require(store.load())
+        #expect(old.mustDoID == "R2")
+        #expect(old.agents.isEmpty)
+    }
+}

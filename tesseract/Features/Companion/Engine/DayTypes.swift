@@ -25,6 +25,14 @@ nonisolated enum DaySignal: Sendable, Equatable {
     case presenceLeft
     /// The owner opened the Today page.
     case todayOpened
+    /// Another app's banner appeared.
+    case notificationArrived(ObservedNotification)
+    /// An app came to the front (its display name and bundle id).
+    case appActivated(name: String, bundleID: String?)
+    /// A coding agent's hook reported in.
+    case agentSignal(AgentSignal)
+    /// Power or thermal state changed.
+    case powerChanged
     /// A moment's model call finished.
     case momentOutcome(MomentRequest, MomentOutcome)
     /// The owner acted on a card.
@@ -41,6 +49,13 @@ nonisolated enum CardAction: Sendable, Equatable {
     case leftover(cardID: String, reminderID: String, Leftover.Suggestion)
     /// Every remaining leftover, each with its own suggestion.
     case allLeftovers(cardID: String)
+    /// A card item was opened in its app.
+    case openItem(cardID: String, itemID: String)
+    /// A card item is handled: the notification or agent is resolved, the
+    /// reminder is completed.
+    case itemDone(cardID: String, itemID: String)
+    /// A waiting coding agent was dealt with, from Today.
+    case agentHandled(agentID: String)
     /// Plan the day now, whatever the hour.
     case planNow
     /// Wrap up now, whatever the hour.
@@ -54,8 +69,14 @@ nonisolated enum DayEffect: Sendable, Equatable {
     case syncNudges([Nudge])
     /// Run one moment: append its request to the Day Thread and generate.
     case runMoment(MomentRequest)
-    /// Show a card on a delivery rung.
+    /// Show a card on a delivery rung (voice is `speak`).
     case presentCard(DayCard, DeliveryRung)
+    /// Take a card off the panel.
+    case retractCard(cardID: String)
+    /// Say one line aloud.
+    case speak(String)
+    /// Bring an app to the front (a card item's "Open").
+    case openApp(name: String)
     /// Change the owner's Reminders.
     case mutateAgenda(AgendaMutation)
     /// How many things are waiting on the owner, for the glyph.
@@ -83,6 +104,8 @@ nonisolated enum AgendaMutation: Sendable, Equatable {
     case clearDue(reminderID: String)
     /// Let it go.
     case delete(reminderID: String)
+    /// Done.
+    case complete(reminderID: String)
 }
 
 // MARK: - Snapshot
@@ -99,11 +122,20 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
     var ownerPresent: Bool
     /// A Today chat turn is running; moments wait for it.
     var chatBusy: Bool
+    /// The app in front.
+    var frontmostAppName: String?
+    var frontmostBundleID: String?
+    /// When a terminal (where coding agents live) was last in front; now
+    /// when one is in front.
+    var lastTerminalFrontAt: Date?
+    var power: PowerState
 
     init(
         now: Date, calendar: Calendar = .current, settings: DaySettings,
         agenda: AgendaSnapshot, areas: [Area] = [], inboxListID: String? = nil,
-        ownerPresent: Bool = true, chatBusy: Bool = false
+        ownerPresent: Bool = true, chatBusy: Bool = false, frontmostAppName: String? = nil,
+        frontmostBundleID: String? = nil, lastTerminalFrontAt: Date? = nil,
+        power: PowerState = .nominal
     ) {
         self.now = now
         self.calendar = calendar
@@ -113,6 +145,10 @@ nonisolated struct DaySnapshot: Sendable, Equatable {
         self.inboxListID = inboxListID
         self.ownerPresent = ownerPresent
         self.chatBusy = chatBusy
+        self.frontmostAppName = frontmostAppName
+        self.frontmostBundleID = frontmostBundleID
+        self.lastTerminalFrontAt = lastTerminalFrontAt
+        self.power = power
     }
 
     func facts(state: DayState) -> DayFacts {
@@ -138,9 +174,18 @@ nonisolated struct DaySettings: Sendable, Equatable {
     var speaks: Bool = true
     var quietStartMinutes: Int = 23 * 60
     var quietEndMinutes: Int = 8 * 60
+    /// The owner's notification rules.
+    var rules: [TriageRule] = []
 
     /// The overnight gap that makes a return the day's first sit-down.
     static let overnightGap: TimeInterval = 4 * 3600
+    /// Triage runs at most this often.
+    static let triageInterval: TimeInterval = 10 * 60
+    /// A waiting agent is spoken about once the terminal has been out of
+    /// sight this long.
+    static let agentSpeakAfter: TimeInterval = 2 * 60
+    /// Agents that never report back stop waiting after this.
+    static let agentExpiry: TimeInterval = 12 * 3600
 }
 
 // MARK: - State
@@ -167,9 +212,55 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
     /// Tonight's note, handed to the next day.
     var carryOverForNextDay: String?
 
+    /// Other apps' banners and what the owner has seen (carried across days:
+    /// unresolved items expire on their own).
+    var ledger = SeenLedger()
+    /// Coding agents that reported in, latest signal per session (carried).
+    var agents: [AgentSignal] = []
+    /// When each waiting agent was last spoken about.
+    var agentSpokenAt: [String: Date] = [:]
+    /// The previous clock tick, to notice meetings that just ended.
+    var lastTickAt: Date?
+    var lastTriageAt: Date?
+    /// Where the owner left off: the app in front when they walked away.
+    var whereYouWere: String?
+    /// Moments the governor held back, to run when the Mac allows.
+    var deferred: Set<MomentKind> = []
+
     init(day: DayKey, syncedNudgeIDs: Set<String>? = nil) {
         self.day = day
         self.syncedNudgeIDs = syncedNudgeIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case day, syncedNudgeIDs, lastPresentAt, morningPlanAt, eveningWrapUpAt, nightReflectionAt
+        case running, cards, mustDoID, plan, carryOver, carryOverForNextDay, ledger, agents
+        case agentSpokenAt, lastTickAt, lastTriageAt, whereYouWere, deferred
+    }
+
+    /// Every field but the day is optional on disk, so a state saved by an
+    /// earlier build still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        day = try c.decode(DayKey.self, forKey: .day)
+        syncedNudgeIDs = try c.decodeIfPresent(Set<String>.self, forKey: .syncedNudgeIDs)
+        lastPresentAt = try c.decodeIfPresent(Date.self, forKey: .lastPresentAt)
+        morningPlanAt = try c.decodeIfPresent(Date.self, forKey: .morningPlanAt)
+        eveningWrapUpAt = try c.decodeIfPresent(Date.self, forKey: .eveningWrapUpAt)
+        nightReflectionAt = try c.decodeIfPresent(Date.self, forKey: .nightReflectionAt)
+        running = try c.decodeIfPresent(MomentKind.self, forKey: .running)
+        cards = (try? c.decodeIfPresent([DayCard].self, forKey: .cards)) ?? []
+        mustDoID = try c.decodeIfPresent(String.self, forKey: .mustDoID)
+        plan = (try? c.decodeIfPresent([Placement].self, forKey: .plan)) ?? []
+        carryOver = try c.decodeIfPresent(String.self, forKey: .carryOver)
+        carryOverForNextDay = try c.decodeIfPresent(String.self, forKey: .carryOverForNextDay)
+        ledger = (try? c.decodeIfPresent(SeenLedger.self, forKey: .ledger)) ?? SeenLedger()
+        agents = (try? c.decodeIfPresent([AgentSignal].self, forKey: .agents)) ?? []
+        agentSpokenAt = (try? c.decodeIfPresent([String: Date].self, forKey: .agentSpokenAt)) ?? [:]
+        lastTickAt = try c.decodeIfPresent(Date.self, forKey: .lastTickAt)
+        lastTriageAt = try c.decodeIfPresent(Date.self, forKey: .lastTriageAt)
+        whereYouWere = try c.decodeIfPresent(String.self, forKey: .whereYouWere)
+        deferred = (try? c.decodeIfPresent(Set<MomentKind>.self, forKey: .deferred)) ?? []
     }
 
     /// The next day's state: what must survive the rollover survives.
@@ -177,9 +268,19 @@ nonisolated struct DayState: Sendable, Equatable, Codable {
         var next = DayState(day: day, syncedNudgeIDs: syncedNudgeIDs)
         next.lastPresentAt = lastPresentAt
         next.carryOver = carryOverForNextDay
+        next.ledger = ledger
+        next.agents = agents
+        next.agentSpokenAt = agentSpokenAt
+        next.lastTickAt = lastTickAt
+        next.whereYouWere = whereYouWere
         return next
     }
 
     /// Cards the owner hasn't dismissed.
     var openCards: [DayCard] { cards.filter { !$0.dismissed } }
+
+    /// Agents still waiting on the owner (or finished and unreviewed).
+    func agentsWaiting(now: Date) -> [AgentSignal] {
+        agents.filter { now.timeIntervalSince($0.at) < DaySettings.agentExpiry }
+    }
 }

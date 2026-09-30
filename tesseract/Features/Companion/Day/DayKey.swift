@@ -33,6 +33,16 @@ nonisolated struct DayKey: Hashable, Comparable, Sendable, Codable, CustomString
 
     var description: String { rawValue }
 
+    /// Encoded as the plain `yyyy-MM-dd` string.
+    init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
     static func < (lhs: DayKey, rhs: DayKey) -> Bool { lhs.rawValue < rhs.rawValue }
 
     /// The local calendar date the key names, at midnight.

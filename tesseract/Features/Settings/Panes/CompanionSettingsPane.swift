@@ -85,6 +85,10 @@ struct CompanionSettingsPane: View {
 
             AreasSection()
 
+            CodingAgentsSection()
+
+            NotificationRulesSection()
+
             Section {
                 Stepper(
                     "Compact past \(settings.companionThreadCeilingTokens / 1000)k tokens",
@@ -237,5 +241,99 @@ private struct AreasSection: View {
                 "Areas are the parts of your life a day spans — each one a Reminders list. Captures without a home land in the Inbox."
             )
         }
+    }
+}
+
+/// Claude Code's hooks: install or remove, and the one-liner for a terminal.
+private struct CodingAgentsSection: View {
+    @Environment(SettingsManager.self) private var settings
+    @State private var installed = ClaudeCodeHooks.installed()
+    @State private var problem: String?
+
+    var body: some View {
+        let port = Int(HTTPServer.clampedPort(settings.serverPort))
+        Section {
+            HStack {
+                Text("Claude Code")
+                Spacer()
+                Text(installed ? "Connected" : "Not connected").foregroundStyle(.secondary)
+                if installed {
+                    Button("Disconnect") { change { try ClaudeCodeHooks.uninstall() } }
+                } else {
+                    Button("Connect") {
+                        change {
+                            settings.isServerEnabled = true
+                            try ClaudeCodeHooks.install(port: port)
+                        }
+                    }
+                }
+            }
+            Text(ClaudeCodeHooks.oneLiner(port: port))
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .foregroundStyle(.secondary)
+            if let problem {
+                Text(problem).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Coding Agents")
+        } footer: {
+            Text(
+                "Claude Code's hooks tell Jarvis when an agent is waiting on you or has finished. Waiting agents show in Today; if you've been out of the terminal for two minutes, Jarvis says so once. Connecting writes to ~/.claude/settings.json (with a backup) and turns on the local server, which only listens on this Mac. Or run the line above in a terminal."
+            )
+        }
+    }
+
+    private func change(_ action: () throws -> Void) {
+        do {
+            try action()
+            problem = nil
+        } catch {
+            problem = "Couldn't update ~/.claude/settings.json: \(error.localizedDescription)"
+        }
+        installed = ClaudeCodeHooks.installed()
+    }
+}
+
+/// The owner's notification rules, set by talking to Jarvis.
+private struct NotificationRulesSection: View {
+    @Environment(SettingsManager.self) private var settings
+
+    var body: some View {
+        let rules = TriageRules.decode(settings.companionTriageRulesJSON)
+        Section {
+            if rules.isEmpty {
+                Text("No rules yet.").foregroundStyle(.secondary)
+            }
+            ForEach(rules) { rule in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(rule.phrase.isEmpty ? rule.action.rawValue : rule.phrase)
+                        Text(summary(rule)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Remove") {
+                        settings.companionTriageRulesJSON = TriageRules.encode(
+                            rules.filter { $0.id != rule.id })
+                    }
+                }
+            }
+        } header: {
+            Text("Notification Rules")
+        } footer: {
+            Text(
+                "Tell Jarvis in any chat — \"never tell me about CI passing\" — and it becomes a rule here. Rules apply before Jarvis sees a notification."
+            )
+        }
+    }
+
+    private func summary(_ rule: TriageRule) -> String {
+        var parts = [rule.action.rawValue]
+        if let app = rule.app { parts.append("app: \(app)") }
+        if let sender = rule.sender { parts.append("from: \(sender)") }
+        if !rule.keywords.isEmpty {
+            parts.append("words: \(rule.keywords.joined(separator: ", "))")
+        }
+        return parts.joined(separator: " · ")
     }
 }

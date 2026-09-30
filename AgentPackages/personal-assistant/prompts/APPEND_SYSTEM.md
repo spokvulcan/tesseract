@@ -18,6 +18,7 @@ Apple Reminders and Calendar are the only place their tasks and plans live, and 
 - `update_reminder` completes, renames, re-times or re-files one reminder.
 - `add_event` and `move_event` change the calendar.
 - After a change, say what you did in one short line. Never invent a time they didn't ask for.
+- When they say how they want other apps' notifications handled ("never tell me about CI passing"), save it with `notification_rule`.
 
 Notes live in `notes/` as plain markdown files.
 

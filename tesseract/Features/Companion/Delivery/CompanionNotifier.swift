@@ -9,6 +9,7 @@
 //  Companion.
 //
 
+import AppKit
 import Foundation
 import UserNotifications
 
@@ -124,5 +125,26 @@ nonisolated final class CompanionNotificationDelegate: NSObject, UNUserNotificat
         _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse
     ) async {
         await onResponse?(response.notification.request.identifier)
+    }
+}
+
+/// Brings an app to the front by its display name: a card item's "Open".
+@MainActor
+enum AppOpener {
+    static func open(named name: String) {
+        if let running = NSWorkspace.shared.runningApplications.first(where: {
+            $0.localizedName == name
+        }) {
+            running.activate()
+            return
+        }
+        for folder in ["/Applications", "/System/Applications", "/System/Applications/Utilities"] {
+            let url = URL(fileURLWithPath: folder).appendingPathComponent("\(name).app")
+            if FileManager.default.fileExists(atPath: url.path) {
+                NSWorkspace.shared.openApplication(at: url, configuration: .init())
+                return
+            }
+        }
+        Log.companion.info("No app named \(name) to open")
     }
 }
