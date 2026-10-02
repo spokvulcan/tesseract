@@ -20,6 +20,38 @@ nonisolated struct DayCard: Sendable, Equatable, Codable, Identifiable {
     var body: Body
     /// The owner dismissed it (the close button, or acted on everything).
     var dismissed: Bool = false
+    /// Built by code and shown at once; Jarvis is still thinking it through,
+    /// and his version will replace it in place.
+    var isRefining: Bool = false
+
+    init(
+        id: String, kind: MomentKind, createdAt: Date, isFallback: Bool, body: Body,
+        dismissed: Bool = false, isRefining: Bool = false
+    ) {
+        self.id = id
+        self.kind = kind
+        self.createdAt = createdAt
+        self.isFallback = isFallback
+        self.body = body
+        self.dismissed = dismissed
+        self.isRefining = isRefining
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, kind, createdAt, isFallback, body, dismissed, isRefining
+    }
+
+    /// A card saved by an earlier build (no `isRefining`) still loads.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        kind = try c.decode(MomentKind.self, forKey: .kind)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        isFallback = try c.decode(Bool.self, forKey: .isFallback)
+        body = try c.decode(Body.self, forKey: .body)
+        dismissed = try c.decodeIfPresent(Bool.self, forKey: .dismissed) ?? false
+        isRefining = try c.decodeIfPresent(Bool.self, forKey: .isRefining) ?? false
+    }
 
     enum Body: Sendable, Equatable, Codable {
         case morningPlan(MorningPlanCard)

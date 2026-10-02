@@ -35,9 +35,9 @@ public final class Qwen3TTSModel: @unchecked Sendable {
     private let lock = NSLock()
     /// Held for as long as a generation or a priming uses the kept KV
     /// caches. A cancelled stream's generation runs on to the end of its
-    /// frame after its consumer has gone and the engine's GPU lease has
-    /// passed on; the next one waits for it here instead of rewinding
-    /// caches it is still writing.
+    /// frame after its consumer has gone and the engine has moved on; the
+    /// next one waits for it here instead of rewinding caches it is still
+    /// writing.
     private let generationLock = NSLock()
 
     /// Working memory kept across the segments of an utterance: the talker's
@@ -152,8 +152,7 @@ public final class Qwen3TTSModel: @unchecked Sendable {
 
     /// A latent and MLX's audio for it, to check a Neural Engine codec
     /// against: six frames of random codes, several calls' worth, so the
-    /// carried state is checked too. Runs on the GPU; `warmUp` makes it
-    /// under the engine's GPU lease.
+    /// carried state is checked too. Runs on the GPU; `warmUp` makes it.
     struct NeuralProbe {
         let latent: [Float16]
         let expected: [Float]

@@ -1,13 +1,15 @@
 // TesseractSpeech — engine v2 (ADR-0038). The facade actor: lifecycle,
 // sessions, utterance admission with deterministic supersession, and the
-// per-segment burst driver that owns GPU-lease and memory discipline.
+// per-segment burst driver that owns memory discipline. Speech never waits
+// for the host's LLM: the engine takes no GPU turn (ADR-0081 in the app) —
+// MLX keeps concurrent evaluation safe, and the model's own generation lock
+// orders this engine's work.
 
 import Foundation
 
 public actor SpeechEngine {
     private let model: TTSModelSpec
     private let synthesizer: any SpeechSynthesizing
-    private let gpu: any GPULeasing
     private let memory: MemoryPolicy
     private let diagnostics: (any SpeechDiagnosticsTap)?
 
@@ -33,13 +35,11 @@ public actor SpeechEngine {
     public init(
         model: TTSModelSpec,
         synthesizer: any SpeechSynthesizing,
-        gpu: any GPULeasing,
         memory: MemoryPolicy = .default,
         diagnostics: (any SpeechDiagnosticsTap)? = nil
     ) {
         self.model = model
         self.synthesizer = synthesizer
-        self.gpu = gpu
         self.memory = memory
         self.diagnostics = diagnostics
     }
@@ -86,7 +86,7 @@ public actor SpeechEngine {
         }
         try await ensureLoaded(onPhase: onPhase)
         if target == .warm {
-            try await withLeaseMapped {
+            try await mappingErrors {
                 onPhase?(.warmingKernels)
                 try await self.synthesizer.warmUp()
                 for voice in priming {
@@ -117,14 +117,11 @@ public actor SpeechEngine {
             try await inFlight.value
             return
         }
-        let task = Task { [model, synthesizer, gpu] in
-            // Before the lease: a checkpoint that isn't on disk fails here
-            // rather than queueing behind, or holding up, LLM work.
+        let task = Task { [model, synthesizer] in
+            // A checkpoint that isn't on disk fails here, before any load.
             try await synthesizer.checkAvailable(model)
-            try await gpu.withLease {
-                try await synthesizer.load(model, onPhase: onPhase)
-                try await synthesizer.warmUp()
-            }
+            try await synthesizer.load(model, onPhase: onPhase)
+            try await synthesizer.warmUp()
         }
         inFlightPrepare = task
         defer { inFlightPrepare = nil }
@@ -149,7 +146,7 @@ public actor SpeechEngine {
             }
         }
         try await ensureLoaded()
-        try await withLeaseMapped {
+        try await mappingErrors {
             try await self.synthesizer.primeVoice(
                 description: voice.description, language: voice.language)
         }
@@ -287,45 +284,43 @@ public actor SpeechEngine {
                 let samplesPerFrame = format.samplesPerFrame
 
                 diagnostics?.event("burst.begin", "segment \(segmentIndex)")
-                let outcome: BurstOutcome = try await gpu.withLease {
-                    await channel.send(.segment(SegmentScript(
-                        index: segmentIndex, text: segment.text, startFrame: startFrame)))
+                await channel.send(.segment(SegmentScript(
+                    index: segmentIndex, text: segment.text, startFrame: startFrame)))
 
-                    var segmentSamples = 0
-                    var emittedFrames = 0
-                    var captured: ReferenceTake?
+                var segmentSamples = 0
+                var emittedFrames = 0
+                var captured: ReferenceTake?
 
-                    let stream = await synthesizer.synthesizeSegment(request)
-                    for try await event in stream {
-                        switch event {
-                        case .chunk(let samples):
-                            guard !samples.isEmpty else { break }
-                            segmentSamples += samples.count
-                            let totalFrames =
-                                (segmentSamples + samplesPerFrame - 1) / samplesPerFrame
-                            let range = (startFrame + emittedFrames)..<(startFrame + totalFrames)
-                            emittedFrames = totalFrames
-                            await channel.send(.audio(AudioChunk(
-                                samples: samples, frames: range, segmentIndex: segmentIndex)))
-                        case .words(let starts):
-                            // Frames the synthesizer counted from the segment's
-                            // first; clamped to the audio sent, as the port promises.
-                            guard !starts.isEmpty else { break }
-                            let shifted = starts.map {
-                                WordStart(
-                                    word: $0.word,
-                                    frame: startFrame + min(max($0.frame, 0), emittedFrames))
-                            }
-                            await channel.send(.words(WordTiming(
-                                segmentIndex: segmentIndex, starts: shifted)))
-                        case .done(let take):
-                            captured = take
+                let stream = await synthesizer.synthesizeSegment(request)
+                for try await event in stream {
+                    switch event {
+                    case .chunk(let samples):
+                        guard !samples.isEmpty else { break }
+                        segmentSamples += samples.count
+                        let totalFrames =
+                            (segmentSamples + samplesPerFrame - 1) / samplesPerFrame
+                        let range = (startFrame + emittedFrames)..<(startFrame + totalFrames)
+                        emittedFrames = totalFrames
+                        await channel.send(.audio(AudioChunk(
+                            samples: samples, frames: range, segmentIndex: segmentIndex)))
+                    case .words(let starts):
+                        // Frames the synthesizer counted from the segment's
+                        // first; clamped to the audio sent, as the port promises.
+                        guard !starts.isEmpty else { break }
+                        let shifted = starts.map {
+                            WordStart(
+                                word: $0.word,
+                                frame: startFrame + min(max($0.frame, 0), emittedFrames))
                         }
-                        try Task.checkCancellation()
+                        await channel.send(.words(WordTiming(
+                            segmentIndex: segmentIndex, starts: shifted)))
+                    case .done(let take):
+                        captured = take
                     }
                     try Task.checkCancellation()
-                    return BurstOutcome(frameCount: emittedFrames, captured: captured)
                 }
+                try Task.checkCancellation()
+                let outcome = BurstOutcome(frameCount: emittedFrames, captured: captured)
                 diagnostics?.event("burst.end", "segment \(segmentIndex), \(outcome.frameCount) frames")
 
                 cumulativeFrames += outcome.frameCount
@@ -357,9 +352,9 @@ public actor SpeechEngine {
 
     // MARK: - Helpers
 
-    private func withLeaseMapped(_ body: @escaping @Sendable () async throws -> Void) async throws {
+    private func mappingErrors(_ body: @escaping @Sendable () async throws -> Void) async throws {
         do {
-            try await gpu.withLease(body)
+            try await body()
         } catch is CancellationError {
             throw CancellationError()
         } catch let error as SpeechEngineError {

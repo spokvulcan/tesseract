@@ -1,9 +1,12 @@
 # Voice-session self-echo: Echo Floor + Soft Barge over Dual-Path Playback
 
-Status: accepted — detector + Soft Barge landed (PR A, #356); acoustic
-substrate (voice hold v2 + persistent player node at a fixed hosted gain)
-plus the acoustic-only barge (word gates removed, owner decision 2026-07-18)
-in PR #355 continued
+Status: Superseded by ADR-0082 (2026-10-01; the voice session is half-duplex
+— the voice hold, the Echo Floor and the Soft Barge are deleted, and a key or
+a click interrupts Jarvis; this ADR's rejection of half-duplex is reversed);
+was accepted — detector + Soft Barge landed (PR A, #356); acoustic substrate
+(voice hold v2 + persistent player node at a fixed hosted gain) plus the
+acoustic-only barge (word gates removed, owner decision 2026-07-18) in PR
+#355 continued
 
 The Voice Session keeps the microphone open while the assistant speaks (full
 duplex — voice barge-in is a hard requirement, #310 §4), which makes Self-Echo

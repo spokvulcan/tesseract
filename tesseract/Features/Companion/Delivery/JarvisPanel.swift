@@ -96,6 +96,8 @@ final class JarvisPanelController {
             self.model.draft = text
             self.send()
         }
+        // A take with no words (too short, no speech) ends listening too.
+        voice.onVoiceFailure = { [weak self] _ in self?.model.listening = false }
         panel.host(
             JarvisPanelView(
                 model: model, thread: thread,
@@ -289,6 +291,10 @@ private struct CardContent: View {
             case .morningPlan, .eveningWrapUp, .reflection:
                 Text(card.kind.title).fontWeight(.semibold)
                 Text(card.line).fixedSize(horizontal: false, vertical: true)
+                if card.isRefining {
+                    Text("Jarvis is still thinking it through; this card updates when he's done.")
+                        .foregroundStyle(.secondary)
+                }
                 Text("Open Today to see it all.").foregroundStyle(.secondary)
             }
         }

@@ -91,80 +91,67 @@ struct CaptureEngineLifecycleTests {
         #expect(!alwaysArmed.idleRebuildNeedsArmRetry(engineExists: false, armed: false))
     }
 
-    // MARK: - Voice hold (ADR-0041)
+    // MARK: - Live-input check
+
+    /// One check's verdict on a long-lived engine, past the first-buffer grace
+    /// unless the row says otherwise.
+    private func verdict(
+        _ policy: CaptureEngineLifecycle, since: Int, total: Int, rebuilt: Bool = false,
+        secondsSinceStart: TimeInterval = 2, engineAge: TimeInterval = 3600
+    ) -> CaptureEngineLifecycle.LiveInputVerdict {
+        policy.liveInputVerdict(
+            buffersSinceLastCheck: since, buffersThisCapture: total, rebuiltThisCapture: rebuilt,
+            secondsSinceStart: secondsSinceStart, engineAge: engineAge)
+    }
 
     @Test
-    func holdBeginDefersToTheCaptureStopWhenACaptureIsMidTake() {
+    func anyBufferSinceTheLastCheckIsAlive() {
         for policy in [alwaysArmed, fallback] {
-            #expect(
-                policy.holdBeginAction(
-                    engineExists: true, needsRebuild: false, isCapturing: true,
-                    engineArmed: true)
-                    == .deferToCaptureStop)
-            #expect(
-                policy.holdBeginAction(
-                    engineExists: false, needsRebuild: true, isCapturing: true,
-                    engineArmed: false)
-                    == .deferToCaptureStop)
+            #expect(verdict(policy, since: 1, total: 1) == .alive)
+            #expect(verdict(policy, since: 5, total: 40, rebuilt: true) == .alive)
+            #expect(verdict(policy, since: 1, total: 1, secondsSinceStart: 0.5) == .alive)
         }
     }
 
     @Test
-    func holdBeginWiresNowOnlyOnAHealthyArmedStoppedEngine() {
-        #expect(
-            alwaysArmed.holdBeginAction(
-                engineExists: true, needsRebuild: false, isCapturing: false,
-                engineArmed: true)
-                == .wireNow)
-        // The fallback lifecycle's plain idle engine is rebuilt armed, not
-        // wired plain — the hold wants the AEC.
-        #expect(
-            fallback.holdBeginAction(
-                engineExists: true, needsRebuild: false, isCapturing: false,
-                engineArmed: false)
-                == .rebuildThenWire)
-        #expect(
-            alwaysArmed.holdBeginAction(
-                engineExists: false, needsRebuild: false, isCapturing: false,
-                engineArmed: false)
-                == .rebuildThenWire)
-        #expect(
-            alwaysArmed.holdBeginAction(
-                engineExists: true, needsRebuild: true, isCapturing: false,
-                engineArmed: true)
-                == .rebuildThenWire)
+    func aSlowInputGetsItsFirstSecond() {
+        // A Bluetooth headset switching to its microphone profile takes about
+        // a second to deliver its first buffer: no rebuild before the grace.
+        #expect(verdict(alwaysArmed, since: 0, total: 0, secondsSinceStart: 0.5) == .waiting)
+        #expect(verdict(alwaysArmed, since: 0, total: 0, secondsSinceStart: 1.0) == .waiting)
+        #expect(alwaysArmed.firstBufferGrace == 1.5)
     }
 
     @Test
-    func onlyAWiredHoldKeepsTheEngineRunningAtCaptureStop() {
-        #expect(alwaysArmed.captureStopKeepsEngineRunning(holdWired: true))
-        #expect(!alwaysArmed.captureStopKeepsEngineRunning(holdWired: false))
+    func anInputThatNeverDeliveredIsRebuiltOnce() {
+        // Nothing recorded yet, so the restart is lossless — and it is tried
+        // only once per capture.
+        #expect(verdict(alwaysArmed, since: 0, total: 0) == .rebuildAndRestart)
+        #expect(verdict(alwaysArmed, since: 0, total: 0, rebuilt: true) == .dead)
     }
 
     @Test
-    func pendingHoldWiresAfterTheInProgressCaptureStops() {
-        #expect(alwaysArmed.shouldWireHoldAfterCaptureStop(holdActive: true, holdWired: false))
-        #expect(!alwaysArmed.shouldWireHoldAfterCaptureStop(holdActive: true, holdWired: true))
-        #expect(!alwaysArmed.shouldWireHoldAfterCaptureStop(holdActive: false, holdWired: false))
+    func anEngineBuiltMomentsAgoIsNotRebuiltAgain() {
+        // Back-to-back voice-processing engines are what wedge CoreAudio
+        // input: a silent input on a young engine is reported dead instead.
+        #expect(verdict(alwaysArmed, since: 0, total: 0, engineAge: 2) == .dead)
+        #expect(verdict(alwaysArmed, since: 0, total: 0, engineAge: 6) == .rebuildAndRestart)
+        #expect(alwaysArmed.freshEngineAge == 5)
     }
 
     @Test
-    func rebuildUnderAnActiveHoldRewires() {
-        #expect(alwaysArmed.shouldRewireAfterRebuild(holdActive: true))
-        #expect(!alwaysArmed.shouldRewireAfterRebuild(holdActive: false))
+    func anInputThatWentQuietMidCaptureIsDead() {
+        // Audio arrived, then stopped: a restart would cut the take, so the
+        // owner hears about it instead.
+        #expect(verdict(alwaysArmed, since: 0, total: 12) == .dead)
+        #expect(verdict(alwaysArmed, since: 0, total: 12, rebuilt: true) == .dead)
+        #expect(verdict(alwaysArmed, since: 0, total: 12, secondsSinceStart: 0.5) == .dead)
     }
 
     @Test
-    func hostingRequiresArmedAndVerifiedRender() {
-        #expect(alwaysArmed.hostsPlayback(armed: true, renderVerified: true))
-        #expect(!alwaysArmed.hostsPlayback(armed: false, renderVerified: true))
-        #expect(!alwaysArmed.hostsPlayback(armed: true, renderVerified: false))
-    }
-
-    @Test
-    func theFallbackNeverDisarmsUnderAHold() {
-        #expect(!fallback.shouldDisarmAfterCapture(holdActive: true))
-        #expect(fallback.shouldDisarmAfterCapture(holdActive: false))
-        #expect(!alwaysArmed.shouldDisarmAfterCapture(holdActive: false))
+    func theCheckRunsAtTheEmptyCaptureGrace() {
+        // A live input delivers a buffer every ~100 ms, through silence too.
+        #expect(alwaysArmed.liveInputInterval == .milliseconds(500))
+        #expect(alwaysArmed.emptyCaptureGrace == 0.5)
     }
 }

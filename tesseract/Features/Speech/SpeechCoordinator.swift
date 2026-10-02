@@ -4,14 +4,14 @@
 //
 //  The presentation loop over the v2 speech engine (ADR-0038): open a session
 //  for the settings voice, `speak`, and drain one typed event stream into
-//  playback and the notch overlay. Segmentation, anchoring, pacing, GPU
-//  leasing, and memory discipline all live behind the engine seam — v1's
+//  playback and the notch overlay. Segmentation, anchoring, pacing and
+//  memory discipline all live behind the engine seam — v1's
 //  six-responsibility, 432-line orchestration is deleted, not moved.
 //
 //  Pacing: the stream is the demand signal. After each segment lands we wait
 //  until the scheduled-but-unplayed audio drops below a small window before
 //  pulling the next event; the engine's `.lookahead` policy converts that
-//  back-pressure into a lease-free park, so the GPU is free between bursts.
+//  back-pressure into a park, so the GPU is free between bursts.
 //  Pause is real: the player pauses instantly and we simply stop pulling.
 //
 
@@ -53,37 +53,16 @@ final class SpeechCoordinator {
         static let pollInterval: Duration = .milliseconds(150)
     }
 
-    /// Which sink an utterance plays through (Dual-Path Playback, ADR-0041):
-    /// `.standard` is the dedicated playback engine; `.voiceSession` renders
-    /// through the VPIO capture engine so echo cancellation hears the reply
-    /// as its own far-end reference.
-    enum PlaybackRoute {
-        case standard
-        case voiceSession
-    }
-
     /// Called when a request the user made (the hotkey, a Speak button) finds
     /// no Voice Engine on disk; the app opens the Models page. Speech the app
     /// starts on its own (auto-speak, the Companion) only shows the error.
     var onVoiceEngineMissing: (@MainActor () -> Void)?
-
-    /// The voice-session sink (ADR-0041), installed by the composition root.
-    /// `nil` (or a `.standard` route) keeps the dedicated engine.
-    var voiceSessionPlayback: (any AudioPlayback)? {
-        didSet { voiceSessionPlayback.map(wireFinished) }
-    }
-
-    /// The sink the current utterance plays through. Every playback touch
-    /// goes through this so stop/pause/resume always hit the engine that is
-    /// actually speaking.
-    private var activeSink: any AudioPlayback
 
     private var activeTask: Task<Void, Never>?
     private var session: SpeechSession?
     private var sessionVoiceKey: String?
     private var isPaused = false
     private var speechCompletionCallback: (@MainActor @Sendable () -> Void)?
-    private var fadeTask: Task<Void, Never>?
 
     init(
         textExtractor: any TextExtracting,
@@ -101,13 +80,8 @@ final class SpeechCoordinator {
         self.settings = settings
         self.notchOverlay = notchOverlay
         self.pinnedVoices = pinnedVoices
-        self.activeSink = playback
 
-        wireFinished(playback)
-    }
-
-    private func wireFinished(_ sink: any AudioPlayback) {
-        sink.onPlaybackFinished = { [weak self] in
+        playback.onPlaybackFinished = { [weak self] in
             guard let self else { return }
             self.state = .idle
             let callback = self.speechCompletionCallback
@@ -140,7 +114,6 @@ final class SpeechCoordinator {
     /// only the opening as a new Reference Take (see `tryAnotherTake`).
     func speakText(
         _ text: String, showsOverlay: Bool = true,
-        route: PlaybackRoute = .standard,
         userInitiated: Bool = false,
         retake: Bool = false,
         onSuccess: (@MainActor @Sendable () -> Void)? = nil
@@ -148,13 +121,12 @@ final class SpeechCoordinator {
         guard !text.isEmpty else { return }
 
         stop()
-        activeSink = route == .voiceSession ? (voiceSessionPlayback ?? playback) : playback
         speechCompletionCallback = onSuccess
         // Claim the state synchronously: `stop()` above set `.idle`, and the
         // task below only reaches `.generating` after the session-open await.
         // The voice session's settled-engine watchdog polls this state — a
-        // transient `.idle` here reopened the mic under live TTS (the
-        // 2026-07-16 self-echo trace, ADR-0041).
+        // transient `.idle` here reads as a finished reply, which stops it
+        // and reopens the mic (the 2026-07-16 trace).
         state = .generating(progress: "")
         activeTask = Task {
             guard await voiceEngineReady(userInitiated: userInitiated) else { return }
@@ -199,11 +171,11 @@ final class SpeechCoordinator {
             model: ModelDefinition.textToSpeechModelSpec)
     }
 
-    /// Read-aloud speed (the setting), applied at once to speech on the
-    /// dedicated engine. Voice-session replies always play at 1×.
+    /// Read-aloud speed (the setting), applied at once to whatever is
+    /// speaking — voice-session replies included.
     func setPlaybackRate(_ rate: Double) {
         settings.ttsPlaybackRate = rate
-        if activeSink === playback { playback.setPlaybackRate(Float(rate)) }
+        playback.setPlaybackRate(Float(rate))
     }
 
     /// Cancelling the consuming task is the engine-side cancellation token
@@ -213,10 +185,8 @@ final class SpeechCoordinator {
         speechCompletionCallback = nil
         activeTask?.cancel()
         activeTask = nil
-        fadeTask?.cancel()
-        fadeTask = nil
         isPaused = false
-        activeSink.stop()
+        playback.stop()
         currentSegmentIndex = 0
         totalSegments = 0
         state = .idle
@@ -225,63 +195,30 @@ final class SpeechCoordinator {
     }
 
     /// Real pause: the player pauses instantly and the drain loop stops
-    /// pulling, which parks the engine lease-free at the next segment
+    /// pulling, which parks the engine at the next segment
     /// boundary. (v1 could only finish the in-flight segment.)
     func pause() {
         guard !isPaused else { return }
         switch state {
-        // `.generating` too: a voice-session barge-in can land before the
-        // first audio chunk — the pause must hold that audio back (the sink
-        // won't start a paused player) or TTS would talk over the take.
+        // `.generating` too: a pause can land before the first audio
+        // chunk — it must hold that audio back (the sink won't start a
+        // paused player).
         case .streaming, .streamingLongForm, .playing, .generating: break
         default: return
         }
         isPaused = true
-        activeSink.pause()
+        playback.pause()
         state = .paused(segment: currentSegmentIndex + 1, of: max(totalSegments, 1))
     }
 
     func resume() {
         guard isPaused else { return }
         isPaused = false
-        activeSink.resume()
+        playback.resume()
         state =
             totalSegments > 1
             ? .streamingLongForm(segment: currentSegmentIndex + 1, of: totalSegments)
             : .streaming
-    }
-
-    // MARK: - Soft Barge surface (ADR-0041)
-
-    /// The reply's loudness at the playback head — the Echo Floor's playback
-    /// envelope input.
-    func playbackLevelNow() -> Float {
-        activeSink.playbackLevel()
-    }
-
-    /// One volume step per ~16 ms (~60 Hz) — the fade ramp's granularity.
-    private static let fadeStep: TimeInterval = 0.016
-
-    /// Ramps the active sink's volume to `target` — the Soft Barge duck and
-    /// its fade-back. Linear steps at `fadeStep`; a new fade supersedes the
-    /// one in flight; `stop()` cancels outright (the sink resets itself to
-    /// 1.0).
-    func fadePlayback(to target: Float, over duration: TimeInterval) {
-        fadeTask?.cancel()
-        let start = activeSink.volume
-        guard duration > 0, abs(target - start) > 0.001 else {
-            activeSink.setVolume(target)
-            return
-        }
-        let steps = max(1, Int(duration / Self.fadeStep))
-        fadeTask = Task { [weak self] in
-            for step in 1...steps {
-                try? await Task.sleep(for: .seconds(Self.fadeStep))
-                guard !Task.isCancelled, let self else { return }
-                let fraction = Float(step) / Float(steps)
-                self.activeSink.setVolume(start + (target - start) * fraction)
-            }
-        }
     }
 
     // MARK: - Private
@@ -416,10 +353,8 @@ final class SpeechCoordinator {
                 : try await session.speak(text, options: options)
             try Task.checkCancellation()
             totalSegments = utterance.segmentCount
-            activeSink.startStreaming(sampleRate: utterance.sampleRate)
-            if activeSink === playback {
-                playback.setPlaybackRate(Float(settings.ttsPlaybackRate))
-            }
+            playback.startStreaming(sampleRate: utterance.sampleRate)
+            playback.setPlaybackRate(Float(settings.ttsPlaybackRate))
 
             // A retake is one short segment: keep its audio for replay.
             var takeSamples: [Float] = []
@@ -442,7 +377,7 @@ final class SpeechCoordinator {
                         overlayShown: &overlayShown)
 
                 case .audio(let chunk):
-                    activeSink.appendChunk(samples: chunk.samples)
+                    playback.appendChunk(samples: chunk.samples)
                     if retake { takeSamples.append(contentsOf: chunk.samples) }
 
                 case .words(let timing):
@@ -458,7 +393,7 @@ final class SpeechCoordinator {
                 case .segmentDone(let index):
                     await rememberVoice(of: session)
                     try Task.checkCancellation()
-                    overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
+                    overlay?.updateTotalDuration(playback.totalScheduledDuration)
                     Log.speech.info("Segment \(index + 1)/\(self.totalSegments) complete")
                     if index + 1 < utterance.segmentCount {
                         overlay?.markSegmentComplete()
@@ -468,8 +403,8 @@ final class SpeechCoordinator {
                     }
 
                 case .finished:
-                    activeSink.finishStreaming()
-                    overlay?.updateTotalDuration(activeSink.totalScheduledDuration)
+                    playback.finishStreaming()
+                    overlay?.updateTotalDuration(playback.totalScheduledDuration)
                     overlay?.markGenerationComplete()
                     if retake, let voice = await session.exportPinnedVoice() {
                         latestTake = VoiceTake(
@@ -491,13 +426,13 @@ final class SpeechCoordinator {
             // The catalog said downloaded, but the engine's disk check found
             // the checkpoint gone or partial.
             Log.speech.error("Voice Engine unavailable: \(detail)")
-            activeSink.stop()
+            playback.stop()
             notchOverlay?.dismiss()
             await presentVoiceEngineMissing(userInitiated: userInitiated)
         } catch {
             Log.speech.error("Speech generation failed: \(error)")
             speechCompletionCallback = nil
-            activeSink.stop()
+            playback.stop()
             notchOverlay?.dismiss()
             await presentTransientError(error.localizedDescription)
         }
@@ -519,7 +454,7 @@ final class SpeechCoordinator {
                 // What is heard, not what is rendering: over Bluetooth the
                 // two are 150 ms or more apart (ADR-0077).
                 playbackTimeProvider: { [weak self] in
-                    self?.activeSink.heardPlaybackTime() ?? 0
+                    self?.playback.heardPlaybackTime() ?? 0
                 }
             )
             overlayShown = true
@@ -538,7 +473,7 @@ final class SpeechCoordinator {
         while true {
             try Task.checkCancellation()
             if !isPaused {
-                let ahead = activeSink.totalScheduledDuration - activeSink.currentPlaybackTime()
+                let ahead = playback.totalScheduledDuration - playback.currentPlaybackTime()
                 if ahead < Pacing.bufferAheadSeconds { return }
             }
             try await Task.sleep(for: Pacing.pollInterval)

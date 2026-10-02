@@ -73,6 +73,9 @@ struct CaptureParserTests {
             said: "pay the invoice tomorrow", title: "Pay the invoice",
             due: Calendar.current.startOfDay(for: local(31, 12)), hasTime: false),
         Row(
+            said: "call Anna the day after tomorrow at 3pm", title: "Call Anna",
+            due: local(32, 15), hasTime: true),
+        Row(
             said: "book physio #health", title: "Book physio", due: nil, hasTime: false,
             area: "Health"),
         Row(

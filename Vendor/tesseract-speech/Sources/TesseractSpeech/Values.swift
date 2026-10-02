@@ -211,8 +211,8 @@ public enum PacingPolicy: Sendable, Equatable {
     /// Generate flat-out (short utterances, server, export).
     case eager
     /// At most the in-flight segment plus `segments` completed-but-undelivered
-    /// segments exist; the engine then suspends *without the GPU lease* until
-    /// the consumer pulls. Pause falls out: stop pulling.
+    /// segments exist; the engine then suspends until the consumer pulls.
+    /// Pause falls out: stop pulling.
     case lookahead(segments: Int = 1)
 }
 

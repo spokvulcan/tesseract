@@ -175,12 +175,20 @@ nonisolated enum CardParser {
 /// plain, and never empty of the essential facts.
 nonisolated enum FallbackCards {
 
+    /// The plan code can make alone, shown at once while Jarvis thinks and
+    /// kept if he can't: the day's shape and where it starts.
     static func morningPlan(facts: DayFacts) -> MorningPlanCard {
-        let count = facts.remainingEventsToday.count
-        let line =
-            count == 0
-            ? "Here's your day. Nothing on the calendar — it's yours to shape."
-            : "Here's your day: \(count) event\(count == 1 ? "" : "s") ahead."
+        let remaining = facts.remainingEventsToday
+        let line: String
+        if let first = remaining.first {
+            let count = remaining.count
+            let clock = AgendaTime.clock(first.start, calendar: facts.calendar)
+            let lead =
+                first.start <= facts.now ? "now \(first.title)" : "first \(first.title) at \(clock)"
+            line = "Here's your day: \(count) event\(count == 1 ? "" : "s") ahead — \(lead)."
+        } else {
+            line = "Here's your day. Nothing on the calendar — it's yours to shape."
+        }
         return MorningPlanCard(
             line: line, mustDoID: facts.mustDoID, placements: [], suggestions: [])
     }

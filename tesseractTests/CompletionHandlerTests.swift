@@ -5,21 +5,21 @@ import Testing
 
 struct CompletionHandlerTests {
 
-    // MARK: - LeaseAcquiredSignal
+    // MARK: - GateAcquiredSignal
 
     @Test func signalStartsFalse() {
-        let signal = LeaseAcquiredSignal()
+        let signal = GateAcquiredSignal()
         #expect(!signal.isSet)
     }
 
     @Test func signalBecomesTrue() {
-        let signal = LeaseAcquiredSignal()
+        let signal = GateAcquiredSignal()
         signal.set()
         #expect(signal.isSet)
     }
 
     @Test func signalSetIsIdempotent() {
-        let signal = LeaseAcquiredSignal()
+        let signal = GateAcquiredSignal()
         signal.set()
         signal.set()
         #expect(signal.isSet)
@@ -34,8 +34,8 @@ struct CompletionHandlerTests {
             ) { _ in
                 try await Task.sleep(nanoseconds: 5_000_000_000)
             }
-            Issue.record("Expected LeaseTimeoutError")
-        } catch is LeaseTimeoutError {
+            Issue.record("Expected GateTimeoutError")
+        } catch is GateTimeoutError {
             // Expected
         } catch {
             Issue.record("Unexpected error: \(error)")
@@ -43,7 +43,7 @@ struct CompletionHandlerTests {
     }
 
     @Test func longBodyNotCancelledAfterSignal() async throws {
-        let completed = LeaseAcquiredSignal()
+        let completed = GateAcquiredSignal()
 
         try await CompletionHandler.withAcquisitionTimeout(
             timeoutNanoseconds: 100_000_000
@@ -57,7 +57,7 @@ struct CompletionHandlerTests {
     }
 
     @Test func fastBodyCompletesBeforeTimeout() async throws {
-        let completed = LeaseAcquiredSignal()
+        let completed = GateAcquiredSignal()
 
         try await CompletionHandler.withAcquisitionTimeout(
             timeoutNanoseconds: 1_000_000_000
@@ -730,8 +730,8 @@ struct HTTPServerIntegrationTests {
     @Test func sseWriterDetectsDisconnect() async throws {
         // Verify that SSEWriter.send returns false when the connection fails,
         // and that the handler does not run all 200 iterations.
-        let chunksSent = LeaseAcquiredSignal()  // reuse as "at least some sent" flag
-        let handlerDone = LeaseAcquiredSignal()
+        let chunksSent = GateAcquiredSignal()  // reuse as "at least some sent" flag
+        let handlerDone = GateAcquiredSignal()
 
         let server = HTTPServer(port: 0)
         server.route(.GET, "/slow-sse") { _, writer in
@@ -874,7 +874,7 @@ struct HTTPServerIntegrationTests {
     @Test func midStreamDisconnectBreaksGenerationLoop() async throws {
         // Verify that failed sse.send() breaks the labeled generation loop,
         // not just the switch statement.
-        let loopExited = LeaseAcquiredSignal()
+        let loopExited = GateAcquiredSignal()
 
         let server = HTTPServer(port: 0)
         server.route(.GET, "/midstream-disconnect") { _, writer in

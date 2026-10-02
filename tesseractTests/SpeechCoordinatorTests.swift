@@ -64,8 +64,7 @@ private struct Harness {
         // The app's checkpoint, as DependencyContainer wires it: stored voices
         // are looked up under this spec.
         let engine = SpeechEngine(
-            model: ModelDefinition.textToSpeechModelSpec, synthesizer: synthesizer,
-            gpu: ImmediateGPULease())
+            model: ModelDefinition.textToSpeechModelSpec, synthesizer: synthesizer)
         presenter = SpeechEnginePresenter(engine: engine)
         playback = InMemoryAudioPlayback()
         overlay = RecordingHighlightSurface()
@@ -315,81 +314,24 @@ struct SpeechCoordinatorTests {
         harness.coordinator.speakText("Hello world.")
         // Synchronous read, no waiting: the voice session's settled-engine
         // watchdog polls this state — a transient `.idle` during the
-        // session-open await reopened the mic under live TTS (ADR-0041).
+        // session-open await reads as a finished reply, which stops it and
+        // reopens the mic.
         #expect(harness.coordinator.state != .idle)
 
         harness.coordinator.stop()
     }
 
     @Test
-    func voiceSessionRouteStreamsThroughTheVoiceSink() async throws {
-        let harness = await Harness()
-        let voiceSink = InMemoryAudioPlayback()
-        harness.coordinator.voiceSessionPlayback = voiceSink
+    func voiceSessionRepliesFollowTheReadAloudSpeed() async throws {
+        // Replies play on the one playback path: the speed setting applies
+        // to an audio-only utterance like any other.
+        let harness = await Harness(script: .init(holdAfterChunks: 1))
+        harness.settings.ttsPlaybackRate = 1.25
 
-        harness.coordinator.speakText(
-            "Hello world.", showsOverlay: false, route: .voiceSession)
-        #expect(await waitUntil { voiceSink.finishStreamingCount == 1 })
-
-        // Dual-Path Playback (ADR-0041): the voice sink got the utterance,
-        // the standard sink stayed silent.
-        #expect(voiceSink.startedSampleRates == [24_000])
-        #expect(voiceSink.appendedChunks.count == 3)
-        #expect(harness.playback.startedSampleRates.isEmpty)
-
-        voiceSink.firePlaybackFinished()
-        #expect(harness.coordinator.state == .idle)
-
-        // The next standard utterance returns to the default sink.
-        harness.coordinator.speakText("Hello again.")
-        #expect(await waitUntil { harness.playback.finishStreamingCount == 1 })
-        #expect(voiceSink.finishStreamingCount == 1)
-        harness.playback.firePlaybackFinished()
-    }
-
-    // MARK: Soft Barge surface (ADR-0041)
-
-    @Test
-    func playbackLevelNowForwardsToTheActiveSink() async throws {
-        let harness = await Harness()
-        harness.playback.scriptedPlaybackLevel = 0.42
-        #expect(harness.coordinator.playbackLevelNow() == 0.42)
-
-        // The voice route swaps the active sink — the reading follows it.
-        let voiceSink = InMemoryAudioPlayback()
-        voiceSink.scriptedPlaybackLevel = 0.17
-        harness.coordinator.voiceSessionPlayback = voiceSink
-        harness.coordinator.speakText(
-            "Hello world.", showsOverlay: false, route: .voiceSession)
-        #expect(harness.coordinator.playbackLevelNow() == 0.17)
+        harness.coordinator.speakText("Hello world.", showsOverlay: false)
+        #expect(await waitUntil { harness.playback.playbackRates == [1.25] })
+        #expect(harness.playback.startedSampleRates == [24_000])
         harness.coordinator.stop()
-    }
-
-    @Test
-    func fadePlaybackStepsTheSinkVolumeToTheTarget() async throws {
-        let harness = await Harness()
-
-        harness.coordinator.fadePlayback(to: 0.25, over: 0.1)
-        #expect(await waitUntil { harness.playback.setVolumeCalls.last == 0.25 })
-        // A ramp, not a jump — intermediate steps landed too.
-        #expect(harness.playback.setVolumeCalls.count > 1)
-
-        // Zero duration is an instant set.
-        harness.coordinator.fadePlayback(to: 1.0, over: 0)
-        #expect(harness.playback.setVolumeCalls.last == 1.0)
-    }
-
-    @Test
-    func stopCancelsAnInFlightFade() async throws {
-        let harness = await Harness()
-
-        harness.coordinator.fadePlayback(to: 0.25, over: 2.0)
-        _ = await waitUntil { !harness.playback.setVolumeCalls.isEmpty }
-        harness.coordinator.stop()
-        let countAtStop = harness.playback.setVolumeCalls.count
-        try await Task.sleep(for: .milliseconds(100))
-        // The fade died with the utterance — no further steps.
-        #expect(harness.playback.setVolumeCalls.count == countAtStop)
     }
 
     // MARK: Voice Engine availability (the engine never downloads)

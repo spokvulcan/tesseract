@@ -54,6 +54,63 @@ nonisolated extension DayEngine {
         ]
     }
 
+    /// The Morning Plan: a card built by code goes up at once, and Jarvis's
+    /// version replaces it in place when he has thought the day through —
+    /// the owner never waits on the model for the essentials.
+    static func morningPlan(
+        trigger: MomentTrigger, snapshot: DaySnapshot, state: inout DayState
+    ) -> [DayEffect] {
+        guard state.running == nil, !snapshot.chatBusy else { return [] }
+        let facts = snapshot.facts(state: state)
+        var effects = accept(
+            .morningPlan(FallbackCards.morningPlan(facts: facts)), kind: .morningPlan,
+            fallback: false, snapshot: snapshot, state: &state, refining: true)
+        let cardID = state.cards.last?.id
+        effects += run(
+            .morningPlan, trigger: trigger, snapshot: snapshot, state: &state,
+            context: MomentContext(cardID: cardID))
+        return effects
+    }
+
+    /// Plan the day before the owner sits down, when the Mac is awake and on
+    /// power in the morning window and they have been away all night. The
+    /// card waits in Today and comes forward at the first sit-down.
+    static func prepareMorningPlanIfDue(snapshot: DaySnapshot, state: inout DayState)
+        -> [DayEffect]
+    {
+        let hour = snapshot.minuteOfDay / 60
+        let away = snapshot.now.timeIntervalSince(state.lastPresentAt ?? .distantPast)
+        guard state.morningPlanAt == nil, !snapshot.ownerPresent,
+            hour >= snapshot.settings.morningStartHour, hour < snapshot.settings.morningEndHour,
+            away >= DaySettings.overnightGap, snapshot.power.onACPower,
+            snapshot.power.thermal <= .fair
+        else { return [] }
+        return morningPlan(trigger: .prepared, snapshot: snapshot, state: &state)
+    }
+
+    /// A plan made while the owner was away comes forward when they sit down.
+    static func presentPreparedMorningPlan(
+        awayFrom: Date, snapshot: DaySnapshot, state: DayState
+    ) -> [DayEffect] {
+        guard
+            let card = state.cards.last(where: {
+                $0.kind == .morningPlan && !$0.dismissed && $0.createdAt >= awayFrom
+            })
+        else { return [] }
+        let rungs = DeliveryLadder.rungs(for: .normal, snapshot: snapshot).filter {
+            $0 == .panel || $0 == .today
+        }
+        return rungs.map { .presentCard(card, $0) } + [
+            .trace(
+                .cardPresented,
+                [
+                    "card": .string(card.id), "moment": "morningPlan",
+                    "rungs": .string(rungs.map(\.rawValue).joined(separator: ",")),
+                    "prepared": true, "refining": .bool(card.isRefining),
+                ])
+        ]
+    }
+
     /// Open tasks that belonged to today: due today, or planned today.
     static func leftovers(_ facts: DayFacts) -> [AgendaReminder] {
         let planned = Set(facts.plan.map(\.reminderID))
@@ -117,7 +174,8 @@ nonisolated extension DayEngine {
                 return nil
             }
             return accept(
-                body, kind: .morningPlan, fallback: false, snapshot: snapshot, state: &state)
+                body, kind: .morningPlan, fallback: false, snapshot: snapshot, state: &state,
+                cardID: request.context.cardID)
         case .eveningWrapUp:
             guard
                 case .card(let body) = CardParser.eveningWrapUp(
@@ -142,6 +200,18 @@ nonisolated extension DayEngine {
         let facts = snapshot.facts(state: state)
         switch request.kind {
         case .morningPlan:
+            // The code-built card is already up: it stands, as the facts.
+            if let cardID = request.context.cardID,
+                let index = state.cards.firstIndex(where: { $0.id == cardID })
+            {
+                state.cards[index].isFallback = true
+                state.cards[index].isRefining = false
+                let card = state.cards[index]
+                guard !card.dismissed else { return [] }
+                return DeliveryLadder.rungs(for: .normal, snapshot: snapshot)
+                    .filter { $0 == .panel || $0 == .today }
+                    .map { .presentCard(card, $0) }
+            }
             return accept(
                 .morningPlan(FallbackCards.morningPlan(facts: facts)), kind: .morningPlan,
                 fallback: true, snapshot: snapshot, state: &state)
@@ -165,10 +235,13 @@ nonisolated extension DayEngine {
         }
     }
 
-    /// Put a new card on the day and deliver it.
+    /// Put a new card on the day and deliver it. With `cardID`, the model's
+    /// version replaces the card code put up first; `refining` marks a code
+    /// card the model is still working on.
     static func accept(
         _ body: DayCard.Body, kind: MomentKind, fallback: Bool, snapshot: DaySnapshot,
-        state: inout DayState, importance: Importance = .normal, cardID: String? = nil
+        state: inout DayState, importance: Importance = .normal, cardID: String? = nil,
+        refining: Bool = false
     ) -> [DayEffect] {
         switch body {
         case .morningPlan(let card):
@@ -183,16 +256,24 @@ nonisolated extension DayEngine {
         case .breakpoint, .triage:
             break
         }
-        // Refining a card in place (a Breakpoint's model version).
+        // Refining a card in place (the model's version of a Breakpoint or
+        // a Morning Plan code put up first).
         if let cardID, let index = state.cards.firstIndex(where: { $0.id == cardID }) {
+            state.cards[index].isRefining = false
             guard !state.cards[index].dismissed else { return [] }
+            // A card code kept in Today stays there unless the model found
+            // something for the owner; one already on the panel updates there.
+            let wasQuiet =
+                deliveryRungs(state.cards[index].body, importance: importance, snapshot: snapshot)
+                == [.today]
             state.cards[index].body = body
             state.cards[index].isFallback = fallback
             let card = state.cards[index]
-            let rungs = DeliveryLadder.rungs(for: importance, snapshot: snapshot).filter {
-                $0 == .panel || $0 == .today
-            }
-            return rungs.map { .presentCard(card, $0) }
+            let rungs =
+                wasQuiet
+                ? deliveryRungs(body, importance: importance, snapshot: snapshot)
+                : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
+            return rungs.filter { $0 == .panel || $0 == .today }.map { .presentCard(card, $0) }
         }
         // A newer card of the same kind replaces the older one.
         var effects: [DayEffect] = []
@@ -203,13 +284,10 @@ nonisolated extension DayEngine {
         }
         let card = DayCard(
             id: "\(kind.rawValue)-\(state.day.rawValue)-\(state.cards.count)",
-            kind: kind, createdAt: snapshot.now, isFallback: fallback, body: body)
+            kind: kind, createdAt: snapshot.now, isFallback: fallback, body: body,
+            isRefining: refining)
         state.cards.append(card)
-        // The night's reflection waits in Today; every other card takes the
-        // ladder (the panel when the owner is at the Mac).
-        let rungs: [DeliveryRung] =
-            kind == .nightReflection
-            ? [.today] : DeliveryLadder.rungs(for: importance, snapshot: snapshot)
+        let rungs = deliveryRungs(body, importance: importance, snapshot: snapshot)
         for rung in rungs {
             if rung == .voice {
                 effects.append(.speak(card.line))
@@ -224,11 +302,29 @@ nonisolated extension DayEngine {
                     "card": .string(card.id), "moment": .string(kind.rawValue),
                     "rungs": .string(rungs.map(\.rawValue).joined(separator: ",")),
                     "fallback": .bool(fallback), "importance": .string(importance.rawValue),
+                    "refining": .bool(refining),
                 ]))
         if case .reflection(let reflection) = body, !reflection.proposals.isEmpty {
             effects.append(.proposeFacts(reflection.proposals))
         }
         return effects
+    }
+
+    /// Where a card goes. The night's reflection waits in Today, and so does
+    /// a Breakpoint with nothing that needs the owner — "nothing needs you"
+    /// never pops up over their work. Every other card takes the ladder (the
+    /// panel when the owner is at the Mac).
+    static func deliveryRungs(_ body: DayCard.Body, importance: Importance, snapshot: DaySnapshot)
+        -> [DeliveryRung]
+    {
+        switch body {
+        case .reflection:
+            return [.today]
+        case .breakpoint(let card) where card.needsYou.isEmpty:
+            return [.today]
+        case .morningPlan, .eveningWrapUp, .breakpoint, .triage:
+            return DeliveryLadder.rungs(for: importance, snapshot: snapshot)
+        }
     }
 
     private static func traceFields(
@@ -252,6 +348,7 @@ nonisolated extension DayEngine {
             fields["prefillSeconds"] = .double(measure.prefillSeconds)
             fields["generateSeconds"] = .double(measure.generateSeconds)
             fields["latencySeconds"] = .double(measure.latencySeconds)
+            fields["waitSeconds"] = .double(measure.waitSeconds)
             fields["hitCap"] = .bool(measure.hitCap)
             fields["model"] = .string(measure.modelID)
         }
@@ -380,7 +477,7 @@ nonisolated extension DayEngine {
             return [.trace(.cardReaction, ["action": "agentHandled"])]
 
         case .planNow:
-            return run(.morningPlan, trigger: .ownerAsked, snapshot: snapshot, state: &state)
+            return morningPlan(trigger: .ownerAsked, snapshot: snapshot, state: &state)
 
         case .wrapUpNow:
             return run(.eveningWrapUp, trigger: .ownerAsked, snapshot: snapshot, state: &state)

@@ -3,6 +3,8 @@
 - Status: Accepted (as built through #480; large-model memory and latency
   acceptance remain open, as recorded below)
 - Date: 2026-09-06
+- Amended by: ADR-0081 (2026-10-01: "the GPU lease" below is now the **LLM Gate**;
+  one LLM generation at a time still holds)
 - Relates to: ADR-0023 (its rejection of copy-on-write restore stands; this
   ADR explains why a move is not that alias), ADR-0019 (the Restore Pin is
   amended by the Leaf Lease; its Deferred Payload Extraction amendment is

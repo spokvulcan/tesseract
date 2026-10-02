@@ -50,8 +50,8 @@ final class DependencyContainer: ObservableObject {
 
     // Proofread Pass (ADR-0034): the second, small co-resident MLX model that
     // polishes transcriptions. The pass is pure policy over injected closures;
-    // the model actor never touches the arbiter — skip-when-busy reads the
-    // lease instead of queueing on it.
+    // the model actor never touches the arbiter — skip-when-busy reads
+    // whether the LLM is generating, and never waits for it.
     lazy var proofreadModel = ProofreadModel()
     // Built in a method, not inline: a lazy initializer is checked as a
     // default-argument context, which must have a *single* isolation — and
@@ -66,7 +66,7 @@ final class DependencyContainer: ObservableObject {
         let downloads = modelDownloadManager
         return ProofreadPass(
             isEnabled: { settings.proofreadDictation },
-            isGPUBusy: { arbiter.isGPULeaseHeld },
+            isLLMBusy: { arbiter.isLLMBusy },
             modelDirectory: {
                 downloads.isDownloaded(ModelDefinition.defaultProofreadModelID)
                     ? downloads.modelPath(for: ModelDefinition.defaultProofreadModelID)
@@ -163,9 +163,6 @@ final class DependencyContainer: ObservableObject {
     lazy var companionNotifier: CompanionNotifier = {
         let notifier = CompanionNotifier()
         notifier.onOpen = { (NSApp.delegate as? AppDelegate)?.navigateToToday() }
-        notifier.onNudgeDelivered = { [companionTrace] id in
-            companionTrace.record(.nudgeFired, fields: ["id": .string(id)])
-        }
         return notifier
     }()
     /// The Day Thread's own agent: the same system prompt and tools as every
@@ -261,9 +258,8 @@ final class DependencyContainer: ObservableObject {
     lazy var companionTrace = CompanionTrace()
     lazy var agentConversationStore = AgentConversationStore()
     lazy var inferenceArbiter: InferenceArbiter = {
-        // TTS residency arrives as closures (evaluated lazily) because the
-        // speech engine's GPU lease adapter needs the arbiter — stored
-        // references in both directions would recurse at construction.
+        // TTS residency arrives as closures (evaluated lazily), so the
+        // arbiter never holds the speech engine.
         InferenceArbiter(
             agentEngine: agentEngine,
             settingsManager: settingsManager,
@@ -463,7 +459,8 @@ final class DependencyContainer: ObservableObject {
     // The voice session (#310): voice as a mode of the one conversation —
     // binds the #328 overlay, the speech engine, and the auto-listen loop to
     // the interactive chat. Spoken and typed turns are the same persisted
-    // message stream; barge-in is app-observed at the engine seam (#326).
+    // message stream. Half-duplex (ADR-0082): the mic is closed while he
+    // speaks; a key press or a click interrupts him.
     lazy var companionVoiceSession: CompanionVoiceSessionController = {
         let controller = CompanionVoiceSessionController(
             capture: VoiceCaptureSession(
@@ -476,6 +473,7 @@ final class DependencyContainer: ObservableObject {
             ),
             meterLevel: { [dictationFeed] in dictationFeed.level },
             meterSpectrum: { [dictationFeed] in dictationFeed.spectrum },
+            inputDead: { [audioCaptureEngine] in audioCaptureEngine.isInputDead },
             sendMessage: { [weak self] text in
                 self?.chatSession.sendMessage(text, bypassCommandParsing: true)
             },
@@ -483,12 +481,9 @@ final class DependencyContainer: ObservableObject {
                 composerDraft.restore(text: text, images: [])
             },
             speak: { [weak self] text, onDone in
-                self?.speechCoordinator.speakText(
-                    text, showsOverlay: false, route: .voiceSession, onSuccess: onDone)
+                self?.speechCoordinator.speakText(text, showsOverlay: false, onSuccess: onDone)
             },
             stopSpeaking: { [weak self] in self?.speechCoordinator.stop() },
-            pauseSpeaking: { [weak self] in self?.speechCoordinator.pause() },
-            resumeSpeaking: { [weak self] in self?.speechCoordinator.resume() },
             speechState: { [weak self] in self?.speechCoordinator.state ?? .idle },
             currentConversationID: { [weak self] in
                 self?.agentConversationStore.currentConversation?.id
@@ -496,19 +491,7 @@ final class DependencyContainer: ObservableObject {
             overlay: companionVoicePrototype,
             recorder: companionTrace,
             settings: settingsManager,
-            proofreadPass: proofreadPass,
-            // The Echo Floor's far-end signal and the Soft Barge duck
-            // (ADR-0041) — both live on the coordinator's active sink.
-            playbackLevel: { [weak self] in
-                self?.speechCoordinator.playbackLevelNow() ?? 0
-            },
-            fadeSpeech: { [weak self] target, duration in
-                self?.speechCoordinator.fadePlayback(to: target, over: duration)
-            },
-            // ADR-0041: the capture engine is held (and hosts the reply's
-            // playback) for the session's lifetime.
-            beginVoiceHold: { [weak self] in self?.audioCaptureEngine.beginVoiceHold() },
-            endVoiceHold: { [weak self] in self?.audioCaptureEngine.endVoiceHold() }
+            proofreadPass: proofreadPass
         )
         // The reply hook: while a session is live it owns the spoken reply
         // and the auto-listen loop; autoSpeak stays the chat-only path.
@@ -540,8 +523,7 @@ final class DependencyContainer: ObservableObject {
                             ModelDefinition.storageSubdirectory(forRepo: spec.repo))
                     },
                     neuralEngineCache: Qwen3Synthesizer.neuralEngineCache(
-                        in: StorageEnvironment.caches)),
-                gpu: ArbiterGPULease(arbiter: inferenceArbiter)
+                        in: StorageEnvironment.caches))
             )
         )
     }()
@@ -565,9 +547,6 @@ final class DependencyContainer: ObservableObject {
         // (`AudioPlaybackManager()`) — the AVFoundation adapter is needed by
         // nothing else in the graph, so there is no shared handle to wire here.
         // Tests inject `InMemoryAudioPlayback`.
-        // Dual-Path Playback (ADR-0041): the voice-session sink renders
-        // session replies through the VPIO capture engine under its voice
-        // hold; every other TTS surface keeps the dedicated engine.
         let coordinator = SpeechCoordinator(
             textExtractor: textExtractor,
             engine: speechEnginePresenter,
@@ -582,7 +561,6 @@ final class DependencyContainer: ObservableObject {
             notchOverlay: speechReadAlong,
             pinnedVoices: pinnedVoiceStore
         )
-        coordinator.voiceSessionPlayback = VoiceSessionPlayback(host: audioCaptureEngine)
         coordinator.onVoiceEngineMissing = {
             (NSApp.delegate as? AppDelegate)?.navigateToModels()
         }
@@ -652,6 +630,7 @@ final class DependencyContainer: ObservableObject {
         manager.diskCacheBytes = { [settingsManager] in
             SSDSnapshotStore.artifactBytes(at: settingsManager.ssdPrefixCacheRootURL)
         }
+        manager.modelActivity = { [weak self] in self?.modelActivity() ?? .empty }
         return manager
     }()
 
@@ -820,27 +799,44 @@ final class DependencyContainer: ObservableObject {
                     onDown: { [weak self] in self?.dictationCoordinator.onHotkeyDown() },
                     onUp: { [weak self] in self?.dictationCoordinator.onHotkeyUp() }
                 )
-                // Register TTS hotkey
+                // Register TTS hotkey. In a voice session it and the Agent
+                // hotkey are the interrupt key: Jarvis stops and listens
+                // (ADR-0082).
                 hotkeyManager.registerHotkey(
                     id: "tts",
                     combo: settingsManager.ttsHotkey,
                     onDown: { [weak self] in
-                        self?.speechCoordinator.onHotkeyPressed()
+                        guard let self else { return }
+                        if companionVoiceSession.isActive {
+                            companionVoiceSession.bargeIn(source: "key")
+                        } else {
+                            speechCoordinator.onHotkeyPressed()
+                        }
                     }
                 )
                 // Register Agent hotkey
                 hotkeyManager.registerHotkey(
                     id: "agent",
                     combo: settingsManager.agentHotkey,
-                    onDown: { [weak self] in self?.agentVoiceInput.start() },
+                    onDown: { [weak self] in
+                        guard let self else { return }
+                        if companionVoiceSession.isActive {
+                            companionVoiceSession.bargeIn(source: "key")
+                        } else {
+                            agentVoiceInput.start()
+                        }
+                    },
                     onUp: { [weak self] in self?.agentVoiceInput.finishCapture() }
                 )
                 // Register the capture hotkey: tap to type, hold to speak.
+                // As one key (Right ⌥ by default), another key pressed with
+                // it cancels: the owner is typing.
                 hotkeyManager.registerHotkey(
                     id: "capture",
                     combo: settingsManager.captureHotkey,
                     onDown: { [weak self] in self?.capturePanel.hotkeyDown() },
-                    onUp: { [weak self] in self?.capturePanel.hotkeyUp() }
+                    onUp: { [weak self] in self?.capturePanel.hotkeyUp() },
+                    onCancel: { [weak self] in self?.capturePanel.hotkeyCancelled() }
                 )
                 // Register Appshot hotkey (one-shot tap, no held state)
                 hotkeyManager.registerHotkey(
@@ -1011,7 +1007,7 @@ final class DependencyContainer: ObservableObject {
                 // currently-loaded one is reported with `state: "loaded"`;
                 // the rest are `"available"`. Undownloaded models are omitted
                 // because `CompletionHandler` validates `request.model` before
-                // entering the lease queue; advertising an undownloaded id would
+                // queueing at the LLM gate; advertising an undownloaded id would
                 // promise a model that immediately returns `model_not_found`.
                 let loadedID: String? = engine.isModelLoaded ? arbiter.loadedLLMModelID : nil
                 let models: [OpenAI.ModelObject] =

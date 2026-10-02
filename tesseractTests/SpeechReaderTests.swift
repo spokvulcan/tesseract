@@ -34,8 +34,7 @@ private struct ReaderHarness {
         synthesizer = ScriptedSpeechSynthesizer()
         await synthesizer.configure(script)
         let engine = SpeechEngine(
-            model: ModelDefinition.textToSpeechModelSpec, synthesizer: synthesizer,
-            gpu: ImmediateGPULease())
+            model: ModelDefinition.textToSpeechModelSpec, synthesizer: synthesizer)
         playback = InMemoryAudioPlayback()
         readAlong = SpeechReadAlong()
         settings = SettingsManager(store: InMemorySettingsStore())

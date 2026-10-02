@@ -7,7 +7,7 @@ import os
 /// (ADR-0069): its lane in the **Active-Inference Reserve**, its **Restore
 /// Pins** and, after a **Leaf Handoff**, its **Leaf Lease**. Snapshot
 /// Resolution adds the lane and the pins; the check-out takes the lease.
-/// The claim concludes exactly once, inside the request's GPU lease, and
+/// The claim concludes exactly once, inside the request's LLM gate turn, and
 /// only a claim lets go of what it holds.
 ///
 /// A claim is held only inside an owner scope, one owner at a time. `start`

@@ -24,7 +24,7 @@ actor LLMActor {
     ///
     /// Math for Qwen3.5-Next-4B-paro on Apple Silicon (Mac15,9 / 48 GB unified):
     /// - Model weights (4-bit quant):      ~2.5 GB
-    /// - MLX free buffer pool:             ~1.0 GB (cacheLimitMB)
+    /// - MLX free buffer pool:             ≤512 MB (cacheLimitMB)
     /// - Active inference KV cache:        ~1.0 GB (single in-flight 16 K context turn)
     /// - Activations / scratch:            ~1.0 GB
     /// - Subtotal (single in-flight turn): ~5.5 GB
@@ -47,7 +47,11 @@ actor LLMActor {
     /// so pre-load paths and tests retain deterministic behavior. Machines too
     /// small to fit model + headroom clamp to 0 and rely on the fallback.
     enum Defaults {
-        static let cacheLimitMB = 2048
+        /// The pool of freed MLX buffers kept for reuse. Decode reuses the
+        /// same small buffers, which fit; a long prefill's large ones go back
+        /// to the system instead of sitting in memory (they filled a 2 GB pool
+        /// on every turn), because memory is what the models share.
+        static let cacheLimitMB = 512
         static let prefixCacheHeadroomBytes = 20 * 1024 * 1024 * 1024  // 20 GiB
         /// Fallback budget used before load-time sizing runs. Each snapshot
         /// costs ~200–600 MiB depending on context length, so 3 GiB fits
@@ -429,7 +433,7 @@ actor LLMActor {
     /// module's active completion (cancel-and-await, so no in-flight server
     /// request can touch model state during teardown), then drops the module
     /// (prefix cache, load-time snapshot facts, admin state) and the
-    /// container. The GPU lease remains the primary guard; this drain is the
+    /// container. The LLM gate remains the primary guard; this drain is the
     /// in-actor backstop (ADR-0015).
     func unloadModel() async {
         // Identity only: a strong local would keep the whole model alive
@@ -722,7 +726,7 @@ actor LLMActor {
         // the store point so a failed load leaves the policy matching the
         // still-resident previous model, and every successful load —
         // including MoE↔dense switches — installs its own leg. The policy is
-        // process-global: co-resident MLX work (TTS under its own GPU lease)
+        // process-global: co-resident MLX work (TTS, running beside the LLM)
         // runs under the resident LLM's caps, which is scheduling-only;
         // `unloadModel` restores the balanced default.
         GPU.setCommitLimits(maxMBPerBuffer: identity.isMoE ? 200 : 100)

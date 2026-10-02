@@ -77,6 +77,29 @@ nonisolated struct ObservedNotification: Sendable, Equatable, Hashable, Codable,
     let subtitle: String
     let body: String
     let arrivedAt: Date
+    /// Who it is from, as code classified it on arrival; nil for a banner
+    /// admitted before sources existed (it is treated as a person's).
+    let source: NotificationSource?
+
+    init(
+        id: String, app: String, title: String, subtitle: String, body: String,
+        arrivedAt: Date, source: NotificationSource? = nil
+    ) {
+        self.id = id
+        self.app = app
+        self.title = title
+        self.subtitle = subtitle
+        self.body = body
+        self.arrivedAt = arrivedAt
+        self.source = source
+    }
+
+    /// The same banner with its source classified.
+    func classified(_ source: NotificationSource) -> ObservedNotification {
+        ObservedNotification(
+            id: id, app: app, title: title, subtitle: subtitle, body: body, arrivedAt: arrivedAt,
+            source: source)
+    }
 
     /// "App: title — body", the line the model and the card read.
     var line: String {

@@ -2,11 +2,11 @@
 //  InferenceArbitrating.swift
 //  tesseract
 //
-//  The narrow seam the lease-acquiring consumers (`AgentRunController`,
-//  `SpeechCoordinator`, `AgentCoordinator`) depend on — one member, the scoped
-//  lease. Two adapters make it real (ADR-0001): the production
-//  `InferenceArbiter`, and the in-memory peer in `tesseractTests` that records
-//  lease calls and runs the body without loading a model.
+//  The narrow seam LLM consumers (`AgentRunController`, the Day Thread, the
+//  completion handler) depend on — one member, the scoped LLM turn. Two
+//  adapters make it real (ADR-0001): the production `InferenceArbiter`, and
+//  the in-memory peer in `tesseractTests` that records turns and runs the
+//  body without loading a model.
 //
 //  Deliberately single-member: `reloadLLMIfNeeded` and the read-only model
 //  state stay on the concrete facade — their only consumers already hold it.
@@ -15,7 +15,7 @@
 //  (contrast the actor-backed speech model ports of ADR-0003).
 //
 
-/// How a lease chooses the `.llm` slot's vision mode (ADR-0008).
+/// How an LLM turn chooses the model's vision mode (ADR-0008).
 nonisolated enum LLMVisionRequirement: Sendable, Equatable {
     /// Chat UI and background agents: load vision when the user's global
     /// "Use vision models when available" opt-out is on *and* the model is
@@ -38,31 +38,22 @@ nonisolated enum LLMVisionRequirement: Sendable, Equatable {
     }
 }
 
-/// Scoped exclusive GPU access with the required model loaded: waits FIFO-fair
-/// for the lease, ensures `slot`'s model is resident, runs `body`, releases on
-/// exit — including on throw.
+/// One LLM turn with the selected model loaded: waits its FIFO turn at the
+/// **LLM Gate**, makes sure the model is resident, runs `body`, releases on
+/// exit — including on throw. Only LLM work takes the gate (ADR-0081).
 @MainActor
 protocol InferenceArbitrating {
-    func withExclusiveGPU<T: Sendable>(
-        _ slot: ModelSlot,
-        llmModelIDOverride: String?,
-        llmVision: LLMVisionRequirement,
+    func withLLM<T: Sendable>(
+        modelIDOverride: String?,
+        vision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T
 }
 
 extension InferenceArbitrating {
     /// Protocol requirements cannot carry default arguments; this restores the
-    /// common two-argument call shape (`withExclusiveGPU(.llm) { … }`).
-    func withExclusiveGPU<T: Sendable>(
-        _ slot: ModelSlot,
-        body: () async throws -> T
-    ) async throws -> T {
-        try await withExclusiveGPU(
-            slot,
-            llmModelIDOverride: nil,
-            llmVision: .fromSettings,
-            body: body
-        )
+    /// common one-argument call shape (`withLLM { … }`).
+    func withLLM<T: Sendable>(body: () async throws -> T) async throws -> T {
+        try await withLLM(modelIDOverride: nil, vision: .fromSettings, body: body)
     }
 }

@@ -21,7 +21,8 @@ struct DayEngineBreakpointTests {
 
     static func snapshot(
         at now: Date, present: Bool = true, frontmost: String? = "com.apple.Safari",
-        terminalAt: Date? = nil, power: PowerState = .nominal, rules: [TriageRule] = []
+        terminalAt: Date? = nil, power: PowerState = .nominal, rules: [TriageRule] = [],
+        game: Bool = false
     ) -> DaySnapshot {
         var agenda = AgendaSnapshot.empty
         agenda.access = .full
@@ -34,7 +35,7 @@ struct DayEngineBreakpointTests {
         settings.rules = rules
         return DaySnapshot(
             now: now, settings: settings, agenda: agenda, ownerPresent: present,
-            frontmostAppName: "Safari", frontmostBundleID: frontmost,
+            frontmostAppName: "Safari", frontmostBundleID: frontmost, frontmostIsGame: game,
             lastTerminalFrontAt: terminalAt,
             power: power)
     }
@@ -59,6 +60,10 @@ struct DayEngineBreakpointTests {
 
     static func panelCards(_ effects: [DayEffect]) -> [DayCard] {
         effects.compactMap { if case .presentCard(let card, .panel) = $0 { card } else { nil } }
+    }
+
+    static func todayCards(_ effects: [DayEffect]) -> [DayCard] {
+        effects.compactMap { if case .presentCard(let card, .today) = $0 { card } else { nil } }
     }
 
     /// Two banners arrive while the owner is away at lunch.
@@ -103,7 +108,10 @@ struct DayEngineBreakpointTests {
             .presenceReturned(awayFrom: Self.local(12)),
             snapshot: Self.snapshot(at: Self.local(13)),
             state: Self.awayWithNotifications())
-        let card = try #require(Self.panelCards(decision.effects).first)
+        // Nothing needs the owner yet: the card waits in Today, no panel pops
+        // up over their work while the model judges the banners.
+        #expect(Self.panelCards(decision.effects).isEmpty)
+        let card = try #require(Self.todayCards(decision.effects).first)
         guard case .breakpoint(let breakpoint) = card.body else {
             Issue.record("expected a Breakpoint card")
             return
@@ -239,6 +247,92 @@ struct DayEngineBreakpointTests {
             snapshot: Self.snapshot(at: Self.local(10, 2)), state: run.state)
         #expect(Self.panelCards(quiet.effects).isEmpty)
         #expect(quiet.state.ledger.entry("bank")?.triagedAt != nil)
+    }
+
+    @Test func onlyPeopleReachTriage() throws {
+        // The evening of the first: Game Mode turns on, an image is ready, and
+        // someone writes on Slack.
+        var state = Self.state()
+        for (notification, at) in [
+            (
+                Self.notification(
+                    "game-mode", app: "Game Mode", title: "Game Mode: On", body: "",
+                    at: Self.local(19)
+                ).classified(.noise), Self.local(19)
+            ),
+            (
+                Self.notification(
+                    "image", app: "ChatGPT", title: "Your image is ready", body: "",
+                    at: Self.local(19, 1)
+                ).classified(.app), Self.local(19, 1)
+            ),
+            (
+                Self.notification(
+                    "anna", app: "Slack", title: "Anna", body: "Can you look at the PR?",
+                    at: Self.local(19, 2)
+                ).classified(.person), Self.local(19, 2)
+            ),
+        ] {
+            state =
+                DayEngine.decide(
+                    .notificationArrived(notification), snapshot: Self.snapshot(at: at),
+                    state: state
+                ).state
+        }
+        let run = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(19, 3)), state: state)
+        let request = try #require(Self.moments(run.effects).first)
+        #expect(request.context.notificationIDs == ["anna"])
+        // The image waits for the next Breakpoint; Game Mode never shows.
+        let unresolved = run.state.ledger.unresolved(now: Self.local(19, 3)).map(\.id)
+        #expect(unresolved.contains("image"))
+        #expect(!unresolved.contains("game-mode"))
+    }
+
+    @Test func anAppsNewsWaitsOnTheBreakpointWithoutAModel() throws {
+        var state = Self.state()
+        state =
+            DayEngine.decide(
+                .notificationArrived(
+                    Self.notification(
+                        "image", app: "ChatGPT", title: "Your image is ready", body: "",
+                        at: Self.local(12, 30)
+                    ).classified(.app)),
+                snapshot: Self.snapshot(at: Self.local(12, 30), present: false), state: state
+            ).state
+        let back = DayEngine.decide(
+            .presenceReturned(awayFrom: Self.local(12)),
+            snapshot: Self.snapshot(at: Self.local(13)), state: state)
+        #expect(Self.moments(back.effects).isEmpty)
+        let card = try #require(Self.todayCards(back.effects).first)
+        guard case .breakpoint(let breakpoint) = card.body else {
+            Issue.record("expected a Breakpoint card")
+            return
+        }
+        #expect(breakpoint.canWait.map(\.app) == ["ChatGPT"])
+        #expect(breakpoint.needsYou.isEmpty)
+    }
+
+    @Test func noTriageWhileAGameIsInFront() {
+        var state = Self.state()
+        state =
+            DayEngine.decide(
+                .notificationArrived(
+                    Self.notification(
+                        "anna", app: "Slack", title: "Anna", body: "ping", at: Self.local(20)
+                    ).classified(.person)),
+                snapshot: Self.snapshot(at: Self.local(20)), state: state
+            ).state
+        let playing = DayEngine.decide(
+            .tick,
+            snapshot: Self.snapshot(
+                at: Self.local(20, 1), frontmost: "com.valvesoftware.dota2", game: true),
+            state: state)
+        #expect(Self.moments(playing.effects).isEmpty)
+        // Out of the game, it runs.
+        let back = DayEngine.decide(
+            .tick, snapshot: Self.snapshot(at: Self.local(20, 2)), state: playing.state)
+        #expect(Self.moments(back.effects).first?.kind == .triage)
     }
 
     @Test func aRaiseRuleSkipsTheModel() {

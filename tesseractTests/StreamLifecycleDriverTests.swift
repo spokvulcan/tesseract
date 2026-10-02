@@ -72,8 +72,8 @@ struct StreamLifecycleDriverTests {
     /// generation, reports `.connectionState`, and the drive observes its own
     /// cancellation (it does not linger).
     @Test func disconnectMidDriveCancelsDrivePromptly() async {
-        let cancelBridged = LeaseAcquiredSignal()
-        let driveObservedCancel = LeaseAcquiredSignal()
+        let cancelBridged = GateAcquiredSignal()
+        let driveObservedCancel = GateAcquiredSignal()
         let driveRunning = AsyncLatch()
         let connection = AsyncLatch()
 
@@ -160,7 +160,7 @@ struct StreamLifecycleDriverTests {
     /// neither watcher ever fires — no keepalives, no transport cancel.
     @Test func normalCompletionTearsDownBothWatchers() async {
         let keepalives = Counter()
-        let cancelBridged = LeaseAcquiredSignal()
+        let cancelBridged = GateAcquiredSignal()
         let connection = connectionStaysUp()
 
         let outcome = await StreamLifecycleDriver.run(

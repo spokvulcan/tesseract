@@ -74,8 +74,8 @@ private actor ReplayRecorder {
 
 private struct ScriptedGeneration {
     let generation: CompletionDelivery.Generation
-    let cancelled: LeaseAcquiredSignal
-    let drained: LeaseAcquiredSignal
+    let cancelled: GateAcquiredSignal
+    let drained: GateAcquiredSignal
 }
 
 private let scriptedInfo = GenerationFixtures.info(promptTokenCount: 12, generationTokenCount: 3)
@@ -109,8 +109,8 @@ private func scriptedGeneration(
     cachedTokenCount: Int = 5,
     drive: @escaping @Sendable () async -> Void = {}
 ) -> ScriptedGeneration {
-    let cancelled = LeaseAcquiredSignal()
-    let drained = LeaseAcquiredSignal()
+    let cancelled = GateAcquiredSignal()
+    let drained = GateAcquiredSignal()
     let (stream, continuation) = AsyncThrowingStream<AgentGeneration, Error>.makeStream()
     for event in events { continuation.yield(event) }
     if let failure {
@@ -169,7 +169,7 @@ struct CompletionDeliveryTests {
     @Test func disconnectCancelsBeforeGenerationStartReturns() async {
         let connection = HTTPConnectionLifecycle()
         let (started, signal) = AsyncStream<Void>.makeStream()
-        let observedCancel = LeaseAcquiredSignal()
+        let observedCancel = GateAcquiredSignal()
         let dropper = Task {
             for await _ in started { break }
             await connection.markDisconnected()
@@ -300,7 +300,7 @@ struct CompletionDeliveryTests {
     }
 
     /// A completed request's drive still concludes its Cache Claim after the
-    /// stream ends, and the GPU lease must cover that (ADR-0069). Delivery
+    /// stream ends, and the LLM gate must cover that (ADR-0069). Delivery
     /// hands the client its last chunk first, then waits for the drive
     /// without cancelling it.
     @Test func aCompletedDeliveryWaitsForTheDriveBeforeReturning() async throws {
@@ -309,7 +309,7 @@ struct CompletionDeliveryTests {
             [.text("done"), .info(scriptedInfo)], drive: { await tail.run() })
         let sink = RecordingSink()
         let (log, handle) = await makeTrace(stream: false)
-        let returned = LeaseAcquiredSignal()
+        let returned = GateAcquiredSignal()
 
         let delivery = Task {
             await CompletionDelivery.deliver(

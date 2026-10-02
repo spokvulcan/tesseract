@@ -1,6 +1,8 @@
 # ADR-0050: The voice hold's async arbitration is a value machine
 
-- Status: Accepted
+- Status: Superseded by ADR-0082 (2026-10-01; the voice hold is deleted —
+  every capture is a per-take tap, so there is no detached wiring left to
+  arbitrate); was Accepted
 - Date: 2026-07-19
 - Relates to: ADR-0041 (Dual-Path Playback — the hold itself), ADR-0042
   (Voice Session Machine — decides *when* to hold), ADR-0025 (the

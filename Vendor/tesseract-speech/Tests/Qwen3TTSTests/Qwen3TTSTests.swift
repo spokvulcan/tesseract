@@ -70,9 +70,8 @@ struct Qwen3TTSTests {
 
     /// Generations on one model never overlap: a second one waits for the
     /// first, and each renders what it renders alone. (A cancelled stream's
-    /// generation runs on to the end of its frame after its consumer and the
-    /// engine's GPU lease have gone; the next one must not rewind the kept
-    /// KV caches under it.)
+    /// generation runs on to the end of its frame after its consumer has
+    /// gone; the next one must not rewind the kept KV caches under it.)
     @Test func overlappingGenerationsRenderAsIfAlone() async throws {
         let fixture = try await TinyModel.make(ttsModelType: "voice_design")
         defer { fixture.cleanUp() }

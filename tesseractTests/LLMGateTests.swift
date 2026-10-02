@@ -2,21 +2,21 @@ import Testing
 
 @testable import Tesseract_Agent
 
-/// Tests for the **GPU Lease Queue** — the pure, zero-dependency mutual-exclusion
-/// lease carved out of the `InferenceArbiter` (issue #58). Driven directly through
+/// Tests for the **LLM Gate** — the pure, zero-dependency mutual-exclusion
+/// gate carved out of the `InferenceArbiter` (issue #58). Driven directly through
 /// the single `withExclusive` operation, the way `OperationGuard` is tested as a
 /// value: no engines, no models, no peer.
 ///
 /// Determinism: every test runs on the MainActor and sequences concurrent callers
 /// with held continuations (`Gate`) and explicit `Task.yield()` handoffs — never
 /// wall-clock sleeps. All assertions target the observable contract of
-/// `withExclusive` (ordering, throwing, exclusion, `isLeased`), never the private
+/// `withExclusive` (ordering, throwing, exclusion, `isHeld`), never the private
 /// waiter array.
 @MainActor
-struct GPULeaseQueueTests {
+struct LLMGateTests {
 
     /// A continuation-backed latch: bodies park on `wait()` until the test calls
-    /// `open()`, letting a test hold the lease exactly as long as it needs.
+    /// `open()`, letting a test hold the gate exactly as long as it needs.
     @MainActor
     private final class Gate {
         private var isOpen = false
@@ -50,22 +50,22 @@ struct GPULeaseQueueTests {
     }
 
     /// The tracer: an uncontended `withExclusive` runs its body, returns its value,
-    /// and leaves the lease free.
+    /// and leaves the gate free.
     @Test
     func uncontendedCallRunsBodyAndReleases() async throws {
-        let queue = GPULeaseQueue()
+        let queue = LLMGate()
 
         let value = try await queue.withExclusive { 42 }
 
         #expect(value == 42)
-        #expect(!queue.isLeased)
+        #expect(!queue.isHeld)
     }
 
     /// The mutual-exclusion guarantee itself: a second caller arriving while the
-    /// lease is held must not enter its body until the holder's body has exited.
+    /// gate is held must not enter its body until the holder's body has exited.
     @Test
     func contendedBodiesNeverOverlap() async throws {
-        let queue = GPULeaseQueue()
+        let queue = LLMGate()
         let log = EventLog()
         let gate = Gate()
 
@@ -96,11 +96,11 @@ struct GPULeaseQueueTests {
         #expect(log.events == ["A-in", "A-out", "B-in", "B-out"])
     }
 
-    /// Queued waiters acquire the lease in arrival order — a queue-bypass
+    /// Queued waiters acquire the gate in arrival order — a queue-bypass
     /// regression (any later arrival overtaking an earlier one) breaks this.
     @Test
     func queuedWaitersAcquireInFIFOOrder() async throws {
-        let queue = GPULeaseQueue()
+        let queue = LLMGate()
         let log = EventLog()
         let gate = Gate()
 
@@ -127,14 +127,14 @@ struct GPULeaseQueueTests {
         #expect(log.events == ["B", "C", "D"])
     }
 
-    /// The atomic handoff: on release with waiters queued, the lease passes to the
+    /// The atomic handoff: on release with waiters queued, the gate passes to the
     /// next waiter directly — there is no instant where the queue looks free. A
-    /// release that clears `isLeased` and *then* wakes the waiter opens a one-job
+    /// release that clears `isHeld` and *then* wakes the waiter opens a one-job
     /// window where a third caller sees a free queue and barges past it; this test
     /// schedules a barger into exactly that window and demands FIFO survives.
     @Test
     func handoffLeavesNoWindowForABargingCaller() async throws {
-        let queue = GPULeaseQueue()
+        let queue = LLMGate()
         let log = EventLog()
         let holderGate = Gate()
         let bargeSignal = Gate()
@@ -172,11 +172,11 @@ struct GPULeaseQueueTests {
     }
 
     /// A waiter cancelled while queued throws `CancellationError` without ever
-    /// acquiring the lease — its body never runs — and the queue stays functional
+    /// acquiring the gate — its body never runs — and the queue stays functional
     /// for later callers.
     @Test
     func cancelWhileQueuedThrowsWithoutAcquiring() async throws {
-        let queue = GPULeaseQueue()
+        let queue = LLMGate()
         let log = EventLog()
         let gate = Gate()
 
@@ -201,28 +201,28 @@ struct GPULeaseQueueTests {
         // The queue is not wedged: a fresh caller acquires and releases normally.
         let value = try await queue.withExclusive { 7 }
         #expect(value == 7)
-        #expect(!queue.isLeased)
+        #expect(!queue.isHeld)
     }
 
     /// The handoff race: a waiter whose task is cancelled *after* the releasing
-    /// holder has resumed it, but *before* it claims the lease, must not inherit
-    /// it — its body never runs and it throws `CancellationError`. And the lease
+    /// holder has resumed it, but *before* it claims the gate, must not inherit
+    /// it — its body never runs and it throws `CancellationError`. And the gate
     /// must pass onward, not be orphaned: a bystander queued behind the cancelled
     /// waiter still acquires, and the queue drains to free. (The orphaning half is
     /// the wedge this test exists to lock out: a pre-claim cancellation check that
-    /// merely throws strands `isLeased` true forever, stalling all inference.)
+    /// merely throws strands `isHeld` true forever, stalling all inference.)
     ///
     /// Job ordering aims the cancel into the window — `gate.open()` enqueues the
     /// holder's release job, then the cancel runs as its own MainActor job behind
     /// it, after the handoff has resumed the victim but before the victim's own
     /// job claims. Scheduler ordering is not contractual, so the scenario sweeps
     /// ten iterations: every interleaving must uphold both invariants (body never
-    /// runs + lease passes onward), and an implementation with the window open
+    /// runs + gate passes onward), and an implementation with the window open
     /// cannot win the race ten times in a row.
     @Test
-    func cancelDuringHandoffCannotInheritTheLease() async throws {
+    func cancelDuringHandoffCannotInheritTheGate() async throws {
         for iteration in 0..<10 {
-            let queue = GPULeaseQueue()
+            let queue = LLMGate()
             let log = EventLog()
             let gate = Gate()
 
@@ -251,23 +251,23 @@ struct GPULeaseQueueTests {
             let outcome = await victim.result
             #expect(throws: CancellationError.self) { try outcome.get() }
 
-            // Hang-proof wedge probe: if the lease was orphaned, the bystander
+            // Hang-proof wedge probe: if the gate was orphaned, the bystander
             // never runs; assert via the log after settling, then cancel as
             // cleanup so a regression fails fast instead of deadlocking the suite.
             await settle()
             #expect(log.events == ["B"], "iteration \(iteration)")
-            #expect(!queue.isLeased, "iteration \(iteration)")
+            #expect(!queue.isHeld, "iteration \(iteration)")
             bystander.cancel()
             _ = await bystander.result
         }
     }
 
     /// A throwing body can never wedge the queue: the error propagates to the
-    /// caller, the lease is released, and a queued waiter still acquires.
+    /// caller, the gate is released, and a queued waiter still acquires.
     @Test
-    func bodyThrowReleasesTheLeaseToTheNextWaiter() async throws {
+    func bodyThrowReleasesTheGateToTheNextWaiter() async throws {
         struct BodyError: Error {}
-        let queue = GPULeaseQueue()
+        let queue = LLMGate()
         let log = EventLog()
         let gate = Gate()
 
@@ -290,6 +290,6 @@ struct GPULeaseQueueTests {
 
         try await waiter.value
         #expect(log.events == ["W"])
-        #expect(!queue.isLeased)
+        #expect(!queue.isHeld)
     }
 }

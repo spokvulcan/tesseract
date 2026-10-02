@@ -216,13 +216,19 @@ included); a reply that hits it falls back to the deterministic card.
 |---|---|
 | Morning Plan | 6,000 |
 | Breakpoint | 3,000 |
-| Triage | 2,500 |
+| Triage | 1,024 |
 | Evening Wrap-up | 4,000 |
 | Night Reflection | 8,000 |
 
-The Day Thread compacts past its ceiling (Settings → Companion, 80k tokens by
+The Day Thread compacts past its ceiling (Settings → Companion, 64k tokens by
 default). On the 27B hybrid checkpoints only 16 of 64 layers hold a KV cache,
-64 KB per token at full precision, so an 80k-token thread is about 5 GB.
+64 KB per token at full precision, so a 64k-token thread is about 4 GB during
+each moment (a full day measured 22.7k tokens, about 1.4 GB).
+
+The MLX buffer pool (`LLMActor.Defaults.cacheLimitMB`, process-wide) keeps at
+most 512 MB of freed buffers for reuse: decode's small buffers fit, and a long
+prefill's large ones go back to the system. It was 2 GB, which a long prefill
+filled on every turn.
 
 ## Non-LLM entries
 

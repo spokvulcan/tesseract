@@ -7,13 +7,11 @@ import Testing
 
 private func makeEngine(
     script: ScriptedSynthesizer.Script = .init()
-) async -> (SpeechEngine, ScriptedSynthesizer, RecordingLease) {
+) async -> (SpeechEngine, ScriptedSynthesizer) {
     let synth = ScriptedSynthesizer()
     await synth.configure(script)
-    let lease = RecordingLease()
-    let engine = SpeechEngine(
-        model: .voiceDesign17B(.q8), synthesizer: synth, gpu: lease)
-    return (engine, synth, lease)
+    let engine = SpeechEngine(model: .voiceDesign17B(.q8), synthesizer: synth)
+    return (engine, synth)
 }
 
 /// ~400 words in short sentences → 3 segments at the 200-token target.
@@ -27,7 +25,7 @@ private let shortText = "Hello there, this is a short utterance."
 @Suite struct EventGrammarTests {
 
     @Test func grammarOrderAndGaplessFrames() async throws {
-        let (engine, _, _) = await makeEngine()
+        let (engine, _) = await makeEngine()
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         let utterance = try await session.speak(longText)
 
@@ -77,7 +75,7 @@ private let shortText = "Hello there, this is a short utterance."
             WordStart(word: 0, frame: 0), WordStart(word: 1, frame: 3),
             WordStart(word: 2, frame: 99),
         ]
-        let (engine, _, _) = await makeEngine(script: .init(wordStarts: starts))
+        let (engine, _) = await makeEngine(script: .init(wordStarts: starts))
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         let utterance = try await session.speak(longText)
 
@@ -101,7 +99,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func audioProjectionYieldsOnlyChunks() async throws {
-        let (engine, _, _) = await makeEngine()
+        let (engine, _) = await makeEngine()
         let session = try await engine.session(.companion, voice: .standard(language: "en"))
         let utterance = try await session.speak(shortText)
 
@@ -111,7 +109,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func generationFailureTerminatesWithTypedError() async throws {
-        let (engine, _, _) = await makeEngine(script: .init(failOnSegmentIndex: 0))
+        let (engine, _) = await makeEngine(script: .init(failOnSegmentIndex: 0))
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         let utterance = try await session.speak(shortText)
 
@@ -124,7 +122,7 @@ private let shortText = "Hello there, this is a short utterance."
 @Suite struct CancellationTests {
 
     @Test func consumerTaskCancelSurfacesCancellationError() async throws {
-        let (engine, synth, _) = await makeEngine(
+        let (engine, synth) = await makeEngine(
             script: .init(chunksPerSegment: 50, chunkDelayNanos: 5_000_000))
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         let utterance = try await session.speak(shortText)
@@ -150,7 +148,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func supersessionTerminatesOldStreamBeforeNewSpeakReturns() async throws {
-        let (engine, _, _) = await makeEngine(
+        let (engine, _) = await makeEngine(
             script: .init(chunksPerSegment: 100, chunkDelayNanos: 2_000_000))
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
 
@@ -178,7 +176,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func closedSessionRejectsSpeak() async throws {
-        let (engine, _, _) = await makeEngine()
+        let (engine, _) = await makeEngine()
         let session = try await engine.session(.companion, voice: .standard(language: "en"))
         await session.close()
         await #expect(throws: SpeechEngineError.sessionClosed) {
@@ -187,7 +185,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func unloadTerminatesActiveUtterance() async throws {
-        let (engine, _, _) = await makeEngine(
+        let (engine, _) = await makeEngine(
             script: .init(chunksPerSegment: 200, chunkDelayNanos: 5_000_000))
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         let utterance = try await session.speak(shortText)
@@ -207,19 +205,18 @@ private let shortText = "Hello there, this is a short utterance."
     }
 }
 
-@Suite struct PacingAndLeaseTests {
+@Suite struct PacingTests {
 
-    @Test func lookaheadBoundsProductionAndLeaseIsReleasedWhileParked() async throws {
-        let (engine, synth, lease) = await makeEngine()
+    @Test func lookaheadBoundsProduction() async throws {
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         let utterance = try await session.speak(longText)
         #expect(utterance.segmentCount >= 3)
 
         // Consume nothing yet: producer must stop after segment 1 (in-flight
-        // finished + 1 undelivered) and park OUTSIDE the lease.
+        // finished + 1 undelivered) and park.
         try await Task.sleep(nanoseconds: 200_000_000)
         #expect(await synth.segmentsStarted == 1, "lookahead(1): one completed undelivered segment max")
-        #expect(await lease.depth == 0, "GPU lease released while demand-parked")
 
         // Drain fully: production resumes segment by segment.
         var doneCount = 0
@@ -228,11 +225,10 @@ private let shortText = "Hello there, this is a short utterance."
         }
         #expect(doneCount == utterance.segmentCount)
         #expect(await synth.segmentsFinished == utterance.segmentCount)
-        #expect(await lease.maxDepth == 1, "leases never nest")
     }
 
     @Test func eagerPacingRunsAhead() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(
             SessionProfile(reference: .none, pacing: .eager), voice: .standard(language: "en"))
         let utterance = try await session.speak(longText)
@@ -252,7 +248,7 @@ private let shortText = "Hello there, this is a short utterance."
 @Suite struct VoiceIdentityTests {
 
     @Test func leadSegmentBecomesTheTakeAndEveryLaterSegmentContinuesIt() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(
             .readAloud, voice: .designed(description: "warm narrator", language: "en"))
         let utterance = try await session.speak(longText)
@@ -272,7 +268,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func theTakeOutlivesTheUtterance() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(
             .readAloud, voice: .designed(description: "warm narrator", language: "en"))
         for try await _ in try await session.speak(shortText).events {}
@@ -287,7 +283,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func pinnedVoiceRoundTripsIntoAFreshEngine() async throws {
-        let (engine, _, _) = await makeEngine()
+        let (engine, _) = await makeEngine()
         let session = try await engine.session(
             .companion, voice: .designed(description: "product voice", language: "en"))
         #expect(await session.exportPinnedVoice() == nil, "no take before the first segment")
@@ -297,7 +293,7 @@ private let shortText = "Hello there, this is a short utterance."
         #expect(exported.voiceDescription == "product voice")
 
         let restored = try PinnedVoice(validating: try exported.serialized())
-        let (engine2, synth2, _) = await makeEngine()
+        let (engine2, synth2) = await makeEngine()
         let session2 = try await engine2.session(.companion, voice: .pinned(restored))
         for try await _ in try await session2.speak(longText).events {}
         let requests = await synth2.requests
@@ -309,7 +305,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func retakeReplacesTheTakeOnlyWhenItFinishes() async throws {
-        let (engine, synth, _) = await makeEngine(
+        let (engine, synth) = await makeEngine(
             script: .init(chunksPerSegment: 3, chunkDelayNanos: 20_000_000))
         let session = try await engine.session(
             .readAloud, voice: .designed(description: "warm narrator", language: "en"))
@@ -343,7 +339,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func aRetakeSpeaksOnlyTheOpening() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(
             .readAloud, voice: .designed(description: "warm narrator", language: "en"))
         let retake = try await session.retake(longText, options: .init(seed: .fixed(5)))
@@ -356,7 +352,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func withoutAReferencePolicyEverySegmentStandsAlone() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(
             SessionProfile(reference: .none, pacing: .eager),
             voice: .designed(description: "warm narrator", language: "en"))
@@ -368,7 +364,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func mismatchedFingerprintIsRejected() async throws {
-        let (engine, _, _) = await makeEngine()  // q8 engine
+        let (engine, _) = await makeEngine()  // q8 engine
         let foreign = PinnedVoice(
             modelFingerprint: TTSModelSpec.voiceDesign17B(.q6).fingerprint,
             voiceDescription: "v", language: "en", referenceText: "v",
@@ -388,7 +384,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func seedResolvedEntropyVariesFixedRepeats() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(
             SessionProfile(reference: .none, pacing: .eager), voice: .standard(language: "en"))
 
@@ -404,7 +400,7 @@ private let shortText = "Hello there, this is a short utterance."
 }
 
 /// The engine only loads a checkpoint already on disk. A missing one throws
-/// `modelUnavailable` before the GPU lease, so it never blocks LLM work.
+/// `modelUnavailable` before any load.
 @Suite struct ModelAvailabilityTests {
 
     private func expectModelUnavailable(
@@ -421,8 +417,8 @@ private let shortText = "Hello there, this is a short utterance."
         }
     }
 
-    @Test func missingCheckpointFailsBeforeTheLease() async throws {
-        let (engine, synth, lease) = await makeEngine()
+    @Test func missingCheckpointFailsBeforeAnyLoad() async throws {
+        let (engine, synth) = await makeEngine()
         await synth.setCheckpointOnDisk(false)
 
         await expectModelUnavailable {
@@ -430,13 +426,12 @@ private let shortText = "Hello there, this is a short utterance."
         }
         await expectModelUnavailable { try await engine.prepare(.warm) }
 
-        #expect(await lease.acquisitions == 0, "no GPU lease for a model that isn't there")
         #expect(await synth.loadCount == 0)
         #expect(await engine.readiness == .unloaded)
     }
 
     @Test func checkpointArrivingLaterLoadsNormally() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         await synth.setCheckpointOnDisk(false)
         await expectModelUnavailable {
             _ = try await engine.session(.companion, voice: .standard(language: "en"))
@@ -452,7 +447,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func concurrentOpensShareOneCheck() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         async let a: Void = engine.prepare(.loaded)
         async let b: Void = engine.prepare(.loaded)
         _ = try await (a, b)
@@ -463,7 +458,7 @@ private let shortText = "Hello there, this is a short utterance."
 @Suite struct LifecycleTests {
 
     @Test func lazyLoadOnFirstUseThenWarm() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         #expect(await engine.readiness == .unloaded)
         let session = try await engine.session(.readAloud, voice: .standard(language: "en"))
         #expect(await engine.readiness == .warm, "load + warmup happen at session open")
@@ -475,7 +470,7 @@ private let shortText = "Hello there, this is a short utterance."
     /// A caller that can't await the engine follows its readiness from the
     /// updates, including the reload under a session that outlived an unload.
     @Test func readinessUpdatesFollowEveryLoadAndUnload() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         var updates = await engine.readinessUpdates().makeAsyncIterator()
         let initial = await updates.next()
         #expect(initial == .unloaded)
@@ -506,7 +501,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func prepareCoalescesAndPrimes() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         async let a: Void = engine.prepare(.warm, priming: [.designed(description: "narrator", language: "en")])
         async let b: Void = engine.prepare(.warm)
         _ = try await (a, b)
@@ -515,7 +510,7 @@ private let shortText = "Hello there, this is a short utterance."
     }
 
     @Test func utteranceEndTrimsCaches() async throws {
-        let (engine, synth, _) = await makeEngine()
+        let (engine, synth) = await makeEngine()
         let session = try await engine.session(.companion, voice: .standard(language: "en"))
         for try await _ in try await session.speak(shortText).events {}
         try await Task.sleep(nanoseconds: 50_000_000)

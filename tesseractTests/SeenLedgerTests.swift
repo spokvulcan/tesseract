@@ -120,7 +120,8 @@ struct SeenLedgerTests {
 struct DeliveryLadderTests {
 
     static func snapshot(
-        hour: Int, present: Bool = true, speaks: Bool = true, frontmost: String? = nil
+        hour: Int, present: Bool = true, speaks: Bool = true, frontmost: String? = nil,
+        game: Bool = false
     ) -> DaySnapshot {
         var settings = DaySettings()
         settings.speaks = speaks
@@ -128,7 +129,13 @@ struct DeliveryLadderTests {
             from: DateComponents(year: 2026, month: 9, day: 30, hour: hour))!
         return DaySnapshot(
             now: now, settings: settings, agenda: .empty, ownerPresent: present,
-            frontmostBundleID: frontmost)
+            frontmostBundleID: frontmost, frontmostIsGame: game)
+    }
+
+    @Test func aGameInFrontGetsNoPanelAndNoVoice() {
+        let playing = Self.snapshot(hour: 20, frontmost: "com.valvesoftware.dota2", game: true)
+        #expect(DeliveryLadder.rungs(for: .normal, snapshot: playing) == [.today])
+        #expect(DeliveryLadder.rungs(for: .urgent, snapshot: playing) == [.banner])
     }
 
     @Test(arguments: [
@@ -152,11 +159,22 @@ struct DeliveryLadderTests {
     }
 
     @Test(arguments: [
+        // The reflection runs on power, or on a battery at least half full
+        // with a cool Mac.
         (
             MomentKind.nightReflection,
-            PowerState(onACPower: false, batteryPercent: 90, thermal: .nominal), true
+            PowerState(onACPower: false, batteryPercent: 90, thermal: .nominal), false
         ),
-        (.nightReflection, PowerState(onACPower: true, batteryPercent: 90, thermal: .fair), true),
+        (
+            .nightReflection, PowerState(onACPower: false, batteryPercent: 49, thermal: .nominal),
+            true
+        ),
+        (.nightReflection, PowerState(onACPower: false, batteryPercent: 90, thermal: .fair), true),
+        (.nightReflection, PowerState(onACPower: true, batteryPercent: 90, thermal: .fair), false),
+        (
+            .nightReflection, PowerState(onACPower: true, batteryPercent: 90, thermal: .serious),
+            true
+        ),
         (
             .nightReflection, PowerState(onACPower: true, batteryPercent: 90, thermal: .nominal),
             false

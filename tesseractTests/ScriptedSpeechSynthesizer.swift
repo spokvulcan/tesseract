@@ -126,14 +126,3 @@ actor ScriptedSpeechSynthesizer: SpeechSynthesizing {
         }
     }
 }
-
-/// A pass-through GPU lease for coordinator tests — no queue, no arbiter.
-/// `@concurrent` matches the package requirement: this module builds with
-/// NonisolatedNonsendingByDefault, the package does not.
-nonisolated struct ImmediateGPULease: GPULeasing {
-    func withLease<T: Sendable>(
-        _ body: @concurrent @Sendable () async throws -> T
-    ) async throws -> T {
-        try await body()
-    }
-}

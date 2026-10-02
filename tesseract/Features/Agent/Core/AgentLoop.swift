@@ -335,7 +335,7 @@ private func streamAssistantResponse(
     // `.malformedToolCall` event, both logs — stay here.
     var accumulator = GenerationAccumulator()
     var builder = AssistantPartsBuilder()
-    builder.model = config.model.id
+    builder.model = await config.currentModelID?() ?? config.model.id
 
     // messageStart with the empty snapshot, then the protocol's `start`.
     let placeholderMessage = builder.snapshot()

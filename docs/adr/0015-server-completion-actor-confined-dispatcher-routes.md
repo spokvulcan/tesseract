@@ -2,6 +2,9 @@
 status: accepted
 ---
 
+> Amended by ADR-0081 (2026-10-01): "the lease" in this record is now the **LLM
+> Gate** — the same FIFO turn for LLM work, no longer taken by speech.
+
 # Server Completion is an actor-confined module; the dispatcher owns the route; the lease is the primary guard
 
 This records the design decided in the 2026-06-09 architecture-review grilling for

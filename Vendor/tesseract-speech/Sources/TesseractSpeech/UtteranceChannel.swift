@@ -1,8 +1,8 @@
 // TesseractSpeech — the demand-paced event channel behind an Utterance.
 //
 // Why not AsyncThrowingStream: it buffers without exposing consumer demand,
-// and demand IS the pacing signal (ADR-0038: the engine suspends, lease-free,
-// until pulled). This channel parks the producer at segment boundaries when
+// and demand IS the pacing signal (ADR-0038: the engine suspends until
+// pulled). This channel parks the producer at segment boundaries when
 // the undelivered-segment count reaches the lookahead bound, and parks the
 // consumer when the buffer is empty. Single consumer by contract.
 
@@ -42,7 +42,7 @@ actor UtteranceChannel {
         }
     }
 
-    /// Park until undelivered completed segments < limit. Called lease-free.
+    /// Park until undelivered completed segments < limit.
     func waitForDemand(limit: Int) async {
         while terminal == nil, segmentsProduced - segmentsDelivered >= limit, !Task.isCancelled {
             await withTaskCancellationHandler {

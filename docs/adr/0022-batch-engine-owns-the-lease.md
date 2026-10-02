@@ -2,6 +2,9 @@
 status: accepted, not pursued (the engine was reverted on 2026-07-06; see the note at the end)
 ---
 
+> ADR-0081 (2026-10-01) retired the GPU lease: LLM work takes the **LLM Gate**;
+> speech no longer waits on it.
+
 # Batch inference: a lane engine owns the GPU lease
 
 Today the second concurrent completion waits FIFO on the GPU lease up to 60 s,

@@ -5,10 +5,10 @@
 //  The **Streaming Scheduler** at its own seam (ADR-0054): decision tables
 //  over the push-based playback fold — the start gate, finish detection, and
 //  the stream epoch that makes a stale buffer completion ignorable. Before the
-//  cut this fold was declared and mutated inline in three places
-//  (`AudioPlaybackManager`, `VoiceSessionPlayback`, `InMemoryAudioPlayback`),
-//  had already drifted on the epoch guard, and no test constructed any of
-//  them. All three now drive the value machine tested here.
+//  cut this fold was declared and mutated inline in every sink and the
+//  in-memory peer, had already drifted on the epoch guard, and no test
+//  constructed any of them. `AudioPlaybackManager` and `InMemoryAudioPlayback`
+//  now drive the value machine tested here.
 //
 //  Gotcha: Swift Testing's `#expect` can't wrap a call to a `mutating` method
 //  directly — every verdict below is hoisted into a `let` first.
@@ -176,23 +176,5 @@ struct StreamingSchedulerTests {
 
         scheduler.stop()
         #expect(scheduler.totalScheduledDuration == 0)
-    }
-
-    /// The `hasUndrainedAudio` gate (VoiceSessionPlayback's `hostedPlaying`)
-    /// is true from stream start — even before any chunk — until a finished
-    /// stream fully drains, and false while idle.
-    @Test func hasUndrainedAudioGatesFromStartUntilDrained() {
-        var scheduler = StreamingScheduler()
-        #expect(!scheduler.hasUndrainedAudio)
-
-        scheduler.beginStream(sampleRate: 24_000)
-        #expect(scheduler.hasUndrainedAudio)
-
-        let a = scheduler.appendChunk(sampleCount: 100)
-        _ = scheduler.finishStream()
-        #expect(scheduler.hasUndrainedAudio)  // finished but not yet drained
-
-        _ = scheduler.bufferCompleted(epoch: a.epoch)
-        #expect(!scheduler.hasUndrainedAudio)  // drained
     }
 }

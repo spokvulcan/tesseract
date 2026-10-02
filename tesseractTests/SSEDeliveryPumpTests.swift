@@ -169,7 +169,7 @@ struct SSEDeliveryPumpTests {
     /// A refused send reads as a client disconnect: the pump cancels
     /// generation and reports the chunk-write source.
     @Test func refusedSendCancelsAndReportsChunkWriteDisconnect() async {
-        let cancelled = LeaseAcquiredSignal()
+        let cancelled = GateAcquiredSignal()
         let (chunks, outcome) = await pumpEvents(
             [.text("a"), .text("b")],
             format: .xmlFunction,

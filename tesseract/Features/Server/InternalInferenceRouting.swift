@@ -7,7 +7,7 @@ private nonisolated func makeInternalInferenceStream(
     requestBuilder:
         @escaping @MainActor @Sendable (AgentGenerateParameters, ServerInferenceModelState?)
         -> ServerInferenceRequest,
-    onStart: (@MainActor @Sendable (_ cachedTokenCount: Int) -> Void)? = nil
+    onStart: (@MainActor @Sendable (ServerInferenceStartFacts) -> Void)? = nil
 ) -> AsyncThrowingStream<AgentGeneration, Error> {
     let (stream, continuation) = AsyncThrowingStream.makeStream(of: AgentGeneration.self)
     let cancelHandle = OSAllocatedUnfairLock<@Sendable () -> Void>(initialState: {})
@@ -17,8 +17,9 @@ private nonisolated func makeInternalInferenceStream(
         do {
             let parameters = parametersProvider()
             let modelState = inferenceService.currentModelState()
+            let requested = Date()
             start = try await inferenceService.start(requestBuilder(parameters, modelState))
-            if let start { onStart?(start.cachedTokenCount) }
+            if let start { onStart?(ServerInferenceStartFacts(start, requestedAt: requested)) }
 
             if let cancel = start?.cancel {
                 cancelHandle.withLock { $0 = cancel }
@@ -68,12 +69,13 @@ private nonisolated func makeInternalInferenceStream(
 /// Server Completion machinery. A `nil` conversation (undecodable attachment)
 /// falls back to the standard managed path, today's uncached behavior.
 ///
-/// `onStart` hears how many prompt tokens the prefix cache supplied, once the
-/// request starts — the Companion Trace's cache-reuse measure.
+/// `onStart` hears, once the request starts, how many prompt tokens the
+/// prefix cache supplied and how long the prompt took — the Companion
+/// Trace's cache-reuse and prefill measures.
 nonisolated func makeServerInferenceGenerateClosure(
     inferenceService: ServerInferenceService,
     parametersProvider: @escaping @MainActor @Sendable () -> AgentGenerateParameters,
-    onStart: (@MainActor @Sendable (_ cachedTokenCount: Int) -> Void)? = nil
+    onStart: (@MainActor @Sendable (ServerInferenceStartFacts) -> Void)? = nil
 ) -> LLMGenerateFunction {
     return { systemPrompt, messages, tools, _ in
         makeInternalInferenceStream(

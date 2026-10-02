@@ -2,12 +2,12 @@
 //  VoiceSessionMachineTests.swift
 //  tesseractTests
 //
-//  The Voice Session Machine's decision tables (ADR-0042): whole sessions —
-//  listen → speak → false barge → escalation → confirm → turn → mutual
-//  silence — replayed as event sequences against the pure machine, with no
-//  ticker, no CoreAudio, and no wall clock. Every scenario that previously
-//  required hardware (the 2026-07-17 flap storm, the watchdog's self-echo
-//  trace, the capture-retry freeze) is a table here.
+//  The Voice Session Machine's decision tables (ADR-0042, half-duplex since
+//  ADR-0082): whole sessions — listen → turn → reply → interrupt → listen →
+//  mutual silence — replayed as event sequences against the pure machine,
+//  with no ticker, no CoreAudio, and no wall clock. Every scenario that
+//  previously required hardware (the watchdog's 2026-07-16 trace, the
+//  capture-retry freeze, a dead microphone) is a table here.
 //
 
 import Foundation
@@ -25,7 +25,7 @@ struct VoiceSessionMachineHarness {
     var now: TimeInterval = 0
     var micAvailable = true
     var tunables = VoiceSessionMachine.Tunables(
-        trailingSilence: 1.8, sessionTimeout: 30, bargeInLevel: 0.25, autoSend: true)
+        trailingSilence: 1.8, sessionTimeout: 30, autoSend: true)
 
     @discardableResult
     mutating func send(_ event: VoiceSessionMachine.Event) -> [VoiceSessionMachine.Effect] {
@@ -45,23 +45,23 @@ struct VoiceSessionMachineHarness {
     /// ticker's sleep-then-tick.
     @discardableResult
     mutating func tick(
-        level: Float = 0.02, playback: Float = 0, speechActive: Bool = true
+        level: Float = 0.02, inputDead: Bool = false, speechActive: Bool = false
     ) -> [VoiceSessionMachine.Effect] {
         now += 0.05
         return send(
             .tick(
                 VoiceSessionMachine.Tick(
-                    level: level, playbackLevel: playback, speechActive: speechActive),
+                    level: level, inputDead: inputDead, speechActive: speechActive),
                 tunables: tunables))
     }
 
     @discardableResult
     mutating func ticks(
-        _ count: Int, level: Float = 0.02, playback: Float = 0, speechActive: Bool = true
+        _ count: Int, level: Float = 0.02, speechActive: Bool = false
     ) -> [VoiceSessionMachine.Effect] {
         var all: [VoiceSessionMachine.Effect] = []
         for _ in 0..<count {
-            all += tick(level: level, playback: playback, speechActive: speechActive)
+            all += tick(level: level, speechActive: speechActive)
         }
         return all
     }
@@ -77,6 +77,14 @@ struct VoiceSessionMachineHarness {
         enterListening()
         send(.turnTranscribed("hi"))
         send(.replyArrived(reply))
+    }
+
+    /// One whole spoken turn from listening: onset, speech, trailing
+    /// silence — the take closes and the machine is transcribing. Long
+    /// enough to ride out a post-utterance grace before the onset.
+    mutating func speakATurn() {
+        ticks(15, level: 0.6)
+        ticks(40, level: 0.02)
     }
 }
 
@@ -107,12 +115,11 @@ extension [VoiceSessionMachine.Effect] {
 
     // MARK: Entry / exit
 
-    @Test func enterOpensHoldOverlayAndListens() {
+    @Test func enterOpensTheOverlayAndListens() {
         var h = VoiceSessionMachineHarness()
         let effects = h.send(.enter(via: "test", tunables: h.tunables))
         #expect(
             effects == [
-                .beginVoiceHold,
                 .record(event: .voiceSessionEntered, snapshot: ["via": "test"]),
                 .overlayBeginSession,
                 .openCapture,
@@ -132,13 +139,13 @@ extension [VoiceSessionMachine.Effect] {
         h.enterListening()
         h.now = 30.0
         let effects = h.tick()
-        #expect(effects.contains(.endVoiceHold))
+        #expect(effects.contains(.closeCapture))
         #expect(effects.contains(.overlayEndSession))
         #expect(effects.snapshot(of: "voice.session-exited")?["reason"] == "mutual-silence")
         #expect(h.machine.phase == .idle)
     }
 
-    @Test func exitStopsSpeakingOnlyWhenSpeakingOrBarged() {
+    @Test func exitStopsSpeakingOnlyWhenSpeaking() {
         var quiet = VoiceSessionMachineHarness()
         quiet.enterListening()
         #expect(!quiet.send(.exit(reason: "test")).contains(.stopSpeaking))
@@ -147,16 +154,23 @@ extension [VoiceSessionMachine.Effect] {
         speaking.startSpeaking()
         let effects = speaking.send(.exit(reason: "test"))
         #expect(effects.first == .stopSpeaking)
+        // The mic was already closed for the reply.
+        #expect(!effects.contains(.closeCapture))
     }
 
-    @Test func exitClosesCaptureBeforeEndingTheHold() {
+    @Test func exitClosesTheCaptureAndEndsTheOverlay() {
         var h = VoiceSessionMachineHarness()
         h.enterListening()
         let effects = h.send(.exit(reason: "dismissed"))
-        let close = effects.firstIndex(of: .closeCapture)
-        let hold = effects.firstIndex(of: .endVoiceHold)
-        #expect(close != nil && hold != nil)
-        if let close, let hold { #expect(close < hold) }
+        #expect(
+            effects == [
+                .closeCapture,
+                .record(
+                    event: .voiceSessionExited,
+                    snapshot: ["reason": "dismissed", "exchanges": "0"]),
+                .overlayEndSession,
+            ])
+        #expect(h.machine.phase == .idle)
     }
 
     // MARK: Listening → turn
@@ -203,14 +217,14 @@ extension [VoiceSessionMachine.Effect] {
     @Test func unusableTakeReturnsToListening() {
         var h = VoiceSessionMachineHarness()
         h.enterListening()
-        h.ticks(6, level: 0.6)
-        h.ticks(38, level: 0.02)
+        h.speakATurn()
         let effects = h.send(.takeUnusable(reason: "empty"))
+        #expect(effects.contains(.openCapture))
         #expect(effects.contains(.feedState(.listening)))
         #expect(h.machine.phase == .listening)
     }
 
-    // MARK: The reply
+    // MARK: The reply (half-duplex)
 
     @Test func replyArrivesAndSpeaks() {
         var h = VoiceSessionMachineHarness()
@@ -219,6 +233,7 @@ extension [VoiceSessionMachine.Effect] {
         let effects = h.send(.replyArrived("hello there"))
         #expect(
             effects == [
+                .closeCapture,
                 .presentSpokenReply("hello there"),
                 .speak("hello there"),
                 .record(event: .voiceReplySpoken, snapshot: ["chars": "11"]),
@@ -226,11 +241,34 @@ extension [VoiceSessionMachine.Effect] {
         #expect(h.machine.phase == .speaking)
     }
 
+    @Test func aReplyAfterAClosedTakeSpeaksWithoutTouchingTheMic() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.speakATurn()
+        h.send(.turnTranscribed("hi"))
+        let effects = h.send(.replyArrived("hello"))
+        #expect(!effects.contains(.closeCapture))
+        #expect(!effects.contains(.openCapture))
+        #expect(effects.contains(.speak("hello")))
+    }
+
+    @Test func micStaysClosedWhileSpeakingAndLoudTicksDoNotReact() {
+        var h = VoiceSessionMachineHarness()
+        h.startSpeaking()
+        // Two seconds of loud input — his own voice in the room, or the
+        // owner talking over him: nothing opens, nothing captures.
+        let effects = h.ticks(40, level: 0.9, speechActive: true)
+        #expect(effects.isEmpty)
+        #expect(h.machine.phase == .speaking)
+    }
+
     @Test func silentReplyReopensTheMic() {
         var h = VoiceSessionMachineHarness()
         h.enterListening()
+        h.speakATurn()
         h.send(.turnTranscribed("hi"))
         let effects = h.send(.replyArrived(nil))
+        #expect(effects.contains(.openCapture))
         #expect(effects.contains(.feedState(.listening)))
         #expect(h.machine.phase == .listening)
     }
@@ -242,146 +280,201 @@ extension [VoiceSessionMachine.Effect] {
         #expect(h.machine.phase == .listening)
     }
 
-    // MARK: Soft Barge (ADR-0041)
-
-    @Test func energyOnsetDucksAndCapturesWithoutPausing() {
+    @Test func aTurnThatLandsWhileSpeakingStopsTheReplyFirst() {
         var h = VoiceSessionMachineHarness()
         h.startSpeaking()
-        let effects = h.ticks(12, level: 0.6)
-        #expect(effects.contains(record: "voice.barge-soft-onset"))
-        #expect(
-            effects.contains(
-                .fadeSpeech(
-                    target: VoiceSessionMachine.softDuckLevel,
-                    duration: VoiceSessionMachine.softDuckRampDown)))
-        #expect(effects.contains(.feedState(.listening)))
-        #expect(!effects.contains(.pauseSpeaking))
-        #expect(h.machine.phase == .capturing)
-    }
-
-    @Test func sustainedVoicingHardensTheDuckIntoThePause() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        h.ticks(12, level: 0.6)
-        let effects = h.ticks(8, level: 0.6)
-        #expect(effects.contains(.pauseSpeaking))
-        #expect(effects.snapshot(of: "voice.barge-in")?["detector"] == "energy-soft")
-    }
-
-    @Test func aSilentConfirmWindowFadesTheReplyBack() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        h.ticks(12, level: 0.6)
-        let effects = h.ticks(17, level: 0.02)
-        #expect(effects.snapshot(of: "voice.barge-false-resume")?["reason"] == "soft-fadeback")
-        #expect(
-            effects.contains(
-                .fadeSpeech(target: 1.0, duration: VoiceSessionMachine.softDuckRampUp)))
-        #expect(!effects.contains(.resumeSpeaking))
-        #expect(effects.contains(.feedState(.speaking)))
-        #expect(h.machine.phase == .speaking)
-
-        // Deaf through the restore transient (the 2026-07-17 flap cycle):
-        // loud input inside the post-resume grace must not re-onset.
-        let deaf = h.ticks(12, level: 0.6)
-        #expect(!deaf.contains(record: "voice.barge-soft-onset"))
-    }
-
-    @Test func escalationMutesTheEnergyDetectorAfterFourFalseBarges() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        for cycle in 1...4 {
-            h.ticks(12, level: 0.6)  // onset → duck
-            let fadeback = h.ticks(17, level: 0.02)  // window expires
-            #expect(
-                fadeback.snapshot(of: "voice.barge-false-resume")?["falseBargeCount"]
-                    == String(cycle))
-            h.ticks(22, level: 0.02)  // wait out the post-resume deafness
-        }
-        let suppressed = h.ticks(12, level: 0.6)
-        #expect(suppressed.contains(record: "voice.barge-suppressed"))
-        #expect(!suppressed.contains(record: "voice.barge-soft-onset"))
-        #expect(h.machine.phase == .speaking)
-    }
-
-    @Test func escalationWidensTheFloorMarginAfterTwoFalseBarges() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        for _ in 1...2 {
-            h.ticks(12, level: 0.6)
-            h.ticks(17, level: 0.02)
-            h.ticks(22, level: 0.02)
-        }
-        // Converge the floor on residual: believable = min(0.4, 0.8 − 0.2).
-        let effects = h.ticks(20, level: 0.4, playback: 0.8)
-        guard let sample = effects.snapshot(of: "voice.energy-sample"),
-            let threshold = Float(sample["threshold"] ?? "")
-        else {
-            Issue.record("no energy sample with a parseable threshold")
-            return
-        }
-        // margin 0.08 × 1.5 over the converged floor (~0.4) — the unscaled
-        // margin would sit at ~0.48.
-        #expect(threshold > 0.5)
-    }
-
-    // MARK: Click barge
-
-    @Test func clickBargePausesImmediately() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        let effects = h.send(.clickBarge(source: "click"))
-        #expect(effects.first == .pauseSpeaking)
-        #expect(effects.snapshot(of: "voice.barge-in")?["detector"] == "click")
-        #expect(effects.contains(.feedState(.listening)))
-        #expect(h.machine.phase == .capturing)
-    }
-
-    @Test func clickDuringTheSoftWindowCommitsThePause() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        h.ticks(12, level: 0.6)
-        let effects = h.send(.clickBarge(source: "click"))
-        #expect(effects.contains(.pauseSpeaking))
-        #expect(effects.snapshot(of: "voice.barge-in")?["detector"] == "click")
-        #expect(h.machine.phase == .capturing)
-    }
-
-    @Test func aBargeWithNoSpeechResumesTheReply() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        h.send(.clickBarge(source: "click"))
-        let effects = h.ticks(42, level: 0.02)
-        #expect(effects.snapshot(of: "voice.barge-false-resume")?["reason"] == "no-speech")
-        #expect(effects.contains(.resumeSpeaking))
-        #expect(
-            effects.contains(
-                .fadeSpeech(target: 1.0, duration: VoiceSessionMachine.softDuckRampUp)))
-        #expect(h.machine.phase == .speaking)
-    }
-
-    @Test func aBargedTurnThatTranscribesStopsTheReplyForGood() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        h.send(.clickBarge(source: "click"))
-        h.ticks(6, level: 0.6)
-        h.ticks(38, level: 0.02)
-        #expect(h.machine.phase == .transcribing)
-        let effects = h.send(.turnTranscribed("stop that"))
-        #expect(effects.contains(.stopSpeaking))
-        #expect(effects.contains(.send("stop that")))
+        let effects = h.send(.turnTranscribed("wait"))
+        #expect(effects.first == .stopSpeaking)
+        #expect(effects.contains(.send("wait")))
+        #expect(!effects.contains(.openCapture))
         #expect(h.machine.phase == .awaitingReply)
     }
 
-    @Test func anEmptyBargedTakeResumesTheReply() {
+    @Test func aLateUnusableTakeNeverOpensTheMicUnderTheReply() {
         var h = VoiceSessionMachineHarness()
         h.startSpeaking()
-        h.send(.clickBarge(source: "click"))
-        h.ticks(6, level: 0.6)
-        h.ticks(38, level: 0.02)
-        let effects = h.send(.takeUnusable(reason: "empty"))
-        #expect(effects.contains(.resumeSpeaking))
+        #expect(h.send(.takeUnusable(reason: "empty")).isEmpty)
+        #expect(h.send(.turnTranscribed("   ")).isEmpty)
         #expect(h.machine.phase == .speaking)
+    }
+
+    // MARK: Barge-in (a key or a click)
+
+    @Test func bargeInStopsTheReplyAndListens() {
+        var h = VoiceSessionMachineHarness()
+        h.startSpeaking()
+        h.now += 2.0
+        let effects = h.send(.bargeIn(source: "key"))
+        #expect(effects.first == .stopSpeaking)
+        let barge = effects.snapshot(of: "voice.barge-in")
+        #expect(barge?["source"] == "key")
+        #expect(barge?["offsetSeconds"] == "2.0")
+        // Speech stops before the mic opens.
+        let stop = effects.firstIndex(of: .stopSpeaking)
+        let open = effects.firstIndex(of: .openCapture)
+        #expect(stop != nil && open != nil)
+        if let stop, let open { #expect(stop < open) }
+        #expect(effects.contains(.feedState(.listening)))
+        #expect(h.machine.phase == .listening)
+    }
+
+    @Test func aClickIsRecordedAsItsSource() {
+        var h = VoiceSessionMachineHarness()
+        h.startSpeaking()
+        let effects = h.send(.bargeIn(source: "click"))
+        #expect(effects.snapshot(of: "voice.barge-in")?["source"] == "click")
+        #expect(h.machine.phase == .listening)
+    }
+
+    @Test func bargeInOutsideSpeakingDoesNothing() {
+        var idle = VoiceSessionMachineHarness()
+        #expect(idle.send(.bargeIn(source: "key")).isEmpty)
+        #expect(idle.machine.phase == .idle)
+
+        var listening = VoiceSessionMachineHarness()
+        listening.enterListening()
+        #expect(listening.send(.bargeIn(source: "key")).isEmpty)
+        #expect(listening.machine.phase == .listening)
+
+        var capturing = VoiceSessionMachineHarness()
+        capturing.enterListening()
+        capturing.ticks(7, level: 0.6)
+        #expect(capturing.send(.bargeIn(source: "click")).isEmpty)
+        #expect(capturing.machine.phase == .capturing)
+
+        var awaiting = VoiceSessionMachineHarness()
+        awaiting.enterListening()
+        awaiting.send(.turnTranscribed("hi"))
+        #expect(awaiting.send(.bargeIn(source: "key")).isEmpty)
+        #expect(awaiting.machine.phase == .awaitingReply)
+    }
+
+    @Test func theOwnerIsHeardAfterTheGraceThatFollowsAnInterrupt() {
+        var h = VoiceSessionMachineHarness()
+        h.startSpeaking()
+        h.send(.bargeIn(source: "key"))
+        // The reply's room tail inside the grace cannot seed a turn…
+        h.ticks(5, level: 0.6)
+        #expect(h.machine.phase == .listening)
+        // …but the owner speaking after it can.
+        h.ticks(7, level: 0.6)
+        #expect(h.machine.phase == .capturing)
+    }
+
+    @Test func nothingResumesAnInterruptedReply() {
+        var h = VoiceSessionMachineHarness()
+        h.startSpeaking(reply: "a long answer")
+        h.send(.bargeIn(source: "click"))
+        // A stray success callback from the stopped reply is inert.
+        #expect(h.send(.speechDone).isEmpty)
+        // An empty take after the interrupt just listens again.
+        h.speakATurn()
+        let effects = h.send(.takeUnusable(reason: "empty"))
+        #expect(!effects.contains(.speak("a long answer")))
+        #expect(effects.contains(.feedState(.listening)))
+        #expect(h.machine.phase == .listening)
+        // A second interrupt has nothing to stop.
+        #expect(h.send(.bargeIn(source: "key")).isEmpty)
+    }
+
+    // MARK: Other speech (half-duplex holds for it too)
+
+    @Test func otherSpeechHoldsTheMicClosedWhileListening() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        // The chat starts reading a reply aloud: the mic closes…
+        #expect(h.tick(speechActive: true) == [.closeCapture])
+        // …and stays closed through it, loud or not, past the session timeout.
+        h.now += 40
+        let held = h.ticks(20, level: 0.9, speechActive: true)
+        #expect(!held.contains(.openCapture))
+        #expect(h.machine.phase == .listening)
+        // It ends: the mic reopens, deaf through the room tail…
+        #expect(h.tick().contains(.openCapture))
+        h.ticks(5, level: 0.6)
+        #expect(h.machine.phase == .listening)
+        // …then hears the owner (a few spare ticks: at this clock the grace
+        // boundary rounds either way).
+        h.ticks(10, level: 0.6)
+        #expect(h.machine.phase == .capturing)
+    }
+
+    @Test func aKeyStopsOtherSpeechAndListens() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.tick(speechActive: true)
+        let effects = h.send(.bargeIn(source: "key"))
+        #expect(effects.first == .stopSpeaking)
+        #expect(effects.snapshot(of: "voice.barge-in")?["speech"] == "other")
+        #expect(effects.contains(.openCapture))
+        #expect(h.machine.phase == .listening)
+    }
+
+    @Test func otherSpeechOverATurnClosesTheTakeOnWhatWasSaid() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.ticks(7, level: 0.6)
+        #expect(h.machine.phase == .capturing)
+        let effects = h.tick(level: 0.6, speechActive: true)
+        #expect(effects.contains(.finishTake))
+        #expect(h.machine.phase == .transcribing)
+    }
+
+    // MARK: A take still transcribing (the mic waits for it)
+
+    @Test func aReplyThatLandsDuringATakeNeverSupersedesIt() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.speakATurn()
+        #expect(h.machine.phase == .transcribing)
+        // A reply to something typed earlier speaks while his take
+        // transcribes…
+        h.send(.replyArrived("about the typed question"))
+        #expect(h.machine.phase == .speaking)
+        // …and an interrupt stops it without opening the mic: a new capture
+        // would supersede the take still in flight.
+        let interrupted = h.send(.bargeIn(source: "key"))
+        #expect(interrupted.first == .stopSpeaking)
+        #expect(!interrupted.contains(.openCapture))
+        #expect(h.machine.phase == .transcribing)
+        // The take lands and goes out as his turn.
+        let landed = h.send(.turnTranscribed("my words"))
+        #expect(landed.contains(.send("my words")))
+        #expect(h.machine.phase == .awaitingReply)
+    }
+
+    @Test func aReplyThatEndsBeforeTheTakeWaitsForItsOutcome() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.speakATurn()
+        h.send(.replyArrived("short"))
+        let done = h.send(.speechDone)
+        #expect(!done.contains(.openCapture))
+        #expect(h.machine.phase == .transcribing)
+        let died = h.send(.takeUnusable(reason: "empty"))
+        #expect(died.contains(.openCapture))
+        #expect(h.machine.phase == .listening)
+    }
+
+    @Test func aSilentReplyDuringATakeLeavesTheMicClosed() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.speakATurn()
+        #expect(h.send(.replyArrived(nil)).isEmpty)
+        #expect(h.machine.phase == .transcribing)
+        #expect(h.send(.turnTranscribed("still mine")).contains(.send("still mine")))
+    }
+
+    @Test func anUnusableTakeUnderAReplyLetsTheReplyFinish() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.speakATurn()
+        h.send(.replyArrived("the reply"))
+        #expect(h.send(.takeUnusable(reason: "empty")).isEmpty)
+        #expect(h.machine.phase == .speaking)
+        // The reply's end opens the mic as usual.
+        #expect(h.send(.speechDone).contains(.openCapture))
+        #expect(h.machine.phase == .listening)
     }
 
     // MARK: Utterance end
@@ -391,6 +484,8 @@ extension [VoiceSessionMachine.Effect] {
         h.startSpeaking()
         let effects = h.send(.speechDone)
         #expect(effects.first == .stopSpeaking)
+        #expect(effects.contains(.openCapture))
+        #expect(!effects.contains(record: "voice.barge-in"))
         #expect(effects.contains(.feedState(.listening)))
         #expect(h.machine.phase == .listening)
 
@@ -400,17 +495,6 @@ extension [VoiceSessionMachine.Effect] {
         // …but the owner speaking after it can.
         h.ticks(7, level: 0.6)
         #expect(h.machine.phase == .capturing)
-    }
-
-    @Test func speechDoneWhileBargedRestoresWithoutResuming() {
-        var h = VoiceSessionMachineHarness()
-        h.startSpeaking()
-        h.send(.clickBarge(source: "click"))
-        #expect(h.send(.speechDone).isEmpty)
-        let effects = h.ticks(42, level: 0.02)
-        #expect(effects.contains(.fadeSpeech(target: 1.0, duration: 0)))
-        #expect(!effects.contains(.resumeSpeaking))
-        #expect(h.machine.phase == .listening)
     }
 
     @Test func watchdogExitsOnlyOnASustainedSettledReading() {
@@ -431,6 +515,67 @@ extension [VoiceSessionMachine.Effect] {
         let effects = h.ticks(2, level: 0.02, speechActive: false)
         #expect(effects.contains(record: "voice.watchdog-exit"))
         #expect(effects.contains(.stopSpeaking))
+        #expect(effects.contains(.openCapture))
+        #expect(h.machine.phase == .listening)
+    }
+
+    // MARK: Dead input (the capture engine's live-input check)
+
+    @Test func deadInputWhileListeningClosesAndReopensOnTheBackoff() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        let effects = h.tick(inputDead: true)
+        #expect(
+            effects == [
+                .closeCapture,
+                .record(event: .voiceCaptureDead, snapshot: ["count": "1"]),
+            ])
+        #expect(h.machine.phase == .listening)
+        // No reopen at tick cadence…
+        #expect(!h.ticks(10).contains(.openCapture))
+        // …only past the backoff, on a fresh capture.
+        h.now += 1.0
+        #expect(h.tick().contains(.openCapture))
+        h.ticks(8, level: 0.6)
+        #expect(h.machine.phase == .capturing)
+    }
+
+    @Test func twoDeadCapturesInARowExitTheSession() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.tick(inputDead: true)
+        h.now += 1.0
+        #expect(h.tick().contains(.openCapture))
+        let effects = h.tick(inputDead: true)
+        #expect(effects.snapshot(of: "voice.capture-dead")?["count"] == "2")
+        #expect(effects.snapshot(of: "voice.session-exited")?["reason"] == "capture-dead")
+        #expect(effects.contains(.overlayEndSession))
+        #expect(h.machine.phase == .idle)
+    }
+
+    @Test func hearingTheOwnerResetsTheDeadCount() {
+        var h = VoiceSessionMachineHarness()
+        h.enterListening()
+        h.tick(inputDead: true)
+        h.now += 1.0
+        h.tick()
+        // The reopened input works: he is heard, and his take ends.
+        h.speakATurn()
+        h.send(.takeUnusable(reason: "empty"))
+        let effects = h.tick(inputDead: true)
+        #expect(effects.snapshot(of: "voice.capture-dead")?["count"] == "1")
+        #expect(h.machine.phase == .listening)
+    }
+
+    @Test func aDeadFlagWithoutAnOpenCaptureIsIgnored() {
+        // The mic is busy elsewhere (a dictation take): its dead input is
+        // that capture's owner's business.
+        var h = VoiceSessionMachineHarness()
+        h.micAvailable = false
+        h.enterListening()
+        let effects = h.tick(inputDead: true)
+        #expect(!effects.contains(.closeCapture))
+        #expect(!effects.contains(record: "voice.capture-dead"))
         #expect(h.machine.phase == .listening)
     }
 
@@ -460,12 +605,26 @@ extension [VoiceSessionMachine.Effect] {
     @Test func takeOutcomesAfterExitAreInert() {
         var h = VoiceSessionMachineHarness()
         h.enterListening()
-        h.ticks(6, level: 0.6)
-        h.ticks(38, level: 0.02)
+        h.speakATurn()
         #expect(h.machine.phase == .transcribing)
         h.send(.exit(reason: "dismissed"))
         #expect(h.send(.turnTranscribed("hello")).isEmpty)
         #expect(h.send(.takeUnusable(reason: "empty")).isEmpty)
+        #expect(h.send(.bargeIn(source: "key")).isEmpty)
+        // A capture that opens after the end has no owner: closed at once.
+        #expect(h.send(.captureOpened) == [.closeCapture])
+        #expect(h.machine.phase == .idle)
+    }
+
+    @Test func theTimeoutNeverOpensACaptureItWouldLeaveRunning() {
+        var h = VoiceSessionMachineHarness()
+        h.micAvailable = false
+        h.enterListening()  // the start fails; the retry waits out the backoff
+        h.micAvailable = true
+        h.now = 30.0  // the retry and the timeout fall on one tick
+        let effects = h.tick()
+        #expect(!effects.contains(.openCapture))
+        #expect(effects.snapshot(of: "voice.session-exited")?["reason"] == "mutual-silence")
         #expect(h.machine.phase == .idle)
     }
 }

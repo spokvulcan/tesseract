@@ -30,7 +30,8 @@ struct DayEngineMomentTests {
 
     static func snapshot(
         at now: Date, present: Bool = true, chatBusy: Bool = false,
-        open: [AgendaReminder] = [review, gym], done: [AgendaReminder] = []
+        open: [AgendaReminder] = [review, gym], done: [AgendaReminder] = [],
+        power: PowerState = .nominal
     ) -> DaySnapshot {
         var agenda = AgendaSnapshot.empty
         agenda.access = .full
@@ -40,7 +41,7 @@ struct DayEngineMomentTests {
         return DaySnapshot(
             now: now, settings: DaySettings(), agenda: agenda,
             areas: [Area(id: "work", name: "Work"), Area(id: "health", name: "Health")],
-            inboxListID: "inbox", ownerPresent: present, chatBusy: chatBusy)
+            inboxListID: "inbox", ownerPresent: present, chatBusy: chatBusy, power: power)
     }
 
     static func state(_ day: Int = 30) -> DayState {

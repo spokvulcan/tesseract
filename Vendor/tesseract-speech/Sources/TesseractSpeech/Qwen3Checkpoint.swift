@@ -1,8 +1,8 @@
 // TesseractSpeech — what a Qwen3-TTS checkpoint directory must hold before
 // `Qwen3Synthesizer` loads it. Disk only: no MLX, no network.
 //
-// One rule, two readers: the synthesizer checks it before the engine takes
-// the GPU lease, and the app's Model Catalog uses it to decide whether the
+// One rule, two readers: the synthesizer checks it before the engine loads
+// anything, and the app's Model Catalog uses it to decide whether the
 // Voice Engine counts as downloaded. So the Models page can't call a
 // checkpoint downloaded that the engine would then refuse.
 

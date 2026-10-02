@@ -4,11 +4,11 @@
 //
 //  The **Agent Run** module: the foreground-run envelope carved out of
 //  `AgentCoordinator`. It owns the lifecycle of one foreground LLM invocation —
-//  a `send` turn or a `/compact` — serialized behind the `InferenceArbiter`'s
-//  exclusive `.llm` lease, and is the **single writer** of `isGenerating`.
+//  a `send` turn or a `/compact` — taking its turn at the `InferenceArbiter`'s
+//  **LLM Gate**, and is the **single writer** of `isGenerating`.
 //
-//  `isGenerating` is set *eagerly* in `send`/`runUnderLease` — before
-//  `agent.prompt` runs — because the run may sit **queued** behind the lease
+//  `isGenerating` is set *eagerly* in `send`/`runUnderGate` — before
+//  `agent.prompt` runs — because the run may sit **queued** at the gate
 //  while the agent itself is still idle. The flag therefore means "a
 //  foreground run is queued **or** active," a fact only this module knows.
 //
@@ -16,7 +16,7 @@
 //  coordinator's event dispatcher *feeds* the event-side transitions
 //  (`markStarted`/`finish`); this module never subscribes to `AgentEvent`s
 //  itself. A standalone `/compact` carries no `.agentEnd`, so it clears the flag
-//  by completing its body under `runUnderLease`, not via an event gate.
+//  by completing its body under `runUnderGate`, not via an event gate.
 //
 
 import Foundation
@@ -38,7 +38,7 @@ final class AgentRunController {
     private let arbiter: any InferenceArbitrating
     private let toolRegistry: ToolRegistry?
     private let settings: SettingsManager?
-    /// Failures inside the lease task surface through the coordinator's shared
+    /// Failures inside the gated task surface through the coordinator's shared
     /// `error` banner via this injected closure. Settable post-construction so the
     /// coordinator can wire it once `self` is fully initialized.
     @ObservationIgnored private var reportError: @MainActor (String) -> Void
@@ -47,7 +47,7 @@ final class AgentRunController {
     /// See `setOnRunSettled`.
     @ObservationIgnored private var onRunSettled: @MainActor () -> Void = {}
 
-    /// The task that holds the arbiter lease for the current run. Cancelled by
+    /// The task that holds the LLM gate for the current run. Cancelled by
     /// `cancel()` to abort both queued waits and active runs.
     @ObservationIgnored private var sendTask: Task<Void, Never>?
 
@@ -73,9 +73,9 @@ final class AgentRunController {
         reportError = handler
     }
 
-    /// Wire the run-settled sink: called exactly once per `runUnderLease` task,
+    /// Wire the run-settled sink: called exactly once per `runUnderGate` task,
     /// after `isGenerating` clears, on every exit — completion, cancellation
-    /// (including a cancel while still *queued* behind the lease, which emits
+    /// (including a cancel while still *queued* at the gate, which emits
     /// no agent events at all), and error. The Chat Session uses it to settle
     /// a Pending Row whose message never reached the agent.
     func setOnRunSettled(_ handler: @escaping @MainActor () -> Void) {
@@ -85,25 +85,25 @@ final class AgentRunController {
     // MARK: - Command Side
 
     /// Begin a foreground turn for `message`. Syncs the active tool set for the
-    /// current web-access setting, then drives `agent.prompt` under the lease.
+    /// current web-access setting, then drives `agent.prompt` at the gate.
     func send(_ message: any AgentMessageProtocol & Sendable) {
         syncActiveTools()
-        runUnderLease { [agent] in
+        runUnderGate { [agent] in
             agent.prompt(message)
             await agent.waitForIdle()
         }
     }
 
-    /// Run `body` under the exclusive `.llm` lease, holding it until the body
-    /// (and the in-agent work it awaits) finishes. Shared by `send` and
-    /// `/compact` so the lease/flag/cancel contract is written once.
+    /// Run `body` at the **LLM Gate**, holding it until the body (and the
+    /// in-agent work it awaits) finishes. Shared by `send` and `/compact` so
+    /// the gate/flag/cancel contract is written once.
     ///
     /// `isGenerating` is set eagerly and cleared when the body completes (or on
     /// cancel/error), so a body that awaits its work to completion — a `send`
     /// turn *or* a `/compact` — owns the whole busy-flag lifecycle through one
     /// rule. (A `send` body also sees `.agentEnd` clear the flag via the event
     /// spine; the completion clear is idempotent with it.)
-    func runUnderLease(_ body: @escaping @MainActor () async -> Void) {
+    func runUnderGate(_ body: @escaping @MainActor () async -> Void) {
         isGenerating = true
 
         // ADR-0013: when "Use vision models when available" is on (the default),
@@ -111,18 +111,16 @@ final class AgentRunController {
         // model so attaching an image just works with no toggle and no re-prefill.
         // Off → `.fromSettings`, which the arbiter resolves against the same
         // opt-out (→ text-only). Absent settings (some tests) keep the
-        // `.fromSettings` default so the lease contract is unchanged there.
+        // `.fromSettings` default so the gate contract is unchanged there.
         let visionReq: LLMVisionRequirement =
             (settings?.useVisionWhenAvailable ?? false) ? .visionIfCapable : .fromSettings
 
         sendTask = Task {
             do {
-                try await arbiter.withExclusiveGPU(
-                    .llm, llmModelIDOverride: nil, llmVision: visionReq
-                ) {
+                try await arbiter.withLLM(modelIDOverride: nil, vision: visionReq) {
                     await body()
                 }
-                // Body ran to completion under the lease — clear the busy flag.
+                // Body ran to completion at the gate — clear the busy flag.
                 self.isGenerating = false
             } catch is CancellationError {
                 // Cancelled while queued or during run — clean up.
@@ -138,7 +136,7 @@ final class AgentRunController {
         }
     }
 
-    /// Cancel the current run — aborts both a queued lease wait and an active run.
+    /// Cancel the current run — aborts both a queued gate wait and an active run.
     func cancel() {
         sendTask?.cancel()
         sendTask = nil

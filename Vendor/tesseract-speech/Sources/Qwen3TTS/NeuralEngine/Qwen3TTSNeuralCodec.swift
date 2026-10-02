@@ -283,8 +283,8 @@ package final class Qwen3TTSNeuralCodec: @unchecked Sendable {
         var dilationConsts: [Int: MILVar] = [:]
         var groupConsts: [Int: MILVar] = [:]
 
-        // On the CPU stream: building runs beside generation, outside the
-        // engine's GPU lease, and never touches the GPU.
+        // On the CPU stream: building runs beside generation and never
+        // touches the GPU.
         func halves(_ a: MLXArray) -> MLXArray {
             contiguous(a.asType(.float16, stream: .cpu), stream: .cpu)
         }

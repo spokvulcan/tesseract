@@ -93,13 +93,18 @@ enum AgentFactory {
         )
 
         // 8. Create agent config
-        let config = AgentLoopConfig(
+        var config = AgentLoopConfig(
             model: AgentModelRef(id: settingsManager.selectedAgentModelID),
             convertToLlm: { msgs in msgs.compactMap { $0.toLLMMessage() } },
             contextTransform: compactionTransform,
             getSteeringMessages: nil,
             getFollowUpMessages: nil
         )
+        // Agents live as long as the app (the Day Thread's, the chat's), so
+        // each turn reads the model the owner has selected now.
+        config.currentModelID = { [settingsManager] in
+            await MainActor.run { settingsManager.selectedAgentModelID }
+        }
 
         // 9. Create Agent, seeded with the resolved set, and wire the prompt
         // reassembler: when a later resolve changes the prompt facts (Web

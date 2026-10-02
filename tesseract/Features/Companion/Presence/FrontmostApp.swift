@@ -14,26 +14,37 @@ import Foundation
 @MainActor
 final class FrontmostAppTracker {
 
+    /// The lock screen and the screen saver come forward when the owner
+    /// walks away; they are never "where you were".
+    static let passingBundleIDs: Set<String> = [
+        "com.apple.loginwindow", "com.apple.ScreenSaver.Engine", "com.apple.screensaver",
+    ]
+
     private(set) var name: String?
     private(set) var bundleID: String?
+    /// The app in front is a game.
+    private(set) var isGame = false
     /// When a terminal was last in front (kept current while one is).
     private var terminalLeftAt: Date?
     private var observer: NSObjectProtocol?
+    private let resolver: AppIdentityResolver
 
     /// Called on every activation with the app's display name and bundle id.
     var onActivate: ((String, String?) -> Void)?
 
+    init(resolver: AppIdentityResolver = AppIdentityResolver()) {
+        self.resolver = resolver
+    }
+
     func start() {
         guard observer == nil else { return }
-        record(NSWorkspace.shared.frontmostApplication)
+        if let app = NSWorkspace.shared.frontmostApplication { activated(app, notify: false) }
         observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            let name = app?.localizedName
-            let bundleID = app?.bundleIdentifier
             MainActor.assumeIsolated {
-                self?.activated(name: name, bundleID: bundleID)
+                if let app { self?.activated(app, notify: true) }
             }
         }
     }
@@ -43,18 +54,22 @@ final class FrontmostAppTracker {
         TerminalApps.contains(bundleID) ? now : terminalLeftAt
     }
 
-    private func record(_ app: NSRunningApplication?) {
-        name = app?.localizedName
-        bundleID = app?.bundleIdentifier
+    /// Who the app behind a banner is, when it is running.
+    func identity(named name: String) -> AppIdentity? {
+        resolver.identity(named: name)
     }
 
-    private func activated(name: String?, bundleID: String?) {
+    private func activated(_ app: NSRunningApplication, notify: Bool) {
+        let bundleID = app.bundleIdentifier
+        if let bundleID, Self.passingBundleIDs.contains(bundleID) { return }
         if TerminalApps.contains(self.bundleID), !TerminalApps.contains(bundleID) {
             terminalLeftAt = Date()
         }
-        self.name = name
+        let identity = resolver.identity(of: app)
+        name = app.localizedName
         self.bundleID = bundleID
-        if let name { onActivate?(name, bundleID) }
+        isGame = identity.isGame
+        if notify, let name { onActivate?(name, bundleID) }
     }
 }
 

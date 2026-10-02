@@ -536,7 +536,7 @@ struct DictationCoordinatorTests {
     ) -> ProofreadPass {
         ProofreadPass(
             isEnabled: { true },
-            isGPUBusy: { false },
+            isLLMBusy: { false },
             modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
             loadModel: { _ in },
             runModel: { _, text in reply(text) },
@@ -651,7 +651,7 @@ struct DictationCoordinatorTests {
         let feed = DictationFeed()
         let pass = ProofreadPass(
             isEnabled: { true },
-            isGPUBusy: { false },
+            isLLMBusy: { false },
             modelDirectory: { URL(fileURLWithPath: "/tmp/proofread-model") },
             loadModel: { _ in },
             runModel: { _, _ in

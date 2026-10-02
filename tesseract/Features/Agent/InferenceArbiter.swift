@@ -8,9 +8,8 @@ import MLXLMCommon
 import Observation
 import os
 
-/// Which model occupies a GPU slot.
-///
-/// Co-resident slots (`.llm`, `.tts`) can coexist in memory.
+/// A model the arbiter tracks for residency: what is loaded, and what
+/// Offload Model frees. Both can be in memory at once and run at once.
 nonisolated enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
     case llm
     case tts
@@ -23,10 +22,16 @@ nonisolated enum ModelSlot: Sendable, Hashable, CustomStringConvertible {
     }
 }
 
-/// Single authority for model ownership and GPU serialization.
+/// Single authority for the LLM's identity and its one-at-a-time rule, and
+/// the residency mirror for Offload Model.
 ///
-/// Replaces ad-hoc `prepareForInference`/`prepareForSpeech`/`ensureModelLoaded`
-/// callbacks with a scoped lease API. Only one consumer generates at a time.
+/// LLM work — chat turns, the Companion's moments, HTTP requests, `/compact`,
+/// reloads — runs inside `withLLM`, which takes the **LLM Gate** (FIFO) and
+/// makes sure the selected model is loaded first, so the model can never
+/// change under a running generation. Nothing else takes the gate: speech,
+/// dictation, the proofreader and the embedder run beside the LLM (ADR-0081).
+/// Memory, not the GPU, is the shared limit; the menu bar shows what is
+/// loaded and working.
 ///
 /// Memory residency model:
 ///   - LLM + TTS are co-resident (independently lazy-loaded, both allowed in
@@ -92,17 +97,16 @@ final class InferenceArbiter: InferenceArbitrating {
     /// has no override (vendor JSON default).
     var loadedToolCallFormat: ToolCallFormat? { agentEngine.toolCallFormat }
 
-    /// The GPU mutual-exclusion lease — FIFO queue, atomic handoff, cancellation
-    /// protocol. Owned and tested as its own module (`GPULeaseQueueTests`); the
-    /// arbiter composes it with model loading.
-    @ObservationIgnored private let lease = GPULeaseQueue()
+    /// One LLM generation at a time — FIFO queue, atomic handoff,
+    /// cancellation protocol. Owned and tested as its own module
+    /// (`LLMGateTests`); the arbiter composes it with model loading.
+    @ObservationIgnored private let gate = LLMGate()
 
-    /// Whether the GPU lease is held right now — the **Proofread Pass**'s
-    /// skip-when-busy read (ADR-0034): a pass that would queue behind an
-    /// agent turn is skipped instead. A point-in-time read, deliberately not
-    /// a reservation — a lease acquired a moment later merely contends with
-    /// a sub-second 0.8B pass on the MLX stream.
-    var isGPULeaseHeld: Bool { lease.isLeased }
+    /// Whether LLM work is running right now — the **Proofread Pass**'s
+    /// skip-when-busy read (ADR-0034): dictation commits its cleaned raw text
+    /// at once rather than share the GPU with a long generation. A
+    /// point-in-time read, never a wait.
+    var isLLMBusy: Bool { gate.isHeld }
 
     // MARK: - Dependencies
 
@@ -110,10 +114,10 @@ final class InferenceArbiter: InferenceArbitrating {
     private let settingsManager: SettingsManager
     private let modelDownloadManager: ModelDownloadManager
 
-    /// The v2 speech engine self-loads under `withSpeechGPULease` (ADR-0039),
-    /// so the arbiter only *observes* TTS residency and can *release* it —
-    /// closures rather than a stored engine, which also keeps the container's
-    /// arbiter ↔ speech wiring acyclic.
+    /// The v2 speech engine loads itself (ADR-0039), so the arbiter only
+    /// *observes* TTS residency and can *release* it — closures rather than a
+    /// stored engine, which also keeps the container's arbiter ↔ speech
+    /// wiring acyclic.
     private let isTTSLoaded: @MainActor () -> Bool
     private let unloadTTS: @MainActor () async -> Void
 
@@ -133,166 +137,106 @@ final class InferenceArbiter: InferenceArbitrating {
 
     // MARK: - Public API
 
-    /// Scoped exclusive GPU access. Waits for any active lease to complete
-    /// (FIFO order), ensures the required model is loaded, runs the closure,
-    /// and releases the lease on exit — including on throw.
+    /// Scoped LLM access: waits its FIFO turn at the **LLM Gate**, makes sure
+    /// the model is loaded, runs the closure, and releases the gate on exit —
+    /// including on throw.
     ///
-    /// The lease semantics (FIFO, atomic handoff, cancellation while queued or
-    /// during handoff) live in `GPULeaseQueue`; the arbiter's contribution is
-    /// holding the lease across `ensureLoaded` *and* the body, so model identity
-    /// can never change under a running consumer.
-    func withExclusiveGPU<T: Sendable>(
-        _ slot: ModelSlot,
-        llmModelIDOverride: String? = nil,
-        llmVision: LLMVisionRequirement = .fromSettings,
+    /// The gate semantics (FIFO, atomic handoff, cancellation while queued or
+    /// during handoff) live in `LLMGate`; the arbiter's contribution is
+    /// holding the gate across `ensureLLMLoaded` *and* the body, so model
+    /// identity can never change under a running consumer.
+    func withLLM<T: Sendable>(
+        modelIDOverride: String?,
+        vision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T {
-        try await lease.withExclusive {
-            Log.general.info("InferenceArbiter: lease acquired for \(slot)")
-            try await ensureLoaded(
-                slot,
-                llmModelIDOverride: llmModelIDOverride,
-                llmVision: llmVision
-            )
+        try await gate.withExclusive {
+            Log.general.info("InferenceArbiter: LLM gate taken")
+            try await ensureLLMLoaded(modelIDOverride: modelIDOverride, vision: vision)
             return try await body()
         }
     }
 
-    /// The raw GPU lease for the v2 speech engine's bursts (ADR-0038): the
-    /// same FIFO queue as `.llm` work — so TTS generation, model loads, and
-    /// LLM turns stay mutually exclusive — but with no slot loading: the
-    /// engine loads its own model under this lease (ADR-0039 lazy load).
-    /// `ArbiterGPULease` adapts this onto the engine's `GPULeasing` port.
-    func withSpeechGPULease<T: Sendable>(
-        _ body: @concurrent @Sendable () async throws -> T
-    ) async throws -> T {
-        try await lease.withExclusive {
-            try await body()
-        }
-    }
-
     /// Propagate a settings change (selected model or vision mode) into an
-    /// eager model reload. Acquires the `.llm` lease FIFO-fair,
-    /// runs `ensureLoaded(.llm)` — which compares desired state against
+    /// eager model reload. Takes its turn at the gate, runs
+    /// `ensureLLMLoaded` — which compares desired state against
     /// `loadedLLMState` and reloads on mismatch — and releases. A no-op when
     /// nothing relevant changed and the model is already loaded. Throws the
-    /// same errors as any other `.llm` lease acquisition (including
-    /// `modelNotDownloaded` if the currently-selected model is not on disk).
-    /// Independent of `isServerEnabled`: internal server-core use must work
-    /// without the public HTTP listener enabled.
+    /// same errors as any other LLM turn (including `modelNotDownloaded` if
+    /// the currently-selected model is not on disk). Independent of
+    /// `isServerEnabled`: internal server-core use must work without the
+    /// public HTTP listener enabled.
     func reloadLLMIfNeeded() async throws {
-        try await withExclusiveGPU(.llm) {}
+        try await withLLM {}
     }
 
     // MARK: - Model Management
 
-    /// Load a model slot. Co-resident slots coexist.
-    /// For `.llm`: checks if the loaded state satisfies the target. The target
-    /// model ID is `llmModelIDOverride` when the caller passed one (HTTP
+    /// Load the LLM if the loaded state doesn't satisfy the target. The
+    /// target model ID is `modelIDOverride` when the caller passed one (HTTP
     /// requests honoring `request.model`), otherwise the user's
     /// `settingsManager.selectedAgentModelID` (chat UI, background agents).
-    /// Vision mode follows `llmVision` (ADR-0008): chat callers honor the
-    /// global vision opt-out (`.fromSettings`); HTTP callers demand vision
-    /// whenever the target model is capable (`.visionIfCapable`). Satisfaction
-    /// upgrades but never downgrades — a loaded vision container also serves
-    /// text-only demands.
-    private func ensureLoaded(
-        _ slot: ModelSlot,
-        llmModelIDOverride: String? = nil,
-        llmVision: LLMVisionRequirement = .fromSettings
-    ) async throws {
-        switch slot {
-        case .llm:
-            let targetModelID = llmModelIDOverride ?? settingsManager.selectedAgentModelID
-            let desiredVision = llmVision.wantsVision(
-                useVisionWhenAvailable: settingsManager.useVisionWhenAvailable,
-                isVisionCapable: modelDownloadManager.isVisionCapable(targetModelID)
-            )
-            let desired = LoadedLLMState(
-                modelID: targetModelID,
-                visionMode: desiredVision
-            )
-            if loadedSlots.contains(.llm),
-                let loaded = loadedLLMState,
-                loaded.satisfies(desired)
-            {
-                return
-            }
-            // Model or vision mode changed, or not loaded — (re)load
-            if loadedSlots.contains(.llm) { await unload(.llm) }
-            // Drain the detached unload task before the next load. Without
-            // this, the actor-level `llmActor.unloadModel()` can interleave
-            // after the new `llmActor.loadModel()` and tear down the freshly
-            // loaded model, tokenizer, and prefix-cache state.
-            await agentEngine.awaitPendingUnload()
-            try await loadSlot(
-                .llm,
-                modelID: desired.modelID,
-                visionMode: desired.visionMode
-            )
-            loadedLLMState = desired
-
-        case .tts:
-            // The v2 engine loads itself lazily under `withSpeechGPULease`
-            // (ADR-0039); there is nothing for the arbiter to load here.
+    /// Vision mode follows `vision` (ADR-0008): chat callers honor the global
+    /// vision opt-out (`.fromSettings`); HTTP callers demand vision whenever
+    /// the target model is capable (`.visionIfCapable`). Satisfaction upgrades
+    /// but never downgrades — a loaded vision container also serves text-only
+    /// demands. The TTS engine loads itself (ADR-0039).
+    private func ensureLLMLoaded(modelIDOverride: String?, vision: LLMVisionRequirement)
+        async throws
+    {
+        let targetModelID = modelIDOverride ?? settingsManager.selectedAgentModelID
+        let desiredVision = vision.wantsVision(
+            useVisionWhenAvailable: settingsManager.useVisionWhenAvailable,
+            isVisionCapable: modelDownloadManager.isVisionCapable(targetModelID)
+        )
+        let desired = LoadedLLMState(modelID: targetModelID, visionMode: desiredVision)
+        if loadedSlots.contains(.llm), let loaded = loadedLLMState, loaded.satisfies(desired) {
             return
         }
+        // Model or vision mode changed, or not loaded — (re)load
+        if loadedSlots.contains(.llm) { await unload(.llm) }
+        // Drain the detached unload task before the next load. Without
+        // this, the actor-level `llmActor.unloadModel()` can interleave
+        // after the new `llmActor.loadModel()` and tear down the freshly
+        // loaded model, tokenizer, and prefix-cache state.
+        await agentEngine.awaitPendingUnload()
+        try await loadLLM(modelID: desired.modelID, visionMode: desired.visionMode)
+        loadedLLMState = desired
     }
 
-    private func loadSlot(
-        _ slot: ModelSlot,
-        modelID: String? = nil,
-        visionMode: Bool = false
-    ) async throws {
-        switch slot {
-        case .llm:
-            guard let modelID else {
-                throw AgentEngineError.modelNotLoaded
-            }
-            guard modelDownloadManager.isDownloaded(modelID),
-                let path = modelDownloadManager.modelPath(for: modelID)
-            else {
-                Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
-                // Specific error case so HTTP callers can surface 404
-                // `model_not_found` instead of a generic 503. Closes the
-                // race where a model validated pre-lease is deleted from
-                // Settings → Models while a request is queued.
-                throw AgentEngineError.modelNotDownloaded(modelID: modelID)
-            }
-            Log.general.info(
-                "InferenceArbiter: loading LLM model '\(modelID)' "
-                    + "visionMode=\(visionMode)"
-            )
-            try await agentEngine.loadModel(
-                from: path,
-                visionMode: visionMode
-            )
-
-        case .tts:
-            // Unreachable: `ensureLoaded(.tts)` returns without loading.
-            return
+    private func loadLLM(modelID: String, visionMode: Bool) async throws {
+        guard modelDownloadManager.isDownloaded(modelID),
+            let path = modelDownloadManager.modelPath(for: modelID)
+        else {
+            Log.general.error("InferenceArbiter: LLM model '\(modelID)' not downloaded")
+            // Specific error case so HTTP callers can surface 404
+            // `model_not_found` instead of a generic 503. Closes the race
+            // where a model validated before its turn is deleted from
+            // Settings → Models while a request is queued.
+            throw AgentEngineError.modelNotDownloaded(modelID: modelID)
         }
+        Log.general.info(
+            "InferenceArbiter: loading LLM model '\(modelID)' visionMode=\(visionMode)")
+        try await agentEngine.loadModel(from: path, visionMode: visionMode)
     }
 
-    /// User-initiated offload (the status-bar menu's "Offload Model"):
-    /// waits its FIFO turn on the GPU lease — so a running generation
-    /// finishes first and nothing can interleave — then unloads every
-    /// loaded slot. The next consumer lazy-reloads as usual. STT is
-    /// deliberately untouched: always-armed dictation is a product
-    /// promise (ADR-0025), and WhisperKit lives in a separate memory
+    /// User-initiated offload (the status-bar menu's "Offload Model"): the
+    /// voice engine is released at once (it cancels its own utterance first);
+    /// the LLM waits its turn at the gate, so a running generation finishes
+    /// first and nothing can interleave. The next consumer lazy-reloads as
+    /// usual. STT is deliberately untouched: always-armed dictation is a
+    /// product promise (ADR-0025), and WhisperKit lives in a separate memory
     /// pool anyway.
     func offloadAllModels() async {
+        if loadedSlots.contains(.tts) { await unload(.tts) }
         do {
-            try await lease.withExclusive {
-                let slots = loadedSlots
-                guard !slots.isEmpty else { return }
-                for slot in slots {
-                    await unload(slot)
-                }
+            try await gate.withExclusive {
+                guard loadedSlots.contains(.llm) else { return }
+                await unload(.llm)
             }
         } catch {
             Log.general.error(
-                "InferenceArbiter.offloadAllModels: lease acquisition failed: "
+                "InferenceArbiter.offloadAllModels: the LLM gate failed: "
                     + "\(error.localizedDescription)")
         }
     }
@@ -305,9 +249,8 @@ final class InferenceArbiter: InferenceArbitrating {
             Log.general.info("InferenceArbiter: unloaded LLM")
 
         case .tts:
-            // Safe while we hold the lease: the engine cancels its active
-            // driver first, and a driver queued on this same lease is
-            // removed by the queue's cancellation-while-queued rule.
+            // The engine cancels its active utterance and waits for it before
+            // releasing the model.
             await unloadTTS()
             Log.general.info("InferenceArbiter: unloaded TTS")
         }

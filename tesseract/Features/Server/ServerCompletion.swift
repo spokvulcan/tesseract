@@ -349,7 +349,7 @@ nonisolated enum VisionPrefixMemoryGuard {
 /// at model load, and clears it at unload. Every state-touching entry takes an
 /// `isolated LLMActor` parameter so module state and every model-affine step
 /// stay on the actor's executor — this is a module split, not an isolation
-/// split (a second actor was rejected; ADR-0015). The GPU lease, held across
+/// split (a second actor was rejected; ADR-0015). The LLM gate, held across
 /// the whole HTTP request by `CompletionHandler`, remains the primary guard
 /// against unload/reload interleaving.
 ///
@@ -416,7 +416,7 @@ nonisolated final class ServerCompletion {
 
     /// Active-completion registry: the most recent cache-aware start, keyed
     /// by its request ID so the natural-finish clear and the drain can tell
-    /// handles apart. The GPU lease — held across the whole HTTP request by
+    /// handles apart. The LLM gate — held across the whole HTTP request by
     /// `CompletionHandler` — is the primary guard against unload/reload
     /// interleaving; this handle is the in-actor backstop
     /// `LLMActor.unloadModel` drains (cancel-and-await) before the container

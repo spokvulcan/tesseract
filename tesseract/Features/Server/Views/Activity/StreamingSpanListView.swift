@@ -233,7 +233,7 @@ private struct PhaseHint: View {
 
     private var hintTitle: String {
         switch trace.phase {
-        case .queued: return "Waiting for inference lease…"
+        case .queued: return "Waiting for the model…"
         case .lookingUp: return "Looking up prefix cache…"
         case .prefilling: return "Prefilling prompt…"
         case .decoding: return "Decoding…"

@@ -63,9 +63,9 @@ struct AgendaToolsTests {
             hasOtherAttendees: true)
     }
 
-    @Test func thereAreFiveAgendaTools() {
+    @Test func thereAreSixAgendaTools() {
         #expect(Set(fixture().tools.keys) == Set(AgendaToolNames.all))
-        #expect(AgendaToolNames.all.count <= 5)
+        #expect(AgendaToolNames.all.count <= 6)
     }
 
     @Test func remindMeWithATimeBecomesATimedReminder() async throws {
@@ -152,6 +152,34 @@ struct AgendaToolsTests {
             f.store.events(from: Self.local(30, 0, 0), to: Self.local(31, 0, 0)).first)
         #expect(after.start == Self.local(30, 17, 0))
         #expect(after.end == Self.local(30, 17, 30))
+    }
+
+    @Test func deleteEventRemovesTheOwnersBlockAndUndoBringsItBack() async throws {
+        let f = fixture()
+        _ = try await f.run(
+            "add_event", ["title": .string("Errand block"), "start": .string("2026-09-30T13:00")])
+        let event = try #require(
+            f.store.events(from: Self.local(30, 0, 0), to: Self.local(31, 0, 0)).first)
+
+        let deleted = try await f.run("delete_event", ["id": .string(event.id)])
+        #expect(deleted.hasPrefix("Deleted “Errand block” — today 13:00–13:30, Home."))
+        #expect(f.store.events(from: Self.local(30, 0, 0), to: Self.local(31, 0, 0)).isEmpty)
+
+        try await f.agenda.undo(try #require(f.agenda.lastChange))
+        let restored = try #require(
+            f.store.events(from: Self.local(30, 0, 0), to: Self.local(31, 0, 0)).first)
+        #expect(restored.title == "Errand block")
+        #expect(restored.start == Self.local(30, 13, 0))
+    }
+
+    @Test func aMeetingWithOthersIsNotDeletedHere() async throws {
+        let f = fixture(events: [oneOnOne])
+        await #expect(throws: AgendaError.self) {
+            _ = try await f.run("delete_event", ["id": .string(oneOnOne.id)])
+        }
+        #expect(
+            f.store.events(from: Self.local(30, 0, 0), to: Self.local(31, 0, 0)).map(\.id)
+                == [oneOnOne.id])
     }
 
     @Test func theListingShowsTheDayWithIDs() async throws {

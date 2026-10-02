@@ -41,7 +41,8 @@ nonisolated enum MomentKind: String, Sendable, Equatable, Hashable, Codable, Cas
         switch self {
         case .morningPlan: 6_000
         case .breakpoint: 3_000
-        case .triage: 2_500
+        // A yes-or-no over a few banners: a short think is plenty.
+        case .triage: 1_024
         case .eveningWrapUp: 4_000
         case .nightReflection: 8_000
         }
@@ -54,6 +55,8 @@ nonisolated enum MomentKind: String, Sendable, Equatable, Hashable, Codable, Cas
 /// Why a moment ran, for the trace and the request.
 nonisolated enum MomentTrigger: String, Sendable, Equatable, Codable {
     case firstPresence
+    /// Made ready before the owner sat down: the Mac was awake and on power.
+    case prepared
     case todayOpened
     case presenceReturned
     case meetingEnded
@@ -102,9 +105,16 @@ nonisolated struct MomentMeasure: Sendable, Equatable, Codable {
     /// Prompt tokens the prefix cache supplied (not prefilled again).
     var cachedTokens: Int = 0
     var outputTokens: Int
+    /// The whole prompt's processing: cache lookup and restore, the prefill
+    /// of everything the cache didn't hold, and the last residual chunk.
     var prefillSeconds: Double
     var generateSeconds: Double
+    /// From the moment's start to its reply, waits and the cache save
+    /// after the answer included.
     var latencySeconds: Double
+    /// Waiting for the model before the request began (another chat turn or
+    /// moment on the model, or the model loading).
+    var waitSeconds: Double = 0
     var hitCap: Bool
     var modelID: String
 }

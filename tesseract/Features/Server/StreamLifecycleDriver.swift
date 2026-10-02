@@ -38,7 +38,7 @@ nonisolated enum StreamLifecycleDriver {
 
             // A start may finish just as the connection drops, or return a
             // handle despite cancellation. Drain that handle before the
-            // handler can release its GPU lease; never abandon a live owner.
+            // handler can release the LLM gate; never abandon a live owner.
             var started = first
             for await remaining in group {
                 if let remaining { started = remaining }

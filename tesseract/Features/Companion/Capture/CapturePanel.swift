@@ -7,6 +7,11 @@
 //  go through the capture door into Reminders, and the panel answers with
 //  one line and an undo, then fades.
 //
+//  Nothing shows until the press says what it is: a release before the hold
+//  threshold is a tap, a hold past it starts listening. That lets the hotkey
+//  be one modifier key — another key pressed with it cancels, and the owner
+//  types ⌥-something as usual.
+//
 
 import AppKit
 import Observation
@@ -35,7 +40,10 @@ final class CapturePanelController {
     private let voice: AgentVoiceInputController
     private let model = CapturePanelModel()
     private var panel: GlassPanel?
-    private var pressedAt: Date?
+    /// Waiting out the hold threshold after a press.
+    private var holdTask: Task<Void, Never>?
+    /// The press became a hold: the microphone is on.
+    private var isHolding = false
     private var dismissTask: Task<Void, Never>?
 
     private static let width: CGFloat = 560
@@ -50,29 +58,54 @@ final class CapturePanelController {
         voice.onVoiceTranscription = { [weak self] text in
             self?.voiceFinished(text)
         }
+        voice.onVoiceFailure = { [weak self] message in
+            self?.voiceFailed(message)
+        }
     }
 
     // MARK: Hotkey
 
     func hotkeyDown() {
-        pressedAt = Date()
-        show()
-        model.mode = .listening
-        voice.start()
+        holdTask?.cancel()
+        holdTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.holdThreshold))
+            guard !Task.isCancelled else { return }
+            self?.beginHolding()
+        }
     }
 
     func hotkeyUp() {
-        let held = Date().timeIntervalSince(pressedAt ?? Date())
-        pressedAt = nil
-        if held < Self.holdThreshold {
-            voice.cancel()
-            model.mode = .typing
-            model.focusRequest += 1
-            panel?.makeKey()
-        } else {
+        holdTask?.cancel()
+        holdTask = nil
+        if isHolding {
+            isHolding = false
             model.mode = .transcribing
             voice.finishCapture()
+            return
         }
+        // A tap: type.
+        show()
+        model.mode = .typing
+        model.focusRequest += 1
+        panel?.makeKey()
+    }
+
+    /// Another key joined the one-key hotkey: the owner is typing with it.
+    func hotkeyCancelled() {
+        holdTask?.cancel()
+        holdTask = nil
+        guard isHolding else { return }
+        isHolding = false
+        hide()
+    }
+
+    /// Held past the threshold: listen.
+    private func beginHolding() {
+        holdTask = nil
+        isHolding = true
+        show()
+        model.mode = .listening
+        voice.start()
     }
 
     // MARK: Panel
@@ -104,6 +137,9 @@ final class CapturePanelController {
 
     func hide() {
         dismissTask?.cancel()
+        holdTask?.cancel()
+        holdTask = nil
+        isHolding = false
         voice.cancel()
         panel?.orderOut(nil)
         model.text = ""
@@ -115,6 +151,17 @@ final class CapturePanelController {
         model.text = text
         model.mode = .typing
         submit()
+    }
+
+    /// The take ended without words (too short, no speech, a failed
+    /// transcription): back to typing, with the reason, instead of waiting.
+    private func voiceFailed(_ message: String) {
+        guard panel?.isVisible == true, model.mode != .typing else { return }
+        model.mode = .typing
+        model.outcome = .failed("\(message). Type it instead, or hold the key and speak again.")
+        panel?.setHeight(Self.withLineHeight)
+        model.focusRequest += 1
+        panel?.makeKey()
     }
 
     private func submit() {

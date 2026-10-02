@@ -3,8 +3,8 @@
 //  tesseractTests
 //
 //  The in-memory **Inference Arbitrating** peer — the second adapter that makes
-//  the consumer seam real (ADR-0001's "two adapters" rule). It records lease
-//  calls and runs the body without loading a model, so a coordinator's lease
+//  the consumer seam real (ADR-0001's "two adapters" rule). It records LLM
+//  turns and runs the body without loading a model, so a coordinator's gate
 //  contract is assertable hermetically: no engines, no downloads, no GPU.
 //
 
@@ -13,49 +13,37 @@
 @MainActor
 final class InMemoryInferenceArbiter: InferenceArbitrating {
 
-    nonisolated struct LeaseCall: Equatable {
-        let slot: ModelSlot
-        let llmModelIDOverride: String?
-        let llmVision: LLMVisionRequirement
+    nonisolated struct GateCall: Equatable {
+        let modelIDOverride: String?
+        let vision: LLMVisionRequirement
 
-        init(
-            slot: ModelSlot,
-            llmModelIDOverride: String? = nil,
-            llmVision: LLMVisionRequirement = .fromSettings
-        ) {
-            self.slot = slot
-            self.llmModelIDOverride = llmModelIDOverride
-            self.llmVision = llmVision
+        init(modelIDOverride: String? = nil, vision: LLMVisionRequirement = .fromSettings) {
+            self.modelIDOverride = modelIDOverride
+            self.vision = vision
         }
     }
 
-    /// Every lease acquisition, in order.
-    private(set) var leaseCalls: [LeaseCall] = []
+    /// Every LLM turn taken, in order.
+    private(set) var gateCalls: [GateCall] = []
 
-    /// When set, the lease throws before the body runs — the in-memory analogue
-    /// of `ensureLoaded` failing (e.g. `modelNotDownloaded`).
+    /// When set, the turn throws before the body runs — the in-memory analogue
+    /// of `ensureLLMLoaded` failing (e.g. `modelNotDownloaded`).
     var ensureLoadedError: (any Error)?
 
-    /// When set, the lease suspends this long before running the body — the
-    /// in-memory analogue of a run sitting *queued* behind the lease (e.g. a
+    /// When set, the turn suspends this long before running the body — the
+    /// in-memory analogue of a run sitting *queued* at the gate (e.g. a
     /// cold-start model load). A cancellation during the wait surfaces as
-    /// `CancellationError`, exactly like a real queued lease.
-    var leaseDelay: Duration?
+    /// `CancellationError`, exactly like a real queued turn.
+    var gateDelay: Duration?
 
-    func withExclusiveGPU<T: Sendable>(
-        _ slot: ModelSlot,
-        llmModelIDOverride: String?,
-        llmVision: LLMVisionRequirement,
+    func withLLM<T: Sendable>(
+        modelIDOverride: String?,
+        vision: LLMVisionRequirement,
         body: () async throws -> T
     ) async throws -> T {
-        leaseCalls.append(
-            LeaseCall(
-                slot: slot,
-                llmModelIDOverride: llmModelIDOverride,
-                llmVision: llmVision
-            ))
+        gateCalls.append(GateCall(modelIDOverride: modelIDOverride, vision: vision))
         if let ensureLoadedError { throw ensureLoadedError }
-        if let leaseDelay { try await Task.sleep(for: leaseDelay) }
+        if let gateDelay { try await Task.sleep(for: gateDelay) }
         return try await body()
     }
 }

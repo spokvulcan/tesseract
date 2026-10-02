@@ -184,29 +184,32 @@ final class DayThread {
         momentRunning = request.kind
         defer { momentRunning = nil }
         openIfNeeded()
-        await compactIfPastCeiling()
         syncActiveTools()
 
         let started = now()
         let message = UserMessage(content: request.text, timestamp: started, turnOrigin: .moment)
         var parameters = settings.makeAgentGenerateParameters()
         parameters.maxTokens = request.kind.maxTokens
-        let cached = CachedTokenBox()
+        let timing = MomentTimingBox()
         let generate = makeServerInferenceGenerateClosure(
             inferenceService: inferenceService, parametersProvider: { [parameters] in parameters },
-            onStart: { count in cached.value = count })
-        let systemPrompt = agent.state.systemPrompt
-        let tools = agent.state.tools
-        let history = agent.state.messages + [message]
-        let llmMessages = history.compactMap { $0.toLLMMessage() }
+            onStart: { facts in timing.start = facts })
         let modelID = settings.selectedAgentModelID
         let vision: LLMVisionRequirement =
             settings.useVisionWhenAvailable ? .visionIfCapable : .fromSettings
 
         do {
-            let result = try await arbiter.withExclusiveGPU(
-                .llm, llmModelIDOverride: nil, llmVision: vision
-            ) { () async throws -> MomentGenerationResult in
+            let result = try await arbiter.withLLM(modelIDOverride: nil, vision: vision) {
+                () async throws -> MomentGenerationResult in
+                timing.modelReadyAt = now()
+                // Compacting is LLM work too: it runs in this turn, and the
+                // prompt is read after it.
+                await compactIfPastCeiling()
+                let systemPrompt = agent.state.systemPrompt
+                let tools = agent.state.tools
+                let llmMessages = (agent.state.messages + [message]).compactMap {
+                    $0.toLLMMessage()
+                }
                 var accumulator = GenerationAccumulator()
                 var builder = AssistantPartsBuilder()
                 builder.model = modelID
@@ -222,13 +225,17 @@ final class DayThread {
                     text: accumulator.text, reply: reply, info: info,
                     hitCap: builder.hitLengthLimit)
             }
+            // The server prefills what the cache didn't hold before the
+            // stream starts; the stream's own prompt time is only the last
+            // residual chunk.
             let measure = MomentMeasure(
                 promptTokens: result.info?.promptTokenCount ?? 0,
-                cachedTokens: cached.value,
+                cachedTokens: timing.start?.cachedTokenCount ?? 0,
                 outputTokens: result.info?.generationTokenCount ?? 0,
-                prefillSeconds: result.info?.promptTime ?? 0,
+                prefillSeconds: (timing.start?.promptSeconds ?? 0) + (result.info?.promptTime ?? 0),
                 generateSeconds: result.info?.generateTime ?? 0,
                 latencySeconds: now().timeIntervalSince(started),
+                waitSeconds: max(0, (timing.modelReadyAt ?? started).timeIntervalSince(started)),
                 hitCap: result.hitCap, modelID: modelID)
             // Request and reply join the thread whatever the reply holds: the
             // thread records what was asked and said, append-only. A moment
@@ -269,10 +276,12 @@ final class DayThread {
     }
 }
 
-/// Where the inference start reports the cache's share of the prompt.
+/// Where a moment's generation reports its timing: when the model was free
+/// for it, and what the server's start said about the prompt.
 @MainActor
-private final class CachedTokenBox {
-    var value = 0
+private final class MomentTimingBox {
+    var modelReadyAt: Date?
+    var start: ServerInferenceStartFacts?
 }
 
 private nonisolated struct MomentGenerationResult: Sendable {
